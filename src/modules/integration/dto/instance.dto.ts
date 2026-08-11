@@ -97,6 +97,8 @@ export class InstanceView {
   @ApiPropertyOptional({
     description: 'Session id the instance is scoped to, or null for all sessions.',
     nullable: true,
+    // `string | null` reduces to `Object` under emitDecoratorMetadata; declare the real type.
+    type: String,
   })
   sessionScope!: string | null;
 
@@ -109,6 +111,7 @@ export class InstanceView {
   @ApiPropertyOptional({
     description: "Provider verify-token. Masked ('***') on reads when set; plaintext on create/regenerate-secret.",
     nullable: true,
+    type: String,
   })
   verifyToken!: string | null;
 

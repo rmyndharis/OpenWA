@@ -301,7 +301,9 @@
       "phone": "رقم الهاتف",
       "phoneNone": "غير متصل",
       "created": "تاريخ الإنشاء",
-      "lastActive": "آخر نشاط"
+      "lastActive": "آخر نشاط",
+      "autoRejectCalls": "الرفض التلقائي للمكالمات",
+      "autoRejectCallsHint": "يتم رفض المكالمات الواردة فور رنينها. ولا يزال الويب هوك call.received يُرسل قبل ذلك. يسري على المكالمة التالية — دون الحاجة إلى إعادة التشغيل."
     },
     "actions": {
       "view": "عرض",
@@ -794,6 +796,8 @@
       "export": "تصدير البيانات",
       "import": "استيراد البيانات",
       "exportFailed": "تعذّر تصدير البيانات",
+      "exportPartialTitle": "Backup is missing some media",
+      "exportPartial": "{{count}} attachment payload(s) exceeded the export media budget and were saved as placeholders. The messages restore; their media does not.",
       "importFailed": "تعذّر استيراد البيانات",
       "importOk": "تمّ استيراد البيانات",
       "importConfirm": "سيؤدّي الاستيراد إلى استبدال جميع البيانات الحالية بالنسخة الاحتياطية ({{rows}} صفًّا). لا يمكن التراجع عن هذا الإجراء. هل تريد المتابعة؟",

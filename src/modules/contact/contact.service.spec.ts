@@ -14,6 +14,16 @@ describe('ContactService', () => {
     expect(() => makeService(undefined).getContacts('s1')).toThrow(BadRequestException);
   });
 
+  it('getBlockedContacts delegates to the engine and returns the bare id list', async () => {
+    const getBlockedContacts = jest.fn().mockResolvedValue(['628111@c.us']);
+    await expect(makeService({ getBlockedContacts }).getBlockedContacts('s1')).resolves.toEqual(['628111@c.us']);
+    expect(getBlockedContacts).toHaveBeenCalledTimes(1);
+  });
+
+  it('getBlockedContacts throws 400 when the session is not started', () => {
+    expect(() => makeService(undefined).getBlockedContacts('s1')).toThrow(BadRequestException);
+  });
+
   it('caps an unbounded contacts list at the default limit (1000)', async () => {
     const big = Array.from({ length: 1500 }, (_, i) => ({ id: `${i}@c.us` }));
     const getContacts = jest.fn().mockResolvedValue(big);

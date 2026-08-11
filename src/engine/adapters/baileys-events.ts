@@ -34,6 +34,7 @@ import {
 import type { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { type createLogger } from '../../common/services/logger.service';
 import { createSilentLogger } from './baileys-logger';
+import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
 
 /**
  * Inbound event handling extracted from BaileysAdapter: the socket event handlers
@@ -158,15 +159,23 @@ export class BaileysEvents {
       }
       // Throttle through the limiter so a burst of media messages can't run unbounded parallel
       // downloads (each a full decrypted buffer in heap). Ordering stays correct — the message store
-      // keeps the newest by timestamp. When the waiter queue is saturated we REJECT instead of parking
-      // forever, and re-process the message WITHOUT media: the message (body + metadata) is still
-      // emitted, but we skip the heap-heavy download that the limiter exists to bound.
+      // keeps the newest by timestamp. The queue is unbounded, so a burst parks rather than shedding
+      // and the message keeps its media either way; on any rejection we still re-process WITHOUT
+      // media, so the body and metadata are emitted rather than lost.
       void this.host.inboundLimiter
         .run(() => this.processInboundMessage(msg))
-        .catch(() => {
-          this.host.logger.warn('Inbound media limiter saturated; emitting message without media', {
-            msgId: msg.key?.id ?? 'unknown',
-          });
+        .catch((error: unknown) => {
+          // Two different failures land here and they are not the same event. The limiter closing is
+          // an orderly teardown; anything else is a real download failure, and reporting it as
+          // "saturated" sent operators to look at concurrency settings for a problem that was never
+          // there. Say which one happened.
+          const closed = error instanceof Error && error.message.startsWith('ConcurrencyLimiter closed');
+          this.host.logger.warn(
+            closed
+              ? 'Inbound media limiter closed during teardown; emitting message without media'
+              : 'Inbound media download failed; emitting message without media',
+            { msgId: msg.key?.id ?? 'unknown', ...(closed ? {} : { error: String(error) }) },
+          );
           return this.processInboundMessage(msg, { skipMedia: true });
         });
     }
@@ -349,6 +358,45 @@ export class BaileysEvents {
     };
     // authorPn is the phone-dialect twin of a lid author: prefer it so the neutral actor id does
     // not depend on whether the lid->pn mapping happens to be learned yet.
+    const actor = event.authorPn ?? event.author;
+    if (actor) {
+      payload.actorId = this.host.toNeutralJid(actor);
+    }
+    this.host.getOnGroupEvent()?.(payload);
+  }
+
+  /**
+   * Baileys `group.join-request`: someone asked to join a group the account admins (join-approval
+   * on). Only action 'created' maps to the neutral join_request kind — the wwebjs event has no
+   * revoke/reject counterpart, so only the shared signal is surfaced. Upstream scope caveat: rc13
+   * emits this event only from the NON_ADMIN_ADD stub (172); the direct self-request stub (144) is
+   * unhandled with an upstream TODO (Utils/process-message.js:569), so an invite-link self-request
+   * may produce no event on this engine — the REST list endpoint still sees it. The pn twins are
+   * preferred over lids for the same reason as everywhere else. The event carries no timestamp, so
+   * it is stamped at receipt.
+   */
+  handleGroupJoinRequest(event: {
+    id?: string;
+    author?: string;
+    authorPn?: string;
+    participant?: string;
+    participantPn?: string;
+    action?: string;
+    method?: string;
+  }): void {
+    if (event.action !== 'created' || !event.id) {
+      return;
+    }
+    const participant = event.participantPn ?? event.participant;
+    if (!participant) {
+      return; // nothing addressable to report
+    }
+    const payload: GroupEvent = {
+      kind: 'join_request',
+      groupId: this.host.toNeutralJid(event.id),
+      participantIds: [this.host.toNeutralJid(participant)],
+      timestamp: Math.floor(Date.now() / 1000),
+    };
     const actor = event.authorPn ?? event.author;
     if (actor) {
       payload.actorId = this.host.toNeutralJid(actor);
@@ -616,7 +664,11 @@ export class BaileysEvents {
     if (!sock) {
       throw new EngineNotReadyError('Cannot reject a call before the engine is initialized.');
     }
-    await sock.rejectCall(callId, entry.callFrom);
+    await withQueryDeadline(
+      sock.rejectCall(callId, entry.callFrom),
+      BAILEYS_QUERY_BUDGET_MS,
+      'WhatsApp did not confirm the call rejection in time',
+    );
     // A rejection made HERE produces no inbound `reject` signal to observe, so without this the
     // one outcome the caller definitely knows about — the one they asked for — was the only one
     // never published. Emitted only after the socket accepted it, and the entry is already evicted,
@@ -719,8 +771,10 @@ export class BaileysEvents {
       return undefined;
     }
 
-    // The outbound "sent" echo passes skipMediaDownload: the sender already holds the media, and for
-    // parity with the wwjs message.sent (which carries no media buffer) we emit only the marker here.
+    // The outbound "sent" echo passes skipMediaDownload: the API caller already holds the media and
+    // the REST send path persists it, so re-downloading it here would buy nothing. This is where
+    // Baileys deliberately diverges from wwjs, whose echo does download the payload
+    // (wwebjs-message-events.ts) because a phone-composed send has no other source for it.
     if (skipMediaDownload || !isMediaDownloadEnabled()) {
       // Emit the omitted marker so the media field is present (webhook/n8n/dashboard contract).
       // mimetype is available pre-download from the message content.

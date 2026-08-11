@@ -294,12 +294,14 @@ environment still hits a WA-Web compatibility hang, pin a known-good WA-Web vers
 `WWEBJS_WEB_VERSION`:
 
 ```bash
-# Optional workaround:
-WWEBJS_WEB_VERSION=2.3000.1040641150-alpha
+# Optional workaround — substitute a build that the registry currently serves:
+WWEBJS_WEB_VERSION=<a build from that registry's html/ folder>
 ```
 
-Restart the container after changing it. Browse newer versions at
-[wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder). With
+Restart the container after changing it. Pick the build from
+[wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder) — a
+build the registry no longer serves is fetched, missed, and silently ignored, leaving you on the
+default behaviour rather than the pin you asked for. With
 `WWEBJS_WEB_VERSION` unset, `latest`, or `auto` (the default), OpenWA auto-resolves a settled build
 from that registry and pins its HTML — note this HTML is fetched from a third-party repository and
 executed inside the `web.whatsapp.com` origin without an integrity check. Set
@@ -509,7 +511,11 @@ once, so the session stops instead of being silently unlinked by WhatsApp about 
 > a container stops Chromium launching at all). If your deployment does get a
 > localised modal, it is **not** auto-dismissed and the session never reaches `action_required` —
 > instead it links normally, then drops to `disconnected` with reason `LOGOUT` a few minutes later and
-> the device disappears from the phone's Linked devices list. Because that path wipes the stored
+> the device disappears from the phone's Linked devices list. That miss is no longer silent: when the
+> watcher finds a visible dialog it cannot match, it logs a warning (`action:
+onboarding_dialog_unrecognized`) carrying the dialog's heading and button labels — the label to add
+> via `WWEBJS_ONBOARDING_CONTINUE_LABELS`, and the heading worth reporting — minutes before the unlink
+> would happen. Because that path wipes the stored
 > credentials, the automatic reconnect comes back with a fresh QR on its own, so the session is
 > usually already sitting at `qr_ready` rather than needing a manual start. Acknowledge the modal once
 > in a browser signed in as that account, then scan the QR. It does not recur — the modal is shown
@@ -713,11 +719,20 @@ curl -X POST http://localhost:2785/api/sessions/{id}/messages/send-image \
 **Diagnostic:**
 
 ```bash
-# Check webhook configuration
+# Check webhook configuration — `active` must be true, `events` must list the event (or "*"),
+# and `filters` must not exclude it. `lastTriggeredAt` stays null until a real 2xx delivery:
+# the Test button never sets it, so a green Test proves nothing about real events.
 curl -H "X-API-Key: $API_KEY" \
   http://localhost:2785/api/sessions/{sessionId}/webhooks
 
-# No webhook-delivery log API — check the server logs / audit trail instead
+# Abandoned deliveries, most recent first: those that exhausted every retry, plus those never
+# attempted at all (recorded with `attempts: 0`). Requires an ADMIN key — an OPERATOR key gets
+# a 403, which reads like the endpoint does not exist. Rows older than
+# WEBHOOK_FAILURE_RETENTION_DAYS (default 90) are pruned.
+curl -H "X-API-Key: $ADMIN_API_KEY" \
+  "http://localhost:2785/api/webhooks/delivery-failures?sessionId={sessionId}&limit=20"
+
+# Attempts still in flight (not yet exhausted) appear only in the server logs:
 docker compose logs openwa-api 2>&1 | grep -i webhook
 
 # Test webhook endpoint
@@ -727,6 +742,12 @@ curl -X POST http://your-webhook-url \
 ```
 
 **Solutions:**
+
+Read the two lists together before changing anything. A delivery-failure row carrying an HTTP
+`lastStatusCode` means the gateway delivered and your receiver rejected it — fix the receiver. An
+empty list with `lastTriggeredAt` still null means nothing has ever been delivered and nothing has
+permanently failed: the event either never matched this webhook (`active`, `events`, `filters`) or
+was never emitted for the session at all.
 
 Webhooks are rows created through the API — there is no webhook config file:
 
@@ -1016,7 +1037,7 @@ docker exec openwa-api curl http://host.docker.internal:8080
 ```bash
 # Get group list
 curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions/{id}/groups
+  http://localhost:2785/api/sessions/{sessionId}/groups
 
 # Send to group
 curl -X POST http://localhost:2785/api/sessions/{id}/messages/send-text \
@@ -1164,6 +1185,7 @@ available_events:
   - group.join # Participant(s) added/joined
   - group.leave # Participant(s) left/removed
   - group.update # Group subject/description/announce/locked changed
+  - group.join_request # Someone asked to join a group this session administers
 
   # Calls
   - call.received # Incoming call ringing (payload: callId, from, isVideo, isGroup, timestamp)

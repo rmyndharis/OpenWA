@@ -61,6 +61,22 @@ func (s *ChatsService) Archive(ctx context.Context, sessionID string, body Archi
 	return s.post(ctx, sessionID, "/archive", body)
 }
 
+// Pin pins a chat to the top of the list, or unpins it. A false Success means
+// WhatsApp declined — an account may pin only three chats at a time.
+func (s *ChatsService) Pin(ctx context.Context, sessionID string, body PinChatRequest) (*SuccessResult, error) {
+	return s.post(ctx, sessionID, "/pin", body)
+}
+
+// Mute mutes a chat until an absolute timestamp, or unmutes it when
+// body.MuteUntil is nil.
+//
+// MuteUntil is epoch MILLISECONDS. Passing seconds points at an instant in
+// 1970, so the mute expires the moment it is set while the call still succeeds
+// — nothing in the response distinguishes that from a mute that took effect.
+func (s *ChatsService) Mute(ctx context.Context, sessionID string, body MuteChatRequest) (*SuccessResult, error) {
+	return s.post(ctx, sessionID, "/mute", body)
+}
+
 // ClearMessages deletes every message in a chat, keeping the chat itself. A
 // false Success means the engine declined — an unknown chat, or on Baileys a
 // chat with no known history.

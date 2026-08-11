@@ -6,13 +6,13 @@ socket. Security matters here, and we appreciate responsible disclosure.
 
 ## Supported versions
 
-Security fixes land on the latest minor release (currently 0.14.x). Older minor
+Security fixes land on the latest minor release (currently 0.16.x). Older minor
 lines receive no backports — please upgrade older deployments.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.14.x  | :white_check_mark: |
-| < 0.14  | :x:                |
+| 0.16.x  | :white_check_mark: |
+| < 0.16  | :x:                |
 
 ## Reporting a vulnerability
 
@@ -49,6 +49,13 @@ the README and `docs/` — in particular `CORS_ORIGINS`, `ALLOW_DEV_API_KEY`,
 `ENABLE_SWAGGER`, `WEBHOOK_SSRF_PROTECT`, `BODY_SIZE_LIMIT`, and the Docker proxy setup.
 Never expose the dashboard/API to the public internet with the development API key
 enabled.
+
+If you created your `.env` by copying `.env.example` before this advisory, check it for
+`ENABLE_SWAGGER=true`. Earlier templates shipped that line uncommented alongside
+`NODE_ENV=production`, so a copied file pinned the opt-in that production otherwise
+withholds, and `/api/docs` is served outside the API-key guard. Comment the line out or
+set it to `false` to restore the production default. Docker Compose and the Helm chart
+are unaffected — neither forwards `ENABLE_SWAGGER` and the container never reads `.env`.
 
 ### Docker socket proxy — scope and residual risk
 

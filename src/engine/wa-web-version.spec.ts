@@ -8,6 +8,7 @@ import {
   pickSettledWebVersion,
   resolveCurrentWebVersion,
   resolveWebVersionPin,
+  WA_VERSION_REGISTRY_URL,
   WEB_VERSION_SETTLE_MS,
 } from './wa-web-version';
 
@@ -171,5 +172,60 @@ describe('resolveWebVersionPin remote-trust warning', () => {
       expect.stringContaining('WITHOUT an integrity check'),
       expect.objectContaining({ webVersion: '2.3000.SOLO-alpha' }),
     );
+  });
+});
+
+// A failed resolve degrades the engine to whatsapp-web.js's own version selection — the #488 class
+// the pin exists to prevent. It used to do so in total silence, so the operator had nothing to grep.
+describe('resolveCurrentWebVersion failure warning', () => {
+  const json = (body: unknown) => ({ ok: true, status: 200, json: () => Promise.resolve(body) });
+
+  beforeEach(() => {
+    __resetWebVersionCache();
+    mockWarn.mockClear();
+  });
+  afterEach(() => __resetWebVersionCache());
+
+  const failureMeta = () => (mockWarn.mock.calls[0] as [string, Record<string, string>])[1];
+
+  it('warns when the registry cannot be reached', async () => {
+    const fetcher = jest.fn(() => Promise.reject(new Error('getaddrinfo ENOTFOUND raw.githubusercontent.com')));
+    await expect(resolveCurrentWebVersion(fetcher as never)).resolves.toBeNull();
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    const meta = failureMeta();
+    expect(meta.action).toBe('web_version_resolve_failed');
+    expect(meta.reason).toContain('ENOTFOUND');
+    expect(meta.registry).toBe(WA_VERSION_REGISTRY_URL);
+    expect(meta.remedy).toContain('WWEBJS_WEB_VERSION');
+  });
+
+  it('warns when the registry answers a non-ok status', async () => {
+    const fetcher = jest.fn(() => Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({}) }));
+    await expect(resolveCurrentWebVersion(fetcher as never)).resolves.toBeNull();
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(failureMeta().reason).toContain('503');
+  });
+
+  it('warns when the registry answers with no usable build', async () => {
+    const fetcher = jest.fn(() => Promise.resolve(json({ currentVersion: null, versions: [] })));
+    await expect(resolveCurrentWebVersion(fetcher as never)).resolves.toBeNull();
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(failureMeta().reason).toContain('no usable build');
+  });
+
+  it('stays silent on a successful resolve', async () => {
+    const fetcher = jest.fn(() => Promise.resolve(json({ currentVersion: '2.3000.SOLO-alpha' })));
+    await expect(resolveCurrentWebVersion(fetcher as never)).resolves.toBe('2.3000.SOLO-alpha');
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
+  // The warning repeats so it survives a bounded log window, but the existing backoff is what keeps
+  // that from becoming a per-call flood: the second call returns before the fetcher is even reached.
+  it('does not re-warn inside the failure backoff window', async () => {
+    const fetcher = jest.fn(() => Promise.reject(new Error('boom')));
+    await resolveCurrentWebVersion(fetcher as never);
+    await resolveCurrentWebVersion(fetcher as never);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(mockWarn).toHaveBeenCalledTimes(1);
   });
 });

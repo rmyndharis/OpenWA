@@ -33,6 +33,18 @@ export function useDataBackup(): DataBackup {
       a.download = `openwa-backup-${dump.exportedAt?.slice(0, 10) || 'data'}.json`;
       a.click();
       URL.revokeObjectURL(url);
+
+      // The download itself is silent on success, which is fine when the backup is complete. It is
+      // not fine when the budget dropped media: the archive restores without error and nothing else
+      // would ever tell the operator that some history came back without its attachments.
+      const omitted = dump.omittedInlineMedia;
+      const dropped = (omitted?.messages ?? 0) + (omitted?.messageBatches ?? 0);
+      if (dropped > 0) {
+        toast.warning(
+          t('infrastructure.migration.exportPartialTitle'),
+          t('infrastructure.migration.exportPartial', { count: dropped }),
+        );
+      }
     } catch (err) {
       toast.error(
         t('infrastructure.migration.exportFailed'),

@@ -13,7 +13,7 @@ import {
   UploadedFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiOperation, ApiResponse, ApiConsumes } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { PluginsService } from './plugins.service';
 import { PluginDto, PluginConfigDto, PluginSessionsDto, InstallFromUrlDto } from './dto/plugin.dto';
 import type { CatalogPlugin } from './catalog';
@@ -38,7 +38,7 @@ export class PluginsController {
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
   @ApiOperation({ summary: 'List all plugins' })
-  @ApiResponse({ status: 200, description: 'List of all plugins' })
+  @ApiResponse({ status: 200, description: 'List of all plugins', type: PluginDto, isArray: true })
   findAll(): PluginDto[] {
     return this.pluginsService.findAll();
   }
@@ -48,8 +48,18 @@ export class PluginsController {
   @RequireUnscopedKey()
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_PLUGIN_UPLOAD_BYTES } }))
   @ApiConsumes('multipart/form-data')
+  // @ApiConsumes only names the media type; without a body schema the upload this route exists for is
+  // invisible in the contract, and a generated client has no parameter to attach the file to.
+  @ApiBody({
+    required: true,
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary', description: 'The plugin .zip package' } },
+    },
+  })
   @ApiOperation({ summary: 'Install a plugin from an uploaded .zip package' })
-  @ApiResponse({ status: 201, description: 'Plugin installed' })
+  @ApiResponse({ status: 201, description: 'Plugin installed', type: PluginDto })
   @ApiResponse({ status: 400, description: 'Invalid package' })
   @ApiResponse({ status: 409, description: 'Plugin already installed' })
   install(@UploadedFile() file: { buffer?: Buffer }): PluginDto {
@@ -60,7 +70,7 @@ export class PluginsController {
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
   @ApiOperation({ summary: 'Install a plugin by downloading its .zip from a URL (SSRF-guarded)' })
-  @ApiResponse({ status: 201, description: 'Plugin installed' })
+  @ApiResponse({ status: 201, description: 'Plugin installed', type: PluginDto })
   @ApiResponse({ status: 400, description: 'Invalid URL, download failed, or invalid package' })
   @ApiResponse({ status: 409, description: 'Plugin already installed' })
   async installFromUrl(@Body() dto: InstallFromUrlDto): Promise<PluginDto> {
@@ -82,7 +92,7 @@ export class PluginsController {
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
   @ApiOperation({ summary: 'Get plugin by ID' })
-  @ApiResponse({ status: 200, description: 'Plugin details' })
+  @ApiResponse({ status: 200, description: 'Plugin details', type: PluginDto })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
   findOne(@Param('id') id: string): PluginDto {
     return this.pluginsService.findOne(id);
@@ -127,7 +137,13 @@ export class PluginsController {
   @Header('Content-Security-Policy', 'sandbox')
   @Header('X-Content-Type-Options', 'nosniff')
   @ApiOperation({ summary: "Serve a plugin's sandboxed config-UI entry HTML (for an iframe srcdoc)" })
-  @ApiResponse({ status: 200, description: 'Config UI HTML' })
+  // The handler pins the media type with @Header, which the document cannot see — declare it, or the
+  // only HTML route in the API publishes a 200 a client would decode as JSON.
+  @ApiResponse({
+    status: 200,
+    description: 'Config UI HTML',
+    content: { 'text/html': { schema: { type: 'string' } } },
+  })
   @ApiResponse({ status: 404, description: 'Plugin not found or has no config UI' })
   getConfigUi(@Param('id') id: string): string {
     return this.pluginsService.getConfigUiHtml(id);
@@ -170,7 +186,7 @@ export class PluginsController {
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
   @ApiOperation({ summary: 'Update an installed plugin in place from a URL (preserves config + enabled state)' })
-  @ApiResponse({ status: 201, description: 'Plugin updated' })
+  @ApiResponse({ status: 201, description: 'Plugin updated', type: PluginDto })
   @ApiResponse({ status: 400, description: 'Invalid URL/package, id mismatch, or built-in' })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
   async update(@Param('id') id: string, @Body() dto: InstallFromUrlDto): Promise<PluginDto> {

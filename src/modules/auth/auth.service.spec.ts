@@ -98,6 +98,7 @@ describe('AuthService', () => {
       findOne: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
+      update: jest.fn(),
       remove: jest.fn(),
       increment: jest.fn(),
     };
@@ -600,7 +601,7 @@ describe('AuthService', () => {
 
       const result = await service.validateApiKey(rawKey);
 
-      expect(repository.save).not.toHaveBeenCalled(); // throttled — no DB write this request
+      expect(repository.update).not.toHaveBeenCalled(); // throttled — no DB write this request
       expect(result.usageCount).toBe(6); // but the count is still reflected in-memory
       expect(result.lastUsedAt).toBeDefined();
     });
@@ -613,11 +614,17 @@ describe('AuthService', () => {
         usageCount: 5,
       });
       (repository.findOne as jest.Mock).mockResolvedValue(key);
-      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
 
       await service.validateApiKey(rawKey);
 
-      expect(repository.save).toHaveBeenCalled(); // persisted after the window
+      // Scoped to the usage columns: persisting the whole entity here would write back the
+      // authorisation state this request loaded, reverting any concurrent administrator change.
+      const [criteria, patch] = (repository.update as jest.Mock).mock.calls[0] as [{ id: string }, Partial<ApiKey>];
+      expect(criteria).toEqual({ id: key.id });
+      expect(Object.keys(patch).sort()).toEqual(['lastUsedAt', 'usageCount']);
+      expect(patch.usageCount).toBe(6);
+      expect(repository.save).not.toHaveBeenCalled();
     });
 
     it('should throw UnauthorizedException for invalid key', async () => {
@@ -702,16 +709,16 @@ describe('AuthService', () => {
   // ── usage-stat lost-update safety + shutdown flush ────────────────
 
   describe('usage-stat lost-update safety', () => {
-    it('keeps the accumulated delta when the windowed save fails, and the next flush carries it', async () => {
+    it('keeps the accumulated delta when the windowed write fails, and the next flush carries it', async () => {
       const rawKey = 'flaky-key';
       // Fresh row per findOne, as TypeORM returns it (no identity map): the DB state never
       // reflects the failed write, so the delta must survive in the pending map.
       const freshRow = () =>
         createMockApiKey({ keyHash: hashKey(rawKey), lastUsedAt: new Date(Date.now() - 5 * 60_000), usageCount: 5 });
       (repository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(freshRow()));
-      (repository.save as jest.Mock)
+      (repository.update as jest.Mock)
         .mockRejectedValueOnce(new Error('db write failed'))
-        .mockImplementation(k => Promise.resolve(k));
+        .mockResolvedValue({ affected: 1 });
 
       // The windowed write fails: the request still succeeds (the key is valid) and the delta is kept.
       const first = await service.validateApiKey(rawKey);
@@ -720,8 +727,8 @@ describe('AuthService', () => {
       // Still due on the next request (DB lastUsedAt was never written) → the retry persists the
       // failed delta plus this request's increment — nothing is lost.
       await service.validateApiKey(rawKey);
-      const saves = (repository.save as jest.Mock).mock.calls as Array<[ApiKey]>;
-      expect(saves[1][0].usageCount).toBe(7); // DB 5 + failed delta 1 + this request 1
+      const writes = (repository.update as jest.Mock).mock.calls as Array<[unknown, Partial<ApiKey>]>;
+      expect(writes[1][1].usageCount).toBe(7); // DB 5 + failed delta 1 + this request 1
 
       // The successful retry drained the accumulator — nothing left for the shutdown flush.
       await service.onModuleDestroy();
@@ -738,7 +745,7 @@ describe('AuthService', () => {
       (repository.increment as jest.Mock).mockResolvedValue({ affected: 1 });
 
       await service.validateApiKey(rawKey); // inside the throttle window → coalesced, no DB write
-      expect(repository.save).not.toHaveBeenCalled();
+      expect(repository.update).not.toHaveBeenCalled();
 
       await service.onModuleDestroy();
       expect(repository.increment).toHaveBeenCalledWith({ id: 'uuid-1' }, 'usageCount', 1);

@@ -19,6 +19,9 @@
  *      current-support prose ("currently X.Y.x") and the supported-versions table row
  *      ("| X.Y.x | :white_check_mark: |"), plus the lower-bound row ("< X.Y"). Derived from
  *      package.json so a release cannot ship with a stale supported-version.
+ *   6. charts/openwa/Chart.yaml `appVersion` must equal package.json — the chart defaults its image
+ *      tag to appVersion, so a stale one deploys a tag that does not exist yet. The chart's own
+ *      `version:` is intentionally left alone: it tracks packaging changes on its own cadence.
  *
  * Run locally: `npm run check:versions`. Runs in CI (lint job).
  */
@@ -113,6 +116,21 @@ if (minorMatch) {
     const found = security.match(new RegExp(`^\\|\\s+<\\s+(\\d+\\.\\d+)\\s+\\|\\s+:x:\\s+\\|`, 'm'))?.[1];
     errors.push(
       `SECURITY.md: supported-versions lower-bound row advertises < ${found} but package.json is ${supportedMinor} — bump the bound.`,
+    );
+  }
+}
+
+// 6) The Helm chart's appVersion must name the shipped application version. The chart's own
+//    `version:` is deliberately NOT checked — it tracks packaging changes and bumps on its own
+//    cadence, so tying it to package.json would be wrong.
+{
+  const chart = read('charts/openwa/Chart.yaml');
+  const appVersion = chart.match(/^appVersion:\s*["']?([^"'\s]+)["']?\s*$/m)?.[1];
+  if (!appVersion) {
+    errors.push('charts/openwa/Chart.yaml: no appVersion line found — it must name the shipped application version.');
+  } else if (appVersion !== version) {
+    errors.push(
+      `charts/openwa/Chart.yaml: appVersion is ${appVersion} but package.json is ${version} — the chart would deploy an image tag that does not exist yet.`,
     );
   }
 }

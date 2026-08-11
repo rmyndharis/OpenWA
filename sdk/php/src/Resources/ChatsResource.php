@@ -92,6 +92,35 @@ class ChatsResource
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/chats/archive", [], $body) ?? [];
     }
 
+    /**
+     * Pin a chat to the top of the list, or unpin it.
+     *
+     * `success: false` means WhatsApp declined — an account may pin only three chats at a time.
+     *
+     * @param array<string,mixed> $body chatId and pin (bool).
+     * @return array<string,mixed>
+     */
+    public function pin(string $sessionId, array $body): array
+    {
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/chats/pin", [], $body) ?? [];
+    }
+
+    /**
+     * Mute a chat until an absolute timestamp, or unmute it with `muteUntil: null`.
+     *
+     * `muteUntil` is epoch MILLISECONDS. Passing seconds points at an instant in 1970, so the mute
+     * expires the moment it is set while the call still succeeds — nothing in the response
+     * distinguishes that from a mute that took effect. It is required, not optional: the two
+     * readings of an omitted value, unmute now and mute indefinitely, are opposites.
+     *
+     * @param array<string,mixed> $body chatId and muteUntil (int epoch ms, or null to unmute).
+     * @return array<string,mixed>
+     */
+    public function mute(string $sessionId, array $body): array
+    {
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/chats/mute", [], $body) ?? [];
+    }
+
     /** @return array<string,mixed> */
     public function delete(string $sessionId, array $body): array
     {

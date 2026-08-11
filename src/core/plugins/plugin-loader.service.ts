@@ -69,6 +69,16 @@ export function resolvePluginMainPath(pluginsDir: string, pluginId: string, main
 }
 
 /**
+ * The same containment guard, anchored to a plugin's own package directory rather than to the
+ * configured plugins root. Callers that hold a loaded plugin's `packageDir` use this: the package
+ * may sit in the legacy directory, in which case resolving against `plugins.dir` names a file that
+ * does not exist.
+ */
+export function resolvePluginEntryPath(packageDir: string, entry: string): string {
+  return resolvePluginMainPath(path.dirname(packageDir), path.basename(packageDir), entry);
+}
+
+/**
  * Sibling directory names an in-place plugin update stages into / backs up to (see
  * PluginsService.updatePackageInner). Dot-prefixed so the boot directory scan skips them, and placed
  * inside the plugins dir so the swap renames stay on one filesystem (EXDEV-safe). The loader's
@@ -542,6 +552,10 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       builtIn: false,
       activeSessions: storedSessions,
       sessionConfig: storedSessionConfig,
+      // The directory this package was actually found in, which is not necessarily
+      // <plugins.dir>/<id> — the legacy directory is scanned too. Recorded here because this is the
+      // only point that knows it; every later write against the package reads it back.
+      packageDir: path.resolve(pluginPath),
     };
 
     this.plugins.set(manifest.id, pluginInstance);
@@ -772,6 +786,25 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     return this.pluginsDir;
   }
 
+  /**
+   * Absolute path of a plugin's own package directory — the tree its code was loaded from.
+   *
+   * Every operation that acts on the package (enable, uninstall, update, config UI) must use this
+   * rather than <plugins.dir>/<id>: the loader also scans the legacy plugins directory, so those are
+   * not the same path for a plugin a host has not migrated yet. Falls back to the configured
+   * location for an id that is not loaded, which is what a fresh install wants.
+   */
+  getPluginPackageDir(pluginId: string): string {
+    return this.plugins.get(pluginId)?.packageDir ?? path.join(this.pluginsDir, pluginId);
+  }
+
+  /** <plugins.dir>/<id> for an id with no loaded package, or null if the id escapes that root. */
+  private resolveUninstallDir(pluginId: string): string | null {
+    const base = path.resolve(this.pluginsDir);
+    const dir = path.resolve(base, pluginId);
+    return dir !== base && dir.startsWith(base + path.sep) ? dir : null;
+  }
+
   /** Whether a plugin is a first-party built-in (engine / bundled extension) vs an installed user plugin. */
   isBuiltIn(pluginId: string): boolean {
     return this.pluginStorage.getPluginEntry(pluginId)?.builtIn ?? false;
@@ -787,15 +820,21 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       throw new Error(`Cannot uninstall built-in plugin ${pluginId}`);
     }
 
+    // Read the package location BEFORE unloading: unloadPlugin drops the runtime record that holds
+    // it, and for a plugin loaded from the legacy directory the configured root is the wrong tree —
+    // deleting there removes the ctx.storage directory and leaves the code, so the plugin comes
+    // back on the next boot having reported a successful uninstall.
+    const recordedDir = this.plugins.get(pluginId)?.packageDir ?? null;
+
     if (this.plugins.has(pluginId)) {
       await this.unloadPlugin(pluginId);
     }
     this.pluginStorage.deletePluginEntry(pluginId);
 
-    // Delete the plugin's directory, guarding against a traversal id escaping the plugins dir.
-    const base = path.resolve(this.pluginsDir);
-    const dir = path.resolve(base, pluginId);
-    if (dir !== base && dir.startsWith(base + path.sep) && fs.existsSync(dir)) {
+    // A recorded directory came from the boot scan and is already contained. Without one the id is
+    // the only input, so it stays behind the traversal guard against the configured root.
+    const dir = recordedDir ?? this.resolveUninstallDir(pluginId);
+    if (dir && fs.existsSync(dir)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
 
@@ -947,6 +986,9 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
 
     if (!plugin.instance) {
       // Containment guard: reject a manifest.main that escapes the plugin dir.
+      // The configured root, not getPluginPackageDir: this tier runs only for built-ins
+      // (enablePlugin routes `builtIn === false` to the sandbox), and a built-in is registered
+      // programmatically with no on-disk package, so the two resolve identically here.
       const mainPath = resolvePluginMainPath(this.pluginsDir, pluginId, plugin.manifest.main);
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const pluginModule = require(mainPath) as { default?: new () => IPlugin };

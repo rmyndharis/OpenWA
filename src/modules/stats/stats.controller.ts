@@ -1,5 +1,6 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { MessageStatsResponseDto, OverviewStatsResponseDto, SessionStatsResponseDto } from './dto/stats-response.dto';
 import { StatsService } from './stats.service';
 import { StatsQueryDto } from './dto/stats-query.dto';
 import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
@@ -17,7 +18,11 @@ export class StatsController {
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
   @ApiOperation({ summary: 'Get overall statistics' })
-  @ApiResponse({ status: 200, description: 'Cross-session aggregate statistics (sessions, messages, etc.).' })
+  @ApiResponse({
+    status: 200,
+    description: 'Cross-session aggregate statistics (sessions, messages, etc.).',
+    type: OverviewStatsResponseDto,
+  })
   async getOverview() {
     return this.statsService.getOverview();
   }
@@ -26,14 +31,22 @@ export class StatsController {
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
   @ApiOperation({ summary: 'Get message statistics with time series' })
-  @ApiResponse({ status: 200, description: 'Message statistics with a time series for the requested period.' })
+  @ApiResponse({
+    status: 200,
+    description: 'Message statistics with a time series for the requested period.',
+    type: MessageStatsResponseDto,
+  })
   async getMessageStats(@Query() query: StatsQueryDto) {
     return this.statsService.getMessageStats(query.period || '24h');
   }
 
   @Get('sessions/:sessionId')
   @ApiOperation({ summary: 'Get statistics for a specific session' })
-  @ApiResponse({ status: 200, description: 'Per-session statistics for the requested session.' })
+  @ApiResponse({
+    status: 200,
+    description: 'Per-session statistics for the requested session.',
+    type: SessionStatsResponseDto,
+  })
   async getSessionStats(@Param('sessionId') sessionId: string) {
     return this.statsService.getSessionStats(sessionId);
   }

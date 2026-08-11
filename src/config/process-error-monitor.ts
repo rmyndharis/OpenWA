@@ -15,14 +15,23 @@ interface RejectionLogger extends FatalLogger {
 }
 
 /**
- * Puppeteer raises this when an isolated world is disposed while an `evaluate` is still waiting for an
- * execution context — i.e. the page went away underneath it.
+ * The two shapes an ownerless `inject()` rejection takes (#982). One cause, so one classification.
  *
- * Deliberately duplicated from the whatsapp-web.js adapter's own predicate rather than imported: that
- * module pulls whatsapp-web.js in eagerly, and this one is loaded during bootstrap, where the engine
- * must stay lazy. Keep the two in sync.
+ * 1. `execution context was destroyed` — Puppeteer disposed the isolated world while an `evaluate`
+ *    was still waiting for a context, i.e. the page went away underneath it.
+ * 2. `window.require is not a function` — the navigation landed on a page whose WhatsApp Web bundle
+ *    has not defined its module registry yet, so the evaluate reaches `window.require` before it
+ *    exists. Observed at the first boot after the pinned WA Web build moved under a warm profile:
+ *    twice, then the session reached READY unaided, and a restart on the same build produced none.
+ *
+ * Only the FIRST alternative mirrors the whatsapp-web.js adapter's `isExecutionContextDestroyedError`
+ * — deliberately duplicated rather than imported, because that module pulls whatsapp-web.js in eagerly
+ * and this one loads during bootstrap, where the engine must stay lazy. Keep that alternative in sync
+ * with it. The second is monitor-only ON PURPOSE: the adapter uses its predicate to advise about a
+ * stale browser profile (#663/#708), and a missing `window.require` is not evidence of that, so
+ * teaching it there would produce a confidently wrong advisory.
  */
-const PAGE_CONTEXT_LOST_REJECTION = /execution context was destroyed/i;
+const PAGE_CONTEXT_LOST_REJECTION = /execution context was destroyed|window\.require is not a function/i;
 
 /**
  * Register an `uncaughtExceptionMonitor` that routes an otherwise-fatal uncaught exception through the

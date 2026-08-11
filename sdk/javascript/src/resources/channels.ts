@@ -9,7 +9,9 @@ import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type {
   CreateChannelRequest,
+  DemoteChannelAdminRequest,
   MuteChannelRequest,
+  TransferChannelOwnershipRequest,
   ChannelMessageQuery,
   ChannelMessageRecord,
   ChannelRecord,
@@ -90,6 +92,37 @@ export class ChannelsResource {
     return this.client.request<SuccessResult>({
       method: 'DELETE',
       path: `/api/sessions/${encodeSegment(sessionId)}/channels/${encodeSegment(channelId)}`,
+    });
+  }
+  /**
+   * Demote a channel admin back to a subscriber. Requires an OPERATOR-level key.
+   *
+   * There is no promote counterpart: neither engine library has one, so an admin is promoted from
+   * the WhatsApp app and demoted here. The whatsapp-web.js engine answers `501`.
+   */
+  demoteAdmin(sessionId: string, channelId: string, body: DemoteChannelAdminRequest): Promise<SuccessResult> {
+    return this.client.request<SuccessResult>({
+      method: 'POST',
+      path: `/api/sessions/${encodeSegment(sessionId)}/channels/${encodeSegment(channelId)}/admins/demote`,
+      body,
+    });
+  }
+
+  /**
+   * Hand a channel to a new owner. Requires an OPERATOR-level key.
+   *
+   * **Irreversible**: once the transfer lands this account stops being the owner and cannot take the
+   * channel back. The whatsapp-web.js engine answers `501`.
+   */
+  transferOwnership(
+    sessionId: string,
+    channelId: string,
+    body: TransferChannelOwnershipRequest,
+  ): Promise<SuccessResult> {
+    return this.client.request<SuccessResult>({
+      method: 'POST',
+      path: `/api/sessions/${encodeSegment(sessionId)}/channels/${encodeSegment(channelId)}/owner/transfer`,
+      body,
     });
   }
 }

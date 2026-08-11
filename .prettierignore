@@ -1,0 +1,22 @@
+# Prettier resolves its default ignore files at the CWD only — it does not walk directories the way
+# git does, so the nested .gitignore files under sdk/* are never opened. Anything installed or built
+# below them therefore reaches the `**/*.md` glob in `format` / `format:check`, and a plain
+# `composer install` is enough to fail the check on markdown this repository does not own.
+#
+# Keep in step with those nested .gitignore files. The root .gitignore is read by default, so rules
+# already there (node_modules/, dist/, coverage/) do not need repeating.
+
+# sdk/php/.gitignore
+sdk/php/vendor/
+sdk/php/.phpunit.cache/
+
+# sdk/python/.gitignore
+sdk/python/.pytest_cache/
+sdk/python/__pycache__/
+sdk/python/build/
+sdk/python/dist/
+sdk/python/.venv/
+sdk/python/*.egg-info/
+
+# sdk/java/.gitignore
+sdk/java/target/

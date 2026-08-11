@@ -290,7 +290,9 @@
       "phone": "전화번호",
       "phoneNone": "연결되지 않음",
       "created": "생성일",
-      "lastActive": "마지막 활동"
+      "lastActive": "마지막 활동",
+      "autoRejectCalls": "통화 자동 거절",
+      "autoRejectCallsHint": "수신 통화가 울리는 즉시 거절됩니다. call.received 웹훅은 그전에 그대로 전송됩니다. 다음 통화부터 적용되며 재시작이 필요하지 않습니다."
     },
     "actions": {
       "view": "보기",
@@ -760,6 +762,8 @@
       "export": "데이터 내보내기",
       "import": "데이터 가져오기",
       "exportFailed": "데이터를 내보내지 못했습니다",
+      "exportPartialTitle": "Backup is missing some media",
+      "exportPartial": "{{count}} attachment payload(s) exceeded the export media budget and were saved as placeholders. The messages restore; their media does not.",
       "importFailed": "데이터를 가져오지 못했습니다",
       "importOk": "데이터를 가져왔습니다",
       "importConfirm": "가져오기를 실행하면 현재 데이터가 백업본({{rows}}행)으로 완전히 대체됩니다. 되돌릴 수 없습니다. 계속할까요?",

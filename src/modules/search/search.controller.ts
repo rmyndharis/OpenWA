@@ -1,5 +1,6 @@
 import { Controller, Get, Query, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { SearchResultsResponseDto } from './dto/search-response.dto';
 import { RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { SearchService } from './search.service';
@@ -14,7 +15,7 @@ export class SearchController {
   @Get()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Search messages across sessions (active search provider)' })
-  @ApiResponse({ status: 200, description: 'Search results from the active provider' })
+  @ApiResponse({ status: 200, description: 'Search results from the active provider', type: SearchResultsResponseDto })
   @ApiResponse({ status: 400, description: 'Empty or whitespace-only "q"' })
   @ApiResponse({ status: 501, description: 'No search provider configured' })
   @ApiQuery({ name: 'q', required: true, description: 'Search term (required, non-empty)' })

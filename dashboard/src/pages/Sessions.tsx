@@ -15,7 +15,7 @@ import {
   Skull,
   Unlink,
 } from 'lucide-react';
-import { sessionApi, type Session, type AccountRestriction } from '../services/api';
+import { sessionApi, type Session, type SessionConfig, type AccountRestriction } from '../services/api';
 import { queryKeys } from '../hooks/queries';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
@@ -69,6 +69,10 @@ export function Sessions() {
   const [killConfirmId, setKillConfirmId] = useState<string | null>(null);
   const [unlinkConfirmId, setUnlinkConfirmId] = useState<string | null>(null);
   const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
+  // Session config is not on the list payload — the API never returns the config column, so it is
+  // fetched per session when the detail modal opens rather than N times to render the list.
+  const [sessionConfig, setSessionConfig] = useState<SessionConfig | null>(null);
+  const [savingConfig, setSavingConfig] = useState(false);
 
   const fetchSessions = useCallback(async (): Promise<Session[]> => {
     try {
@@ -263,6 +267,44 @@ export function Sessions() {
       const fresh = await fetchSessions();
       const current = fresh.find(s => s.id === id);
       if (current?.status !== 'ready') handleShowQR(id);
+    }
+  };
+
+  // Load the config when the detail modal opens and drop it when it closes, so a value fetched for
+  // one session can never render against another.
+  const selectedSessionId = selectedSession?.id ?? null;
+  useEffect(() => {
+    setSessionConfig(null);
+    if (!selectedSessionId) return;
+    let cancelled = false;
+    sessionApi
+      .getConfig(selectedSessionId)
+      .then(cfg => {
+        if (!cancelled) setSessionConfig(cfg);
+      })
+      .catch(() => {
+        // Leave the row absent rather than defaulting the toggle to off: rendering it off would
+        // assert that auto-reject is disabled for a session we failed to ask about.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSessionId]);
+
+  const handleAutoRejectToggle = async (next: boolean) => {
+    if (!selectedSessionId || !sessionConfig) return;
+    const previous = sessionConfig;
+    setSessionConfig({ ...sessionConfig, autoRejectCalls: next });
+    setSavingConfig(true);
+    try {
+      setSessionConfig(await sessionApi.updateConfig(selectedSessionId, { autoRejectCalls: next }));
+    } catch (err) {
+      // Revert: an optimistic toggle left flipped would tell the operator calls are being rejected
+      // when the gateway never accepted the change.
+      setSessionConfig(previous);
+      toast.error(t('sessions.details.autoRejectCalls'), err instanceof Error ? err.message : t('common.unknownError'));
+    } finally {
+      setSavingConfig(false);
     }
   };
 
@@ -628,6 +670,23 @@ export function Sessions() {
                 {selectedSession.lastActive ? new Date(selectedSession.lastActive).toLocaleString() : t('common.never')}
               </span>
             </div>
+            {sessionConfig && (
+              <div className="detail-item detail-item-toggle">
+                <div className="detail-toggle-row">
+                  <span className="detail-label">{t('sessions.details.autoRejectCalls')}</span>
+                  <label className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      checked={sessionConfig.autoRejectCalls}
+                      disabled={!canWrite || savingConfig}
+                      onChange={e => void handleAutoRejectToggle(e.target.checked)}
+                    />
+                    <span className="toggle-slider"></span>
+                  </label>
+                </div>
+                <small className="detail-hint">{t('sessions.details.autoRejectCallsHint')}</small>
+              </div>
+            )}
           </div>
         </Modal>
       )}

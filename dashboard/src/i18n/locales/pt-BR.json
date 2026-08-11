@@ -290,7 +290,9 @@
       "phone": "Número de telefone",
       "phoneNone": "Não conectado",
       "created": "Criado em",
-      "lastActive": "Última atividade"
+      "lastActive": "Última atividade",
+      "autoRejectCalls": "Rejeitar chamadas automaticamente",
+      "autoRejectCallsHint": "As chamadas recebidas são recusadas assim que tocam. O webhook call.received continua sendo enviado antes. Vale a partir da próxima chamada — sem reiniciar."
     },
     "actions": {
       "view": "Ver",
@@ -779,6 +781,8 @@
       "export": "Exportar dados",
       "import": "Importar dados",
       "exportFailed": "Não foi possível exportar os dados",
+      "exportPartialTitle": "Backup is missing some media",
+      "exportPartial": "{{count}} attachment payload(s) exceeded the export media budget and were saved as placeholders. The messages restore; their media does not.",
       "importFailed": "Não foi possível importar os dados",
       "importOk": "Dados importados",
       "importConfirm": "A importação IRÁ SUBSTITUIR todos os dados atuais pelo backup ({{rows}} linhas). Isso não pode ser desfeito. Continuar?",

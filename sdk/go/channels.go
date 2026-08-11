@@ -77,3 +77,33 @@ func (s *ChannelsService) Unsubscribe(ctx context.Context, sessionID, channelID 
 	}
 	return &out, nil
 }
+
+// DemoteAdmin demotes a channel admin back to a subscriber. Requires an OPERATOR-level key.
+//
+// There is no promote counterpart: neither engine library has one, so an admin is promoted from the
+// WhatsApp app and demoted here. The whatsapp-web.js engine answers 501.
+func (s *ChannelsService) DemoteAdmin(
+	ctx context.Context, sessionID, channelID string, body DemoteChannelAdminRequest,
+) (*SuccessResult, error) {
+	var out SuccessResult
+	err := s.client.do(ctx, "POST", s.base(sessionID)+"/"+pathEscape(channelID)+"/admins/demote", nil, body, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// TransferOwnership hands a channel to a new owner. Requires an OPERATOR-level key.
+//
+// Irreversible: once the transfer lands this account stops being the owner and cannot take the
+// channel back. The whatsapp-web.js engine answers 501.
+func (s *ChannelsService) TransferOwnership(
+	ctx context.Context, sessionID, channelID string, body TransferChannelOwnershipRequest,
+) (*SuccessResult, error) {
+	var out SuccessResult
+	err := s.client.do(ctx, "POST", s.base(sessionID)+"/"+pathEscape(channelID)+"/owner/transfer", nil, body, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

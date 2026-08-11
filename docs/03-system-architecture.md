@@ -239,7 +239,8 @@ connections**:
 - **`data`** — the pluggable user-data connection: `sqlite` (default) or `postgres`, selected by
   `DATABASE_TYPE`. Owns the session/webhook/message/template/engine entities, plus the
   integration-fabric (`plugin_instances`, `ingress_events`, `conversation_mappings`,
-  `integration_delivery_failures`) and status-store (`status_updates`) entities.
+  `integration_delivery_failures`), status-store (`status_updates`) and automation
+  (`automation_rules`) entities.
 
 The engine is provided by `EngineModule` as the `EngineFactory` **class** (a normal injectable, not a
 string token). Storage and cache are provided as the `StorageService` and `CacheService` classes by
@@ -384,7 +385,7 @@ flowchart TB
 
 ### NestJS Module Organization
 
-Trimmed to the load-bearing directories — `src/modules/` holds 27 feature modules. Only `*.module.ts`
+Trimmed to the load-bearing directories — `src/modules/` holds 31 feature modules. Only `*.module.ts`
 is common to all of them; the rest of the shape varies. Most pair a `*.controller.ts` with a
 `*.service.ts`, but `events/` is a WebSocket gateway, `mcp/` an MCP server and `queue/` pure BullMQ
 wiring (none of the three has either); `docker/` and `status-store/` are service-only; `health/`,
@@ -428,6 +429,9 @@ src/
 │   ├── auth/                   # API-key auth: auth.service.ts, guards/, decorators/, entities/
 │   ├── queue/                  # BullMQ wiring + processors/
 │   ├── integration/            # Integration fabric (plugin instances, ingress, mappings)
+│   ├── automation/            # Autoreply rules (automation_rules, the 14th migration table)
+│   ├── media/  chat-media/    # Inbound media handling + the optional chat-media archive
+│   ├── takeover/
 │   └── plugins/  mcp/  events/  infra/  docker/  settings/  metrics/  audit/  health/
 │
 └── database/                   # data-source.ts / data-source-main.ts
@@ -906,7 +910,7 @@ export interface EngineEventCallbacks {
   onMessageRevoked?: (message: RevokedMessage) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
-  onGroupEvent?: (event: GroupEvent) => void; // kind selects group.join / group.leave / group.update
+  onGroupEvent?: (event: GroupEvent) => void; // kind selects group.join / group.leave / group.update / group.join_request
   onCall?: (event: IncomingCallEvent) => void; // incoming call ringing; rejectCall() while it rings
   onHistoryMessages?: (messages: IncomingMessage[]) => void; // bulk initial sync; persist, don't dispatch
   onDisconnected?: (reason: string) => void; // recoverable -> reconnect
@@ -1142,7 +1146,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
     this.socket!.ev.on('messages.upsert', ({ messages }) => {
       for (const msg of messages) {
-        if (!msg.key.fromMe) this.callbacks.onMessage?.(this.toIncomingMessage(msg)); // neutral ids
+        const incoming = this.toIncomingMessage(msg); // neutral ids
+        // Own sends are not dropped: they route to onMessageCreate, which drives `message.sent`.
+        if (msg.key.fromMe) this.callbacks.onMessageCreate?.(incoming);
+        else this.callbacks.onMessage?.(incoming);
       }
     });
   }

@@ -474,6 +474,10 @@ spec:
 
 ### Deploy to Kubernetes
 
+The maintained chart is [`charts/openwa`](../charts/openwa), a single-instance StatefulSet that
+already encodes the `replicaCount: 1` constraint below; prefer it over hand-applied manifests. The
+raw manifests here stay for operators who do not use Helm.
+
 ```bash
 # Apply all manifests
 kubectl apply -f k8s/

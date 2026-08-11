@@ -21,7 +21,11 @@ export class MetricsController {
   @Get()
   @ApiOperation({ summary: 'Prometheus metrics (requires METRICS_TOKEN bearer)' })
   @ApiSecurity(METRICS_BEARER_SCHEME)
-  @ApiResponse({ status: 200, description: 'Prometheus exposition text' })
+  @ApiResponse({
+    status: 200,
+    description: 'Prometheus exposition text',
+    content: { 'text/plain': { schema: { type: 'string' } } },
+  })
   @ApiResponse({ status: 401, description: 'METRICS_TOKEN is configured but the bearer is missing or wrong' })
   @ApiResponse({ status: 404, description: 'Metrics endpoint is disabled (METRICS_TOKEN unset)' })
   @Header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')

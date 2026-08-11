@@ -10,6 +10,11 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
+import {
+  StorageExportResponseDto,
+  StorageFileCountResponseDto,
+  StorageImportResponseDto,
+} from './dto/infra-response.dto';
 import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { isPathWithin } from '../../common/utils/path-safety';
@@ -105,7 +110,7 @@ export class InfraStorageController implements OnApplicationBootstrap {
   @Get('storage/files/count')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get file count in current storage' })
-  @ApiResponse({ status: 200, description: 'File count and size' })
+  @ApiResponse({ status: 200, description: 'File count and size', type: StorageFileCountResponseDto })
   async getStorageFileCount(): Promise<{
     storageType: string;
     count: number;
@@ -124,7 +129,13 @@ export class InfraStorageController implements OnApplicationBootstrap {
   @Get('storage/export')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Export all storage files as tar.gz' })
-  @ApiResponse({ status: 200, description: 'Tar.gz archive stream' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'JSON pointing at the archive that was written under data/exports/. This route does NOT stream ' +
+      'the tar.gz itself — fetch it from the returned `download` path.',
+    type: StorageExportResponseDto,
+  })
   async exportStorage(): Promise<{ message: string; download: string }> {
     // Note: In production, this would return a StreamableFile
     // For simplicity, we'll save to a temp file and return the path
@@ -181,7 +192,7 @@ export class InfraStorageController implements OnApplicationBootstrap {
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Import storage files from tar.gz' })
   @ApiBody({ description: 'Path to tar.gz file to import' })
-  @ApiResponse({ status: 200, description: 'Import result' })
+  @ApiResponse({ status: 200, description: 'Import result', type: StorageImportResponseDto })
   async importStorage(
     @Body() body: ImportStorageDto,
   ): Promise<{ imported: boolean; count: number; storageType: string }> {

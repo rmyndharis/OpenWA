@@ -4,6 +4,7 @@ import static com.rmyndharis.openwa.http.Http.encodeSegment;
 
 import com.rmyndharis.openwa.OpenWAClient;
 import com.rmyndharis.openwa.http.HttpMethod;
+import com.rmyndharis.openwa.model.DeliveryFailureQuery;
 import com.rmyndharis.openwa.model.CreateWebhookRequest;
 import com.rmyndharis.openwa.model.UpdateWebhookRequest;
 import com.rmyndharis.openwa.model.WebhookResponse;
@@ -16,6 +17,25 @@ public final class WebhooksResource {
 
     public WebhooksResource(OpenWAClient client) {
         this.client = client;
+    }
+
+    /**
+     * List webhooks across EVERY session the key can see, not one session's. Requires an
+     * OPERATOR-level key.
+     */
+    public List<WebhookResponse> listAll(DeliveryFailureQuery query) {
+        return client.requestList(HttpMethod.GET, "/api/webhooks", query, null, WebhookResponse.class);
+    }
+
+    /**
+     * Deliveries that were ATTEMPTED and failed — the diagnostic for a webhook that stopped arriving.
+     * Requires an ADMIN-level key.
+     *
+     * <p>A delivery a smart filter suppressed never reaches this log. The response has no published
+     * schema, so it is returned as a raw JSON tree.
+     */
+    public Object deliveryFailures(DeliveryFailureQuery query) {
+        return client.request(HttpMethod.GET, "/api/webhooks/delivery-failures", query, null, Object.class);
     }
 
     /** List all webhooks for a session. */

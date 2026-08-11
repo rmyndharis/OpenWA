@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Body, ConflictException, HttpCode, HttpStatus, Optional } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
+import { InfraExportDataResponseDto, InfraImportDataResponseDto } from './dto/infra-response.dto';
 import { ConfigService } from '@nestjs/config';
 import { DataSource, QueryRunner } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -131,6 +132,155 @@ export async function restoreSessionOwnership(
  */
 const SHARED_CONNECTION_DIALECTS = new Set(['better-sqlite3', 'sqlite']);
 
+/**
+ * Aggregate budget for the inline base64 media ONE export may carry, counted in the encoded bytes
+ * that actually land in the JSON body. Override with EXPORT_INLINE_MEDIA_BUDGET_BYTES; 0 omits every
+ * payload, and anything that is not a non-negative decimal integer falls back to the default.
+ *
+ * The export is bounded by nothing while the import rides the global request body limit (25mb by
+ * default, `resolveBodyLimit`), so unbounded inline media produces a backup this gateway then refuses
+ * with a 413 — inbound media is capped at MEDIA_DOWNLOAD_MAX_BYTES (50 MiB by default) and base64
+ * inflates that to 4/3.
+ *
+ * A blanket strip would trade the 413 for silent data loss, which is why this is a budget and not a
+ * flag: with the chat-media archive off — the default — `metadata.media.data` is the ONLY copy of an
+ * inbound photo, and a 180 KB one costs nothing against a 25 MiB ceiling. Mirrors
+ * CHAT_HISTORY_MEDIA_BUDGET_BYTES, which bounds the same failure on the chat-history response.
+ */
+const DEFAULT_EXPORT_INLINE_MEDIA_BUDGET_BYTES = 8 * 1024 * 1024;
+
+function exportInlineMediaBudgetBytes(): number {
+  const parsed = Number.parseInt(process.env.EXPORT_INLINE_MEDIA_BUDGET_BYTES ?? '', 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : DEFAULT_EXPORT_INLINE_MEDIA_BUDGET_BYTES;
+}
+
+/**
+ * A `data` value that is a POINTER rather than bytes. `metadata.media.data` holds `base64 || dto.url!`
+ * (message.service.ts), and the URL form is the only one the send examples offer — so a URL must never
+ * be treated as a payload: dropping it destroys the reference for a few dozen bytes that were never a
+ * 413 risk, and reports a `sizeBytes` that is URL text measured as base64, the size of nothing.
+ */
+function isMediaPointer(data: string): boolean {
+  // Case-insensitive to match the two adapters that actually fetch these (`isHttpUrl` in
+  // wwebjs-messaging.ts, `resolveMediaBuffer` in baileys-messaging.ts). `@IsUrl()` accepts an
+  // uppercase scheme, so a row can hold one; disagreeing with the senders here would destroy a
+  // reference to media they had just delivered.
+  return /^https?:\/\//i.test(data);
+}
+
+/**
+ * Order rows so the media budget is spent newest-first, keeping the most recent media when it cannot
+ * hold everything. `SELECT *` carries no ORDER BY: rows arrive in rowid order on SQLite — oldest
+ * first, the exact inverse of what a backup wants — and in physical-tuple order on Postgres, which
+ * routine UPDATEs reshuffle, so two exports of an unchanged DB need not agree. Sorts a COPY, leaving
+ * the exported array's own order untouched. A row with no usable timestamp sorts last, as the least
+ * worth spending the budget on.
+ */
+function newestFirst<T>(rows: readonly T[], at: (row: T) => number): T[] {
+  const key = (row: T): number => {
+    const value = at(row);
+    return Number.isFinite(value) ? value : 0;
+  };
+  return [...rows].sort((a, b) => key(b) - key(a));
+}
+
+/**
+ * Spends the shared budget, and remembers what it refused.
+ *
+ * `exceeds` returns true when this payload does not fit and must be dropped. The tally matters as
+ * much as the bound: an over-budget payload is replaced with the engine's own omitted marker, which
+ * is deliberately the same shape a payload skipped on the way in gets — so without a count, a
+ * truncated backup is indistinguishable from a complete one, both on inspection and on restore.
+ */
+function createInlineMediaBudget(): { exceeds: (encodedBytes: number) => boolean; droppedPayloads: () => number } {
+  const budget = exportInlineMediaBudgetBytes();
+  let spent = 0;
+  let dropped = 0;
+  return {
+    exceeds: (encodedBytes: number): boolean => {
+      if (spent + encodedBytes > budget) {
+        dropped += 1;
+        return true;
+      }
+      spent += encodedBytes;
+      return false;
+    },
+    droppedPayloads: () => dropped,
+  };
+}
+
+/**
+ * Replace an over-budget inline payload on a message row with the engine's own omitted marker
+ * (`{ mimetype, filename?, omitted: true, sizeBytes }`, `capInboundMedia`), so a restored row is
+ * indistinguishable from one whose media was skipped on the way in rather than a new shape consumers
+ * must learn. `mediaPath`/`mediaMimetype` are untouched.
+ *
+ * NOTE: this bounds the media, not the export. A text-only history is still unbounded — every row
+ * carries a few hundred bytes of scaffolding regardless of what was said.
+ */
+function stripInlineMediaPayload(row: MessageRow, exceedsBudget: (encodedBytes: number) => boolean): void {
+  // `metadata` is TEXT on both dialects and the export reads through a raw query that never hydrates
+  // an entity, so the value is always a string here.
+  const raw = row.metadata;
+  if (typeof raw !== 'string') return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // Metadata we cannot parse is not ours to rewrite; the importer round-trips it verbatim.
+    return;
+  }
+  // `JSON.parse('null')` yields null, and the import accepts a hand-edited archive verbatim, so this
+  // is reachable — reading `.media` off it would 500 every export until the row is deleted by hand.
+  if (typeof parsed !== 'object' || parsed === null) return;
+  const bag = parsed as Record<string, unknown>;
+  const media = bag.media as { data?: unknown; sizeBytes?: number } | null | undefined;
+  if (!media || typeof media.data !== 'string' || isMediaPointer(media.data)) return;
+  if (!exceedsBudget(Buffer.byteLength(media.data, 'utf8'))) return;
+  const { data, ...withoutPayload } = media;
+  bag.media = {
+    ...withoutPayload,
+    omitted: true,
+    // Decoded bytes, matching what capInboundMedia reports — the caller asked how big it WAS.
+    sizeBytes: media.sizeBytes ?? Buffer.byteLength(data, 'base64'),
+  };
+  row.metadata = JSON.stringify(bag);
+}
+
+/**
+ * The same budget applied to a bulk batch's stored message list.
+ *
+ * `message_batches.messages` carries the whole outbound list, base64 included, for the entire
+ * duration of a run — `stripBatchMediaPayloads` only fires on the four terminal transitions, and a
+ * batch left PROCESSING by another node keeps its payloads indefinitely. Bounding only `messages`
+ * would let the 413 arrive by this route instead. The batch shape keeps `url` in its own field, so
+ * unlike a message row there is no pointer to confuse with a payload.
+ */
+function stripBatchInlineMedia(row: MessageBatchRow, exceedsBudget: (encodedBytes: number) => boolean): void {
+  const raw = row.messages;
+  if (typeof raw !== 'string') return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (!Array.isArray(parsed)) return;
+  let stripped = false;
+  for (const entry of parsed) {
+    const content = (entry as { content?: unknown } | null)?.content;
+    if (typeof content !== 'object' || content === null) continue;
+    for (const key of ['image', 'video', 'audio', 'document']) {
+      const media = (content as Record<string, unknown>)[key] as { base64?: unknown } | null | undefined;
+      if (!media || typeof media !== 'object' || typeof media.base64 !== 'string') continue;
+      if (!exceedsBudget(Buffer.byteLength(media.base64, 'utf8'))) continue;
+      delete media.base64;
+      stripped = true;
+    }
+  }
+  if (stripped) row.messages = JSON.stringify(parsed);
+}
+
 @ApiTags('infrastructure')
 @Controller('infra')
 // Every route here is deployment-global (data export/import, infra config, service orchestration),
@@ -178,7 +328,7 @@ export class InfraDataController {
   @Get('export-data')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Export all data from Data DB for migration' })
-  @ApiResponse({ status: 200, description: 'Exported data as JSON' })
+  @ApiResponse({ status: 200, description: 'Exported data as JSON', type: InfraExportDataResponseDto })
   async exportData(): Promise<{
     exportedAt: string;
     dataDbType: string;
@@ -201,6 +351,12 @@ export class InfraDataController {
     };
     /** Optional tables that were skipped because they genuinely do not exist in this DB (older schema). */
     skippedTables: string[];
+    /**
+     * Inline media payloads the export budget refused, so a truncated backup can be told apart from
+     * a complete one. Zeroes mean everything fitted. Restoring an archive with a non-zero count is
+     * still valid — the rows come back, their media does not.
+     */
+    omittedInlineMedia: { messages: number; messageBatches: number };
   }> {
     // Get all entities from Data DB
     const sessions = await this.dataDataSource.query<SessionRow[]>('SELECT * FROM sessions');
@@ -225,6 +381,11 @@ export class InfraDataController {
       }
     };
 
+    // One budget shared by the two tables that carry a full inline payload — `messages` and
+    // `message_batches` — so the total is what is bounded rather than each table separately.
+    const inlineMediaBudget = createInlineMediaBudget();
+    const exceedsBudget = inlineMediaBudget.exceeds;
+
     const messages = await queryOptionalTable<MessageRow>('messages');
     // Postgres carries a STORED generated tsvector column `body_ts` (FTS) that `SELECT *` picks up.
     // It is a server-maintained index artifact, not payload: strip it so backups stay dialect-neutral
@@ -232,7 +393,18 @@ export class InfraDataController {
     for (const row of messages) {
       delete row.body_ts;
     }
+    for (const row of newestFirst(messages, row => Number(row.timestamp))) {
+      stripInlineMediaPayload(row, exceedsBudget);
+    }
+    // Snapshot between the two loops so the report can say WHICH table lost payloads — messages are
+    // served first, batches spend what is left.
+    const omittedMessageMedia = inlineMediaBudget.droppedPayloads();
     const messageBatches = await queryOptionalTable<MessageBatchRow>('message_batches');
+    // Batches spend what the messages left, and by the same newest-first rule: a run left PROCESSING
+    // keeps its payloads indefinitely, so a stale one must not outbid a current one.
+    for (const row of newestFirst(messageBatches, row => Date.parse(row.created_at))) {
+      stripBatchInlineMedia(row, exceedsBudget);
+    }
     const templates = await queryOptionalTable<TemplateRow>('templates');
     const baileysStoredMessages = await queryOptionalTable<BaileysStoredMessageRow>('baileys_stored_messages');
     const lidMappings = await queryOptionalTable<LidMappingRow>('lid_mappings');
@@ -291,6 +463,10 @@ export class InfraDataController {
       },
       counts,
       skippedTables,
+      omittedInlineMedia: {
+        messages: omittedMessageMedia,
+        messageBatches: inlineMediaBudget.droppedPayloads() - omittedMessageMedia,
+      },
     };
   }
 
@@ -315,18 +491,29 @@ export class InfraDataController {
         },
         tables: {
           type: 'object',
+          description:
+            'Every one of the 14 migration tables is emptied before the restore runs, so a key omitted here is restored EMPTY rather than left untouched. Post the whole GET /api/infra/export-data payload, not a hand-built subset.',
           properties: {
             sessions: { type: 'array' },
             webhooks: { type: 'array' },
             messages: { type: 'array' },
             messageBatches: { type: 'array' },
+            templates: { type: 'array' },
+            baileysStoredMessages: { type: 'array' },
+            lidMappings: { type: 'array' },
+            pluginInstances: { type: 'array' },
+            conversationMappings: { type: 'array' },
+            ingressEvents: { type: 'array' },
+            webhookDeliveryFailures: { type: 'array' },
+            integrationDeliveryFailures: { type: 'array' },
             statusUpdates: { type: 'array' },
+            automationRules: { type: 'array' },
           },
         },
       },
     },
   })
-  @ApiResponse({ status: 200, description: 'Data imported successfully' })
+  @ApiResponse({ status: 200, description: 'Data imported successfully', type: InfraImportDataResponseDto })
   @ApiResponse({
     status: 409,
     description:
@@ -355,7 +542,11 @@ export class InfraDataController {
      * warnings: notices never cause a rollback, while warnings make the replace-rollback gate fire.
      */
     notices: string[];
-    /** True when live engines were left pointing at sessions this restore removed — restart to stop them. */
+    /**
+     * True when an engine may still be writing into the restored tables, from any of three causes:
+     * orphans deliberately left running (`force`), a `stopOrphans` teardown that failed, or sessions
+     * held by another node, which this request has no channel to stop. Restart to reconcile.
+     */
     restartRequired: boolean;
     /** Session ids with a running engine that the restored data no longer contains. */
     orphanedEngines: string[];
@@ -702,8 +893,9 @@ export class InfraDataController {
         // only the per-table counts.
         await this.auditService?.logInfo(AuditAction.INFRA_DATA_IMPORTED, { metadata: { counts } });
 
-        // restartRequired was computed in the pre-flight: true only when orphans were left running
-        // (force=true legacy path) or when stopOrphans teardown failed for at least one engine.
+        // restartRequired was computed in the pre-flight, from three independent causes: orphans left
+        // running (force=true legacy path), a stopOrphans teardown that failed for at least one
+        // engine, and sessions held by another node, which this request cannot reach to stop.
         return {
           imported: true,
           counts,

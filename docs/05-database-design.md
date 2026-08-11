@@ -55,6 +55,7 @@ OpenWA v0.2+ implements a **dual-database architecture** that separates boot con
 │                             │ • integration_delivery_failures   │
 │                             │ • baileys_stored_messages (engine)│
 │                             │ • lid_mappings (engine)           │
+│                             │ • automation_rules                │
 └─────────────────────────────┴───────────────────────────────────┘
 ```
 
@@ -187,6 +188,10 @@ erDiagram
         varchar proxyType
         timestamp connectedAt
         timestamp lastActiveAt
+        varchar nodeId
+        timestamp claimedAt
+        varchar nodeUrl
+        timestamp leaseExpiresAt
         timestamp createdAt
         timestamp updatedAt
     }
@@ -362,6 +367,20 @@ clears it, and so does a gateway restart.
 | `reconnectBaseDelay`   | `5000` ms | Base delay of the reconnect backoff, clamped to 1000–300000 ms           |
 | `autoRejectCalls`      | `false`   | Auto-reject an incoming call as soon as it rings                         |
 
+Set them at creation with `POST /api/sessions`, or on an existing session with
+`PATCH /api/sessions/{id}/config` — no restart, and no re-scan of the QR. The patch merges, so a key
+it does not mention keeps its stored value, and an explicit `null` clears a key back to the default
+above (the only way back to unlimited reconnect attempts once a cap is set).
+
+When each takes effect differs, because each is read at a different moment: `autoRejectCalls` is
+re-read from this row on every incoming call, so a patch applies to the next call. The two reconnect
+keys are read once per `start()` into the in-memory reconnect state, so a patch applies on the next
+start and leaves a reconnect sequence already in flight alone.
+
+`GET /api/sessions/{id}/config` reports the effective values. It reports only these three keys and
+never the raw column — `config` is stripped from `SessionResponseDto` alongside the
+credential-bearing `proxyUrl`, and echoing an opaque blob back would defeat that.
+
 > [!NOTE]
 > Proxy settings are **not** read from `config` — they live in the dedicated `proxyUrl` / `proxyType` columns shown in the DDL above. Puppeteer options are global engine configuration from the environment (`engine.puppeteer.*`), not per-session. Anything else placed in `config` is stored but ignored.
 
@@ -410,6 +429,7 @@ CREATE TABLE webhooks (
   "group.join",
   "group.leave",
   "group.update",
+  "group.join_request",
   "call.received",
   "call.accepted",
   "call.rejected",
@@ -558,7 +578,7 @@ CREATE INDEX "IDX_c69efb19bf127c97e6740ad530" ON audit_logs("createdAt");
 `api_key_updated`, `api_key_used`, `api_key_revoked`, `api_key_deleted`, `api_key_auth_failed`), session
 lifecycle (`session_created`, `session_started`, `session_stopped`, `session_force_killed`,
 `session_logged_out`, `session_deleted`, `session_qr_generated`, `session_connected`,
-`session_disconnected`), WhatsApp-imposed account restrictions (`session_restricted`,
+`session_disconnected`, `session_config_updated`), WhatsApp-imposed account restrictions (`session_restricted`,
 `session_restriction_lifted`), messages
 (`message_sent`, `message_failed`), send-pacing enforcement (`send_pacing_blocked`, sampled to at
 most one row per session per minute; `send_breaker_tripped`, never sampled), webhooks (`webhook_created`, `webhook_deleted`,
@@ -757,10 +777,10 @@ flowchart LR
 
 OpenWA runs **two separate TypeORM connections**, each with its own migrations directory and CLI DataSource:
 
-| Connection | DataSource            | Migrations dir                  | Owns                                                                                                                                                                                                                                                                                 |
-| ---------- | --------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **main**   | `data-source-main.ts` | `src/database/migrations-main/` | `api_keys`, `audit_logs` — always SQLite (`./data/main.sqlite` by default)                                                                                                                                                                                                           |
-| **data**   | `data-source.ts`      | `src/database/migrations/`      | `sessions`, `webhooks`, `messages`, `message_batches`, `templates`, `status_updates`, `webhook_delivery_failures`, the integration tables (`plugin_instances`, `ingress_events`, `conversation_mappings`, `integration_delivery_failures`), engine tables — SQLite **or** PostgreSQL |
+| Connection | DataSource            | Migrations dir                  | Owns                                                                                                                                                                                                                                                                                                     |
+| ---------- | --------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **main**   | `data-source-main.ts` | `src/database/migrations-main/` | `api_keys`, `audit_logs` — always SQLite (`./data/main.sqlite` by default)                                                                                                                                                                                                                               |
+| **data**   | `data-source.ts`      | `src/database/migrations/`      | `sessions`, `webhooks`, `messages`, `message_batches`, `templates`, `status_updates`, `automation_rules`, `webhook_delivery_failures`, the integration tables (`plugin_instances`, `ingress_events`, `conversation_mappings`, `integration_delivery_failures`), engine tables — SQLite **or** PostgreSQL |
 
 Migrations are hand-authored and idempotent (`IF NOT EXISTS`) so they are safe to adopt on a database originally created by `synchronize`. The two connections differ in how schema is managed:
 
@@ -797,7 +817,11 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1784908800000-AddMessageAuthor.ts
 ├── 1785112230000-AddIngressEventDispatchState.ts
 ├── 1785123853000-AddMessagesCreatedAtIndex.ts
-└── 1785600000000-SlimIngressEventPayload.ts
+├── 1785600000000-SlimIngressEventPayload.ts
+├── 1785700000000-AddMessageMediaArchive.ts
+├── 1785800000000-AddSessionOwnership.ts
+├── 1785900000000-AddAutomationRules.ts            # 14th migration table; FKs sessions ON DELETE CASCADE
+└── 1786000000000-AddSessionNodeUrl.ts
 ```
 
 > [!NOTE]
@@ -832,7 +856,7 @@ export class AddMessagesWaMessageIdUnique1781300000000 implements MigrationInter
 
 ### Retention Policies
 
-Five tables have an automated _time-based_ retention job, across four services: **`audit_logs`**, **`status_updates`**, **`webhook_delivery_failures`**, **`ingress_events`** and **`integration_delivery_failures`**. Separately, **`baileys_stored_messages`** is capped per session rather than by age — each write keeps the newest `BAILEYS_MESSAGE_STORE_LIMIT` rows (default 5000) for that session and deletes the rest. Everything else is kept indefinitely (sessions, webhooks, batches, templates, conversation mappings, plugin instances) and is removed only by user action (e.g. deleting a session) or operational backup/restore — the `messages` history table in particular has no auto-purge and grows without bound.
+Five tables have an automated _time-based_ retention job, across four services: **`audit_logs`**, **`status_updates`**, **`webhook_delivery_failures`**, **`ingress_events`** and **`integration_delivery_failures`**. Separately, **`baileys_stored_messages`** is capped per session rather than by age — each write keeps the newest `BAILEYS_MESSAGE_STORE_LIMIT` rows (default 5000) for that session and deletes the rest. Everything else is kept indefinitely (api keys, sessions, webhooks, batches, templates, conversation mappings, plugin instances, lid mappings, automation rules) and is removed only by user action (e.g. deleting a session) or operational backup/restore — the `messages` history table in particular has no auto-purge and grows without bound.
 
 | Data Type                     | Default Retention | Configurable                                                    |
 | ----------------------------- | ----------------- | --------------------------------------------------------------- |

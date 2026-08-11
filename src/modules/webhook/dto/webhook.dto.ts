@@ -53,6 +53,7 @@ export const WEBHOOK_EVENTS = [
   'group.join',
   'group.leave',
   'group.update',
+  'group.join_request',
   'call.received',
   'call.accepted',
   'call.rejected',
@@ -104,7 +105,11 @@ export class CreateWebhookDto {
   @IsHeaderMap()
   headers?: Record<string, string>;
 
-  @ApiPropertyOptional({ description: FILTERS_API_DESCRIPTION, example: FILTERS_API_EXAMPLE })
+  // `nullable` spelled out for the same reason lastTriggeredAt spells out its type: the field is
+  // STORED as null whenever a webhook is created without filters (`dto.filters ?? null`), and the
+  // description offers null as an input, so a schema without it rejects a value the route both
+  // sends and accepts.
+  @ApiPropertyOptional({ description: FILTERS_API_DESCRIPTION, example: FILTERS_API_EXAMPLE, nullable: true })
   @IsOptional()
   @IsValidWebhookFilters()
   filters?: WebhookFilters | null;
@@ -153,7 +158,11 @@ export class UpdateWebhookDto {
   @IsHeaderMap()
   headers?: Record<string, string>;
 
-  @ApiPropertyOptional({ description: FILTERS_API_DESCRIPTION, example: FILTERS_API_EXAMPLE })
+  // `nullable` spelled out for the same reason lastTriggeredAt spells out its type: the field is
+  // STORED as null whenever a webhook is created without filters (`dto.filters ?? null`), and the
+  // description offers null as an input, so a schema without it rejects a value the route both
+  // sends and accepts.
+  @ApiPropertyOptional({ description: FILTERS_API_DESCRIPTION, example: FILTERS_API_EXAMPLE, nullable: true })
   @IsOptional()
   @IsValidWebhookFilters()
   filters?: WebhookFilters | null;
@@ -164,7 +173,12 @@ export class UpdateWebhookDto {
   @IsBoolean()
   active?: boolean;
 
-  @ApiPropertyOptional({ description: 'Retry count' })
+  @ApiPropertyOptional({
+    description: 'Delivery attempts before the webhook is parked. Same range the create route enforces.',
+    example: 3,
+    minimum: 0,
+    maximum: 5,
+  })
   @ToStrictNumber()
   @IsOptional()
   @IsInt()
@@ -200,7 +214,11 @@ export class WebhookResponseDto {
   events!: string[];
 
   @Expose()
-  @ApiPropertyOptional({ description: FILTERS_API_DESCRIPTION, example: FILTERS_API_EXAMPLE })
+  // `nullable` spelled out for the same reason lastTriggeredAt spells out its type: the field is
+  // STORED as null whenever a webhook is created without filters (`dto.filters ?? null`), and the
+  // description offers null as an input, so a schema without it rejects a value the route both
+  // sends and accepts.
+  @ApiPropertyOptional({ description: FILTERS_API_DESCRIPTION, example: FILTERS_API_EXAMPLE, nullable: true })
   filters?: WebhookFilters | null;
 
   @Expose()
@@ -212,7 +230,9 @@ export class WebhookResponseDto {
   retryCount!: number;
 
   @Expose()
-  @ApiPropertyOptional()
+  // Spelled out because a bare @ApiPropertyOptional() on `Date | null` emits `type: object`, and the
+  // published schema then rejects both values this field actually carries.
+  @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
   lastTriggeredAt?: Date | null;
 
   @Expose()

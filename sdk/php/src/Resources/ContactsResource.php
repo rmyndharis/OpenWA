@@ -100,4 +100,17 @@ class ContactsResource
     {
         return $this->http->request('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}/block");
     }
+
+    /**
+     * List the JIDs this account has blocked.
+     *
+     * Session-wide, so it takes no contact id — unlike block() and unblock(), which act on one
+     * contact. Returns a bare list of ids, not contact records.
+     *
+     * @return array<int,string>
+     */
+    public function listBlocked(string $sessionId): array
+    {
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/blocked");
+    }
 }

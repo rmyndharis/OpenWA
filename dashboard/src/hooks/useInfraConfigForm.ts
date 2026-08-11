@@ -62,10 +62,9 @@ export interface InfraConfigForm {
 /**
  * Owns the editable infrastructure form: dbConfig/redisConfig/storageConfig/engineConfig, the
  * redis-enabled/queue-enabled toggles, and the hydration that seeds them from the two server
- * sources (live /status + saved /config). Takes those two query results (plus the resolved current
- * engine) as arguments rather than calling the query hooks itself — the page already holds them for
- * its own loading/error early returns, and passing them in keeps this hook testable without a
- * QueryClientProvider.
+ * sources (live /status + saved /config). Takes those two query results as arguments rather than
+ * calling the query hooks itself — the page already holds them for its own loading/error early
+ * returns, and passing them in keeps this hook testable without a QueryClientProvider.
  *
  * `redisConfig.connected` and the page's `queueStats` are LIVE indicators, not editable form state —
  * they are seeded by a separate effect that lives in the page (every refetch, not just once), and
@@ -74,7 +73,6 @@ export interface InfraConfigForm {
 export function useInfraConfigForm(
   infraStatus: InfraStatus | undefined,
   savedConfig: SavedConfig | undefined,
-  currentEngine: string,
 ): InfraConfigForm {
   const [dbConfig, setDbConfig] = useState<DatabaseConfig>({
     type: 'sqlite',
@@ -124,14 +122,14 @@ export function useInfraConfigForm(
   // operator's in-progress, unsaved edits. A successful save restarts → full page reload, re-arming it.
   const formHydrated = useRef(false);
 
-  // The engine radio seeds ONCE from the running engine (which honours a real ENGINE_TYPE env override
-  // over the saved .env.generated value — see the effect below), then is never re-stamped by a background
-  // refetch. `engineTouched` additionally wins over a late first resolution: if the operator clicked a
-  // different engine before /engines/current resolved, the delayed seed must not revert their selection (#735).
+  // The engine radio seeds ONCE from the saved file (see the effect below), then is never re-stamped by
+  // a background refetch. `engineTouched` additionally wins over a late first resolution: if the
+  // operator clicked a different engine before the seed resolved, the delayed seed must not revert
+  // their selection (#735).
   const engineHydrated = useRef(false);
   const engineTouched = useRef(false);
 
-  /** Whether engineConfig.type reflects a real value (seeded from the running engine or user-picked)
+  /** Whether engineConfig.type reflects a real value (seeded from the saved config or user-picked)
    * rather than the useState default — the save payload omits `type` when it doesn't. */
   const engineTypeKnown = (): boolean => engineHydrated.current || engineTouched.current;
 
@@ -209,15 +207,23 @@ export function useInfraConfigForm(
     if (infraStatus && savedConfig) formHydrated.current = true;
   }, [infraStatus, savedConfig]);
 
-  // The active engine reflects what's actually running (honours a real-env ENGINE_TYPE override),
-  // so seed the selected radio from it rather than the saved .env.generated value — but only ONCE, and
-  // never after the operator has touched it. Without this guard a background refetch (or a late first
-  // resolution racing an early click) re-stamps the running engine over an in-progress selection (#735).
+  // Seed the radio from the SAVED engine, once, and never after the operator has touched it (#735).
+  //
+  // Not from the running engine, which this used to do: the gateway resolves ENGINE_TYPE once at boot,
+  // so the running value is stale from the moment a change is saved until the server restarts, and it
+  // is the pinned value outright when an environment variable supplies one. Either way it is a value
+  // nobody chose here, and because `buildSavePayload` always sends `type` once the radio has seeded,
+  // the next save of ANY field on this page wrote it back over the operator's saved engine — losing a
+  // choice that unsetting the variable, or restarting, was supposed to reveal (#1082).
+  //
+  // The saved file is the intent; what is actually running is reported by the card badge and, when the
+  // two differ, named by the card's own notice.
   useEffect(() => {
-    if (!currentEngine || engineHydrated.current || engineTouched.current) return;
+    const seed = savedConfig?.engine.type;
+    if (!seed || engineHydrated.current || engineTouched.current) return;
     engineHydrated.current = true;
-    setEngineConfig(prev => (prev.type === currentEngine ? prev : { ...prev, type: currentEngine }));
-  }, [currentEngine]);
+    setEngineConfig(prev => (prev.type === seed ? prev : { ...prev, type: seed }));
+  }, [savedConfig]);
 
   const updateDbConfig = (key: keyof DatabaseConfig, value: string | number | boolean) =>
     setDbConfig(prev => ({ ...prev, [key]: value }));

@@ -297,7 +297,9 @@
       "phone": "מספר טלפון",
       "phoneNone": "לא מחובר",
       "created": "נוצר בתאריך",
-      "lastActive": "פעילות אחרונה"
+      "lastActive": "פעילות אחרונה",
+      "autoRejectCalls": "דחיית שיחות אוטומטית",
+      "autoRejectCallsHint": "שיחות נכנסות נדחות ברגע שהן מצלצלות. ה-webhook call.received עדיין נשלח לפני כן. חל מהשיחה הבאה — ללא צורך בהפעלה מחדש."
     },
     "actions": {
       "view": "צפייה",
@@ -788,6 +790,8 @@
       "export": "ייצוא נתונים",
       "import": "ייבוא נתונים",
       "exportFailed": "לא ניתן לייצא את הנתונים",
+      "exportPartialTitle": "Backup is missing some media",
+      "exportPartial": "{{count}} attachment payload(s) exceeded the export media budget and were saved as placeholders. The messages restore; their media does not.",
       "importFailed": "לא ניתן לייבא את הנתונים",
       "importOk": "הנתונים יובאו",
       "importConfirm": "הייבוא יחליף את כל הנתונים הנוכחיים בגיבוי ({{rows}} שורות). לא ניתן לבטל פעולה זו. להמשיך?",

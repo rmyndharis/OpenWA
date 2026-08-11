@@ -91,11 +91,19 @@ const MAX_REFUSAL_KEYS = 1000;
  * exactly the automated traffic it exists to pace.
  *
  * The daily count is read from the `messages` table rather than a counter of its own. That table is
- * already the durable record of every send — bulk included, which persists through the same
+ * already the durable record of every chat send — bulk included, which persists through the same
  * `saveOutgoingMessage` — and it already carries the `(sessionId, createdAt)` index the count needs.
- * So the cap survives restarts with no table, no migration, and no way to drift from what was really
- * sent. The breaker, by contrast, is in memory on purpose: it describes live conditions, and a
- * restart clearing it is the correct behaviour.
+ * So the cap survives restarts with no table and no migration. The trade is that it counts only what
+ * writes a row. Three kinds of path clear this check without ever adding to it: a status post
+ * (status.service.ts), both Baileys catalog sends (catalog.service.ts `sendProduct` and
+ * `sendCatalog`), and a message edit — which is gated here via applySendingGate but only UPDATEs the
+ * existing row, never inserts. A bulk item the engine refuses is a fourth: bulk persists its row only
+ * after the send succeeds, so a failed item is checked against the cap but never counted into it,
+ * unlike a failed single send whose PENDING row is kept as FAILED. A session using
+ * them can exceed its stated allowance. Deliberate, and documented in .env.example and docs/06 so
+ * the number an operator reads is the number they get.
+ * The breaker, by contrast, is in memory on purpose: it describes live conditions, and a restart
+ * clearing it is the correct behaviour.
  */
 @Injectable()
 export class SendPacingService {

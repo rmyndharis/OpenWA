@@ -22,6 +22,17 @@ if (API_ORIGIN) warnIfInsecureHttpUrl(API_ORIGIN, 'VITE_API_URL');
 // Types
 // =============================================================================
 
+/**
+ * The three tunable keys, as the gateway resolves them — not the raw stored column, which the API
+ * never returns. `maxReconnectAttempts` is null when reconnects are unlimited, which is the default
+ * and which no number in the accepted 0-20 range can express.
+ */
+export interface SessionConfig {
+  autoRejectCalls: boolean;
+  maxReconnectAttempts: number | null;
+  reconnectBaseDelay: number;
+}
+
 export interface Session {
   id: string;
   name: string;
@@ -709,6 +720,13 @@ export const sessionApi = {
       body: JSON.stringify({ name }),
     }),
   delete: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
+  getConfig: (id: string) => request<SessionConfig>(`/sessions/${id}/config`),
+  // PATCH merges: only the keys sent are touched. Send null to clear one back to its default.
+  updateConfig: (id: string, patch: Partial<Record<keyof SessionConfig, boolean | number | null>>) =>
+    request<SessionConfig>(`/sessions/${id}/config`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
   start: (id: string) => request<Session>(`/sessions/${id}/start`, { method: 'POST' }),
   stop: (id: string) => request<Session>(`/sessions/${id}/stop`, { method: 'POST' }),
   logout: (id: string) => request<Session>(`/sessions/${id}/logout`, { method: 'POST' }),
@@ -1071,6 +1089,13 @@ export const infraApi = {
       dataDbType: string;
       tables: Record<string, unknown[]>;
       counts: Record<string, number>;
+      // Optional tables absent from an older schema. Always present in the response; a non-empty
+      // list means the backup is partial, not that those tables were empty.
+      skippedTables: string[];
+      // Inline media payloads the export budget refused. Always present; non-zero means the rows are
+      // all there but some of their media is not — a state a restored archive cannot express, since
+      // the omitted marker is the same one media skipped on the way in gets.
+      omittedInlineMedia: { messages: number; messageBatches: number };
     }>('/infra/export-data'),
   // 200 contract includes the orphan-engine reconciliation result (restartRequired / notices /
   // stopped+failed ids). 409 has several causes and the error's `code` distinguishes them:

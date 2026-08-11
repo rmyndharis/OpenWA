@@ -2,6 +2,7 @@ import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { Chat, Contact as BaileysContact, WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { EngineEventCallbacks, IncomingMessage } from '../interfaces/whatsapp-engine.interface';
 import { buildIncomingMessageFromBaileys, extractBaileysBody } from './baileys-message-mapper';
+import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
 import { type createLogger } from '../../common/services/logger.service';
 
 /**
@@ -88,7 +89,15 @@ export class BaileysHistory {
    */
   async hydrateNames(): Promise<void> {
     try {
-      const groups = await this.sock().groupFetchAllParticipating();
+      // Same ambiguity getGroups is bounded against: an unanswered query and an account with no groups
+      // both yield `{}`, and query() resolves rather than throwing, so neither the catch below nor an
+      // empty result can tell them apart. Without a clock of our own this step finishes silently — no
+      // warn, because nothing threw, and no debug, because there was nothing to hydrate.
+      const groups = await withQueryDeadline(
+        this.sock().groupFetchAllParticipating(),
+        BAILEYS_QUERY_BUDGET_MS,
+        'WhatsApp did not answer the group list query in time',
+      );
       const named = Object.values(groups)
         .filter(g => g?.id && g.subject)
         .map(g => ({ id: g.id, name: g.subject }));

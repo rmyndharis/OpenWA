@@ -1,6 +1,7 @@
 import { BaileysEvents, type BaileysEventsHost } from './baileys-events';
 import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
+import { inboundMediaConcurrency } from './inbound-media-cap';
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 
 /**
@@ -96,7 +97,7 @@ function makeHost(overrides: Partial<BaileysEventsHost> = {}): BaileysEventsHost
     // connectedAt only gates handleMessagesUpsert's history-replay skip; mapMessage itself never
     // reads it.
     connectedAt: 0,
-    inboundLimiter: new ConcurrencyLimiter(1),
+    inboundLimiter: new ConcurrencyLimiter(inboundMediaConcurrency()),
     recordKeyLidMappings: noop,
     recordMessage: noop,
     recordMessageEdit: noop,

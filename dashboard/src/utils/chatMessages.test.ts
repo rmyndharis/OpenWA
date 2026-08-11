@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mapEngineHistoryMessage, mergeChatMessages, type EngineHistoryMessage } from './chatMessages.ts';
+import {
+  mapEngineHistoryMessage,
+  mergeChatMessages,
+  mergeReactionSnapshot,
+  type EngineHistoryMessage,
+} from './chatMessages.ts';
 import type { ChatMessage } from '../services/api';
 
 const hist = (over: Partial<EngineHistoryMessage> = {}): EngineHistoryMessage => ({
@@ -147,7 +152,7 @@ test('mergeOrAppend keeps existing metadata when the incoming copy carries none'
 });
 
 test('mergeOrAppend: an omitted-media echo does NOT clobber the copy holding the payload', () => {
-  // The optimistic send bubble holds the only base64 copy; the engine's own-send echo carries just
+  // The optimistic send bubble holds the only base64 copy; a Baileys API-send echo carries just
   // `{media: {omitted: true}}` (no data). Replacing wholesale would blank the sent image.
   const optimistic = msg({
     id: 'm-1',
@@ -386,4 +391,27 @@ test('mergeChatMessages enforces the payload cap on the initial load', () => {
   assert.equal(merged[0].metadata?.media?.omitted, true);
   assert.equal(merged[1].metadata?.media?.omitted, true);
   assert.equal(merged[2].metadata?.media?.data, 'DB_2'); // newest MEDIA_PAYLOAD_CACHE_LIMIT survive
+});
+
+// A `message.reaction` frame omits `reactions` when the gateway holds no stored copy of the message
+// to snapshot from. Absent means "unknown", not "there are none" — and the difference is visible:
+// the local user's own optimistic reaction lives under the `me` key in exactly that map.
+test('mergeReactionSnapshot keeps the known map when the event carries no snapshot', () => {
+  assert.deepEqual(mergeReactionSnapshot({ me: '👍' }, undefined), { me: '👍' });
+});
+
+test('mergeReactionSnapshot takes the snapshot when the event carries one', () => {
+  assert.deepEqual(mergeReactionSnapshot({ me: '👍' }, { '628@c.us': '❤️' }), { '628@c.us': '❤️' });
+});
+
+test('mergeReactionSnapshot treats an EMPTY snapshot as an answer, not as absence', () => {
+  // The last reaction being withdrawn is a real state the gateway reports as `{}`, and it must clear
+  // the badge rather than fall back to the stale map. Note `{}` is truthy, so `||` and `??` agree
+  // here — the absent-vs-empty distinction is destroyed one layer up if the socket mapper coerces
+  // an absent key with `|| {}`, which is exactly the defect this function was extracted to expose.
+  assert.deepEqual(mergeReactionSnapshot({ me: '👍' }, {}), {});
+});
+
+test('mergeReactionSnapshot stays undefined when neither side knows anything', () => {
+  assert.equal(mergeReactionSnapshot(undefined, undefined), undefined);
 });

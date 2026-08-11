@@ -58,6 +58,7 @@ class OpenWAApiException extends OpenWAException
             409 => new OpenWAConflictException($message, $status, $body, $errorKind),
             429 => new OpenWARateLimitException($message, $status, $body, $errorKind),
             501 => new OpenWANotImplementedException($message, $status, $body, $errorKind),
+            503 => new OpenWAServiceUnavailableException($message, $status, $body, $errorKind),
             default => new OpenWAApiException($message, $status, $body, $errorKind),
         };
     }

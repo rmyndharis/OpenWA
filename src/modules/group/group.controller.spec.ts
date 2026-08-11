@@ -86,6 +86,44 @@ describe('GroupController join + settings', () => {
 // the same path shape is unreachable — `GET /groups/join-info` would arrive at `GET /groups/:groupId`
 // with groupId='join-info' and be looked up as a group. Reading the decorators back off the class is
 // the only way to catch a reordering, since both routes keep working in isolation either way.
+describe('GroupController membership requests', () => {
+  const build = (service: Partial<Record<keyof GroupService, jest.Mock>>) => {
+    const controller = new GroupController(service as unknown as GroupService);
+    return { controller, service };
+  };
+
+  it('GET :groupId/membership-requests returns the pending queue as a bare array', async () => {
+    const requests = [{ participantId: '628111@c.us', method: 'invite_link', requestedAt: 1754700000 }];
+    const { controller, service } = build({ getGroupMembershipRequests: jest.fn().mockResolvedValue(requests) });
+
+    await expect(controller.getMembershipRequests('s1', 'g1')).resolves.toEqual(requests);
+    expect(service.getGroupMembershipRequests).toHaveBeenCalledWith('s1', 'g1');
+  });
+
+  it.each([
+    ['approve', 'approveMembershipRequests' as const, 'approveGroupMembershipRequests' as const, 'approved'],
+    ['reject', 'rejectMembershipRequests' as const, 'rejectGroupMembershipRequests' as const, 'rejected'],
+  ])('POST :groupId/membership-requests/%s returns the per-participant results', async (_a, route, svcMethod, verb) => {
+    const results = [{ id: '628111@c.us', success: true, status: 200 }];
+    const { controller, service } = build({ [svcMethod]: jest.fn().mockResolvedValue(results) });
+
+    await expect(controller[route]('s1', 'g1', { participants: ['628111@c.us'] })).resolves.toEqual({
+      success: true,
+      message: `Membership requests ${verb}`,
+      results,
+    });
+    expect(service[svcMethod]).toHaveBeenCalledWith('s1', 'g1', ['628111@c.us']);
+  });
+
+  it('an empty body approves ALL pending requests (participants passed as undefined)', async () => {
+    const { controller, service } = build({ approveGroupMembershipRequests: jest.fn().mockResolvedValue([]) });
+
+    await controller.approveMembershipRequests('s1', 'g1', {});
+
+    expect(service.approveGroupMembershipRequests).toHaveBeenCalledWith('s1', 'g1', undefined);
+  });
+});
+
 describe('GroupController route ordering', () => {
   it('declares the literal join-info route before the :groupId parameter route', () => {
     const proto = GroupController.prototype as object;

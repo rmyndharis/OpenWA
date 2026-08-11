@@ -2,8 +2,9 @@
 
 Helm chart for [OpenWA](https://github.com/rmyndharis/OpenWA) — WhatsApp API.
 
-> **Single instance only.** OpenWA is single-process with in-memory engine state.
-> Keep `replicaCount: 1`; scaling out corrupts WhatsApp session auth. See
+> **Single instance only.** A session lease stops two pods from launching the same session,
+> but API-key socket eviction, WS rate-limit buckets and in-flight bulk batches are still
+> process-local. Keep `replicaCount: 1`. See
 > [docs/13-horizontal-scaling.md](../../docs/13-horizontal-scaling.md).
 
 ## Install

@@ -1,5 +1,6 @@
 import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { HealthCheckResponseDto, LivenessResponseDto, ReadinessResponseDto } from './dto/health-response.dto';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { Public } from '../auth/decorators/auth.decorators';
@@ -36,7 +37,7 @@ export class HealthController {
 
   @Get()
   @ApiOperation({ summary: 'Basic health check' })
-  @ApiResponse({ status: 200, description: 'Application is healthy' })
+  @ApiResponse({ status: 200, description: 'Application is healthy', type: HealthCheckResponseDto })
   check(): { status: string; timestamp: string; version: string } {
     return {
       status: 'ok',
@@ -47,7 +48,7 @@ export class HealthController {
 
   @Get('live')
   @ApiOperation({ summary: 'Liveness probe for Kubernetes' })
-  @ApiResponse({ status: 200, description: 'Application is alive' })
+  @ApiResponse({ status: 200, description: 'Application is alive', type: LivenessResponseDto })
   liveness(): { status: string } {
     // Liveness only reflects process liveness — deliberately static so a transient
     // dependency outage doesn't trigger a pod KILL (that's readiness' job).
@@ -56,7 +57,7 @@ export class HealthController {
 
   @Get('ready')
   @ApiOperation({ summary: 'Readiness probe — verifies the auth/audit + data databases respond' })
-  @ApiResponse({ status: 200, description: 'Application is ready to accept traffic' })
+  @ApiResponse({ status: 200, description: 'Application is ready to accept traffic', type: ReadinessResponseDto })
   @ApiResponse({ status: 503, description: 'A required dependency is down' })
   async readiness(): Promise<HealthCheckResult> {
     // While draining (shutdown started), report 503 so the LB/orchestrator stops

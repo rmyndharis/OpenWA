@@ -69,7 +69,7 @@ curl -X GET "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/qr" \
   -H "X-API-Key: $API_KEY"
 ```
 
-#### GET /api/sessions/:id/groups
+#### GET /api/sessions/:sessionId/groups
 
 List groups the session belongs to (paginated).
 
@@ -212,6 +212,26 @@ curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/chats/arch
   -d '{"chatId":"1234567890-123@g.us","archive":true}'
 ```
 
+#### POST /api/sessions/:id/chats/mute
+
+Mute a chat until an epoch-**milliseconds** timestamp, or send `"muteUntil":null` to unmute (OPERATOR).
+
+```bash
+curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/chats/mute" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"chatId":"1234567890-123@g.us","muteUntil":1800000000000}'
+```
+
+#### POST /api/sessions/:id/chats/pin
+
+Pin a chat to the top of the list, or unpin it (OPERATOR). WhatsApp allows at most three pinned chats.
+
+```bash
+curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/chats/pin" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"chatId":"1234567890-123@g.us","pin":true}'
+```
+
 #### POST /api/sessions/:id/chats/delete
 
 Delete a chat from the chat list (OPERATOR).
@@ -314,8 +334,9 @@ curl -X POST "$BASE/api/sessions/$SESSION_ID/messages/unpin" \
 
 #### GET /api/sessions/:sessionId/messages/:chatId/:messageId/media
 
-Download a message's archived media. Requires `CHAT_MEDIA_ARCHIVE_ENABLED=true` to have been set
-when the message arrived; `404` otherwise.
+Download a message's stored media: the archived file when one exists (`CHAT_MEDIA_ARCHIVE_ENABLED`,
+plus `CHAT_MEDIA_ARCHIVE_OUTBOUND` for media this account sent), else the inline copy on the message
+row — which covers media sent by this account either way; `404` when neither holds bytes.
 
 ```bash
 curl "$BASE/api/sessions/$SESSION_ID/messages/628123456789@c.us/true_628123456789@c.us_3EB0ABCD/media" \
@@ -1295,7 +1316,7 @@ curl "$BASE/api/infra/export-data" \
 
 #### POST /api/infra/import-data
 
-Replace all Data DB rows with a prior export (destructive, all-or-nothing).
+Replace all Data DB rows with a prior export (destructive, all-or-nothing). Every one of the 14 migration tables is emptied first, so a key you omit restores **empty** rather than untouched — send a body produced by `GET /api/infra/export-data`, not a hand-built subset. All 14 keys are shown below for that reason.
 
 ```bash
 curl -X POST "$BASE/api/infra/import-data" \
@@ -1303,8 +1324,10 @@ curl -X POST "$BASE/api/infra/import-data" \
   -H "Content-Type: application/json" \
   -d '{
     "tables": {
-      "sessions": [ { "id": "s1", "name": "main", "status": "READY", "phone": "15551234567", "pushName": "Me", "config": {}, "proxyUrl": null, "proxyType": null, "connectedAt": "2026-06-25T00:00:00.000Z", "lastActiveAt": "2026-06-25T00:00:00.000Z", "createdAt": "2026-06-25T00:00:00.000Z", "updatedAt": "2026-06-25T00:00:00.000Z" } ],
-      "webhooks": [], "messages": [], "messageBatches": [], "templates": [], "baileysStoredMessages": []
+      "sessions": [ { "id": "s1", "name": "main", "status": "ready", "phone": "15551234567", "pushName": "Me", "config": {}, "proxyUrl": null, "proxyType": null, "connectedAt": "2026-06-25T00:00:00.000Z", "lastActiveAt": "2026-06-25T00:00:00.000Z", "createdAt": "2026-06-25T00:00:00.000Z", "updatedAt": "2026-06-25T00:00:00.000Z" } ],
+      "webhooks": [], "messages": [], "messageBatches": [], "templates": [], "baileysStoredMessages": [],
+      "lidMappings": [], "pluginInstances": [], "conversationMappings": [], "ingressEvents": [],
+      "webhookDeliveryFailures": [], "integrationDeliveryFailures": [], "statusUpdates": [], "automationRules": []
     }
   }'
 ```

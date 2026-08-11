@@ -1,5 +1,5 @@
 import { All, Controller, Param, Query, Req, Res, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOkResponse, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOkResponse, ApiParam, ApiResponse } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { Public } from '../auth/decorators/auth.decorators';
 import { IngressService } from './ingress.service';
@@ -28,6 +28,15 @@ export class IngressController {
   // InstanceThrottlerGuard's onModuleInit for how it keeps its tier fully independent.
   @UseGuards(InstanceThrottlerGuard)
   @All(':pluginId/:instanceId/*path')
+  // The wildcard segment is part of the published path template, so it needs a parameter of its own —
+  // the handler reads it off the request rather than binding it, which leaves the document with a
+  // `{path}` placeholder nothing declares. Awkward to express, not impossible.
+  @ApiParam({
+    name: 'path',
+    type: String,
+    description: 'Provider-defined trailing path the plugin claims (may contain slashes).',
+    example: 'events/message',
+  })
   @ApiOkResponse({
     description:
       'GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202.',

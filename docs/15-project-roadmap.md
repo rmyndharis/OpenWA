@@ -655,12 +655,22 @@ version bump lands as a single commit on `main`, and pushing the tag hands every
 
 ### The release commit
 
-Exactly four files change. Nothing else belongs in this commit.
+Five files change on a patch. A MINOR changes six: `SECURITY.md` names the supported minor in its
+prose, its table row and its `< X.Y` lower bound, and `npm run check:versions` fails without it — a
+gate that runs on the pushed tag, so omitting it means deleting the tag and cutting again. Nothing
+else belongs in this commit.
 
 ```bash
 npm version --no-git-tag-version <version>   # package.json + package-lock.json
 npm run openapi:export                        # openapi.json info.version follows package.json
 ```
+
+Then bump `appVersion` in `charts/openwa/Chart.yaml` to the same version — the chart defaults its
+image tag to `appVersion`, so a stale one deploys a tag that does not exist yet. Bump the chart's own
+`version:` by a patch in the same commit: Helm identifies a chart by that field alone, so leaving it
+while the templates change makes two different charts answer to one name in `helm list` and
+`helm history`. Every release from v0.13.0 onward has bumped it in lockstep, and nothing gates it —
+`npm run check:versions` reads only `appVersion`, and the `chart` job lints behaviour, not versions.
 
 Then in `CHANGELOG.md`, insert the new heading directly under the retained, now-empty
 `## [Unreleased]` — the accumulated entries fall under it by position:
@@ -688,7 +698,8 @@ cd dashboard && npm run lint && npm run typecheck && npm run i18n:check && npm r
 ```
 
 ```bash
-git add package.json package-lock.json openapi.json CHANGELOG.md
+# SECURITY.md only on a MINOR; the chart's own `version:` bumps a patch alongside `appVersion`.
+git add package.json package-lock.json openapi.json CHANGELOG.md charts/openwa/Chart.yaml SECURITY.md
 git commit -m "chore(release): v<version>"
 git tag -a v<version> -m "v<version>"
 git push origin main --follow-tags

@@ -290,7 +290,9 @@
       "phone": "ఫోన్ నంబర్",
       "phoneNone": "కనెక్ట్ కాలేదు",
       "created": "సృష్టించబడింది",
-      "lastActive": "చివరిసారి యాక్టివ్"
+      "lastActive": "చివరిసారి యాక్టివ్",
+      "autoRejectCalls": "కాల్‌లను ఆటోమేటిక్‌గా తిరస్కరించు",
+      "autoRejectCallsHint": "ఇన్‌కమింగ్ కాల్‌లు మోగిన వెంటనే తిరస్కరించబడతాయి. call.received వెబ్‌హుక్ మాత్రం ముందుగా పంపబడుతుంది. తదుపరి కాల్ నుండి వర్తిస్తుంది — పునఃప్రారంభం అవసరం లేదు."
     },
     "actions": {
       "view": "చూడు",
@@ -779,6 +781,8 @@
       "export": "డేటాను ఎక్స్‌పోర్ట్ చేయండి",
       "import": "డేటాను ఇంపోర్ట్ చేయండి",
       "exportFailed": "డేటాను ఎక్స్‌పోర్ట్ చేయలేకపోయాం",
+      "exportPartialTitle": "Backup is missing some media",
+      "exportPartial": "{{count}} attachment payload(s) exceeded the export media budget and were saved as placeholders. The messages restore; their media does not.",
       "importFailed": "డేటాను ఇంపోర్ట్ చేయలేకపోయాం",
       "importOk": "డేటా ఇంపోర్ట్ చేయబడింది",
       "importConfirm": "ఇంపోర్ట్ చేయడం వల్ల ప్రస్తుత డేటా మొత్తం బ్యాకప్‌తో ({{rows}} వరుసలు) భర్తీ చేయబడుతుంది. దీన్ని వెనక్కి తీసుకోలేరు. కొనసాగించాలా?",

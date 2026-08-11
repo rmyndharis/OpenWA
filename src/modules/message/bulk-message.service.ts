@@ -493,9 +493,10 @@ export class BulkMessageService implements OnApplicationBootstrap {
       batch.progress.sent++;
       batch.progress.pending--;
 
-      // Persist like a single send so the message shows in chat history + stats. The engine echo
-      // (onMessageCreate) fires the webhook/WS but does NOT write the DB, so without this the
-      // bulk-sent message is invisible to the messages table.
+      // Persist like a single send so the row carries the media payload and the batch's type
+      // mapping — the engine echo (onMessageCreate) writes its own OUTGOING row, but only with what
+      // the engine reported, and a Baileys API send echoes a media-less marker. The two writers
+      // dedup on UNIQUE(sessionId, waMessageId).
       await this.persistSentMessage(batch.sessionId, msg.chatId, msg.type, content, messageResult);
 
       this.logger.debug(`Batch ${batch.batchId}: Sent message ${i + 1}/${batch.messages.length} to ${msg.chatId}`);
@@ -701,6 +702,8 @@ export class BulkMessageService implements OnApplicationBootstrap {
           : undefined,
       });
     } catch (error) {
+      // Losing the dedup race to the own-send echo is no longer an error here — saveOutgoingMessage
+      // merges onto the echo's row. Anything reaching this point is a real persistence fault.
       this.logger.warn(`Batch message persisted-after-send failed: ${String(error)}`);
     }
   }

@@ -78,6 +78,16 @@ class OpenWANotImplementedError(OpenWAApiError):
     """501 Not Implemented — the active engine does not support this operation."""
 
 
+class OpenWAServiceUnavailableError(OpenWAApiError):
+    """503 Service Unavailable -- a transport failure, not a refusal.
+
+    The gateway answers this when the engine did not confirm the operation in time: WhatsApp never
+    replied, the socket was down, or the request budget ran out. Retryable, unlike every other typed
+    error here. The non-idempotent sends are deliberately left unbounded by the gateway so they never
+    answer one.
+    """
+
+
 class OpenWATimeoutError(OpenWAError):
     """Raised when a request exceeds the configured timeout."""
 
@@ -95,5 +105,6 @@ def classify(status: int, message: str, body: Any, error_kind: str | None) -> Op
         409: OpenWAConflictError,
         429: OpenWARateLimitError,
         501: OpenWANotImplementedError,
+        503: OpenWAServiceUnavailableError,
     }.get(status, OpenWAApiError)
     return cls(message, status, body, error_kind)

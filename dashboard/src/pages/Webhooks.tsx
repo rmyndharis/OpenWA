@@ -107,6 +107,7 @@ const availableEventNames = [
   'group.join',
   'group.leave',
   'group.update',
+  'group.join_request',
   'call.received',
   'call.accepted',
   'call.rejected',

@@ -113,6 +113,13 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
   -d @data-backup.json
 ```
 
+> [!IMPORTANT]
+> Post the whole exported file, as the `-d @data-backup.json` above does. The import empties all 14
+> migration tables before repopulating, so a hand-built body carrying only some keys restores the rest
+> **empty**. The export also bounds the inline media it carries
+> (`EXPORT_INLINE_MEDIA_BUDGET_BYTES`, 8 MiB by default); for a byte-exact copy including media, use
+> `scripts/backup.sh`, which snapshots the database file itself.
+
 > [!NOTE]
 > **Dual-Database Architecture**
 >
@@ -142,7 +149,8 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
     "ingressEvents": [...],
     "webhookDeliveryFailures": [...],
     "integrationDeliveryFailures": [...],
-    "statusUpdates": [...]
+    "statusUpdates": [...],
+    "automationRules": [...]
   },
   "counts": {
     "sessions": 5,
@@ -157,7 +165,8 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
     "ingressEvents": 12,
     "webhookDeliveryFailures": 0,
     "integrationDeliveryFailures": 0,
-    "statusUpdates": 19
+    "statusUpdates": 19,
+    "automationRules": 7
   },
   "skippedTables": []
 }
@@ -337,6 +346,8 @@ async function migrateSqliteToPostgres(config: MigrationConfig): Promise<Migrati
     'webhook_delivery_failures',
     'integration_delivery_failures',
     'status_updates',
+    // ON DELETE CASCADE FK to sessions, so it must follow them.
+    'automation_rules',
   ];
 
   // 4. Migrate each table

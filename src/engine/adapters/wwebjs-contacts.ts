@@ -2,7 +2,7 @@ import { type Client } from 'whatsapp-web.js';
 import { Contact } from '../interfaces/whatsapp-engine.interface';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { userPart } from '../identity/wa-id';
-import { readWid } from '../types/whatsapp-web-js.types';
+import { readWid, type SerializedWid } from '../types/whatsapp-web-js.types';
 import { type WwebjsEngineHost } from './wwebjs-host';
 
 /**
@@ -50,6 +50,15 @@ export class WwebjsContacts {
         isBlocked: contact.isBlocked,
       };
     } catch (error) {
+      // Unlike the avatar lookup, a throw here can legitimately mean the contact is absent:
+      // `window.WWebJS.getContact` has no try/catch and reads `contact.isBusiness` straight off
+      // `Contact.find`, so an unknown id throws a TypeError on null. Null (→ 404) stays the answer
+      // for that. A dead page is not a missing contact, though, and this was the one lookup that
+      // never separated the two.
+      if (this.host.isPageTransportError(error)) {
+        this.host.reportIfPageTransportError(error, 'getContactById');
+        throw new EngineTransportError(`Transport died while reading contact ${contactId}`);
+      }
       this.host.logger.warn(`Failed to get contact: ${contactId}`, { error: String(error) });
       return null;
     }
@@ -113,6 +122,22 @@ export class WwebjsContacts {
     this.host.logger.log(`Blocked contact ${contactId}`);
   }
 
+  /**
+   * The read half of block/unblockContact. Ids only — the neutral common subset with Baileys,
+   * whose blocklist query answers bare jids. An entry whose wid is unreadable (#747 rename
+   * hazard) is dropped rather than reported as the literal "undefined".
+   */
+  async getBlockedContacts(): Promise<string[]> {
+    this.host.ensureReady();
+    try {
+      const contacts = await this.client().getBlockedContacts();
+      return contacts.map(c => readWid(c.id as unknown as SerializedWid)).filter((id): id is string => Boolean(id));
+    } catch (error) {
+      this.host.reportIfPageTransportError(error, 'getBlockedContacts');
+      throw error;
+    }
+  }
+
   async unblockContact(contactId: string): Promise<void> {
     this.host.ensureReady();
     const contact = await this.client().getContactById(contactId);
@@ -126,15 +151,21 @@ export class WwebjsContacts {
       const url = await this.client().getProfilePicUrl(contactId);
       return url || null;
     } catch (error) {
-      // Mirrors getGroupInfo: a dead page and a contact with no picture both land here, and only the
-      // second may become null (→ service: the contact simply has no avatar). A transport death
-      // surfaced as "no picture" sends operators debugging the wrong layer — report it and answer 503.
-      if (this.host.isPageTransportError(error)) {
-        this.host.reportIfPageTransportError(error, 'getProfilePicture');
-        throw new EngineTransportError(`Transport died while reading profile picture for ${contactId}`);
-      }
+      // Nothing reaching here is a statement about the avatar, so nothing reaching here may become
+      // null. Returning null would answer 200 with {"url": null} — byte-identical to the verdict
+      // above — and a caller that caches "no avatar" would record absence for a lookup that never
+      // produced one. The page throws for two distinct reasons and we cannot tell them apart from
+      // the message: `getChat` failing to resolve the contact at all, or the profile-pic bridge
+      // failing. 404 would assert the first; 503 says only that we could not reach an answer, which
+      // is all we know.
+      //
+      // NOTE the Baileys adapter does the OPPOSITE on this same interface method, and correctly:
+      // there a no-picture verdict *is* delivered as a throw, so it swallows to null and uses its
+      // own deadline to separate a verdict from a non-answer. Do not harmonise the two into a shared
+      // helper — the engines disagree about what a throw means.
+      this.host.reportIfPageTransportError(error, 'getProfilePicture');
       this.host.logger.warn(`Failed to get profile picture for ${contactId}: ${String(error)}`);
-      return null;
+      throw new EngineTransportError(`Could not read the profile picture for ${contactId}: ${String(error)}`);
     }
   }
 }

@@ -88,6 +88,10 @@ function findFetchCall(method: string, path: string): FetchCall | undefined {
 // into a confusing downstream failure. Lifecycle actions (start/stop/logout/force-kill/pairing-code)
 // are stubbed generically even though none of the three cases below trigger them, per the brief's
 // endpoint list — a future case exercising them should not need to touch this stub.
+// Mutable so a test can set the starting value and observe what a PATCH wrote back.
+let sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null as number | null, reconnectBaseDelay: 5000 };
+let configPatchFails = false;
+
 function installFetchStub(): void {
   globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -128,6 +132,18 @@ function installFetchStub(): void {
     }
     if (method === 'DELETE' && sessionIdMatch) {
       return Promise.resolve(new Response(null, { status: 204 }));
+    }
+
+    const configMatch = path.match(/^\/api\/sessions\/([^/]+)\/config$/);
+    if (configMatch) {
+      if (method === 'GET') return Promise.resolve(jsonResponse({ ...sessionConfig }));
+      if (method === 'PATCH') {
+        // Per-test switch: the revert case needs the write to fail while the initial read succeeds,
+        // which a single stub response cannot express.
+        if (configPatchFails) return Promise.resolve(jsonResponse({ message: 'nope' }, 500));
+        Object.assign(sessionConfig, body as Record<string, unknown>);
+        return Promise.resolve(jsonResponse({ ...sessionConfig }));
+      }
     }
 
     const qrMatch = path.match(/^\/api\/sessions\/([^/]+)\/qr$/);
@@ -330,4 +346,53 @@ test('an unrestricted session shows no restriction row', async () => {
   const card = (await screen.findByText('stale-engine')).closest('.session-card') as HTMLElement;
 
   assert.equal(within(card).queryByText('Restriction'), null);
+});
+
+// ── Auto-reject toggle ───────────────────────────────────────────────────────
+
+async function openDetailFor(name: string): Promise<HTMLInputElement> {
+  const { screen, within } = rtl;
+  const card = (await screen.findByText(name)).closest('.session-card') as HTMLElement;
+  rtl.fireEvent.click(within(card).getByRole('button', { name: 'View' }));
+  // The config is fetched when the modal opens, so the toggle only appears once that read lands —
+  // findBy, not getBy.
+  return (await screen.findByRole('checkbox')) as HTMLInputElement;
+}
+
+test('the auto-reject toggle reflects the stored config and patches only the key it owns', async () => {
+  resetFetchCalls();
+  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000 };
+  configPatchFails = false;
+  renderSessions();
+
+  const toggle = await openDetailFor('new-device');
+  assert.equal(toggle.checked, false);
+
+  rtl.fireEvent.click(toggle);
+  await rtl.waitFor(() => assert.ok(fetchCalls.some(c => c.method === 'PATCH')));
+
+  const patch = fetchCalls.find(c => c.method === 'PATCH');
+  assert.match(patch?.path ?? '', /\/api\/sessions\/[^/]+\/config$/);
+  // Only autoRejectCalls: sending the whole object would rewrite the two reconnect keys this screen
+  // never showed the operator, and a merge patch exists precisely to avoid that.
+  assert.deepEqual(patch?.body, { autoRejectCalls: true });
+  await rtl.waitFor(() => assert.equal((rtl.screen.getByRole('checkbox') as HTMLInputElement).checked, true));
+});
+
+test('a rejected write reverts the toggle instead of leaving it showing a state the gateway never accepted', async () => {
+  resetFetchCalls();
+  sessionConfig = { autoRejectCalls: false, maxReconnectAttempts: null, reconnectBaseDelay: 5000 };
+  configPatchFails = true;
+  renderSessions();
+
+  const toggle = await openDetailFor('new-device');
+  assert.equal(toggle.checked, false);
+
+  rtl.fireEvent.click(toggle);
+  await rtl.waitFor(() => assert.ok(fetchCalls.some(c => c.method === 'PATCH')));
+
+  // The optimistic flip must not survive the failure: a toggle left on would tell the operator calls
+  // are being auto-rejected when the gateway still has it off.
+  await rtl.waitFor(() => assert.equal((rtl.screen.getByRole('checkbox') as HTMLInputElement).checked, false));
+  configPatchFails = false;
 });

@@ -65,6 +65,32 @@ function warnRemoteTrustOnce(pin: WebVersionPin): void {
   );
 }
 
+/**
+ * Report a failed registry resolve. Without this the degradation is invisible: the fetch is
+ * swallowed, `resolveWebVersionPin` returns undefined, and the adapter logs only inside
+ * `if (versionPin)` — so a host that cannot reach the registry silently falls back to
+ * whatsapp-web.js's own version selection, which is the failure class the pin exists to prevent
+ * (#488), with nothing in the log to grep for.
+ *
+ * Deliberately NOT once-per-process like `warnRemoteTrustOnce`. The state is ongoing rather than a
+ * one-time decision, and an operator diagnosing a session days into a container's life reads a
+ * bounded log window (`docker compose logs --tail=…`) — a warning emitted only at first failure
+ * would have scrolled away exactly when it is needed. Repetition is already bounded: the
+ * `lastFailureAt` backoff returns before the fetch, so at most one attempt (hence one warning) per
+ * FAILURE_BACKOFF_MS.
+ */
+function warnResolveFailed(reason: string): void {
+  logger.warn('Could not resolve a WhatsApp Web build from the wa-version registry — continuing WITHOUT a pin', {
+    action: 'web_version_resolve_failed',
+    reason,
+    registry: WA_VERSION_REGISTRY_URL,
+    consequence:
+      "whatsapp-web.js selects the build itself, which on some setups authenticates then never reaches 'ready'",
+    remedy:
+      'confirm the host can reach the registry URL, or set WWEBJS_WEB_VERSION to an exact build (or "off" to accept the first-party build)',
+  });
+}
+
 function buildRemotePin(version: string): WebVersionPin {
   const template = process.env.WWEBJS_WEB_VERSION_REMOTE_PATH?.trim() || DEFAULT_REMOTE_TEMPLATE;
   return {
@@ -129,12 +155,14 @@ export async function resolveCurrentWebVersion(fetcher: typeof fetch = fetch): P
           return picked;
         }
         lastFailureAt = Date.now(); // nothing usable — back off, then retry
+        warnResolveFailed('the registry carried no usable build');
         return null;
       } finally {
         clearTimeout(timer);
       }
-    } catch {
+    } catch (error) {
       lastFailureAt = Date.now(); // fetch failed — back off, then retry
+      warnResolveFailed(error instanceof Error ? error.message : String(error));
       return null;
     } finally {
       inFlight = null;

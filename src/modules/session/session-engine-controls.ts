@@ -59,6 +59,8 @@ export interface SessionEngineControlsHost {
   isSessionRetired(id: string): Promise<boolean>;
   purgeAuthDirsIfDeleted(id: string, name: string): Promise<void>;
   updateStatus(id: string, status: SessionStatus): Promise<void>;
+  /** Ownership gate, same contract as SessionEngineWiringHost.ownsSession. */
+  ownsSession(id: string): boolean;
   stoppingSessions: Set<string>;
   reconnectStates: Map<string, ReconnectState>;
   stuckAuthRecoveryUsed: Set<string>;
@@ -218,7 +220,13 @@ export class SessionEngineControls {
           this.engines.delete(id);
           this.sessionErrors.set(id, err instanceof Error ? err.message : String(err));
           await this.fences.teardownEngineSafely(id, orphan, e => e.forceDestroy(), 'force-destroy');
-          await this.host.updateStatus(id, SessionStatus.FAILED).catch(() => undefined);
+          // Fenced on ownership like the engine callbacks: initializeEngine can await a slow
+          // Chromium launch for minutes, and this node's lease can lapse and be taken over inside
+          // that window. FAILED is excluded from the boot reset AND from the takeover sweep, so
+          // writing it onto a row a peer now owns strands the session on every node.
+          if (this.host.ownsSession(id)) {
+            await this.host.updateStatus(id, SessionStatus.FAILED).catch(() => undefined);
+          }
         }
         // Drop the reconnect state this start() armed up front: no engine was registered, so
         // nothing will ever fire it, and leaving it behind is dead state a later liveness check

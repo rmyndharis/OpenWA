@@ -33,6 +33,12 @@ var (
 	// ErrNotImplemented is returned for a 501 (the active engine does not
 	// support this operation).
 	ErrNotImplemented = errors.New("openwa: not implemented")
+	// ErrServiceUnavailable is returned for a 503 — a transport failure rather
+	// than a refusal: WhatsApp never replied, the socket was down, or the
+	// request budget ran out. Unlike every other sentinel here it is
+	// RETRYABLE. The non-idempotent sends are deliberately left unbounded by
+	// the gateway so they never answer one.
+	ErrServiceUnavailable = errors.New("openwa: service unavailable")
 )
 
 // APIError is returned when the API responds with a non-2xx status. A 3xx also
@@ -76,6 +82,8 @@ func (e *APIError) Is(target error) bool {
 		return target == ErrRateLimited
 	case 501:
 		return target == ErrNotImplemented
+	case 503:
+		return target == ErrServiceUnavailable
 	}
 	return false
 }

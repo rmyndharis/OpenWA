@@ -13,6 +13,27 @@ func (s *SessionsService) List(ctx context.Context, query *ListSessionsQuery) ([
 	return out, err
 }
 
+// GetConfig reads a session's effective configuration.
+func (s *SessionsService) GetConfig(ctx context.Context, sessionID string) (*SessionConfig, error) {
+	var out SessionConfig
+	err := s.client.do(ctx, "GET", "/api/sessions/"+pathEscape(sessionID)+"/config", nil, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UpdateConfig changes a RUNNING session's configuration. It takes effect without re-linking the
+// account — all three fields were fixed at creation before this route existed.
+func (s *SessionsService) UpdateConfig(ctx context.Context, sessionID string, body UpdateSessionConfigRequest) (*SessionConfig, error) {
+	var out SessionConfig
+	err := s.client.do(ctx, "PATCH", "/api/sessions/"+pathEscape(sessionID)+"/config", nil, body, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Get returns a single session.
 func (s *SessionsService) Get(ctx context.Context, sessionID string) (*SessionResponse, error) {
 	var out SessionResponse
@@ -110,6 +131,22 @@ func (s *SessionsService) RequestPairingCode(ctx context.Context, sessionID stri
 func (s *SessionsService) Stats(ctx context.Context) (*SessionStatsOverview, error) {
 	var out SessionStatsOverview
 	err := s.client.do(ctx, "GET", "/api/sessions/stats/overview", nil, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetOnlinePresence sets the account's own global presence — appear online, or offline.
+//
+// Available=false hands notifications back to the phone: a linked device that stays online
+// suppresses the phone's own alerts. This is the ACCOUNT's presence, not a chat's — see
+// ChatsService.SendState for per-chat typing/recording states.
+func (s *SessionsService) SetOnlinePresence(
+	ctx context.Context, sessionID string, body SetOwnPresenceRequest,
+) (*SuccessResult, error) {
+	var out SuccessResult
+	err := s.client.do(ctx, "PUT", "/api/sessions/"+pathEscape(sessionID)+"/presence", nil, body, &out)
 	if err != nil {
 		return nil, err
 	}

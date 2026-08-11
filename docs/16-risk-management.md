@@ -122,9 +122,16 @@ Alongside that:
 - A single bulk request carries at most 100 messages (`@ArrayMaxSize(100)` on
   `SendBulkMessageDto.messages`); a 101st entry is rejected by the global `ValidationPipe` with HTTP 400.
 
-Not implemented: there are no per-minute / per-hour / per-day send caps, no media-specific delay and
-no new-number warmup enforcement. The guidelines below are operator discipline, not something the
-gateway enforces.
+Opt-in: `SEND_PACING_ENABLED=true` adds a per-UTC-day send cap whose allowance grows with the
+session's age (`SEND_PACING_WARMUP_SCHEDULE`), a separate cap on new conversations
+(`SEND_PACING_COLD_DAILY_CAP`) and a consecutive-failure breaker — see
+[06 §Send pacing](./06-api-specification.md). It is **off by default**, and it counts only sends that
+write a `messages` row, so status posts, catalog sends and message edits are checked against the cap
+without counting into it.
+
+Still not implemented: there are no per-minute or per-hour caps and no media-specific delay. With
+pacing off — the default — the guidelines below are operator discipline, not something the gateway
+enforces.
 
 **User Guidelines:**
 
@@ -544,9 +551,10 @@ The gateway enforces HTTP request throttling (`@nestjs/throttler`, registered gl
 | `SIMULATE_TYPING` / `SIMULATE_TYPING_MAX_MS`          | on / 5000 ms               | Typing pause, text sends only (`send-text` / `send-template`) |
 
 These bound API traffic and bulk pacing — they are **not** per-session WhatsApp send caps. The
-gateway does not count messages per minute, hour or day per session, so staying inside WhatsApp's
-undocumented limits remains the operator's responsibility. The thresholds below are targets for
-operator-side monitoring, not values the gateway enforces.
+gateway counts no messages per minute or hour, and counts per UTC day only when
+`SEND_PACING_ENABLED=true`, which is off by default; with it off, staying inside WhatsApp's
+undocumented limits remains entirely the operator's responsibility. The thresholds below are targets
+for operator-side monitoring, not values the gateway enforces.
 
 **Monitoring Metrics:**
 

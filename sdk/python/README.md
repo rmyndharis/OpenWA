@@ -67,7 +67,8 @@ for hit in res["hits"]:
 
 A non-2xx response raises a typed `OpenWAApiError` subclass — `OpenWAAuthError` (401),
 `OpenWAForbiddenError` (403), `OpenWANotFoundError` (404), `OpenWAConflictError` (409),
-`OpenWARateLimitError` (429), `OpenWANotImplementedError` (501) — each carrying `.status`
+`OpenWARateLimitError` (429), `OpenWANotImplementedError` (501),
+`OpenWAServiceUnavailableError` (503 — the only retryable one) — each carrying `.status`
 and the parsed `.body`. A timeout raises `OpenWATimeoutError`.
 
 ```python
@@ -110,7 +111,7 @@ rejects the upload, so configure it first.
 Cutting a release:
 
 1. Bump `version` in `pyproject.toml` and land it on `main`.
-2. Tag that commit `py-sdk-v<version>` (e.g. `py-sdk-v0.2.0`) and push the tag.
+2. Tag that commit `py-sdk-v<version>` (e.g. `py-sdk-v0.3.0`) and push the tag.
    The SDK has its own version line — the monorepo's `v*` tags are the app
    version and never trigger an SDK publish.
 3. The workflow re-runs the test suite, builds the sdist and wheel, and

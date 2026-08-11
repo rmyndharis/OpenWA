@@ -290,7 +290,9 @@
       "phone": "電話號碼",
       "phoneNone": "未連線",
       "created": "建立時間",
-      "lastActive": "上次活躍"
+      "lastActive": "上次活躍",
+      "autoRejectCalls": "自動拒接來電",
+      "autoRejectCallsHint": "來電響鈴後即時拒接。call.received webhook 仍會先行觸發。下一通來電起生效，無需重新啟動。"
     },
     "actions": {
       "view": "查看",
@@ -779,6 +781,8 @@
       "export": "匯出資料",
       "import": "匯入資料",
       "exportFailed": "無法匯出資料",
+      "exportPartialTitle": "Backup is missing some media",
+      "exportPartial": "{{count}} attachment payload(s) exceeded the export media budget and were saved as placeholders. The messages restore; their media does not.",
       "importFailed": "無法匯入資料",
       "importOk": "資料已匯入",
       "importConfirm": "匯入將以備份（{{rows}} 列）取代所有目前資料。此操作無法復原。是否繼續？",

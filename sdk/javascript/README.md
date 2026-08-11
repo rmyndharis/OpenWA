@@ -41,7 +41,8 @@ CommonJS consumers use `require('@rmyndharis/openwa')` identically.
 
 Non-2xx responses throw a typed `OpenWAApiError` subclass
 (`OpenWAAuthError`, `OpenWAForbiddenError`, `OpenWANotFoundError`,
-`OpenWAConflictError`, `OpenWARateLimitError`, `OpenWANotImplementedError`),
+`OpenWAConflictError`, `OpenWARateLimitError`, `OpenWANotImplementedError`,
+`OpenWAServiceUnavailableError` — 503, the only retryable one),
 each carrying `.status` and the parsed `.body`. Timeouts throw
 `OpenWATimeoutError`. The SDK does **not** retry — wrap calls with your own
 backoff if needed.
@@ -70,7 +71,7 @@ rejects the publish, so configure it first.
 Cutting a release:
 
 1. Bump `version` in `package.json` and land it on `main`.
-2. Tag that commit `js-sdk-v<version>` (e.g. `js-sdk-v0.2.0`) and push the tag.
+2. Tag that commit `js-sdk-v<version>` (e.g. `js-sdk-v0.3.0`) and push the tag.
    The SDK has its own version line — the monorepo's `v*` tags are the app
    version and never trigger an SDK publish.
 3. The workflow re-runs the SDK's tests, typecheck, build and dual CJS/ESM

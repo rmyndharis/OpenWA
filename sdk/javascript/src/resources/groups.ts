@@ -11,12 +11,14 @@ import type {
   CreateGroupRequest,
   GroupInfo,
   GroupJoinInfo,
+  GroupMembershipRequest,
   GroupSettingsResponse,
   GroupSummary,
   InviteCodeResponse,
   SetGroupPictureRequest,
   JoinGroupRequest,
   JoinGroupResponse,
+  ParticipantsResult,
   SuccessResult,
   UpdateGroupSettingsRequest,
 } from '../types.js';
@@ -46,9 +48,14 @@ export class GroupsResource {
     });
   }
 
-  /** Create a new group. */
-  create(sessionId: string, body: CreateGroupRequest): Promise<GroupInfo> {
-    return this.client.request<GroupInfo>({
+  /**
+   * Create a new group.
+   *
+   * Answers the group SUMMARY, not the detail shape `get()` returns — there is no participant list,
+   * description, owner or creation time on a create response.
+   */
+  create(sessionId: string, body: CreateGroupRequest): Promise<GroupSummary> {
+    return this.client.request<GroupSummary>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/groups`,
       body,
@@ -80,8 +87,8 @@ export class GroupsResource {
   }
 
   /** Add participants to a group. */
-  addParticipants(sessionId: string, groupId: string, participants: string[]): Promise<SuccessResult> {
-    return this.client.request<SuccessResult>({
+  addParticipants(sessionId: string, groupId: string, participants: string[]): Promise<ParticipantsResult> {
+    return this.client.request<ParticipantsResult>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/participants`,
       body: { participants },
@@ -89,8 +96,8 @@ export class GroupsResource {
   }
 
   /** Remove participants from a group. */
-  removeParticipants(sessionId: string, groupId: string, participants: string[]): Promise<SuccessResult> {
-    return this.client.request<SuccessResult>({
+  removeParticipants(sessionId: string, groupId: string, participants: string[]): Promise<ParticipantsResult> {
+    return this.client.request<ParticipantsResult>({
       method: 'DELETE',
       path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/participants`,
       body: { participants },
@@ -98,8 +105,8 @@ export class GroupsResource {
   }
 
   /** Promote participants to group admin. */
-  promoteParticipants(sessionId: string, groupId: string, participants: string[]): Promise<SuccessResult> {
-    return this.client.request<SuccessResult>({
+  promoteParticipants(sessionId: string, groupId: string, participants: string[]): Promise<ParticipantsResult> {
+    return this.client.request<ParticipantsResult>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/participants/promote`,
       body: { participants },
@@ -107,8 +114,8 @@ export class GroupsResource {
   }
 
   /** Demote participants from group admin. */
-  demoteParticipants(sessionId: string, groupId: string, participants: string[]): Promise<SuccessResult> {
-    return this.client.request<SuccessResult>({
+  demoteParticipants(sessionId: string, groupId: string, participants: string[]): Promise<ParticipantsResult> {
+    return this.client.request<ParticipantsResult>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/participants/demote`,
       body: { participants },
@@ -199,6 +206,42 @@ export class GroupsResource {
     return this.client.request<InviteCodeResponse>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/invite-code/revoke`,
+    });
+  }
+
+  /**
+   * List a group's pending join requests. Requires the account to be a group admin.
+   *
+   * Only `participantId` is guaranteed — the rest of each entry is reported by the engine when it
+   * has it, so treat `addedById`, `method` and `requestedAt` as absent rather than assuming a shape.
+   */
+  getMembershipRequests(sessionId: string, groupId: string): Promise<GroupMembershipRequest[]> {
+    return this.client.request<GroupMembershipRequest[]>({
+      method: 'GET',
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/membership-requests`,
+    });
+  }
+
+  /**
+   * Approve pending join requests. Omit `participants` to approve every pending request.
+   *
+   * A partial refusal answers 200 and reports it per participant in `results`, so `success` alone
+   * does not mean everyone was let in.
+   */
+  approveMembershipRequests(sessionId: string, groupId: string, participants?: string[]): Promise<ParticipantsResult> {
+    return this.client.request<ParticipantsResult>({
+      method: 'POST',
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/membership-requests/approve`,
+      body: participants === undefined ? {} : { participants },
+    });
+  }
+
+  /** Reject pending join requests. Omit `participants` to reject every pending request. */
+  rejectMembershipRequests(sessionId: string, groupId: string, participants?: string[]): Promise<ParticipantsResult> {
+    return this.client.request<ParticipantsResult>({
+      method: 'POST',
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/membership-requests/reject`,
+      body: participants === undefined ? {} : { participants },
     });
   }
 }

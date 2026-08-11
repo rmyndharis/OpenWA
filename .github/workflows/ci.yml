@@ -56,6 +56,27 @@ jobs:
       - name: Check OpenAPI snapshot is up to date
         run: npm run openapi:check
 
+      # Lives here, not in sdk-ci.yml: that workflow is path-filtered and does not list openapi.json,
+      # so a contract change alone runs none of it — and it never runs on a release tag at all.
+      - name: Check SDK routes against the contract
+        run: npm run check:sdk-routes
+
+      # The other direction. check:sdk-routes verifies every route an SDK builds exists in the
+      # contract; nothing verified that every route the contract publishes has a client method, and
+      # ten reached main without one. Fails PER SDK so a route three clients have and two do not is
+      # a failure rather than a healthy-looking total.
+      - name: Check the contract is covered by every SDK
+        run: npm run check:sdk-coverage
+
+      - name: Check SDK webhook events against the contract
+        run: npm run check:sdk-events
+
+      # Same reason again: a docs-only PR matches none of sdk-ci.yml's path filter, and the drift this
+      # catches is a documentation one — fourteen feature commits shipped a client method that the
+      # design doc never learned about.
+      - name: Check SDK docs cover the shipped client surface
+        run: npm run check:sdk-docs
+
   # Deliberately its own job rather than a step inside Lint. `npm audit` reports against the
   # advisory database, not against the diff, so a newly published advisory turns red on unrelated
   # PRs. While it lived as the first step of Lint, that failure aborted the job before ESLint, the
@@ -251,15 +272,67 @@ jobs:
         # Widened from the original three (#926) now that the rest are clean too. The narrow scope was
         # not free: `smoke-test-non-root.sh` carried a UTF-8 BOM before its shebang for months, which
         # shellcheck reports as SC1082 and which nothing else here would ever have caught.
-        run: shellcheck scripts/*.sh
+        # `docker-entrypoint.sh` is named explicitly because it is the only shell script outside
+        # scripts/, and a `scripts/*.sh` glob silently excluded the one that runs as root, chowns the
+        # data volume and execs gosu — the most privilege-sensitive script in the repo.
+        run: shellcheck docker-entrypoint.sh scripts/*.sh
 
       - name: Run backup/restore smoke test
         run: ./scripts/smoke-test-backup-restore.sh
 
+  # The chart and the workflows had no gate of any kind: nothing rendered charts/openwa, and nothing
+  # parsed the workflow YAML. Tools run as pinned containers rather than actions so there is no new
+  # action to pin by SHA, matching how redis/postgres images are pinned elsewhere in this file.
+  chart:
+    name: Helm chart and workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # For the behaviour check below. No `npm ci`: it imports only node: builtins, so pinning the
+      # runtime is the whole dependency — without this the step would silently take whatever Node the
+      # runner image happens to ship.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: helm lint
+        run: docker run --rm -v "$PWD/charts:/charts:ro" alpine/helm:4.2.3 lint /charts/openwa
+
+      # Two value sets: the defaults an operator gets, and every optional resource switched on, so a
+      # template that only breaks under a toggle cannot pass unnoticed.
+      - name: helm template
+        run: |
+          mkdir -p rendered
+          docker run --rm -v "$PWD/charts:/charts:ro" alpine/helm:4.2.3 \
+            template ci /charts/openwa > rendered/default.yaml
+          docker run --rm -v "$PWD/charts:/charts:ro" alpine/helm:4.2.3 \
+            template ci /charts/openwa \
+            --set ingress.enabled=true \
+            --set podDisruptionBudget.enabled=true \
+            --set serviceMonitor.enabled=true > rendered/toggled.yaml
+
+      # -ignore-missing-schemas so the ServiceMonitor CRD is skipped rather than failing the run;
+      # without it the toggled render exits 1 on a resource whose schema is not in the catalogue.
+      - name: Validate rendered manifests
+        run: |
+          docker run --rm -v "$PWD/rendered:/w:ro" ghcr.io/yannh/kubeconform:v0.8.0 \
+            -strict -ignore-missing-schemas -summary /w/default.yaml /w/toggled.yaml
+
+      # The three steps above all ask whether the chart renders into schema-valid YAML. This one asks
+      # what the rendered objects would do in a cluster — a selector matching two Services, a probe
+      # budget boot cannot meet, a config change that reaches no container. It shells out to the same
+      # pinned helm image, so it needs no chart tooling of its own.
+      - name: Check chart behaviour
+        run: npm run check:chart
+
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.12 -color
+
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, audit, test, dashboard, scripts-smoke]
+    needs: [lint, audit, test, dashboard, scripts-smoke, chart]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

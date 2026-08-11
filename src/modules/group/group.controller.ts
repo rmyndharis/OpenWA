@@ -8,10 +8,47 @@ import {
   GroupDescriptionDto,
   JoinGroupDto,
   GroupSettingsDto,
+  MembershipRequestActionDto,
   SetGroupPictureDto,
 } from './dto/group.dto';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
+import {
+  GroupAckResponseDto,
+  GroupInfoDto,
+  GroupInviteCodeResponseDto,
+  GroupInviteCodeRevokedResponseDto,
+  GroupJoinInfoDto,
+  GroupJoinedResponseDto,
+  GroupMembershipRequestDto,
+  GroupPictureResponseDto,
+  GroupSettingsResponseDto,
+  GroupSummaryDto,
+  ParticipantsOperationResponseDto,
+} from './dto/group-response.dto';
+import {
+  ENGINE_NOT_READY_409,
+  ENGINE_REFUSED_403,
+  GROUP_NOT_FOUND_404,
+} from '../../common/openapi/engine-status-responses';
+
+// Reading an invite code is admin-only, but the groups list returns every group the account
+// belongs to whatever its role — so these two statuses apply to ids the caller was just given.
+const INVITE_CODE_403 = 'The engine refused the request — admin rights required for this group';
+const INVITE_CODE_503 = 'WhatsApp did not answer the invite-code query — retry shortly';
+
+// Shared by the four participant writes, whose 200 reports per-participant refusals inside `results` —
+// so this 503 has to say, on all four, that it is not one of those.
+const PARTICIPANTS_503 =
+  'WhatsApp did not answer within the request budget, so no per-participant outcome was read at all. ' +
+  'Deliberately not folded into the 200 above — a participant WhatsApp turned down is reported inside ' +
+  '`results` and is an answer; an update that never came back is not.';
+
+// Shared by group creation and the four participant writes: an entry that does not name an individual
+// is rejected here rather than handed to the engine, where it produced an unnamed page-side failure.
+const PARTICIPANT_ID_400 =
+  'A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; ' +
+  'a group id or free text is rejected.';
 
 // NOTE: the session→groups LIST lives on the SessionController at GET /sessions/:id/groups (it
 // registered first and owns the canonical narrow projection). A bare @Get() here would collide on
@@ -36,9 +73,16 @@ export class GroupController {
   })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiQuery({ name: 'code', description: 'Group invite code (the part after the invite link)' })
-  @ApiResponse({ status: 200, description: 'What the invite discloses about the group' })
+  @ApiResponse({ status: 200, description: 'What the invite discloses about the group', type: GroupJoinInfoDto })
+  @ApiResponse({
+    status: 503,
+    description:
+      'WhatsApp did not answer within the request budget. Deliberately not folded into the 404 above — ' +
+      'a query that never came back is not the same claim as a group that does not exist.',
+  })
   @ApiResponse({ status: 400, description: 'Session not started, or no code supplied' })
   @ApiResponse({ status: 404, description: 'No such invite — invalid, expired or revoked' })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async joinInfo(@Param('sessionId') sessionId: string, @Query('code') code: string) {
     return this.groupService.getGroupJoinInfo(sessionId, code);
   }
@@ -47,8 +91,15 @@ export class GroupController {
   @ApiOperation({ summary: 'Get detailed group info' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID (e.g., 120363xxx@g.us)' })
-  @ApiResponse({ status: 200, description: 'Group details with participants' })
+  @ApiResponse({ status: 200, description: 'Group details with participants', type: GroupInfoDto })
+  @ApiResponse({
+    status: 503,
+    description:
+      'WhatsApp did not answer within the request budget. Deliberately not folded into the 404 above — ' +
+      'a query that never came back is not the same claim as a group that does not exist.',
+  })
   @ApiResponse({ status: 404, description: 'Group not found' })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async findOne(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
     return this.groupService.getGroupInfo(sessionId, groupId);
   }
@@ -59,8 +110,15 @@ export class GroupController {
   @ApiOperation({ summary: 'Join a group via invite code' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiBody({ type: JoinGroupDto })
-  @ApiResponse({ status: 200, description: 'Joined the group' })
+  @ApiResponse({ status: 200, description: 'Joined the group', type: GroupJoinedResponseDto })
   @ApiResponse({ status: 400, description: 'Invalid or expired invite code, or session is not started' })
+  @ApiResponse({
+    status: 503,
+    description:
+      'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
+      'the gateway stopped waiting for a confirmation that never came.',
+  })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async join(@Param('sessionId') sessionId: string, @Body() dto: JoinGroupDto) {
     const groupId = await this.groupService.joinGroupViaInviteCode(sessionId, dto.inviteCode);
     return { success: true, groupId };
@@ -70,8 +128,13 @@ export class GroupController {
   @ApiOperation({ summary: 'Get group settings (announce / locked / ephemeral timer)' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
-  @ApiResponse({ status: 200, description: 'Group settings' })
+  @ApiResponse({ status: 200, description: 'Group settings', type: GroupSettingsResponseDto })
   @ApiResponse({ status: 404, description: 'Group not found' })
+  @ApiResponse({
+    status: 503,
+    description: 'WhatsApp did not answer within the request budget — nothing could be read.',
+  })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async getSettings(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
     return this.groupService.getGroupSettings(sessionId, groupId);
   }
@@ -82,11 +145,18 @@ export class GroupController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: GroupSettingsDto })
-  @ApiResponse({ status: 200, description: 'Group settings updated' })
+  @ApiResponse({ status: 200, description: 'Group settings updated', type: GroupAckResponseDto })
   @ApiResponse({ status: 400, description: 'No setting provided, or a value is not a boolean' })
   @ApiResponse({ status: 403, description: 'The engine refused the change (the account is not a group admin)' })
   @ApiResponse({ status: 404, description: 'Group not found' })
   @ApiResponse({ status: 501, description: 'The active engine does not support a requested setting' })
+  @ApiResponse({
+    status: 503,
+    description:
+      'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
+      'the gateway stopped waiting for a confirmation that never came.',
+  })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async updateSettings(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
@@ -101,7 +171,15 @@ export class GroupController {
   @ApiOperation({ summary: 'Create a new group' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiBody({ type: CreateGroupDto })
-  @ApiResponse({ status: 201, description: 'Group created' })
+  @ApiResponse({ status: 201, description: 'Group created', type: GroupSummaryDto })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
+  @ApiResponse({ status: 400, description: PARTICIPANT_ID_400 })
+  @ApiResponse({
+    status: 501,
+    description:
+      'Not supported by the active engine: whatsapp-web.js reaches a WhatsApp Web internal that no longer exists, so group creation is Baileys-only.',
+  })
   async create(@Param('sessionId') sessionId: string, @Body() dto: CreateGroupDto) {
     return this.groupService.createGroup(sessionId, dto.name, dto.participants);
   }
@@ -116,7 +194,12 @@ export class GroupController {
     status: 200,
     description:
       'Participants processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal is an error)',
+    type: ParticipantsOperationResponseDto,
   })
+  @ApiResponse({ status: 503, description: PARTICIPANTS_503 })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
+  @ApiResponse({ status: 400, description: PARTICIPANT_ID_400 })
   @HttpCode(HttpStatus.OK)
   async addParticipants(
     @Param('sessionId') sessionId: string,
@@ -137,7 +220,12 @@ export class GroupController {
     status: 200,
     description:
       'Participants processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal is an error)',
+    type: ParticipantsOperationResponseDto,
   })
+  @ApiResponse({ status: 503, description: PARTICIPANTS_503 })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
+  @ApiResponse({ status: 400, description: PARTICIPANT_ID_400 })
   async removeParticipants(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
@@ -157,8 +245,13 @@ export class GroupController {
     status: 200,
     description:
       'Participants processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal is an error)',
+    type: ParticipantsOperationResponseDto,
   })
+  @ApiResponse({ status: 503, description: PARTICIPANTS_503 })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
   @HttpCode(HttpStatus.OK)
+  @ApiResponse({ status: 400, description: PARTICIPANT_ID_400 })
   async promoteParticipants(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
@@ -178,8 +271,13 @@ export class GroupController {
     status: 200,
     description:
       'Participants processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal is an error)',
+    type: ParticipantsOperationResponseDto,
   })
+  @ApiResponse({ status: 503, description: PARTICIPANTS_503 })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
   @HttpCode(HttpStatus.OK)
+  @ApiResponse({ status: 400, description: PARTICIPANT_ID_400 })
   async demoteParticipants(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
@@ -189,14 +287,103 @@ export class GroupController {
     return { success: true, message: 'Participants demoted from admin', results };
   }
 
+  @Get(':groupId/membership-requests')
+  @ApiOperation({
+    summary: 'List pending join requests for a group',
+    description:
+      'The join-approval queue of a group the account administers (join-approval mode on). ' +
+      'Admin-only on both engines — a non-admin read is refused. Fields the engine does not ' +
+      'report are omitted rather than defaulted.',
+  })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'groupId', description: 'Group ID' })
+  @ApiResponse({ status: 200, description: 'Pending membership requests', type: [GroupMembershipRequestDto] })
+  @ApiResponse({ status: 503, description: 'WhatsApp did not answer within the request budget — retry shortly' })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
+  async getMembershipRequests(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
+    return this.groupService.getGroupMembershipRequests(sessionId, groupId);
+  }
+
+  @Post(':groupId/membership-requests/approve')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Approve pending join requests',
+    description:
+      'Approves the named requesters, or EVERY pending request when the body names none. ' +
+      'Approving an empty queue is a no-op that returns an empty results list. On whatsapp-web.js ' +
+      'the engine pauses 250-500ms between requesters (upstream anti-abuse pacing), so acting on a ' +
+      'large queue is a proportionally long request.',
+  })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'groupId', description: 'Group ID' })
+  @ApiBody({ type: MembershipRequestActionDto })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Requests processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal of NAMED requesters is an error)',
+    type: ParticipantsOperationResponseDto,
+  })
+  @ApiResponse({ status: 503, description: PARTICIPANTS_503 })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
+  async approveMembershipRequests(
+    @Param('sessionId') sessionId: string,
+    @Param('groupId') groupId: string,
+    @Body() dto: MembershipRequestActionDto,
+  ) {
+    const results = await this.groupService.approveGroupMembershipRequests(sessionId, groupId, dto.participants);
+    return { success: true, message: 'Membership requests approved', results };
+  }
+
+  @Post(':groupId/membership-requests/reject')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Reject pending join requests',
+    description:
+      'Rejects the named requesters, or EVERY pending request when the body names none. ' +
+      'Rejecting an empty queue is a no-op that returns an empty results list. On whatsapp-web.js ' +
+      'the engine pauses 250-500ms between requesters (upstream anti-abuse pacing), so acting on a ' +
+      'large queue is a proportionally long request.',
+  })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'groupId', description: 'Group ID' })
+  @ApiBody({ type: MembershipRequestActionDto })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Requests processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal of NAMED requesters is an error)',
+    type: ParticipantsOperationResponseDto,
+  })
+  @ApiResponse({ status: 503, description: PARTICIPANTS_503 })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
+  async rejectMembershipRequests(
+    @Param('sessionId') sessionId: string,
+    @Param('groupId') groupId: string,
+    @Body() dto: MembershipRequestActionDto,
+  ) {
+    const results = await this.groupService.rejectGroupMembershipRequests(sessionId, groupId, dto.participants);
+    return { success: true, message: 'Membership requests rejected', results };
+  }
+
   @Put(':groupId/subject')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Change group name/subject' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: GroupSubjectDto })
-  @ApiResponse({ status: 200, description: 'Subject updated' })
+  @ApiResponse({ status: 200, description: 'Subject updated', type: GroupAckResponseDto })
   @ApiResponse({ status: 403, description: 'The engine refused the change — admin rights are required' })
+  @ApiResponse({
+    status: 503,
+    description:
+      'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
+      'the gateway stopped waiting for a confirmation that never came.',
+  })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async setSubject(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
@@ -212,8 +399,15 @@ export class GroupController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: GroupDescriptionDto })
-  @ApiResponse({ status: 200, description: 'Description updated' })
+  @ApiResponse({ status: 200, description: 'Description updated', type: GroupAckResponseDto })
   @ApiResponse({ status: 403, description: 'The engine refused the change — admin rights are required' })
+  @ApiResponse({
+    status: 503,
+    description:
+      'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
+      'the gateway stopped waiting for a confirmation that never came.',
+  })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async setDescription(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
@@ -228,8 +422,15 @@ export class GroupController {
   @ApiOperation({ summary: 'Leave a group' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
-  @ApiResponse({ status: 200, description: 'Left the group' })
+  @ApiResponse({ status: 200, description: 'Left the group', type: GroupAckResponseDto })
   @HttpCode(HttpStatus.OK)
+  @ApiResponse({
+    status: 503,
+    description:
+      'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
+      'the gateway stopped waiting for a confirmation that never came.',
+  })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async leave(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
     await this.groupService.leaveGroup(sessionId, groupId);
     return { success: true, message: 'Left the group' };
@@ -241,7 +442,16 @@ export class GroupController {
   @ApiOperation({ summary: "Get the group's picture URL" })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
-  @ApiResponse({ status: 200, description: 'Picture URL, or null when the group has none' })
+  @ApiResponse({
+    status: 200,
+    description: 'Picture URL, or null when the group has none',
+    type: GroupPictureResponseDto,
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'WhatsApp did not answer within the request budget — nothing could be read.',
+  })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async getPicture(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
     return { url: await this.groupService.getGroupPicture(sessionId, groupId) };
   }
@@ -252,9 +462,17 @@ export class GroupController {
   @ApiOperation({ summary: "Set the group's picture" })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
-  @ApiResponse({ status: 200, description: 'Group picture updated' })
+  @ApiResponse({ status: 200, description: 'Group picture updated', type: GroupAckResponseDto })
   @ApiResponse({ status: 400, description: 'Session not active, or neither url nor base64 supplied' })
   @ApiResponse({ status: 403, description: 'The engine refused the change — admin rights required' })
+  @ApiResponse({
+    status: 503,
+    description:
+      'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
+      'the gateway stopped waiting for a confirmation that never came.',
+  })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   async setPicture(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
@@ -270,8 +488,16 @@ export class GroupController {
   @ApiOperation({ summary: "Remove the group's picture" })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
-  @ApiResponse({ status: 200, description: 'Group picture removed' })
+  @ApiResponse({ status: 200, description: 'Group picture removed', type: GroupAckResponseDto })
   @ApiResponse({ status: 403, description: 'The engine refused the change — admin rights required' })
+  @ApiResponse({
+    status: 503,
+    description:
+      'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
+      'the gateway stopped waiting for a confirmation that never came.',
+  })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   async deletePicture(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
     await this.groupService.deleteGroupPicture(sessionId, groupId);
     return { success: true, message: 'Group picture removed' };
@@ -281,7 +507,10 @@ export class GroupController {
   @ApiOperation({ summary: 'Get group invite code/link' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
-  @ApiResponse({ status: 200, description: 'Group invite code' })
+  @ApiResponse({ status: 200, description: 'Group invite code', type: GroupInviteCodeResponseDto })
+  @ApiResponse({ status: 403, description: INVITE_CODE_403 })
+  @ApiResponse({ status: 503, description: INVITE_CODE_503 })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async getInviteCode(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
     const inviteCode = await this.groupService.getGroupInviteCode(sessionId, groupId);
     return {
@@ -296,7 +525,10 @@ export class GroupController {
   @ApiOperation({ summary: 'Revoke group invite code and generate new one' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
-  @ApiResponse({ status: 200, description: 'New invite code generated' })
+  @ApiResponse({ status: 200, description: 'New invite code generated', type: GroupInviteCodeRevokedResponseDto })
+  @ApiResponse({ status: 403, description: INVITE_CODE_403 })
+  @ApiResponse({ status: 503, description: INVITE_CODE_503 })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async revokeInviteCode(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
     const newCode = await this.groupService.revokeGroupInviteCode(sessionId, groupId);
     return {

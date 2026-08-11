@@ -8,7 +8,9 @@ import com.rmyndharis.openwa.model.ChannelMessageQuery;
 import com.rmyndharis.openwa.model.ChannelMessageRecord;
 import com.rmyndharis.openwa.model.ChannelRecord;
 import com.rmyndharis.openwa.model.CreateChannelRequest;
+import com.rmyndharis.openwa.model.DemoteChannelAdminRequest;
 import com.rmyndharis.openwa.model.MuteChannelRequest;
+import com.rmyndharis.openwa.model.TransferChannelOwnershipRequest;
 import com.rmyndharis.openwa.model.SubscribeChannelRequest;
 import com.rmyndharis.openwa.model.SuccessResult;
 import java.util.List;
@@ -101,4 +103,34 @@ public final class ChannelsResource {
             null,
             SuccessResult.class);
     }
+    /**
+     * Demote a channel admin back to a subscriber. Requires an OPERATOR-level key.
+     *
+     * <p>There is no promote counterpart: neither engine library has one, so an admin is promoted
+     * from the WhatsApp app and demoted here. The whatsapp-web.js engine answers {@code 501}.
+     */
+    public SuccessResult demoteAdmin(String sessionId, String channelId, DemoteChannelAdminRequest body) {
+        return client.request(
+            HttpMethod.POST,
+            "/api/sessions/" + encodeSegment(sessionId) + "/channels/" + encodeSegment(channelId) + "/admins/demote",
+            null,
+            body,
+            SuccessResult.class);
+    }
+
+    /**
+     * Hand a channel to a new owner. Requires an OPERATOR-level key.
+     *
+     * <p><b>Irreversible</b>: once the transfer lands this account stops being the owner and cannot
+     * take the channel back. The whatsapp-web.js engine answers {@code 501}.
+     */
+    public SuccessResult transferOwnership(String sessionId, String channelId, TransferChannelOwnershipRequest body) {
+        return client.request(
+            HttpMethod.POST,
+            "/api/sessions/" + encodeSegment(sessionId) + "/channels/" + encodeSegment(channelId) + "/owner/transfer",
+            null,
+            body,
+            SuccessResult.class);
+    }
+
 }

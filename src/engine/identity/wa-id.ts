@@ -71,6 +71,49 @@ export function parseWaId(jid: string): ParsedWaId {
 }
 
 /**
+ * The user-part of every id that names a person: a phone number or a lid, both digits-only. The
+ * floor rules out `0`, `-1` and the empty string, none of which is a WhatsApp id.
+ */
+const NUMERIC_ID = /^\d{5,}$/;
+
+/**
+ * Whether a string names an individual in a qualified dialect: `<phone>@c.us` (and its raw-protocol
+ * twin `@s.whatsapp.net`) or `<lid>@lid`. A `:<device>` suffix is fine — {@link parseWaId} strips it.
+ *
+ * **The domain alone is not enough.** `parseWaId` classifies anything ending in `@c.us` as a user, so
+ * a check that stops at the kind accepts `NOT A USER@c.us` and `@c.us`. Those still reach WhatsApp
+ * Web's page-side `createWid`, which throws an error the minified bundle reports without a name, and
+ * the caller gets the undiagnosable 500 this check exists to prevent — reproduced against a live
+ * session. The user-part has to look like a WhatsApp id too (#1220, and #1068 before it).
+ */
+export function isIndividualWid(value: string): boolean {
+  const { kind, userPart } = parseWaId(value.trim());
+  return (kind === 'user' || kind === 'lid') && NUMERIC_ID.test(userPart);
+}
+
+/**
+ * Whether a string can address an individual participant of a group: an individual WID, or a bare
+ * phone number accepted for convenience and qualified by {@link toParticipantWid}. A group id is
+ * rejected — a group cannot be a member of a group — as is anything else.
+ */
+export function isAddressableParticipant(value: string): boolean {
+  const trimmed = value.trim();
+  return isIndividualWid(trimmed) || NUMERIC_ID.test(trimmed);
+}
+
+/**
+ * Qualify a bare number to the neutral `@c.us` dialect. Anything else passes through verbatim.
+ *
+ * Deliberately keyed on the bare-number shape rather than on the absence of `@`: the old rule
+ * (`p.includes('@') ? p : p + '@c.us'`) minted an id out of ANY un-domained string, so `abc` became
+ * `abc@c.us` — a well-formed id naming nobody.
+ */
+export function toParticipantWid(value: string): string {
+  const trimmed = value.trim();
+  return NUMERIC_ID.test(trimmed) ? `${trimmed}@c.us` : trimmed;
+}
+
+/**
  * Reduce any WhatsApp JID to the neutral dialect (see the module contract above). `resolvePhone` maps a
  * lid to its phone user-part when the engine knows the mapping; an unresolvable lid is kept as
  * `<lid>@lid`. Idempotent on an already-neutral id. An unrecognized format is passed through unchanged.

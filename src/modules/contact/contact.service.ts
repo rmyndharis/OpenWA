@@ -33,6 +33,11 @@ export class ContactService {
     return contact;
   }
 
+  /** The read half of block/unblock — neutral ids only (the honest common subset of both engines). */
+  getBlockedContacts(sessionId: string) {
+    return this.getEngine(sessionId).getBlockedContacts();
+  }
+
   checkNumberExists(sessionId: string, number: string) {
     return this.getEngine(sessionId).checkNumberExists(number);
   }

@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm';
 import { SessionService } from '../session/session.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -52,6 +52,17 @@ function inertMimetype(mimetype: string): string {
 }
 
 /**
+ * True when this write's media is only a remote-URL pointer (a URL-based send, whose bytes the
+ * engine fetches and discards). Merging such metadata onto an echo row would REPLACE bytes the
+ * gateway already downloaded — wwjs enriches its own-send echo with the real payload — leaving a
+ * row that renders as a bare marker and that the archive cannot use.
+ */
+function isUrlPointerMetadata(metadata: Record<string, unknown> | undefined): boolean {
+  const data = (metadata as { media?: { data?: unknown } } | undefined)?.media?.data;
+  return typeof data === 'string' && /^https?:\/\//i.test(data);
+}
+
+/**
  * Outbound sends are executed directly against the WhatsApp engine, not via a BullMQ queue.
  *
  * The engine is single-threaded per session (a Puppeteer page for the whatsapp-web.js adapter, a
@@ -84,8 +95,8 @@ export class MessageService {
     private readonly pacing: SendPacingService,
     @Optional()
     private readonly configService?: ConfigService,
-    // Optional so the existing standalone constructions keep working; absent means the archive
-    // read endpoint reports "nothing archived", which is also what a disabled archive reports.
+    // Optional so the existing standalone constructions keep working; absent (like a disabled
+    // archive) means the media read endpoint serves only the inline row copy, never archived files.
     @Optional()
     private readonly chatMediaArchive?: ChatMediaArchiveService,
     @Optional()
@@ -615,6 +626,12 @@ export class MessageService {
    * Save outgoing message to database.
    * When called before sending, creates a record with PENDING status; bulk send reuses this after a
    * successful send (status SENT) so batch messages are persisted like single sends.
+   *
+   * A caller that already knows the engine id races the own-send echo on
+   * UNIQUE(sessionId, waMessageId) — only the bulk path does today, since every single send persists
+   * its PENDING row before the id exists. Losing that race merges onto the echo's row rather than
+   * failing, mirroring `persistSentState`: the echo carries only what the engine reported (for a
+   * Baileys API send, a media-less marker), so dropping this write would lose the media payload.
    */
   async saveOutgoingMessage(
     sessionId: string,
@@ -648,7 +665,23 @@ export class MessageService {
       status: data.status ?? MessageStatus.PENDING,
       metadata: data.metadata,
     });
-    const saved = await this.messageRepository.save(message);
+    const saved = await this.messageRepository.save(message).catch(async (err: unknown) => {
+      const waMessageId = message.waMessageId;
+      if (!waMessageId || !isUniqueConstraintError(err)) throw err;
+      const patch: QueryDeepPartialEntity<Message> = {
+        status: message.status,
+        timestamp: message.timestamp,
+      };
+      // Only when this write actually carries metadata worth merging: a text item must not blank
+      // the echo's, and a URL pointer must not replace bytes the engine already downloaded.
+      if (message.metadata && !isUrlPointerMetadata(message.metadata)) {
+        patch.metadata = message.metadata as QueryDeepPartialEntity<Record<string, unknown>>;
+      }
+      await this.messageRepository.update({ sessionId, waMessageId }, patch);
+      const surviving = await this.messageRepository.findOne({ where: { sessionId, waMessageId } });
+      if (!surviving) throw err;
+      return surviving;
+    });
     this.emitPersisted(sessionId, saved);
     return saved;
   }
@@ -659,10 +692,23 @@ export class MessageService {
   // transition (SENT / FAILED / merge) — so a provider's copy never stays stuck at PENDING (#906).
   // The payload is a shallow snapshot: the same entity instance is mutated as the send progresses
   // (PENDING → SENT/FAILED), and fire-and-forget execution must still see the state at emission time.
+  //
+  // Outbound archiving rides the same chokepoint rather than a call at each of the four persist
+  // sites: every terminal state of an outbound row passes here. Gated on SENT because a PENDING row
+  // may still be deleted by the dedup merge or rewritten by the pending reaper, and a FAILED one has
+  // had its payload stripped — archiving either would strand a file the row never points at.
   private emitPersisted(sessionId: string, message: Message): void {
     void this.hookManager
       .execute('message:persisted', { sessionId, message: { ...message } }, { sessionId, source: 'MessageService' })
       .catch(() => undefined);
+    if (message.status === MessageStatus.SENT && this.archiveOutboundEnabled) {
+      void this.chatMediaArchive?.archive(message).catch(() => undefined);
+    }
+  }
+
+  /** Whether media this account sent is archived too — a sub-flag of the archive itself. */
+  private get archiveOutboundEnabled(): boolean {
+    return this.configService?.get<boolean>('chatMedia.archiveOutbound', false) === true;
   }
 
   /**
@@ -704,9 +750,10 @@ export class MessageService {
     } catch (persistError) {
       if (result.id && isUniqueConstraintError(persistError)) {
         // The engine's own-send echo (onMessageCreate) won the race and already persisted a row with
-        // this waMessageId. That row carries only a media-less marker — merge our SENT state AND our
-        // metadata (the actual media payload) onto it BEFORE dropping this redundant PENDING row, or
-        // the payload-bearing row is the one that gets deleted and the media is gone after a reload.
+        // this waMessageId. That row carries only what the engine reported — for a Baileys API send,
+        // a media-less marker — so merge our SENT state AND our metadata (the actual media payload)
+        // onto it BEFORE dropping this redundant PENDING row, or the payload-bearing row is the one
+        // that gets deleted and the media is gone after a reload.
         // Best-effort throughout: the send itself already succeeded.
         this.logger.debug(
           `Send echo already persisted ${result.id}; merging state and dropping the redundant pending row`,
@@ -715,7 +762,7 @@ export class MessageService {
           },
         );
         const patch: QueryDeepPartialEntity<Message> = { status: MessageStatus.SENT, timestamp: result.timestamp };
-        if (message.metadata) {
+        if (message.metadata && !isUrlPointerMetadata(message.metadata)) {
           patch.metadata = message.metadata as QueryDeepPartialEntity<Record<string, unknown>>;
         }
         await this.messageRepository
@@ -761,7 +808,13 @@ export class MessageService {
   }
 
   /**
-   * Read a message's archived media back out of the file store.
+   * Read a message's media: the archived file when one exists, else the inline copy persisted on
+   * the message row. The fallback is what makes media sent BY the account retrievable here — the
+   * archive is written only on the inbound path, but outbound rows carry the payload inline: the
+   * REST send persists it, wwjs downloads it for the own-send echo, and Baileys downloads it for
+   * phone-composed fromMe messages (the Baileys API-send echo alone carries only a marker, which
+   * the REST-persisted copy covers) — #1165. It also serves an inbound message whose archived file
+   * was purged by retention while the inline copy lives on.
    *
    * Unlike status media (only ever an image or video), chat media includes documents a sender chose
    * the type of — so the declared mimetype is echoed back only when it is inert, and the caller
@@ -773,21 +826,42 @@ export class MessageService {
     chatId: string,
     messageId: string,
   ): Promise<{ buffer: Buffer; mimetype: string }> {
-    const media = await this.chatMediaArchive?.getMedia(sessionId, chatId, messageId);
-    if (!media || !this.storageService) {
-      throw new NotFoundException('No archived media for this message');
-    }
-    try {
-      const buffer = await this.storageService.getFile(media.path);
-      return { buffer, mimetype: inertMimetype(media.mimetype) };
-    } catch (error) {
-      // The row outlived its file: the retention purge (or a concurrent delete) removed it between
-      // the DB read and this read. That's "gone", not a server fault — surface a 404.
-      if (isMissingObjectError(error)) {
-        throw new NotFoundException('No archived media for this message');
+    const chatIds = this.resolveJidCandidates(chatId);
+    const media = await this.chatMediaArchive?.getMedia(sessionId, chatIds, messageId);
+    if (media && this.storageService) {
+      try {
+        return { buffer: await this.storageService.getFile(media.path), mimetype: inertMimetype(media.mimetype) };
+      } catch (error) {
+        // The row outlived its file: the retention purge (or a concurrent delete) removed it
+        // between the DB read and this read. Not a server fault — try the inline copy instead.
+        if (!isMissingObjectError(error)) {
+          throw error;
+        }
       }
-      throw error;
     }
+
+    // Match across dialects like getMessages does: an outbound row stores the caller's literal
+    // chatId (REST persist) or the engine-neutral form (own-send echo) depending on which writer
+    // won the persist race, so a literal match would 404 on half the rows this fallback exists for.
+    const row = await this.messageRepository.findOne({
+      where: { sessionId, chatId: In(chatIds), waMessageId: messageId },
+    });
+    const inline = (row?.metadata as { media?: { data?: unknown; mimetype?: unknown; omitted?: unknown } })?.media;
+    if (
+      !inline ||
+      inline.omitted ||
+      typeof inline.data !== 'string' ||
+      !inline.data ||
+      typeof inline.mimetype !== 'string' ||
+      !inline.mimetype ||
+      // A URL-based send persists the URL STRING as `data` (buildMediaInput: `data: base64 ||
+      // dto.url!`) — the bytes were fetched at send time and never stored. Decoding the URL as
+      // base64 would serve garbage, so report it as absent. Same discriminator as the send path.
+      /^https?:\/\//i.test(inline.data)
+    ) {
+      throw new NotFoundException('No media stored for this message');
+    }
+    return { buffer: Buffer.from(inline.data, 'base64'), mimetype: inertMimetype(inline.mimetype) };
   }
 
   /** Maximum messages a single getChatHistory call may request from the engine. */

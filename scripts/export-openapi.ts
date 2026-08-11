@@ -12,7 +12,7 @@ import { SwaggerModule } from '@nestjs/swagger';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSwaggerConfig, exemptPublicOperations } from '../src/config/swagger.config';
+import { createSwaggerConfig, dropUnexpressibleOperations, exemptPublicOperations } from '../src/config/swagger.config';
 
 // Pin a hermetic env BEFORE AppModule is imported. AppModule reads QUEUE_ENABLED / MCP_ENABLED at
 // module top-level (its conditional module mounts) and TypeORM reads the DB settings during
@@ -61,16 +61,20 @@ async function main() {
   app.setGlobalPrefix('api');
   try {
     const doc = SwaggerModule.createDocument(app, createSwaggerConfig());
+    // Before the exemption pass, so it never spends work on an operation about to be removed.
+    dropUnexpressibleOperations(doc);
     exemptPublicOperations(doc);
     writeFileSync(out, JSON.stringify(doc, null, 2) + '\n');
-    console.log(`✓ OpenAPI snapshot written to ${out} (version ${doc.info.version}, ${Object.keys(doc.paths).length} paths)`);
+    console.log(
+      `✓ OpenAPI snapshot written to ${out} (version ${doc.info.version}, ${Object.keys(doc.paths).length} paths)`,
+    );
   } finally {
     await app.close();
     rmSync(exportDataDir, { recursive: true, force: true });
   }
 }
 
-void main().catch((e) => {
+void main().catch(e => {
   console.error(e);
   process.exit(1);
 });

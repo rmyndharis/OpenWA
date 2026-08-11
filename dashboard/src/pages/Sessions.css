@@ -785,3 +785,80 @@
   font-size: 0.9375rem;
   color: var(--text-primary);
 }
+
+/* Auto-reject toggle in the session detail modal. The toggle-switch rules mirror the per-page copies
+   in Webhooks.css / Plugins.css / Infrastructure.css — this codebase scopes them per page rather
+   than sharing one definition. The visually-hidden input is excluded from the modal's
+   input[type='checkbox'] reset in index.css, so it keeps width:0 here. */
+.sessions-page .detail-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.sessions-page .detail-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.sessions-page .toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 48px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.sessions-page .toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.sessions-page .toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--border);
+  transition: 0.3s;
+  border-radius: 26px;
+}
+
+.sessions-page .toggle-slider::before {
+  position: absolute;
+  content: '';
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.3s;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.sessions-page .toggle-switch input:checked + .toggle-slider {
+  background-color: var(--primary);
+}
+
+.sessions-page .toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(22px);
+}
+
+/* A viewer-role key cannot write, and the control is also held during a save. The page copies this
+   rule came from have no disabled state because none of their toggles can be disabled; without it
+   the switch looks live to someone who can never move it. */
+.sessions-page .toggle-switch input:disabled + .toggle-slider {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.sessions-page .toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}

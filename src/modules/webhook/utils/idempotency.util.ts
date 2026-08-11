@@ -121,6 +121,11 @@ export function generateIdempotencyKey(event: string, data: Record<string, unkno
       // Same recurring-occurrence treatment as group.join.
       return `grp_${toStr(data.groupId)}_${hashData({ participants: data.participantIds })}_leave${occurrence}`;
 
+    case 'group.join_request':
+      // Same recurring-occurrence treatment as group.join: a user whose request was rejected can
+      // legitimately ask again, so the occurrence salt keeps the re-request deliverable.
+      return `grp_${toStr(data.groupId)}_${hashData({ participants: data.participantIds })}_join_request${occurrence}`;
+
     case 'group.update':
       // Key on WHAT changed (a subject set to "X" twice is one logical change; announce toggling
       // back and forth is several), salted per occurrence so identical repeat updates stay distinct.

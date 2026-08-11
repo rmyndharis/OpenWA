@@ -5,29 +5,53 @@ Backed by ``src/modules/session/session.controller.ts``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 from .._http import quote_segment
 from ..types import (
     CreateSessionRequest,
+    SessionConfig,
+    UpdateSessionConfigRequest,
     PairingCodeResponse,
     QrCodeResponse,
     RequestPairingCodeRequest,
     SessionResponse,
     SessionStatsOverview,
+    SetOwnPresenceRequest,
+    SuccessResult,
 )
 
 if TYPE_CHECKING:
     from .._http import HttpExecutor
 
 
+class ListSessionsQuery(TypedDict, total=False):
+    """Pagination for :meth:`SessionsResource.list`. The server applies its own default when omitted."""
+
+    limit: int
+    offset: int
+
+
 class SessionsResource:
     def __init__(self, http: "HttpExecutor") -> None:
         self._http = http
 
-    def list(self) -> list[SessionResponse]:
+    def list(self, query: ListSessionsQuery | None = None) -> list[SessionResponse]:
         """List sessions."""
-        return self._http.request("GET", "/api/sessions")
+        return self._http.request("GET", "/api/sessions", query=query)
+
+    def get_config(self, session_id: str) -> SessionConfig:
+        """Read a session's effective configuration."""
+        return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/config")
+
+    def update_config(self, session_id: str, body: UpdateSessionConfigRequest) -> SessionConfig:
+        """Update a RUNNING session's configuration -- no re-link and no QR scan.
+
+        All three fields were fixed at creation before this route existed.
+        """
+        return self._http.request(
+            "PATCH", f"/api/sessions/{quote_segment(session_id)}/config", body=body
+        )
 
     def get(self, session_id: str) -> SessionResponse:
         """Return a single session."""
@@ -82,3 +106,14 @@ class SessionsResource:
     def stats(self) -> SessionStatsOverview:
         """Return the aggregate session stats overview."""
         return self._http.request("GET", "/api/sessions/stats/overview")
+
+    def set_online_presence(self, session_id: str, body: SetOwnPresenceRequest) -> SuccessResult:
+        """Set the account's own global presence — appear online, or offline.
+
+        ``available: False`` hands notifications back to the phone: a linked device that stays
+        online suppresses the phone's own alerts. This is the ACCOUNT's presence, not a chat's —
+        see the chats resource for per-chat typing/recording states.
+        """
+        return self._http.request(
+            "PUT", f"/api/sessions/{quote_segment(session_id)}/presence", body=body
+        )

@@ -11,6 +11,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiPropertyOptional } from '@nestjs/swagger';
+import { InfraConfigResponseDto, InfraConfigSaveResponseDto, InfraRestartResponseDto } from './dto/infra-response.dto';
 import { IsArray, IsOptional, IsString } from 'class-validator';
 import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
@@ -109,7 +110,7 @@ export class InfraConfigController {
   @Get('config')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Read the saved infrastructure configuration for the dashboard form' })
-  @ApiResponse({ status: 200, description: 'Saved configuration (secrets omitted)' })
+  @ApiResponse({ status: 200, description: 'Saved configuration (secrets omitted)', type: InfraConfigResponseDto })
   getConfig(): SavedConfigResponse {
     const saved = readGeneratedEnv();
 
@@ -159,7 +160,11 @@ export class InfraConfigController {
   @Put('config')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Save infrastructure configuration to .env file' })
-  @ApiResponse({ status: 200, description: 'Configuration saved' })
+  @ApiResponse({
+    status: 200,
+    description: 'Save outcome. A failed write also answers 200 with `saved: false` — read the flag, not the status.',
+    type: InfraConfigSaveResponseDto,
+  })
   @ApiBody({ description: 'Configuration to save', type: SaveConfigDto })
   saveConfig(@Body() config: SaveConfigDto): { message: string; saved: boolean; envPath: string; profiles: string[] } {
     try {
@@ -354,7 +359,7 @@ export class InfraConfigController {
   @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Request server restart with Docker orchestration' })
-  @ApiResponse({ status: 200, description: 'Server will restart with new profiles' })
+  @ApiResponse({ status: 200, description: 'Server will restart with new profiles', type: InfraRestartResponseDto })
   @ApiBody({ required: false, type: RestartDto })
   async requestRestart(@Body() body?: RestartDto): Promise<{
     message: string;

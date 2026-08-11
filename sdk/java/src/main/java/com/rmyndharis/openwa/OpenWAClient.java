@@ -1,6 +1,7 @@
 package com.rmyndharis.openwa;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
 import com.rmyndharis.openwa.errors.OpenWAApiError;
 import com.rmyndharis.openwa.errors.OpenWAError;
@@ -8,6 +9,9 @@ import com.rmyndharis.openwa.http.BinaryResponse;
 import com.rmyndharis.openwa.http.DefaultHttpTransport;
 import com.rmyndharis.openwa.http.Http;
 import com.rmyndharis.openwa.http.HttpMethod;
+import com.rmyndharis.openwa.model.MuteChatRequest;
+import com.rmyndharis.openwa.model.UpdateSessionConfigRequest;
+import com.rmyndharis.openwa.model.UpdateSessionConfigRequestSerializer;
 import com.rmyndharis.openwa.http.HttpRequestData;
 import com.rmyndharis.openwa.http.HttpResponseData;
 import com.rmyndharis.openwa.http.HttpTransport;
@@ -47,6 +51,18 @@ import java.util.Map;
  */
 public final class OpenWAClient {
     private final Gson gson = new Gson();
+
+    // Used for the two body types listed in bodySerializer(), never the shared default. Emitting an
+    // explicit null needs two things that pull in opposite directions: a serializer that decides
+    // WHICH keys appear, and serializeNulls() so the ones it chose survive the writer — Gson drops
+    // JsonNull members otherwise, even from a JsonObject the serializer already built. Applying
+    // serializeNulls() to the shared instance instead would turn every unset field of every other
+    // body into an explicit null, which the session-config route reads as "reset to default": a far
+    // worse bug than the one it fixes.
+    private final Gson nullEmittingGson = new GsonBuilder()
+            .serializeNulls()
+            .registerTypeAdapter(UpdateSessionConfigRequest.class, new UpdateSessionConfigRequestSerializer())
+            .create();
     private final ClientConfig config;
     private final HttpTransport transport;
 
@@ -166,10 +182,23 @@ public final class OpenWAClient {
         return body == null ? "" : new String(body, StandardCharsets.UTF_8);
     }
 
+    /**
+     * The bodies that must be able to emit an explicit null.
+     *
+     * Gson drops null members by default, so for these two a null field would leave the request
+     * without the key at all — which is not a weaker version of the request, it is a different one.
+     * {@link MuteChatRequest} is safe to route here despite the warning on {@code nullEmittingGson}
+     * because both of its fields are required: it has no optional field that an explicit null could
+     * turn into an unintended "reset to default".
+     */
+    private Gson bodySerializer(Object body) {
+        return body instanceof UpdateSessionConfigRequest || body instanceof MuteChatRequest ? nullEmittingGson : gson;
+    }
+
     private HttpResponseData execute(HttpMethod method, String path, Object query, Object body) {
         String url = Http.buildUrl(config.baseUrl, path, query, gson);
         Map<String, String> headers = Http.mergeHeaders(config.defaultHeaders, null, config.apiKey);
-        String bodyJson = body != null ? gson.toJson(body) : null;
+        String bodyJson = body != null ? bodySerializer(body).toJson(body) : null;
         HttpRequestData reqData = new HttpRequestData(method, url, headers, bodyJson, config.timeout);
         HttpResponseData res;
         try {

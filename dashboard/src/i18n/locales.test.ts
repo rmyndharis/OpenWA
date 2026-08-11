@@ -178,3 +178,56 @@ test('English start teardown-pending copy is a retryable warning, not an error',
   assert.ok(/try again/i.test(body), `teardown-pending copy lost the retry guidance: "${body}"`);
   assert.ok(title && title !== 'sessions.start.teardownPendingTitle');
 });
+
+// A locale JSON file is only reachable in the UI once it is wired into index.ts in four separate
+// places. `check-i18n-parity.mjs` scans the locales DIRECTORY and never opens index.ts, so a fully
+// translated catalogue can pass that gate while being unreachable — no import, absent from the
+// language picker, or missing from i18next's resources. Read index.ts as text (the same technique
+// this file already uses for Sessions.tsx) rather than importing it, which would pull in
+// `i18next-browser-languagedetector` and `document` under the bare node test runner.
+const I18N_INDEX_SOURCE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
+
+const section = (start: string, source = I18N_INDEX_SOURCE): string => {
+  const from = source.indexOf(start);
+  assert.notEqual(from, -1, `index.ts no longer contains "${start}" — update this test's anchors`);
+  const end = source.indexOf('];', from);
+  assert.notEqual(end, -1, `could not find the end of "${start}" in index.ts`);
+  return source.slice(from, end);
+};
+
+// Permissive on purpose: matches 'pt-BR' and "zh-CN" alike so a Prettier reflow or a quote-style
+// change cannot break the assertion.
+const localeIdsIn = (text: string): string[] => [
+  ...new Set([...text.matchAll(/['"]([a-z]{2}(?:-[A-Za-z]{2,4})?)['"]/g)].map(m => m[1])),
+];
+
+test('every locale file is registered in all four index.ts sites', () => {
+  const registrations: Array<[string, string[]]> = [
+    ['import', [...I18N_INDEX_SOURCE.matchAll(/from '\.\/locales\/([^']+)\.json'/g)].map(m => m[1])],
+    ['supportedLanguages', localeIdsIn(section('export const supportedLanguages = ['))],
+    ['languageOptions', localeIdsIn(section('export const languageOptions:'))],
+    // Anchored on `: { translation:` — the resources map is the only place that shape occurs, and
+    // it quotes only hyphenated ids ('zh-CN') while leaving simple ones bare (en), so both forms
+    // must be accepted.
+    [
+      'resources',
+      [...I18N_INDEX_SOURCE.matchAll(/(?:'([\w-]+)'|([\w-]+))\s*:\s*\{\s*translation:/g)].map(m => m[1] ?? m[2]),
+    ],
+  ];
+
+  for (const [site, found] of registrations) {
+    assert.deepEqual(
+      [...found].sort(),
+      LOCALE_IDS,
+      `${site} in index.ts does not match the locale files on disk — a locale here is unreachable in the UI`,
+    );
+  }
+});
+
+// rtlLanguages is deliberately a SUBSET (only he/ar today), so it is checked for validity, not parity:
+// an id here that is not a shipped locale would set dir="rtl" for a language that cannot be selected.
+test('rtlLanguages only names shipped locales', () => {
+  const rtl = localeIdsIn(section('export const rtlLanguages:'));
+  assert.ok(rtl.length > 0, 'rtlLanguages parsed as empty — the anchor or the pattern has drifted');
+  for (const id of rtl) assert.ok(LOCALE_IDS.includes(id), `rtlLanguages names "${id}", which has no locale file`);
+});

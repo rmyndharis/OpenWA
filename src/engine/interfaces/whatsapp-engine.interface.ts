@@ -196,10 +196,17 @@ export interface GroupParticipant {
  * Outcome of a group membership write (add/remove/promote/demote) for ONE participant. Engines
  * that report per-participant results map them verbatim (whatsapp-web.js `addParticipants` resolves
  * a `{[participantId]: {code, message}}` object; Baileys `groupParticipantsUpdate` resolves a
- * `[{status, jid}]` array); engines that only confirm the batch as a whole (whatsapp-web.js
- * remove/promote/demote resolve `{status: 200}`) report one success entry per requested participant.
+ * `[{status, jid}]` array).
+ *
+ * whatsapp-web.js remove/promote/demote confirm only the batch, but an install-time patch
+ * (`scripts/patch-wwebjs-participant-arity.js`) makes the page report which requested ids resolved
+ * to actual members, so those entries are per-participant too: an id the page dropped is reported
+ * `404` rather than confirmed. On a tree where that patch was not applied the marker is absent and
+ * the adapter falls back to one batch-confirmed entry per requested participant, which is all the
+ * library reports there.
+ *
  * `status` is the engine's own code when it reported one (e.g. 200 ok, 403 invite-only/not-admin,
- * 404 not registered, 409 already a member).
+ * 404 not registered or not a member, 409 already a member).
  */
 export interface ParticipantOperationResult {
   /** Neutral participant id the outcome belongs to. */
@@ -257,6 +264,27 @@ export interface GroupJoinInfo {
   createdAt?: number;
   /** How many members, when disclosed. There is no list to give — you are not in the group yet. */
   participantCount?: number;
+}
+
+/** How a join request was made. Neutral vocabulary; both engines' tokens map onto it. */
+export type GroupMembershipRequestMethod = 'invite_link' | 'non_admin_add' | 'linked_group_join';
+
+/**
+ * One pending request to join a group that has join-approval turned on. Mapped at the adapter
+ * boundary from engine shapes that disagree on everything: whatsapp-web.js resolves raw
+ * page-context store objects (wid objects, PascalCase method tokens), Baileys bare wire attrs
+ * (engine-dialect jids, snake_case tokens, stringly timestamps). Fields the engine did not report
+ * are omitted rather than defaulted.
+ */
+export interface GroupMembershipRequest {
+  /** Neutral id of the user asking to join. */
+  participantId: string;
+  /** Who created the request when the engine reports it (differs from the requester on a non-admin add). */
+  addedById?: string;
+  /** How the request was made, when the engine reports a token this shape models. */
+  method?: GroupMembershipRequestMethod;
+  /** Unix seconds the request was created, when the engine reports it. */
+  requestedAt?: number;
 }
 
 /**
@@ -456,6 +484,12 @@ export interface ChatSummary {
 export type ChatState = 'typing' | 'recording' | 'paused';
 
 /**
+ * Which kind of call a generated link opens. `audio` is the neutral spelling; Baileys uses the same
+ * word, whatsapp-web.js calls it `voice`, and WhatsApp's own URL path is `/voice/`.
+ */
+export type CallLinkType = 'audio' | 'video';
+
+/**
  * Engine-neutral message delivery status. Each adapter maps its native delivery signal
  * (e.g. whatsapp-web.js MessageAck integers, Baileys WAMessageStatus) to this vocabulary,
  * so no consumer outside the adapter sees engine-specific ack codes.
@@ -520,19 +554,24 @@ export interface ReactionEvent {
 /**
  * A group membership or metadata change, mapped at the adapter boundary to this neutral
  * shape so consumers never see engine-specific payloads:
- *  - whatsapp-web.js: `group_join` / `group_leave` / `group_update` (GroupNotification).
+ *  - whatsapp-web.js: `group_join` / `group_leave` / `group_update` /
+ *    `group_membership_request` (GroupNotification).
  *  - Baileys: `group-participants.update` (add/remove only — promote/demote are not
- *    surfaced) and `groups.update` (subject/desc/announce/restrict).
+ *    surfaced), `groups.update` (subject/desc/announce/restrict) and `group.join-request`
+ *    (action 'created' only — the wwebjs event has no revoke/reject counterpart, so only
+ *    the shared signal is surfaced; rc13 itself emits the event only for non-admin-add
+ *    requests — the direct self-request stub 144 is unhandled upstream, marked TODO at
+ *    Utils/process-message.js:569 — so an invite-link self-request may not fire on Baileys).
  * All ids are in the neutral dialect (`@g.us` / `@c.us`; a lid stays `<id>@lid` when the
  * lid->phone mapping is unknown).
  */
 export interface GroupEvent {
-  kind: 'join' | 'leave' | 'update';
+  kind: 'join' | 'leave' | 'update' | 'join_request';
   /** Neutral group id (`@g.us`). */
   groupId: string;
   /** Who performed the action, neutral user id when the engine reports one. */
   actorId?: string;
-  /** Affected users (join/leave), neutral ids. Empty for metadata updates. */
+  /** Affected users (join/leave), or the users asking to join (join_request), neutral ids. Empty for metadata updates. */
   participantIds: string[];
   /** Metadata delta for kind 'update'; absent or partially populated for join/leave. */
   changes?: { subject?: string; description?: string; announce?: boolean; locked?: boolean };
@@ -667,9 +706,9 @@ export interface EngineEventCallbacks {
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
   /**
-   * Fired on group membership changes (join/leave) and group metadata updates
-   * (subject/description/announce/locked). The `kind` selects the consumer event name
-   * (`group.join` / `group.leave` / `group.update`).
+   * Fired on group membership changes (join/leave), group metadata updates
+   * (subject/description/announce/locked), and pending join requests. The `kind` selects the
+   * consumer event name (`group.join` / `group.leave` / `group.update` / `group.join_request`).
    */
   onGroupEvent?: (event: GroupEvent) => void;
   /**
@@ -891,6 +930,20 @@ export interface IWhatsAppEngine {
    * Known values: 86400 (24h), 604800 (7d), 7776000 (90d).
    */
   setGroupEphemeral(groupId: string, durationSec: number): Promise<void>;
+  /**
+   * Pending join requests for a group with join-approval turned on. Admin-only on both engines;
+   * a non-admin's read is refused by the engine and surfaced as-is.
+   */
+  getGroupMembershipRequests(groupId: string): Promise<GroupMembershipRequest[]>;
+  /**
+   * Approve pending join requests — the named participants, or EVERY pending request when
+   * `participants` is omitted. Per-participant outcomes follow the membership-write contract
+   * (see addParticipants); the all-failed/no-outcome guards apply only when participants were
+   * NAMED — approving an empty queue is a no-op that resolves [].
+   */
+  approveGroupMembershipRequests(groupId: string, participants?: string[]): Promise<ParticipantOperationResult[]>;
+  /** Reject pending join requests; same contract as approveGroupMembershipRequests. */
+  rejectGroupMembershipRequests(groupId: string, participants?: string[]): Promise<ParticipantOperationResult[]>;
 
   // Message Operations
   deleteMessage(chatId: string, messageId: string, forEveryone?: boolean): Promise<void>;
@@ -948,11 +1001,29 @@ export interface IWhatsAppEngine {
    * ringing window, and an unknown or expired callId fails with a not-found error (HTTP 404).
    */
   rejectCall(callId: string): Promise<void>;
+  /**
+   * Generate a shareable WhatsApp call link, returning the finished `https://call.whatsapp.com/…`
+   * URL. `startTime` is an absolute epoch-MILLISECONDS timestamp; both engines take seconds on the
+   * wire and each adapter converts.
+   *
+   * The engines return different things and the adapters reconcile them: whatsapp-web.js resolves
+   * the finished link (or `''` on failure), Baileys resolves only the bare token and the adapter
+   * assembles it behind the library's own prefix. A WhatsApp-side failure throws rather than
+   * returning an empty or prefix-only link, which would look like a working link and is not one.
+   */
+  createCallLink(type: CallLinkType, startTime: number): Promise<string>;
 
   // Contact Extended Operations
   getProfilePicture(contactId: string): Promise<string | null>;
   blockContact(contactId: string): Promise<void>;
   unblockContact(contactId: string): Promise<void>;
+  /**
+   * Neutral ids of the contacts this account has blocked — the read half of block/unblockContact.
+   * Ids only: whatsapp-web.js resolves full Contact models, but Baileys' blocklist query answers
+   * bare jids, and inventing the other fields on one engine would make the two engines claim
+   * different things about the same account.
+   */
+  getBlockedContacts(): Promise<string[]>;
 
   /**
    * Save a contact to the account's addressbook, or edit an existing entry. `contactId` is a
@@ -970,6 +1041,16 @@ export interface IWhatsAppEngine {
   setProfileStatus(status: string): Promise<void>;
   /** Set the account's profile picture (a URL payload is fetched server-side). */
   setProfilePicture(media: MediaInput): Promise<void>;
+  /**
+   * Remove the account's own profile picture. Resolves when the removal is acknowledged; deleting a
+   * picture that is not there is a no-op rather than an error, so the call is idempotent.
+   *
+   * Only whatsapp-web.js can report a refusal, and only as an explicit `false` — its page helper
+   * also returns `undefined` when it did not attempt the delete at all, which is NOT a refusal.
+   * Baileys resolves void and has no refusal signal, so it reports success for any acknowledged
+   * write.
+   */
+  deleteProfilePicture(): Promise<void>;
 
   // Labels (Phase 3) - WhatsApp Business only
   getLabels(): Promise<Label[]>;
@@ -990,6 +1071,23 @@ export interface IWhatsAppEngine {
   deleteChannel(channelId: string): Promise<void>;
   /** Mute or unmute a channel's notifications for this account. Does not affect subscription. */
   muteChannel(channelId: string, mute: boolean): Promise<void>;
+  /**
+   * Demote a channel admin back to a plain subscriber. Requires this account to own the channel.
+   *
+   * There is deliberately no promote counterpart: neither library has one — Baileys exposes no
+   * `newsletterPromote` and whatsapp-web.js no `promoteChannelAdmin` — so an admin is promoted from
+   * the WhatsApp app and can then be demoted here.
+   */
+  demoteChannelAdmin(channelId: string, userId: string): Promise<void>;
+  /**
+   * Hand a channel this account owns to a new owner. **Irreversible** — the account stops being the
+   * owner and cannot take it back through this API.
+   *
+   * The whatsapp-web.js option to also dismiss yourself as admin in the same call is not exposed:
+   * the page function it relies on no longer exists, and it sits inside a branch that swallows its
+   * own errors, so it would fail silently rather than refusing.
+   */
+  transferChannelOwnership(channelId: string, newOwnerId: string): Promise<void>;
   upsertLabel(label: LabelInput): Promise<void>;
   /** Delete a label. It disappears from every chat it was on. */
   deleteLabel(labelId: string): Promise<void>;
@@ -1036,6 +1134,35 @@ export interface IWhatsAppEngine {
    */
   archiveChat(chatId: string, archive: boolean): Promise<boolean>;
   /**
+   * Pin or unpin a chat at the top of the chat list. Chat-level — distinct from `pinMessage`, which
+   * pins a message inside a chat.
+   *
+   * Resolves false only when the engine DECLINED, and only one direction can: WhatsApp allows at
+   * most three pinned chats, and whatsapp-web.js reports the refusal rather than silently dropping
+   * it. Unpinning always resolves true, and Baileys always resolves true in both directions — it
+   * writes an app-state patch and WhatsApp reports nothing back, so it cannot see the cap. Unlike
+   * archiveChat the patch carries no `lastMessages`, so a chat with no known history pins fine.
+   */
+  pinChat(chatId: string, pin: boolean): Promise<boolean>;
+  /**
+   * Mute or unmute a chat's notifications. `muteUntil` is an absolute epoch-MILLISECONDS timestamp
+   * the mute expires at; `null` unmutes now. To mute indefinitely, pass a far-future timestamp —
+   * neither engine exposes a portable "forever" sentinel (whatsapp-web.js uses -1 internally,
+   * Baileys has none), so the contract keeps a single well-defined shape instead.
+   *
+   * Milliseconds is measured, not inferred. WhatsApp's app-state `MuteAction.muteEndTimestamp` is
+   * unsuffixed while the proto spells other millisecond fields `…Ms`, which reads as seconds and is
+   * wrong: sending an epoch-seconds value live left the chat unmuted (the instant had already
+   * passed in 1970), and the same instant sent in milliseconds muted it to the expected minute.
+   * Getting this backwards is silent — the send still answers 200 and the mute simply never applies,
+   * or lands tens of thousands of years out and reads as permanent.
+   *
+   * Unlike archiveChat/clearChatMessages/deleteChat this has no "engine declined" outcome: the
+   * Baileys `mute` app-state modification carries no `lastMessages`, so a chat with no known
+   * history mutes like any other. That is why it resolves void rather than boolean.
+   */
+  muteChat(chatId: string, muteUntil: number | null): Promise<void>;
+  /**
    * Delete every message in a chat while keeping the chat itself in the list. Resolves false when
    * the engine cannot act — an unknown chat on whatsapp-web.js, or (as with archiveChat) a chat
    * with no known history on Baileys, whose clear is keyed to the last message.
@@ -1046,6 +1173,16 @@ export interface IWhatsAppEngine {
    * Engine-agnostic and best-effort: engines without a presence concept should no-op.
    */
   sendChatState(chatId: string, state: ChatState): Promise<void>;
+  /**
+   * Publish the ACCOUNT's own global presence: `true` = appear online, `false` = appear offline.
+   * A linked device that announces itself online routes notifications away from the phone, so a
+   * headless bot that never goes offline suppresses the phone's own alerts — which is why this is
+   * NOT best-effort, unlike sendChatState: the caller asked for a specific visibility, and a
+   * swallowed failure would leave the account silently online. The setting belongs to the
+   * connection and resets on reconnect (Baileys re-announces per its `markOnlineOnConnect`
+   * socket option), so callers re-issue it after a reconnect.
+   */
+  setOnlinePresence(available: boolean): Promise<void>;
   /**
    * Ask WhatsApp to start reporting a chat's presence, delivered through `onPresenceUpdate`.
    *

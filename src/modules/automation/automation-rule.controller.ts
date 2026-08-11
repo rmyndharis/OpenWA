@@ -30,6 +30,8 @@ export class AutomationRuleController {
   @ApiResponse({
     status: 200,
     description: 'Rules in evaluation order: creation time, id as the same-second tiebreak.',
+    type: AutomationRuleResponseDto,
+    isArray: true,
   })
   async findAll(@Param('sessionId') sessionId: string): Promise<AutomationRuleResponseDto[]> {
     return (await this.automationRules.findAll(sessionId)).map(rule => AutomationRuleResponseDto.fromEntity(rule));

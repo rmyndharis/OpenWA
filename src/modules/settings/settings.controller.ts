@@ -1,5 +1,6 @@
 import { Controller, Get, Put, NotImplementedException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { SettingsResponseDto } from './dto/settings-response.dto';
 import { ConfigService } from '@nestjs/config';
 import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
@@ -62,7 +63,7 @@ export class SettingsController {
   @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
   @ApiOperation({ summary: 'Get application settings' })
-  @ApiResponse({ status: 200, description: 'Current settings' })
+  @ApiResponse({ status: 200, description: 'Current settings', type: SettingsResponseDto })
   get(): Settings {
     // Settings expose environment-derived configuration (debug flag, reconnect policy, rate-limit
     // thresholds, base URL) that describes the deployment rather than any one session. Gate the read

@@ -31,4 +31,20 @@ class CallsResource
     {
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/calls/{$this->http->encodeSegment($callId)}/reject");
     }
+    /**
+     * Create a shareable WhatsApp call link.
+     *
+     * Both fields are required. `startTime` is absolute epoch MILLISECONDS — a link for right now is
+     * the current timestamp rather than an omitted field, because whatsapp-web.js generates an
+     * event-linked call and has no notion of "no start time". A WhatsApp-side failure answers `403`
+     * rather than a success carrying an empty link.
+     *
+     * @param array{type:string,startTime:int|float} $body
+     * @return array<string,mixed>
+     */
+    public function createLink(string $sessionId, array $body): array
+    {
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/calls/link", [], $body);
+    }
+
 }

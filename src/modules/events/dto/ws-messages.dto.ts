@@ -27,6 +27,7 @@ export const SUBSCRIBABLE_EVENTS = [
   'group.join',
   'group.leave',
   'group.update',
+  'group.join_request',
   'call.received',
   'status.received',
   'presence.update',

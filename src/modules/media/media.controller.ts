@@ -1,5 +1,6 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ConversionStatusResponseDto, ConvertedMediaResponseDto } from './dto/media-response.dto';
 import { MediaConversionService } from './media-conversion.service';
 import { ConvertMediaDto } from './dto/convert-media.dto';
 import { RequireRole } from '../auth/decorators/auth.decorators';
@@ -14,6 +15,10 @@ import { ApiKeyRole } from '../auth/entities/api-key.entity';
  * unscoped, which would shut session-restricted keys out of a feature they need in order to send.
  */
 @ApiTags('media')
+// Declared on the class because no handler binds the parameter — conversion needs no session id, only
+// the guard does (see above). Without this the published paths carry a `{sessionId}` template with no
+// parameter to fill it, which OpenAPI 3.0 does not allow and a generated client cannot satisfy.
+@ApiParam({ name: 'sessionId', type: String, description: 'Session ID the API key must be authorized for' })
 @Controller('sessions/:sessionId/media')
 export class MediaController {
   constructor(private readonly mediaConversion: MediaConversionService) {}
@@ -25,6 +30,7 @@ export class MediaController {
     description:
       'Reports whether conversion is switched on AND the ffmpeg binary can be run, so a client can ' +
       'decide between converting here and converting before it sends.',
+    type: ConversionStatusResponseDto,
   })
   async conversionStatus(): Promise<{ available: boolean }> {
     return { available: await this.mediaConversion.isAvailable() };
@@ -40,6 +46,7 @@ export class MediaController {
     description:
       'Converted bytes, ready to post to send-audio with ptt=true. WhatsApp only renders a playable ' +
       'mic bubble for Ogg/Opus; other formats arrive as an audio file that will not play.',
+    type: ConvertedMediaResponseDto,
   })
   @ApiResponse({ status: 400, description: 'Neither url nor base64 given, or ffmpeg refused the input.' })
   @ApiResponse({ status: 413, description: 'The supplied media is above the media size cap.' })
@@ -61,6 +68,7 @@ export class MediaController {
     description:
       'Converted bytes: baseline H.264 with AAC audio, long edge bounded at 1280, index moved to the ' +
       'front so the recipient can start playing before the whole file arrives.',
+    type: ConvertedMediaResponseDto,
   })
   @ApiResponse({ status: 400, description: 'Neither url nor base64 given, or ffmpeg refused the input.' })
   @ApiResponse({ status: 413, description: 'The supplied media is above the media size cap.' })

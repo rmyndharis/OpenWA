@@ -42,8 +42,10 @@ func (s *GroupsService) JoinInfo(ctx context.Context, sessionID, code string) (*
 }
 
 // Create creates a group.
-func (s *GroupsService) Create(ctx context.Context, sessionID string, body CreateGroupRequest) (*GroupInfo, error) {
-	var out GroupInfo
+// Create makes a new group. It answers the group SUMMARY, not the detail shape Get returns — there is
+// no participant list, description, owner or creation time on a create response.
+func (s *GroupsService) Create(ctx context.Context, sessionID string, body CreateGroupRequest) (*GroupSummary, error) {
+	var out GroupSummary
 	err := s.client.do(ctx, "POST", s.base(sessionID), nil, body, &out)
 	if err != nil {
 		return nil, err
@@ -86,27 +88,27 @@ func (s *GroupsService) UpdateGroupSettings(ctx context.Context, sessionID, grou
 }
 
 // AddParticipants adds members to a group.
-func (s *GroupsService) AddParticipants(ctx context.Context, sessionID, groupID string, participants []string) (*SuccessResult, error) {
+func (s *GroupsService) AddParticipants(ctx context.Context, sessionID, groupID string, participants []string) (*ParticipantsResult, error) {
 	return s.participants(ctx, "POST", sessionID, groupID, "/participants", participants)
 }
 
 // RemoveParticipants removes members from a group.
-func (s *GroupsService) RemoveParticipants(ctx context.Context, sessionID, groupID string, participants []string) (*SuccessResult, error) {
+func (s *GroupsService) RemoveParticipants(ctx context.Context, sessionID, groupID string, participants []string) (*ParticipantsResult, error) {
 	return s.participants(ctx, "DELETE", sessionID, groupID, "/participants", participants)
 }
 
 // PromoteParticipants promotes members to admin.
-func (s *GroupsService) PromoteParticipants(ctx context.Context, sessionID, groupID string, participants []string) (*SuccessResult, error) {
+func (s *GroupsService) PromoteParticipants(ctx context.Context, sessionID, groupID string, participants []string) (*ParticipantsResult, error) {
 	return s.participants(ctx, "POST", sessionID, groupID, "/participants/promote", participants)
 }
 
 // DemoteParticipants demotes admins to member.
-func (s *GroupsService) DemoteParticipants(ctx context.Context, sessionID, groupID string, participants []string) (*SuccessResult, error) {
+func (s *GroupsService) DemoteParticipants(ctx context.Context, sessionID, groupID string, participants []string) (*ParticipantsResult, error) {
 	return s.participants(ctx, "POST", sessionID, groupID, "/participants/demote", participants)
 }
 
-func (s *GroupsService) participants(ctx context.Context, method, sessionID, groupID, suffix string, participants []string) (*SuccessResult, error) {
-	var out SuccessResult
+func (s *GroupsService) participants(ctx context.Context, method, sessionID, groupID, suffix string, participants []string) (*ParticipantsResult, error) {
+	var out ParticipantsResult
 	body := map[string][]string{"participants": participants}
 	err := s.client.do(ctx, method, s.base(sessionID)+"/"+pathEscape(groupID)+suffix, nil, body, &out)
 	if err != nil {
@@ -188,6 +190,59 @@ func (s *GroupsService) InviteCode(ctx context.Context, sessionID, groupID strin
 func (s *GroupsService) RevokeInviteCode(ctx context.Context, sessionID, groupID string) (*InviteCodeResponse, error) {
 	var out InviteCodeResponse
 	err := s.client.do(ctx, "POST", s.base(sessionID)+"/"+pathEscape(groupID)+"/invite-code/revoke", nil, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetMembershipRequests lists a group's pending join requests. Requires the account to be a group
+// admin. Only ParticipantID is guaranteed on each entry — the engine reports the rest when it has it.
+func (s *GroupsService) GetMembershipRequests(
+	ctx context.Context, sessionID, groupID string,
+) ([]GroupMembershipRequest, error) {
+	var out []GroupMembershipRequest
+	err := s.client.do(ctx, "GET", s.base(sessionID)+"/"+pathEscape(groupID)+"/membership-requests", nil, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ApproveMembershipRequests approves pending join requests. Pass a nil slice to approve every
+// pending request.
+//
+// A partial refusal answers 200 and reports it per participant in Results, so Success alone does
+// not mean everyone was let in.
+func (s *GroupsService) ApproveMembershipRequests(
+	ctx context.Context, sessionID, groupID string, participants []string,
+) (*ParticipantsResult, error) {
+	return s.membershipRequestAction(ctx, sessionID, groupID, "approve", participants)
+}
+
+// RejectMembershipRequests rejects pending join requests. Pass a nil slice to reject every pending
+// request.
+func (s *GroupsService) RejectMembershipRequests(
+	ctx context.Context, sessionID, groupID string, participants []string,
+) (*ParticipantsResult, error) {
+	return s.membershipRequestAction(ctx, sessionID, groupID, "reject", participants)
+}
+
+func (s *GroupsService) membershipRequestAction(
+	ctx context.Context, sessionID, groupID, verb string, participants []string,
+) (*ParticipantsResult, error) {
+	// A nil slice means "every pending request", which the gateway reads from the ABSENCE of the
+	// key — `null` is not absence there, so the bodyless case sends an empty object rather than the
+	// struct. A non-nil slice always sends the key, empty included, so naming nobody stays a 400
+	// instead of collapsing into naming everybody.
+	var body any = struct{}{}
+	if participants != nil {
+		body = MembershipRequestActionRequest{Participants: participants}
+	}
+	var out ParticipantsResult
+	err := s.client.do(
+		ctx, "POST", s.base(sessionID)+"/"+pathEscape(groupID)+"/membership-requests/"+verb, nil, body, &out,
+	)
 	if err != nil {
 		return nil, err
 	}

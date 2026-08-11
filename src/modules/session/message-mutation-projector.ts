@@ -54,29 +54,40 @@ export class MessageMutationProjector {
       if (!event.messageId) return;
 
       const msg = await this.messageRepository.findOne({ where: { sessionId: id, waMessageId: event.messageId } });
-      if (!msg) return;
 
-      const metadata = msg.metadata || {};
-      const reactions = (metadata.reactions as Record<string, string>) || {};
-      if (!event.reaction) {
-        delete reactions[event.senderId];
-      } else {
-        reactions[event.senderId] = event.reaction;
+      // The stored copy is best-effort — a message is absent whenever it was never persisted (an
+      // ephemeral one under STORE_EPHEMERAL_MESSAGES=false, or one that arrived before the session
+      // went live) — but the notification is not: `message.reaction` is a declared webhook event and
+      // the dashboard stream is the point of it, the same contract handleMessageRevoked states.
+      let reactions: Record<string, string> | undefined;
+      if (msg) {
+        const metadata = msg.metadata || {};
+        reactions = (metadata.reactions as Record<string, string>) || {};
+        if (!event.reaction) {
+          delete reactions[event.senderId];
+        } else {
+          reactions[event.senderId] = event.reaction;
+        }
+        metadata.reactions = reactions;
+        // Scoped update of ONLY the metadata column. A full-row save(msg) would re-persist the `status`
+        // read at findOne time, clobbering a concurrent ack UPDATE (SENT→DELIVERED/READ) that committed in
+        // the window between this findOne and the write — the mutation chain serializes reaction-vs-reaction
+        // but NOT reaction-vs-ack, so scoping the write to metadata is what keeps delivery state monotonic
+        // (#220). Other metadata fields are carried through untouched (they were read into `metadata`).
+        await this.messageRepository.update({ sessionId: id, waMessageId: event.messageId }, {
+          metadata,
+        } as QueryDeepPartialEntity<Message>);
       }
-      metadata.reactions = reactions;
-      // Scoped update of ONLY the metadata column. A full-row save(msg) would re-persist the `status`
-      // read at findOne time, clobbering a concurrent ack UPDATE (SENT→DELIVERED/READ) that committed in
-      // the window between this findOne and the write — the mutation chain serializes reaction-vs-reaction
-      // but NOT reaction-vs-ack, so scoping the write to metadata is what keeps delivery state monotonic
-      // (#220). Other metadata fields are carried through untouched (they were read into `metadata`).
-      await this.messageRepository.update({ sessionId: id, waMessageId: event.messageId }, {
-        metadata,
-      } as QueryDeepPartialEntity<Message>);
 
-      this.eventsGateway.emitMessageReaction(id, { ...event, reactions });
-      // Webhook parity with the WebSocket broadcast: same payload (event + post-apply snapshot), so a
-      // webhook-only consumer observes reactions too. Idempotency for this event is salted per dispatch.
-      void this.webhookService.dispatch(id, 'message.reaction', { ...event, reactions });
+      // `reactions` is the post-apply snapshot of EVERY reaction on the message and consumers REPLACE
+      // their copy with it, so this one reaction must not stand in for the whole set — that would read
+      // as the other senders having withdrawn theirs. Omitted means "no stored copy to snapshot",
+      // which is the truth; present keeps today's contract byte for byte.
+      const payload = reactions ? { ...event, reactions } : { ...event };
+      this.eventsGateway.emitMessageReaction(id, payload);
+      // Webhook parity with the WebSocket broadcast: same payload, so a webhook-only consumer observes
+      // reactions too. Idempotency for this event is salted per dispatch.
+      void this.webhookService.dispatch(id, 'message.reaction', payload);
     } catch (err) {
       this.logger.error(`Failed to update message reaction: ${event.messageId}`, String(err));
     }

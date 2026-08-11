@@ -48,6 +48,8 @@ public enum WebhookEvent {
     GROUP_LEAVE,
     @SerializedName("group.update")
     GROUP_UPDATE,
+    @SerializedName("group.join_request")
+    GROUP_JOIN_REQUEST,
     @SerializedName("call.received")
     CALL_RECEIVED,
     @SerializedName("status.received")

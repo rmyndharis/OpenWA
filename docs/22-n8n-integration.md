@@ -90,11 +90,18 @@ Start workflows when WhatsApp events occur.
 | `session.reconnect_loop`                          | Every 5th consecutive reconnect attempt       | Stuck-session alerting                       |
 | `session.restriction`                             | WhatsApp restricted the account, or lifted it | Pausing outreach while an account is limited |
 | `presence.update`                                 | A watched chat's online/typing state changed  | Live agent hand-off, presence-aware routing  |
-| `call.accepted` / `call.rejected` / `call.missed` | A ringing call ended                          | Missed-call follow-up, call logging          |
+| `call.accepted` / `call.rejected` / `call.missed` | A ringing call ended — **Baileys only**       | Missed-call follow-up, call logging          |
 | `group.join`                                      | Participant(s) joined a group                 | Welcome messages                             |
 | `group.leave`                                     | Participant(s) left a group                   | Churn tracking                               |
 | `group.update`                                    | Group subject/description/settings changed    | Group administration                         |
+| `group.join_request`                              | Someone asked to join an administered group   | Auto-approve/vet join requests               |
 | `call.received`                                   | Incoming call started ringing                 | Auto-reject + auto-reply bots                |
+
+> [!NOTE]
+> The three call-outcome events fire on Baileys only. whatsapp-web.js hooks the call collection's
+> insert and sees no status at all, so it can report the ring but never how the call ended — a
+> workflow triggered on `call.missed` will simply never run on a whatsapp-web.js session.
+> `call.received` fires on both engines.
 
 #### How It Works
 
@@ -261,10 +268,20 @@ Always use the correct format for chat IDs:
 
 ### Trigger Not Receiving Events
 
-1. Check webhook was created in OpenWA dashboard
-2. Verify n8n webhook URL is accessible from OpenWA server
-3. Check firewall/proxy settings
-4. Ensure session is connected and active
+1. **Confirm you registered the production webhook URL, not the test one.** n8n gives every Webhook
+   node two URLs: a test URL (`https://your-n8n/webhook-test/…`) and a production URL
+   (`https://your-n8n/webhook/…`). The test URL is registered only while the editor is listening and
+   stops after a single request, so a workflow wired to it receives one event and then goes silent.
+   Activate the workflow and point OpenWA at the production URL.
+2. Check webhook was created in OpenWA dashboard
+3. Verify n8n webhook URL is accessible from OpenWA server
+4. Check firewall/proxy settings
+5. Ensure session is connected and active
+6. For a call-outcome trigger, confirm the session runs Baileys — see the note under the trigger
+   event table above
+7. Ask OpenWA which side dropped the event:
+   `GET /api/webhooks/delivery-failures?sessionId={sessionId}` (ADMIN key). A row means OpenWA
+   delivered and n8n rejected it; an empty list means the event never reached delivery at all
 
 ### Message Not Sending
 

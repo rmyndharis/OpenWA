@@ -1,3 +1,5 @@
+import type { ExecutionContext } from '@nestjs/common';
+import type { Reflector } from '@nestjs/core';
 import { ProxyAwareThrottlerGuard } from './proxy-aware-throttler.guard';
 
 /**
@@ -45,5 +47,67 @@ describe('ProxyAwareThrottlerGuard.getTracker', () => {
     process.env.TRUSTED_PROXIES = '172.18.0.0/16';
     // peer 203.0.113.9 is NOT a trusted proxy → its XFF is ignored, key on the socket IP
     expect(await track(reqFrom('203.0.113.9', '10.0.0.1'))).toBe('203.0.113.9');
+  });
+});
+
+/**
+ * Regression lock: a bare `@SkipThrottle()` must actually exempt the route.
+ *
+ * The decorator writes ONE metadata key, `THROTTLER:SKIP` + the key of its argument object, which
+ * defaults to `{ default: true }`. The base guard reads `THROTTLER:SKIP` + the name of each
+ * CONFIGURED tier, and this application names its tiers `short`, `medium` and `long`. The two
+ * spellings never intersect, so a bare decorator writes a key nothing reads and the route stays
+ * throttled. Unlike the tier loop, `shouldSkip` runs before any tier is evaluated, so honouring the
+ * library's default key here exempts the route from every tier and from the storage round-trip each
+ * one would perform.
+ *
+ * These cases instantiate the guard properly rather than via `Object.create`: unlike `getTracker`,
+ * `shouldSkip` reads `this.reflector`.
+ */
+describe('ProxyAwareThrottlerGuard.shouldSkip', () => {
+  const LIBRARY_DEFAULT_SKIP_KEY = 'THROTTLER:SKIPdefault';
+
+  const handler = (): void => undefined;
+  class Controller {}
+  const context = {
+    getHandler: () => handler,
+    getClass: () => Controller,
+  } as unknown as ExecutionContext;
+
+  function guardReading(metadata: boolean | undefined): {
+    skip: () => Promise<boolean>;
+    reflector: { getAllAndOverride: jest.Mock };
+  } {
+    const reflector = { getAllAndOverride: jest.fn().mockReturnValue(metadata) };
+    type GuardArgs = ConstructorParameters<typeof ProxyAwareThrottlerGuard>;
+    const guard = new ProxyAwareThrottlerGuard(
+      { throttlers: [] },
+      {} as GuardArgs[1],
+      reflector as unknown as Reflector,
+    );
+    const skip = (): Promise<boolean> =>
+      (guard as unknown as { shouldSkip(c: ExecutionContext): Promise<boolean> }).shouldSkip(context);
+    return { skip, reflector };
+  }
+
+  it('exempts a route whose bare @SkipThrottle() wrote the library default key', async () => {
+    const { skip } = guardReading(true);
+    expect(await skip()).toBe(true);
+  });
+
+  it('reads the key the library actually writes, on handler then class', async () => {
+    const { skip, reflector } = guardReading(true);
+    await skip();
+    expect(reflector.getAllAndOverride).toHaveBeenCalledWith(LIBRARY_DEFAULT_SKIP_KEY, [handler, Controller]);
+  });
+
+  it('does not exempt a route carrying no skip metadata', async () => {
+    const { skip } = guardReading(undefined);
+    expect(await skip()).toBe(false);
+  });
+
+  it('does not exempt an explicit opt-out — @SkipThrottle({ default: false })', async () => {
+    const { skip } = guardReading(false);
+    expect(await skip()).toBe(false);
   });
 });

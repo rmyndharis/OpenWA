@@ -435,6 +435,14 @@ export class MessageProjector {
                 { sessionId: id, source: 'SessionService' },
               )
               .catch(() => undefined);
+
+            // Archive this send's media, mirroring onMessage. This is the ONLY path a phone-composed
+            // send takes, so the REST-side chokepoint would never see it. Opt-in twice over
+            // (CHAT_MEDIA_ARCHIVE_ENABLED + _OUTBOUND) and a no-op otherwise; archive() itself
+            // refuses a row that is already archived, so the REST writer racing us costs nothing.
+            if (this.configService?.get<boolean>('chatMedia.archiveOutbound', false) === true) {
+              void this.chatMediaArchive?.archive(dbMessage).catch(() => undefined);
+            }
           }
         }
 

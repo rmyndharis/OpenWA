@@ -12,6 +12,15 @@ spec:
       {{- include "openwa.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      # envFrom is read once, when the container is created — Kubernetes never updates it in a
+      # running container. Without something config-derived here, a `helm upgrade` that changes only
+      # env/secretEnv renders an identical pod template, so no rollout happens and the process keeps
+      # its old values while the release reports success. Hashing the RENDERED objects rather than
+      # `.Values` on purpose: a change to the template itself — a new key, a changed quoting rule —
+      # alters the ConfigMap without altering the values it was built from.
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
       labels:
         {{- include "openwa.selectorLabels" . | nindent 8 }}
     spec:
@@ -35,6 +44,36 @@ spec:
                 name: {{ include "openwa.fullname" . }}
             - secretRef:
                 name: {{ include "openwa.secretName" . }}
+          # The port is bound only after Nest has run every bootstrap hook — migrations, the database
+          # connect retry (up to 10 attempts, 3s apart), plugin load and the backfills — so during
+          # boot the endpoint is not unhealthy, it is closed, and every probe is a connection
+          # refusal. Without a startupProbe the liveness block below governs that window and allows
+          # 30s + 10s x (3-1) = 50s before the kubelet restarts the container, which the connect
+          # retry alone can consume.
+          #
+          # Budget here is periodSeconds x (failureThreshold - 1) = 5s x (60-1) = 295s — the same
+          # arithmetic as the 50s above, because the first probe fires at initialDelaySeconds and the
+          # verdict lands on the Nth consecutive failure, not one period after it. The Kubernetes
+          # docs' shorthand (period x threshold) would say 300s; it is one period long, and applying
+          # it to the liveness probe above would give 60s rather than the 50s stated there. Do not
+          # "correct" this back without changing that one too. The point of either figure is that it
+          # converts "killed at 50s by default" into "killed at a budget we chose" — a large
+          # improvement, and not a guarantee for a boot that is genuinely unbounded.
+          #
+          # initialDelaySeconds is deliberately left at its default of 0: the first probe fires
+          # immediately, so a fast boot is recognised in ~5s instead of waiting out a fixed delay.
+          # The pod therefore becomes live SOONER than it does today, not later.
+          #
+          # Kubernetes suspends the liveness and readiness probes until a startupProbe succeeds, so
+          # the values below keep their meaning for steady state and stop governing boot. (That
+          # suspension is documented kubelet behaviour, not something this chart's tests observe —
+          # rendering a manifest cannot demonstrate a runtime scheduling rule.)
+          startupProbe:
+            httpGet:
+              path: /api/health/live
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /api/health/live

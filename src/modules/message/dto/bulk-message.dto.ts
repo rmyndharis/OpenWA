@@ -106,7 +106,12 @@ class BulkMessageItemDto {
 }
 
 class BulkMessageOptionsDto {
-  @ApiPropertyOptional({ description: 'Delay between messages in ms (min: 1000, default: 3000)', default: 3000 })
+  @ApiPropertyOptional({
+    description: 'Delay between messages in ms.',
+    default: 3000,
+    minimum: 1000,
+    maximum: 60000,
+  })
   @IsOptional()
   @IsNumber()
   @Min(1000)

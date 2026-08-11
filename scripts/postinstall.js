@@ -1,7 +1,7 @@
 /**
  * Post-install hook (npm `postinstall`).
  *
- * Five conditional steps, each skipped when its target is absent so the hook is a no-op where the
+ * Eight conditional steps, each skipped when its target is absent so the hook is a no-op where the
  * piece is missing (the Docker builder stage copies package*.json long before any source):
  *
  *   1. `npm ci` inside dashboard/ when dashboard/ exists — the dashboard carries its own lockfile and
@@ -21,6 +21,13 @@
  *      repairs, gated the same way as step 3.
  *   5. `node scripts/patch-wwebjs-ready-sync.js --best-effort` when present — the readiness
  *      marker + hasSynced level-check, gated the same way.
+ *   6. `node scripts/patch-wwebjs-participant-arity.js --best-effort` when present — makes the group
+ *      participant writes report which requested ids resolved to members, gated the same way.
+ *   7. `node scripts/patch-baileys-appstate.js --best-effort` when present — the app-state resync
+ *      bound, gated the same way.
+ *   8. `node scripts/patch-baileys-newsletter-create.js --best-effort` when present — the
+ *      newsletter-create parse fix. Steps 7-8 are the Baileys patches, so a Baileys-only install
+ *      runs those and skips 2-6.
  *
  * Structured like scripts/patch-wwebjs-201832.js: pure planning + injectable spawn, so the spec
  * (scripts/postinstall.spec.js, node:test) exercises every branch without a real npm run.
@@ -97,6 +104,33 @@ function planSteps(root, env = process.env) {
       name: 'whatsapp-web.js ready-sync repair (scripts/patch-wwebjs-ready-sync.js --best-effort)',
       command: process.execPath,
       args: [readySyncPatcher, '--best-effort'],
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
+    });
+  }
+  const participantArityPatcher = path.join(root, 'scripts', 'patch-wwebjs-participant-arity.js');
+  if (fs.existsSync(participantArityPatcher)) {
+    steps.push({
+      name: 'whatsapp-web.js participant batch truth (scripts/patch-wwebjs-participant-arity.js --best-effort)',
+      command: process.execPath,
+      args: [participantArityPatcher, '--best-effort'],
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
+    });
+  }
+  const baileysAppStatePatcher = path.join(root, 'scripts', 'patch-baileys-appstate.js');
+  if (fs.existsSync(baileysAppStatePatcher)) {
+    steps.push({
+      name: 'Baileys app-state resync bound (scripts/patch-baileys-appstate.js --best-effort)',
+      command: process.execPath,
+      args: [baileysAppStatePatcher, '--best-effort'],
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
+    });
+  }
+  const baileysNewsletterPatcher = path.join(root, 'scripts', 'patch-baileys-newsletter-create.js');
+  if (fs.existsSync(baileysNewsletterPatcher)) {
+    steps.push({
+      name: 'Baileys newsletter-create parse fix (scripts/patch-baileys-newsletter-create.js --best-effort)',
+      command: process.execPath,
+      args: [baileysNewsletterPatcher, '--best-effort'],
       options: { stdio: 'inherit', cwd: root, env: cleanEnv },
     });
   }

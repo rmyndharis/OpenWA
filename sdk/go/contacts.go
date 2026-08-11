@@ -111,3 +111,11 @@ func (s *ContactsService) Unblock(ctx context.Context, sessionID, contactID stri
 	}
 	return &out, nil
 }
+
+// ListBlocked returns the JIDs this account has blocked. Session-wide, so it takes no contact ID —
+// unlike Block and Unblock, which act on one contact — and it returns bare IDs, not contact records.
+func (s *ContactsService) ListBlocked(ctx context.Context, sessionID string) ([]string, error) {
+	var out []string
+	err := s.client.do(ctx, "GET", s.base(sessionID)+"/blocked", nil, nil, &out)
+	return out, err
+}

@@ -20,3 +20,36 @@ type SuccessResult struct {
 	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
 }
+
+// ParticipantResult is one entry per requested participant, in the order they were requested.
+//
+// Success is true only when the engine confirmed the change for this participant. Engines that
+// confirm the batch rather than each member report one success entry per requested id, so a true
+// here does not always mean the engine spoke about that participant individually.
+type ParticipantResult struct {
+	ID      string `json:"id"`
+	Success bool   `json:"success"`
+	Status  int    `json:"status,omitempty"`
+	// Message is the engine-reported reason, when it gave one.
+	Message string `json:"message,omitempty"`
+}
+
+// ParticipantsResult is the response of the group membership writes.
+//
+// A partial refusal does NOT fail the batch — the request answers 200 and reports the
+// per-participant outcome in Results, so Success alone hides a member that was rejected.
+type ParticipantsResult struct {
+	Success bool                `json:"success"`
+	Message string              `json:"message,omitempty"`
+	Results []ParticipantResult `json:"results"`
+}
+
+// ProductMessageResponse is the response of send-product.
+//
+// The route answers with the sent message's id under "id", not the "messageId" the other send
+// routes use.
+type ProductMessageResponse struct {
+	ID string `json:"id"`
+	// Timestamp is unix SECONDS the engine stamped on the outgoing message.
+	Timestamp int64 `json:"timestamp"`
+}

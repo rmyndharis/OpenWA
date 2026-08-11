@@ -25,6 +25,17 @@ class ErrorsTest {
     }
 
     @Test
+    void mapsTheRetryableStatusToItsOwnSubclass() {
+        // 503 is the gateway's answer when the engine never confirmed an operation — a transport
+        // failure, and the only typed error here worth retrying. It used to fall through to the base
+        // class while 501, which is permanent, had a subclass of its own.
+        String body = "{\"statusCode\":503,\"message\":\"WhatsApp did not answer\",\"error\":\"Service Unavailable\"}";
+        OpenWAApiError e = OpenWAApiError.fromResponse(503, "Service Unavailable", body, "POST /x");
+        assertTrue(e instanceof OpenWAServiceUnavailableError);
+        assertEquals(503, e.status());
+    }
+
+    @Test
     void unmappedStatusFallsBackToBase() {
         OpenWAApiError e = OpenWAApiError.fromResponse(418, "I'm a teapot", "", "GET /x");
         assertEquals(OpenWAApiError.class, e.getClass());

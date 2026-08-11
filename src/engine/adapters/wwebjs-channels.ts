@@ -71,6 +71,62 @@ export class WwebjsChannels {
     };
   }
 
+  /**
+   * Not available on this engine, despite `Client.demoteChannelAdmin` existing and being typed
+   * `Promise<boolean>` (`index.d.ts:35`).
+   *
+   * The page body calls `window.require('WAWebDemoteNewsletterAdminAction').demoteNewsletterAdmin`
+   * (`Client.js:1907-1925`), and WhatsApp Web no longer provides that function. Measured against a
+   * live session on Web `2.3000.1044824727-alpha` with no version pin: the call rejects with
+   * `TypeError: window.require(...).demoteNewsletterAdmin is not a function`, which reached the
+   * caller as a bare 500.
+   *
+   * A module-existence probe run in the same page narrows it further — **the module still resolves;
+   * the function is gone**: `WAWebDemoteNewsletterAdminAction` → `demoteNewsletterAdmin: undefined`,
+   * and the second demote path whatsapp-web.js uses elsewhere is equally dead
+   * (`WAWebNewsletterDemoteAdminJob` → `demoteNewsletterAdminAction: undefined`). So there is no
+   * sibling module to retarget, and `muteChannel` answered 200 twice on that session, so the page
+   * and its registry were healthy throughout.
+   *
+   * Wiring it anyway would be a phantom-support row: the matrix would claim the capability while
+   * every call failed. A 501 states the truth. Re-enable by restoring the call here and flipping
+   * the matrix cell once whatsapp-web.js targets a module WhatsApp Web actually exports; the
+   * Baileys engine serves this capability in the meantime.
+   */
+  /* eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars */
+  async demoteChannelAdmin(_channelId: string, _userId: string): Promise<void> {
+    this.host.ensureReady();
+    throw new EngineNotSupportedError('demoteChannelAdmin');
+  }
+
+  /**
+   * Not available on this engine, despite `Client.transferChannelOwnership` existing and being typed
+   * `Promise<boolean>` (`index.d.ts:375`).
+   *
+   * `WAWebChangeNewsletterOwnerAction.changeNewsletterOwnerAction` is present — unlike the demote
+   * path — but on WhatsApp Web `2.3000.1044824727-alpha` it rejects every call with
+   * `contact-not-found-in-newsletter-subscriber-list` **without contacting the server**. Measured in
+   * the page against a known-server call taken at the same moment: the transfer threw in **4-9ms**
+   * while `requestProfilePicFromServer` on the same chat took **352-531ms**. So it is a local check
+   * against a subscriber list the page holds, not a WhatsApp business rule we could satisfy.
+   *
+   * It is not a stale cache either: the target had subscribed (`subscribeToChannel` → 201), the
+   * operator could promote it to admin from the app, and a full session restart — a fresh page, a
+   * fresh cache — produced the identical 4ms refusal. The one path that could repopulate that list,
+   * `WAWebCollections.NewsletterMetadataCollection.update`, is `undefined` in this Web version, and
+   * it is the same line `Client.transferChannelOwnership` itself calls when a channel has no cached
+   * metadata — so an uncached channel throws there before the transfer is even attempted.
+   *
+   * Wiring it would be a phantom-support row: a claimed capability whose every call fails, locally,
+   * with a reason the library then discards into a bare `false`. A 501 states the truth. Baileys
+   * serves this capability — its refusal is a genuine server round trip (418ms, WhatsApp code named).
+   */
+  /* eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars */
+  async transferChannelOwnership(_channelId: string, _newOwnerId: string): Promise<void> {
+    this.host.ensureReady();
+    throw new EngineNotSupportedError('transferChannelOwnership');
+  }
+
   /** Delete a channel. `false` means the channel was not found or the server refused. */
   async deleteChannel(channelId: string): Promise<void> {
     this.host.ensureReady();

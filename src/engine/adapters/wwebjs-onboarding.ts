@@ -75,3 +75,71 @@ export function probeOnboardingModal(options?: { labels?: string[]; headingOptio
   }
   return { modalPresent: false, dismissed: false };
 }
+
+/**
+ * In-page diagnostics for the onboarding watcher (#1072 follow-up): when {@link probeOnboardingModal}
+ * finds nothing to click, report what dialogs ARE on screen, so a modal the detector does not
+ * recognise — a title WhatsApp changed, another language — shows up in the logs instead of failing
+ * silently until the companion is unlinked. Observational only: it clicks nothing and changes
+ * nothing, and the adapter logs the result once per distinct answer.
+ *
+ * Scoped to dialog containers on purpose. The heading text of a `[role="dialog"]` is UI chrome; a
+ * chat-list row is not a dialog, so ordinary conversation content never enters the report. The
+ * probe's own comment documents why treating page text as a MATCH signal is dangerous — nothing
+ * here is a match signal, but the capture is still bounded (three dialogs, five buttons each,
+ * truncated strings) so a pathological page cannot flood the logs.
+ *
+ * Every captured string is sanitized: the text goes straight into a log line, and a newline or
+ * control character in page-controlled text would forge extra log entries.
+ *
+ * Self-contained like the probe: `page.evaluate` stringifies this into the browser, so nothing may
+ * be closed over — every constant lives in the body — and being a plain function keeps the DOM work
+ * unit-testable.
+ */
+export function collectDialogDiagnostics(): Array<{ heading: string | null; buttons: string[] }> {
+  const MAX_DIALOGS = 3;
+  const MAX_BUTTONS_PER_DIALOG = 5;
+  const ASSOCIATION_WALK = 12;
+  const HEADING_TEXT_MAX = 80;
+  const BUTTON_LABEL_MAX = 40;
+
+  const clean = (text: string, max: number): string =>
+    text
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x1F\x7F]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, max);
+  const isVisible = (el: Element): boolean => {
+    const rect = (el as HTMLElement).getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && (el as HTMLElement).offsetParent !== null;
+  };
+  // Association walks UP from the candidate, bounded, so a heading or button anywhere on the page
+  // is never attributed to a dialog it merely shares a distant ancestor with.
+  const within = (el: Element, ancestor: Element): boolean => {
+    let scope: Element | null = el.parentElement;
+    for (let depth = 0; depth < ASSOCIATION_WALK && scope; depth++, scope = scope.parentElement) {
+      if (scope === ancestor) return true;
+    }
+    return false;
+  };
+
+  const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'))
+    .filter(isVisible)
+    .slice(0, MAX_DIALOGS);
+  if (dialogs.length === 0) return [];
+  const headings = Array.from(document.querySelectorAll('[role="heading"], h1, h2, h3, h4, h5, h6')).filter(isVisible);
+  const buttons = Array.from(document.querySelectorAll('button, [role="button"]')).filter(isVisible);
+
+  return dialogs.map(dialog => {
+    const headingEl = headings.find(h => within(h, dialog));
+    const rawHeading = headingEl ? headingEl.textContent : dialog.getAttribute('aria-label');
+    const heading = rawHeading ? clean(String(rawHeading), HEADING_TEXT_MAX) : '';
+    const labels = buttons
+      .filter(b => within(b, dialog))
+      .map(b => clean(b.textContent || '', BUTTON_LABEL_MAX))
+      .filter(label => label.length > 0)
+      .slice(0, MAX_BUTTONS_PER_DIALOG);
+    return { heading: heading || null, buttons: labels };
+  });
+}

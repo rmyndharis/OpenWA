@@ -8,6 +8,8 @@ import {
   GroupDescriptionDto,
   JoinGroupDto,
   GroupSettingsDto,
+  MembershipRequestActionDto,
+  GROUP_PARTICIPANTS_MAX,
 } from './group.dto';
 
 // Mirror the global ValidationPipe: whitelist + forbidNonWhitelisted from src/main.ts, AND the
@@ -134,5 +136,34 @@ describe('group DTO validation', () => {
   it('GroupSettingsDto still accepts a numeric-string ephemeralSeconds from a form body', () => {
     expect(instanceFor(GroupSettingsDto, { ephemeralSeconds: '86400' }).ephemeralSeconds).toBe(86400);
     expect(instanceFor(GroupSettingsDto, { ephemeralSeconds: '0' }).ephemeralSeconds).toBe(0);
+  });
+});
+
+/**
+ * The approve/reject body draws a sharp line between "omitted" (act on EVERY pending request) and
+ * every other shape. An explicit `null` and an empty array must fail validation rather than be
+ * read as approve-all — the explicit-null discipline of SetGroupPictureDto — because both are the
+ * classic malformed-client shapes, and misreading either mass-approves join requests.
+ */
+describe('MembershipRequestActionDto', () => {
+  it('accepts an empty body — approve/reject ALL pending', async () => {
+    expect(await errorsFor(MembershipRequestActionDto, {})).toHaveLength(0);
+  });
+
+  it('accepts a named requester list', async () => {
+    expect(await errorsFor(MembershipRequestActionDto, { participants: ['628123456789@c.us'] })).toHaveLength(0);
+  });
+
+  it('rejects an explicit null — malformed, not approve-all', async () => {
+    expect((await errorsFor(MembershipRequestActionDto, { participants: null })).length).toBeGreaterThan(0);
+  });
+
+  it('rejects an empty array — naming nobody is not the same claim as "all"', async () => {
+    expect((await errorsFor(MembershipRequestActionDto, { participants: [] })).length).toBeGreaterThan(0);
+  });
+
+  it('rejects a list beyond the shared participant cap', async () => {
+    const oversized = Array.from({ length: GROUP_PARTICIPANTS_MAX + 1 }, (_, i) => `62${i}@c.us`);
+    expect((await errorsFor(MembershipRequestActionDto, { participants: oversized })).length).toBeGreaterThan(0);
   });
 });

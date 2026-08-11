@@ -152,6 +152,37 @@ describe('validateEnv', () => {
     expect(() => validateEnv({})).not.toThrow();
   });
 
+  it('rejects a mistyped value for the datastore, webhook and engine booleans too', () => {
+    // Read with the same bare `=== 'true'` / `!== 'false'` comparison but absent from the strict list,
+    // so a typo configured the opposite of what the operator asked for, in silence. DATABASE_SSL is
+    // the one that fails OPEN: `require` is the natural Postgres spelling and reads as OFF, so a
+    // connection the operator believed was TLS-protected runs in plaintext.
+    expect(() => validateEnv({ DATABASE_SSL: 'require' })).toThrow(/DATABASE_SSL/);
+    expect(() => validateEnv({ DATABASE_SSL_REJECT_UNAUTHORIZED: '0' })).toThrow(/DATABASE_SSL_REJECT_UNAUTHORIZED/);
+    expect(() => validateEnv({ MAIN_DATABASE_SYNCHRONIZE: 'False' })).toThrow(/MAIN_DATABASE_SYNCHRONIZE/);
+    expect(() => validateEnv({ ALLOW_UNSIGNED_INGRESS: 'yes' })).toThrow(/ALLOW_UNSIGNED_INGRESS/);
+    expect(() => validateEnv({ ALLOW_DEV_API_KEY: '1' })).toThrow(/ALLOW_DEV_API_KEY/);
+    expect(() => validateEnv({ WEBHOOK_SSRF_PROTECT: 'off' })).toThrow(/WEBHOOK_SSRF_PROTECT/);
+    expect(() => validateEnv({ WEBHOOK_CONTACT_DETAILS: 'on' })).toThrow(/WEBHOOK_CONTACT_DETAILS/);
+    expect(() => validateEnv({ BAILEYS_SYNC_FULL_HISTORY: 'True' })).toThrow(/BAILEYS_SYNC_FULL_HISTORY/);
+    expect(() => validateEnv({ BAILEYS_MARK_ONLINE_ON_CONNECT: 'ture' })).toThrow(/BAILEYS_MARK_ONLINE_ON_CONNECT/);
+    expect(() => validateEnv({ POSTGRES_BUILTIN: 'yes' })).toThrow(/POSTGRES_BUILTIN/);
+    expect(() => validateEnv({ REDIS_BUILTIN: 'yes' })).toThrow(/REDIS_BUILTIN/);
+    expect(() => validateEnv({ MINIO_BUILTIN: 'yes' })).toThrow(/MINIO_BUILTIN/);
+    expect(() => validateEnv({ CACHE_ENABLED: '1' })).toThrow(/CACHE_ENABLED/);
+    expect(() => validateEnv({ DATABASE_LOGGING: '1' })).toThrow(/DATABASE_LOGGING/);
+
+    // Canonical values, and the blank a compose `${KEY:-}` forward renders, both stay legal.
+    expect(() => validateEnv({ DATABASE_SSL: 'true', MAIN_DATABASE_SYNCHRONIZE: 'false' })).not.toThrow();
+    expect(() => validateEnv({ DATABASE_SSL: '', WEBHOOK_SSRF_PROTECT: '' })).not.toThrow();
+
+    // Deliberately still tolerant, because both fail toward the SAFE state and the repo tests that
+    // tolerance: mcp.server.spec.ts asserts MCP_READONLY='yes' stays read-only, and
+    // PUPPETEER_HEADLESS='new' is a real Puppeteer value that works today.
+    expect(() => validateEnv({ MCP_READONLY: 'yes' })).not.toThrow();
+    expect(() => validateEnv({ PUPPETEER_HEADLESS: 'new' })).not.toThrow();
+  });
+
   it('rejects a REDIS_ENABLED typo instead of silently downgrading throttler+cache to in-memory', () => {
     // REDIS_ENABLED is read at boot with `=== 'true'` (throttler storage in app.module.ts,
     // CacheService), so a typo flips rate limiting + caching to per-process in-memory with zero
@@ -166,7 +197,7 @@ describe('validateEnv', () => {
     expect(() => validateEnv({})).not.toThrow();
   });
 
-  it.each(['MEDIA_CONVERSION_ENABLED', 'CHAT_MEDIA_ARCHIVE_ENABLED'])(
+  it.each(['MEDIA_CONVERSION_ENABLED', 'CHAT_MEDIA_ARCHIVE_ENABLED', 'CHAT_MEDIA_ARCHIVE_OUTBOUND'])(
     'rejects a %s typo instead of silently leaving the feature off',
     key => {
       // Both are read at boot with `=== 'true'`, so a typo silently disables the feature and the
@@ -178,6 +209,27 @@ describe('validateEnv', () => {
       expect(() => validateEnv({ [key]: '' })).not.toThrow();
     },
   );
+
+  it('rejects a MEDIA_DOWNLOAD_ENABLED typo instead of silently keeping the expensive default on', () => {
+    // The odd one out of the boolean family: it is read with `!== 'false' && !== '0' && !== 'no'`
+    // (inbound-media-cap.ts), so a typo does not disable a feature — it leaves inbound media being
+    // decrypted and base64-inlined into every message row, up to MEDIA_DOWNLOAD_MAX_BYTES apiece.
+    // An operator who typed it to turn that OFF gets the most expensive behaviour the gateway has,
+    // with no diagnostics anywhere.
+    expect(() => validateEnv({ MEDIA_DOWNLOAD_ENABLED: 'fasle' })).toThrow(/MEDIA_DOWNLOAD_ENABLED/);
+    expect(() => validateEnv({ MEDIA_DOWNLOAD_ENABLED: 'ture' })).toThrow(/MEDIA_DOWNLOAD_ENABLED/);
+    // Unlike the strict family this flag is read through a NORMALISING parser — inbound-media-cap.ts
+    // trims and lowercases, and inbound-media-cap.spec.ts asserts 'FALSE' / ' false ' disable. Those
+    // spellings demonstrably work, so validation must not reject them; only a value the read site
+    // cannot recognise at all is a mistake worth failing the boot for.
+    expect(() => validateEnv({ MEDIA_DOWNLOAD_ENABLED: 'False' })).not.toThrow();
+    expect(() => validateEnv({ MEDIA_DOWNLOAD_ENABLED: ' false ' })).not.toThrow();
+    expect(() => validateEnv({ MEDIA_DOWNLOAD_ENABLED: '0' })).not.toThrow();
+    expect(() => validateEnv({ MEDIA_DOWNLOAD_ENABLED: 'no' })).not.toThrow();
+    expect(() => validateEnv({ MEDIA_DOWNLOAD_ENABLED: 'true' })).not.toThrow();
+    expect(() => validateEnv({ MEDIA_DOWNLOAD_ENABLED: 'false' })).not.toThrow();
+    expect(() => validateEnv({ MEDIA_DOWNLOAD_ENABLED: '' })).not.toThrow();
+  });
 
   it('rejects a SEARCH_PROVIDER typo instead of silently falling back to auto', () => {
     // A bogus / typo value must fail fast at boot rather than silently selecting the default provider.

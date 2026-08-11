@@ -1,5 +1,11 @@
 import { Controller, Get, Optional } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import {
+  AvailableEngineDto,
+  InfraCurrentEngineResponseDto,
+  InfraHealthResponseDto,
+  InfraStatusResponseDto,
+} from './dto/infra-response.dto';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { QUEUE_NAMES } from '../queue/queue-names';
@@ -106,7 +112,7 @@ export class InfraStatusController {
   @Get('status')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get infrastructure status' })
-  @ApiResponse({ status: 200, description: 'Infrastructure status' })
+  @ApiResponse({ status: 200, description: 'Infrastructure status', type: InfraStatusResponseDto })
   async getStatus(): Promise<InfraStatus> {
     // Active DB liveness probe (SELECT 1) on both connections in parallel — not just isInitialized,
     // which stays true after a Postgres backend dies until an explicit .destroy() (see probeDbConnected).
@@ -237,7 +243,7 @@ export class InfraStatusController {
   @Get('engines')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get available WhatsApp engines' })
-  @ApiResponse({ status: 200, description: 'List of available engines' })
+  @ApiResponse({ status: 200, description: 'List of available engines', type: [AvailableEngineDto] })
   getEngines(): Array<{ id: string; name: string; enabled: boolean; features: string[] }> {
     return this.engineFactory.getAvailableEngines();
   }
@@ -245,7 +251,7 @@ export class InfraStatusController {
   @Get('engines/current')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get current active engine' })
-  @ApiResponse({ status: 200, description: 'Current engine info' })
+  @ApiResponse({ status: 200, description: 'Current engine info', type: InfraCurrentEngineResponseDto })
   getCurrentEngine(): { engineType: string } {
     return { engineType: this.engineFactory.getCurrentEngine() };
   }
@@ -253,7 +259,11 @@ export class InfraStatusController {
   @Get('health')
   @Public()
   @ApiOperation({ summary: 'Health check endpoint' })
-  @ApiResponse({ status: 200, description: 'Server is healthy' })
+  @ApiResponse({
+    status: 200,
+    description: 'Process is up. This route does not probe dependencies — read /infra/status for those.',
+    type: InfraHealthResponseDto,
+  })
   healthCheck(): { status: string; timestamp: string } {
     return {
       status: 'ok',

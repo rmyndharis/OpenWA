@@ -12,6 +12,7 @@ import * as qrcode from 'qrcode';
 import * as path from 'path';
 import * as fs from 'fs';
 import {
+  CallLinkType,
   IWhatsAppEngine,
   EngineStatus,
   EngineEventCallbacks,
@@ -22,6 +23,7 @@ import {
   Group,
   GroupInfo,
   GroupMemberAddMode,
+  GroupMembershipRequest,
   ParticipantOperationResult,
   LocationInput,
   PollInput,
@@ -48,7 +50,7 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { resolveWebVersionPin } from '../wa-web-version';
-import { resolveAuthTimeoutMs } from '../engine-init-timeout';
+import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import { killOrphanedChromiumProcesses, removeStaleSingletonFiles } from './chromium-profile-hygiene';
 import { isChannelJid } from '../identity/wa-id';
 import { LidMappingStore } from '../identity/lid-mapping-store.service';
@@ -70,6 +72,7 @@ import { WwebjsCatalog } from './wwebjs-catalog';
 import { isSupportedProxyUrl, buildProxyLaunchConfig } from './wwebjs-proxy';
 import {
   probeOnboardingModal,
+  collectDialogDiagnostics,
   resolveOnboardingContinueLabels,
   ONBOARDING_DEFAULT_CONTINUE_LABEL,
 } from './wwebjs-onboarding';
@@ -98,6 +101,20 @@ export function isExecutionContextDestroyedError(reason: string): boolean {
   return /execution context was destroyed/i.test(reason);
 }
 
+/**
+ * A first-inject rejection that reads as "the page navigated out from under the in-flight evaluate":
+ * the exec-context class above plus the 'window.require is not a function' variant (an evaluate
+ * landing on a document whose WA bundle has not booted yet). Deliberately SEPARATE from the
+ * stale-profile advisory classifier: the advisory names a remedy (delete the profile) that is wrong
+ * for the window.require shape (see src/config/process-error-monitor.ts) — this predicate only
+ * decides whether one in-place retry is worth it, both shapes being transient when a reload caused
+ * them. whatsapp-web.js registers its own re-inject handler only AFTER the first inject succeeds
+ * (Client.js:502 vs :504), so a navigation landing during it is caught by nothing upstream (#1081).
+ */
+function isNavigationShapedInitRejection(reason: string): boolean {
+  return isExecutionContextDestroyedError(reason) || /window\.require is not a function/i.test(reason);
+}
+
 export interface WhatsAppWebJsConfig {
   sessionId: string;
   sessionDataPath: string;
@@ -117,7 +134,42 @@ export interface WhatsAppWebJsConfig {
 }
 
 const READY_RECONCILE_INTERVAL_MS = 2000;
-const READY_RECONCILE_TIMEOUT_MS = 90_000;
+export const READY_RECONCILE_TIMEOUT_MS = 90_000;
+
+// How long after `authenticated` the event bridge is allowed to still be attaching before a reload is
+// considered. whatsapp-web.js clears `eventsAttached` in its constructor (Client.js:109) and sets it
+// only once attachEventListeners() resolves (Client.js:373); in between it evaluates LoadUtils, polls
+// up to 30s for window.WWebJS (Client.js:334), then builds ClientInfo and InterfaceController. So a
+// false flag is the NORMAL reading for most of a minute on a loaded host, and reloading on it aborts
+// a healthy attach — the page navigates out from under the in-flight inject(), which then dies before
+// re-exposing the bridge and cannot be retried (#1081). Must exceed upstream's own 30s poll with room
+// for the rest of the pipeline, and stay well under READY_RECONCILE_TIMEOUT_MS so a reload that IS
+// warranted still has time to reinject before the deadline.
+export const READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS = 45_000;
+
+// A post-READY page navigation (WhatsApp Web's ~5-minute first reload on a fresh pairing, a
+// service-worker update, …) destroys the page's JS world; whatsapp-web.js re-injects on its own
+// framenavigated handler (Client.js:504-513), but until WA Web has booted again getState() REJECTS,
+// so the liveness probe reads a healing page as dead and every delegate evaluate dies as a raw
+// TypeError under a status that still says READY (#1081). Sizing — floor: the pre-boot phase alone
+// (page load + WA Web bundle boot, the stretch where getState() rejects) takes tens of seconds on a
+// slow host, and upstream's re-inject then polls up to 30s for window.WWebJS (Client.js:332-343);
+// ceiling: one watchdog interval (60s), so a page that navigates and then wedges loses at most one
+// probe to the grace and still dies within one extra interval. NOT a sibling of
+// READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS above: that one is capped by the 90s reconcile deadline,
+// this one by keeping the watchdog's safety net alive — do not "harmonize" them.
+export const NAVIGATION_REINJECT_GRACE_MS = 60_000;
+
+// Hard bound per recovery episode (first navigation → the next completed re-inject): a page stuck in
+// a navigation loop re-stamps the rolling grace faster than it expires, which would suppress the
+// watchdog forever and leave a zombie session READY that only ever answers 409. Past this cap the
+// probe reports the truth again and the watchdog takes over.
+export const NAVIGATION_EPISODE_CAP_MS = 3 * NAVIGATION_REINJECT_GRACE_MS;
+
+// The single in-adapter retry of a navigation-killed first inject only runs while at least this much
+// of the lifecycle's outer init deadline remains — a retry the outer race SIGKILLs mid-launch would
+// surface as a bare 504 with no reason. Below it, fail with today's exact terminal shape instead.
+const INIT_RETRY_MIN_REMAINING_MS = 20_000;
 
 // WhatsApp Web states that mean WhatsApp has judged the account or its egress, mapped to the neutral
 // restriction kinds. This is the ONLY channel the library offers: there is no dedicated event, error
@@ -173,7 +225,7 @@ export { isSupportedProxyUrl, buildProxyLaunchConfig } from './wwebjs-proxy';
 
 // The onboarding-modal probe moved to ./wwebjs-onboarding with its label resolution; re-exported
 // because existing callers (the adapter spec) still import it from here.
-export { probeOnboardingModal } from './wwebjs-onboarding';
+export { probeOnboardingModal, collectDialogDiagnostics } from './wwebjs-onboarding';
 
 export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngine {
   private client: Client | null = null;
@@ -189,6 +241,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   // decision (a CONNECTED session must never have its credentials wiped).
   private lastProbeStateConnected = false;
   private readyReconcileReloadAttempted = false;
+  // Navigation re-inject window (#1081): stamped by our framenavigated listener, closed by the
+  // library's re-emitted 'ready' and by teardown. Timestamps, never timers — several suites pin
+  // exact jest timer counts, and a timer would also outlive the single-use adapter.
+  private lastMainFrameNavigationAt = 0;
+  private navigationEpisodeStartedAt = 0;
   // Onboarding-modal watcher handle (#982). Self-rescheduling setTimeout so a hung probe can't stall
   // the loop; cleared on teardown exactly like readyReconcileTimer.
   private onboardingWatcherTimer: ReturnType<typeof setTimeout> | null = null;
@@ -197,6 +254,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   // How many times we have clicked the modal's Continue button. Not reset by clearOnboardingWatcher:
   // it counts for the engine's lifetime, which is what makes "the click is not landing" detectable.
   private onboardingDismissClicks = 0;
+  // Dialog signatures the watcher already warned about (#1072 follow-up). A signature is the
+  // serialized diagnostics of what is on screen, so the warn fires once per DISTINCT unrecognised
+  // dialog instead of once per 5s tick. Dies with the engine, exactly like the watcher itself.
+  private onboardingDialogSignatures = new Set<string>();
+  // Probe ticks run, for the lifetime-cap summary line.
+  private onboardingProbes = 0;
   /** How long a received call's handle stays rejectable. Calls ring for roughly a minute, so
    *  two minutes covers the ringing window with margin without pinning dead calls for long. */
   private static readonly LIVE_CALL_TTL_MS = 2 * 60_000;
@@ -259,12 +322,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private readonly logger = createLogger('WhatsAppWebJsAdapter');
   // Bound concurrent inbound media downloads: downloadMedia() materialises the full base64 blob, so an
   // unbounded burst could stack many multi-MB allocations.
-  private readonly inboundLimiter = new ConcurrencyLimiter(
-    inboundMediaConcurrency(),
-    // Queue cap == active slots: beyond (active + queued) concurrent media messages, reject instead of
-    // parking, so a burst can't grow heap without bound (each parked closure holds the message).
-    inboundMediaConcurrency(),
-  );
+  // The queue is UNBOUNDED. A cap equal to the active slots made admission a constant
+  // (active + queued) whatever the batch size, so a burst lost the media of everything past the
+  // eighth — the same defect repaired on the Baileys side. Parking costs one held Message per
+  // waiting download, and only the download runs inside the limiter: each message awaits its own
+  // capInboundMediaFor, so a parked one delays itself and a text message never enters the gate.
+  private readonly inboundLimiter = new ConcurrencyLimiter(inboundMediaConcurrency());
 
   private readonly host: WwebjsEngineHost;
   private readonly groups: WwebjsGroups;
@@ -329,17 +392,32 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         () => undefined,
       );
     });
-    // The slot-holder runs in the background. It only rejects when the limiter's waiter queue is
-    // saturated (queue full) — in which case the download task never ran and boundedReady would hang.
-    // Resolve null so the caller unblocks and emits the message without media, matching the
-    // timeout/byte-cap no-media path. Never let it surface as an unhandled rejection either.
-    void slotHeld.catch(() => {
-      this.logger.warn('Inbound media limiter saturated; emitting message without media', {
+    // Defensive only, and deliberately kept. `run()` rejects on a full queue (gone — the queue is
+    // unbounded) or on close(), which nothing calls on this limiter; the task itself swallows both
+    // download outcomes. So nothing is expected here — but an unhandled rejection from a
+    // fire-and-forget promise is not an acceptable way to find that out.
+    void slotHeld.catch((error: unknown) => {
+      this.logger.warn('Inbound media slot holder rejected unexpectedly; emitting message without media', {
         msgId: msg.id._serialized,
+        error: String(error),
       });
       resolveBounded(null);
     });
-    const media = await boundedReady;
+    // The caller's wait spans the QUEUE as well as the download, and BOTH are unbounded: the queue by
+    // design now, and the wait for a slot because a slot is held until its download really settles —
+    // which a hung page never does. The inner race only starts once this message is admitted, so it
+    // cannot cover the waiting. Without a bound here, a burst behind stuck slots parks forever and
+    // those messages are never emitted AT ALL — strictly worse than the media loss this change set
+    // out to fix. The old queue cap provided that degradation by rejecting; this restores it without
+    // shedding at a fixed batch size.
+    const media = await withInboundDownloadTimeout(boundedReady, inboundMediaTimeoutMs(), () =>
+      this.logger.warn(
+        'Inbound media did not arrive within MEDIA_DOWNLOAD_TIMEOUT_MS; emitting message without media',
+        {
+          msgId: msg.id._serialized,
+        },
+      ),
+    );
     if (!media) {
       return declaredOnlyMedia(msg);
     }
@@ -361,6 +439,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   async initialize(callbacks: EngineEventCallbacks): Promise<void> {
     this.callbacks = callbacks;
     this.setStatus(EngineStatus.INITIALIZING);
+    const initStartedAt = Date.now();
 
     // An install that skipped the message-id backport fails later with errors that name no cause
     // (#889) — say so here instead, while the operator is still looking at the startup logs.
@@ -429,51 +508,44 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         this.logger.log(`Using auth timeout ${authTimeoutMs}ms`);
       }
 
-      this.client = new Client({
-        authStrategy: new LocalAuth({
-          clientId: this.config.sessionId,
-          dataPath: path.resolve(this.config.sessionDataPath),
-        }),
-        puppeteer: {
-          headless: this.config.puppeteer?.headless ?? true,
-          args: puppeteerArgs,
-          // Do NOT let Puppeteer install its own process signal handlers. By default it handles
-          // SIGINT (→ synchronous process.exit(130), which would skip the graceful drain entirely)
-          // and SIGTERM/SIGHUP (→ kills Chromium at signal time, defeating the drain window). We own
-          // signal handling in main.ts. Puppeteer's unconditional `exit` hook still SIGKILLs this
-          // browser when the process actually exits, so nothing is orphaned.
-          handleSIGINT: false,
-          handleSIGTERM: false,
-          handleSIGHUP: false,
-          // Only override the executable when explicitly configured; otherwise let
-          // whatsapp-web.js fall back to Puppeteer's bundled Chromium.
-          ...(this.config.puppeteer?.executablePath ? { executablePath: this.config.puppeteer.executablePath } : {}),
-        },
-        ...(authTimeoutMs !== undefined ? { authTimeoutMs } : {}),
-        ...(proxyAuthentication ? { proxyAuthentication } : {}),
-        ...(versionPin ?? {}),
-      });
-
-      this.setupEventHandlers();
-      if (this.tearingDown) {
-        this.client = null;
-        this.setStatus(EngineStatus.DISCONNECTED);
-        return;
+      // One retry for a navigation-killed first inject (#1081): a WhatsApp Web reload landing
+      // mid-inject rejects initialize() with nothing upstream ever retrying (see
+      // isNavigationShapedInitRejection), and the onError channel below is terminal end to end.
+      // Structurally a single second try — skipped when the lifecycle's outer init race is nearly
+      // spent (a retry the race SIGKILLs mid-launch would surface as a bare 504 with no reason), and
+      // abandoned when attempt 1's browser cannot be destroyed (see resetForInitRetry).
+      try {
+        await this.runInitAttempt(puppeteerArgs, authTimeoutMs, proxyAuthentication, versionPin);
+      } catch (attemptError) {
+        const attemptReason = attemptError instanceof Error ? attemptError.message : String(attemptError);
+        const budgetLeftMs = resolveEngineInitTimeoutMs() - (Date.now() - initStartedAt);
+        if (
+          this.tearingDown ||
+          !isNavigationShapedInitRejection(attemptReason) ||
+          budgetLeftMs < INIT_RETRY_MIN_REMAINING_MS
+        ) {
+          throw attemptError;
+        }
+        this.logger.warn(
+          `"${attemptReason}" killed the first inject — a page navigation landed before ` +
+            `whatsapp-web.js installed its re-inject handler. Retrying the launch once (#1081).`,
+          { sessionId: this.config.sessionId, action: 'init_navigation_retry' },
+        );
+        const cleaned = await this.resetForInitRetry();
+        if (this.tearingDown) {
+          this.setStatus(EngineStatus.DISCONNECTED);
+          return;
+        }
+        if (!cleaned) {
+          this.logger.warn(
+            "Attempt 1's browser did not die within the destroy bound — abandoning the retry rather " +
+              'than launching a second Chromium into the same profile',
+            { sessionId: this.config.sessionId, action: 'init_navigation_retry_abandoned' },
+          );
+          throw attemptError;
+        }
+        await this.runInitAttempt(puppeteerArgs, authTimeoutMs, proxyAuthentication, versionPin);
       }
-      // Kill any Chromium that survived a hard kill of a previous OpenWA process lifetime (its
-      // Puppeteer exit hook never ran, leaving an orphaned browser holding the profile). Safe here
-      // for the same reason as the Singleton cleanup below: this runs only at engine (re)start,
-      // before this lifetime's browser exists, so it cannot kill a live browser.
-      await killOrphanedChromiumProcesses(this.config.sessionId, this.logger);
-      // Clear stale Chromium Singleton* files left by a hard kill before launching — see
-      // removeStaleSingletonFiles. This runs only at engine (re)start, never while
-      // the browser is alive, so it cannot pull the files out from under a running Chromium.
-      await removeStaleSingletonFiles(this.config.sessionId, this.config.sessionDataPath, this.logger);
-      await this.client.initialize();
-      // whatsapp-web.js 1.34.x never observes the Chromium process/page it drives, so a crashed
-      // browser leaves the client looking READY forever ("silent death"). Attach death listeners
-      // to the puppeteer handles so a dead browser surfaces as a normal disconnect → reconnect.
-      this.attachPuppeteerLifecycleListeners();
     } catch (error) {
       this.setStatus(EngineStatus.FAILED);
       const reason = error instanceof Error ? error.message : String(error);
@@ -508,6 +580,116 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       }
       this.callbacks.onError?.(surfacedReason);
       throw error;
+    }
+  }
+
+  /**
+   * One construction+launch attempt: everything from `new Client(...)` through the puppeteer death
+   * listeners. Extracted so the navigation retry (#1081) repeats the FULL sequence — a second
+   * attempt without setupEventHandlers() would have no qr/authenticated/ready handlers at all, and
+   * without the pre-launch sweeps it would trip over attempt 1's stale Singleton files. A LIVE
+   * attempt-1 browser never reaches attempt 2: resetForInitRetry() abandons the retry instead.
+   */
+  private async runInitAttempt(
+    puppeteerArgs: string[],
+    authTimeoutMs: number | undefined,
+    proxyAuthentication: { username: string; password: string } | undefined,
+    versionPin: Awaited<ReturnType<typeof resolveWebVersionPin>>,
+  ): Promise<void> {
+    const client = new Client({
+      authStrategy: new LocalAuth({
+        clientId: this.config.sessionId,
+        dataPath: path.resolve(this.config.sessionDataPath),
+      }),
+      puppeteer: {
+        headless: this.config.puppeteer?.headless ?? true,
+        args: puppeteerArgs,
+        // Do NOT let Puppeteer install its own process signal handlers. By default it handles
+        // SIGINT (→ synchronous process.exit(130), which would skip the graceful drain entirely)
+        // and SIGTERM/SIGHUP (→ kills Chromium at signal time, defeating the drain window). We own
+        // signal handling in main.ts. Puppeteer's unconditional `exit` hook still SIGKILLs this
+        // browser when the process actually exits, so nothing is orphaned.
+        handleSIGINT: false,
+        handleSIGTERM: false,
+        handleSIGHUP: false,
+        // Only override the executable when explicitly configured; otherwise let
+        // whatsapp-web.js fall back to Puppeteer's bundled Chromium.
+        ...(this.config.puppeteer?.executablePath ? { executablePath: this.config.puppeteer.executablePath } : {}),
+      },
+      ...(authTimeoutMs !== undefined ? { authTimeoutMs } : {}),
+      ...(proxyAuthentication ? { proxyAuthentication } : {}),
+      ...(versionPin ?? {}),
+    });
+    this.client = client;
+
+    this.setupEventHandlers();
+    if (this.tearingDown) {
+      this.client = null;
+      this.setStatus(EngineStatus.DISCONNECTED);
+      return;
+    }
+    // Kill any Chromium that survived a hard kill of a previous OpenWA process lifetime (its
+    // Puppeteer exit hook never ran, leaving an orphaned browser holding the profile). Safe here:
+    // this runs before this attempt's browser exists, so the only thing it can kill is an orphan —
+    // including attempt 1's browser when the bounded inter-attempt destroy did not finish it.
+    await killOrphanedChromiumProcesses(this.config.sessionId, this.logger);
+    // Clear stale Chromium Singleton* files left by a hard kill before launching — see
+    // removeStaleSingletonFiles. This runs after the orphan kill above and before this attempt's
+    // browser exists, so it cannot pull the files out from under a running Chromium.
+    await removeStaleSingletonFiles(this.config.sessionId, this.config.sessionDataPath, this.logger);
+    await client.initialize();
+    // whatsapp-web.js 1.34.x never observes the Chromium process/page it drives, so a crashed
+    // browser leaves the client looking READY forever ("silent death"). Attach death listeners
+    // to the puppeteer handles so a dead browser surfaces as a normal disconnect → reconnect.
+    this.attachPuppeteerLifecycleListeners();
+  }
+
+  /**
+   * Reset between a failed first init attempt and its single retry (#1081). Deliberately NOT
+   * beginClientTeardown(): that would latch tearingDown (the adapter is single-use after teardown)
+   * and write DISCONNECTED, whose disconnectReported latch permanently drops the retry's
+   * qr/authenticated events. The reconcile clear matters most: the patched hasSynced level-check can
+   * fire AUTHENTICATED before the navigation-killed evaluate rejects initialize(), leaving attempt
+   * 1's 90s deadline live — its non-bridge branch deletes credentials (recoverFromStuckAuth), which
+   * must never run underneath a retry that is about to succeed.
+   *
+   * Returns false when attempt 1's browser could not be destroyed within the bound — the caller
+   * must then abandon the retry: launching a second Chromium into the same LocalAuth profile risks
+   * corrupting the only credential copy (an irreversible re-pair), and the marker-based orphan
+   * sweep is explicitly best-effort, so it cannot be trusted as the escalation for a LIVE browser.
+   */
+  private async resetForInitRetry(): Promise<boolean> {
+    const failed = this.client;
+    this.client = null;
+    this.clearReadyReconcile();
+    this.qrCode = null;
+    this.setStatus(EngineStatus.INITIALIZING);
+    if (!failed) return true;
+    // The old client may still emit late events from persisted page bindings; 'authenticated' and
+    // 'ready' have no source-client identity fence, so silence it before the new attempt starts.
+    failed.removeAllListeners();
+    // Bounded DIRECT destroy — never this.destroy()/forceDestroy(), both of which latch the
+    // teardown flags above.
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        failed.destroy(),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('init-retry destroy timed out')), 5_000);
+          timeout.unref?.();
+        }),
+      ]);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn('Destroying the failed first init attempt did not complete cleanly', {
+        error: message,
+      });
+      // A FAST rejection means the browser was already gone (destroy found nothing live to close) —
+      // safe to relaunch. A TIMEOUT means a live, wedged Chromium still holds the profile.
+      return message !== 'init-retry destroy timed out';
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
   }
 
@@ -576,6 +758,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     });
 
     this.client.on('ready', () => {
+      // The library re-emits 'ready' at the end of EVERY completed (re)inject pipeline — for a
+      // post-navigation re-inject this is the completion edge, and the only one it offers. Close the
+      // navigation window HERE, before the guards below: markReadyFromClientInfo early-returns while
+      // already READY, so a clear behind it would never run for the re-inject case (#1081).
+      this.clearNavigationReinjectWindow();
       // whatsapp-web.js can emit `ready` BEFORE its message listeners are attached: its post-auth
       // callback runs once per hasSynced trigger, and any run that finds `window.WWebJS` already
       // defined skips the attach and bare-emits `ready` — including while the first run's attach is
@@ -602,6 +789,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.client.on('group_join', notification => this.handleGroupNotification('join', notification));
     this.client.on('group_leave', notification => this.handleGroupNotification('leave', notification));
     this.client.on('group_update', notification => this.handleGroupNotification('update', notification));
+    this.client.on('group_membership_request', notification =>
+      this.handleGroupNotification('join_request', notification),
+    );
 
     this.client.on('call', call => this.handleIncomingCall(call));
 
@@ -692,6 +882,14 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.channels.muteChannel(channelId, mute);
   }
 
+  demoteChannelAdmin(channelId: string, userId: string): Promise<void> {
+    return this.channels.demoteChannelAdmin(channelId, userId);
+  }
+
+  transferChannelOwnership(channelId: string, newOwnerId: string): Promise<void> {
+    return this.channels.transferChannelOwnership(channelId, newOwnerId);
+  }
+
   getChatsByLabel(labelId: string): Promise<ChatSummary[]> {
     return this.labels.getChatsByLabel(labelId);
   }
@@ -743,6 +941,15 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
             ? Math.floor(notification.timestamp)
             : Math.floor(Date.now() / 1000),
       };
+      if (kind === 'join_request' && payload.participantIds.length === 0) {
+        // A self-request carries no recipients: the author IS the user asking to join
+        // (Client.js:633-641 documents chatId/author/timestamp for this event). A request naming
+        // nobody at all is unactionable and dropped.
+        if (!payload.actorId) {
+          return;
+        }
+        payload.participantIds = [payload.actorId];
+      }
       if (kind === 'update') {
         // Join/leave carry no metadata delta. An update whose subtype/body cannot be interpreted
         // still emits with empty changes rather than being dropped silently.
@@ -817,6 +1024,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return isNewCall;
   }
 
+  createCallLink(type: CallLinkType, startTime: number): Promise<string> {
+    return this.profile.createCallLink(type, startTime);
+  }
+
   /**
    * Reject a currently-ringing call. The entry is evicted on ANY attempt (a rejected/ended call
    * will not become rejectable again); an unknown id or an expired entry maps to CallNotFoundError
@@ -841,11 +1052,41 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     if (!this.client) return;
     const { pupBrowser, pupPage } = this.client as unknown as {
       pupBrowser?: { on: (event: 'disconnected', cb: () => void) => void };
-      pupPage?: { on: (event: 'error' | 'close', cb: () => void) => void };
+      pupPage?: {
+        on: (event: 'error' | 'close' | 'framenavigated', cb: (frame?: { url?: () => string }) => void) => void;
+        mainFrame?: () => unknown;
+      };
     };
     pupBrowser?.on('disconnected', () => this.handlePuppeteerDeath('Browser process closed or crashed'));
     pupPage?.on('error', () => this.handlePuppeteerDeath('Page crashed'));
     pupPage?.on('close', () => this.handlePuppeteerDeath('Page closed'));
+    // A page NAVIGATION fires none of the above: the page is healing, not dead — whatsapp-web.js
+    // re-injects on its own framenavigated handler and re-emits 'ready' when done. Stamp the window
+    // so probeLiveness and ensureReady treat it as alive-but-recovering (#1081). Never stamp the
+    // LOGOUT navigation shapes (post_logout URL, or upstream's latched lastLoggedOut): there the
+    // credential teardown driven by the DISCONNECTED('LOGOUT') event is the path that must win.
+    pupPage?.on('framenavigated', frame => {
+      try {
+        // mainFrame is feature-detected: the spec harnesses' EventEmitter pages have no frames.
+        if (typeof pupPage.mainFrame === 'function' && frame !== pupPage.mainFrame()) return;
+        if (typeof frame?.url === 'function' && frame.url().includes('post_logout=1')) return;
+      } catch {
+        return; // the frame detached before this handler ran — nothing worth stamping
+      }
+      // lastLoggedOut is a runtime field the wwjs typings do not declare (same loose-cast pattern as
+      // the pupBrowser/pupPage handles above).
+      if ((this.client as unknown as { lastLoggedOut?: boolean } | null)?.lastLoggedOut) return;
+      const now = Date.now();
+      if (this.navigationEpisodeStartedAt === 0) this.navigationEpisodeStartedAt = now;
+      this.lastMainFrameNavigationAt = now;
+      // `graced: false` here means the episode cap already expired — the stamp is recorded but the
+      // probe/ensureReady grace is NOT being granted, so the log must not claim it is.
+      this.logger.warn('Page navigated; whatsapp-web.js is re-injecting', {
+        sessionId: this.config.sessionId,
+        action: 'page_navigation_reinject_window',
+        graced: this.isInNavigationReinjectWindow(),
+      });
+    });
   }
 
   /**
@@ -887,6 +1128,20 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
    */
   private reportIfPageTransportError(error: unknown, context: string): void {
     if (!this.isPageTransportError(error)) {
+      return;
+    }
+    // Inside the navigation re-inject window the same signatures ride a HEALING page: an in-flight
+    // evaluate killed by the navigation keeps its 'Protocol error' prefix (puppeteer only rewrites
+    // the shapes that END with a context-gone suffix), and a navigating page transiently detaches
+    // frames. Reporting that as death would tear down the session whatsapp-web.js is about to
+    // re-inject — faster than the watchdog the grace protects against (#1081). Log the match so the
+    // theory stays falsifiable from field logs; the error still propagates to the caller, and a
+    // REAL browser death still reports through the pupBrowser/pupPage death listeners untouched.
+    if (this.isInNavigationReinjectWindow()) {
+      this.logger.warn(`Page transport error during ${context} inside the navigation re-inject window — not a death`, {
+        error: error instanceof Error ? error.message : String(error),
+        action: 'page_transport_error_graced',
+      });
       return;
     }
     this.logger.warn(`Page transport error during ${context} — treating the session as dead`, {
@@ -1026,6 +1281,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     if (this.onboardingWatcherStarted) return; // idempotent: ready event + reconcile path share one funnel
     this.onboardingWatcherStarted = true;
     this.onboardingWatcherStartedAt = Date.now();
+    this.logger.debug('Onboarding modal watcher armed', {
+      sessionId: this.config.sessionId,
+      action: 'onboarding_watcher_started',
+    });
 
     const tick = (): void => {
       if (!this.client || this.status !== EngineStatus.READY || this.tearingDown || this.disconnectReported) {
@@ -1034,6 +1293,16 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       }
       // The modal is one-shot per account: stop after the lifetime cap rather than polling forever.
       if (Date.now() - this.onboardingWatcherStartedAt >= ONBOARDING_MODAL_MAX_LIFETIME_MS) {
+        // Natural end of the episode: one summary, so a log read can tell the watcher ran and what
+        // it saw without per-tick noise. Teardown/disconnect stops log nothing — that is shutdown,
+        // not signal.
+        this.logger.debug('Onboarding modal watcher stopped at its lifetime cap', {
+          sessionId: this.config.sessionId,
+          probes: this.onboardingProbes,
+          clicks: this.onboardingDismissClicks,
+          dialogsSeen: this.onboardingDialogSignatures.size,
+          action: 'onboarding_watcher_stopped',
+        });
         this.clearOnboardingWatcher();
         return;
       }
@@ -1063,9 +1332,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
    */
   private async dismissOnboardingModalIfNeeded(): Promise<void> {
     if (!this.client) return;
+    this.onboardingProbes += 1;
     const page = (
       this.client as unknown as {
-        pupPage?: { evaluate: <T, A>(fn: (arg: A) => T, arg: A) => Promise<T> };
+        pupPage?: { evaluate: <T, A>(fn: (arg: A) => T, arg?: A) => Promise<T> };
       }
     ).pupPage;
 
@@ -1086,6 +1356,32 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           timeout.unref?.();
         }),
       ]);
+
+      // The probe found nothing to click: ask the page what dialogs ARE on screen, so a modal whose
+      // title or button label the detector does not recognise is visible in the logs instead of
+      // failing silently until WhatsApp unlinks the companion (#1072 follow-up). The `=== false`
+      // dispatch is deliberate: a probe that clicked (dismissed) needs no diagnostics, and an
+      // absent/garbled result says the page is in no state to answer a second evaluate either.
+      if (result && result.dismissed === false) {
+        const dialogs = await page?.evaluate(collectDialogDiagnostics);
+        if (Array.isArray(dialogs) && dialogs.length > 0) {
+          const signature = JSON.stringify(dialogs);
+          if (!this.onboardingDialogSignatures.has(signature)) {
+            this.onboardingDialogSignatures.add(signature);
+            this.logger.warn(
+              'A visible dialog on WhatsApp Web matches neither the onboarding-modal heading nor a ' +
+                'confirm-button label. If this is the onboarding screen in an unrecognised title or ' +
+                'language, WhatsApp will unlink this companion within minutes: add its confirm-label ' +
+                'via WWEBJS_ONBOARDING_CONTINUE_LABELS, and report the heading so detection can cover it.',
+              {
+                sessionId: this.config.sessionId,
+                dialogs,
+                action: 'onboarding_dialog_unrecognized',
+              },
+            );
+          }
+        }
+      }
 
       if (!result?.dismissed) return;
 
@@ -1124,7 +1420,16 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   private reportActionRequired(reason: string): void {
     this.clearOnboardingWatcher();
-    if (this.status !== EngineStatus.READY) return; // already leaving READY; don't override a teardown/failure
+    if (this.status !== EngineStatus.READY) {
+      // A teardown/failure latched first: its status stands and the callback stays silent — but the
+      // reason must not vanish without a trace, or this path is indistinguishable from "no modal".
+      this.logger.debug('Onboarding modal fallback superseded by a status change; not moving to ACTION_REQUIRED', {
+        sessionId: this.config.sessionId,
+        status: this.status,
+        action: 'onboarding_action_required_suppressed',
+      });
+      return;
+    }
     this.setStatus(EngineStatus.ACTION_REQUIRED);
     this.callbacks.onActionRequired?.(reason);
     this.logger.warn(reason, { sessionId: this.config.sessionId, action: 'onboarding_modal_fallback' });
@@ -1239,6 +1544,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     if (!this.client || !this.lastProbeStateConnected) return;
     const client = this.client as Client & { eventsAttached?: boolean };
     if (client.eventsAttached !== false) return;
+    // An attach still inside upstream's own budget is slow, not dead — navigating now would abort it.
+    if (Date.now() - this.readyReconcileStartedAt < READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS) return;
     this.readyReconcileReloadAttempted = true;
     this.logger.warn('WhatsApp Web is connected but its event bridge never attached; reloading the page to reinject', {
       sessionId: this.config.sessionId,
@@ -1270,6 +1577,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // Any cached call handle is dead once the client goes away — drop them all so a later
     // rejectCall() reports not-found instead of acting on a destroyed page.
     this.liveCalls.clear();
+    // Before the clientless early-return: a teardown must always close the navigation window, or a
+    // stale stamp could grace the next generation's probe (single-use contract notwithstanding).
+    this.clearNavigationReinjectWindow();
     const client = this.client;
     if (!client) return null;
 
@@ -1288,6 +1598,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
     this.clearReadyReconcile();
     this.clearOnboardingWatcher();
+    this.clearNavigationReinjectWindow();
   }
 
   async disconnect(): Promise<void> {
@@ -1392,10 +1703,32 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   /**
+   * Whether a recent main-frame navigation is still inside its bounded re-inject window. Two bounds:
+   * the rolling per-navigation grace, and the per-episode cap that stops a navigation LOOP from
+   * re-stamping its way past the watchdog forever. Consulted only AFTER the READY-status gates in
+   * probeLiveness()/ensureReady() — a teardown or LOGOUT drops the status first, and the grace must
+   * never outrank that (#1081).
+   */
+  private isInNavigationReinjectWindow(): boolean {
+    if (this.lastMainFrameNavigationAt === 0) return false;
+    const now = Date.now();
+    return (
+      now - this.lastMainFrameNavigationAt < NAVIGATION_REINJECT_GRACE_MS &&
+      now - this.navigationEpisodeStartedAt < NAVIGATION_EPISODE_CAP_MS
+    );
+  }
+
+  private clearNavigationReinjectWindow(): void {
+    this.lastMainFrameNavigationAt = 0;
+    this.navigationEpisodeStartedAt = 0;
+  }
+
+  /**
    * Active liveness probe for the session watchdog: race a real getState() round-trip against a 10s
    * timeout. Probe failure or timeout means dead — a wedged page can keep reporting CONNECTED
    * (whatsapp-web.js #5728), so turning consecutive probe failures into a reconnect decision stays
-   * the calling watchdog's job.
+   * the calling watchdog's job. One exception: inside the bounded navigation re-inject window a
+   * failing probe answers alive, since the page is healing, not dead (#1081).
    */
   async probeLiveness(): Promise<boolean> {
     if (this.status !== EngineStatus.READY || !this.client) return false;
@@ -1409,9 +1742,20 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           timeout.unref?.();
         }),
       ]);
-      return state === WAState.CONNECTED;
+      if (state === WAState.CONNECTED) {
+        // Observed recovery closes the navigation episode. Without this, an episode whose re-inject
+        // died silently (no 'ready' re-emit, but WA Web's socket back up) would keep a stale episode
+        // anchor forever, denying the grace to every LATER navigation via the episode cap.
+        this.clearNavigationReinjectWindow();
+        return true;
+      }
+      return this.isInNavigationReinjectWindow();
     } catch {
-      return false;
+      // Inside the navigation window the evaluate rejecting (context destroyed, window.require not
+      // yet a function) means the page is healing, not dead — answer alive so the watchdog does not
+      // tear down a session whatsapp-web.js is about to re-inject (#1081). The window is bounded, so
+      // a page that navigated and then wedged still dies within one extra watchdog interval.
+      return this.isInNavigationReinjectWindow();
     } finally {
       // Never leave the timeout dangling when getState() settles first (Jest open-handle hygiene).
       if (timeout) clearTimeout(timeout);
@@ -1424,12 +1768,19 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   /**
    * Request an 8-char pairing code so the user can link via "Link with phone number" instead of
-   * scanning the QR. Must be called after the engine has started (the client is initialized and
-   * waiting to link); whatsapp-web.js throws if called before it is ready or after authentication.
+   * scanning the QR.
+   *
+   * Gated on QR_READY, not on the client merely existing. `this.client` is assigned before
+   * `client.initialize()` (see runInitAttempt), so for the whole Chromium launch — seconds on a
+   * modest host — a client is present while its `pupPage` is still null, and whatsapp-web.js's
+   * requestPairingCode reaches `exposeFunctionIfAbsent(this.pupPage, …)` and throws a raw TypeError
+   * that surfaces as a 500. QR_READY is the precise window this can work in anyway: the library
+   * emits 'qr' only once the Store is injected and the in-page socket reports UNPAIRED, which are
+   * the same preconditions the pairing flow needs.
    */
   async requestPairingCode(phoneNumber: string): Promise<string> {
-    if (!this.client) {
-      throw new EngineNotReadyError();
+    if (!this.client || this.status !== EngineStatus.QR_READY) {
+      throw new EngineNotReadyError('Session is not waiting to be linked. Start it and wait for the QR stage.');
     }
     return this.client.requestPairingCode(phoneNumber);
   }
@@ -1667,6 +2018,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.contacts.unblockContact(contactId);
   }
 
+  getBlockedContacts(): Promise<string[]> {
+    return this.contacts.getBlockedContacts();
+  }
+
   // ========== Profile (own account) ==========
 
   setProfileName(name: string): Promise<void> {
@@ -1675,6 +2030,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   setProfileStatus(status: string): Promise<void> {
     return this.profile.setProfileStatus(status);
+  }
+
+  deleteProfilePicture(): Promise<void> {
+    return this.profile.deleteProfilePicture();
   }
 
   setProfilePicture(media: MediaInput): Promise<void> {
@@ -1724,6 +2083,18 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   setGroupEphemeral(groupId: string, durationSec: number): Promise<void> {
     return this.groups.setGroupEphemeral(groupId, durationSec);
+  }
+
+  getGroupMembershipRequests(groupId: string): Promise<GroupMembershipRequest[]> {
+    return this.groups.getGroupMembershipRequests(groupId);
+  }
+
+  approveGroupMembershipRequests(groupId: string, participants?: string[]): Promise<ParticipantOperationResult[]> {
+    return this.groups.approveGroupMembershipRequests(groupId, participants);
+  }
+
+  rejectGroupMembershipRequests(groupId: string, participants?: string[]): Promise<ParticipantOperationResult[]> {
+    return this.groups.rejectGroupMembershipRequests(groupId, participants);
   }
 
   // ========== Status/Stories (Phase 3) ==========
@@ -1791,6 +2162,14 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.chats.sendSeen(chatId);
   }
 
+  muteChat(chatId: string, muteUntil: number | null): Promise<void> {
+    return this.chats.muteChat(chatId, muteUntil);
+  }
+
+  pinChat(chatId: string, pin: boolean): Promise<boolean> {
+    return this.chats.pinChat(chatId, pin);
+  }
+
   archiveChat(chatId: string, archive: boolean): Promise<boolean> {
     return this.chats.archiveChat(chatId, archive);
   }
@@ -1811,12 +2190,25 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.chats.sendChatState(chatId, state);
   }
 
+  setOnlinePresence(available: boolean): Promise<void> {
+    return this.chats.setOnlinePresence(available);
+  }
+
   private ensureReady(): void {
     if (this.status !== EngineStatus.READY || !this.client) {
       // Typed so the global filter returns 409 Conflict ("session not connected")
       // instead of a 500 when an engine op is attempted while the session is
       // disconnected / reconnecting / still initializing (#100).
       throw new EngineNotReadyError();
+    }
+    // Post-READY navigation window: window.WWebJS is gone until the re-inject completes, so every
+    // delegate evaluate would die as a raw TypeError 500 (and five raw send failures latch the send
+    // breaker for its 15-minute cooldown). Answer the same retryable 409 the pre-READY states get,
+    // naming the reload so the operator can tell this state from a plain disconnect (#1081).
+    if (this.isInNavigationReinjectWindow()) {
+      throw new EngineNotReadyError(
+        'WhatsApp Web is reloading its page and the session is re-injecting. Retry in a few seconds.',
+      );
     }
   }
 

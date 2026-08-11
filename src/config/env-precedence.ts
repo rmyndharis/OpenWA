@@ -47,6 +47,7 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   // Chat-media archiving. Blank-forwarded by compose like the storage keys above, so an operator
   // who sets nothing must not have an empty string pin the feature off against data/.env.generated.
   'CHAT_MEDIA_ARCHIVE_ENABLED',
+  'CHAT_MEDIA_ARCHIVE_OUTBOUND',
   'CHAT_MEDIA_ARCHIVE_MAX_BYTES',
   'CHAT_MEDIA_ARCHIVE_TTL_DAYS',
   'CHAT_MEDIA_ORPHAN_SWEEP_INTERVAL_MS',
@@ -75,6 +76,22 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   // Autoreply rule cap, blank-forwarded like the knobs above so an operator who sets nothing does
   // not have an empty string shadow a value in .env / data/.env.generated.
   'AUTOMATION_MAX_PER_SESSION',
+  // Behaviour flags with no dashboard route: before they were forwarded, a value set in .env simply
+  // never reached the container. They are blank-forwarded like everything else here so the forward
+  // itself cannot pin them off.
+  'WEBHOOK_CONTACT_DETAILS',
+  'BAILEYS_MARK_ONLINE_ON_CONNECT',
+  'BAILEYS_SYNC_FULL_HISTORY',
+  'ALLOW_UNSIGNED_INGRESS',
+  'STORE_EPHEMERAL_MESSAGES',
+  'RESOLVE_LID_TO_PHONE',
+  'SIMULATE_TYPING',
+  'MCP_ENABLED',
+  'SEARCH_ENABLED',
+  'SERVE_DASHBOARD',
+  'CACHE_ENABLED',
+  'DATABASE_LOGGING',
+  'MAIN_DATABASE_SYNCHRONIZE',
   // Redis selection + connection details (#488)
   'REDIS_ENABLED',
   'REDIS_HOST',

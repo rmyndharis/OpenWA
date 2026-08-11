@@ -25,6 +25,12 @@ const dedupIds = (find: jest.Mock, call = 0): string[] => {
   return calls[call][0].where.waMessageId._value;
 };
 
+// The payload a webhook dispatch carried, reached without an `any` hop — same reason as dedupIds.
+const dispatchPayload = (dispatch: jest.Mock, call = 0): Record<string, unknown> => {
+  const calls = dispatch.mock.calls as Array<[string, string, Record<string, unknown>]>;
+  return calls[call][2];
+};
+
 const historyMessage = (over: Partial<IncomingMessage> = {}): IncomingMessage =>
   ({
     id: 'WA1',
@@ -39,7 +45,12 @@ const historyMessage = (over: Partial<IncomingMessage> = {}): IncomingMessage =>
 
 describe('MessageProjector', () => {
   let messageRepository: { find: jest.Mock; findOne: jest.Mock; create: jest.Mock; update: jest.Mock };
-  let eventsGateway: { emitMessage: jest.Mock; emitMessageSent: jest.Mock; emitMessageRevoked: jest.Mock };
+  let eventsGateway: {
+    emitMessage: jest.Mock;
+    emitMessageSent: jest.Mock;
+    emitMessageRevoked: jest.Mock;
+    emitMessageReaction: jest.Mock;
+  };
   let webhookService: { dispatch: jest.Mock };
   let engines: EngineRegistry;
   let engine: IWhatsAppEngine;
@@ -52,7 +63,12 @@ describe('MessageProjector', () => {
       create: jest.fn((x: unknown) => x),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
-    eventsGateway = { emitMessage: jest.fn(), emitMessageSent: jest.fn(), emitMessageRevoked: jest.fn() };
+    eventsGateway = {
+      emitMessage: jest.fn(),
+      emitMessageSent: jest.fn(),
+      emitMessageRevoked: jest.fn(),
+      emitMessageReaction: jest.fn(),
+    };
     webhookService = { dispatch: jest.fn().mockResolvedValue(undefined) };
     engines = new EngineRegistry();
     engine = {} as IWhatsAppEngine;
@@ -124,6 +140,72 @@ describe('MessageProjector', () => {
       await settle();
 
       expect(messageRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('still notifies consumers when the reacted message has no stored row', async () => {
+      // Same contract as handleMessageRevoked: the stored copy is best-effort, but message.reaction is
+      // a declared webhook event and the dashboard stream is the point of it. A row is absent whenever
+      // the message was never persisted — an ephemeral message under STORE_EPHEMERAL_MESSAGES=false,
+      // or one that arrived before the session went live.
+      messageRepository.findOne.mockResolvedValue(null);
+
+      projector.applyReactionQueued('s1', {
+        messageId: 'WA1',
+        chatId: 'c1@c.us',
+        senderId: '628@c.us',
+        reaction: '👍',
+      });
+
+      await settle();
+      await settle();
+
+      expect(webhookService.dispatch).toHaveBeenCalledWith('s1', 'message.reaction', expect.anything());
+      expect(eventsGateway.emitMessageReaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('omits the reactions snapshot when there is no stored row to compute it from', async () => {
+      // `reactions` is the post-apply snapshot of EVERY reaction on the message, and consumers replace
+      // their copy with it. Without the row that snapshot is unknowable, and sending this one reaction
+      // as if it were the whole set would tell them the other senders had withdrawn theirs. Absent
+      // means "we hold no copy", which is the truth.
+      messageRepository.findOne.mockResolvedValue(null);
+
+      projector.applyReactionQueued('s1', {
+        messageId: 'WA1',
+        chatId: 'c1@c.us',
+        senderId: '628@c.us',
+        reaction: '👍',
+      });
+
+      await settle();
+      await settle();
+
+      const payload = dispatchPayload(webhookService.dispatch);
+      expect(payload).not.toHaveProperty('reactions');
+      expect(payload).toMatchObject({ messageId: 'WA1', senderId: '628@c.us', reaction: '👍' });
+    });
+
+    it('still carries the full snapshot, and still writes it, when the row IS there', async () => {
+      // The other half of the branch above: making the snapshot conditional must not make it optional
+      // in the case that has always produced it. A prior sender's reaction survives in the map.
+      messageRepository.findOne.mockResolvedValue({ metadata: { reactions: { '627@c.us': '❤️' } } });
+
+      projector.applyReactionQueued('s1', {
+        messageId: 'WA1',
+        chatId: 'c1@c.us',
+        senderId: '628@c.us',
+        reaction: '👍',
+      });
+
+      await settle();
+      await settle();
+
+      const payload = dispatchPayload(webhookService.dispatch);
+      expect(payload.reactions).toEqual({ '627@c.us': '❤️', '628@c.us': '👍' });
+      expect(messageRepository.update).toHaveBeenCalledWith(
+        { sessionId: 's1', waMessageId: 'WA1' },
+        { metadata: { reactions: { '627@c.us': '❤️', '628@c.us': '👍' } } },
+      );
     });
   });
 

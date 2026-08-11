@@ -128,7 +128,9 @@ class MessagesResource:
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/messages/unpin", body=body)
 
     def media(self, session_id: str, chat_id: str, message_id: str) -> MessageMedia:
-        """Fetch a message's archived media bytes (404 when nothing is archived for it)."""
+        """Fetch a message's stored media bytes: the archived file when one exists, else the
+        inline copy on the message row (covers media sent by this account); 404 when neither
+        holds bytes."""
         data, content_type = self._http.request_bytes(
             "GET",
             f"/api/sessions/{quote_segment(session_id)}/messages/{quote_segment(chat_id)}/{quote_segment(message_id)}/media",

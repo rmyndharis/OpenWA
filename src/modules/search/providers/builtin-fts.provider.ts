@@ -156,15 +156,30 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
     await this.dataSource.query(
       `CREATE VIRTUAL TABLE IF NOT EXISTS "messages_fts" USING fts5(body, content='messages', content_rowid='rowid')`,
     );
-    // Backfill only when the FTS table is empty but messages has rows — avoids re-copying on every boot
-    // once the index is populated. `messages_fts` with 'rowid' content exposes its size via this count.
-    const sizeRow: unknown[] = await this.dataSource.query(
-      `SELECT (SELECT count(*) FROM "messages_fts") AS fts, (SELECT count(*) FROM "messages" WHERE "body" IS NOT NULL) AS msgs`,
+    // Backfill the rows this index does not hold. NOT an emptiness test: `messages_fts` is an FTS5
+    // external-content table, so `count(*)` on it scans `messages` and returns THAT table's row
+    // count, never the number of indexed documents — a "the index is empty" probe written that way
+    // is unsatisfiable, because a zero count means `messages` itself is empty. The indexed documents
+    // live in the `messages_fts_docsize` shadow table, so completeness is a rowid-level anti-join.
+    //
+    // It has to hold on a PARTIALLY populated index, not just an empty one: once a box has booted
+    // once without the backfill, its later writes are indexed by the triggers below while its older
+    // rows stay missing, and an emptiness test is false there and repairs nothing. Until those rows
+    // are indexed the AFTER UPDATE/DELETE triggers issue FTS5 'delete' commands for documents that
+    // were never added, and SQLite rejects the whole statement — so ordinary edits and deletes on
+    // them fail, not merely searches. Reads `d."rowid"` rather than `d."id"`: same query plan,
+    // without depending on the shadow table's column naming.
+    const gapRow: unknown[] = await this.dataSource.query(
+      `SELECT EXISTS(SELECT 1 FROM "messages" m WHERE m."body" IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM "messages_fts_docsize" d WHERE d."rowid" = m."rowid")) AS missing`,
     );
-    const sr = (sizeRow as Array<{ fts: number; msgs: number }>)[0];
-    if (Number(sr?.fts) === 0 && Number(sr?.msgs) > 0) {
+    if (Number((gapRow as Array<{ missing: number }>)[0]?.missing)) {
+      // `body IS NOT NULL` mirrors the migration's own backfill exactly: a repair that indexed a NULL
+      // body as an empty document would leave the index disagreeing with the schema it repairs.
       await this.dataSource.query(
-        `INSERT INTO "messages_fts"("rowid", "body") SELECT "rowid", "body" FROM "messages" WHERE "body" IS NOT NULL`,
+        `INSERT INTO "messages_fts"("rowid", "body")
+           SELECT m."rowid", m."body" FROM "messages" m WHERE m."body" IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM "messages_fts_docsize" d WHERE d."rowid" = m."rowid")`,
       );
     }
     // The three sync triggers are CREATE-OR-REPLACE by name via DROP + CREATE; idempotent on re-run.

@@ -1,5 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, Matches } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsString, Matches } from 'class-validator';
+import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
+
+export class SetOwnPresenceDto {
+  @ApiProperty({
+    description:
+      "true = appear online; false = appear offline (hands notifications back to the phone — an always-online linked device suppresses the phone's own alerts)",
+    example: false,
+  })
+  @ToStrictBoolean()
+  @IsBoolean()
+  available!: boolean;
+}
 
 export class SubscribePresenceDto {
   @ApiProperty({

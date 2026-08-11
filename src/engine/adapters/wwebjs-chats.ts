@@ -1,5 +1,7 @@
+import { BadRequestException } from '@nestjs/common';
 import { MessageTypes, type Client } from 'whatsapp-web.js';
 import { ChatSummary, ChatState } from '../interfaces/whatsapp-engine.interface';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { chatKind, isChannelJid } from '../identity/wa-id';
 import { WwebjsMessaging } from './wwebjs-messaging';
 import { type WwebjsEngineHost } from './wwebjs-host';
@@ -23,7 +25,18 @@ export class WwebjsChats {
 
   async getChats(): Promise<ChatSummary[]> {
     this.host.ensureReady();
-    const chats = await this.client().getChats();
+    let chats: Awaited<ReturnType<Client['getChats']>>;
+    try {
+      chats = await this.client().getChats();
+    } catch (error) {
+      // Same split every sibling read makes (see getChatsByLabel): a dead page is a 503 and an
+      // early death signal, not an opaque 500 under a status that still says READY (#1081).
+      if (this.host.isPageTransportError(error)) {
+        this.host.reportIfPageTransportError(error, 'getChats');
+        throw new EngineTransportError('Transport died while listing chats');
+      }
+      throw error;
+    }
     const summaries: ChatSummary[] = [];
     let skipped = 0;
 
@@ -107,6 +120,58 @@ export class WwebjsChats {
     }
   }
 
+  /**
+   * whatsapp-web.js signals a chat it cannot resolve by rejecting deep inside the page — `No LID for
+   * user` from pin's WID lookup, a TypeError from the evaluate inside `Client._muteUnmuteChat` for
+   * mute. Both surfaced as a bare 500, a status neither route declares, while every older member of
+   * this family answers an unknown chat gracefully.
+   *
+   * Resolving the chat first turns that into the 400 the contract already promises. It deliberately
+   * does NOT wrap the pin/mute call itself: a page-side rejection for a chat that DOES exist is the
+   * one signal a renamed page internal produces, and demoting it to "bad input" would hide a total
+   * capability failure — the shape `createGroup` turned out to have. `getChatById` is the same
+   * resolution five neighbours here already trust, and it reports an unknown chat either way it can,
+   * by resolving undefined or by rejecting.
+   */
+  private async requireResolvableChat(chatId: string): Promise<void> {
+    const chat = await this.client()
+      .getChatById(chatId)
+      .catch(() => undefined);
+    if (!chat) throw new BadRequestException(`Chat ${chatId} does not exist on this session`);
+  }
+
+  async muteChat(chatId: string, muteUntil: number | null): Promise<void> {
+    this.host.ensureReady();
+    await this.requireResolvableChat(chatId);
+    if (muteUntil === null) {
+      await this.client().unmuteChat(chatId);
+      return;
+    }
+    // muteUntil is epoch milliseconds, which is what Date wants; Client.muteChat floors it to the
+    // seconds its page-side call expects. The Baileys side takes the same milliseconds unmodified.
+    await this.client().muteChat(chatId, new Date(muteUntil));
+  }
+
+  async pinChat(chatId: string, pin: boolean): Promise<boolean> {
+    this.host.ensureReady();
+    // Not `return false` for an unknown chat: `false` is already taken here, and means the three-pin
+    // cap refused a real chat. Conflating the two would tell a caller with a stale chatId that its
+    // pin quota is full.
+    await this.requireResolvableChat(chatId);
+    if (!pin) {
+      // unpinChat resolves the chat's NEW pin state, which is `false` for every successful unpin —
+      // both on its early-out for an already-unpinned chat and after actually unpinning
+      // (Client.js:2073-2084). Forwarding it would report every success as a refusal, the same trap
+      // archiveChat documents. Discard it: an unpin that did not throw succeeded.
+      await this.client().unpinChat(chatId);
+      return true;
+    }
+    // In this direction the return value IS information. WhatsApp caps pinned chats at three
+    // (MAX_PIN_COUNT, Client.js:2054-2063) and the page returns false without pinning once that is
+    // met, so a false here is a real refusal the caller needs to see.
+    return await this.client().pinChat(chatId);
+  }
+
   async markUnread(chatId: string): Promise<boolean> {
     this.host.ensureReady();
     if (isChannelJid(chatId)) {
@@ -138,6 +203,21 @@ export class WwebjsChats {
     } catch (error) {
       this.host.logger.error(`Error deleting chat ${chatId}`, String(error));
       return false;
+    }
+  }
+
+  /**
+   * Publish the account's own GLOBAL presence. Not best-effort, unlike sendChatState: the caller
+   * asked for a specific visibility, and swallowing a failure would leave the account silently
+   * online after the API reported otherwise (#871 — an always-online bot suppresses the phone's
+   * own notifications).
+   */
+  async setOnlinePresence(available: boolean): Promise<void> {
+    this.host.ensureReady();
+    if (available) {
+      await this.client().sendPresenceAvailable();
+    } else {
+      await this.client().sendPresenceUnavailable();
     }
   }
 

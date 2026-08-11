@@ -31,6 +31,16 @@ describe('SendTextMessageDto mentions', () => {
     expect(errors).toHaveLength(0);
   });
 
+  it.each([['NOT A USER@c.us'], ['abc@c.us'], ['@c.us'], ['abc@lid'], ['0@c.us']])(
+    'rejects %s — a recognised domain is not enough on its own',
+    async mention => {
+      // These satisfied the original domain-only check and still reached the page-side createWid,
+      // which is the throw #1068 was filed for.
+      const errors = await validateDto(SendTextMessageDto, { chatId: 'g@g.us', text: 'hi', mentions: [mention] });
+      expect(errors.length).toBeGreaterThan(0);
+    },
+  );
+
   it('rejects a non-string element in mentions', async () => {
     const errors = await validateDto(SendTextMessageDto, {
       chatId: 'g@g.us',
@@ -44,7 +54,9 @@ describe('SendTextMessageDto mentions', () => {
     const errors = await validateDto(SendTextMessageDto, {
       chatId: 'g@g.us',
       text: 'hi',
-      mentions: Array.from({ length: 1025 }, (_, i) => `${i}@c.us`),
+      // Each entry must be individually VALID, or the array-size rule is not what fails and the
+      // test passes for the wrong reason: `0@c.us` is rejected on shape.
+      mentions: Array.from({ length: 1025 }, (_, i) => `${628000000000 + i}@c.us`),
     });
     expect(errors.length).toBeGreaterThan(0);
   });

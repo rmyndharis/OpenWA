@@ -124,9 +124,15 @@ export class SessionProxyInterceptor implements NestInterceptor {
 
     const sessionId = this.sessionIdOf(context, request);
     if (!sessionId) return next.handle();
-    // A malformed id cannot name a routed session, and on Postgres a raw findOne against the uuid
-    // column throws (a 500) before the route's ParseUUIDPipe could answer 400 — skip routing and
-    // let the pipe reject it.
+    // A malformed id cannot name a routed session, so there is nothing to route and the lookup below
+    // would be a wasted query — skip it and let the request take its normal 404.
+    //
+    // NOT because the query would throw: `sessions.id` is `varchar` on BOTH dialects (see the
+    // PostgreSQL branch of 1770108659848-AddMessageStatus, and the `gen_random_uuid()::varchar`
+    // default a uuid column could not take), so a non-UUID id simply matches nothing. An earlier
+    // version of this comment claimed Postgres would raise a 500 here; it would not, and reasoning
+    // from that claim leads to conclusions about the 105 unvalidated `@Param('sessionId')` routes
+    // that do not hold.
     if (!isUUID(sessionId)) return next.handle();
 
     const owner = await this.sessions.findOne({

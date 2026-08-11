@@ -22,7 +22,7 @@
     "i18next-browser-languagedetector": "^8.2.1",
     "linkify-react": "^4.3.3",
     "linkifyjs": "^4.3.3",
-    "lucide-react": "^1.28.0",
+    "lucide-react": "^1.29.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-i18next": "^17.0.11",
@@ -43,12 +43,12 @@
     "eslint": "^10.8.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
-    "globals": "^17.8.0",
+    "globals": "^17.9.0",
     "jsdom": "^30.0.1",
     "prettier": "^3.9.6",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.65.0",
-    "vite": "^8.2.0"
+    "typescript-eslint": "^8.66.0",
+    "vite": "^8.2.1"
   },
   "overrides": {
     "brace-expansion": "^5.0.8"

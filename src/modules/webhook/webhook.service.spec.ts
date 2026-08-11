@@ -1119,6 +1119,44 @@ describe('WebhookService', () => {
       return mockFetch.mock.calls.length;
     }
 
+    // A condition names a field the event's payload does not carry — `sender` resolves from
+    // author/from, and message.ack dispatches { id, messageId, status, ack }. The condition cannot
+    // match, so the delivery is dropped. That is the filter working as specified; what was missing
+    // was any way to find out it had happened.
+    it('logs when a filter suppresses a subscribed webhook', async () => {
+      const logger = (service as unknown as { logger: { debug: jest.Mock } }).logger;
+      const spy = jest.spyOn(logger, 'debug');
+
+      expect(
+        await deliveries(conds({ field: 'sender', operator: 'is', value: ['111@c.us'] }), 'message.ack', {
+          messageId: 'm1',
+          status: 'read',
+        }),
+      ).toBe(0);
+
+      const suppressed = spy.mock.calls.filter(c => String(c[0]).includes('suppressed a delivery'));
+      expect(suppressed).toHaveLength(1);
+      expect(suppressed[0][1]).toMatchObject({ event: 'message.ack', subscribed: 1, suppressed: 1 });
+      // The payload's own fields are recorded, because the usual cause is a condition on a field
+      // this event does not have — that list is the answer to "why did nothing fire?".
+      expect((suppressed[0][1] as { payloadFields: string }).payloadFields).toBe('messageId,status');
+      spy.mockRestore();
+    });
+
+    it('stays quiet when nothing is suppressed', async () => {
+      const logger = (service as unknown as { logger: { debug: jest.Mock } }).logger;
+      const spy = jest.spyOn(logger, 'debug');
+
+      expect(
+        await deliveries(conds({ field: 'sender', operator: 'is', value: ['111@c.us'] }), 'message.received', {
+          from: '111@c.us',
+        }),
+      ).toBe(1);
+
+      expect(spy.mock.calls.filter(c => String(c[0]).includes('suppressed a delivery'))).toHaveLength(0);
+      spy.mockRestore();
+    });
+
     it('fires with no filters (additive: zero-config behaviour is unchanged)', async () => {
       expect(await deliveries(null, 'message.received', { from: '111@c.us' })).toBe(1);
       expect(await deliveries(conds(), 'message.received', { from: '111@c.us' })).toBe(1);

@@ -47,7 +47,7 @@ export function Infrastructure() {
   const { data: currentEngineData } = useCurrentEngineQuery();
   const currentEngine = currentEngineData?.engineType ?? '';
 
-  const configForm = useInfraConfigForm(infraStatus, savedConfig, currentEngine);
+  const configForm = useInfraConfigForm(infraStatus, savedConfig);
   const restartFlow = useRestartFlow();
   const dataBackup = useDataBackup();
 
@@ -138,9 +138,11 @@ export function Infrastructure() {
         </p>
       );
     }
-    // savePending suppresses the note only while the request is in flight; afterwards the saved value
-    // genuinely differs from the running one until a restart, and saying so is the whole point.
-    const pendingRestart = !configSave.savePending && !!infraStatus && !!savedConfig && running !== saved;
+    // Suppressed only while the request is actually in flight. `saving` is that flag; `savePending` is
+    // a latch set once a save SUCCEEDS and cleared only by a restart's page reload, so gating on it
+    // hid this note for the whole life of the page from the first successful save — which is exactly
+    // the state it exists to report, and exactly what the operator who chose "Restart Later" is in.
+    const pendingRestart = !configSave.saving && !!infraStatus && !!savedConfig && running !== saved;
     return pendingRestart ? (
       <p className="env-pin-note">
         <AlertTriangle size={14} /> {t('infrastructure.pendingRestartNote')}
