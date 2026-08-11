@@ -1,0 +1,957 @@
+{
+  "toast": {
+    "connectionLost": {
+      "title": "Sunucu Bağlantısı Kesildi",
+      "message": "Arka uç sunucusuna ulaşılamıyor. Lütfen sunucunun çalışıp çalışmadığını kontrol edin."
+    }
+  },
+  "common": {
+    "appName": "OpenWA",
+    "loading": "Yükleniyor...",
+    "cancel": "İptal",
+    "delete": "Sil",
+    "create": "Oluştur",
+    "close": "Kapat",
+    "showApiKey": "API anahtarını göster",
+    "hideApiKey": "API anahtarını gizle",
+    "search": "Ara",
+    "status": "Durum",
+    "name": "Ad",
+    "role": "Rol",
+    "url": "URL",
+    "port": "Port",
+    "host": "Sunucu (Host)",
+    "username": "Kullanıcı Adı",
+    "password": "Şifre",
+    "active": "Aktif",
+    "inactive": "Devre Dışı",
+    "connected": "Bağlandı",
+    "disconnected": "Bağlantı Kesildi",
+    "never": "Hiçbir zaman",
+    "justNow": "Az önce",
+    "minAgo": "{{count}} dk önce",
+    "hoursAgo": "{{count}} saat önce",
+    "optional": "isteğe bağlı",
+    "language": "Dil",
+    "back": "Geri",
+    "next": "İleri",
+    "previous": "Önceki",
+    "expand": "Genişlet",
+    "collapse": "Daralt",
+    "logout": "Çıkış Yap",
+    "refresh": "Yenile",
+    "errorGeneric": "Bir hata oluştu",
+    "unknownError": "Bilinmeyen hata",
+    "retry": "Yeniden Dene"
+  },
+  "theme": {
+    "light": "Açık",
+    "dark": "Koyu",
+    "system": "Sistem",
+    "label": "Tema: {{value}}",
+    "appearance": "Görünüm",
+    "mode": "Mod",
+    "toggleTo": "{{value}} moduna geç"
+  },
+  "nav": {
+    "dashboard": "Kontrol Paneli",
+    "sessions": "Oturumlar",
+    "chats": "Sohbetler",
+    "webhooks": "Webhook'lar",
+    "templates": "Şablonlar",
+    "apiKeys": "API Anahtarları",
+    "messageTester": "Mesaj Test Aracı",
+    "infrastructure": "Altyapı",
+    "plugins": "Eklentiler",
+    "logs": "Kayıtlar (Logs)"
+  },
+  "chats": {
+    "media": {
+      "location": "Konum",
+      "call": "Arama",
+      "callMissed": "Cevapsız arama",
+      "callVideo": "Görüntülü arama",
+      "callVideoMissed": "Cevapsız görüntülü arama",
+      "omitted": "Medya",
+      "image": "Görsel"
+    },
+    "subtitle": "WhatsApp mesajlarını gerçek zamanlı gönderin ve yanıtlayın",
+    "noSessionsTitle": "Bağlı oturum yok",
+    "noSessionsDesc": "Sohbet özelliğini kullanmak için lütfen önce <1>Oturumlar</1> menüsünden bir WhatsApp oturumu bağlayın.",
+    "sessionLabel": "WhatsApp oturumu",
+    "noPhone": "Telefon yok",
+    "searchPlaceholder": "Sohbetlerde ara...",
+    "loadingChats": "Sohbetler yükleniyor...",
+    "empty": "Sohbet yok",
+    "noMessageYet": "Henüz mesaj yok",
+    "unreadBadge": "{{count}} okunmamış mesaj",
+    "unreadBadge_other": "{{count}} okunmamış mesaj",
+    "loadingMessages": "Mesajlar yükleniyor...",
+    "noMessagesInChat": "Henüz mesaj yok. Başlamak için ilk mesajı gönderin!",
+    "downloadDocument": "Belgeyi indir",
+    "actions": {
+      "reply": "Yanıtla",
+      "react": "Tepki Ver",
+      "delete": "Mesajı sil"
+    },
+    "replyingTo": "{{name}} kişisine yanıt veriliyor",
+    "you": "Siz",
+    "youPrefix": "Siz: ",
+    "yesterday": "Dün",
+    "attachTitle": "Dosya / görsel gönder",
+    "emojiTitle": "Emoji seç",
+    "captionPlaceholder": "Bir açıklama ekleyin...",
+    "messagePlaceholder": "Bir mesaj yazın...",
+    "noPermission": "Mesaj gönderme izniniz yok",
+    "send": "Gönder",
+    "placeholderTitle": "Mesajlaşmaya başlayın",
+    "placeholderDesc": "Okumak ve yanıtlamak için bir sohbet seçin.",
+    "scrollToBottom": "En alta kaydır",
+    "groupSubtitle": "Grup",
+    "privateContactSubtitle": "Özel kişi",
+    "deleteConfirm": "Bu mesaj herkesten silinsin mi?",
+    "messageDeleted": "🚫 Bu mesaj silindi",
+    "messageMasked": "🔒 Bağlı cihazlar için WhatsApp tarafından gizlendi — ana telefonunuzu kontrol edin",
+    "kind": {
+      "group": "Grup",
+      "channel": "Kanal",
+      "status": "Durum",
+      "broadcast": "Toplu Mesaj Listesi"
+    },
+    "tab": {
+      "chats": "Sohbetler",
+      "channels": "Kanallar",
+      "status": "Durum"
+    },
+    "status": {
+      "itemCount": "{{count}} güncelleme",
+      "itemCount_other": "{{count}} güncelleme",
+      "empty": "Hiçbir kişinin aktif bir durumu yok.",
+      "loadError": "Durumlar yüklenemedi.",
+      "mediaUnavailable": "Medya kullanılamıyor",
+      "compose": "Durum paylaş",
+      "composeText": "Metin",
+      "composeImage": "Görsel",
+      "recipients": "Bunu kimler görebilir",
+      "recipientsHint": "Baileys bir alıcı listesi gerektirir; whatsapp-web.js durum gizliliği hedef kitlenizi kullanır.",
+      "noContacts": "Kişi bulunamadı",
+      "caption": "Açıklama",
+      "backgroundColor": "Arka plan rengi",
+      "font": "Yazı Tipi",
+      "fontDefault": "Varsayılan",
+      "orLabel": "veya",
+      "post": "Paylaş",
+      "posted": "Durum paylaşıldı",
+      "postFailed": "Durum paylaşılamadı"
+    },
+    "channels": {
+      "notSupported": "Kanallar Baileys motorunda desteklenmemektedir.",
+      "empty": "Henüz hiçbir kanala abone değilsiniz.",
+      "notReady": "Oturum henüz hazır değil.",
+      "subscribers": "{{count}} abone",
+      "subscribers_other": "{{count}} abone"
+    },
+    "errors": {
+      "loadSessions": "Oturumlar yüklenemedi",
+      "loadChats": "Sohbetler yüklenemedi",
+      "markRead": "Sohbet okundu olarak işaretlenemedi",
+      "send": "Mesaj gönderilemedi",
+      "react": "Mesaja tepki verilemedi",
+      "delete": "Mesaj silinemedi"
+    },
+    "loadMessagesError": "Mesajlar yüklenemedi. Sunucu kayıtlarını kontrol edin."
+  },
+  "errorBoundary": {
+    "title": "Bir şeyler ters gitti",
+    "description": "Kontrol paneli beklenmeyen bir hatayla karşılaştı.",
+    "reload": "Kontrol Panelini Yeniden Yükle"
+  },
+  "login": {
+    "apiKey": "API Anahtarı",
+    "apiKeyPlaceholder": "API anahtarınızı girin",
+    "apiKeyRequired": "API anahtarı zorunludur",
+    "connect": "Bağlan",
+    "connecting": "Bağlanıyor...",
+    "invalidKey": "Geçersiz API anahtarı",
+    "connectionError": "Sunucuya bağlanılamadı. Lütfen tekrar deneyin.",
+    "help": "Yardıma mı ihtiyacınız var?",
+    "viewDocs": "Dokümantasyonu Görüntüle",
+    "footer": "Yudhi Armyndharis ve OpenWA Topluluğu tarafından ❤️ ile yapılmıştır",
+    "version": "v{{version}} · {{date}}"
+  },
+  "dashboard": {
+    "title": "Kontrol Paneli",
+    "subtitle": "WhatsApp oturumlarınızın ve aktivitelerinizin genel görünümü",
+    "stats": {
+      "activeSessions": "Bağlı Oturumlar",
+      "sessionsDetail": "{{running}} çalışıyor · {{total}} toplam",
+      "messagesToday": "Bugünkü Mesajlar",
+      "webhooksConfigured": "Yapılandırılmış Webhook'lar",
+      "totalMessages": "Toplam Mesaj"
+    },
+    "sessionsOverview": "Oturumlara Genel Bakış",
+    "showingSessions": "{{total}} oturumdan {{shown}} tanesi gösteriliyor",
+    "columns": {
+      "sessionId": "Oturum Kimliği (ID)",
+      "phone": "Telefon Numarası",
+      "status": "Durum",
+      "lastActive": "Son Görülme",
+      "actions": "İşlemler"
+    },
+    "noSessions": "Oturum bulunamadı. Başlamak için bir tane oluşturun.",
+    "view": "Görüntüle",
+    "disconnect": "Bağlantıyı Kes",
+    "errorPrefix": "Hata: {{message}}",
+    "loadError": "Veriler yüklenemedi",
+    "charts": {
+      "title": "Mesaj Analitiği",
+      "period": {
+        "24h": "24s",
+        "7d": "7g",
+        "30d": "30g"
+      },
+      "overTime": "Zamana göre mesajlar",
+      "byType": "Türe göre mesajlar",
+      "topChats": "En popüler sohbetler",
+      "sent": "Gönderilen",
+      "received": "Alınan",
+      "messages": "Mesajlar",
+      "empty": "Bu dönemde mesaj aktivitesi bulunamadı.",
+      "error": "Mesaj analitiği yüklenemedi. Sunucu kayıtlarını kontrol edin."
+    }
+  },
+  "sessionStatus": {
+    "created": "Yeni",
+    "idle": "Boşta",
+    "initializing": "Başlatılıyor...",
+    "connecting": "Bağlanıyor...",
+    "qr_ready": "QR Tara",
+    "ready": "Bağlandı",
+    "disconnected": "Bağlantı Kesildi",
+    "action_required": "İşlem gerekiyor",
+    "failed": "Başarısız",
+    "authenticating": "Kimlik doğrulanıyor..."
+  },
+  "sessions": {
+    "title": "Oturumlar",
+    "subtitle": "WhatsApp oturumlarınızı ve QR kodu bağlantılarınızı yönetin",
+    "newSession": "Yeni Oturum",
+    "searchPlaceholder": "Oturumlarda ara...",
+    "filter": {
+      "all": "Tüm Durumlar",
+      "active": "Aktif (Bağlı)",
+      "inactive": "Devre Dışı",
+      "connecting": "Bağlanıyor"
+    },
+    "empty": {
+      "title": "Oturum bulunamadı",
+      "description": "Başlamak için yeni bir oturum oluşturun"
+    },
+    "create": {
+      "title": "Yeni Oturum Oluştur",
+      "label": "Oturum Adı",
+      "placeholder": "ör. pazarlama-botu",
+      "hint": "Yalnızca küçük harfler, sayılar ve tire kullanın. Örnek: <code>musteri-hizmetleri</code>, <code>bot-1</code>",
+      "invalidChars": "Geçersiz karakterler. Yalnızca küçük harfler, sayılar ve tire işaretine izin verilir.",
+      "tooLong": "Ad 50 karakter veya daha kısa olmalıdır ({{length}}/50).",
+      "duplicate": "Bu ada sahip bir oturum zaten var.",
+      "successTitle": "Oturum Oluşturuldu",
+      "successDesc": "\"{{name}}\" oturumu başarıyla oluşturuldu",
+      "errorTitle": "Oluşturma Başarısız",
+      "errorDefault": "Oturum oluşturulamadı"
+    },
+    "delete": {
+      "title": "Silmeyi Onayla",
+      "message": "<strong>\"{{name}}\"</strong> oturumunu silmek istediğinizden emin misiniz?",
+      "warning": "Bu işlem geri alınamaz.",
+      "successTitle": "Oturum Silindi",
+      "successDescNamed": "\"{{name}}\" oturumu silindi",
+      "successDescGeneric": "Oturum silindi",
+      "errorTitle": "Silme Başarısız",
+      "errorDefault": "Oturum silinemedi"
+    },
+    "start": {
+      "teardownPendingTitle": "Oturum Başlatılıyor",
+      "teardownPending": "Bu oturum için bir kimlik bilgisi sıfırlama işlemi devam ediyor. Lütfen biraz bekleyip tekrar deneyin."
+    },
+    "qr": {
+      "title": "QR Kodunu Tara",
+      "step1": "<strong>1.</strong> Telefonunuzda WhatsApp'ı açın",
+      "step2": "<strong>2.</strong> <strong>Menü</strong> → <strong>Bağlı Cihazlar</strong> seçeneğine dokunun",
+      "step3": "<strong>3.</strong> <strong>Cihaz Bağla</strong> seçeneğine dokunun ve bu QR kodunu tarayın",
+      "autoRefresh": "QR kodu her 5 saniyede bir otomatik olarak yenilenir",
+      "generating": "QR kodu oluşturuluyor...",
+      "preparing": "QR kodu hazırlanıyor...",
+      "showQr": "QR Göster",
+      "loading": "Yükleniyor...",
+      "scanToConnect": "Bağlanmak için QR kodunu tarayın"
+    },
+    "details": {
+      "title": "Oturum Detayları",
+      "name": "Ad",
+      "status": "Durum",
+      "sessionId": "Oturum Kimliği (ID)",
+      "phone": "Telefon Numarası",
+      "phoneNone": "Bağlı değil",
+      "created": "Oluşturuldu",
+      "lastActive": "Son Görülme",
+      "autoRejectCalls": "Aramaları otomatik reddet",
+      "autoRejectCallsHint": "Gelen aramalar çaldığı anda reddedilir. call.received webhook'u yine de ilk olarak tetiklenir. Bir sonraki arama için geçerlidir — yeniden başlatma gerekmez."
+    },
+    "actions": {
+      "view": "Görüntüle",
+      "start": "Başlat",
+      "stop": "Durdur",
+      "reconnect": "Yeniden Bağlan",
+      "unlink": "Bağlantıyı Kaldır",
+      "delete": "Sil",
+      "killStuck": "Takılanı Sonlandır"
+    },
+    "toasts": {
+      "readyTitle": "Oturum Hazır",
+      "readyDesc": "WhatsApp oturumu şimdi bağlandı",
+      "disconnectedTitle": "Oturum Bağlantısı Kesildi",
+      "disconnectedDesc": "WhatsApp oturumunun bağlantısı kesildi",
+      "actionRequiredTitle": "İşlem gerekiyor",
+      "actionRequiredDesc": "Bu oturumun ilgilenilmesi gerekiyor. Ne yapılması gerektiğini görmek için oturumu açın.",
+      "failedTitle": "Oturum Başarısız",
+      "failedDesc": "WhatsApp oturumu başlatılamadı. Nedenini görmek için oturumu açın."
+    },
+    "card": {
+      "phone": "Telefon",
+      "sessionId": "Oturum Kimliği (ID)",
+      "lastActive": "Son Görülme",
+      "error": "Hata",
+      "restriction": "Kısıtlama"
+    },
+    "forceKill": {
+      "title": "Takılan Oturumu Sonlandır",
+      "message": "\"{{name}}\" oturumunu zorla sonlandırmak istediğinizden emin misiniz?",
+      "warning": "Bu işlem WhatsApp tarayıcı sürecini zorla kapatacaktır. Yeniden başlatıldığında oturumun tekrar taranması gerekebilir.",
+      "confirm": "Oturumu Sonlandır",
+      "successTitle": "Oturum Sonlandırıldı",
+      "success": "Oturum zorla sonlandırıldı. Şimdi yeniden başlatabilirsiniz.",
+      "failedTitle": "Zorla Sonlandırma Başarısız",
+      "failed": "Oturum zorla sonlandırılamadı."
+    },
+    "unlink": {
+      "title": "Cihaz Bağlantısını Kaldır",
+      "message": "<strong>\"{{name}}\"</strong> oturumunun WhatsApp hesabıyla bağlantısı kaldırılsın mı?",
+      "warning": "WhatsApp bu cihazı hesabın Bağlı Cihazlar listesinden kaldırır ve oturum durur. Yeniden bağlanmak için yeni bir QR taraması veya eşleme kodu gerekir. Tüm yerel verileri de silmek için sonrasında oturumu silin.",
+      "confirm": "Bağlantıyı Kaldır",
+      "successTitle": "Cihaz Bağlantısı Kaldırıldı",
+      "success": "Bağlantı kaldırma tamamlandı: cihazın oturumu kapatıldı ve yerel oturum kimlik bilgileri temizlendi. Yeniden bağlanmak için yeni bir QR taraması veya eşleme kodu gerekir.",
+      "incompleteTitle": "Bağlantı Kaldırma Tamamlanmadı",
+      "incomplete": "Oturum yerel olarak durduruldu, ancak oturum kapatma işlemi tamamlanamadı — cihaz hala bağlı olabilir. Oturumu başlatın ve çıkış yapmayı tekrar deneyin.",
+      "failedTitle": "Bağlantı Kaldırma Başarısız",
+      "failed": "Oturumun bağlantısı kaldırılamadı."
+    },
+    "pairing": {
+      "tabQr": "QR Kodu",
+      "tabPhone": "Telefon Numarası ile Bağla",
+      "phoneLabel": "Telefon Numarası",
+      "phonePlaceholder": "ör. 905XXXXXXXXX",
+      "phoneHint": "Uluslararası formatta (+, boşluk veya tire olmadan) yalnızca rakamlar (ülke kodu + numara).",
+      "invalidPhone": "Geçerli bir telefon numarası girin: 6–15 basamak, başta ülke kodu, sembolsüz.",
+      "generateButton": "Eşleme Kodu Oluştur",
+      "generating": "Eşleme kodu oluşturuluyor...",
+      "codeLabel": "Eşleme Kodunuz",
+      "changeNumber": "Numarayı Değiştir / Yeni Kod İste",
+      "instructions": "Eşleme Talimatları",
+      "step1": "<strong>1.</strong> Telefonunuzda WhatsApp'ı açın",
+      "step2": "<strong>2.</strong> <strong>Menü</strong> veya <strong>Ayarlar</strong>'a dokunup <strong>Bağlı Cihazlar</strong>'ı seçin",
+      "step3": "<strong>3.</strong> <strong>Cihaz Bağla</strong>'ya dokunun, ardından <strong>Bunun yerine telefon numarasıyla bağla</strong>'yı seçin",
+      "step4": "<strong>4.</strong> Yukarıda gösterilen 8 haneli kodu telefonunuza girin",
+      "waitingConnection": "Telefonunuzun bağlanması bekleniyor…"
+    },
+    "restriction": {
+      "reachout_timelock": "Yeni sohbetler engellendi",
+      "tos_block": "WhatsApp tarafından engellendi",
+      "proxy_block": "Bağlantı engellendi",
+      "until": "{{date}} tarihine kadar"
+    }
+  },
+  "webhooks": {
+    "title": "Webhook'lar",
+    "subtitle": "Gerçek zamanlı olay bildirimleri için HTTP geri çağrılarını (callbacks) yapılandırın",
+    "addWebhook": "Webhook Ekle",
+    "createTitle": "Webhook Oluştur",
+    "editTitle": "Webhook Düzenle",
+    "deleteTitle": "Webhook Sil",
+    "deleteConfirm": "Bu webhook'u silmek istediğinizden emin misiniz?",
+    "selectSession": "Oturum seçin...",
+    "session": "Oturum",
+    "events": "Olaylar",
+    "available": "Kullanılabilir Olaylar",
+    "saveChanges": "Değişiklikleri Kaydet",
+    "filters": {
+      "title": "Filtreler (isteğe bağlı)",
+      "hint": "Yalnızca tüm koşullar eşleştiğinde tetiklenir. Mesaj olayları için geçerlidir.",
+      "badge": "{{count}} filtre",
+      "badge_other": "{{count}} filtre",
+      "addCondition": "Koşul ekle",
+      "removeCondition": "Koşulu kaldır",
+      "caseSensitive": "Büyük/küçük harfe duyarlı",
+      "contactPlaceholder": "Numara veya WhatsApp ID...",
+      "textPlaceholder": "Eşleşecek metin...",
+      "addValue": "\"{{value}}\" ekle",
+      "yes": "Evet",
+      "no": "Hayır",
+      "fields": {
+        "sender": "Gönderen",
+        "recipient": "Alıcı",
+        "body": "Mesaj içeriği",
+        "type": "Mesaj türü",
+        "isGroup": "Grup sohbeti mi",
+        "fromMe": "Benim tarafımdan gönderildi",
+        "hasMedia": "Medya içeriyor",
+        "mentions": "Bahsetmeler"
+      },
+      "operators": {
+        "is": "eşittir",
+        "isNot": "eşit değildir",
+        "contains": "içerir",
+        "equals": "tam eşleşir"
+      }
+    },
+    "columns": {
+      "url": "URL",
+      "events": "Olaylar",
+      "session": "Oturum",
+      "status": "Durum",
+      "actions": "İşlemler"
+    },
+    "empty": {
+      "title": "Yapılandırılmış webhook yok",
+      "description": "Gerçek zamanlı olay bildirimleri almak için bir webhook ekleyin"
+    },
+    "toasts": {
+      "created": "Webhook başarıyla oluşturuldu",
+      "createFailed": "Webhook oluşturulamadı: {{message}}",
+      "deleted": "Webhook başarıyla silindi",
+      "deleteFailed": "Webhook silinemedi: {{message}}",
+      "updated": "Webhook başarıyla güncellendi",
+      "updateFailed": "Webhook güncellenemedi: {{message}}",
+      "testOk": "Webhook testi başarılı! Durum: {{status}}",
+      "testFailed": "Webhook testi başarısız: {{message}}",
+      "testError": "Webhook test edilemedi: {{message}}"
+    },
+    "actions": {
+      "test": "Test Et",
+      "edit": "Düzenle",
+      "delete": "Sil"
+    },
+    "eventDescriptions": {
+      "message.received": "Bir mesaj alındığında",
+      "message.sent": "Bir mesaj gönderildiğinde",
+      "session.connected": "Bir oturum bağlandığında",
+      "session.disconnected": "Bir oturumun bağlantısı kesildiğinde",
+      "session.qr": "QR kodu oluşturulduğunda",
+      "all": "Tüm olaylar"
+    }
+  },
+  "templates": {
+    "title": "Şablonlar",
+    "subtitle": "Her WhatsApp oturumu için yeniden kullanılabilir mesaj şablonları oluşturun",
+    "createTitle": "Şablon Oluştur",
+    "editTitle": "Şablon Düzenle",
+    "newTemplate": "Yeni Şablon",
+    "createTemplate": "Şablon Oluştur",
+    "saveChanges": "Değişiklikleri Kaydet",
+    "viewOnly": "Yalnızca Görüntüle",
+    "noSessions": "Oturum yok",
+    "sessionHint": "{{name}} altına kaydedildi",
+    "namePlaceholder": "ör. siparis-onayi",
+    "header": "Başlık (Header)",
+    "headerPlaceholder": "İsteğe bağlı giriş satırı",
+    "body": "Gövde",
+    "bodyPlaceholder": "Merhaba {{customer}}, {{orderId}} numaralı siparişiniz hazır.",
+    "footer": "Alt Bilgi (Footer)",
+    "footerPlaceholder": "İsteğe bağlı kapanış satırı",
+    "previewTitle": "Önizleme",
+    "previewValuePlaceholder": "Örnek değer",
+    "previewEmpty": "Burada önizlemek için bir şablon yazmaya başlayın.",
+    "noPlaceholders": "Değişkenleri test etmek için {{name}} yer tutucularını kullanın.",
+    "savedTitle": "Kayıtlı Şablonlar",
+    "count": "Toplam {{count}}",
+    "deleteTitle": "Şablonu Sil",
+    "deleteConfirm": "\"{{name}}\" şablonu silinsin mi? Bu işlem geri alınamaz.",
+    "actions": {
+      "copyName": "Şablon adını kopyala"
+    },
+    "empty": {
+      "title": "Kayıtlı şablon yok",
+      "description": "Sık kullanılan yanıtları ve bildirimleri hızlandırmak için yeniden kullanılabilir bir şablon oluşturun.",
+      "noSessionsTitle": "Kullanılabilir oturum yok",
+      "noSessionsDesc": "Şablon eklemeden önce bir WhatsApp oturumu oluşturun."
+    },
+    "toasts": {
+      "created": "Şablon başarıyla oluşturuldu",
+      "createFailed": "Şablon oluşturulamadı: {{message}}",
+      "updated": "Şablon başarıyla güncellendi",
+      "updateFailed": "Şablon güncellenemedi: {{message}}",
+      "deleted": "Şablon başarıyla silindi",
+      "deleteFailed": "Şablon silinemedi: {{message}}",
+      "copied": "Şablon adı kopyalandı"
+    }
+  },
+  "apiKeys": {
+    "title": "API Anahtarları",
+    "subtitle": "Kimlik doğrulama ve erişim denetimi için API anahtarlarını yönetin",
+    "createBtn": "API Anahtarı Oluştur",
+    "modalTitle": "API Anahtarı Oluştur",
+    "createdTitle": "API Anahtarı Oluşturuldu",
+    "createdHint": "Bu anahtarı şimdi kopyalayın. Bir daha göremeyeceksiniz.",
+    "namePlaceholder": "ör. Prodüksiyon Anahtarı",
+    "rolesTitle": "Roller Referansı",
+    "roles": {
+      "admin": "Yönetici (Admin)",
+      "operator": "Operatör",
+      "viewer": "İzleyici"
+    },
+    "roleDescriptions": {
+      "admin": "Tüm kaynaklara tam erişim",
+      "operator": "Oturum ve mesaj yönetimi",
+      "viewer": "Salt okunur erişim"
+    },
+    "columns": {
+      "name": "Ad",
+      "key": "Anahtar",
+      "role": "Rol",
+      "status": "Durum",
+      "lastUsed": "Son Kullanım",
+      "actions": "İşlemler"
+    },
+    "statuses": {
+      "active": "Aktif",
+      "revoked": "İptal Edildi"
+    },
+    "empty": {
+      "title": "Oluşturulmuş API anahtarı yok",
+      "description": "İsteklerinizin kimliğini doğrulamak için bir API anahtarı oluşturun"
+    },
+    "confirm": {
+      "deleteTitle": "API Anahtarını Sil",
+      "revokeTitle": "API Anahtarını İptal Et",
+      "deleteMessage": "<strong>{{name}}</strong> anahtarını kalıcı olarak silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.",
+      "revokeMessage": "<strong>{{name}}</strong> anahtarını iptal etmek istediğinizden emin misiniz? Artık çalışmayacaktır.",
+      "delete": "Sil",
+      "revoke": "İptal Et"
+    },
+    "actions": {
+      "copy": "Kopyala",
+      "revoke": "İptal Et",
+      "delete": "Sil"
+    }
+  },
+  "logs": {
+    "title": "Denetim Kayıtları (Audit Logs)",
+    "subtitle": "Tüm API işlemlerini ve sistem olaylarını takip edip inceleyin",
+    "exportCsv": "CSV Olarak Dışa Aktar",
+    "searchPlaceholder": "Kayıtlarda ara...",
+    "severity": {
+      "all": "Tüm Önem Düzeyleri",
+      "info": "Bilgi (Info)",
+      "warn": "Uyarı (Warning)",
+      "error": "Hata (Error)"
+    },
+    "columns": {
+      "timestamp": "Zaman Damgası",
+      "action": "İşlem",
+      "session": "Oturum",
+      "apiKey": "API Anahtarı",
+      "ip": "IP Adresi",
+      "severity": "Önem Düzeyi"
+    },
+    "empty": {
+      "title": "Kayıt bulunamadı",
+      "description": "İşlemler gerçekleştirildikçe denetim kayıtları burada görünecektir"
+    }
+  },
+  "messageTester": {
+    "title": "Mesaj Test Aracı",
+    "subtitle": "API üzerinden test mesajları gönderin",
+    "compose": "Test Mesajı Gönder",
+    "responseTitle": "API Yanıtı",
+    "session": "Oturum",
+    "noReadySessions": "Hazır oturum yok",
+    "sessionOptionPhoneNone": "Telefon yok",
+    "recipientType": "Alıcı Türü",
+    "personal": "Kişisel",
+    "group": "Grup",
+    "selectGroup": "Grup Seçin",
+    "recipientPhone": "Alıcı Telefon Numarası",
+    "loadingGroups": "Gruplar yükleniyor...",
+    "noGroupsFound": "Grup bulunamadı",
+    "selectGroupHint": "WhatsApp'ınızdan bir grup seçin",
+    "phoneHint": "Boşluk bırakmadan uluslararası formatı kullanın",
+    "messageType": "Mesaj Türü",
+    "types": {
+      "text": "Metin",
+      "image": "Görsel",
+      "video": "Video",
+      "audio": "Ses",
+      "document": "Belge",
+      "location": "Konum",
+      "contact": "Kişi",
+      "sticker": "Çıkartma",
+      "poll": "Anket",
+      "forward": "İlet",
+      "bulk": "Toplu"
+    },
+    "messageContent": "Mesaj İçeriği",
+    "messagePlaceholder": "Mesajınızı buraya girin...",
+    "mediaUrl": "Medya URL'si",
+    "uploadFile": "Dosya yükle",
+    "browse": "Gözat",
+    "removeFile": "Dosyayı kaldır",
+    "fileReadError": "Dosya okunamadı",
+    "fileTooLarge": "Dosya çok büyük (maks 18 MB)",
+    "caption": "Açıklama",
+    "filename": "Dosya Adı",
+    "captionPlaceholder": "Açıklama girin...",
+    "filenamePlaceholder": "belge.pdf",
+    "locationLatitude": "Enlem (Latitude)",
+    "locationLongitude": "Boylam (Longitude)",
+    "locationDescription": "Açıklama",
+    "locationAddress": "Adres",
+    "contactName": "Kişi Adı",
+    "contactNamePlaceholder": "Ahmet Yılmaz",
+    "contactNumber": "Kişi Numarası",
+    "pollQuestion": "Anket Sorusu",
+    "pollQuestionPlaceholder": "Nerede buluşalım?",
+    "pollOptions": "Anket Seçenekleri",
+    "pollOptionPlaceholder": "Seçenek {{index}}",
+    "pollOptionsHint": "2 ile 12 seçenek arasında",
+    "addOption": "Seçenek Ekle",
+    "removeOption": "Seçeneği kaldır",
+    "allowMultipleAnswers": "Birden fazla yanıta izin ver",
+    "forwardFromChatId": "Kaynak Sohbet ID'si",
+    "forwardFromPlaceholder": "905XXXXXXXXX@c.us",
+    "forwardFromHint": "Mevcut alıcıdan iletmek için boş bırakın",
+    "forwardToChatId": "Hedef Sohbet ID'si",
+    "forwardToPlaceholder": "Telefon numarası veya sohbet ID'si",
+    "forwardMessageId": "Mesaj ID'si",
+    "forwardMessageIdHint": "İletilecek mesajın ID'si",
+    "bulkRecipients": "Alıcılar",
+    "bulkRecipientsPlaceholder": "+905XXXXXXXXX",
+    "bulkRecipientsHint": "Her satıra bir telefon numarası veya sohbet ID'si (maks 100)",
+    "bulkRecipientsCount": "Alıcılar: {{count}}",
+    "bulkDelay": "Mesajlar Arası Gecikme (ms)",
+    "bulkDelayHint": "1000–60000 ms (varsayılan 3000)",
+    "send": "Mesajı Gönder",
+    "sending": "Gönderiliyor...",
+    "viewOnly": "Yalnızca Görüntüle",
+    "responseEmpty": "API yanıtını görmek için bir mesaj gönderin",
+    "successLabel": "Başarılı",
+    "failedLabel": "Başarısız",
+    "response": {
+      "timestamp": "Zaman Damgası",
+      "messageId": "Mesaj ID'si",
+      "batchId": "Toplu İşlem ID'si (Batch ID)",
+      "error": "Hata"
+    },
+    "sendFailed": "Mesaj gönderilemedi",
+    "notOnWhatsApp": "Bu numara WhatsApp'ta kayıtlı değil",
+    "batch": {
+      "status": {
+        "pending": "Beklemede",
+        "processing": "İşleniyor",
+        "completed": "Tamamlandı",
+        "cancelled": "İptal Edildi",
+        "failed": "Başarısız"
+      },
+      "progress": "{{total}} içerisinden {{sent}} gönderildi · {{failed}} başarısız · {{pending}} beklemede",
+      "cancel": "Toplu İşlemi İptal Et",
+      "cancelling": "İptal ediliyor..."
+    }
+  },
+  "infrastructure": {
+    "title": "Altyapı",
+    "subtitle": "Sunucu, veritabanı, önbellek, depolama ve motor ayarlarını yapılandırın",
+    "saveConfig": "Yapılandırmayı Kaydet",
+    "saving": "Kaydediliyor...",
+    "database": {
+      "title": "Veritabanı Yapılandırması",
+      "sqlite": "SQLite",
+      "sqliteDesc": "Yerel dosya tabanlı veritabanı",
+      "postgres": "PostgreSQL",
+      "postgresDesc": "Prodüksiyona hazır veritabanı",
+      "useBuiltIn": "Dahili PostgreSQL Konteynerini Kullan",
+      "builtInDesc": "OpenWA sizin için bir PostgreSQL konteynerini yönetecektir",
+      "dbName": "Veritabanı Adı",
+      "schema": "Şema (Schema)",
+      "schemaDesc": "PostgreSQL şeması (SQLite için yok sayılır). Varsayılan 'public'. Şema zaten mevcut olmalıdır.",
+      "poolSize": "Havuz Boyutu (Pool Size)",
+      "ssl": "SSL Bağlantısı",
+      "sslDesc": "Güvenli veritabanı bağlantıları için TLS/SSL'i etkinleştirin",
+      "sslRejectUnauthorized": "SSL Sertifikasını Doğrula",
+      "sslRejectUnauthorizedDesc": "Kendinden imzalı veya geçersiz sertifikaları reddeder. Kendinden imzalı sertifikalara sahip yönetilen Postgres için kapatın (Supabase, Heroku, Render, Railway).",
+      "migrationsTitle": "Veritabanı Geçişleri (Migrations)",
+      "migrationsStatus": "Şema, TypeORM ile otomatik olarak senkronize edilir",
+      "migrationsHint": "Geçişler otomatik olarak yönetilir. Manuel geçişler için CLI kullanın."
+    },
+    "engine": {
+      "title": "WhatsApp Motoru",
+      "builtIn": "Dahili",
+      "headless": "Arayüzsüz Mod (Headless)",
+      "headlessDesc": "Tarayıcıyı görünür bir arayüz olmadan çalıştırın (prodüksiyon için önerilir).",
+      "sessionDataPath": "Oturum Veri Yolu",
+      "browserArgs": "Tarayıcı Bağımsız Değişkenleri (Arguments)",
+      "noBrowser": "Bu motor WebSocket üzerinden bağlanır — tarayıcısı yoktur, bu nedenle headless veya tarayıcı bağımsız değişken ayarları bulunmaz. Aktif motor yeniden başlatmanın ardından uygulanır.",
+      "restartNote": "Motoru değiştirmek sunucu yeniden başlatıldıktan sonra yürürlüğe girer.",
+      "webVersion": "WhatsApp Web derlemesi",
+      "webVersionNative": "otomatik (whatsapp-web.js varsayılanı)",
+      "webVersionSource": {
+        "pinned": "WWEBJS_WEB_VERSION ile sabitlendi",
+        "auto": "otomatik çözümlendi, bilinen en iyi derleme",
+        "native": "whatsapp-web.js yerel otomatik seçim"
+      }
+    },
+    "redis": {
+      "title": "Redis",
+      "enable": "Redis'i Etkinleştir",
+      "enableDesc": "Önbelleğe alma, oturum depolama ve BullMQ kuyrukları için gereklidir",
+      "useBuiltIn": "Dahili Redis Konteynerini Kullan",
+      "builtInDesc": "OpenWA sizin için bir Redis konteynerini yönetecektir",
+      "queueTitle": "BullMQ Kuyruk Sistemini Etkinleştir",
+      "queueDesc": "Güvenilir mesaj ve webhook iletimi için mesaj kuyruklarını kullanın",
+      "statsTitle": "Kuyruk İstatistikleri",
+      "webhookQueue": "Webhook Kuyruğu",
+      "pending": "Beklemede",
+      "completed": "Tamamlandı",
+      "failed": "Başarısız",
+      "viewBullMq": "Bull MQ Kontrol Panelini Görüntüle",
+      "disabledTitle": "Redis Devre Dışı",
+      "disabledDesc": "Önbelleğe alma, oturum depolama ve BullMQ mesaj kuyrukları için Redis'i etkinleştirin.",
+      "passwordOptional": "(isteğe bağlı)",
+      "bullMqUrlCopied": "Bull MQ kontrol paneli URL'si kopyalandı",
+      "bullMqUrlHint": "Bir ADMIN API anahtarıyla açın — normal bir tarayıcı sekmesi kimlik doğrulaması yapamaz."
+    },
+    "storage": {
+      "title": "Depolama Yapılandırması",
+      "s3Unreachable": "S3 (ulaşılamıyor)",
+      "local": "Yerel Dosya Sistemi",
+      "localDesc": "Medya dosyalarını yerel olarak saklayın",
+      "s3": "Amazon S3",
+      "s3Desc": "Bulut depolama (S3 uyumlu)",
+      "useBuiltIn": "Dahili MinIO Konteynerini Kullan",
+      "builtInDesc": "OpenWA sizin için bir MinIO (S3 uyumlu) konteynerini yönetecektir",
+      "storagePath": "Depolama Yolu",
+      "bucket": "Kova (Bucket) Adı",
+      "region": "Bölge (Region)",
+      "accessKey": "Erişim Anahtarı (Access Key)",
+      "secretKey": "Gizli Anahtar (Secret Key)",
+      "endpoint": "Özel Uç Nokta (isteğe bağlı)",
+      "endpointHint": "MinIO veya diğer S3 uyumlu servisler için"
+    },
+    "statusLabels": {
+      "connected": "Bağlandı",
+      "disconnected": "Bağlantı Kesildi",
+      "disabled": "Devre Dışı"
+    },
+    "envPinNote": "{{name}} ortam değişkeni tarafından sabitlendi — bu çalışan değerdir; ortam değişkeni kaldırılana kadar kontrol panelindeki değişiklikler uygulanmayacaktır.",
+    "pendingRestartNote": "Kaydedildi, ancak henüz uygulanmadı — bu değişikliğin yürürlüğe girmesi için sunucuyu yeniden başlatın.",
+    "migration": {
+      "title": "Dikkat — bu işlem veri arka ucunu değiştirir",
+      "dbWarning": "Yeni veritabanı boş olarak başlar. Mevcut verilerinizin yedeğini şimdi (hala eski veritabanındayken) indirin, ardından yeniden başlattıktan sonra geri yükleyin.",
+      "storageWarning": "Mevcut medya dosyaları yeni depolama arka ucuna otomatik olarak taşınmaz; eski konumda kalırlar.",
+      "downloadBackup": "Önce yedeği indirin",
+      "backupTitle": "Veri yedekleme ve geri yükleme",
+      "backupHint": "Veritabanlarını değiştirmeden önce tüm verileri JSON olarak dışa aktarın, ardından değişiklikten sonra içe aktarın. Yedekleme; webhook gizli anahtarlarını ve proxy kimlik bilgilerini düz metin olarak içerir — güvenli bir şekilde saklayın ve geri yükledikten sonra silin.",
+      "export": "Verileri dışa aktar",
+      "import": "Verileri içe aktar",
+      "exportFailed": "Veriler dışa aktarılamadı",
+      "exportPartialTitle": "Yedekte bazı medyalar eksik",
+      "exportPartial": "{{count}} ek veri yükü dışa aktarma medya sınırını aştı ve yer tutucu olarak kaydedildi. Mesajlar geri yüklenir; ancak medyaları yüklenmez.",
+      "importFailed": "Veriler içe aktarılamadı",
+      "importOk": "Veriler içe aktarıldı",
+      "importConfirm": "İçe aktarma işlemi mevcut tüm verileri yedekle ({{rows}} satır) DEĞİŞTİRECEKTİR. Bu işlem geri alınamaz. Devam edilsin mi?",
+      "invalidFile": "Bu dosya geçerli bir OpenWA veri yedeği değil.",
+      "importTooLarge": "Yedekleme, istek sınırı için çok büyük. Sunucudaki BODY_SIZE_LIMIT değerini artırın ve tekrar deneyin."
+    },
+    "restart": {
+      "idleTitle": "Yapılandırma kaydedildi",
+      "restartingTitle": "Sunucu yeniden başlatılıyor…",
+      "waitingTitle": "Lütfen bekleyin…",
+      "successTitle": "Sunucu hazır",
+      "errorTitle": "Yeniden başlatma başarısız",
+      "idleDesc": "Yapılandırma <code>.env.generated</code> dosyasına kaydedildi.<br/>Değişikliklerin uygulanması için sunucunun yeniden başlatılması gerekir.",
+      "later": "Daha Sonra Yeniden Başlat",
+      "now": "Şimdi Yeniden Başlat",
+      "restartingMsg": "Sunucu yeniden başlatılıyor... {{count}}s",
+      "checking": "Sunucu durumu kontrol ediliyor...",
+      "dontClose": "Lütfen bu pencereyi kapatmayın",
+      "successMsg": "Sunucu tekrar çevrimiçi! Sayfa otomatik olarak yeniden yüklenecektir.",
+      "errorMsg": "Sunucu 30 saniye sonra yanıt vermedi. Lütfen Docker kayıtlarını kontrol edin ve manuel olarak yeniden başlatın.",
+      "reload": "Sayfayı Yeniden Yükle"
+    },
+    "toasts": {
+      "saveFailed": "Kaydetme Başarısız"
+    },
+    "statusLoadError": "Mevcut altyapı durumu yüklenemedi. Yeniden denemek için sayfayı yenileyin."
+  },
+  "plugins": {
+    "title": "Eklentiler",
+    "subtitle": "Eklentileri yükleyin, yapılandırın ve yönetin",
+    "refresh": "Yenile",
+    "builtIn": "Dahili",
+    "noDescription": "Açıklama bulunmuyor",
+    "enable": "Etkinleştir",
+    "disable": "Devre Dışı Bırak",
+    "healthCheck": "Sağlık Kontrolü",
+    "configure": "Yapılandır",
+    "install": "Eklenti yükle",
+    "uninstall": "Kaldır",
+    "uninstallConfirm": "\"{{name}}\" kaldırılsın mı? Bu işlem dosyalarını silecektir.",
+    "empty": {
+      "title": "Yüklü eklenti yok",
+      "description": "OpenWA'nın yapabileceklerini genişletmek için bir eklenti yükleyin."
+    },
+    "config": {
+      "title": "{{name}} Yapılandır",
+      "noOptions": "Bu eklenti için yapılandırma seçeneği bulunmuyor",
+      "uiHandshakeError": "Eklenti yapılandırma arayüzü başlatılamadı. Varsa aşağıdaki şema formunu kullanın.",
+      "save": "Yapılandırmayı Kaydet",
+      "addItem": "Ekle",
+      "tabConfig": "Yapılandırma",
+      "tabSessions": "Oturumlar"
+    },
+    "rail": {
+      "enabled": "etkin",
+      "installed": "yüklendi",
+      "active": "Aktif eklentiler",
+      "none": "Henüz hiçbiri etkinleştirilmedi"
+    },
+    "installModal": {
+      "title": "Bir eklenti yükle",
+      "hint": ".zip olarak paketlenmiş (manifest.json içeren) bir eklenti yükleyin. Etkinleştirildiğinde yalıtılmış alanda (sandbox) çalışır.",
+      "choose": "Bir .zip dosyası seçin…",
+      "tooLarge": "Dosya 5 MB sınırını aşıyor.",
+      "catalogHint": "Doğrudan OpenWA eklenti kataloğundan yükleyin. .zip dosyası SSRF koruması üzerinden sunucu tarafında çekilir, ardından doğrulanır ve korumalı alana alınır.",
+      "catalogTeaser": "Eklenti mi arıyorsunuz?",
+      "catalogTeaserSuffix": "resmi pazar yerine göz atın.",
+      "tabCatalog": "Katalog",
+      "tabUpload": ".zip Yükle"
+    },
+    "toasts": {
+      "errorTitle": "Eklenti Hatası",
+      "errorDefault": "Eklenti durumu değiştirilemedi",
+      "healthOk": "Sağlık Kontrolü Başarılı",
+      "healthFail": "Sağlık Kontrolü Başarısız",
+      "healthError": "Sağlık Kontrolü Hatası",
+      "savedTitle": "Yapılandırma Kaydedildi",
+      "savedDesc": "Değişikliklerin uygulanması için sunucunun yeniden başlatılması gerekir.",
+      "saveFailed": "Kaydetme Başarısız",
+      "installed": "Eklenti yüklendi",
+      "installFailed": "Yükleme başarısız",
+      "uninstalled": "Eklenti kaldırıldı",
+      "uninstallFailed": "Kaldırma başarısız",
+      "enableFailedTitle": "Etkinleştirme başarısız",
+      "disableFailedTitle": "Devre dışı bırakma başarısız",
+      "configRequiredTitle": "Yapılandırma gerekli",
+      "configRequiredDesc": "Etkinleştirmeden önce gerekli alanları doldurun: {{fields}}",
+      "updateFailed": "Güncelleme başarısız"
+    },
+    "sessions": {
+      "activationTitle": "Şunun için çalıştır:",
+      "activationDesc": "Bu eklentinin hangi oturumlar için çalışacağını seçin.",
+      "allSessions": "Tüm oturumlar",
+      "specificSessions": "Belirli oturumlar",
+      "noSessions": "Henüz oturum yok.",
+      "saveActivation": "Etkinleştirmeyi kaydet",
+      "perSessionTitle": "Oturum bazlı yapılandırma",
+      "perSessionDesc": "Bir oturum için genel yapılandırmayı geçersiz kılın; dokunulmayan alanlar genel değeri devralır.",
+      "selectSession": "Bir oturum seçin…",
+      "saveOverride": "Geçersiz kılmayı kaydet",
+      "clearOverride": "Geçersiz kılmayı temizle"
+    },
+    "instances": {
+      "title": "Örnekler (Instances)",
+      "description": "Bu entegrasyon için hesap başına örnekler tanımlayın. Her örneğin kendi imzalama gizli anahtarı ve giriş URL'si vardır.",
+      "create": "Örnek oluştur",
+      "empty": "Henüz örnek yok. Giriş URL'si ve gizli anahtar almak için bir tane oluşturun.",
+      "loadError": "Örnekler yüklenemedi.",
+      "allSessions": "Tüm oturumlar",
+      "enabled": "Etkin",
+      "disabled": "Devre Dışı",
+      "form": {
+        "instanceId": "Örnek Kimliği (Instance ID)",
+        "instanceIdPlaceholder": "ör. acme-destek",
+        "instanceIdHint": "Harfler, sayılar, tireler, alt çizgiler (maks 64).",
+        "sessionScope": "Oturum kapsamı (isteğe bağlı)",
+        "sessionScopePlaceholder": "Tüm oturumlar için boş bırakın",
+        "verifyToken": "Doğrulama belirteci (isteğe bağlı)",
+        "verifyTokenPlaceholder": "Sağlayıcının doğrulamada yansıttığı belirteç (token)",
+        "secret": "Giriş gizli anahtarı (isteğe bağlı)",
+        "secretPlaceholder": "Sağlayıcının webhook gizli anahtarı (ör. Chatwoot)",
+        "secretHint": "Otomatik oluşturmak için boş bırakın (yalnızca bir kez gösterilir). Sağlayıcı kendi webhook gizli anahtarını belirliyorsa buraya yapıştırın — otomatik oluşturulan bir anahtar eşleşmeyecektir.",
+        "config": "Yapılandırma (isteğe bağlı JSON)",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "Örnek oluşturuldu",
+        "hint": "Gizli anahtarı şimdi kopyalayın — yalnızca bir kez gösterilir.",
+        "secret": "İmzalama gizli anahtarı",
+        "ingressUrls": "Giriş URL'leri"
+      },
+      "regenerate": {
+        "title": "Gizli anahtarı yeniden oluştur",
+        "confirm": "{{id}} için imzalama gizli anahtarı yeniden oluşturulsun mu? Mevcut gizli anahtar hemen çalışmayı durdurur.",
+        "action": "Yeniden Oluştur"
+      },
+      "edit": {
+        "title": "{{id}} Düzenle"
+      },
+      "delete": {
+        "title": "Örneği sil",
+        "confirm": "{{id}} örneği silinsin mi? Giriş URL'si ve gizli anahtarı hemen çalışmayı durdurur.",
+        "action": "Sil"
+      },
+      "actions": {
+        "regenerate": "Gizli anahtarı yeniden oluştur",
+        "edit": "Düzenle",
+        "delete": "Sil",
+        "copy": "Kopyala",
+        "save": "Kaydet",
+        "enable": "Etkinleştir",
+        "disable": "Devre Dışı Bırak"
+      },
+      "errors": {
+        "invalidId": "Örnek kimliği harf, sayı, tire veya alt çizgi içermelidir (maks 64).",
+        "invalidJson": "Yapılandırma geçerli bir JSON olmalıdır.",
+        "invalidSecret": "Gizli anahtar en az 16 karakter olmalıdır veya otomatik oluşturulması için boş bırakılmalıdır.",
+        "duplicateId": "Bu kimliğe sahip bir örnek zaten var."
+      },
+      "toasts": {
+        "created": "Örnek oluşturuldu",
+        "updated": "Örnek güncellendi",
+        "deleted": "Örnek silindi",
+        "secretRegenerated": "Gizli anahtar yeniden oluşturuldu",
+        "actionFailed": "İşlem başarısız oldu"
+      }
+    },
+    "catalog": {
+      "empty": "Katalogda eklenti yok.",
+      "install": "Yükle",
+      "installed": "Yüklendi",
+      "noDownload": "Bu katalog girdisinin indirme URL'si yok.",
+      "noMatch": "Aramanızla eşleşen eklenti bulunamadı.",
+      "searchPlaceholder": "Eklentilerde ara…",
+      "update": "Güncelle",
+      "updateAvailable": "Güncelleme mevcut",
+      "updated": "Eklenti güncellendi"
+    }
+  },
+  "search": {
+    "placeholder": "Mesajlarda ara…",
+    "results": "{{count}} sonuç",
+    "empty": "Mesaj bulunamadı.",
+    "error": "Arama başarısız oldu. Tekrar deneyin.",
+    "unavailable": "Arama yapılandırılmamış.",
+    "scope": {
+      "current": "Bu oturum"
+    },
+    "loading": "Aranıyor…"
+  }
+}
