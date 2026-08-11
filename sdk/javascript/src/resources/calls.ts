@@ -7,7 +7,7 @@
 
 import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
-import type { SuccessResult } from '../types.js';
+import type { CallLinkResponse, CreateCallLinkRequest, SuccessResult } from '../types.js';
 
 export class CallsResource {
   constructor(private readonly client: OpenWAClient) {}
@@ -21,6 +21,22 @@ export class CallsResource {
     return this.client.request<SuccessResult>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/calls/${encodeSegment(callId)}/reject`,
+    });
+  }
+
+  /**
+   * Create a shareable WhatsApp call link.
+   *
+   * Both fields are required. `startTime` is absolute epoch MILLISECONDS — a link for right now is
+   * `Date.now()` rather than an omitted field, because whatsapp-web.js generates an event-linked
+   * call and has no notion of "no start time". A WhatsApp-side failure answers `403` rather than a
+   * success carrying an empty link.
+   */
+  createLink(sessionId: string, body: CreateCallLinkRequest): Promise<CallLinkResponse> {
+    return this.client.request<CallLinkResponse>({
+      method: 'POST',
+      path: `/api/sessions/${encodeSegment(sessionId)}/calls/link`,
+      body,
     });
   }
 }

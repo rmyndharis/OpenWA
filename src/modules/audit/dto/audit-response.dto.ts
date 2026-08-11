@@ -7,7 +7,7 @@ import { ApiProperty } from '@nestjs/swagger';
  */
 
 export class AuditLogDto {
-  @ApiProperty({ example: '4f1c9b2a-...' }) id!: string;
+  @ApiProperty({ example: '4f1c9b2a-8d3e-4c5b-9a17-2e6f0b4d8c31' }) id!: string;
 
   @ApiProperty({ description: 'What happened.', example: 'session.create' })
   action!: string;

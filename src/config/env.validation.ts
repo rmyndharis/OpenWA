@@ -300,6 +300,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     // conversion/archive endpoints answer as if nothing was configured. Same class as the above.
     'MEDIA_CONVERSION_ENABLED',
     'CHAT_MEDIA_ARCHIVE_ENABLED',
+    'CHAT_MEDIA_ARCHIVE_OUTBOUND',
     // Read with `=== 'true'` in BOTH configuration.ts and data-source.ts, and this is the one whose
     // typo fails OPEN: `DATABASE_SSL=require` is the natural Postgres spelling and reads as OFF, so
     // credentials and message bodies cross the wire in plaintext to a server the operator believed

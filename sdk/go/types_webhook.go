@@ -29,6 +29,7 @@ const (
 	EventGroupJoin            WebhookEvent = "group.join"
 	EventGroupLeave           WebhookEvent = "group.leave"
 	EventGroupUpdate          WebhookEvent = "group.update"
+	EventGroupJoinRequest     WebhookEvent = "group.join_request"
 	EventCallReceived         WebhookEvent = "call.received"
 	EventStatusReceived       WebhookEvent = "status.received"
 	EventAll                  WebhookEvent = "*"

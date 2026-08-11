@@ -23,6 +23,9 @@ export class UpdateSessionConfigDto {
       'incoming call — the session is not restarted.',
     example: true,
     nullable: true,
+    // Explicit because the TypeScript type is a union: emitDecoratorMetadata reduces `boolean | null`
+    // to `Object`, so without this the property publishes as `type: object`.
+    type: Boolean,
   })
   @ToStrictBoolean()
   @IsOptional()
@@ -38,6 +41,9 @@ export class UpdateSessionConfigDto {
     maximum: 20,
     example: 5,
     nullable: true,
+    // Without an explicit type the union publishes as `type: object`, and JSON Schema ignores
+    // minimum/maximum on a non-numeric type — so the range above would be inert as well as wrong.
+    type: Number,
   })
   @ToStrictNumber()
   @IsOptional()
@@ -54,6 +60,7 @@ export class UpdateSessionConfigDto {
     maximum: 300000,
     example: 5000,
     nullable: true,
+    type: Number,
   })
   @ToStrictNumber()
   @IsOptional()
@@ -80,6 +87,7 @@ export class SessionConfigResponseDto {
     description: 'Reconnect attempt cap; `null` means unlimited',
     example: 5,
     nullable: true,
+    type: Number,
   })
   maxReconnectAttempts!: number | null;
 

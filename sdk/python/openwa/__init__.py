@@ -31,6 +31,7 @@ from .errors import (
     OpenWAForbiddenError,
     OpenWANotFoundError,
     OpenWANotImplementedError,
+    OpenWAServiceUnavailableError,
     OpenWARateLimitError,
     OpenWATimeoutError,
 )
@@ -45,5 +46,6 @@ __all__ = [
     "OpenWAConflictError",
     "OpenWARateLimitError",
     "OpenWANotImplementedError",
+    "OpenWAServiceUnavailableError",
     "OpenWATimeoutError",
 ]

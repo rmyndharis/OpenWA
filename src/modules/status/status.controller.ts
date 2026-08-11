@@ -1,12 +1,13 @@
 import { Controller, Get, Post, Delete, Param, Body, Res, StreamableFile } from '@nestjs/common';
 import type { Response } from 'express';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { StatusDeletedResponseDto, StatusListResponseDto, StatusResultDto } from './dto/status-response.dto';
 import { StatusService } from './status.service';
 import { SendTextStatusDto } from './dto/send-text-status.dto';
 import { SendImageStatusDto, SendVideoStatusDto, SendVoiceStatusDto } from './dto/send-media-status.dto';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
+import { ENGINE_NOT_READY_409, SESSION_NOT_STARTED_404 } from '../../common/openapi/engine-status-responses';
 
 @ApiTags('status')
 @Controller('sessions/:sessionId/status')
@@ -24,14 +25,18 @@ export class StatusController {
     return { statuses: await this.statusService.getStatuses(sessionId) };
   }
 
-  @Get(':contactId')
+  // The segment is `:id` on both verbs because GET reads a contact's statuses and DELETE removes one
+  // of our own. Naming it per verb gave the same route two contract entries; the meaning belongs in
+  // @ApiParam, which is per-operation.
+  @Get(':id')
   @ApiOperation({ summary: 'Get status updates from a specific contact' })
+  @ApiParam({ name: 'id', description: 'Contact ID' })
   @ApiResponse({ status: 200, description: 'Status updates from the requested contact.', type: StatusListResponseDto })
-  async getContactStatus(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
+  async getContactStatus(@Param('sessionId') sessionId: string, @Param('id') contactId: string) {
     return { statuses: await this.statusService.getContactStatus(sessionId, contactId) };
   }
 
-  // Two path segments (`:statusId/media`) never collides with the single-segment `:contactId`
+  // Two path segments (`:statusId/media`) never collides with the single-segment `:id`
   // route above regardless of declaration order — Nest/Express match on segment count.
   @Get(':statusId/media')
   @ApiOperation({ summary: 'Stream a stored status media file' })
@@ -62,6 +67,8 @@ export class StatusController {
     type: StatusResultDto,
   })
   @ApiResponse({ status: 400, description: 'Invalid request, or the post was blocked by a plugin.' })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 404, description: SESSION_NOT_STARTED_404 })
   async sendTextStatus(@Param('sessionId') sessionId: string, @Body() dto: SendTextStatusDto) {
     return this.statusService.postTextStatus(sessionId, dto.text, {
       recipients: dto.recipients,
@@ -85,6 +92,8 @@ export class StatusController {
     description: 'Neither url nor base64 provided, or the post was blocked by a plugin.',
   })
   @ApiResponse({ status: 413, description: 'Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES.' })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 404, description: SESSION_NOT_STARTED_404 })
   async sendImageStatus(@Param('sessionId') sessionId: string, @Body() dto: SendImageStatusDto) {
     return this.statusService.postImageStatus(sessionId, dto.image, {
       recipients: dto.recipients,
@@ -107,6 +116,8 @@ export class StatusController {
     description: 'Neither url nor base64 provided, or the post was blocked by a plugin.',
   })
   @ApiResponse({ status: 413, description: 'Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES.' })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 404, description: SESSION_NOT_STARTED_404 })
   async sendVideoStatus(@Param('sessionId') sessionId: string, @Body() dto: SendVideoStatusDto) {
     return this.statusService.postVideoStatus(sessionId, dto.video, {
       recipients: dto.recipients,
@@ -130,6 +141,8 @@ export class StatusController {
     description: 'Neither url nor base64 provided, or the post was blocked by a plugin.',
   })
   @ApiResponse({ status: 413, description: 'Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES.' })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 404, description: SESSION_NOT_STARTED_404 })
   async sendVoiceStatus(@Param('sessionId') sessionId: string, @Body() dto: SendVoiceStatusDto) {
     return this.statusService.postVoiceStatus(sessionId, dto.audio, {
       recipients: dto.recipients,
@@ -137,11 +150,14 @@ export class StatusController {
     });
   }
 
-  @Delete(':statusId')
+  @Delete(':id')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Delete own status' })
+  @ApiParam({ name: 'id', description: 'Status ID' })
   @ApiResponse({ status: 200, description: 'Status deleted.', type: StatusDeletedResponseDto })
-  async deleteStatus(@Param('sessionId') sessionId: string, @Param('statusId') statusId: string) {
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 404, description: SESSION_NOT_STARTED_404 })
+  async deleteStatus(@Param('sessionId') sessionId: string, @Param('id') statusId: string) {
     await this.statusService.deleteStatus(sessionId, statusId);
     return { message: 'Status deleted successfully' };
   }

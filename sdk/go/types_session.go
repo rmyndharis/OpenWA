@@ -1,6 +1,9 @@
 package openwa
 
-import "net/url"
+import (
+	"encoding/json"
+	"net/url"
+)
 
 // ListSessionsQuery paginates GET /sessions. Both fields optional.
 type ListSessionsQuery struct {
@@ -31,6 +34,17 @@ type GroupJoinInfo struct {
 type CreateChannelRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+}
+
+// DemoteChannelAdminRequest is the body for ChannelsService.DemoteAdmin.
+type DemoteChannelAdminRequest struct {
+	UserID string `json:"userId"`
+}
+
+// TransferChannelOwnershipRequest is the body for ChannelsService.TransferOwnership. The transfer
+// is irreversible.
+type TransferChannelOwnershipRequest struct {
+	NewOwnerID string `json:"newOwnerId"`
 }
 
 // MuteChannelRequest is the body for muting or unmuting a channel. The subscription is unaffected
@@ -158,4 +172,77 @@ type SessionStatsOverview struct {
 	Disconnected int            `json:"disconnected"`
 	ByStatus     map[string]int `json:"byStatus,omitempty"`
 	MemoryUsage  MemoryUsage    `json:"memoryUsage"`
+}
+
+// SessionConfig is a session's effective runtime configuration. A nil MaxReconnectAttempts means
+// unlimited — not unset.
+type SessionConfig struct {
+	AutoRejectCalls      bool `json:"autoRejectCalls"`
+	MaxReconnectAttempts *int `json:"maxReconnectAttempts"`
+	ReconnectBaseDelay   int  `json:"reconnectBaseDelay"`
+}
+
+// UpdateSessionConfigRequest is a partial update of a RUNNING session's config — no re-link, no QR
+// scan.
+//
+// The route needs THREE states per field, not two: a key that is absent leaves the value unchanged, a
+// key sent as explicit null clears it back to the default, and a value sets it. A `*int` with
+// `omitempty` can only express the first and the third — a nil pointer is OMITTED, never emitted as
+// null — so the one operation this route exists for, restoring `maxReconnectAttempts` to unlimited
+// (which no in-range number can express), was unreachable. The Clear* flags carry the null case, and
+// MarshalJSON below is what actually emits it.
+type UpdateSessionConfigRequest struct {
+	AutoRejectCalls      *bool `json:"-"`
+	MaxReconnectAttempts *int  `json:"-"`
+	ReconnectBaseDelay   *int  `json:"-"`
+
+	// ClearMaxReconnectAttempts sends an explicit null, restoring unlimited reconnect attempts. It
+	// wins over MaxReconnectAttempts if both are set.
+	ClearMaxReconnectAttempts bool `json:"-"`
+	// ClearAutoRejectCalls sends an explicit null, restoring the server default.
+	ClearAutoRejectCalls bool `json:"-"`
+	// ClearReconnectBaseDelay sends an explicit null, restoring the server default.
+	ClearReconnectBaseDelay bool `json:"-"`
+}
+
+// MarshalJSON emits only the fields the caller actually addressed: a Clear* flag becomes an explicit
+// null, a non-nil pointer becomes its value, and a field that is neither is left out entirely so the
+// server leaves it unchanged.
+func (r UpdateSessionConfigRequest) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+	if r.ClearAutoRejectCalls {
+		out["autoRejectCalls"] = nil
+	} else if r.AutoRejectCalls != nil {
+		out["autoRejectCalls"] = *r.AutoRejectCalls
+	}
+	if r.ClearMaxReconnectAttempts {
+		out["maxReconnectAttempts"] = nil
+	} else if r.MaxReconnectAttempts != nil {
+		out["maxReconnectAttempts"] = *r.MaxReconnectAttempts
+	}
+	if r.ClearReconnectBaseDelay {
+		out["reconnectBaseDelay"] = nil
+	} else if r.ReconnectBaseDelay != nil {
+		out["reconnectBaseDelay"] = *r.ReconnectBaseDelay
+	}
+	return json.Marshal(out)
+}
+
+// DeliveryFailureQuery filters the cross-session webhook list and the delivery-failure log. Nil
+// fields are omitted from the query string. SessionID is ignored by the plain webhook list.
+type DeliveryFailureQuery struct {
+	SessionID *string
+	Limit     *int
+	Offset    *int
+}
+
+func (q *DeliveryFailureQuery) values() url.Values {
+	v := url.Values{}
+	if q == nil {
+		return v
+	}
+	setStr(v, "sessionId", q.SessionID)
+	setInt(v, "limit", q.Limit)
+	setInt(v, "offset", q.Offset)
+	return v
 }

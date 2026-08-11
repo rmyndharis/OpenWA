@@ -35,7 +35,7 @@ export class AccountRestrictionDto {
 }
 
 export class SessionResponseDto {
-  @ApiProperty({ example: 'sess_123e4567-e89b-12d3-a456-426614174000' })
+  @ApiProperty({ example: '0a941dac-a965-45e7-b318-74ae8be134f0' })
   id!: string;
 
   @ApiProperty({ example: 'my-bot' })

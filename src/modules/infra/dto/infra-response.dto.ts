@@ -174,7 +174,11 @@ export class AvailableEngineDto {
   @ApiProperty({ description: 'Whether the plugin is enabled. Disabled engines are still listed.', example: true })
   enabled!: boolean;
 
-  @ApiProperty({ type: [String], description: 'Capabilities the engine declares.', example: ['send-text'] })
+  @ApiProperty({
+    type: [String],
+    description: 'Capabilities the engine declares.',
+    example: ['text-messages', 'media-messages', 'group-management'],
+  })
   features!: string[];
 
   @ApiPropertyOptional({

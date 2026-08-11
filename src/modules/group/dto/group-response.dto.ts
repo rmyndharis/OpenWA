@@ -181,6 +181,30 @@ export class ParticipantsOperationResponseDto extends GroupAckResponseDto {
   results!: ParticipantOperationResultDto[];
 }
 
+export class GroupMembershipRequestDto {
+  @ApiProperty({ description: 'Neutral id of the user asking to join.', example: '628123456789@c.us' })
+  participantId!: string;
+
+  @ApiPropertyOptional({
+    description: 'Who created the request, when the engine reports it (differs from the requester on a non-admin add).',
+    example: '628987654321@c.us',
+  })
+  addedById?: string;
+
+  @ApiPropertyOptional({
+    description: 'How the request was made, when the engine reports it.',
+    enum: ['invite_link', 'non_admin_add', 'linked_group_join'],
+    example: 'invite_link',
+  })
+  method?: string;
+
+  @ApiPropertyOptional({
+    description: 'Unix seconds the request was created, when the engine reports it.',
+    example: 1754700000,
+  })
+  requestedAt?: number;
+}
+
 export class GroupJoinedResponseDto {
   @ApiProperty({ description: 'Always true — a failure is reported as a non-2xx status.', example: true })
   success!: boolean;

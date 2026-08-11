@@ -209,6 +209,19 @@ describe('Idempotency Utils', () => {
       expect(key).toMatch(/^grp_123@g\.us_[a-f0-9]{12}_join_2026-07-20T00:00:00\.000Z$/);
     });
 
+    it('keys group.join_request like group.join — a reject-then-re-request must stay a distinct event', () => {
+      const at = '2026-07-20T00:00:00.000Z';
+      const data = { groupId: '123@g.us', participantIds: ['6281@c.us'], timestamp: 1782000000 };
+
+      const key = generateIdempotencyKey('group.join_request', data, at);
+
+      expect(key).toMatch(/^grp_123@g\.us_[a-f0-9]{12}_join_request_2026-07-20T00:00:00\.000Z$/);
+      // Occurrence salt: the same user asking again later is a new event, not a duplicate.
+      expect(generateIdempotencyKey('group.join_request', data, '2026-07-20T01:00:00.000Z')).not.toBe(key);
+      // Retry-stable: the same dispatch regenerates the same key.
+      expect(generateIdempotencyKey('group.join_request', data, at)).toBe(key);
+    });
+
     it('is retry-stable for group.join: the same occurrence regenerates the same key', () => {
       const at = '2026-07-20T00:00:00.000Z';
       const data = { groupId: '123@g.us', participantIds: ['6281@c.us'], timestamp: 1782000000 };

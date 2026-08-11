@@ -25,6 +25,29 @@ type GroupSummary struct {
 	LinkedParentJID   *string `json:"linkedParentJID,omitempty"`
 }
 
+// GroupMembershipRequest is a pending request to join a group. Only ParticipantID is always
+// present; the engine reports the rest when it has it.
+type GroupMembershipRequest struct {
+	ParticipantID string `json:"participantId"`
+	AddedByID     string `json:"addedById,omitempty"`
+	// Method is one of: invite_link, non_admin_add, linked_group_join.
+	Method string `json:"method,omitempty"`
+	// RequestedAt is Unix seconds.
+	RequestedAt float64 `json:"requestedAt,omitempty"`
+}
+
+// MembershipRequestActionRequest names the requesters to approve or reject. Acting on every pending
+// request is expressed by sending no body field at all, which membershipRequestAction does with an
+// empty body — not by this struct.
+//
+// No `omitempty`: it drops an empty slice as readily as a nil one, so "approve nobody" would reach
+// the gateway as the bodyless "approve everybody". The other four clients key on null rather than
+// emptiness and send `{"participants": []}` for an empty list, which the gateway rejects with 400;
+// the tag made Go the only client where that input silently admitted every pending requester.
+type MembershipRequestActionRequest struct {
+	Participants []string `json:"participants"`
+}
+
 // GroupInfo is the full group detail.
 type GroupInfo struct {
 	ID              string             `json:"id"`

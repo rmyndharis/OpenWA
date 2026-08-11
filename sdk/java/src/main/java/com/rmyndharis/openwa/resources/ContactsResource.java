@@ -125,4 +125,18 @@ public final class ContactsResource {
             null,
             SuccessResult.class);
     }
+
+    /**
+     * List the JIDs this account has blocked. Session-wide, so it takes no contact id — unlike
+     * {@link #block} and {@link #unblock}, which act on one contact — and it returns bare ids
+     * rather than contact records.
+     */
+    public List<String> listBlocked(String sessionId) {
+        return client.requestList(
+            HttpMethod.GET,
+            "/api/sessions/" + encodeSegment(sessionId) + "/contacts/blocked",
+            null,
+            null,
+            String.class);
+    }
 }

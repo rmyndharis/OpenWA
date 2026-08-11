@@ -24,6 +24,8 @@ export interface BaileysContactsHost {
   lastMessage(chatId: string): { key: WAMessageKey; timestamp: number } | null;
   /** Fold a neutral @c.us id to the engine @s.whatsapp.net form used as the app-state index key. */
   toEngineJid(jid: string): string;
+  /** Fold an engine jid back to the neutral dialect before it crosses the engine boundary. */
+  toNeutralJid(jid: string): string;
 }
 
 export class BaileysContacts {
@@ -57,6 +59,11 @@ export class BaileysContacts {
     } catch (err) {
       // A no-picture verdict arrives as a thrown error, so this catch must keep swallowing — but a
       // query that never came back is not a verdict about the picture.
+      //
+      // NOTE the whatsapp-web.js adapter does the OPPOSITE on this same interface method, and
+      // correctly: there the no-picture verdict is delivered as `undefined`, so every throw is a
+      // failure and none of them may become null. Same neutral method, opposite error conventions
+      // underneath — do not harmonise the two into a shared helper.
       if (err instanceof EngineTransportError) {
         throw err;
       }
@@ -104,6 +111,22 @@ export class BaileysContacts {
     await this.confirmed(this.sock().updateBlockStatus(contactId, 'unblock'), 'the unblock');
   }
 
+  /**
+   * The read half of block/unblockContact. Bounded by our own clock: Baileys' `query()` swallows
+   * its timeout, and an unanswered blocklist query would otherwise surface as an EMPTY blocklist —
+   * a claim about the account sold in place of a transport failure. Wire items without a jid attr
+   * are dropped rather than reported as "undefined".
+   */
+  async getBlockedContacts(): Promise<string[]> {
+    this.host.ensureReady();
+    const jids = await withQueryDeadline(
+      this.sock().fetchBlocklist(),
+      this.queryBudgetMs,
+      'WhatsApp did not answer the blocklist query in time',
+    );
+    return (jids ?? []).filter((jid): jid is string => Boolean(jid)).map(jid => this.host.toNeutralJid(jid));
+  }
+
   async setProfileName(name: string): Promise<void> {
     this.host.ensureReady();
     await this.confirmed(this.sock().updateProfileName(name), 'the profile name change');
@@ -124,6 +147,19 @@ export class BaileysContacts {
     // the same conversion the media sends use.
     const { data } = await resolveMediaBuffer(media);
     await this.confirmed(this.sock().updateProfilePicture(selfJid, data), 'the profile picture change');
+  }
+
+  async deleteProfilePicture(): Promise<void> {
+    this.host.ensureReady();
+    const selfJid = this.host.normalizedSelfJid();
+    if (!selfJid) {
+      // Same guard as setProfilePicture: an empty jid would send the removal at nothing while the
+      // endpoint reported success.
+      throw new Error('cannot delete the profile picture: the own JID is not known yet');
+    }
+    // The same socket call `deleteGroupPicture` already uses, addressed at the account instead of a
+    // group. Baileys resolves void either way, so an acknowledged write is the only signal there is.
+    await this.confirmed(this.sock().removeProfilePicture(selfJid), 'the profile picture removal');
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -208,6 +244,23 @@ export class BaileysContacts {
       ),
       'the archive change',
     );
+    return true;
+  }
+
+  async muteChat(chatId: string, muteUntil: number | null): Promise<void> {
+    this.host.ensureReady();
+    // Deliberately no lastMessage lookup: the `mute` member of ChatModification carries no
+    // `lastMessages`, unlike archive/clear/delete, so a chat with no known history mutes fine.
+    await this.confirmed(this.sock().chatModify({ mute: muteUntil }, this.host.toEngineJid(chatId)), 'the mute change');
+  }
+
+  async pinChat(chatId: string, pin: boolean): Promise<boolean> {
+    this.host.ensureReady();
+    // No lastMessage lookup: the `pin` member of ChatModification carries no `lastMessages`, unlike
+    // archive/clear/delete, so a chat with no known history pins fine. Always true — Baileys writes
+    // the app-state patch and reports nothing back, so it has no equivalent of the whatsapp-web.js
+    // three-pin refusal to surface.
+    await this.confirmed(this.sock().chatModify({ pin }, this.host.toEngineJid(chatId)), 'the pin change');
     return true;
   }
 

@@ -10,8 +10,14 @@ metadata:
     {{- end }}
 spec:
   selector:
+    # Names ONE Service. Prometheus Operator's endpoints-role discovery yields a target per address
+    # for every Service matching this selector, with no cross-Service de-duplication by pod — so a
+    # selector of only the shared selectorLabels matches both the ClusterIP and the headless Service
+    # and produces two targets for the same pod, and two sets of series distinguished only by the
+    # `service` label.
     matchLabels:
       {{- include "openwa.selectorLabels" . | nindent 6 }}
+      openwa.io/scrape-target: "primary"
   endpoints:
     - port: http
       path: /api/metrics

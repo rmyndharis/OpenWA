@@ -197,7 +197,7 @@ describe('validateEnv', () => {
     expect(() => validateEnv({})).not.toThrow();
   });
 
-  it.each(['MEDIA_CONVERSION_ENABLED', 'CHAT_MEDIA_ARCHIVE_ENABLED'])(
+  it.each(['MEDIA_CONVERSION_ENABLED', 'CHAT_MEDIA_ARCHIVE_ENABLED', 'CHAT_MEDIA_ARCHIVE_OUTBOUND'])(
     'rejects a %s typo instead of silently leaving the feature off',
     key => {
       // Both are read at boot with `=== 'true'`, so a typo silently disables the feature and the

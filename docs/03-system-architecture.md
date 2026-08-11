@@ -910,7 +910,7 @@ export interface EngineEventCallbacks {
   onMessageRevoked?: (message: RevokedMessage) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
-  onGroupEvent?: (event: GroupEvent) => void; // kind selects group.join / group.leave / group.update
+  onGroupEvent?: (event: GroupEvent) => void; // kind selects group.join / group.leave / group.update / group.join_request
   onCall?: (event: IncomingCallEvent) => void; // incoming call ringing; rejectCall() while it rings
   onHistoryMessages?: (messages: IncomingMessage[]) => void; // bulk initial sync; persist, don't dispatch
   onDisconnected?: (reason: string) => void; // recoverable -> reconnect
@@ -1146,7 +1146,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
     this.socket!.ev.on('messages.upsert', ({ messages }) => {
       for (const msg of messages) {
-        if (!msg.key.fromMe) this.callbacks.onMessage?.(this.toIncomingMessage(msg)); // neutral ids
+        const incoming = this.toIncomingMessage(msg); // neutral ids
+        // Own sends are not dropped: they route to onMessageCreate, which drives `message.sent`.
+        if (msg.key.fromMe) this.callbacks.onMessageCreate?.(incoming);
+        else this.callbacks.onMessage?.(incoming);
       }
     });
   }

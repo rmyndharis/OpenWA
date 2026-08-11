@@ -3,10 +3,11 @@ import type { IncomingMessage } from '../../engine/interfaces/whatsapp-engine.in
 /**
  * Message types whose rows must show a media placeholder even when the payload carried none.
  *
- * The wwjs own-send echo carries no media field at all (Baileys emits an omitted marker), and the
- * history sync maps messages media-free to keep its footprint down. Without the marker such a row
- * renders as an empty bubble — the DB copy wins over the engine-history placeholder in the dashboard
- * merge — and the by-type stats filter would skip it.
+ * A wwjs own-send echo whose media download failed carries no media field at all, and the history
+ * sync maps messages media-free to keep its footprint down. Without the marker such a row renders
+ * as an empty bubble — the DB copy wins over the engine-history placeholder in the dashboard
+ * merge — and the by-type stats filter would skip it. (The Baileys API-send echo needs no synthesis:
+ * it emits the omitted marker itself.)
  */
 export const MEDIA_MESSAGE_TYPES = new Set(['image', 'video', 'audio', 'voice', 'sticker', 'document']);
 
@@ -18,7 +19,7 @@ export const OMITTED_MEDIA = { mimetype: '', omitted: true } as const;
  *
  * The three persist paths (live inbound `onMessage`, own-send echo `onMessageCreate`, and the
  * pre-connection history backfill) each assembled this inline, with one deliberate difference:
- * inbound trusts the engine's media field as-is, while the two paths that are known to lose media
+ * inbound trusts the engine's media field as-is, while the two paths that can arrive without one
  * synthesize a placeholder. Keeping both rules in one function makes that difference explicit
  * instead of something to re-derive at each site.
  *

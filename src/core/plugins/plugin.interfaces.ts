@@ -615,6 +615,12 @@ export interface PluginInstance {
   // First-party built-ins (engines, bundled extensions) run in-process; plugins loaded from the
   // plugins directory are untrusted and run sandboxed in a worker. `false` => sandboxed.
   builtIn?: boolean;
+  // Absolute path of the directory this plugin's package was loaded from. Usually
+  // <plugins.dir>/<id>, but the loader also scans the legacy plugins directory, and every later
+  // operation on the package — enable, uninstall, update, config UI — has to act on the tree the
+  // code actually came from rather than assume the configured one. Absent for built-ins, which are
+  // registered programmatically and have no on-disk package.
+  packageDir?: string;
 }
 
 // ============================================================================

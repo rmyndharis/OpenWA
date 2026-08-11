@@ -8,6 +8,7 @@ import {
   OpenWAConflictError,
   OpenWARateLimitError,
   OpenWANotImplementedError,
+  OpenWAServiceUnavailableError,
   OpenWATimeoutError,
 } from '../src';
 import type { FetchLike } from '../src';
@@ -100,6 +101,19 @@ describe('OpenWAClient', () => {
     await expect(client(t).sessions.get('missing')).rejects.toMatchObject({ status: 404 });
   });
 
+  it('maps a 503 to OpenWAServiceUnavailableError', async () => {
+    // The gateway answers 503 when the engine never confirmed an operation. It is the only typed error
+    // here that is worth retrying, and it used to fall through to the base class while 501 — which is
+    // permanent — had a subclass of its own.
+    const t = new MockTransport().on('POST', '/api/sessions/s1/messages/send-text', {
+      status: 503,
+      body: { statusCode: 503, message: 'WhatsApp did not answer in time', error: 'Service Unavailable' },
+    });
+    await expect(client(t).messages.sendText('s1', { chatId: 'c@c.us', text: 'x' })).rejects.toBeInstanceOf(
+      OpenWAServiceUnavailableError,
+    );
+  });
+
   it('exposes all expected resource properties', () => {
     const c = client(new MockTransport());
     for (const r of [
@@ -136,6 +150,39 @@ describe('OpenWAClient', () => {
     await expect(client(t).messages.sendText('s', { chatId: 'a@c.us', text: 'hi' })).rejects.toBeInstanceOf(
       OpenWAApiError,
     );
+  });
+
+  // A stock production gateway runs the ValidationPipe with `disableErrorMessages`, so NestJS omits
+  // `error` and answers `{ statusCode, message }`. Every case above sends the three-key development
+  // shape, which is why the suite stayed green while this body rendered as "[object Object]".
+  it('parses the envelope a production gateway actually sends, with no `error` key', async () => {
+    const t = new MockTransport().on('POST', '/api/sessions', {
+      status: 400,
+      body: { message: 'Bad Request', statusCode: 400 },
+    });
+    const err = await client(t)
+      .sessions.create({ name: 'x' })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(OpenWAApiError);
+    expect((err as OpenWAApiError).message).toContain('Bad Request');
+    expect((err as OpenWAApiError).message).not.toContain('[object Object]');
+    expect((err as OpenWAApiError).status).toBe(400);
+    // No `error` key was sent, so there is no kind to report — undefined, not a stringified object.
+    expect((err as OpenWAApiError).errorKind).toBeUndefined();
+  });
+
+  it('still reads `error` as the kind when the gateway sends one', async () => {
+    const t = new MockTransport().on('POST', '/api/sessions', {
+      status: 400,
+      body: { message: ['name must be a string'], error: 'Bad Request', statusCode: 400 },
+    });
+    const err = await client(t)
+      .sessions.create({ name: 'x' })
+      .catch((e: unknown) => e);
+
+    expect((err as OpenWAApiError).errorKind).toBe('Bad Request');
+    expect((err as OpenWAApiError).message).toContain('name must be a string');
   });
 
   it('maps each status code to its typed error subclass', async () => {

@@ -13,6 +13,7 @@ describe('ContactController', () => {
     deleteContact: jest.fn(),
     blockContact: jest.fn(),
     unblockContact: jest.fn(),
+    getBlockedContacts: jest.fn(),
   };
   const controller = new ContactController(service as unknown as ContactService);
 
@@ -78,6 +79,12 @@ describe('ContactController', () => {
       contactId: '123@lid',
       phone: '628123456789',
     });
+  });
+
+  it('getBlockedContacts returns the service list as a bare array', async () => {
+    service.getBlockedContacts.mockResolvedValue(['628111@c.us', '628222@c.us']);
+    await expect(controller.getBlockedContacts('s1')).resolves.toEqual(['628111@c.us', '628222@c.us']);
+    expect(service.getBlockedContacts).toHaveBeenCalledWith('s1');
   });
 
   it('upsertContact passes first/last name from the DTO', async () => {

@@ -29,6 +29,15 @@ env:
 secretEnv:
   API_MASTER_KEY: ""
 
+# Note: a sha256 of the rendered Secret is published as a pod annotation so that changing
+# secretEnv restarts the pod — without it the new value would never reach the running
+# container. Pod annotations are readable by anyone with `get pods`, which is a wider set
+# than `get secrets` under a common RBAC split, so someone who can list Pods can confirm a
+# guessed value offline. Uninteresting for a high-entropy API_MASTER_KEY; worth knowing
+# before adding something like DATABASE_PASSWORD here. Use existingSecret below to keep the
+# value out of the chart entirely — the trade is that the chart can no longer detect changes
+# to it, so restarts become `kubectl rollout restart`.
+#
 # Name of an existing, operator-managed Secret to load via envFrom instead of the
 # chart-managed one. When set, secretEnv is ignored and no Secret is created.
 existingSecret: ""

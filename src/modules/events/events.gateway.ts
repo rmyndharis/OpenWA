@@ -653,6 +653,16 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   /**
+   * Emit a pending join request (someone asked to join a group the account admins, join-approval
+   * on). Payload mirrors the `group.join_request` webhook:
+   * `{ groupId, participantIds, timestamp, actorId? }` — participantIds are the users asking to
+   * join; actorId is who created the request when the engine reports one.
+   */
+  emitGroupJoinRequest(sessionId: string, data: Record<string, unknown>) {
+    this.emitToRooms(sessionId, 'group.join_request', data);
+  }
+
+  /**
    * Emit an incoming-call notification (a call is ringing). Payload mirrors the `call.received`
    * webhook: `{ callId, from, isVideo, isGroup, timestamp }`.
    */

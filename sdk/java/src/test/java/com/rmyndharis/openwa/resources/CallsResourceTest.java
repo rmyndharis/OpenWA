@@ -9,6 +9,7 @@ import com.rmyndharis.openwa.OpenWAClient;
 import com.rmyndharis.openwa.errors.OpenWANotFoundError;
 import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.support.MockTransport;
+import com.rmyndharis.openwa.model.CreateCallLinkRequest;
 import org.junit.jupiter.api.Test;
 
 class CallsResourceTest {
@@ -42,4 +43,15 @@ class CallsResourceTest {
         tx.respond(404, "{\"statusCode\":404,\"message\":\"Call not found or no longer ringing\",\"error\":\"Not Found\"}");
         assertThrows(OpenWANotFoundError.class, () -> client.calls.rejectCall("s", "call-123"));
     }
+    @Test
+    void createLinkPostsToCallsLink() {
+        tx.respond(200, "{\"link\":\"https://call.whatsapp.com/video/AbC\"}");
+        var res = client.calls.createLink(
+            "s", CreateCallLinkRequest.builder().type("video").startTime(1800000000000.0).build());
+        assertEquals("http://h/api/sessions/s/calls/link", tx.lastRequest().url());
+        assertEquals(HttpMethod.POST, tx.lastRequest().method());
+        assertTrue(tx.lastRequest().body().contains("video"));
+        assertTrue(res.link().contains("call.whatsapp.com"));
+    }
+
 }

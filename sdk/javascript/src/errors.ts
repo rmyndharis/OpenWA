@@ -2,8 +2,9 @@
  * Typed error hierarchy for the OpenWA SDK.
  *
  * The OpenWA API returns NestJS-default errors of the shape:
- *   `{ statusCode: number, message: string | string[], error: string }`
- * This module maps that to a typed, ergonomic error tree so callers can
+ *   `{ statusCode: number, message: string | string[], error?: string }`
+ * `error` is absent whenever the exception carried no explicit message, so it is never required to
+ * recognise the envelope. This module maps that to a typed, ergonomic error tree so callers can
  * `instanceof`-check or branch on `.status`.
  *
  * @packageDocumentation
@@ -80,6 +81,16 @@ export class OpenWARateLimitError extends OpenWAApiError {}
 /** 501 Not Implemented — the active engine does not support this operation. */
 export class OpenWANotImplementedError extends OpenWAApiError {}
 
+/**
+ * 503 Service Unavailable — a transport failure, not a refusal. The gateway answers this when the
+ * engine did not confirm the operation in time: WhatsApp never replied, the socket was down, or the
+ * request budget ran out. **Retryable**, unlike every other typed error here.
+ *
+ * Not every 503 is safe to repeat blindly: the non-idempotent sends (group create, channel create,
+ * media send) are deliberately left unbounded by the gateway precisely so they never answer one.
+ */
+export class OpenWAServiceUnavailableError extends OpenWAApiError {}
+
 /** Thrown when a request exceeds the configured timeout. */
 export class OpenWATimeoutError extends OpenWAError {
   constructor(timeoutMs: number) {
@@ -106,20 +117,29 @@ export function classifyApiError(status: number, message: string, body: unknown,
       return new OpenWARateLimitError(message, status, body, errorKind);
     case 501:
       return new OpenWANotImplementedError(message, status, body, errorKind);
+    case 503:
+      return new OpenWAServiceUnavailableError(message, status, body, errorKind);
     default:
       return new OpenWAApiError(message, status, body, errorKind);
   }
 }
 
-/** Narrow the NestJS error envelope shape: `{ statusCode, message, error }`. */
+/**
+ * Narrow the NestJS error envelope shape: `{ statusCode, message, error }`.
+ *
+ * `error` is optional. NestJS omits it whenever the exception was constructed without an explicit
+ * message — which is what the global ValidationPipe does under `disableErrorMessages`, the default
+ * when `NODE_ENV=production` and `VALIDATION_ERROR_DETAIL` is unset. Every rejected request in a
+ * stock production deployment therefore answers `{ statusCode, message }` and nothing else.
+ */
 interface NestErrorEnvelope {
   statusCode: number;
   message: string | string[];
-  error: string;
+  error?: string;
 }
 
 function isNestEnvelope(body: unknown): body is NestErrorEnvelope {
-  return typeof body === 'object' && body !== null && 'statusCode' in body && 'message' in body && 'error' in body;
+  return typeof body === 'object' && body !== null && 'statusCode' in body && 'message' in body;
 }
 
 function describeMessage(message: string | string[] | unknown): string {

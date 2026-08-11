@@ -5,7 +5,7 @@ Backed by ``src/modules/webhook/webhook.controller.ts``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, TypedDict
 
 from .._http import quote_segment
 from ..types import CreateWebhookRequest, UpdateWebhookRequest, WebhookResponse, WebhookTestResult
@@ -14,9 +14,37 @@ if TYPE_CHECKING:
     from .._http import HttpExecutor
 
 
+class WebhookListQuery(TypedDict, total=False):
+    """Pagination for the cross-session webhook list and the delivery-failure log."""
+
+    limit: int
+    offset: int
+
+
+class DeliveryFailureQuery(WebhookListQuery, total=False):
+    """Filter for :meth:`WebhooksResource.delivery_failures`."""
+
+    sessionId: str
+
+
 class WebhooksResource:
     def __init__(self, http: "HttpExecutor") -> None:
         self._http = http
+
+    def list_all(self, query: WebhookListQuery | None = None) -> list[WebhookResponse]:
+        """List webhooks across EVERY session the key can see, not one session's.
+
+        Requires an OPERATOR-level key.
+        """
+        return self._http.request("GET", "/api/webhooks", query=query)
+
+    def delivery_failures(self, query: DeliveryFailureQuery | None = None) -> Any:
+        """Deliveries that were ATTEMPTED and failed -- the diagnostic for a webhook that stopped arriving.
+
+        Requires an ADMIN-level key. A delivery a smart filter suppressed never reaches this log. The
+        response has no published schema, so it is returned unshaped.
+        """
+        return self._http.request("GET", "/api/webhooks/delivery-failures", query=query)
 
     def list(self, session_id: str) -> list[WebhookResponse]:
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/webhooks")

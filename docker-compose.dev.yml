@@ -121,6 +121,7 @@ services:
       # file has no env_file, so a variable absent from this list never reaches the container and
       # the feature it gates stays off however the operator's .env is written.
       - CHAT_MEDIA_ARCHIVE_ENABLED=${CHAT_MEDIA_ARCHIVE_ENABLED:-}
+      - CHAT_MEDIA_ARCHIVE_OUTBOUND=${CHAT_MEDIA_ARCHIVE_OUTBOUND:-}
       - CHAT_MEDIA_ARCHIVE_MAX_BYTES=${CHAT_MEDIA_ARCHIVE_MAX_BYTES:-}
       - CHAT_MEDIA_ARCHIVE_TTL_DAYS=${CHAT_MEDIA_ARCHIVE_TTL_DAYS:-}
       - CHAT_MEDIA_ORPHAN_SWEEP_INTERVAL_MS=${CHAT_MEDIA_ORPHAN_SWEEP_INTERVAL_MS:-}

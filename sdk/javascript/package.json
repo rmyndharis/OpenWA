@@ -1,6 +1,6 @@
 {
     "name": "@rmyndharis/openwa",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "Official JavaScript/TypeScript SDK for OpenWA WhatsApp API Gateway",
     "type": "module",
     "main": "./dist/cjs/index.js",

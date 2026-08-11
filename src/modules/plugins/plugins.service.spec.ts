@@ -14,7 +14,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import AdmZip from 'adm-zip';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { PluginsService, isIngressCapable } from './plugins.service';
@@ -22,7 +22,7 @@ import { fetchSafeBuffer } from './plugin-download';
 import { SECRET_SENTINEL } from './redact-config';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { PluginStorageService } from '../../core/plugins/plugin-storage.service';
-import { PluginStatus } from '../../core/plugins/plugin.interfaces';
+import { PluginStatus, PluginType } from '../../core/plugins/plugin.interfaces';
 import { HookManager } from '../../core/hooks';
 
 const manifest = { id: 'svc-plg', name: 'Svc Plugin', version: '1.0.0', type: 'extension', main: 'index.js' };
@@ -642,5 +642,196 @@ describe('PluginsService — disable when the plugin is not loaded', () => {
   it('still throws NotFound for an id with no registry entry at all', async () => {
     const { service } = build();
     await expect(service.disable('never-installed')).rejects.toThrow(/not found/i);
+  });
+});
+
+/**
+ * Recovery for a plugin the gateway still has a registry entry for but whose code is gone — the
+ * state the loader announces on every boot ("Reinstall it — its config and stored data are kept").
+ *
+ * Under the shipped layout `plugins.dir` IS `<dataDir>/plugins`, so a plugin's package directory and
+ * its `ctx.storage` directory are the same path. `ctx.storage` is created eagerly the first time the
+ * plugin is enabled, so the directory outlives the package — which is exactly what a container
+ * recreate leaves behind when the code lived in the image layer and the data on a volume. Both
+ * recovery routes then asked the wrong oracle about it: install read the filesystem (a directory
+ * exists, so 409) and uninstall read the runtime map (nothing loaded, so 404), leaving the entry,
+ * its config and its secrets unremovable through the API.
+ */
+describe('PluginsService — recovering a plugin whose code went missing', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+  let config: ConfigService;
+
+  const build = () => {
+    const storage = new PluginStorageService(config);
+    const loader = new PluginLoaderService(config, new HookManager(), storage, {} as unknown as ModuleRef);
+    return { storage, loader, service: new PluginsService(loader, config) };
+  };
+
+  /** Install, leave a `ctx.storage` file behind, then strip the package — the orphan state. */
+  function orphan(): ReturnType<typeof build> {
+    const first = build();
+    first.service.install({ buffer: pkg() });
+    first.loader.setOperatorEnabled('svc-plg', true);
+    first.storage.setPluginConfig('svc-plg', { token: 'keep-me' });
+    fs.writeFileSync(path.join(pluginsDir, 'svc-plg', 'key-abc.json'), '{"lastId":"msg-42"}');
+
+    fs.rmSync(path.join(pluginsDir, 'svc-plg', 'manifest.json'));
+    fs.rmSync(path.join(pluginsDir, 'svc-plg', 'index.js'));
+
+    const restarted = build();
+    expect(restarted.loader.getPlugin('svc-plg')).toBeUndefined();
+    expect(restarted.loader.getRegistryEntry('svc-plg')).toBeDefined();
+    return restarted;
+  }
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-orphan-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    config = {
+      get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService;
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  it('reinstalls over the surviving storage directory, keeping config and stored data', () => {
+    const { service, loader, storage } = orphan();
+
+    const dto = service.install({ buffer: pkg() });
+
+    expect(dto.id).toBe('svc-plg');
+    expect(loader.getPlugin('svc-plg')).toBeDefined();
+    // The two promises the boot warning makes: stored data and config both survive the reinstall.
+    expect(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'key-abc.json'), 'utf8')).toContain('msg-42');
+    expect(storage.getPluginConfig('svc-plg')).toEqual({ token: 'keep-me' });
+    expect(storage.getPluginEntry('svc-plg')?.enabledByOperator).toBe(true);
+  });
+
+  it('uninstalls an orphan, taking the registry entry and the directory with it', async () => {
+    const { service, storage } = orphan();
+
+    const res = await service.uninstall('svc-plg');
+
+    expect(res.success).toBe(true);
+
+    expect(storage.getPluginEntry('svc-plg')).toBeUndefined();
+    expect(fs.existsSync(path.join(pluginsDir, 'svc-plg'))).toBe(false);
+  });
+
+  it('does not delete surviving stored data when the reinstall itself fails', () => {
+    // Narrowing the install guard turns the rollback into a data-loss path: it used to remove a
+    // directory install had just created, and would now remove one holding the operator's data.
+    const { service, loader } = orphan();
+    jest.spyOn(loader, 'loadPlugin').mockImplementation(() => {
+      throw new Error('bad package');
+    });
+
+    expect(() => service.install({ buffer: pkg() })).toThrow(BadRequestException);
+
+    expect(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'key-abc.json'), 'utf8')).toContain('msg-42');
+  });
+
+  it('still refuses to install over a directory the gateway does not own', () => {
+    const { service } = build();
+    fs.mkdirSync(path.join(pluginsDir, 'svc-plg'), { recursive: true });
+    fs.writeFileSync(path.join(pluginsDir, 'svc-plg', 'operator-notes.txt'), 'not ours');
+
+    // No registry entry: the gateway never installed this, so merging a package into it would
+    // silently adopt whatever is already there.
+    expect(() => service.install({ buffer: pkg() })).toThrow(ConflictException);
+  });
+
+  it('still refuses a duplicate install of a loaded plugin', () => {
+    const { service } = build();
+    service.install({ buffer: pkg() });
+
+    expect(() => service.install({ buffer: pkg() })).toThrow(ConflictException);
+  });
+
+  it('refuses a plugin path that is a symlink escaping the plugins directory', () => {
+    // `existsSync` follows symlinks, so the unconditional guard this replaced happened to refuse
+    // this too. Narrowing it to registry-owned directories must not hand the reinstall a path that
+    // resolves outside the plugins dir: every write below goes through the link, and so does the
+    // rollback's delete.
+    const outside = path.join(tmpDir, 'outside');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'manifest.json'), 'victim');
+    const { service, storage } = orphan();
+    fs.rmSync(path.join(pluginsDir, 'svc-plg'), { recursive: true, force: true });
+    fs.symlinkSync(outside, path.join(pluginsDir, 'svc-plg'));
+    expect(storage.getPluginEntry('svc-plg')).toBeDefined();
+
+    expect(() => service.install({ buffer: pkg() })).toThrow(ConflictException);
+
+    expect(fs.readFileSync(path.join(outside, 'manifest.json'), 'utf8')).toBe('victim');
+  });
+
+  it('does not delete a file the failed install never got as far as writing', () => {
+    // The rollback removes what this install wrote. Removing every entry path instead would reach
+    // files the write never reached — the previous version's, still sitting in a directory the
+    // reinstall was supposed to leave intact.
+    const { service } = orphan();
+    fs.writeFileSync(path.join(pluginsDir, 'svc-plg', 'index.js'), 'previous version');
+    // Fail the very first write, so the install has written nothing: every entry path still holds
+    // whatever was there before, and the rollback must leave all of it alone.
+    const write = jest.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+
+    expect(() => service.install({ buffer: pkg() })).toThrow(BadRequestException);
+
+    expect(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'index.js'), 'utf8')).toBe('previous version');
+    write.mockRestore();
+  });
+
+  it('answers a conflict, not a crash, when a package entry path is occupied by a directory', () => {
+    // The write fails with EISDIR, and the rollback's `rmSync(..., { force: true })` fails the same
+    // way — `force` suppresses ENOENT, not EISDIR — so without care the second throw escapes the
+    // catch entirely and the route answers 500 where it used to answer 409.
+    const { service } = orphan();
+    fs.mkdirSync(path.join(pluginsDir, 'svc-plg', 'manifest.json'), { recursive: true });
+
+    expect(() => service.install({ buffer: pkg() })).toThrow(ConflictException);
+  });
+
+  it('still throws NotFound when uninstalling an id the gateway has never seen', async () => {
+    const { service } = build();
+    await expect(service.uninstall('never-installed')).rejects.toThrow(NotFoundException);
+  });
+
+  it('refuses to uninstall a built-in whose code is not loaded', async () => {
+    const { service, storage } = build();
+    storage.setPluginEntry({
+      id: 'whatsapp-web.js',
+      type: PluginType.ENGINE,
+      name: 'WhatsApp Web',
+      version: '1.0.0',
+      status: PluginStatus.INSTALLED,
+      config: {},
+      builtIn: true,
+      installedAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // Reaching the loader's built-in check is the point: this used to 404 as "unknown id", which
+    // docs/06 already described as a 400.
+    await expect(service.uninstall('whatsapp-web.js')).rejects.toThrow(BadRequestException);
+    expect(storage.getPluginEntry('whatsapp-web.js')).toBeDefined();
+  });
+
+  it('merges the new package over the old files rather than replacing the directory', () => {
+    // Accepted residual, pinned here so it is a decision rather than a surprise: the directory also
+    // holds ctx.storage under the shipped layout, so a reinstall cannot clear it first. A file the
+    // previous package version shipped and the new one dropped therefore stays on disk. It is inert
+    // — nothing loads a file the manifest does not point at — but it is not cleaned up.
+    const first = build();
+    first.service.install({ buffer: pkg() });
+    fs.writeFileSync(path.join(pluginsDir, 'svc-plg', 'legacy.js'), 'module.exports = {};');
+    fs.rmSync(path.join(pluginsDir, 'svc-plg', 'manifest.json'));
+
+    build().service.install({ buffer: pkg({ version: '2.0.0' }) });
+
+    expect(fs.existsSync(path.join(pluginsDir, 'svc-plg', 'legacy.js'))).toBe(true);
   });
 });

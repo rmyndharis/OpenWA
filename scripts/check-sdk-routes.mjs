@@ -22,8 +22,12 @@
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('../', import.meta.url).pathname;
+// fileURLToPath, not URL.pathname: the latter stays percent-encoded, so a checkout under a path
+// containing a space resolves to a directory that does not exist and every read here fails with
+// ENOENT. check-sdk-docs.mjs and check-chart-behaviour.mjs already resolve it this way.
+const root = fileURLToPath(new URL('../', import.meta.url));
 
 /** Every interpolation form the three SDKs use collapses to the same wildcard as an OpenAPI param. */
 const normalize = (path) =>

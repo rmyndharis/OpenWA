@@ -12,6 +12,8 @@ import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type {
   ArchiveChatRequest,
+  PinChatRequest,
+  MuteChatRequest,
   ChatSummary,
   DeleteChatRequest,
   MarkChatRequest,
@@ -90,6 +92,33 @@ export class ChatsResource {
     return this.client.request<SuccessResult>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/chats/archive`,
+      body,
+    });
+  }
+
+  /**
+   * Pin a chat to the top of the list, or unpin it. `success: false` means WhatsApp declined —
+   * an account may pin only three chats at a time.
+   */
+  pin(sessionId: string, body: PinChatRequest): Promise<SuccessResult> {
+    return this.client.request<SuccessResult>({
+      method: 'POST',
+      path: `/api/sessions/${encodeSegment(sessionId)}/chats/pin`,
+      body,
+    });
+  }
+
+  /**
+   * Mute a chat until an absolute timestamp, or unmute it with `muteUntil: null`.
+   *
+   * `muteUntil` is epoch **milliseconds**. Passing seconds points at an instant in 1970, so the
+   * mute expires the moment it is set while the call still succeeds — nothing in the response
+   * distinguishes that from a mute that took effect.
+   */
+  mute(sessionId: string, body: MuteChatRequest): Promise<SuccessResult> {
+    return this.client.request<SuccessResult>({
+      method: 'POST',
+      path: `/api/sessions/${encodeSegment(sessionId)}/chats/mute`,
       body,
     });
   }

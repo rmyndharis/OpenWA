@@ -368,11 +368,16 @@ describe('send paths consult the governor', () => {
     };
     const service = new GroupService({ require: () => engine } as never, pacing as never);
 
-    await expect(service.addParticipants('s1', 'g@g.us', ['a@c.us', 'b@c.us'])).rejects.toBeInstanceOf(HttpException);
-    await expect(service.createGroup('s1', 'New', ['a@c.us'])).rejects.toBeInstanceOf(HttpException);
+    // Addressable ids on purpose: the participant guard runs BEFORE pacing, so a placeholder like
+    // `a@c.us` would 400 first and the governor would never be consulted — this test would then
+    // pass for the wrong reason while asserting nothing about pacing.
+    await expect(service.addParticipants('s1', 'g@g.us', ['628111111@c.us', '628222222@c.us'])).rejects.toBeInstanceOf(
+      HttpException,
+    );
+    await expect(service.createGroup('s1', 'New', ['628111111@c.us'])).rejects.toBeInstanceOf(HttpException);
 
-    expect(pacing.assertReachoutAllowed).toHaveBeenNthCalledWith(1, 's1', ['a@c.us', 'b@c.us']);
-    expect(pacing.assertReachoutAllowed).toHaveBeenNthCalledWith(2, 's1', ['a@c.us']);
+    expect(pacing.assertReachoutAllowed).toHaveBeenNthCalledWith(1, 's1', ['628111111@c.us', '628222222@c.us']);
+    expect(pacing.assertReachoutAllowed).toHaveBeenNthCalledWith(2, 's1', ['628111111@c.us']);
     expect(engine.addParticipants).not.toHaveBeenCalled();
     expect(engine.createGroup).not.toHaveBeenCalled();
   });

@@ -94,6 +94,7 @@ Start workflows when WhatsApp events occur.
 | `group.join`                                      | Participant(s) joined a group                 | Welcome messages                             |
 | `group.leave`                                     | Participant(s) left a group                   | Churn tracking                               |
 | `group.update`                                    | Group subject/description/settings changed    | Group administration                         |
+| `group.join_request`                              | Someone asked to join an administered group   | Auto-approve/vet join requests               |
 | `call.received`                                   | Incoming call started ringing                 | Auto-reject + auto-reply bots                |
 
 > [!NOTE]

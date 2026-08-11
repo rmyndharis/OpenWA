@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { ConfigService } from '@nestjs/config';
 import { createLogger } from '../../common/services/logger.service';
 import { HookManager, HookEvent, KNOWN_HOOK_EVENTS, isKnownHookEvent } from '../hooks';
@@ -224,7 +225,15 @@ export class PluginSandboxBridge {
     // than repeated on each way a generation can end.
     this.lastSandboxHookError.delete(pluginId);
     // Containment guard: reject a manifest.main that escapes the plugin dir.
-    const mainPath = this.resolvePluginMainPath(this.pluginsDir, pluginId, plugin.manifest.main);
+    // Anchored to the directory the package was loaded from, which is not necessarily
+    // <plugins.dir>/<id>: the loader also scans the legacy plugins directory, and the worker's
+    // require() of a path in the wrong tree fails with MODULE_NOT_FOUND.
+    const packageDir = plugin.packageDir ?? path.join(this.pluginsDir, pluginId);
+    const mainPath = this.resolvePluginMainPath(
+      path.dirname(packageDir),
+      path.basename(packageDir),
+      plugin.manifest.main,
+    );
     // The capability dispatcher runs a worker request through the SAME context an in-process plugin
     // gets, so permission + session-scope checks (assertPermission / assertSessionActive) apply
     // identically. The worker can only ask; the host is the gatekeeper.

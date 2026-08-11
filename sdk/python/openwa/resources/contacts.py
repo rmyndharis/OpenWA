@@ -72,3 +72,11 @@ class ContactsResource:
 
     def unblock(self, session_id: str, contact_id: str) -> SuccessResult:
         return self._http.request("DELETE", f"/api/sessions/{quote_segment(session_id)}/contacts/{quote_segment(contact_id)}/block")
+
+    def list_blocked(self, session_id: str) -> list[str]:
+        """List the JIDs this account has blocked.
+
+        Session-wide, so it takes no contact id — unlike ``block`` and ``unblock``, which act on one
+        contact. Returns a bare list of ids, not contact records.
+        """
+        return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/contacts/blocked")

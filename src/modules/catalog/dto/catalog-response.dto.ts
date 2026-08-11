@@ -102,8 +102,10 @@ export class ProductMessageResponseDto {
     description:
       'The message id, assigned when the gateway accepts the message for sending. Note the field ' +
       'name: the send routes served by MessageService answer `messageId` for the same value. A 2xx ' +
-      'here means the message was handed to the WhatsApp client, not that it was delivered.',
-    example: 'true_628123456789@c.us_3EB0123456789',
+      'here means the message was handed to the WhatsApp client, not that it was delivered.\n\n' +
+      'This route is Baileys-only, so the id is the bare key id Baileys assigns — not the ' +
+      '`true_<jid>_<id>` serialized form the whatsapp-web.js send routes report.',
+    example: '3EB0C767D26B8A3F6E',
   })
   id!: string;
 

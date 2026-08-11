@@ -19,6 +19,7 @@ from ..types import (
     MessageResponse,
     PaginatedProducts,
     SendCatalogRequest,
+    ProductMessageResponse,
     SendProductRequest,
 )
 
@@ -45,7 +46,7 @@ class CatalogResource:
             "GET", f"/api/sessions/{quote_segment(session_id)}/catalog/products/{quote_segment(product_id)}"
         )
 
-    def send_product(self, session_id: str, body: SendProductRequest) -> MessageResponse:
+    def send_product(self, session_id: str, body: SendProductRequest) -> ProductMessageResponse:
         """Send a product message. Requires an OPERATOR-level key. Shares the messages path."""
         return self._http.request(
             "POST", f"/api/sessions/{quote_segment(session_id)}/messages/send-product", body=body

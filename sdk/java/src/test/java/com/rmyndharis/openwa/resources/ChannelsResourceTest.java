@@ -11,6 +11,8 @@ import com.rmyndharis.openwa.model.ChannelMessageRecord;
 import com.rmyndharis.openwa.model.ChannelRecord;
 import com.rmyndharis.openwa.model.SubscribeChannelRequest;
 import com.rmyndharis.openwa.support.MockTransport;
+import com.rmyndharis.openwa.model.DemoteChannelAdminRequest;
+import com.rmyndharis.openwa.model.TransferChannelOwnershipRequest;
 import org.junit.jupiter.api.Test;
 
 class ChannelsResourceTest {
@@ -99,4 +101,18 @@ class ChannelsResourceTest {
         assertEquals("http://h/api/sessions/s/channels/123@newsletter", tx.lastRequest().url());
         assertEquals(HttpMethod.DELETE, tx.lastRequest().method());
     }
+    @Test
+    void demoteAdminAndTransferOwnershipHitTheirOwnPaths() {
+        tx.respond(200, "{\"success\":true}");
+        client.channels.demoteAdmin("s", "c", DemoteChannelAdminRequest.builder().userId("a@c.us").build());
+        assertEquals("http://h/api/sessions/s/channels/c/admins/demote", tx.lastRequest().url());
+        assertTrue(tx.lastRequest().body().contains("a@c.us"));
+
+        tx.respond(200, "{\"success\":true}");
+        client.channels.transferOwnership(
+            "s", "c", TransferChannelOwnershipRequest.builder().newOwnerId("b@c.us").build());
+        assertEquals("http://h/api/sessions/s/channels/c/owner/transfer", tx.lastRequest().url());
+        assertTrue(tx.lastRequest().body().contains("b@c.us"));
+    }
+
 }

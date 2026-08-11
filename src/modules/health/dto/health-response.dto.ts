@@ -31,7 +31,7 @@ export class ReadinessResponseDto {
 
   @ApiProperty({
     description: 'Per-dependency outcome, keyed by dependency name. Present on both the 200 and the 503.',
-    example: { database: { status: 'up' } },
+    example: { mainDatabase: { status: 'up' }, dataDatabase: { status: 'up' } },
     additionalProperties: { type: 'object' },
   })
   details!: { [dependency: string]: object };

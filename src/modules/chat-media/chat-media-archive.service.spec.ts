@@ -117,6 +117,37 @@ describe('ChatMediaArchiveService', () => {
       expect((await repository.findOneByOrFail({ id: row.id })).mediaPath).toBeNull();
     });
 
+    it.each([['https://example.com/cat.png'], ['HTTPS://example.com/cat.png'], ['http://example.com/cat.png']])(
+      'skips the URL pointer %s rather than decoding it as base64',
+      async url => {
+        // A URL-based send stores the URL STRING as `data`. Buffer.from(url, 'base64') does not
+        // throw — it yields ~18 bytes of noise — and the archive is consulted BEFORE the inline
+        // fallback, so an archived garbage file would be served in place of the correct 404.
+        const row = await saveRow({ mimetype: 'image/png', data: url });
+
+        expect(await enabled().archive(row)).toBeNull();
+
+        expect((await repository.findOneByOrFail({ id: row.id })).mediaPath).toBeNull();
+        const files = [];
+        for await (const f of storageService.iterateFiles('')) files.push(f);
+        expect(files).toEqual([]);
+      },
+    );
+
+    it('does not re-archive a row that already points at a file', async () => {
+      // Outbound rows have two possible writers (the REST/bulk persist and the engine echo), so the
+      // same row can reach archive() twice; a second write would orphan the first file.
+      const row = await saveRow({ mimetype: 'image/png', data: PNG.toString('base64') });
+      const first = await enabled().archive(row);
+
+      const reloaded = await repository.findOneByOrFail({ id: row.id });
+      expect(await enabled().archive(reloaded)).toBeNull();
+
+      const files = [];
+      for await (const f of storageService.iterateFiles('')) files.push(f);
+      expect(files).toEqual([first]);
+    });
+
     it('skips media above the archive cap without touching the row', async () => {
       const row = await saveRow({ mimetype: 'image/png', data: PNG.toString('base64') });
 
@@ -156,7 +187,7 @@ describe('ChatMediaArchiveService', () => {
       const row = await saveRow({ mimetype: 'image/png', data: PNG.toString('base64') });
       const key = await enabled().archive(row);
 
-      expect(await enabled().getMedia('sess-1', row.chatId, row.waMessageId)).toEqual({
+      expect(await enabled().getMedia('sess-1', [row.chatId], row.waMessageId)).toEqual({
         path: key,
         mimetype: 'image/png',
       });
@@ -164,14 +195,30 @@ describe('ChatMediaArchiveService', () => {
 
     it('returns null for a message with nothing archived', async () => {
       const row = await saveRow({ mimetype: 'image/png', data: PNG.toString('base64') });
-      expect(await enabled().getMedia('sess-1', row.chatId, row.waMessageId)).toBeNull();
+      expect(await enabled().getMedia('sess-1', [row.chatId], row.waMessageId)).toBeNull();
     });
 
     it('does not leak another session’s archived media', async () => {
       const row = await saveRow({ mimetype: 'image/png', data: PNG.toString('base64') });
       await enabled().archive(row);
 
-      expect(await enabled().getMedia('other-sess', row.chatId, row.waMessageId)).toBeNull();
+      expect(await enabled().getMedia('other-sess', [row.chatId], row.waMessageId)).toBeNull();
+    });
+
+    it('matches any of the caller’s chatId dialects', async () => {
+      // An outbound row stores the caller's literal chatId or the engine-neutral form depending on
+      // which writer won the persist race, so the archive lookup must accept both — the same
+      // duality MessageService already resolves for the inline fallback.
+      const row = await saveRow(
+        { mimetype: 'image/png', data: PNG.toString('base64') },
+        { chatId: '628111@s.whatsapp.net', direction: MessageDirection.OUTGOING },
+      );
+      const key = await enabled().archive(row);
+
+      expect(await enabled().getMedia('sess-1', ['628111@c.us', '628111@s.whatsapp.net'], row.waMessageId)).toEqual({
+        path: key,
+        mimetype: 'image/png',
+      });
     });
   });
 
@@ -353,17 +400,44 @@ describe('ChatMediaArchiveService', () => {
   });
 
   describe('sweep scheduling', () => {
-    it('schedules no timers while archiving is off', () => {
+    const backdate = (id: string, daysAgo: number): Promise<unknown> =>
+      repository.query('UPDATE messages SET createdAt = ? WHERE id = ?', [
+        new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString(),
+        id,
+      ]);
+
+    it('schedules both sweeps even while archiving is off', () => {
       const setInterval = jest.spyOn(global, 'setInterval');
       const svc = build();
 
       svc.onModuleInit();
 
-      // With the archive off no row can hold a mediaPath, so both sweeps would be recurring
-      // no-op walks of a store they must never touch.
-      expect(setInterval).not.toHaveBeenCalled();
+      // The flag gates the WRITER, not the store. Turning it off on a deployment that has been
+      // archiving leaves every file and every pointer in place, so the maintenance the sweeps
+      // perform — TTL expiry and orphan reclamation — is exactly what still has work to do.
+      expect(setInterval).toHaveBeenCalledTimes(2);
       svc.onModuleDestroy();
       setInterval.mockRestore();
+    });
+
+    it('still expires an archived file past its TTL while archiving is off', async () => {
+      const row = await saveRow({ mimetype: 'image/png', data: PNG.toString('base64') });
+      const key = await enabled().archive(row);
+      await backdate(row.id, 10);
+
+      expect(await build({ 'chatMedia.ttlDays': 7 }).purgeExpired(Date.now())).toBe(1);
+
+      await expect(storageService.getFile(key!)).rejects.toThrow();
+      expect((await repository.findOneByOrFail({ id: row.id })).mediaPath).toBeNull();
+    });
+
+    it('still reaps an unreferenced archive file while archiving is off', async () => {
+      await storageService.putFile(`${CHAT_MEDIA_PREFIX}sess-1/orphan.png`, PNG);
+      const svc = build({ 'chatMedia.orphanGraceMs': 0 });
+
+      expect(await svc.sweepOrphanedMedia(Date.now())).toBe(1);
+
+      await expect(storageService.getFile(`${CHAT_MEDIA_PREFIX}sess-1/orphan.png`)).rejects.toThrow();
     });
 
     it('schedules both sweeps once archiving is on, and clears them on destroy', () => {

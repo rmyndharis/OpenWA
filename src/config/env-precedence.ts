@@ -47,6 +47,7 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   // Chat-media archiving. Blank-forwarded by compose like the storage keys above, so an operator
   // who sets nothing must not have an empty string pin the feature off against data/.env.generated.
   'CHAT_MEDIA_ARCHIVE_ENABLED',
+  'CHAT_MEDIA_ARCHIVE_OUTBOUND',
   'CHAT_MEDIA_ARCHIVE_MAX_BYTES',
   'CHAT_MEDIA_ARCHIVE_TTL_DAYS',
   'CHAT_MEDIA_ORPHAN_SWEEP_INTERVAL_MS',

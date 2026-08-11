@@ -31,15 +31,80 @@ WebhookEvent = Literal[
     "message.received", "message.sent", "message.ack", "message.failed", "message.revoked",
     "message.reaction", "message.edited", "session.status", "session.qr", "session.authenticated",
     "session.disconnected", "session.reconnect_loop", "session.restriction", "presence.update",
-    "group.join", "group.leave", "group.update", "call.received", "status.received",
+    "group.join", "group.leave", "group.update", "group.join_request",
+    "call.received", "status.received",
     "call.accepted", "call.rejected", "call.missed",
     "*",
 ]
 
 
+class SetOwnPresenceRequest(TypedDict):
+    """Body for :meth:`SessionsResource.set_online_presence`.
+
+    ``available`` is True to appear online, False to appear offline (handing notifications back
+    to the phone).
+    """
+
+    available: bool
+
+
+CallLinkType = Literal["audio", "video"]
+
+
+class CreateCallLinkRequest(TypedDict):
+    """Body for :meth:`CallsResource.create_link`.
+
+    ``start_time`` is absolute epoch MILLISECONDS; a link for right now is the current timestamp
+    rather than an omitted field.
+    """
+
+    type: CallLinkType
+    startTime: float
+
+
+class CallLinkResponse(TypedDict):
+    """The shareable WhatsApp call link."""
+
+    link: str
+class DemoteChannelAdminRequest(TypedDict):
+    """Body for :meth:`ChannelsResource.demote_admin`."""
+
+    userId: str
+
+
+class TransferChannelOwnershipRequest(TypedDict):
+    """Body for :meth:`ChannelsResource.transfer_ownership`. The transfer is irreversible."""
+
+    newOwnerId: str
+
+
 class SuccessResult(TypedDict, total=False):
     success: bool
     message: str
+
+
+class ParticipantResult(TypedDict, total=False):
+    """One entry per requested participant, in the order they were requested.
+
+    ``success`` is true only when the engine confirmed the change for this participant. Engines that
+    confirm the batch rather than each member report one success entry per requested id, so a true
+    here does not always mean the engine spoke about that participant individually.
+    """
+
+    id: str
+    success: bool
+    status: int
+    message: str
+
+
+class ParticipantsResult(SuccessResult):
+    """The group membership writes.
+
+    A partial refusal does NOT fail the batch — the request answers 200 and reports the
+    per-participant outcome in ``results``, so ``success`` alone hides a member that was rejected.
+    """
+
+    results: list[ParticipantResult]
 
 
 class ParticipantPresence(TypedDict, total=False):
@@ -149,6 +214,29 @@ class SessionResponse(TypedDict, total=False):
     # session mid automatic-reconnect (engine present) and one stopped with no engine. Absent from a
     # gateway that predates the field (the TypedDict is total=False).
     engineLoaded: bool
+
+
+class SessionConfig(TypedDict):
+    """A session's effective runtime configuration.
+
+    ``None`` on ``maxReconnectAttempts`` means unlimited -- not unset.
+    """
+
+    autoRejectCalls: bool
+    maxReconnectAttempts: int | None
+    reconnectBaseDelay: int
+
+
+class UpdateSessionConfigRequest(TypedDict, total=False):
+    """Partial update of a running session's config -- no re-link, no QR scan.
+
+    Send ``None`` for ``maxReconnectAttempts`` to restore unlimited retries, which no in-range number
+    can express.
+    """
+
+    autoRejectCalls: bool | None
+    maxReconnectAttempts: int | None
+    reconnectBaseDelay: int | None
 
 
 class CreateSessionRequest(TypedDict, total=False):
@@ -489,12 +577,19 @@ class BatchStatusResponse(TypedDict, total=False):
 
 
 class ContactRecord(TypedDict, total=False):
+    """A contact as the gateway returns it.
+
+    ``isBlocked`` is best-effort: the Baileys adapter does not track blocklist state and always
+    reports ``False``.
+    """
+
     id: Jid
     name: str | None
     number: str | None
-    pushname: str | None
-    isBusiness: bool
+    pushName: str | None
     isMyContact: bool
+    isBlocked: bool
+    profilePicUrl: str | None
 
 
 class CheckNumberResponse(TypedDict):
@@ -536,6 +631,22 @@ class GroupSummary(TypedDict, total=False):
     participantsCount: int
     isAdmin: bool
     linkedParentJID: str | None
+
+
+GroupMembershipRequestMethod = Literal["invite_link", "non_admin_add", "linked_group_join"]
+
+
+class GroupMembershipRequest(TypedDict, total=False):
+    """A pending request to join a group.
+
+    Only ``participantId`` is always present; the engine reports the rest when it has it, so treat
+    ``addedById``, ``method`` and ``requestedAt`` as absent rather than assuming a shape.
+    """
+
+    participantId: str
+    addedById: str
+    method: GroupMembershipRequestMethod
+    requestedAt: float
 
 
 class GroupInfo(TypedDict, total=False):
@@ -762,6 +873,26 @@ class ArchiveChatRequest(TypedDict):
     archive: bool
 
 
+class PinChatRequest(TypedDict):
+    """Pin a chat to the top of the list, or unpin it."""
+
+    chatId: str
+    pin: bool
+
+
+class MuteChatRequest(TypedDict):
+    """Mute a chat until an absolute timestamp, or unmute it.
+
+    ``muteUntil`` is epoch **milliseconds**, or ``None`` to unmute now. Milliseconds, not seconds:
+    a seconds-scale value is an instant in 1970, so the mute expires immediately while the request
+    still answers 200. Required rather than optional because the two readings of an omitted value,
+    unmute now and mute indefinitely, are opposites.
+    """
+
+    chatId: str
+    muteUntil: Optional[int]
+
+
 class VotePollRequest(TypedDict):
     """Vote on a poll. options are option TEXTS (no ids); [] clears the vote."""
 
@@ -784,7 +915,7 @@ class UnpinMessageRequest(TypedDict):
 
 
 class MessageMedia(TypedDict):
-    """A message's archived media file: raw bytes plus the served content type."""
+    """A message's stored media: raw bytes plus the served content type."""
 
     data: bytes
     contentType: str | None
@@ -985,6 +1116,17 @@ class PaginatedProducts(TypedDict):
 
     products: list[CatalogProduct]
     pagination: ProductPagination
+
+
+class ProductMessageResponse(TypedDict):
+    """Response of ``send-product``.
+
+    The route answers with the sent message's id under ``id``, not the ``messageId`` the other send
+    routes use.
+    """
+
+    id: str
+    timestamp: int
 
 
 # chatId + productId required; body optional. Modeled total=False for 3.9 compat

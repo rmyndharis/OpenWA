@@ -2497,8 +2497,16 @@ describe('BaileysAdapter media sends', () => {
 
   it('sendStickerMessage sends the sticker buffer', async () => {
     const adapter = await ready();
-    await adapter.sendStickerMessage('628111@s.whatsapp.net', { mimetype: 'image/webp', data: Buffer.from([7]) });
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', { sticker: Buffer.from([7]) });
+    // A REAL WebP (RIFF….WEBP), not an arbitrary byte: Baileys labels every sticker `image/webp`
+    // without transcoding, so the adapter guarantees the payload actually is one. A placeholder
+    // buffer here would pin the shape this guarantee exists to prevent. Non-WebP conversion and
+    // refusal are covered in baileys-sticker-webp.spec.ts.
+    const webp = Buffer.from(
+      'UklGRlgAAABXRUJQVlA4WAoAAAAQAAAAAAAAAAAAQUxQSAIAAAAAf1ZQOCAwAAAA0AEAnQEqAQABAAFAJiWgAnS6AfgAA7AA/vLrf/zYFc1z7/f/0uD9Lg/S4P/SkAAA',
+      'base64',
+    );
+    await adapter.sendStickerMessage('628111@s.whatsapp.net', { mimetype: 'image/webp', data: webp });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', { sticker: webp });
   });
 
   it('uses the caller-declared mimetype over the fetched content-type for a URL', async () => {
@@ -3019,6 +3027,23 @@ describe('BaileysAdapter group management', () => {
     expect(fakeSock.groupParticipantsUpdate).toHaveBeenCalledWith('123-456@g.us', ['628111@s.whatsapp.net'], action);
   });
 
+  // A bare number is the documented convenience form on these routes, and the guard accepts it. It
+  // must be qualified BEFORE the engine fold: `toEngineJid` only folds an already-domained user id,
+  // so a bare number went out verbatim and Baileys' encoder wrote it as a packed nibble STRING
+  // rather than a JID_PAIR — WhatsApp received an attribute that was not a JID at all.
+  it.each([
+    ['addParticipants', 'add'],
+    ['removeParticipants', 'remove'],
+    ['promoteParticipants', 'promote'],
+    ['demoteParticipants', 'demote'],
+  ])('%s qualifies a bare number before folding to the engine dialect', async (method, action) => {
+    const adapter = await ready();
+    await (adapter as unknown as Record<string, (g: string, p: string[]) => Promise<void>>)[method]('123-456@g.us', [
+      '628111',
+    ]);
+    expect(fakeSock.groupParticipantsUpdate).toHaveBeenCalledWith('123-456@g.us', ['628111@s.whatsapp.net'], action);
+  });
+
   it('participant ops pass @lid ids through unchanged (lid addressing mode)', async () => {
     const adapter = await ready();
     await adapter.addParticipants('123-456@g.us', ['111@lid']);
@@ -3028,8 +3053,14 @@ describe('BaileysAdapter group management', () => {
   it('createGroup folds neutral @c.us participants to the engine dialect, keeping @lid raw', async () => {
     fakeSock.groupCreate.mockResolvedValue(META);
     const adapter = await ready();
-    await adapter.createGroup('G', ['628111@c.us', '222@lid']);
-    expect(fakeSock.groupCreate).toHaveBeenCalledWith('G', ['628111@s.whatsapp.net', '222@lid']);
+    // The bare number belongs here too: it is the documented convenience form, and unqualified it
+    // reaches the socket as a non-JID string.
+    await adapter.createGroup('G', ['628111@c.us', '222@lid', '628333']);
+    expect(fakeSock.groupCreate).toHaveBeenCalledWith('G', [
+      '628111@s.whatsapp.net',
+      '222@lid',
+      '628333@s.whatsapp.net',
+    ]);
   });
 
   it('leaveGroup / setGroupSubject / setGroupDescription delegate to the socket', async () => {
@@ -3214,6 +3245,43 @@ describe('BaileysAdapter group management', () => {
     await expect(adapter.removeParticipants('123-456@g.us', ['628111@c.us'])).rejects.toBeInstanceOf(
       EngineRefusedError,
     );
+  });
+
+  it.each([['addParticipants'], ['removeParticipants'], ['promoteParticipants'], ['demoteParticipants']])(
+    '%s maps a batch-level server refusal to 403 rather than letting a raw Boom escape',
+    async method => {
+      // The per-participant array is the usual refusal channel, but WhatsApp can also reject the IQ
+      // itself — assertNodeErrorFree then throws with the WA code on `data`, and without a mapping
+      // that reaches the caller as an unhandled 500. Every other write in this adapter maps it.
+      fakeSock.groupParticipantsUpdate.mockRejectedValueOnce(Object.assign(new Error('not-authorized'), { data: 403 }));
+      const adapter = await ready();
+      const err = await (adapter as unknown as Record<string, (g: string, p: string[]) => Promise<unknown>>)
+        [method]('123-456@g.us', ['628111@c.us'])
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineRefusedError);
+    },
+  );
+
+  it('rethrows a transport failure on a participant update instead of calling it a refusal', async () => {
+    // A dead socket carries a DisconnectReason-shaped statusCode but no numeric `data`; folding it
+    // into a refusal would report "admin rights may be missing" for a connection that simply died.
+    const connectionClosed = new Boom('Connection Closed', { statusCode: 428 });
+    fakeSock.groupParticipantsUpdate.mockRejectedValueOnce(connectionClosed);
+    const adapter = await ready();
+    const err = await adapter.removeParticipants('123-456@g.us', ['628111@c.us']).catch((e: unknown) => e);
+    expect(err).toBe(connectionClosed);
+  });
+
+  it('keeps an unanswered participant update a 503, not a 403', async () => {
+    // The query deadline sits INSIDE the refusal mapping, so the timeout's own error travels through
+    // mapServerRefusal on its way out. It must arrive unchanged: an unanswered write is a transport
+    // failure, and reporting it as "admin rights may be missing" sends operators to the wrong layer.
+    const unanswered = new EngineTransportError('WhatsApp did not answer the participant remove in time');
+    fakeSock.groupParticipantsUpdate.mockRejectedValueOnce(unanswered);
+    const adapter = await ready();
+    const err = await adapter.removeParticipants('123-456@g.us', ['628111@c.us']).catch((e: unknown) => e);
+    expect(err).toBe(unanswered);
+    expect(err).not.toBeInstanceOf(EngineRefusedError);
   });
 
   it.each([
@@ -3423,6 +3491,46 @@ describe('BaileysAdapter group events (group-participants.update / groups.update
     });
 
     expect(firstEvent(onGroupEvent).actorId).toBeUndefined();
+  });
+
+  it('maps a created group.join-request to a neutral join_request GroupEvent', async () => {
+    const { onGroupEvent } = await readyWithGroupEvents();
+
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1782000000_000);
+    try {
+      fakeSock.fire('group.join-request', {
+        id: '123-456@g.us',
+        author: '628444@s.whatsapp.net',
+        participant: '628111@s.whatsapp.net',
+        action: 'created',
+        method: 'invite_link',
+      });
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(onGroupEvent).toHaveBeenCalledTimes(1);
+    expect(firstEvent(onGroupEvent)).toEqual({
+      kind: 'join_request',
+      groupId: '123-456@g.us',
+      actorId: '628444@c.us',
+      participantIds: ['628111@c.us'],
+      timestamp: 1782000000, // the Baileys event is undated: stamped at receipt
+    });
+  });
+
+  it('drops a revoked group.join-request — only the request being MADE is surfaced', async () => {
+    const { onGroupEvent } = await readyWithGroupEvents();
+
+    fakeSock.fire('group.join-request', {
+      id: '123-456@g.us',
+      author: '628444@s.whatsapp.net',
+      participant: '628111@s.whatsapp.net',
+      action: 'revoked',
+      method: 'invite_link',
+    });
+
+    expect(onGroupEvent).not.toHaveBeenCalled();
   });
 
   it('maps groups.update entries to update GroupEvents with the neutral changes delta', async () => {

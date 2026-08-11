@@ -18,6 +18,7 @@ import type {
   MessageResponse,
   PaginatedProducts,
   SendCatalogRequest,
+  ProductMessageResponse,
   SendProductRequest,
 } from '../types.js';
 
@@ -50,8 +51,8 @@ export class CatalogResource {
   }
 
   /** Send a product message. Requires an OPERATOR-level key. Shares the messages path. */
-  sendProduct(sessionId: string, body: SendProductRequest): Promise<MessageResponse> {
-    return this.client.request<MessageResponse>({
+  sendProduct(sessionId: string, body: SendProductRequest): Promise<ProductMessageResponse> {
+    return this.client.request<ProductMessageResponse>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/messages/send-product`,
       body,

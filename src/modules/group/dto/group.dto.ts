@@ -64,6 +64,26 @@ export class ParticipantsDto {
   participants!: string[];
 }
 
+/**
+ * Approve/reject body for the membership-request routes. `participants` names specific requesters;
+ * omitted (or an empty body) means EVERY pending request — mirroring both engines' act-on-all form.
+ * ValidateIf (not @IsOptional) so an explicit `null` fails validation (400) instead of being read
+ * as approve-all: misreading a malformed client shape here mass-approves join requests.
+ */
+export class MembershipRequestActionDto {
+  @ApiPropertyOptional({
+    description: 'Requester WhatsApp IDs (e.g. 628123456789@c.us). Omit to act on every pending request.',
+    type: [String],
+    maxItems: GROUP_PARTICIPANTS_MAX,
+  })
+  @ValidateIf(o => (o as MembershipRequestActionDto).participants !== undefined)
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(GROUP_PARTICIPANTS_MAX)
+  @IsString({ each: true })
+  participants?: string[];
+}
+
 export class GroupSubjectDto {
   @ApiProperty({ description: 'New group subject/name', maxLength: GROUP_NAME_MAX_LENGTH })
   @IsString()

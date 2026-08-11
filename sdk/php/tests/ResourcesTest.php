@@ -55,6 +55,18 @@ class ResourcesTest extends TestCase
         $this->assertStringContainsString('/sessions/stats/overview', $backend->lastCall()['url']);
     }
 
+    public function testSetOnlinePresence(): void
+    {
+        $backend = new MockBackend();
+        $backend->on(200, ['success' => true]);
+        $client = $backend->makeClient();
+        $client->sessions->setOnlinePresence('s1', ['available' => false]);
+        // The account's own presence: no chat id in the path and no /subscribe suffix.
+        $this->assertSame('PUT', $backend->lastCall()['method']);
+        $this->assertStringEndsWith('/sessions/s1/presence', $backend->lastCall()['url']);
+        $this->assertSame(['available' => false], $backend->lastCall()['body']);
+    }
+
     // ── Groups ────────────────────────────────────────────────────────
 
     public function testGroupListGetCreate(): void
@@ -160,6 +172,19 @@ class ResourcesTest extends TestCase
         $this->assertSame('POST', $backend->calls()[0]['method']);
         $client->contacts->unblock('s', 'a@c.us');
         $this->assertSame('DELETE', $backend->calls()[1]['method']);
+    }
+
+    public function testListBlockedGetsSessionWideRoute(): void
+    {
+        $backend = (new MockBackend())->on(200, ['a@c.us', 'b@c.us']);
+        $client = $backend->makeClient();
+        $res = $client->contacts->listBlocked('s');
+        $call = $backend->lastCall();
+        $this->assertSame('GET', $call['method']);
+        // Session-wide: no contact id in the path, and not the /contacts list route.
+        $this->assertSame('/api/sessions/s/contacts/blocked', $call['path']);
+        $this->assertNull($call['body']);
+        $this->assertSame(['a@c.us', 'b@c.us'], $res);
     }
 
     public function testProfilePicturesBatchResolvesIdsQuery(): void
@@ -286,6 +311,48 @@ class ResourcesTest extends TestCase
         $this->assertSame('POST', $backend->lastCall()['method']);
     }
 
+    public function testChatsPinPostsTheFlag(): void
+    {
+        $backend = new MockBackend();
+        $backend->on(200, ['success' => true]);
+        $client = $backend->makeClient();
+        $client->chats->pin('s', ['chatId' => 'a@c.us', 'pin' => true]);
+        $this->assertSame('/api/sessions/s/chats/pin', $backend->lastCall()['path']);
+        $this->assertSame('POST', $backend->lastCall()['method']);
+        $this->assertSame(['chatId' => 'a@c.us', 'pin' => true], $backend->lastCall()['body']);
+    }
+
+    public function testChatsPinReportsRefusalRatherThanThrowing(): void
+    {
+        $backend = new MockBackend();
+        $backend->on(200, ['success' => false]);
+        $client = $backend->makeClient();
+        $this->assertSame(['success' => false], $client->chats->pin('s', ['chatId' => 'a@c.us', 'pin' => true]));
+    }
+
+    public function testChatsMuteSendsEpochMillisecondsUnchanged(): void
+    {
+        // The value must arrive as the exact millisecond number given. A client that divided by 1000
+        // would still get a 200 back; the wrong unit is only visible on the wire.
+        $backend = new MockBackend();
+        $backend->on(200, ['success' => true]);
+        $client = $backend->makeClient();
+        $client->chats->mute('s', ['chatId' => 'a@c.us', 'muteUntil' => 1893456000000]);
+        $this->assertSame('/api/sessions/s/chats/mute', $backend->lastCall()['path']);
+        $this->assertSame(['chatId' => 'a@c.us', 'muteUntil' => 1893456000000], $backend->lastCall()['body']);
+    }
+
+    public function testChatsMuteSendsExplicitNullToUnmute(): void
+    {
+        // null is the unmute signal and is NOT the same as omitting the key, which the route rejects.
+        $backend = new MockBackend();
+        $backend->on(200, ['success' => true]);
+        $client = $backend->makeClient();
+        $client->chats->mute('s', ['chatId' => 'a@c.us', 'muteUntil' => null]);
+        $this->assertArrayHasKey('muteUntil', $backend->lastCall()['body']);
+        $this->assertNull($backend->lastCall()['body']['muteUntil']);
+    }
+
     // ── Status (Stories) ──────────────────────────────────────────────
 
     public function testStatusSendForwardsRequiredRecipientsAndNestedMedia(): void
@@ -394,4 +461,40 @@ class ResourcesTest extends TestCase
         $this->assertSame('POST', $backend->calls()[3]['method']);
         $this->assertStringContainsString('/auth/validate', $backend->calls()[3]['url']);
     }
+
+    public function testGroupMembershipRequests(): void
+    {
+        $backend = new MockBackend();
+        $backend->on(200, [['participantId' => 'a@c.us', 'method' => 'invite_link']]);
+        $backend->on(200, ['success' => true, 'message' => 'ok', 'results' => []]);
+        $backend->on(200, ['success' => true, 'message' => 'ok', 'results' => []]);
+        $client = $backend->makeClient();
+
+        $pending = $client->groups->getMembershipRequests('s', 'g1@g.us');
+        $this->assertSame('GET', $backend->lastCall()['method']);
+        $this->assertStringEndsWith('/groups/g1@g.us/membership-requests', $backend->lastCall()['url']);
+        $this->assertSame('a@c.us', $pending[0]['participantId']);
+
+        $client->groups->approveMembershipRequests('s', 'g1@g.us', ['a@c.us']);
+        $this->assertStringEndsWith('/membership-requests/approve', $backend->lastCall()['url']);
+        $this->assertSame(['participants' => ['a@c.us']], $backend->lastCall()['body']);
+
+        // Omitting the list means "every pending request": an empty body, not a null participants key.
+        $client->groups->rejectMembershipRequests('s', 'g1@g.us');
+        $this->assertStringEndsWith('/membership-requests/reject', $backend->lastCall()['url']);
+        $this->assertSame([], $backend->lastCall()['body']);
+    }
+
+    public function testCreateCallLink(): void
+    {
+        $backend = new MockBackend();
+        $backend->on(200, ['link' => 'https://call.whatsapp.com/video/AbC']);
+        $client = $backend->makeClient();
+        $res = $client->calls->createLink('s', ['type' => 'video', 'startTime' => 1800000000000]);
+        $this->assertSame('POST', $backend->lastCall()['method']);
+        $this->assertStringEndsWith('/sessions/s/calls/link', $backend->lastCall()['url']);
+        $this->assertSame(['type' => 'video', 'startTime' => 1800000000000], $backend->lastCall()['body']);
+        $this->assertStringContainsString('call.whatsapp.com', $res['link']);
+    }
+
 }

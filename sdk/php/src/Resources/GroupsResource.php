@@ -176,4 +176,46 @@ class GroupsResource
     {
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/groups/{$this->http->encodeSegment($groupId)}/invite-code/revoke");
     }
+
+    /**
+     * List a group's pending join requests. Requires the account to be a group admin.
+     *
+     * Only `participantId` is guaranteed on each entry — the engine reports the rest when it has it.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function getMembershipRequests(string $sessionId, string $groupId): array
+    {
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/groups/{$this->http->encodeSegment($groupId)}/membership-requests") ?? [];
+    }
+
+    /**
+     * Approve pending join requests. Pass null to approve every pending request.
+     *
+     * A partial refusal answers 200 and reports it per participant in `results`, so `success` alone
+     * does not mean everyone was let in.
+     *
+     * @param list<string>|null $participants
+     * @return array<string,mixed>
+     */
+    public function approveMembershipRequests(string $sessionId, string $groupId, ?array $participants = null): array
+    {
+        $body = $participants === null ? [] : ['participants' => $participants];
+
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/groups/{$this->http->encodeSegment($groupId)}/membership-requests/approve", [], $body);
+    }
+
+    /**
+     * Reject pending join requests. Pass null to reject every pending request.
+     *
+     * @param list<string>|null $participants
+     * @return array<string,mixed>
+     */
+    public function rejectMembershipRequests(string $sessionId, string $groupId, ?array $participants = null): array
+    {
+        $body = $participants === null ? [] : ['participants' => $participants];
+
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/groups/{$this->http->encodeSegment($groupId)}/membership-requests/reject", [], $body);
+    }
+
 }

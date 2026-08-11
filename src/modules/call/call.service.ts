@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EngineRegistry } from '../../engine/engine-registry.service';
-import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { CallLinkType, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
 /**
  * Owns engine access for call operations. Controllers depend on this service instead of
@@ -23,5 +23,13 @@ export class CallService {
    */
   rejectCall(sessionId: string, callId: string): Promise<void> {
     return this.getEngine(sessionId).rejectCall(callId);
+  }
+
+  /**
+   * Generate a shareable call link. A WhatsApp-side refusal (no link generated) surfaces as 403 via
+   * the adapter's EngineRefusedError rather than as a success carrying an empty string.
+   */
+  createCallLink(sessionId: string, type: CallLinkType, startTime: number): Promise<string> {
+    return this.getEngine(sessionId).createCallLink(type, startTime);
   }
 }

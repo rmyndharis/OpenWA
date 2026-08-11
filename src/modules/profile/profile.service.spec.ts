@@ -28,6 +28,20 @@ describe('ProfileService', () => {
     expect(setProfileStatus).toHaveBeenCalledWith('');
   });
 
+  it('deleteProfilePicture delegates to the engine with no arguments (the account is implicit)', async () => {
+    const deleteProfilePicture = jest.fn().mockResolvedValue(undefined);
+    await makeService({ deleteProfilePicture }).deleteProfilePicture('s1');
+    // Called with nothing: the engine removes the picture of the account it is already bound to, so
+    // forwarding the sessionId here would be a jid the adapter never asked for.
+    expect(deleteProfilePicture).toHaveBeenCalledWith();
+  });
+
+  it('deleteProfilePicture throws 400 when the engine is missing', () => {
+    // The route carries no body, so this guard is the only pre-check standing between the caller and
+    // the adapter.
+    expect(() => makeService(undefined).deleteProfilePicture('s1')).toThrow(BadRequestException);
+  });
+
   describe('setProfilePicture', () => {
     it('rejects a body with neither url nor base64 (400)', () => {
       // The guard throws synchronously (the service method is a thin sync pass-through, like GroupService).

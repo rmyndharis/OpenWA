@@ -30,6 +30,51 @@ const HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch', 'options', 'head'
 type PathItem = Record<string, { security?: unknown } | undefined>;
 
 /**
+ * The complete field set an OpenAPI 3.0 Path Item Object may carry. The 3.0 schema declares the object
+ * `additionalProperties: false` apart from `^x-`, so anything outside this set makes the whole document
+ * fail schema validation — not just the path it appears on.
+ */
+const OPENAPI_3_PATH_ITEM_FIELDS = new Set([
+  '$ref',
+  'summary',
+  'description',
+  'get',
+  'put',
+  'post',
+  'delete',
+  'options',
+  'head',
+  'patch',
+  'trace',
+  'servers',
+  'parameters',
+]);
+
+/**
+ * Drop path-item entries OpenAPI 3.0 cannot express, so the published document validates.
+ *
+ * `@nestjs/swagger` expands an `@All()` route over its own hardcoded method list, which includes
+ * `search` (`swagger-explorer.js`). SEARCH is a real HTTP method Nest routes at runtime — `RequestMethod`
+ * defines it, along with the WebDAV verbs — but OpenAPI 3.0 has no field for it, so publishing the
+ * operation trades a documented method for an invalid document. The route keeps answering it; only the
+ * unexpressible description of it goes.
+ *
+ * Written as an allowlist rather than a denylist on purpose: upstream is free to widen its expansion
+ * list again (PROPFIND, MKCOL, …), and a denylist would silently let the next one through. Mutates and
+ * returns the document.
+ */
+export function dropUnexpressibleOperations(document: OpenAPIObject): OpenAPIObject {
+  for (const item of Object.values(document.paths ?? {})) {
+    for (const field of Object.keys(item)) {
+      if (!OPENAPI_3_PATH_ITEM_FIELDS.has(field) && !field.startsWith('x-')) {
+        delete (item as Record<string, unknown>)[field];
+      }
+    }
+  }
+  return document;
+}
+
+/**
  * Set `security: []` on every operation of a @Public route so the published spec reflects
  * that no API key is required (an empty `security` array overrides the document's global
  * X-API-Key requirement per OpenAPI 3). Mutates and returns the document.

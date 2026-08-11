@@ -41,8 +41,9 @@ const isStatusSeedOnReadyEnabled = (): boolean => process.env.STATUS_SEED_ON_REA
 
 // Message types that carry downloadable media. Any persisted row of these types must have a media
 // marker in metadata — never NULL — or the dashboard renders an empty bubble (no placeholder) and the
-// by-type stats filter skips the row. Sources that lack the payload (wwjs own-send echo, media-free
-// history sync) get the omitted marker synthesized at the persistence chokepoints.
+// by-type stats filter skips the row. Sources that arrive without a media field (media-free history
+// sync, a wwjs own-send echo whose download failed) get the omitted marker synthesized at the
+// persistence chokepoints.
 
 export interface ReconnectState extends ReconnectAttemptState {
   /** The pending attempt's timer. Lives here, not in the policy, which stays free of side effects. */
@@ -447,6 +448,18 @@ export class SessionEngineLifecycle {
    */
   markStopping(id: string): void {
     this.stoppingSessions.add(id);
+  }
+
+  /**
+   * Drop a mark set by markStopping().
+   *
+   * The "harmless, cleared by the next start()" reasoning above holds only while a session row
+   * exists. start() and delete() clear the mark after their own requireSession, so for an id that
+   * has no row neither reclamation path is reachable and the entry would outlive the process. Used
+   * by SessionService for exactly that case; a refusal against a real session still leaves its mark.
+   */
+  clearStopping(id: string): void {
+    this.stoppingSessions.delete(id);
   }
 
   /**

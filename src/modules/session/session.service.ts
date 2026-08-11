@@ -13,10 +13,8 @@ import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, DataSource, FindManyOptions } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { Session, SessionStatus } from './entities/session.entity';
-import { Message } from '../message/entities/message.entity';
 import { CreateSessionDto, SessionConfigResponseDto, UpdateSessionConfigDto } from './dto';
 import { EngineRegistry } from '../../engine/engine-registry.service';
-import { SessionLidResolver } from './session-lid-resolver.service';
 import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
 import { SessionErrorStore } from './session-error-store.service';
 import { SessionRestrictionStore } from './session-restriction-store.service';
@@ -63,15 +61,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return this.engineRegistry;
   }
 
+  /** The detached auto-start run; see onApplicationBootstrap. Awaited by onModuleDestroy. */
+  private autoStartRun: Promise<void> = Promise.resolve();
+  /** Set at the top of onModuleDestroy so the detached run stops launching further sessions. */
+  private shuttingDown = false;
+
   constructor(
     @InjectRepository(Session, 'data')
     private readonly sessionRepository: Repository<Session>,
-    @InjectRepository(Message, 'data')
-    private readonly messageRepository: Repository<Message>,
     @InjectDataSource('data')
     private readonly dataSource: DataSource,
     private readonly engineRegistry: EngineRegistry,
-    private readonly lidResolver: SessionLidResolver,
     private readonly watchdog: SessionLivenessWatchdog,
     private readonly sessionErrors: SessionErrorStore,
     private readonly sessionRestrictions: SessionRestrictionStore,
@@ -120,7 +120,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
   }
 
-  async onApplicationBootstrap(): Promise<void> {
+  onApplicationBootstrap(): void {
     // Start the liveness watchdog FIRST: it must run even when auto-start is disabled (sessions can
     // be started via the API at any time), so it can't sit behind the auto-start early-return below.
     // The watchdog owns the probe cadence and failure counting; a session it proves dead comes
@@ -142,6 +142,29 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     if (!resolveFeatureFlags(this.configService).autoStartSessions) return;
 
+    // DETACHED, deliberately. Nest binds the HTTP listener only after every onApplicationBootstrap
+    // hook has settled, and this loop's duration is unbounded: one engine initialization is at least
+    // 60s (resolveEngineInitTimeoutMs) and there is a 2s throttle between sessions, so a host with
+    // ten authenticated sessions kept the port CLOSED — not unhealthy, closed — for ten minutes.
+    // Every liveness probe in that window is a connection refusal, and no probe budget can cover a
+    // bound that scales with the session count: the chart's is ~50s and the Dockerfile HEALTHCHECK
+    // encodes the same expectation. Awaited on shutdown so a launch in flight is accounted for.
+    this.autoStartRun = this.autoStartSessions().catch((error: unknown) => {
+      // Previously this rejected out of the hook and aborted boot, so a transient database error
+      // during the session scan took the whole gateway down rather than the auto-start.
+      this.logger.error('Auto-start scan failed', error instanceof Error ? error.message : String(error), {
+        action: 'auto_start_scan_failed',
+      });
+    });
+  }
+
+  /**
+   * Launch every previously authenticated session this node may claim, one at a time.
+   *
+   * Sequential with a throttle by design — these are Chromium launches — which is exactly why it
+   * cannot run inside the bootstrap hook. See onApplicationBootstrap.
+   */
+  private async autoStartSessions(): Promise<void> {
     // Restricted to sessions this node may claim. Without it every replica scans the same rows and
     // races to launch the same engines, which is a WhatsApp account being opened twice, not merely
     // duplicated work.
@@ -158,6 +181,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     });
 
     for (let i = 0; i < sessions.length; i++) {
+      // A shutdown landing mid-run must not launch anything further: onModuleDestroy tears down what
+      // exists, and a browser launched after that point is never destroyed.
+      if (this.shuttingDown) {
+        this.logger.log(`Auto-start stopped at ${i} of ${sessions.length} session(s): shutting down`, {
+          action: 'auto_start_aborted',
+        });
+        return;
+      }
       const session = sessions[i];
       try {
         await this.start(session.id);
@@ -182,8 +213,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   async onModuleDestroy(): Promise<void> {
     // Stop the watchdog FIRST (before any teardown below can hang): no new probe/disconnect handling
     // may start mid-shutdown. stop() is idempotent, so a second onModuleDestroy call stays safe.
+    this.shuttingDown = true;
     this.watchdog.stop();
     this.ownership?.stopHeartbeat();
+    // A SIGTERM during boot can land while the detached auto-start is mid-launch. Let that one
+    // settle — the flag above stops the loop taking another — so the engine it registers is torn
+    // down below instead of outliving the process as an orphaned browser. Bounded by the launch
+    // already in flight, never by the whole run.
+    await this.autoStartRun;
     // Reconnect timers + engine teardown belong to the lifecycle owner.
     await this.engineLifecycle.shutdown();
     // Released only after the engines are actually down, so a peer never claims a session this
@@ -267,14 +304,6 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return this.sessionRestrictions.attachTo(this.sessionErrors.attachTo(session));
   }
 
-  async findByName(name: string): Promise<Session> {
-    const session = await this.sessionRepository.findOne({ where: { name } });
-    if (!session) {
-      throw new NotFoundException(`Session with name '${name}' not found`);
-    }
-    return session;
-  }
-
   /**
    * Project the opaque `config` column onto the three keys the engine actually reads, resolved
    * through the same clamp the engine uses — so a legacy row holding an out-of-range value reports
@@ -339,9 +368,28 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // COUNT, or delete()'s own requireSession — would let the mark land after that window. A mark
     // left behind when the fence refuses (409) is harmless and is cleared by the next start().
     this.engineLifecycle.markStopping(id);
-    if (this.ownership) await this.assertNotHeldElsewhere(id);
-    await this.engineLifecycle.delete(id);
-    await this.ownership?.release(id);
+    try {
+      if (this.ownership) await this.assertNotHeldElsewhere(id);
+      await this.engineLifecycle.delete(id);
+      await this.ownership?.release(id);
+    } catch (error) {
+      this.discardStopMarkForMissingSession(id, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Reclaim the entry-time stop mark when the id turns out to have no session row.
+   *
+   * The mark is set synchronously, before the awaited existence check — deliberately, and the
+   * comments above say why. A mark left behind by a refusal is harmless because the next start()
+   * clears it, but that presupposes a row: start() and delete() both clear the mark only after
+   * their own requireSession, so for an id that never had one the entry is unreachable by every
+   * reclamation path and survives for the life of the process. A 404 also means there is no engine
+   * and no in-flight start() for the mark to guard, so dropping it is safe as well as necessary.
+   */
+  private discardStopMarkForMissingSession(id: string, error: unknown): void {
+    if (error instanceof NotFoundException) this.engineLifecycle.clearStopping(id);
   }
 
   /**
@@ -384,8 +432,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   async stop(id: string): Promise<Session> {
     // Synchronous stop-mark before the awaited fence — see delete() for why.
     this.engineLifecycle.markStopping(id);
-    if (this.ownership) await this.assertNotHeldElsewhere(id);
-    const session = await this.engineLifecycle.stop(id);
+    let session: Session;
+    try {
+      if (this.ownership) await this.assertNotHeldElsewhere(id);
+      session = await this.engineLifecycle.stop(id);
+    } catch (error) {
+      this.discardStopMarkForMissingSession(id, error);
+      throw error;
+    }
     // Handed back on the way out so a peer can pick it up immediately rather than waiting for the
     // lease to lapse. Stop is the deliberate end of this process's ownership — but a start() that
     // began before this stop and is still mid-launch owns the claim now, so the same
@@ -531,6 +585,21 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   /**
+   * Publish the account's own global presence (appear online/offline). Connection-scoped: the
+   * setting resets on reconnect, so callers re-issue it after `session.status` reports one.
+   */
+  async setOnlinePresence(id: string, available: boolean): Promise<void> {
+    await this.findOne(id);
+    const engine = this.engines.get(id);
+
+    if (!engine) {
+      throw new BadRequestException('Session is not started');
+    }
+
+    return engine.setOnlinePresence(available);
+  }
+
+  /**
    * The last presence WhatsApp reported for a chat, or null when none has been — either because the
    * chat was never subscribed, or because nothing has changed since the subscription was made.
    * Deliberately not an error: "nothing reported yet" is a normal state, not a missing resource.
@@ -591,6 +660,37 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
 
     return engine.archiveChat(chatId, archive);
+  }
+
+  /**
+   * Mute a chat until `muteUntil` (absolute epoch milliseconds), or unmute it with `null`. Unlike
+   * archiveChat there is no "engine declined" outcome — the Baileys mute patch is not keyed to the
+   * chat's last message — so this resolves void and a failure surfaces as an error.
+   */
+  async muteChat(id: string, chatId: string, muteUntil: number | null): Promise<void> {
+    await this.findOne(id); // Verify session exists
+    const engine = this.engines.get(id);
+
+    if (!engine) {
+      throw new BadRequestException('Session is not started');
+    }
+
+    return engine.muteChat(chatId, muteUntil);
+  }
+
+  /**
+   * Pin or unpin a chat. Resolves false only when the engine declined — whatsapp-web.js reports
+   * WhatsApp's three-pin cap; Baileys cannot see it and always resolves true.
+   */
+  async pinChat(id: string, chatId: string, pin: boolean): Promise<boolean> {
+    await this.findOne(id); // Verify session exists
+    const engine = this.engines.get(id);
+
+    if (!engine) {
+      throw new BadRequestException('Session is not started');
+    }
+
+    return engine.pinChat(chatId, pin);
   }
 
   async deleteChat(id: string, chatId: string): Promise<boolean> {
@@ -665,13 +765,6 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         rss: Math.round(memory.rss / 1024 / 1024),
       },
     };
-  }
-
-  /**
-   * Get count of currently active (running) sessions
-   */
-  getActiveCount(): number {
-    return this.engines.size;
   }
 
   /**

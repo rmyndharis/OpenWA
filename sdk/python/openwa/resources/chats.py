@@ -12,6 +12,8 @@ from .._http import quote_segment
 from ..types import (
     ChatPresence,
     ArchiveChatRequest,
+    PinChatRequest,
+    MuteChatRequest,
     ChatSummary,
     DeleteChatRequest,
     MarkChatRequest,
@@ -66,6 +68,22 @@ class ChatsResource:
     def archive(self, session_id: str, body: ArchiveChatRequest) -> SuccessResult:
         """Archive or unarchive a chat. success=False means the engine declined."""
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/chats/archive", body=body)
+
+    def pin(self, session_id: str, body: PinChatRequest) -> SuccessResult:
+        """Pin a chat to the top of the list, or unpin it.
+
+        success=False means WhatsApp declined — an account may pin only three chats at a time.
+        """
+        return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/chats/pin", body=body)
+
+    def mute(self, session_id: str, body: MuteChatRequest) -> SuccessResult:
+        """Mute a chat until an absolute timestamp, or unmute it with ``muteUntil=None``.
+
+        ``muteUntil`` is epoch **milliseconds**. Passing seconds points at an instant in 1970, so the
+        mute expires the moment it is set while the call still succeeds — nothing in the response
+        distinguishes that from a mute that took effect.
+        """
+        return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/chats/mute", body=body)
 
     def clear_messages(self, session_id: str, chat_id: str) -> SuccessResult:
         """Delete every message in a chat, keeping the chat. success=False means the engine declined."""

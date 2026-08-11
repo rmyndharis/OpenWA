@@ -698,7 +698,8 @@ SESSION_DATA_PATH=./data/sessions
 ENGINE_TYPE=whatsapp-web.js
 PUPPETEER_HEADLESS=true
 
-# Swagger is enabled by default. Set false to disable.
+# Swagger defaults ON outside production and OFF under NODE_ENV=production.
+# Set it explicitly to force either way.
 ENABLE_SWAGGER=true
 ```
 

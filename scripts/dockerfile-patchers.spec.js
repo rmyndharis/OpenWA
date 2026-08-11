@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 /**
@@ -40,7 +41,17 @@ test('every patcher is RUN fatally after npm ci', () => {
 });
 
 test('every patcher is also wired into postinstall', () => {
-  const postinstall = fs.readFileSync(path.join(__dirname, 'postinstall.js'), 'utf8');
-  const missing = patchers.filter(p => !postinstall.includes(p));
+  // Ask postinstall what it would run, rather than searching its text for the name. A substring
+  // search is satisfied by the patcher appearing in a comment, so a patcher could be described in
+  // the docblock, wired nowhere, and still pass here.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openwa-patchers-'));
+  fs.mkdirSync(path.join(root, 'scripts'));
+  for (const p of patchers) fs.writeFileSync(path.join(root, 'scripts', p), '// stub\n');
+
+  const planned = require('./postinstall.js')
+    .planSteps(root, {})
+    .flatMap(step => step.args || [])
+    .map(arg => path.basename(arg));
+  const missing = patchers.filter(p => !planned.includes(p));
   assert.deepEqual(missing, [], `not wired into postinstall: ${missing.join(', ')}`);
 });

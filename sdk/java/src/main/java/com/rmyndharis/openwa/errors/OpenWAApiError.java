@@ -107,6 +107,7 @@ public class OpenWAApiError extends OpenWAError {
             case 409 -> new OpenWAConflictError(message, status, body, errorKind);
             case 429 -> new OpenWARateLimitError(message, status, body, errorKind);
             case 501 -> new OpenWANotImplementedError(message, status, body, errorKind);
+            case 503 -> new OpenWAServiceUnavailableError(message, status, body, errorKind);
             default -> new OpenWAApiError(message, status, body, errorKind);
         };
     }

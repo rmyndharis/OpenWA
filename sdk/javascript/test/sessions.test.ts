@@ -51,4 +51,15 @@ describe('SessionsResource — exact paths', () => {
     await c.sessions.stats();
     expect(t.lastCall!.url).toBe('http://x/api/sessions/stats/overview');
   });
+
+  it('setOnlinePresence — PUT with the availability flag', async () => {
+    const t = new MockTransport().on('PUT', /\/presence$/, { body: { success: true } });
+    await client(t).sessions.setOnlinePresence('s1', { available: false });
+
+    expect(t.lastCall!.method).toBe('PUT');
+    // The account's own presence, not a chat's: no chat id in the path and no /subscribe suffix.
+    expect(t.lastCall!.url).toBe('http://x/api/sessions/s1/presence');
+    expect(t.lastCall!.body).toEqual({ available: false });
+  });
+
 });

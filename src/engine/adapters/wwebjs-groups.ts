@@ -4,11 +4,14 @@ import {
   GroupInfo,
   GroupJoinInfo,
   GroupMemberAddMode,
+  GroupMembershipRequest,
+  GroupMembershipRequestMethod,
   MediaInput,
   GroupParticipant,
   ParticipantOperationResult,
 } from '../interfaces/whatsapp-engine.interface';
-import { GroupChat, GroupMetadataRaw, GroupCreateResult, SerializedWid, readWid } from '../types/whatsapp-web-js.types';
+import { GroupChat, GroupMetadataRaw, SerializedWid, readWid } from '../types/whatsapp-web-js.types';
+import { toParticipantWid } from '../identity/wa-id';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -54,6 +57,17 @@ export function normalizeWwebjsMemberAddMode(raw: string | boolean | undefined):
   // The documented (but not observed) boolean form: true = only admins may add.
   if (raw === true) return 'admins';
   if (raw === false) return 'all';
+  return undefined;
+}
+
+/**
+ * Normalise whatsapp-web.js's PascalCase request-method token to the neutral vocabulary.
+ * Unrecognised tokens (a future WA Web build) are reported as unknown rather than guessed.
+ */
+export function normalizeWwebjsRequestMethod(raw: string | undefined): GroupMembershipRequestMethod | undefined {
+  if (raw === 'InviteLink') return 'invite_link';
+  if (raw === 'NonAdminAdd') return 'non_admin_add';
+  if (raw === 'LinkedGroupJoin') return 'linked_group_join';
   return undefined;
 }
 
@@ -145,31 +159,29 @@ export class WwebjsGroups {
     }
   }
 
-  async createGroup(name: string, participants: string[]): Promise<Group> {
+  /**
+   * Not available on this engine, despite `Client.createGroup` existing and being typed
+   * `Promise<CreateGroupResult | string>` (`index.d.ts`).
+   *
+   * Its page body reaches a WhatsApp Web internal that no longer exposes `findImpl`
+   * (`Client.js:2325`, inside the injected evaluate). Measured against a live session on two
+   * different WhatsApp Web builds — `2.3000.1044858477-alpha` auto-resolved from the registry, and
+   * `2.3000.1044770897-alpha` pinned explicitly — with identical results:
+   * `TypeError: this.findImpl is not a function`, reaching the caller as a bare 500. Bare and
+   * `@c.us`-qualified participant ids fail the same way, so the id shape is not the variable.
+   *
+   * The build was varied deliberately because this registry pin moves on its own between restarts;
+   * two builds failing the same way is what separates a library limitation from build drift. The
+   * Baileys engine creates groups normally on the same account.
+   *
+   * Nothing here can be patched around: `findImpl` belongs to the page, not to whatsapp-web.js —
+   * it appears in neither the installed `Client.js` nor any OpenWA patcher. Restore this method
+   * when upstream adopts a page API that WhatsApp Web still provides.
+   */
+  /* eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars */
+  async createGroup(_name: string, _participants: string[]): Promise<Group> {
     this.host.ensureReady();
-    // Ensure participant IDs are in correct format
-    const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
-    const result = await this.client().createGroup(name, participantIds);
-
-    // whatsapp-web.js reports a failed creation by RESOLVING with a plain string
-    // ('CreateGroupError: …', Client.js:2376) rather than throwing, and its own typings say so
-    // (`Promise<CreateGroupResult | string>`). Reading `.gid` straight off that string threw an opaque
-    // TypeError and discarded the reason upstream actually gave us; surface it instead.
-    if (typeof result === 'string') {
-      throw new Error(result);
-    }
-    const gid = (result as unknown as GroupCreateResult).gid as SerializedWid | undefined;
-    const groupId = readWid(gid);
-    // A group id is not ack-safe the way a message id is: there is no empty-sentinel equivalent, and any
-    // placeholder would be handed back as a real, addressable group. Fail instead of inventing one.
-    if (!groupId) {
-      throw new Error('the group was created but its id could not be read');
-    }
-    return {
-      id: groupId,
-      name: name,
-      participantsCount: participants.length,
-    };
+    throw new EngineNotSupportedError('createGroup');
   }
 
   async addParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {
@@ -178,7 +190,7 @@ export class WwebjsGroups {
     if (!chat.isGroup) {
       throw new Error('Chat is not a group');
     }
-    const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
+    const participantIds = participants.map(toParticipantWid);
     const raw = await (chat as unknown as GroupChat).addParticipants(participantIds);
     // whatsapp-web.js reports a batch-level refusal (no admin rights, empty group) by RESOLVING a
     // plain reason string (GroupChat.js:106-107,128-130) instead of throwing — surface it as a
@@ -218,13 +230,18 @@ export class WwebjsGroups {
   }
 
   /**
-   * whatsapp-web.js remove/promote/demote resolve `{status: 200}` for the whole batch and reject on
-   * a page-side failure (GroupChat.js:267-298,305-340,343-374) — there is no per-participant
-   * breakdown to map: the page-side code even drops requested ids it can't find in the group and
-   * still resolves 200, so a 200 confirms the batch, not any individual. A non-200 status is a
-   * batch refusal. Within the per-participant shape the truthful report is one entry per requested
-   * participant carrying the batch status, annotated so a consumer can tell it apart from an
-   * individually-confirmed outcome (addParticipants); nothing per-participant exists to map.
+   * whatsapp-web.js resolves each requested id against the group's OWN participant collection and
+   * silently drops what it cannot find (GroupChat.js:289), then resolves `{status: 200}` for the
+   * whole batch. Reporting that as one success per requested participant claimed removals WhatsApp
+   * never performed, and an all-dropped batch reached a request builder that asserts at least one
+   * child — surfacing as an unnamed `500` (#1220).
+   *
+   * `scripts/patch-wwebjs-participant-arity.js` makes the page report `matched`, one boolean per
+   * requested id, and skip the call when nothing resolved. An absent or wrong-length `matched` means
+   * the installed tree is unpatched: keep the previous batch-confirmed shape rather than invent an
+   * outcome, mirroring the `eventsAttached` marker convention from the ready-sync patcher. A batch
+   * where nothing matched is a refusal of the operation itself (HTTP 403) via
+   * {@link assertParticipantResults}.
    */
   private async runStatusOnlyParticipantOp(
     op: 'removeParticipants' | 'promoteParticipants' | 'demoteParticipants',
@@ -236,17 +253,46 @@ export class WwebjsGroups {
     if (!chat.isGroup) {
       throw new Error('Chat is not a group');
     }
-    const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
-    const res = await (chat as unknown as GroupChat)[op](participantIds);
+    const participantIds = participants.map(toParticipantWid);
+    const res = await this.runParticipantBatch(op, groupId, chat as unknown as GroupChat, participantIds);
     if (res?.status !== 200) {
       throw new EngineRefusedError(`${op} refused for group ${groupId} (status ${res?.status ?? 'unknown'})`);
     }
-    return participantIds.map(id => ({
-      id,
-      success: true,
-      status: 200,
-      message: 'confirmed with the batch — wwebjs reports no per-participant outcome',
-    }));
+    const matched = Array.isArray(res.matched) && res.matched.length === participantIds.length ? res.matched : null;
+    const results = participantIds.map((id, i) => {
+      const resolved = matched ? matched[i] === true : true;
+      return {
+        id,
+        success: resolved,
+        status: resolved ? 200 : 404,
+        message: resolved
+          ? 'confirmed with the batch — wwebjs reports no per-participant outcome'
+          : 'not a member of this group — WhatsApp was not asked to act on this participant',
+      };
+    });
+    return this.assertParticipantResults(op, groupId, results);
+  }
+
+  /**
+   * An unpatched tree hands the WA Web request builder an empty participant list when nothing
+   * resolved, and its repeated-field arity assertion rejects. Classify ONLY that: anything else — a
+   * closed target, a dead transport — must keep its own identity rather than be sold to the caller
+   * as a permissions problem, the same rule the Baileys adapter states for its empty-results guard.
+   */
+  private async runParticipantBatch(
+    op: 'removeParticipants' | 'promoteParticipants' | 'demoteParticipants',
+    groupId: string,
+    chat: GroupChat,
+    participantIds: string[],
+  ): Promise<{ status?: number; matched?: unknown }> {
+    try {
+      return await chat[op](participantIds);
+    } catch (error) {
+      if (/expected at least 1 children/.test((error as Error)?.message ?? '')) {
+        throw new EngineRefusedError(`${op}: none of the requested participants is a member of group ${groupId}`);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -499,5 +545,89 @@ export class WwebjsGroups {
   async setGroupEphemeral(_groupId: string, _durationSec: number): Promise<void> {
     this.host.ensureReady();
     throw new EngineNotSupportedError('setGroupEphemeral');
+  }
+
+  async getGroupMembershipRequests(groupId: string): Promise<GroupMembershipRequest[]> {
+    this.host.ensureReady();
+    try {
+      const raw = await this.client().getGroupMembershipRequests(groupId);
+      // Raw page-context store objects: wids can arrive as {_serialized} OR {$1} (the #747
+      // minifier rename), so every id goes through readWid; a requester whose wid is unreadable
+      // is dropped rather than reported as the literal "undefined".
+      return (raw ?? []).flatMap(entry => {
+        const e = entry as unknown as {
+          id?: SerializedWid | string;
+          addedBy?: SerializedWid | string;
+          requestMethod?: string;
+          t?: number;
+        };
+        const participantId = readWid(e.id);
+        if (!participantId) {
+          return [];
+        }
+        const addedById = readWid(e.addedBy);
+        const method = normalizeWwebjsRequestMethod(e.requestMethod);
+        return [
+          {
+            participantId,
+            ...(addedById ? { addedById } : {}),
+            ...(method ? { method } : {}),
+            ...(typeof e.t === 'number' ? { requestedAt: e.t } : {}),
+          },
+        ];
+      });
+    } catch (error) {
+      this.host.reportIfPageTransportError(error, 'getGroupMembershipRequests');
+      throw error;
+    }
+  }
+
+  approveGroupMembershipRequests(groupId: string, participants?: string[]): Promise<ParticipantOperationResult[]> {
+    return this.runMembershipRequestAction('approveGroupMembershipRequests', groupId, participants);
+  }
+
+  rejectGroupMembershipRequests(groupId: string, participants?: string[]): Promise<ParticipantOperationResult[]> {
+    return this.runMembershipRequestAction('rejectGroupMembershipRequests', groupId, participants);
+  }
+
+  /**
+   * Shared body of the approve/reject writes. The upstream default sleep (a human-ish 250-500ms
+   * pause between requesters) is restated explicitly so a wwebjs default change cannot silently
+   * alter this gateway's pacing. The membership-write guards (assertParticipantResults) apply only
+   * when the caller NAMED requesters: acting on "all pending" of an empty queue is a legitimate
+   * no-op that resolves [], not a refusal.
+   */
+  private async runMembershipRequestAction(
+    op: 'approveGroupMembershipRequests' | 'rejectGroupMembershipRequests',
+    groupId: string,
+    participants?: string[],
+  ): Promise<ParticipantOperationResult[]> {
+    this.host.ensureReady();
+    const raw = await this.client()[op](groupId, {
+      // Qualified like every other participant write in this file: the service blesses a bare phone
+      // number, and the page maps requesterIds straight through `createWid` (Injected/Utils.js) —
+      // which upstream itself never hands a bare number, appending '@c.us' first. Unqualified it
+      // threw inside the minified bundle and the caller got an undiagnosable 500, while the same
+      // input succeeded on Baileys. `null` still means every pending request.
+      requesterIds: participants?.map(toParticipantWid) ?? null,
+      sleep: [250, 500],
+    });
+    // {requesterId, error?, message} per requester; requesterId is a page-context value that can
+    // arrive as a string or a wid object (both #747 spellings), so it goes through readWid too.
+    // "No error field" is NOT sufficient for success: the page util's non-success RPC branch pushes
+    // {requesterId, message: 'ServerStatusCodeError'} with no code at all (Injected/Utils.js:1637-1648).
+    const results: ParticipantOperationResult[] = (raw ?? []).map(entry => {
+      const e = entry as unknown as { requesterId?: SerializedWid | string | null; error?: number; message?: string };
+      return {
+        id: readWid(e.requesterId ?? undefined) ?? '',
+        success: e.error === undefined && e.message !== 'ServerStatusCodeError',
+        ...(e.error !== undefined ? { status: e.error } : {}),
+        ...(e.message ? { message: e.message } : {}),
+      };
+    });
+    if (!participants) {
+      return results;
+    }
+    return this.assertParticipantResults(op, groupId, results);
   }
 }

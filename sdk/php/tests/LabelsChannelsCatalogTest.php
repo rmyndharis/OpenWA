@@ -78,4 +78,20 @@ class LabelsChannelsCatalogTest extends TestCase
             $this->assertTrue(property_exists($client, $r), "Client should expose resource: {$r}");
         }
     }
+    public function testChannelAdminAndOwnership(): void
+    {
+        $backend = new MockBackend();
+        $backend->on(200, ['success' => true]);
+        $backend->on(200, ['success' => true]);
+        $client = $backend->makeClient();
+
+        $client->channels->demoteAdmin('s', 'c@newsletter', ['userId' => 'a@c.us']);
+        $this->assertStringEndsWith('/channels/c@newsletter/admins/demote', $backend->lastCall()['url']);
+        $this->assertSame(['userId' => 'a@c.us'], $backend->lastCall()['body']);
+
+        $client->channels->transferOwnership('s', 'c@newsletter', ['newOwnerId' => 'b@c.us']);
+        $this->assertStringEndsWith('/channels/c@newsletter/owner/transfer', $backend->lastCall()['url']);
+        $this->assertSame(['newOwnerId' => 'b@c.us'], $backend->lastCall()['body']);
+    }
+
 }

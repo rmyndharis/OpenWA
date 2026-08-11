@@ -61,6 +61,22 @@ jobs:
       - name: Check SDK routes against the contract
         run: npm run check:sdk-routes
 
+      # The other direction. check:sdk-routes verifies every route an SDK builds exists in the
+      # contract; nothing verified that every route the contract publishes has a client method, and
+      # ten reached main without one. Fails PER SDK so a route three clients have and two do not is
+      # a failure rather than a healthy-looking total.
+      - name: Check the contract is covered by every SDK
+        run: npm run check:sdk-coverage
+
+      - name: Check SDK webhook events against the contract
+        run: npm run check:sdk-events
+
+      # Same reason again: a docs-only PR matches none of sdk-ci.yml's path filter, and the drift this
+      # catches is a documentation one — fourteen feature commits shipped a client method that the
+      # design doc never learned about.
+      - name: Check SDK docs cover the shipped client surface
+        run: npm run check:sdk-docs
+
   # Deliberately its own job rather than a step inside Lint. `npm audit` reports against the
   # advisory database, not against the diff, so a newly published advisory turns red on unrelated
   # PRs. While it lived as the first step of Lint, that failure aborted the job before ESLint, the
@@ -273,6 +289,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # For the behaviour check below. No `npm ci`: it imports only node: builtins, so pinning the
+      # runtime is the whole dependency — without this the step would silently take whatever Node the
+      # runner image happens to ship.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: helm lint
         run: docker run --rm -v "$PWD/charts:/charts:ro" alpine/helm:4.2.3 lint /charts/openwa
 
@@ -295,6 +318,13 @@ jobs:
         run: |
           docker run --rm -v "$PWD/rendered:/w:ro" ghcr.io/yannh/kubeconform:v0.8.0 \
             -strict -ignore-missing-schemas -summary /w/default.yaml /w/toggled.yaml
+
+      # The three steps above all ask whether the chart renders into schema-valid YAML. This one asks
+      # what the rendered objects would do in a cluster — a selector matching two Services, a probe
+      # budget boot cannot meet, a config change that reaches no container. It shells out to the same
+      # pinned helm image, so it needs no chart tooling of its own.
+      - name: Check chart behaviour
+        run: npm run check:chart
 
       - name: actionlint
         run: docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.12 -color

@@ -227,7 +227,7 @@ export const SEND_AUDIO_BODY_EXAMPLES = mediaBodyExample('https://example.com/au
 export const SEND_DOCUMENT_BODY_EXAMPLES = mediaBodyExample('https://example.com/report.pdf', {
   filename: 'report.pdf',
 });
-export const SEND_STICKER_BODY_EXAMPLES = mediaBodyExample('https://example.com/sticker.png');
+export const SEND_STICKER_BODY_EXAMPLES = mediaBodyExample('https://example.com/sticker.webp');
 
 export class SendAudioMessageDto extends SendMediaMessageDto {
   @ApiPropertyOptional({

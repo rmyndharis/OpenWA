@@ -7,7 +7,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
  */
 
 export class SearchHitDto {
-  @ApiProperty({ description: 'Gateway message row id.', example: '4f1c9b2a-...' })
+  @ApiProperty({ description: 'Gateway message row id.', example: '7c2e5a91-3b8d-4f6a-a05c-9d1e4b7f2306' })
   messageId!: string;
 
   @ApiProperty({ description: "WhatsApp's own message id.", example: 'true_628123456789@c.us_3EB0123' })

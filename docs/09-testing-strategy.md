@@ -234,16 +234,17 @@ on broad integration coverage.
 
 Main CI is defined in `.github/workflows/ci.yml`.
 
-| Job             | Checks                                                                                                                  |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `lint`          | backend ESLint, full-program TypeScript check, formatting, version consistency, .dockerignore context, OpenAPI snapshot |
-| `audit`         | dependency security audit                                                                                               |
-| `test`          | backend coverage run, script unit tests (node:test), e2e smoke tests, Codecov upload                                    |
-| `test-postgres` | real PostgreSQL 16 service, backend build, migration smoke, and PostgreSQL FTS provider spec                            |
-| `dashboard`     | dashboard install, lint, test type-check, unit tests, i18n parity, build                                                |
-| `scripts-smoke` | shellcheck on the backup/restore scripts plus the backup/restore smoke test                                             |
-| `build`         | backend build after lint/audit/test/dashboard/scripts-smoke jobs pass                                                   |
-| `docker`        | multi-arch Docker build on pushes and pull requests; publish only where workflow permissions allow                      |
+| Job             | Checks                                                                                                                                                                                                                                              |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lint`          | backend ESLint, full-program TypeScript check, formatting, version consistency, .dockerignore context, OpenAPI snapshot, SDK routes and webhook events against the contract, contract coverage per SDK, SDK docs against the shipped client surface |
+| `audit`         | dependency security audit                                                                                                                                                                                                                           |
+| `test`          | backend coverage run, script unit tests (node:test), e2e smoke tests, Codecov upload                                                                                                                                                                |
+| `test-postgres` | real PostgreSQL 16 service, backend build, migration smoke, and PostgreSQL FTS provider spec                                                                                                                                                        |
+| `dashboard`     | dashboard install, lint, formatting, type-check, i18n parity, build, unit tests                                                                                                                                                                     |
+| `scripts-smoke` | shellcheck on `docker-entrypoint.sh` and every `scripts/*.sh`, plus the backup/restore smoke test                                                                                                                                                   |
+| `chart`         | helm lint, helm template with default and fully-toggled values, kubeconform on both renders, the rendered-behaviour check, actionlint on the workflows                                                                                              |
+| `build`         | backend build after lint/audit/test/dashboard/scripts-smoke/chart jobs pass                                                                                                                                                                         |
+| `docker`        | multi-arch Docker build on pushes and pull requests; publishes to GHCR only on push, so fork pull requests validate both architectures without publishing                                                                                           |
 
 SDK CI is defined in `.github/workflows/sdk-ci.yml` and is path-filtered to SDK sources plus server
 contract surfaces that SDKs mirror (`src/**/dto/**`, `src/**/*.controller.ts`, `src/**/*.service.ts`, and
@@ -256,9 +257,12 @@ re-runs the SDK suites. It runs:
 - Java SDK tests with Maven.
 - Go SDK formatting, `go vet`, and race-enabled tests at the declared Go floor.
 
-Release tags run `.github/workflows/release.yml`. The release gate verifies the tag matches
-`package.json`, checks documented version consistency, runs backend tests with coverage, builds the
-backend, and publishes the GitHub Release only after the Docker image has built and pushed successfully.
+Release tags run `.github/workflows/release.yml`, which mirrors the CI gate rather than running a
+lighter one: the same lint job (including all four SDK contract checks), the same test, PostgreSQL,
+dashboard, shell-script and chart jobs. It additionally verifies the tag matches `package.json`, and
+publishes the GitHub Release only after the Docker image has built and pushed successfully. Nothing in
+it packages or publishes the Helm chart — operators install that from the tagged ref, so the tag is the
+last gate the chart passes.
 
 ## 9.7 Testing Guidelines
 

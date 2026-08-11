@@ -127,10 +127,11 @@ export class SessionEngineLeafEvents {
 
   /**
    * Fan a neutral engine GroupEvent out to consumers: the WebSocket room and the webhook stream.
-   * The `kind` selects the event name (`group.join` / `group.leave` / `group.update`); the payload
-   * is the same plain camelCase shape on both channels, with `kind` itself carried by the name.
-   * There is no persistence here — group membership/metadata lives in the engine, not the message
-   * store — so unlike message edits there is nothing to apply before notifying.
+   * The `kind` selects the event name (`group.join` / `group.leave` / `group.update` /
+   * `group.join_request`); the payload is the same plain camelCase shape on both channels, with
+   * `kind` itself carried by the name. There is no persistence here — group membership/metadata
+   * lives in the engine, not the message store — so unlike message edits there is nothing to
+   * apply before notifying.
    */
   dispatchGroupEvent(id: string, event: GroupEvent): void {
     const payload: Record<string, unknown> = {
@@ -158,6 +159,10 @@ export class SessionEngineLeafEvents {
       case 'update':
         this.eventsGateway.emitGroupUpdate(id, payload);
         void this.webhookService.dispatch(id, 'group.update', payload);
+        break;
+      case 'join_request':
+        this.eventsGateway.emitGroupJoinRequest(id, payload);
+        void this.webhookService.dispatch(id, 'group.join_request', payload);
         break;
     }
   }

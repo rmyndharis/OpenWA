@@ -448,9 +448,25 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     // Resolve a lid actor to its phone through the persistent table so a phone filter matches a
     // lid-addressed sender (e.g. an unresolved @lid group participant). Absent store -> no resolution.
     const resolveLid = (jid: string): string | null => this.lidMappingStore?.getCached(userPart(jid)) ?? null;
-    return webhooks.filter(
-      w => (w.events.includes(event) || w.events.includes('*')) && evaluateFilters(w.filters, event, data, resolveLid),
-    );
+    const subscribed = webhooks.filter(w => w.events.includes(event) || w.events.includes('*'));
+    const matching = subscribed.filter(w => evaluateFilters(w.filters, event, data, resolveLid));
+    // A subscribed webhook that a filter drops leaves no trace otherwise: dispatch() awaits an empty
+    // array and returns, and the delivery-failure table only records deliveries that were ATTEMPTED.
+    // That is fine when the filter is doing its job, and indistinguishable from it when it is not —
+    // a condition on a field the event's payload does not carry resolves to undefined and fails,
+    // which is how a `sender` filter silently swallows every message.ack. Debug rather than warn:
+    // suppression is the normal outcome of a working filter, so this is a trace to switch on while
+    // investigating, not an alarm.
+    if (matching.length < subscribed.length) {
+      this.logger.debug('Webhook filters suppressed a delivery', {
+        action: 'webhook_filter_suppressed',
+        event,
+        subscribed: subscribed.length,
+        suppressed: subscribed.length - matching.length,
+        payloadFields: Object.keys(data).sort().join(','),
+      });
+    }
+    return matching;
   }
 
   private async recordUndelivered(

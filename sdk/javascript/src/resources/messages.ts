@@ -228,8 +228,8 @@ export class MessagesResource {
   }
 
   /**
-   * Fetch a message's archived media bytes. Requires chat-media archiving to have been enabled on
-   * the gateway when the message arrived; 404 otherwise.
+   * Fetch a message's stored media bytes: the archived file when one exists, else the inline copy
+   * on the message row — which covers media sent by this account; 404 when neither holds bytes.
    */
   media(sessionId: string, chatId: string, messageId: string): Promise<BinaryResponse> {
     return this.client.requestBytes({

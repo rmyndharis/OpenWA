@@ -23,6 +23,7 @@ function channels(sock: Record<string, jest.Mock>, budgetMs: number): BaileysCha
   const host = {
     ensureReady: () => undefined,
     getSocket: () => sock as unknown as WASocket,
+    toEngineJid: (jid: string) => jid,
   } as unknown as BaileysChannelsHost;
   return new BaileysChannels(host, budgetMs);
 }
@@ -37,6 +38,11 @@ describe('channel operations report an unanswered query instead of a bare 500', 
     ['muteChannel', 'newsletterMute', (c: BaileysChannels) => c.muteChannel('120363@newsletter', true)],
     ['unmuteChannel', 'newsletterUnmute', (c: BaileysChannels) => c.muteChannel('120363@newsletter', false)],
     ['unsubscribeFromChannel', 'newsletterUnfollow', (c: BaileysChannels) => c.unsubscribeFromChannel('120363@n')],
+    [
+      'demoteChannelAdmin',
+      'newsletterDemote',
+      (c: BaileysChannels) => c.demoteChannelAdmin('120363@n', '628@s.whatsapp.net'),
+    ],
   ])('%s', async (_name, sockMethod, call) => {
     await expect(call(channels({ [sockMethod]: jest.fn(never) }, 15))).rejects.toBeInstanceOf(EngineTransportError);
   });

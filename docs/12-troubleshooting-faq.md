@@ -294,12 +294,14 @@ environment still hits a WA-Web compatibility hang, pin a known-good WA-Web vers
 `WWEBJS_WEB_VERSION`:
 
 ```bash
-# Optional workaround:
-WWEBJS_WEB_VERSION=2.3000.1040641150-alpha
+# Optional workaround — substitute a build that the registry currently serves:
+WWEBJS_WEB_VERSION=<a build from that registry's html/ folder>
 ```
 
-Restart the container after changing it. Browse newer versions at
-[wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder). With
+Restart the container after changing it. Pick the build from
+[wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder) — a
+build the registry no longer serves is fetched, missed, and silently ignored, leaving you on the
+default behaviour rather than the pin you asked for. With
 `WWEBJS_WEB_VERSION` unset, `latest`, or `auto` (the default), OpenWA auto-resolves a settled build
 from that registry and pins its HTML — note this HTML is fetched from a third-party repository and
 executed inside the `web.whatsapp.com` origin without an integrity check. Set
@@ -509,7 +511,11 @@ once, so the session stops instead of being silently unlinked by WhatsApp about 
 > a container stops Chromium launching at all). If your deployment does get a
 > localised modal, it is **not** auto-dismissed and the session never reaches `action_required` —
 > instead it links normally, then drops to `disconnected` with reason `LOGOUT` a few minutes later and
-> the device disappears from the phone's Linked devices list. Because that path wipes the stored
+> the device disappears from the phone's Linked devices list. That miss is no longer silent: when the
+> watcher finds a visible dialog it cannot match, it logs a warning (`action:
+onboarding_dialog_unrecognized`) carrying the dialog's heading and button labels — the label to add
+> via `WWEBJS_ONBOARDING_CONTINUE_LABELS`, and the heading worth reporting — minutes before the unlink
+> would happen. Because that path wipes the stored
 > credentials, the automatic reconnect comes back with a fresh QR on its own, so the session is
 > usually already sitting at `qr_ready` rather than needing a manual start. Acknowledge the modal once
 > in a browser signed in as that account, then scan the QR. It does not recur — the modal is shown
@@ -765,6 +771,35 @@ variables:
 WEBHOOK_TIMEOUT=10000      # per-attempt HTTP timeout in ms (default 10000)
 WEBHOOK_RETRY_DELAY=5000   # base retry backoff in ms (default 5000)
 ```
+
+### Issue: An inbound sender arrives as an `@lid` id instead of a phone number
+
+**Symptoms:**
+
+- `message.received` carries `from` (or `author`, in a group) as `162878178984075@lid` rather than `628123456789@c.us`
+- The number cannot be matched against your own contact records, and replies have to be addressed by the `@lid` id
+- `contact.number` on the payload repeats the lid digits, so it is not the phone number either
+
+**Cause:** WhatsApp identifies some accounts by a privacy id (`@lid`) instead of their phone number,
+and the message itself carries no phone number to read. Mapping one back costs a lookup against the
+engine, so the gateway does not do it on every message unless you ask for it.
+
+**Solution:**
+
+```bash
+# Resolve a single id on demand — works whether or not the flag below is set
+curl -H "X-API-Key: $API_KEY" \
+  http://localhost:2785/api/sessions/{sessionId}/contacts/{contactId}/phone
+
+# Or have every inbound message carry it: adds `senderPhone` to the message.received webhook
+# and the websocket event. Set it in the `.env` next to docker-compose.yml (both compose files
+# already forward the variable), then restart the process — an env change is not picked up by a
+# session reload.
+RESOLVE_LID_TO_PHONE=true
+```
+
+`senderPhone` is `null` when the engine cannot map the id — an `@lid` the account has never seen has
+no mapping to return. Both engines support the lookup.
 
 ## 12.5 Performance Issues
 
@@ -1031,7 +1066,7 @@ docker exec openwa-api curl http://host.docker.internal:8080
 ```bash
 # Get group list
 curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions/{id}/groups
+  http://localhost:2785/api/sessions/{sessionId}/groups
 
 # Send to group
 curl -X POST http://localhost:2785/api/sessions/{id}/messages/send-text \
@@ -1179,6 +1214,7 @@ available_events:
   - group.join # Participant(s) added/joined
   - group.leave # Participant(s) left/removed
   - group.update # Group subject/description/announce/locked changed
+  - group.join_request # Someone asked to join a group this session administers
 
   # Calls
   - call.received # Incoming call ringing (payload: callId, from, isVideo, isGroup, timestamp)

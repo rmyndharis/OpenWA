@@ -24,10 +24,21 @@ function makeRoot({
   previewPatcher = false,
   statusPatcher = false,
   readySyncPatcher = false,
+  participantArityPatcher = false,
+  baileysPatcher = false,
+  baileysNewsletterPatcher = false,
 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openwa-postinstall-'));
   if (dashboard) fs.mkdirSync(path.join(root, 'dashboard'));
-  if (patcher || previewPatcher || statusPatcher || readySyncPatcher) {
+  if (
+    patcher ||
+    previewPatcher ||
+    statusPatcher ||
+    readySyncPatcher ||
+    participantArityPatcher ||
+    baileysPatcher ||
+    baileysNewsletterPatcher
+  ) {
     fs.mkdirSync(path.join(root, 'scripts'));
   }
   if (patcher) {
@@ -41,6 +52,15 @@ function makeRoot({
   }
   if (readySyncPatcher) {
     fs.writeFileSync(path.join(root, 'scripts', 'patch-wwebjs-ready-sync.js'), '// stub\n');
+  }
+  if (participantArityPatcher) {
+    fs.writeFileSync(path.join(root, 'scripts', 'patch-wwebjs-participant-arity.js'), '// stub\n');
+  }
+  if (baileysPatcher) {
+    fs.writeFileSync(path.join(root, 'scripts', 'patch-baileys-appstate.js'), '// stub\n');
+  }
+  if (baileysNewsletterPatcher) {
+    fs.writeFileSync(path.join(root, 'scripts', 'patch-baileys-newsletter-create.js'), '// stub\n');
   }
   return root;
 }
@@ -109,16 +129,38 @@ test('planSteps: ready-sync patcher plans its own best-effort repair', () => {
   assert.deepEqual(steps[0].args.slice(1), ['--best-effort']);
 });
 
+test('planSteps: participant-arity patcher plans its own best-effort repair', () => {
+  const steps = planSteps(makeRoot({ participantArityPatcher: true }));
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0].command, process.execPath);
+  assert.match(steps[0].args[0], /patch-wwebjs-participant-arity\.js$/);
+  assert.deepEqual(steps[0].args.slice(1), ['--best-effort']);
+});
+
 test('planSteps: dashboard and all patchers run in stable order', () => {
   const steps = planSteps(
-    makeRoot({ dashboard: true, patcher: true, previewPatcher: true, statusPatcher: true, readySyncPatcher: true }),
+    makeRoot({
+      dashboard: true,
+      patcher: true,
+      previewPatcher: true,
+      statusPatcher: true,
+      readySyncPatcher: true,
+      participantArityPatcher: true,
+      baileysPatcher: true,
+      baileysNewsletterPatcher: true,
+    }),
   );
-  assert.equal(steps.length, 5);
+  // One assertion per patcher on disk: the test is named for ALL of them, so a patcher that is
+  // planned but never named here would leave the claim false while the suite stayed green.
+  assert.equal(steps.length, 8);
   assert.equal(steps[0].command, 'npm ci');
   assert.match(steps[1].args[0], /patch-wwebjs-201832\.js$/);
   assert.match(steps[2].args[0], /patch-wwebjs-newsletter-preview\.js$/);
   assert.match(steps[3].args[0], /patch-wwebjs-status\.js$/);
   assert.match(steps[4].args[0], /patch-wwebjs-ready-sync\.js$/);
+  assert.match(steps[5].args[0], /patch-wwebjs-participant-arity\.js$/);
+  assert.match(steps[6].args[0], /patch-baileys-appstate\.js$/);
+  assert.match(steps[7].args[0], /patch-baileys-newsletter-create\.js$/);
 });
 
 test('run: nothing to do exits 0 and never spawns', () => {
@@ -187,10 +229,17 @@ test('planSteps: strips npm_config_allow_scripts from step options.env to avoid 
     NPM_CONFIG_ALLOW_SCRIPTS: 'true',
   };
   const steps = planSteps(
-    makeRoot({ dashboard: true, patcher: true, previewPatcher: true, statusPatcher: true, readySyncPatcher: true }),
+    makeRoot({
+      dashboard: true,
+      patcher: true,
+      previewPatcher: true,
+      statusPatcher: true,
+      readySyncPatcher: true,
+      baileysPatcher: true,
+    }),
     env,
   );
-  assert.equal(steps.length, 5);
+  assert.equal(steps.length, 6);
   for (const step of steps) {
     assert.equal('npm_config_allow_scripts' in step.options.env, false);
     assert.equal('NPM_CONFIG_ALLOW_SCRIPTS' in step.options.env, false);

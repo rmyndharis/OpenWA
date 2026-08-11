@@ -90,7 +90,7 @@ export class Message {
 
   /**
    * Storage key of this message's archived media, or null when nothing was archived — which is the
-   * case for every row while `CHAT_MEDIA_ARCHIVE_ENABLED` is off (the default), for non-media
+   * case for every row written while `CHAT_MEDIA_ARCHIVE_ENABLED` is off (the default), for non-media
    * messages, and for media above the archive cap. Independent of the inline base64 copy in
    * `metadata.media`, which is unaffected by archiving.
    */

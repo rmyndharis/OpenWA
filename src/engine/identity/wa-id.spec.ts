@@ -1,4 +1,12 @@
-import { chatKind, isChannelJid, parseWaId, toNeutralJid, userPart } from './wa-id';
+import {
+  chatKind,
+  isAddressableParticipant,
+  isChannelJid,
+  parseWaId,
+  toNeutralJid,
+  toParticipantWid,
+  userPart,
+} from './wa-id';
 
 describe('wa-id', () => {
   describe('userPart', () => {
@@ -90,5 +98,60 @@ describe('wa-id', () => {
     ])('classifies %s as %s', (jid, expected) => {
       expect(chatKind(jid)).toBe(expected);
     });
+  });
+
+  describe('isAddressableParticipant', () => {
+    it.each([
+      ['628123456789', true],
+      ['628123456789@c.us', true],
+      ['628123456789@s.whatsapp.net', true],
+      ['12345678901234567890@lid', true],
+      ['628123456789:12@c.us', true],
+      ['  628123456789@c.us  ', true],
+      ['NOT A USER', false],
+      ['', false],
+      ['1234', false],
+      ['12036@g.us', false],
+      ['status@broadcast', false],
+      ['abc@newsletter', false],
+      ['abc@weird', false],
+      // A recognised domain is not enough: the user-part has to look like a WhatsApp id, or the
+      // string still reaches the page-side createWid and throws there — the very failure the guard
+      // exists to prevent. Reproduced against a live session before this row was added.
+      ['NOT A USER@c.us', false],
+      ['abc@c.us', false],
+      ['abc@s.whatsapp.net', false],
+      ['abc@lid', false],
+      ['@c.us', false],
+      ['x y@c.us', false],
+      ['0@c.us', false],
+      ['-1@c.us', false],
+      ['+628123456789@c.us', false],
+    ])('classifies %s as %s', (value, expected) => {
+      expect(isAddressableParticipant(value)).toBe(expected);
+    });
+  });
+
+  describe('toParticipantWid', () => {
+    it('qualifies a bare number to the c.us dialect', () => {
+      expect(toParticipantWid('628123456789')).toBe('628123456789@c.us');
+    });
+
+    it('leaves an already-qualified id untouched', () => {
+      expect(toParticipantWid('628123456789@c.us')).toBe('628123456789@c.us');
+      expect(toParticipantWid('12345678901234567890@lid')).toBe('12345678901234567890@lid');
+      expect(toParticipantWid('628123456789@s.whatsapp.net')).toBe('628123456789@s.whatsapp.net');
+    });
+
+    it.each([['abc@weird'], ['abc'], ['NOT A USER'], ['']])(
+      'leaves %s alone rather than minting a nonsense id from it',
+      value => {
+        // The old rule was `p.includes('@') ? p : p + '@c.us'`, which turned every un-domained
+        // string into one — `abc` became `abc@c.us`, a well-formed id naming nobody. Keying on the
+        // bare-number shape instead means only a number is ever qualified. (`abc@weird` alone would
+        // NOT show this: the old rule passed it through too, so it discriminates nothing.)
+        expect(toParticipantWid(value)).toBe(value);
+      },
+    );
   });
 });

@@ -13,6 +13,12 @@ type ChatSummary struct {
 	Kind        string  `json:"kind"`
 }
 
+// SetOwnPresenceRequest is the body for SessionsService.SetOnlinePresence. Available reports
+// whether the account should appear online (true) or offline (false).
+type SetOwnPresenceRequest struct {
+	Available bool `json:"available"`
+}
+
 // MarkChatRequest marks a chat read/unread.
 type MarkChatRequest struct {
 	ChatID string `json:"chatId"`
@@ -33,6 +39,26 @@ type DeleteChatRequest struct {
 type ArchiveChatRequest struct {
 	ChatID  string `json:"chatId"`
 	Archive bool   `json:"archive"`
+}
+
+// PinChatRequest pins a chat to the top of the list, or unpins it.
+type PinChatRequest struct {
+	ChatID string `json:"chatId"`
+	Pin    bool   `json:"pin"`
+}
+
+// MuteChatRequest mutes a chat until an absolute timestamp, or unmutes it.
+type MuteChatRequest struct {
+	ChatID string `json:"chatId"`
+	// MuteUntil is an absolute epoch-MILLISECONDS timestamp, or nil to unmute now.
+	//
+	// Milliseconds, not seconds: a seconds-scale value is an instant in 1970, so the mute expires
+	// the moment it is set while the request still answers 200.
+	//
+	// Deliberately no omitempty. The route requires the key, so a nil MuteUntil has to reach it as
+	// an explicit null — omitting it is rejected, and the two readings of an absent value, unmute
+	// now and mute indefinitely, are opposites.
+	MuteUntil *int64 `json:"muteUntil"`
 }
 
 // ListChatsQuery paginates the chat list.

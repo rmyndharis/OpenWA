@@ -230,9 +230,9 @@ function ChatComposer({
       // Race guard: the realtime `message.sent` echo can arrive before this response and already
       // append the message by its real WA id (the dedup at receive time misses because the
       // optimistic placeholder still carries the temp id). If so, fold the placeholder INTO the
-      // echo's row via mergeOrAppend instead of just dropping it — the echo carries no media
-      // payload (engine parity marker), so dropping the placeholder would erase the attachment's
-      // base64 and leave a bare "📎 Media" bubble until the next refetch.
+      // echo's row via mergeOrAppend instead of just dropping it — the echo may carry no media
+      // payload (a Baileys API send echoes only a marker), so dropping the placeholder would erase
+      // the attachment's base64 and leave a bare "📎 Media" bubble until the next refetch.
       const sendKey = messagesQueryKey(selectedSessionId, activeChat.id);
       queryClient.setQueryData<ChatMessageView[]>(sendKey, (prev = []) => {
         const reconciled: ChatMessageView = {

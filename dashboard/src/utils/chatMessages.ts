@@ -170,9 +170,9 @@ export function mergeReactionSnapshot(
  * Merge two metadata bags field-by-field. The incoming copy wins per field only when it actually
  * carries a value — a live `message.sent` echo is built as `{media, quotedMessage, call}` with
  * undefined leaves, and a wholesale `incoming ?? existing` swap would wipe the optimistic bubble's
- * quote/call. Media has one extra rule: an incoming marker WITHOUT the payload (the engine's
- * own-send echo and the media-less history fetch both emit `{media: {omitted: true}}` with no
- * `data`) must not clobber an existing copy holding the real base64 — the optimistic send bubble is
+ * quote/call. Media has one extra rule: an incoming marker WITHOUT the payload (a Baileys API-send
+ * echo and the media-less history fetch both emit `{media: {omitted: true}}` with no `data`) must
+ * not clobber an existing copy holding the real base64 — the optimistic send bubble is
  * the only copy with the payload until a refetch, and the cache is staleTime: Infinity.
  */
 function mergeMessageMetadata(

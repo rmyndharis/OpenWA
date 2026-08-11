@@ -93,4 +93,32 @@ class ChannelsResource
     {
         return $this->http->request('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}");
     }
+    /**
+     * Demote a channel admin back to a subscriber. Requires an OPERATOR-level key.
+     *
+     * There is no promote counterpart: neither engine library has one, so an admin is promoted from
+     * the WhatsApp app and demoted here. The whatsapp-web.js engine answers `501`.
+     *
+     * @param array{userId:string} $body
+     * @return array<string,mixed>
+     */
+    public function demoteAdmin(string $sessionId, string $channelId, array $body): array
+    {
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/admins/demote", [], $body);
+    }
+
+    /**
+     * Hand a channel to a new owner. Requires an OPERATOR-level key.
+     *
+     * Irreversible: once the transfer lands this account stops being the owner and cannot take the
+     * channel back. The whatsapp-web.js engine answers `501`.
+     *
+     * @param array{newOwnerId:string} $body
+     * @return array<string,mixed>
+     */
+    public function transferOwnership(string $sessionId, string $channelId, array $body): array
+    {
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/owner/transfer", [], $body);
+    }
+
 }

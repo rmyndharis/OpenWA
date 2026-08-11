@@ -97,6 +97,17 @@ class ContactsResourceTest {
     }
 
     @Test
+    void listBlockedGetsSessionWideRoute() {
+        tx.respond(200, "[\"a@c.us\",\"b@c.us\"]");
+        List<String> res = client.contacts.listBlocked("s");
+        // Session-wide: no contact id in the path, and not the /contacts list route.
+        assertEquals("http://h/api/sessions/s/contacts/blocked", tx.lastRequest().url());
+        assertEquals(HttpMethod.GET, tx.lastRequest().method());
+        assertNull(tx.lastRequest().body());
+        assertEquals(List.of("a@c.us", "b@c.us"), res);
+    }
+
+    @Test
     void addressbookUpsertAndDelete() {
         tx.respond(200, "{\"success\":true}");
         client.contacts.upsert("s", "628@c.us", UpsertContactRequest.builder().firstName("Ada").build());

@@ -662,12 +662,14 @@
                   "name": "my-bot",
                   "status": "disconnected",
                   "phone": null,
-                  "pushName": null,
-                  "connectedAt": null,
+                  "pushName": "John Doe",
+                  "connectedAt": "2026-06-24T08:15:00.000Z",
                   "lastActive": "2026-06-25T09:01:55.000Z",
                   "createdAt": "2026-06-20T11:30:00.000Z",
                   "updatedAt": "2026-06-25T09:11:00.000Z",
-                  "lastError": null
+                  "lastError": null,
+                  "restriction": null,
+                  "engineLoaded": false
                 }
               }
             }
@@ -756,6 +758,9 @@
           },
           "404": {
             "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Get QR code for session authentication",
@@ -804,6 +809,9 @@
           },
           "404": {
             "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Request an 8-char pairing code to link via phone number (alternative to QR)",
@@ -812,12 +820,12 @@
         ]
       }
     },
-    "/api/sessions/{id}/groups": {
+    "/api/sessions/{sessionId}/groups": {
       "get": {
         "operationId": "SessionController_getGroups",
         "parameters": [
           {
-            "name": "id",
+            "name": "sessionId",
             "required": true,
             "in": "path",
             "description": "Session ID",
@@ -854,6 +862,9 @@
           "404": {
             "description": "Session not found"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer the group-list query. Deliberately not reported as an empty list — the engine returns the same empty value for \"you are in no groups\", and a caller cannot tell those apart from the body."
           }
@@ -861,6 +872,58 @@
         "summary": "Get all groups for a session",
         "tags": [
           "sessions"
+        ]
+      },
+      "post": {
+        "operationId": "GroupController_create",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGroupDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Group created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupSummaryDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected."
+          },
+          "403": {
+            "description": "WhatsApp refused the operation. The request was well formed — the refusal happened WhatsApp-side, most often because the account lacks the admin rights the operation requires."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "Not supported by the active engine: whatsapp-web.js reaches a WhatsApp Web internal that no longer exists, so group creation is Baileys-only."
+          }
+        },
+        "summary": "Create a new group",
+        "tags": [
+          "groups"
         ]
       }
     },
@@ -915,6 +978,12 @@
           },
           "404": {
             "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Deliberately not reported as an empty list — a page that went away says nothing about the chats."
           }
         },
         "summary": "Get active chats for a session",
@@ -956,6 +1025,9 @@
           },
           "404": {
             "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
@@ -1002,11 +1074,59 @@
           "404": {
             "description": "Session not found"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "501": {
             "description": "The active engine cannot observe presence (whatsapp-web.js)"
           }
         },
         "summary": "Subscribe to a chat's presence",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/presence": {
+      "put": {
+        "description": "Publishes whether this account appears online. WhatsApp routes notifications away from the phone while a linked device announces itself online, so a headless bot that never goes offline suppresses the phone's own alerts — set `available: false` to hand them back.\n\nThe setting belongs to the connection: it does not survive a restart or reconnect and must be re-issued after `session.status` reports one (on Baileys the socket re-announces itself per its connect-time behaviour). Supported on both engines.",
+        "operationId": "SessionController_setOnlinePresence",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetOwnPresenceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Presence published"
+          },
+          "400": {
+            "description": "Session not started, or validation failed"
+          },
+          "404": {
+            "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          }
+        },
+        "summary": "Set the account's own global presence (appear online or offline)",
         "tags": [
           "sessions"
         ]
@@ -1091,6 +1211,9 @@
           "404": {
             "description": "Session not found"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
           }
@@ -1133,6 +1256,9 @@
           },
           "404": {
             "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
@@ -1178,11 +1304,108 @@
           "404": {
             "description": "Session not found"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
           }
         },
         "summary": "Archive or unarchive a chat",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/chats/mute": {
+      "post": {
+        "operationId": "SessionController_muteChat",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MuteChatDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns `{ success: true }`. Unlike the archive route there is no declined outcome: the mute change is not keyed to the chat's last message on either engine, so a chat with no known history mutes like any other."
+          },
+          "400": {
+            "description": "Session not ready, or an invalid chatId / muteUntil"
+          },
+          "404": {
+            "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
+          }
+        },
+        "summary": "Mute or unmute a chat",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/chats/pin": {
+      "post": {
+        "operationId": "SessionController_pinChat",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PinChatDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns `{ success }`. `false` means the engine declined, and only a pin can: WhatsApp allows at most three pinned chats and the whatsapp-web.js engine reports the refusal. Unpinning always succeeds, and the Baileys engine always reports success because it cannot observe the cap."
+          },
+          "400": {
+            "description": "Session not ready, or a chatId the session cannot resolve. An unknown chat is reported here rather than as `success: false`, which on this route means only that the three-pin cap refused a real chat. The Baileys engine cannot resolve chats ahead of the write and answers `success: true` for an unknown chat."
+          },
+          "404": {
+            "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
+          }
+        },
+        "summary": "Pin or unpin a chat at the top of the chat list",
         "tags": [
           "sessions"
         ]
@@ -1221,6 +1444,9 @@
           },
           "404": {
             "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
@@ -1262,6 +1488,9 @@
           },
           "404": {
             "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Send a typing/recording presence indicator to a chat (or clear it with 'paused')",
@@ -1674,7 +1903,17 @@
         ],
         "responses": {
           "200": {
-            "description": "Rules in evaluation order: creation time, id as the same-second tiebreak."
+            "description": "Rules in evaluation order: creation time, id as the same-second tiebreak.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AutomationRuleResponseDto"
+                  }
+                }
+              }
+            }
           }
         },
         "summary": "List the session’s autoreply rules",
@@ -1934,6 +2173,12 @@
           },
           "404": {
             "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "A caller-supplied `customLinkPreview` is not supported by the whatsapp-web.js engine — only Baileys can attach one. The send itself is supported on both; omit the field, or use `linkPreview`."
           }
         },
         "summary": "Send a text message",
@@ -1982,6 +2227,9 @@
           },
           "404": {
             "description": "Session or template not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Render a stored text template and send it as a text message",
@@ -2037,6 +2285,12 @@
           },
           "400": {
             "description": "Session not active or invalid request"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "Sending media to a channel (`<id>@newsletter`) is not supported by the whatsapp-web.js engine — the page method it needs was removed by a WhatsApp Web update. Text to a channel still works."
           }
         },
         "summary": "Send an image message",
@@ -2091,6 +2345,12 @@
           },
           "400": {
             "description": "Session not active or invalid request"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "Sending media to a channel (`<id>@newsletter`) is not supported by the whatsapp-web.js engine — the page method it needs was removed by a WhatsApp Web update. Text to a channel still works."
           }
         },
         "summary": "Send a video message",
@@ -2146,6 +2406,12 @@
           },
           "400": {
             "description": "Session not active or invalid request"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "Sending media to a channel (`<id>@newsletter`) is not supported by the whatsapp-web.js engine — the page method it needs was removed by a WhatsApp Web update. Text to a channel still works."
           }
         },
         "summary": "Send an audio/voice message",
@@ -2201,6 +2467,12 @@
           },
           "400": {
             "description": "Session not active or invalid request"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "Sending media to a channel (`<id>@newsletter`) is not supported by the whatsapp-web.js engine — the page method it needs was removed by a WhatsApp Web update. Text to a channel still works."
           }
         },
         "summary": "Send a document/file",
@@ -2243,6 +2515,12 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "The request was rejected before anything was sent. Among the causes: the recipient could not be addressed — WhatsApp reports no deliverable id for that `chatId`, which is how it says the number is not on WhatsApp — as well as body validation and a session that is not active."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Send a location message",
@@ -2285,6 +2563,12 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "The request was rejected before anything was sent. Among the causes: the recipient could not be addressed — WhatsApp reports no deliverable id for that `chatId`, which is how it says the number is not on WhatsApp — as well as body validation and a session that is not active."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Send a contact card message",
@@ -2319,7 +2603,7 @@
                   "summary": "Fetch the media from a URL",
                   "value": {
                     "chatId": "628123456789@c.us",
-                    "url": "https://example.com/sticker.png"
+                    "url": "https://example.com/sticker.webp"
                   }
                 }
               }
@@ -2336,6 +2620,15 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "The request was rejected before anything was sent. Among the causes: the recipient could not be addressed — WhatsApp reports no deliverable id for that `chatId`, which is how it says the number is not on WhatsApp — as well as body validation and a session that is not active."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "Sending media to a channel (`<id>@newsletter`) is not supported by the whatsapp-web.js engine — the page method it needs was removed by a WhatsApp Web update. Text to a channel still works."
           }
         },
         "summary": "Send a sticker message",
@@ -2378,6 +2671,12 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "The request was rejected before anything was sent. Among the causes: the recipient could not be addressed — WhatsApp reports no deliverable id for that `chatId`, which is how it says the number is not on WhatsApp — as well as body validation and a session that is not active."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Send a native WhatsApp poll",
@@ -2420,6 +2719,15 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "The request was rejected before anything was sent. Among the causes: the recipient could not be addressed — WhatsApp reports no deliverable id for that `chatId`, which is how it says the number is not on WhatsApp — as well as body validation and a session that is not active."
+          },
+          "404": {
+            "description": "No such message — the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Reply to a message",
@@ -2462,6 +2770,15 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "The request was rejected before anything was sent. Among the causes: the recipient could not be addressed — WhatsApp reports no deliverable id for that `chatId`, which is how it says the number is not on WhatsApp — as well as body validation and a session that is not active."
+          },
+          "404": {
+            "description": "No such message — the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Forward a message to another chat",
@@ -2500,6 +2817,12 @@
           },
           "400": {
             "description": "Session not active or message not found"
+          },
+          "404": {
+            "description": "No such message — the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Add or remove a reaction to a message",
@@ -2562,6 +2885,12 @@
         "responses": {
           "200": {
             "description": "Chat history (most recent messages)"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "The active engine cannot serve this operation. It is part of the engine contract, but the engine currently running has no implementation for it."
           }
         },
         "summary": "Fetch chat history live from WhatsApp",
@@ -2605,6 +2934,15 @@
         "responses": {
           "200": {
             "description": "List of reactions with senders"
+          },
+          "404": {
+            "description": "No such message — the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "The active engine cannot serve this operation. It is part of the engine contract, but the engine currently running has no implementation for it."
           }
         },
         "summary": "Get reactions for a specific message",
@@ -2647,13 +2985,21 @@
         ],
         "responses": {
           "200": {
-            "description": "The archived media bytes, served as an attachment."
+            "description": "The media bytes — the archived file when one exists, else the inline copy stored on the message row (which is how media sent by this account is served) — as an attachment.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Nothing archived for this message — archiving was off when it arrived, the message carries no media, the media was above the archive cap, retention has since cleared it, or the message was sent BY this account (only inbound media is archived)."
+            "description": "No stored media for this message — it carries no media, media download was disabled or the payload was over the cap when it was stored (size-only marker), it was a URL-based API send (those bytes are never stored), or the message is not in this gateway’s history."
           }
         },
-        "summary": "Download a message’s archived media",
+        "summary": "Download a message’s stored media",
         "tags": [
           "messages"
         ]
@@ -2689,6 +3035,12 @@
           },
           "400": {
             "description": "Session not active or message not found"
+          },
+          "404": {
+            "description": "No such message — the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
@@ -2733,6 +3085,9 @@
           },
           "404": {
             "description": "Poll not found in the chat’s recent history"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "501": {
             "description": "Not supported on the Baileys engine"
@@ -2780,6 +3135,9 @@
           },
           "404": {
             "description": "Message not found in the chat"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Pin a message in its chat",
@@ -2824,6 +3182,9 @@
           },
           "404": {
             "description": "Message not found in the chat"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Remove a message’s pin",
@@ -2865,6 +3226,9 @@
           },
           "404": {
             "description": "Message not found in the chat"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
@@ -2919,6 +3283,9 @@
           },
           "404": {
             "description": "Message not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Edit the text of a message sent by this account",
@@ -3783,6 +4150,9 @@
           },
           "404": {
             "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Get all contacts for a session",
@@ -3825,9 +4195,54 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Batch-resolve profile picture URLs for up to 50 contacts",
+        "tags": [
+          "contacts"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/contacts/blocked": {
+      "get": {
+        "description": "The read half of the block/unblock endpoints. A bare array of neutral contact ids — ids only, because that is the honest common subset: whatsapp-web.js resolves full contact models but Baileys' blocklist query answers bare jids, and inventing the other fields on one engine would make the two engines claim different things about the same account.",
+        "operationId": "ContactController_getBlockedContacts",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Blocked contact ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "WhatsApp did not answer the blocklist query — retry shortly"
+          }
+        },
+        "summary": "List the contacts this account has blocked",
         "tags": [
           "contacts"
         ]
@@ -3869,6 +4284,9 @@
           },
           "404": {
             "description": "Contact not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Get a specific contact by ID",
@@ -3922,6 +4340,9 @@
           "400": {
             "description": "Session not active or invalid request"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
           }
@@ -3966,6 +4387,9 @@
           },
           "400": {
             "description": "Session not active"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
@@ -4012,6 +4436,9 @@
               }
             }
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer the lookup. Deliberately not reported as `exists: false` — that would be a claim about the number rather than about the query, and this route exists to be trusted before a send."
           }
@@ -4056,6 +4483,9 @@
               }
             }
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer the lookup. Deliberately not reported as `url: null` — that is the same answer a contact with no picture gives, and a caller cannot tell them apart."
           }
@@ -4099,6 +4529,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Resolve a contact id (e.g. an @lid) to a phone number — best-effort",
@@ -4141,6 +4574,9 @@
               }
             }
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
           }
@@ -4182,6 +4618,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
@@ -4234,6 +4673,9 @@
           "404": {
             "description": "No such invite — invalid, expired or revoked"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. Deliberately not folded into the 404 above — a query that never came back is not the same claim as a group that does not exist."
           }
@@ -4280,6 +4722,9 @@
           },
           "404": {
             "description": "Group not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget. Deliberately not folded into the 404 above — a query that never came back is not the same claim as a group that does not exist."
@@ -4329,6 +4774,9 @@
           "400": {
             "description": "Invalid or expired invite code, or session is not started"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
           }
@@ -4375,6 +4823,9 @@
           },
           "404": {
             "description": "Group not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget — nothing could be read."
@@ -4437,6 +4888,9 @@
           "404": {
             "description": "Group not found"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "501": {
             "description": "The active engine does not support a requested setting"
           },
@@ -4445,48 +4899,6 @@
           }
         },
         "summary": "Update group settings (announce / locked / ephemeral timer)",
-        "tags": [
-          "groups"
-        ]
-      }
-    },
-    "/api/sessions/{sessionId}/groups": {
-      "post": {
-        "operationId": "GroupController_create",
-        "parameters": [
-          {
-            "name": "sessionId",
-            "required": true,
-            "in": "path",
-            "description": "Session ID",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateGroupDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Group created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GroupSummaryDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Create a new group",
         "tags": [
           "groups"
         ]
@@ -4535,6 +4947,18 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected."
+          },
+          "403": {
+            "description": "WhatsApp refused the operation. The request was well formed — the refusal happened WhatsApp-side, most often because the account lacks the admin rights the operation requires."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget, so no per-participant outcome was read at all. Deliberately not folded into the 200 above — a participant WhatsApp turned down is reported inside `results` and is an answer; an update that never came back is not."
           }
         },
         "summary": "Add participants to a group",
@@ -4584,6 +5008,18 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected."
+          },
+          "403": {
+            "description": "WhatsApp refused the operation. The request was well formed — the refusal happened WhatsApp-side, most often because the account lacks the admin rights the operation requires."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget, so no per-participant outcome was read at all. Deliberately not folded into the 200 above — a participant WhatsApp turned down is reported inside `results` and is an answer; an update that never came back is not."
           }
         },
         "summary": "Remove participants from a group",
@@ -4635,6 +5071,18 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected."
+          },
+          "403": {
+            "description": "WhatsApp refused the operation. The request was well formed — the refusal happened WhatsApp-side, most often because the account lacks the admin rights the operation requires."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget, so no per-participant outcome was read at all. Deliberately not folded into the 200 above — a participant WhatsApp turned down is reported inside `results` and is an answer; an update that never came back is not."
           }
         },
         "summary": "Promote participants to admin",
@@ -4686,9 +5134,197 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "A participant does not name an individual. Pass a phone number, `<phone>@c.us` or `<lid>@lid`; a group id or free text is rejected."
+          },
+          "403": {
+            "description": "WhatsApp refused the operation. The request was well formed — the refusal happened WhatsApp-side, most often because the account lacks the admin rights the operation requires."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget, so no per-participant outcome was read at all. Deliberately not folded into the 200 above — a participant WhatsApp turned down is reported inside `results` and is an answer; an update that never came back is not."
           }
         },
         "summary": "Demote participants from admin",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}/membership-requests": {
+      "get": {
+        "description": "The join-approval queue of a group the account administers (join-approval mode on). Admin-only on both engines — a non-admin read is refused. Fields the engine does not report are omitted rather than defaulted.",
+        "operationId": "GroupController_getMembershipRequests",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pending membership requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GroupMembershipRequestDto"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "WhatsApp refused the operation. The request was well formed — the refusal happened WhatsApp-side, most often because the account lacks the admin rights the operation requires."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget — retry shortly"
+          }
+        },
+        "summary": "List pending join requests for a group",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}/membership-requests/approve": {
+      "post": {
+        "description": "Approves the named requesters, or EVERY pending request when the body names none. Approving an empty queue is a no-op that returns an empty results list. On whatsapp-web.js the engine pauses 250-500ms between requesters (upstream anti-abuse pacing), so acting on a large queue is a proportionally long request.",
+        "operationId": "GroupController_approveMembershipRequests",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MembershipRequestActionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Requests processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal of NAMED requesters is an error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParticipantsOperationResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "WhatsApp refused the operation. The request was well formed — the refusal happened WhatsApp-side, most often because the account lacks the admin rights the operation requires."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget, so no per-participant outcome was read at all. Deliberately not folded into the 200 above — a participant WhatsApp turned down is reported inside `results` and is an answer; an update that never came back is not."
+          }
+        },
+        "summary": "Approve pending join requests",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}/membership-requests/reject": {
+      "post": {
+        "description": "Rejects the named requesters, or EVERY pending request when the body names none. Rejecting an empty queue is a no-op that returns an empty results list. On whatsapp-web.js the engine pauses 250-500ms between requesters (upstream anti-abuse pacing), so acting on a large queue is a proportionally long request.",
+        "operationId": "GroupController_rejectMembershipRequests",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MembershipRequestActionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Requests processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal of NAMED requesters is an error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParticipantsOperationResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "WhatsApp refused the operation. The request was well formed — the refusal happened WhatsApp-side, most often because the account lacks the admin rights the operation requires."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget, so no per-participant outcome was read at all. Deliberately not folded into the 200 above — a participant WhatsApp turned down is reported inside `results` and is an answer; an update that never came back is not."
+          }
+        },
+        "summary": "Reject pending join requests",
         "tags": [
           "groups"
         ]
@@ -4740,6 +5376,9 @@
           },
           "403": {
             "description": "The engine refused the change — admin rights are required"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
@@ -4798,6 +5437,9 @@
           "403": {
             "description": "The engine refused the change — admin rights are required"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
           }
@@ -4842,6 +5484,9 @@
               }
             }
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
           }
@@ -4885,6 +5530,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget — nothing could be read."
@@ -4944,6 +5592,12 @@
           "403": {
             "description": "The engine refused the change — admin rights required"
           },
+          "404": {
+            "description": "No such group — the id is unknown, or it addresses a 1:1 chat rather than a group."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
           }
@@ -4988,6 +5642,12 @@
           },
           "403": {
             "description": "The engine refused the change — admin rights required"
+          },
+          "404": {
+            "description": "No such group — the id is unknown, or it addresses a 1:1 chat rather than a group."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
@@ -5036,6 +5696,9 @@
           "403": {
             "description": "The engine refused the request — admin rights required for this group"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer the invite-code query — retry shortly"
           }
@@ -5082,6 +5745,9 @@
           },
           "403": {
             "description": "The engine refused the request — admin rights required for this group"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer the invite-code query — retry shortly"
@@ -5134,6 +5800,9 @@
           "403": {
             "description": "The engine refused the name change"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
           }
@@ -5181,6 +5850,9 @@
           },
           "400": {
             "description": "Session is not started"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
@@ -5233,6 +5905,9 @@
           "403": {
             "description": "The engine refused the picture change"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "413": {
             "description": "Decoded base64 image exceeds the configured media cap"
           },
@@ -5243,6 +5918,102 @@
         "summary": "Set the account profile picture (URL or base64 image)",
         "tags": [
           "profile"
+        ]
+      },
+      "delete": {
+        "operationId": "ProfileController_deletePicture",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Profile picture removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileAckResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session is not started"
+          },
+          "403": {
+            "description": "The engine refused the picture removal"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
+          }
+        },
+        "summary": "Remove the account's profile picture",
+        "tags": [
+          "profile"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/calls/link": {
+      "post": {
+        "operationId": "CallController_createLink",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCallLinkDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The generated link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallLinkResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session is not started, or an invalid type / startTime"
+          },
+          "403": {
+            "description": "WhatsApp generated no link for this request"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget. The link may or may not have been created — the gateway stopped waiting for a reply that never came."
+          }
+        },
+        "summary": "Generate a shareable WhatsApp call link",
+        "tags": [
+          "calls"
         ]
       }
     },
@@ -5285,6 +6056,9 @@
           },
           "404": {
             "description": "Call not found or no longer ringing"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
@@ -5329,6 +6103,12 @@
           },
           "404": {
             "description": "Session not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "The active engine cannot serve this operation. It is part of the engine contract, but the engine currently running has no implementation for it."
           }
         },
         "summary": "Get all labels (WhatsApp Business only)",
@@ -5373,6 +6153,12 @@
           },
           "404": {
             "description": "Label not found"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "The active engine cannot serve this operation. It is part of the engine contract, but the engine currently running has no implementation for it."
           }
         },
         "summary": "Get a specific label by ID",
@@ -5427,6 +6213,9 @@
           "400": {
             "description": "Session not started, or validation failed"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "501": {
             "description": "The active engine cannot edit labels (whatsapp-web.js)"
           },
@@ -5475,6 +6264,9 @@
           },
           "400": {
             "description": "Session not started"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "501": {
             "description": "The active engine cannot edit labels (whatsapp-web.js)"
@@ -5530,8 +6322,17 @@
           "400": {
             "description": "Session not started"
           },
+          "404": {
+            "description": "No such label — it was never created, or the account is not a WhatsApp Business one and holds no labels at all. Both are the same answer to the caller."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "501": {
             "description": "The active engine cannot list chats by label (Baileys)"
+          },
+          "503": {
+            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Deliberately not reported as a missing label — a page that went away says nothing about whether the label exists. The other engine never answers this: Baileys has no label query at all and answers 501 above."
           }
         },
         "summary": "Get every chat carrying a label",
@@ -5576,6 +6377,12 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "The active engine cannot serve this operation. It is part of the engine contract, but the engine currently running has no implementation for it."
           }
         },
         "summary": "Get labels for a specific chat",
@@ -5635,6 +6442,9 @@
               }
             }
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "422": {
             "description": "Labels require a WhatsApp Business account, or the chat type has no labels"
           },
@@ -5691,6 +6501,9 @@
               }
             }
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "422": {
             "description": "Labels require a WhatsApp Business account, or the chat type has no labels"
           },
@@ -5734,6 +6547,9 @@
           },
           "400": {
             "description": "Session not ready"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "501": {
             "description": "Not supported by the active engine: the Baileys adapter cannot list subscribed channels."
@@ -5784,6 +6600,9 @@
           },
           "403": {
             "description": "The engine refused — channel creation may be disabled for this account"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Create a channel",
@@ -5829,6 +6648,9 @@
           "404": {
             "description": "Channel not found"
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied."
           }
@@ -5870,6 +6692,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "WhatsApp refused the operation. The request was well formed — the refusal happened WhatsApp-side, most often because the account lacks the admin rights the operation requires."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied."
@@ -5927,6 +6755,12 @@
               }
             }
           },
+          "404": {
+            "description": "No such channel — the id is not among the session's subscribed channels, either because it is wrong or because the channel has not synced into the local collection yet."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "501": {
             "description": "Not supported by the active engine: the Baileys adapter cannot read channel messages."
           }
@@ -5977,6 +6811,9 @@
           },
           "403": {
             "description": "The engine refused — not found, or this account does not own it"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "503": {
             "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied."
@@ -6039,11 +6876,151 @@
           "403": {
             "description": "The engine refused"
           },
+          "404": {
+            "description": "No such channel — the id is not among the session's subscribed channels, either because it is wrong or because the channel has not synced into the local collection yet."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied."
           }
         },
         "summary": "Mute or unmute a channel",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/channels/{channelId}/admins/demote": {
+      "post": {
+        "description": "Requires this account to own the channel. There is no promote counterpart: neither engine library exposes one, so an admin is promoted from the WhatsApp app and demoted here.",
+        "operationId": "ChannelController_demoteAdmin",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channelId",
+            "required": true,
+            "in": "path",
+            "description": "Channel ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DemoteChannelAdminDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Admin demoted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelAckResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session not started, or validation failed"
+          },
+          "403": {
+            "description": "The engine refused — not the owner, or the user is not an admin"
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "The whatsapp-web.js engine cannot perform this: the WhatsApp Web module its library method targets no longer exports the function. Use the Baileys engine."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget — the operation may or may not have applied."
+          }
+        },
+        "summary": "Demote a channel admin back to a subscriber",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/channels/{channelId}/owner/transfer": {
+      "post": {
+        "description": "IRREVERSIBLE. Once the transfer lands, this session is no longer the owner and cannot take the channel back through this API. Requires this account to currently own the channel. The upstream option to also dismiss yourself as an admin in the same call is not exposed, because the WhatsApp Web function it depends on no longer exists and the branch swallows its own errors, so it would fail silently.",
+        "operationId": "ChannelController_transferOwnership",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channelId",
+            "required": true,
+            "in": "path",
+            "description": "Channel ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferChannelOwnershipDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ownership transferred",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelAckResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session not started, or validation failed"
+          },
+          "403": {
+            "description": "The engine did not transfer the channel. On whatsapp-web.js this is the only outcome a failure can produce: the page swallows every error into a plain false, so the cause is not reported."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "The whatsapp-web.js engine cannot perform this: its page function rejects every call locally against a subscriber list the page cannot repopulate. Use the Baileys engine."
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget — the transfer may or may not have applied."
+          }
+        },
+        "summary": "Transfer channel ownership to another account",
         "tags": [
           "channels"
         ]
@@ -6094,6 +7071,12 @@
               }
             }
           },
+          "404": {
+            "description": "The invite code does not resolve to a channel — it is wrong, expired, or revoked. This route takes an invite code rather than a channel id."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "501": {
             "description": "Not supported by the active engine: whatsapp-web.js cannot subscribe by invite code."
           },
@@ -6132,7 +7115,23 @@
     "/api/stats/messages": {
       "get": {
         "operationId": "StatsController_getMessageStats",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "period",
+            "required": false,
+            "in": "query",
+            "description": "Time window for the returned series.",
+            "schema": {
+              "default": "24h",
+              "type": "string",
+              "enum": [
+                "24h",
+                "7d",
+                "30d"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Message statistics with a time series for the requested period.",
@@ -6246,7 +7245,7 @@
         ]
       }
     },
-    "/api/sessions/{sessionId}/status/{contactId}": {
+    "/api/sessions/{sessionId}/status/{id}": {
       "get": {
         "operationId": "StatusController_getContactStatus",
         "parameters": [
@@ -6259,9 +7258,10 @@
             }
           },
           {
-            "name": "contactId",
+            "name": "id",
             "required": true,
             "in": "path",
+            "description": "Contact ID",
             "schema": {
               "type": "string"
             }
@@ -6280,6 +7280,50 @@
           }
         },
         "summary": "Get status updates from a specific contact",
+        "tags": [
+          "status"
+        ]
+      },
+      "delete": {
+        "operationId": "StatusController_deleteStatus",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Status ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusDeletedResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No session is running under that id — it was never started, was stopped, or does not exist. These routes report an unstarted session as `404`, where the message and group routes report it as `400`."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          }
+        },
+        "summary": "Delete own status",
         "tags": [
           "status"
         ]
@@ -6364,6 +7408,12 @@
           },
           "400": {
             "description": "Invalid request, or the post was blocked by a plugin."
+          },
+          "404": {
+            "description": "No session is running under that id — it was never started, was stopped, or does not exist. These routes report an unstarted session as `404`, where the message and group routes report it as `400`."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           }
         },
         "summary": "Post a text status",
@@ -6408,6 +7458,12 @@
           },
           "400": {
             "description": "Neither url nor base64 provided, or the post was blocked by a plugin."
+          },
+          "404": {
+            "description": "No session is running under that id — it was never started, was stopped, or does not exist. These routes report an unstarted session as `404`, where the message and group routes report it as `400`."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "413": {
             "description": "Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES."
@@ -6456,6 +7512,12 @@
           "400": {
             "description": "Neither url nor base64 provided, or the post was blocked by a plugin."
           },
+          "404": {
+            "description": "No session is running under that id — it was never started, was stopped, or does not exist. These routes report an unstarted session as `404`, where the message and group routes report it as `400`."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "413": {
             "description": "Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES."
           }
@@ -6503,6 +7565,12 @@
           "400": {
             "description": "Neither url nor base64 provided, or the post was blocked by a plugin."
           },
+          "404": {
+            "description": "No session is running under that id — it was never started, was stopped, or does not exist. These routes report an unstarted session as `404`, where the message and group routes report it as `400`."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "413": {
             "description": "Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES."
           }
@@ -6513,49 +7581,20 @@
         ]
       }
     },
-    "/api/sessions/{sessionId}/status/{statusId}": {
-      "delete": {
-        "operationId": "StatusController_deleteStatus",
+    "/api/sessions/{sessionId}/media/convert": {
+      "get": {
+        "operationId": "MediaController_conversionStatus",
         "parameters": [
           {
             "name": "sessionId",
             "required": true,
             "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "statusId",
-            "required": true,
-            "in": "path",
+            "description": "Session ID the API key must be authorized for",
             "schema": {
               "type": "string"
             }
           }
         ],
-        "responses": {
-          "200": {
-            "description": "Status deleted.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StatusDeletedResponseDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Delete own status",
-        "tags": [
-          "status"
-        ]
-      }
-    },
-    "/api/sessions/{sessionId}/media/convert": {
-      "get": {
-        "operationId": "MediaController_conversionStatus",
-        "parameters": [],
         "responses": {
           "200": {
             "description": "Reports whether conversion is switched on AND the ffmpeg binary can be run, so a client can decide between converting here and converting before it sends.",
@@ -6577,7 +7616,17 @@
     "/api/sessions/{sessionId}/media/convert/voice": {
       "post": {
         "operationId": "MediaController_convertVoice",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID the API key must be authorized for",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -6618,7 +7667,17 @@
     "/api/sessions/{sessionId}/media/convert/video": {
       "post": {
         "operationId": "MediaController_convertVideo",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID the API key must be authorized for",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -6680,6 +7739,12 @@
               }
             }
           },
+          "404": {
+            "description": "No session is running under that id — it was never started, was stopped, or does not exist. These routes report an unstarted session as `404`, where the message and group routes report it as `400`."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "501": {
             "description": "Not supported by the active engine: whatsapp-web.js has no catalog API."
           },
@@ -6739,6 +7804,12 @@
               }
             }
           },
+          "404": {
+            "description": "No session is running under that id — it was never started, was stopped, or does not exist. These routes report an unstarted session as `404`, where the message and group routes report it as `400`."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "501": {
             "description": "Not supported by the active engine: whatsapp-web.js has no catalog API."
           },
@@ -6783,6 +7854,12 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No session is running under that id — it was never started, was stopped, or does not exist. These routes report an unstarted session as `404`, where the message and group routes report it as `400`."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
           "501": {
             "description": "Not supported by the active engine: whatsapp-web.js has no catalog API."
@@ -6837,6 +7914,9 @@
           "404": {
             "description": "Product id not found in the session catalog."
           },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "501": {
             "description": "Not supported by the active engine: whatsapp-web.js cannot send product messages."
           },
@@ -6874,6 +7954,12 @@
           }
         },
         "responses": {
+          "404": {
+            "description": "No session is running under that id — it was never started, was stopped, or does not exist. These routes report an unstarted session as `404`, where the message and group routes report it as `400`."
+          },
+          "409": {
+            "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
           "501": {
             "description": "Not supported by the active engine: no engine can send catalog links."
           }
@@ -6890,7 +7976,17 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "List of all plugins"
+            "description": "List of all plugins",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PluginDto"
+                  }
+                }
+              }
+            }
           }
         },
         "summary": "List all plugins",
@@ -6903,9 +7999,36 @@
       "post": {
         "operationId": "PluginsController_install",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The plugin .zip package"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
-            "description": "Plugin installed"
+            "description": "Plugin installed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginDto"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid package"
@@ -6936,7 +8059,14 @@
         },
         "responses": {
           "201": {
-            "description": "Plugin installed"
+            "description": "Plugin installed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginDto"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid URL, download failed, or invalid package"
@@ -6984,7 +8114,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Plugin details"
+            "description": "Plugin details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginDto"
+                }
+              }
+            }
           },
           "404": {
             "description": "Plugin not found"
@@ -7121,7 +8258,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Config UI HTML"
+            "description": "Config UI HTML",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "description": "Plugin not found or has no config UI"
@@ -7256,7 +8400,14 @@
         },
         "responses": {
           "201": {
-            "description": "Plugin updated"
+            "description": "Plugin updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginDto"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid URL/package, id mismatch, or built-in"
@@ -7314,6 +8465,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "path",
+            "required": true,
+            "in": "path",
+            "description": "Provider-defined trailing path the plugin claims (may contain slashes).",
+            "schema": {
+              "example": "events/message",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7360,6 +8521,16 @@
             "required": true,
             "in": "path",
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "required": true,
+            "in": "path",
+            "description": "Provider-defined trailing path the plugin claims (may contain slashes).",
+            "schema": {
+              "example": "events/message",
               "type": "string"
             }
           }
@@ -7410,6 +8581,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "path",
+            "required": true,
+            "in": "path",
+            "description": "Provider-defined trailing path the plugin claims (may contain slashes).",
+            "schema": {
+              "example": "events/message",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7456,6 +8637,16 @@
             "required": true,
             "in": "path",
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "required": true,
+            "in": "path",
+            "description": "Provider-defined trailing path the plugin claims (may contain slashes).",
+            "schema": {
+              "example": "events/message",
               "type": "string"
             }
           }
@@ -7506,6 +8697,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "path",
+            "required": true,
+            "in": "path",
+            "description": "Provider-defined trailing path the plugin claims (may contain slashes).",
+            "schema": {
+              "example": "events/message",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7552,6 +8753,16 @@
             "required": true,
             "in": "path",
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "required": true,
+            "in": "path",
+            "description": "Provider-defined trailing path the plugin claims (may contain slashes).",
+            "schema": {
+              "example": "events/message",
               "type": "string"
             }
           }
@@ -7602,52 +8813,14 @@
             "schema": {
               "type": "string"
             }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202."
-          },
-          "202": {
-            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
-          },
-          "401": {
-            "description": "Signature verification failed (missing, stale, or wrong secret)."
-          },
-          "403": {
-            "description": "GET verification challenge failed (verifyToken mismatch)."
-          },
-          "404": {
-            "description": "Unknown pluginId/instanceId, or no route claimed by the plugin."
-          },
-          "413": {
-            "description": "Request body exceeds the route maxBodyBytes limit."
-          },
-          "429": {
-            "description": "Per-instance rate limit exceeded (INGRESS_INSTANCE_LIMIT)."
-          }
-        },
-        "tags": [
-          "integration"
-        ],
-        "security": []
-      },
-      "search": {
-        "operationId": "IngressController_receive_search",
-        "parameters": [
-          {
-            "name": "pluginId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
           },
           {
-            "name": "instanceId",
+            "name": "path",
             "required": true,
             "in": "path",
+            "description": "Provider-defined trailing path the plugin claims (may contain slashes).",
             "schema": {
+              "example": "events/message",
               "type": "string"
             }
           }
@@ -8061,7 +9234,7 @@
   "info": {
     "title": "OpenWA API",
     "description": "Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API\n\n**Gateway-wide responses.** Two statuses are returned by middleware before routing, so any operation can emit them:\n\n- `415 Unsupported Media Type` — the request body carries a `Content-Encoding` other than `identity`. The aggregate in-flight body cap counts wire bytes, so a compressed body would be admitted on its compressed size and then inflated past the memory it is meant to bound. Send the body uncompressed.\n- `503 Service Unavailable` with `Retry-After` — the gateway already has too much request body data in flight. The body is not read; retry after the given delay.",
-    "version": "0.14.5",
+    "version": "0.16.0",
     "contact": {
       "name": "OpenWA",
       "url": "https://github.com/rmyndharis/OpenWA",
@@ -8197,7 +9370,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "example": "4f1c9b2a-..."
+            "example": "4f1c9b2a-8d3e-4c5b-9a17-2e6f0b4d8c31"
           },
           "action": {
             "type": "string",
@@ -8339,10 +9512,10 @@
             }
           },
           "allowedSessions": {
-            "description": "Allowed session IDs this key can access",
+            "description": "Session **ids** this key may act on — the server-generated UUIDs, not session names. Matched by exact equality against the id in the request path, so a name never matches and would silently scope the key to nothing. Omit or leave empty to let the key reach every session.",
             "example": [
-              "session-uuid-1",
-              "session-uuid-2"
+              "0a941dac-a965-45e7-b318-74ae8be134f0",
+              "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a"
             ],
             "type": "array",
             "items": {
@@ -8595,7 +9768,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "example": "sess_123e4567-e89b-12d3-a456-426614174000"
+            "example": "0a941dac-a965-45e7-b318-74ae8be134f0"
           },
           "name": {
             "type": "string",
@@ -8687,7 +9860,7 @@
             "example": false
           },
           "maxReconnectAttempts": {
-            "type": "object",
+            "type": "number",
             "description": "Reconnect attempt cap; `null` means unlimited",
             "example": 5,
             "nullable": true
@@ -8708,13 +9881,13 @@
         "type": "object",
         "properties": {
           "autoRejectCalls": {
-            "type": "object",
+            "type": "boolean",
             "description": "Auto-reject every incoming call as soon as it rings. The call.received event is still emitted first, so a webhook consumer sees the call regardless. Takes effect on the next incoming call — the session is not restarted.",
             "example": true,
             "nullable": true
           },
           "maxReconnectAttempts": {
-            "type": "object",
+            "type": "number",
             "description": "Cap on consecutive reconnect attempts (`0` disables reconnect entirely). Send `null` for unlimited, which is the default. Applies on the next session start, not to a reconnect sequence already in flight.",
             "minimum": 0,
             "maximum": 20,
@@ -8722,7 +9895,7 @@
             "nullable": true
           },
           "reconnectBaseDelay": {
-            "type": "object",
+            "type": "number",
             "description": "Base delay of the reconnect backoff in milliseconds. Applies on the next session start, not to a reconnect sequence already in flight.",
             "minimum": 1000,
             "maximum": 300000,
@@ -8869,6 +10042,19 @@
           "chatId"
         ]
       },
+      "SetOwnPresenceDto": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "true = appear online; false = appear offline (hands notifications back to the phone — an always-online linked device suppresses the phone's own alerts)",
+            "example": false
+          }
+        },
+        "required": [
+          "available"
+        ]
+      },
       "ParticipantPresenceDto": {
         "type": "object",
         "properties": {
@@ -8949,6 +10135,44 @@
           "archive"
         ]
       },
+      "MuteChatDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Chat ID in the active engine's native format (e.g. 1234567890-123@g.us on whatsapp-web.js)",
+            "example": "1234567890-123@g.us"
+          },
+          "muteUntil": {
+            "type": "number",
+            "description": "Absolute epoch-MILLISECONDS timestamp at which the mute expires, or `null` to unmute now. Required — omitting it is rejected rather than guessed, because the two plausible readings (unmute vs mute forever) are opposites. To mute indefinitely, send a far-future timestamp. Milliseconds, not seconds: a seconds-scale value is an instant in 1970, so the mute expires immediately while the request still answers 200.",
+            "example": 1800000000000,
+            "nullable": true
+          }
+        },
+        "required": [
+          "chatId",
+          "muteUntil"
+        ]
+      },
+      "PinChatDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Chat ID in the active engine's native format (e.g. 1234567890-123@g.us on whatsapp-web.js)",
+            "example": "1234567890-123@g.us"
+          },
+          "pin": {
+            "type": "boolean",
+            "description": "true to pin the chat to the top of the list, false to unpin it."
+          }
+        },
+        "required": [
+          "chatId",
+          "pin"
+        ]
+      },
       "DeleteChatDto": {
         "type": "object",
         "properties": {
@@ -9023,6 +10247,7 @@
                 "group.join",
                 "group.leave",
                 "group.update",
+                "group.join_request",
                 "call.received",
                 "call.accepted",
                 "call.rejected",
@@ -9061,7 +10286,8 @@
                   "value": "invoice"
                 }
               ]
-            }
+            },
+            "nullable": true
           },
           "retryCount": {
             "type": "number",
@@ -9111,7 +10337,8 @@
                   "value": "invoice"
                 }
               ]
-            }
+            },
+            "nullable": true
           },
           "active": {
             "type": "boolean"
@@ -9120,7 +10347,9 @@
             "type": "number"
           },
           "lastTriggeredAt": {
-            "type": "object"
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
           },
           "createdAt": {
             "format": "date-time",
@@ -9174,6 +10403,7 @@
                 "group.join",
                 "group.leave",
                 "group.update",
+                "group.join_request",
                 "call.received",
                 "call.accepted",
                 "call.rejected",
@@ -9208,7 +10438,8 @@
                   "value": "invoice"
                 }
               ]
-            }
+            },
+            "nullable": true
           },
           "active": {
             "type": "boolean",
@@ -9216,7 +10447,10 @@
           },
           "retryCount": {
             "type": "number",
-            "description": "Retry count"
+            "description": "Delivery attempts before the webhook is parked. Same range the create route enforces.",
+            "example": 3,
+            "minimum": 0,
+            "maximum": 5
           }
         }
       },
@@ -9938,8 +11172,10 @@
         "properties": {
           "delayBetweenMessages": {
             "type": "number",
-            "description": "Delay between messages in ms (min: 1000, default: 3000)",
-            "default": 3000
+            "description": "Delay between messages in ms.",
+            "default": 3000,
+            "minimum": 1000,
+            "maximum": 60000
           },
           "randomizeDelay": {
             "type": "boolean",
@@ -10155,7 +11391,10 @@
             "type": "object",
             "description": "Per-dependency outcome, keyed by dependency name. Present on both the 200 and the 503.",
             "example": {
-              "database": {
+              "mainDatabase": {
+                "status": "up"
+              },
+              "dataDatabase": {
                 "status": "up"
               }
             },
@@ -10533,7 +11772,9 @@
           "features": {
             "description": "Capabilities the engine declares.",
             "example": [
-              "send-text"
+              "text-messages",
+              "media-messages",
+              "group-management"
             ],
             "type": "array",
             "items": {
@@ -12010,6 +13251,52 @@
           "results"
         ]
       },
+      "GroupMembershipRequestDto": {
+        "type": "object",
+        "properties": {
+          "participantId": {
+            "type": "string",
+            "description": "Neutral id of the user asking to join.",
+            "example": "628123456789@c.us"
+          },
+          "addedById": {
+            "type": "string",
+            "description": "Who created the request, when the engine reports it (differs from the requester on a non-admin add).",
+            "example": "628987654321@c.us"
+          },
+          "method": {
+            "type": "string",
+            "description": "How the request was made, when the engine reports it.",
+            "enum": [
+              "invite_link",
+              "non_admin_add",
+              "linked_group_join"
+            ],
+            "example": "invite_link"
+          },
+          "requestedAt": {
+            "type": "number",
+            "description": "Unix seconds the request was created, when the engine reports it.",
+            "example": 1754700000
+          }
+        },
+        "required": [
+          "participantId"
+        ]
+      },
+      "MembershipRequestActionDto": {
+        "type": "object",
+        "properties": {
+          "participants": {
+            "description": "Requester WhatsApp IDs (e.g. 628123456789@c.us). Omit to act on every pending request.",
+            "maxItems": 256,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "GroupSubjectDto": {
         "type": "object",
         "properties": {
@@ -12176,6 +13463,42 @@
             "example": "image/jpeg"
           }
         }
+      },
+      "CreateCallLinkDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Which kind of call the link opens. WhatsApp's own URL path for `audio` is `/voice/`.",
+            "enum": [
+              "audio",
+              "video"
+            ],
+            "example": "video"
+          },
+          "startTime": {
+            "type": "number",
+            "description": "Absolute epoch-MILLISECONDS timestamp the call is scheduled to start at. Required: whatsapp-web.js generates an event-linked call and has no notion of \"no start time\", so a link for right now is `Date.now()` rather than an omitted field.",
+            "example": 1800000000000
+          }
+        },
+        "required": [
+          "type",
+          "startTime"
+        ]
+      },
+      "CallLinkResponseDto": {
+        "type": "object",
+        "properties": {
+          "link": {
+            "type": "string",
+            "description": "The shareable WhatsApp call link.",
+            "example": "https://call.whatsapp.com/video/XxXxXxXxXxXxXx"
+          }
+        },
+        "required": [
+          "link"
+        ]
       },
       "CallAckResponseDto": {
         "type": "object",
@@ -12420,6 +13743,32 @@
         },
         "required": [
           "mute"
+        ]
+      },
+      "DemoteChannelAdminDto": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "description": "WhatsApp ID of the admin to demote back to a subscriber — a phone number, `<phone>@c.us` or `<lid>@lid`; a bare number is qualified for you. Anything that does not name an individual is rejected with 400 rather than handed to WhatsApp.",
+            "example": "628123456789@c.us"
+          }
+        },
+        "required": [
+          "userId"
+        ]
+      },
+      "TransferChannelOwnershipDto": {
+        "type": "object",
+        "properties": {
+          "newOwnerId": {
+            "type": "string",
+            "description": "WhatsApp ID of the account that becomes the new owner — a phone number, `<phone>@c.us` or `<lid>@lid`; a bare number is qualified for you. Anything that does not name an individual is rejected with 400 rather than handed to WhatsApp. This is irreversible: once the transfer lands, this session can no longer take the channel back.",
+            "example": "628123456789@c.us"
+          }
+        },
+        "required": [
+          "newOwnerId"
         ]
       },
       "OverviewSessionsDto": {
@@ -13298,8 +14647,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "The message id, assigned when the gateway accepts the message for sending. Note the field name: the send routes served by MessageService answer `messageId` for the same value. A 2xx here means the message was handed to the WhatsApp client, not that it was delivered.",
-            "example": "true_628123456789@c.us_3EB0123456789"
+            "description": "The message id, assigned when the gateway accepts the message for sending. Note the field name: the send routes served by MessageService answer `messageId` for the same value. A 2xx here means the message was handed to the WhatsApp client, not that it was delivered.\n\nThis route is Baileys-only, so the id is the bare key id Baileys assigns — not the `true_<jid>_<id>` serialized form the whatsapp-web.js send routes report.",
+            "example": "3EB0C767D26B8A3F6E"
           },
           "timestamp": {
             "type": "number",
@@ -13328,48 +14677,6 @@
         },
         "required": [
           "chatId"
-        ]
-      },
-      "InstallFromUrlDto": {
-        "type": "object",
-        "properties": {
-          "url": {
-            "type": "string",
-            "description": "HTTPS URL of the plugin .zip to download and install. Plain http:// is rejected: the package is executable code, so it must be integrity-protected in transit (hosts on private networks remain subject to the SSRF guard). Optional content pinning: append `#sha256=<64 hex>` (fragment — never sent to the server; query params are ignored) to require the downloaded archive to match that digest; a mismatch fails the install."
-          }
-        },
-        "required": [
-          "url"
-        ]
-      },
-      "PluginConfigDto": {
-        "type": "object",
-        "properties": {
-          "config": {
-            "type": "object",
-            "description": "Plugin configuration object"
-          }
-        },
-        "required": [
-          "config"
-        ]
-      },
-      "PluginSessionsDto": {
-        "type": "object",
-        "properties": {
-          "sessions": {
-            "description": "Sessions to activate the plugin for; ['*'] = all numbers, [] = none",
-            "example": [
-              "*"
-            ],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "sessions"
         ]
       },
       "PluginDto": {
@@ -13489,6 +14796,48 @@
           "activeSessions"
         ]
       },
+      "InstallFromUrlDto": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "HTTPS URL of the plugin .zip to download and install. Plain http:// is rejected: the package is executable code, so it must be integrity-protected in transit (hosts on private networks remain subject to the SSRF guard). Optional content pinning: append `#sha256=<64 hex>` (fragment — never sent to the server; query params are ignored) to require the downloaded archive to match that digest; a mismatch fails the install."
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "PluginConfigDto": {
+        "type": "object",
+        "properties": {
+          "config": {
+            "type": "object",
+            "description": "Plugin configuration object"
+          }
+        },
+        "required": [
+          "config"
+        ]
+      },
+      "PluginSessionsDto": {
+        "type": "object",
+        "properties": {
+          "sessions": {
+            "description": "Sessions to activate the plugin for; ['*'] = all numbers, [] = none",
+            "example": [
+              "*"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "sessions"
+        ]
+      },
       "CreateInstanceDto": {
         "type": "object",
         "properties": {
@@ -13559,7 +14908,7 @@
             "description": "Operator-chosen instance id (unique within the plugin)."
           },
           "sessionScope": {
-            "type": "object",
+            "type": "string",
             "description": "Session id the instance is scoped to, or null for all sessions.",
             "nullable": true
           },
@@ -13568,7 +14917,7 @@
             "description": "Ingress HMAC secret. Masked ('***') on every read; plaintext returned only once on create/regenerate-secret."
           },
           "verifyToken": {
-            "type": "object",
+            "type": "string",
             "description": "Provider verify-token. Masked ('***') on reads when set; plaintext on create/regenerate-secret.",
             "nullable": true
           },
@@ -13634,7 +14983,7 @@
           "messageId": {
             "type": "string",
             "description": "Gateway message row id.",
-            "example": "4f1c9b2a-..."
+            "example": "7c2e5a91-3b8d-4f6a-a05c-9d1e4b7f2306"
           },
           "waMessageId": {
             "type": "string",

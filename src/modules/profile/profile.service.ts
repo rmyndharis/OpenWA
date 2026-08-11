@@ -25,6 +25,11 @@ export class ProfileService {
     return this.getEngine(sessionId).setProfileStatus(status);
   }
 
+  /** Remove the account's own picture. Idempotent: no picture to remove is a no-op, not an error. */
+  deleteProfilePicture(sessionId: string) {
+    return this.getEngine(sessionId).deleteProfilePicture();
+  }
+
   /** Map the JSON media body to a MediaInput exactly like the message module's media sends do. */
   setProfilePicture(sessionId: string, dto: SetProfilePictureDto) {
     const base64 = stripBase64DataUri(dto.base64);

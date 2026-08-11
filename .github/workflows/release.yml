@@ -84,11 +84,21 @@ jobs:
       - name: Check OpenAPI snapshot is up to date
         run: npm run openapi:check
 
-      # The same gate ci.yml runs. Its comment there notes this workflow never ran it, which is the
-      # gap: a tag pushed with `--follow-tags` starts both workflows, and only the branch one could
-      # see an SDK left behind by a contract change. The release path has to stand on its own.
+      # The same gates ci.yml runs. Its comment there notes this workflow never ran them, which is
+      # the gap: a tag pushed with `--follow-tags` starts both workflows, and only the branch one
+      # could see an SDK left behind by a contract change. The release path has to stand on its own,
+      # and it is the path that actually publishes the image and the GitHub Release.
       - name: Check SDK routes against the contract
         run: npm run check:sdk-routes
+
+      - name: Check the contract is covered by every SDK
+        run: npm run check:sdk-coverage
+
+      - name: Check SDK webhook events against the contract
+        run: npm run check:sdk-events
+
+      - name: Check SDK docs cover the shipped client surface
+        run: npm run check:sdk-docs
 
   test:
     name: Test
@@ -245,10 +255,60 @@ jobs:
       - name: Run backup/restore smoke test
         run: ./scripts/smoke-test-backup-restore.sh
 
+  # Mirrors ci.yml's chart job. The chart is published from the tag, so without this the only path
+  # that renders and validates it is the branch path — a chart that breaks between the last branch
+  # build and the tag ships unvalidated.
+  chart:
+    name: Helm chart and workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # For the behaviour check below. No `npm ci`: it imports only node: builtins, so pinning the
+      # runtime is the whole dependency — without this the step would silently take whatever Node the
+      # runner image happens to ship.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: helm lint
+        run: docker run --rm -v "$PWD/charts:/charts:ro" alpine/helm:4.2.3 lint /charts/openwa
+
+      # Two value sets: the defaults an operator gets, and every optional resource switched on, so a
+      # template that only breaks under a toggle cannot pass unnoticed.
+      - name: helm template
+        run: |
+          mkdir -p rendered
+          docker run --rm -v "$PWD/charts:/charts:ro" alpine/helm:4.2.3 \
+            template ci /charts/openwa > rendered/default.yaml
+          docker run --rm -v "$PWD/charts:/charts:ro" alpine/helm:4.2.3 \
+            template ci /charts/openwa \
+            --set ingress.enabled=true \
+            --set podDisruptionBudget.enabled=true \
+            --set serviceMonitor.enabled=true > rendered/toggled.yaml
+
+      # -ignore-missing-schemas so the ServiceMonitor CRD is skipped rather than failing the run;
+      # without it the toggled render exits 1 on a resource whose schema is not in the catalogue.
+      - name: Validate rendered manifests
+        run: |
+          docker run --rm -v "$PWD/rendered:/w:ro" ghcr.io/yannh/kubeconform:v0.8.0 \
+            -strict -ignore-missing-schemas -summary /w/default.yaml /w/toggled.yaml
+
+      # What the rendered chart would DO in a cluster, which neither helm lint nor kubeconform can
+      # see: config changes roll the pods, the startup budget exceeds the liveness budget, the
+      # metrics selector names one Service. Nothing here publishes the chart — operators install it
+      # from this ref — so the tag is the last gate it passes, and a chart that renders validly but
+      # misbehaves must not get past it.
+      - name: Check chart behaviour
+        run: npm run check:chart
+
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.12 -color
+
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, test, dashboard, scripts-smoke]
+    needs: [lint, test, dashboard, scripts-smoke, chart]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

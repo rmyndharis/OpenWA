@@ -61,8 +61,10 @@ describe('GroupService', () => {
   it('passes participant lists straight through to the engine', async () => {
     const addParticipants = jest.fn().mockResolvedValue(undefined);
     const svc = makeService({ addParticipants });
-    await svc.addParticipants('s1', 'g1', ['a@c.us', 'b@c.us']);
-    expect(addParticipants).toHaveBeenCalledWith('g1', ['a@c.us', 'b@c.us']);
+    // Real-shaped ids: the participant guard requires a numeric user-part, so `a@c.us` would now
+    // fail validation and this would stop testing the pass-through it is named for.
+    await svc.addParticipants('s1', 'g1', ['628111111@c.us', '628222222@c.us']);
+    expect(addParticipants).toHaveBeenCalledWith('g1', ['628111111@c.us', '628222222@c.us']);
   });
 
   it('joinGroupViaInviteCode delegates and returns the group id', async () => {
@@ -246,4 +248,189 @@ describe('GroupService join-info preview', () => {
       BadRequestException,
     );
   });
+});
+
+describe('GroupService membership requests', () => {
+  const makeService = (engine: Partial<IWhatsAppEngine>, pacing: SendPacingService = inertPacing()) => {
+    const engines = new EngineRegistry();
+    engines.set('s1', engine as IWhatsAppEngine);
+    return { svc: new GroupService(engines, pacing), pacing };
+  };
+
+  it('delegates the pending-request list to the engine', async () => {
+    const requests = [{ participantId: '628111@c.us', method: 'invite_link', requestedAt: 1754700000 }];
+    const getGroupMembershipRequests = jest.fn().mockResolvedValue(requests);
+
+    const { svc } = makeService({ getGroupMembershipRequests });
+
+    await expect(svc.getGroupMembershipRequests('s1', 'g1')).resolves.toEqual(requests);
+    expect(getGroupMembershipRequests).toHaveBeenCalledWith('g1');
+  });
+
+  it.each([['approveGroupMembershipRequests' as const], ['rejectGroupMembershipRequests' as const]])(
+    '%s forwards the named participants and the results verbatim',
+    async method => {
+      const results = [{ id: '628111@c.us', success: true, status: 200 }];
+      const engineFn = jest.fn().mockResolvedValue(results);
+
+      const { svc } = makeService({ [method]: engineFn });
+
+      await expect(svc[method]('s1', 'g1', ['628111@c.us'])).resolves.toEqual(results);
+      expect(engineFn).toHaveBeenCalledWith('g1', ['628111@c.us']);
+    },
+  );
+
+  it('passes an omitted participant list through as undefined (approve/reject ALL pending)', async () => {
+    const approveGroupMembershipRequests = jest.fn().mockResolvedValue([]);
+
+    const { svc } = makeService({ approveGroupMembershipRequests });
+
+    await expect(svc.approveGroupMembershipRequests('s1', 'g1')).resolves.toEqual([]);
+    expect(approveGroupMembershipRequests).toHaveBeenCalledWith('g1', undefined);
+  });
+
+  it('does NOT draw on the cold-reachout budget — the requesters asked for the contact', async () => {
+    const approveGroupMembershipRequests = jest.fn().mockResolvedValue([]);
+    const assertReachoutAllowed = jest.fn().mockResolvedValue(undefined);
+
+    const { svc } = makeService({ approveGroupMembershipRequests }, {
+      assertReachoutAllowed,
+    } as unknown as SendPacingService);
+    await svc.approveGroupMembershipRequests('s1', 'g1', ['628111@c.us']);
+
+    expect(assertReachoutAllowed).not.toHaveBeenCalled();
+  });
+
+  it('throws 400 when the session is not started', () => {
+    const svc = new GroupService(new EngineRegistry(), inertPacing());
+    expect(() => svc.getGroupMembershipRequests('s1', 'g1')).toThrow(BadRequestException);
+  });
+});
+
+describe('GroupService participant id validation (#1220)', () => {
+  const GROUP = '120363165619688042@g.us';
+
+  const makeService = (engine: Partial<IWhatsAppEngine>, pacing: SendPacingService = inertPacing()) => {
+    const engines = new EngineRegistry();
+    engines.set('s1', engine as IWhatsAppEngine);
+    return new GroupService(engines, pacing);
+  };
+
+  /**
+   * The three status-only writes are synchronous forwarders, so their guard throws synchronously,
+   * while createGroup/addParticipants are async. Routing both through a promise lets one table
+   * cover all five without asserting the wrong failure mode for half of them.
+   */
+  const call = (svc: GroupService, op: string, participants: string[]) =>
+    Promise.resolve().then(() =>
+      op === 'createGroup'
+        ? svc.createGroup('s1', 'Team', participants)
+        : (svc as unknown as Record<string, (s: string, g: string, p: string[]) => Promise<unknown>>)[op](
+            's1',
+            GROUP,
+            participants,
+          ),
+    );
+
+  it.each([
+    ['removeParticipants'],
+    ['promoteParticipants'],
+    ['demoteParticipants'],
+    ['addParticipants'],
+    ['createGroup'],
+  ])('%s rejects an unaddressable id with 400 before reaching the engine', async op => {
+    const engineOp = jest.fn();
+    const svc = makeService({ [op]: engineOp });
+
+    await expect(call(svc, op, ['NOT A USER'])).rejects.toBeInstanceOf(BadRequestException);
+    expect(engineOp).not.toHaveBeenCalled();
+  });
+
+  it('names every offending entry and leaves the valid ones out of the message', async () => {
+    const svc = makeService({ removeParticipants: jest.fn() });
+
+    const err = await call(svc, 'removeParticipants', ['628123456789@c.us', 'NOT A USER', '12036@g.us']).catch(
+      (e: unknown) => e,
+    );
+
+    expect((err as Error).message).toContain('NOT A USER');
+    expect((err as Error).message).toContain('12036@g.us');
+    expect((err as Error).message).not.toContain('628123456789@c.us');
+  });
+
+  it('accepts a bare number, a c.us id and a lid, forwarding them verbatim', async () => {
+    const removeParticipants = jest.fn().mockResolvedValue([]);
+    const svc = makeService({ removeParticipants });
+
+    await call(svc, 'removeParticipants', ['628123456789', '628999@c.us', '12345678901234567890@lid']);
+
+    expect(removeParticipants).toHaveBeenCalledWith(GROUP, ['628123456789', '628999@c.us', '12345678901234567890@lid']);
+  });
+
+  it.each([['addParticipants'], ['createGroup']])(
+    '%s rejects a malformed participant before it can consume reachout budget',
+    async op => {
+      // Both paced writes, not just one: a batch that can never reach WhatsApp must not draw on the
+      // cold-reachout budget on its way to a 400.
+      const assertReachoutAllowed = jest.fn().mockResolvedValue(undefined);
+      const svc = makeService({ [op]: jest.fn() }, { assertReachoutAllowed } as unknown as SendPacingService);
+
+      await expect(call(svc, op, ['NOT A USER'])).rejects.toBeInstanceOf(BadRequestException);
+      expect(assertReachoutAllowed).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['NOT A USER'],
+    // A recognised domain alone satisfied the first version of the guard, and the id still reached
+    // the page-side createWid — reproduced as a 500 against a live session.
+    ['NOT A USER@c.us'],
+    ['@c.us'],
+    ['0@c.us'],
+  ])('rejects %s on removeParticipants rather than handing it to the engine', async id => {
+    const engineOp = jest.fn();
+    const svc = makeService({ removeParticipants: engineOp });
+
+    await expect(call(svc, 'removeParticipants', [id])).rejects.toBeInstanceOf(BadRequestException);
+    expect(engineOp).not.toHaveBeenCalled();
+  });
+
+  it.each([['approveGroupMembershipRequests'], ['rejectGroupMembershipRequests']])(
+    '%s validates named requesters too',
+    async op => {
+      // These take the same participant ids as the five writes above and were missed in the first
+      // sweep. whatsapp-web.js feeds them straight to `requesterIds.map(createWid)` (Utils.js), so
+      // free text throws there exactly as it did on the participant routes.
+      const engineOp = jest.fn();
+      const svc = makeService({ [op]: engineOp });
+
+      // Non-async forwarders, so the guard throws synchronously — route it through a promise, as
+      // the participant writes above do.
+      await expect(
+        Promise.resolve().then(() =>
+          (svc as unknown as Record<string, (s: string, g: string, p?: string[]) => Promise<unknown>>)[op](
+            's1',
+            GROUP,
+            ['NOT A USER'],
+          ),
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(engineOp).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([['approveGroupMembershipRequests'], ['rejectGroupMembershipRequests']])(
+    '%s still accepts an omitted list, which means every pending request',
+    async op => {
+      const engineOp = jest.fn().mockResolvedValue([]);
+      const svc = makeService({ [op]: engineOp });
+
+      await (svc as unknown as Record<string, (s: string, g: string, p?: string[]) => Promise<unknown>>)[op](
+        's1',
+        GROUP,
+        undefined,
+      );
+      expect(engineOp).toHaveBeenCalledWith(GROUP, undefined);
+    },
+  );
 });

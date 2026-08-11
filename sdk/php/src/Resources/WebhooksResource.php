@@ -20,6 +20,32 @@ class WebhooksResource
         $this->http = $http;
     }
 
+    /**
+     * List webhooks across EVERY session the key can see, not one session's. Requires an
+     * OPERATOR-level key.
+     *
+     * @param array<string,mixed> $query Optional pagination: `limit`, `offset`.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function listAll(array $query = []): array
+    {
+        return $this->http->request('GET', '/api/webhooks', $query) ?? [];
+    }
+
+    /**
+     * Deliveries that were ATTEMPTED and failed — the diagnostic for a webhook that stopped arriving.
+     * Requires an ADMIN-level key. A delivery a smart filter suppressed never reaches this log.
+     *
+     * @param array<string,mixed> $query Optional filter: `sessionId`, `limit`, `offset`.
+     *
+     * @return mixed the response has no published schema, so it is returned unshaped
+     */
+    public function deliveryFailures(array $query = [])
+    {
+        return $this->http->request('GET', '/api/webhooks/delivery-failures', $query);
+    }
+
     /** @return array<int,array<string,mixed>> */
     public function list(string $sessionId): array
     {

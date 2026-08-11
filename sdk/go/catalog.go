@@ -43,8 +43,8 @@ func (s *CatalogService) Product(ctx context.Context, sessionID, productID strin
 }
 
 // SendProduct sends a product message. Requires an OPERATOR-level key.
-func (s *CatalogService) SendProduct(ctx context.Context, sessionID string, body SendProductRequest) (*MessageResponse, error) {
-	var out MessageResponse
+func (s *CatalogService) SendProduct(ctx context.Context, sessionID string, body SendProductRequest) (*ProductMessageResponse, error) {
+	var out ProductMessageResponse
 	err := s.client.do(ctx, "POST", s.sessionBase(sessionID)+"/messages/send-product", nil, body, &out)
 	if err != nil {
 		return nil, err

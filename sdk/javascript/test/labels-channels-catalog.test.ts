@@ -136,3 +136,20 @@ describe('Client exposes all resources', () => {
     }
   });
 });
+
+describe('ChannelsResource — admin and ownership', () => {
+  it('demoteAdmin and transferOwnership post to their own paths', async () => {
+    const t = new MockTransport()
+      .on('POST', /\/admins\/demote$/, { body: { success: true } })
+      .on('POST', /\/owner\/transfer$/, { body: { success: true } });
+    const c = client(t);
+
+    await c.channels.demoteAdmin('s', 'c@newsletter', { userId: 'a@c.us' });
+    expect(t.lastCall!.url).toContain('/api/sessions/s/channels/c@newsletter/admins/demote');
+    expect(t.lastCall!.body).toEqual({ userId: 'a@c.us' });
+
+    await c.channels.transferOwnership('s', 'c@newsletter', { newOwnerId: 'b@c.us' });
+    expect(t.lastCall!.url).toContain('/api/sessions/s/channels/c@newsletter/owner/transfer');
+    expect(t.lastCall!.body).toEqual({ newOwnerId: 'b@c.us' });
+  });
+});
