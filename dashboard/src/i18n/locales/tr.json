@@ -206,9 +206,10 @@
     "charts": {
       "title": "Mesaj Analitiği",
       "period": {
-        "24h": "24s",
+        "24h": "24 sa",
         "7d": "7g",
         "30d": "30g"
+      }
       },
       "overTime": "Zamana göre mesajlar",
       "byType": "Türe göre mesajlar",
