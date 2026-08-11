@@ -209,7 +209,6 @@
         "24h": "24 sa",
         "7d": "7g",
         "30d": "30g"
-      }
       },
       "overTime": "Zamana göre mesajlar",
       "byType": "Türe göre mesajlar",
@@ -525,7 +524,7 @@
     },
     "statuses": {
       "active": "Aktif",
-      "revoked": "İptal Edildi"
+      "revoked": "Geçersiz Kılındı"
     },
     "empty": {
       "title": "Oluşturulmuş API anahtarı yok",
@@ -533,15 +532,15 @@
     },
     "confirm": {
       "deleteTitle": "API Anahtarını Sil",
-      "revokeTitle": "API Anahtarını İptal Et",
+      "revokeTitle": "API Anahtarını Geçersiz Kıl",
       "deleteMessage": "<strong>{{name}}</strong> anahtarını kalıcı olarak silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.",
-      "revokeMessage": "<strong>{{name}}</strong> anahtarını iptal etmek istediğinizden emin misiniz? Artık çalışmayacaktır.",
+      "revokeMessage": "<strong>{{name}}</strong> anahtarını geçersiz kılmak istediğinizden emin misiniz? Artık çalışmayacaktır.",
       "delete": "Sil",
-      "revoke": "İptal Et"
+      "revoke": "Geçersiz Kıl"
     },
     "actions": {
       "copy": "Kopyala",
-      "revoke": "İptal Et",
+      "revoke": "Geçersiz Kıl",
       "delete": "Sil"
     }
   },
