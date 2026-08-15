@@ -1,4 +1,5 @@
-import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   mergeChatMessages,
   mapEngineHistoryMessage,
@@ -26,23 +27,78 @@ export function messagesQueryKey(sessionId: string, chatId: string): MessagesQue
  * the tab's heap without bound. Cache eviction happens 5 min after the chat stops being observed
  * (gcTime), so browsing several media-rich chats doesn't accumulate large slices.
  */
-export function useChatMessages(sessionId: string, chatId: string | null): UseQueryResult<ChatMessageView[], Error> {
-  return useQuery<ChatMessageView[], Error>({
-    queryKey: messagesQueryKey(sessionId, chatId ?? ''),
+export interface UseChatMessagesResult {
+  data: ChatMessageView[];
+  isLoading: boolean;
+  isError: boolean;
+  isLoadingMore: boolean;
+  hasMore: boolean;
+  fetchPreviousMessages: () => Promise<void>;
+}
+
+export function useChatMessages(sessionId: string, chatId: string | null): UseChatMessagesResult {
+  const queryClient = useQueryClient();
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+
+  const queryKey = messagesQueryKey(sessionId, chatId ?? '');
+
+  const query = useQuery<ChatMessageView[], Error>({
+    queryKey,
     queryFn: async () => {
+      setHasMore(true);
       const [dbRes, historyRes] = await Promise.allSettled([
-        sessionApi.getChatMessages(sessionId, chatId!, 100),
-        sessionApi.getChatHistory(sessionId, chatId!, 100, false),
+        sessionApi.getChatMessages(sessionId, chatId!, 50, 0),
+        sessionApi.getChatHistory(sessionId, chatId!, 50, false),
       ]);
       if (dbRes.status === 'rejected' && historyRes.status === 'rejected') throw dbRes.reason;
       const dbMessages = dbRes.status === 'fulfilled' ? dbRes.value.messages : [];
+      const totalInDb = dbRes.status === 'fulfilled' ? dbRes.value.total : 0;
       const history = historyRes.status === 'fulfilled' ? historyRes.value.map(mapEngineHistoryMessage) : [];
-      return mergeChatMessages(dbMessages, history);
+
+      const merged = mergeChatMessages(dbMessages, history);
+      if (merged.length < 50 && totalInDb <= merged.length) {
+        setHasMore(false);
+      }
+      return merged;
     },
     enabled: Boolean(sessionId && chatId),
     staleTime: Infinity,
     gcTime: 5 * 60 * 1000,
   });
+
+  const fetchPreviousMessages = async () => {
+    if (!sessionId || !chatId || isLoadingMore || !hasMore) return;
+    const current = queryClient.getQueryData<ChatMessageView[]>(queryKey) || [];
+    const offset = current.length;
+    setIsLoadingMore(true);
+
+    try {
+      const res = await sessionApi.getChatMessages(sessionId, chatId, 50, offset);
+      if (!res.messages || res.messages.length === 0) {
+        setHasMore(false);
+      } else {
+        if (res.messages.length < 50) {
+          setHasMore(false);
+        }
+        const merged = mergeChatMessages(res.messages, current);
+        queryClient.setQueryData(queryKey, merged);
+      }
+    } catch {
+      // Failed to load more, stop further auto-requests until next scroll
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  return {
+    data: query.data ?? [],
+    isLoading: query.isLoading,
+    isError: query.isError,
+    isLoadingMore,
+    hasMore,
+    fetchPreviousMessages,
+  };
 }
 
 /**

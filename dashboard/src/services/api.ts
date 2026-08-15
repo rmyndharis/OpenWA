@@ -742,7 +742,13 @@ export const sessionApi = {
   getStats: () => request<SessionStats>('/sessions/stats/overview'),
   getGroups: (id: string) =>
     request<{ id: string; name: string; linkedParentJID?: string | null }[]>(`/sessions/${id}/groups`),
-  getChats: (id: string) => request<Chat[]>(`/sessions/${id}/chats`),
+  getChats: (id: string, limit?: number, offset?: number) => {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set('limit', String(limit));
+    if (offset !== undefined) params.set('offset', String(offset));
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request<Chat[]>(`/sessions/${id}/chats${query}`);
+  },
   markChatRead: (id: string, chatId: string) =>
     request<{ success: boolean }>(`/sessions/${id}/chats/read`, {
       method: 'POST',
@@ -753,9 +759,9 @@ export const sessionApi = {
       method: 'POST',
       body: JSON.stringify({ chatId }),
     }),
-  getChatMessages: (id: string, chatId: string, limit = 100) =>
+  getChatMessages: (id: string, chatId: string, limit = 50, offset = 0) =>
     request<{ messages: ChatMessage[]; total: number }>(
-      `/sessions/${id}/messages?chatId=${encodeURIComponent(chatId)}&limit=${limit}`,
+      `/sessions/${id}/messages?chatId=${encodeURIComponent(chatId)}&limit=${limit}&offset=${offset}`,
     ),
   // Live history straight from WhatsApp (bypasses the DB) — backfills a thread the gateway never
   // captured, e.g. a freshly paired session whose persisted store is still empty.

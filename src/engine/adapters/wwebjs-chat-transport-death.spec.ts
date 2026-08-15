@@ -73,4 +73,14 @@ describe('boolean chat operations distinguish a dead page from a refusal', () =>
     await expect(call(chats, op)).resolves.toBe(false);
     expect(reportIfPageTransportError).not.toHaveBeenCalled();
   });
+
+  it('distinguishes a CDP timeout error from a transport death', async () => {
+    const timeoutError = new Error(
+      "ProtocolError: Runtime.callFunctionOn timed out. Increase the 'protocolTimeout' setting in launch/connect calls for a higher timeout if needed.",
+    );
+    const { chats, reportIfPageTransportError } = makeChats(timeoutError);
+
+    await expect(call(chats, 'sendSeen')).resolves.toBe(false);
+    expect(reportIfPageTransportError).not.toHaveBeenCalled();
+  });
 });

@@ -173,6 +173,9 @@ export function Chats() {
     data: messages = [],
     isLoading: loadingMessages,
     isError: messagesError,
+    isLoadingMore,
+    hasMore,
+    fetchPreviousMessages,
   } = useChatMessages(selectedSessionId, activeChat?.id ?? null);
   const { appendMessage, updateMessage } = useChatMessagesActions();
   const queryClient = useQueryClient();
@@ -216,15 +219,21 @@ export function Chats() {
   }, [activeChat]);
 
   // Per-chat scroll-position memory + auto-scroll heuristic.
-  // Pass `messages.length > 0` as the loaded signal: it stays stable once the
-  // chat has any message (doesn't toggle per append) and covers both the
-  // first-fetch resolution and a WS-driven first message on a previously-empty
-  // chat. `loadingMessages` alone would miss the latter case.
   const {
     containerRef: messagesContainerRef,
     onMessageAppended,
     onMediaLoad,
+    onOlderMessagesPrepended,
   } = useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
+
+  const handleFetchPreviousMessages = useCallback(async () => {
+    const el = messagesContainerRef.current;
+    const oldHeight = el ? el.scrollHeight : 0;
+    await fetchPreviousMessages();
+    requestAnimationFrame(() => {
+      if (oldHeight > 0) onOlderMessagesPrepended(oldHeight);
+    });
+  }, [fetchPreviousMessages, messagesContainerRef, onOlderMessagesPrepended]);
 
   // Batch profile-picture fetch for the visible chat list — ONE request for the whole sidebar
   // (per-row queries burst the per-IP throttle into 429s). Sorted-key cached 1h; rows fall back
@@ -905,6 +914,9 @@ export function Chats() {
                   messages={messages}
                   loadingMessages={loadingMessages}
                   messagesError={messagesError}
+                  isLoadingMore={isLoadingMore}
+                  hasMore={hasMore}
+                  onFetchPreviousMessages={handleFetchPreviousMessages}
                   messagesContainerRef={messagesContainerRef}
                   onMediaLoad={onMediaLoad}
                   onOpenImage={messageId => {

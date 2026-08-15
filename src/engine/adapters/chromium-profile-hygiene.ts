@@ -28,47 +28,79 @@ type HygieneLogger = Pick<LoggerService, 'debug' | 'log'>;
  * logs at debug, so the sweep can never block an engine start.
  */
 export async function killOrphanedChromiumProcesses(sessionId: string, logger: HygieneLogger): Promise<void> {
-  if (process.platform !== 'darwin' && process.platform !== 'linux') {
+  const isWindows = process.platform === 'win32';
+  if (process.platform !== 'darwin' && process.platform !== 'linux' && !isWindows) {
     logger.debug(`Skipping orphaned Chromium sweep: unsupported platform ${process.platform}`);
     return;
   }
   try {
-    // No shell: the args array is handed to ps verbatim, so nothing here is injectable.
-    // maxBuffer is raised because `ps -eo args` prints full command lines, which on a busy host
-    // (many Chromium renderers carrying dozens of flags each) can exceed the 1MB default.
-    const psOutput = await new Promise<string>((resolve, reject) => {
-      execFile('ps', ['-eo', 'pid=,args='], { maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
-        // The @types/node ExecFileException is an Omit<> of ErrnoException, which the type
-        // checker no longer recognises as an Error — narrow it explicitly for the reject.
-        if (error) reject(error instanceof Error ? error : new Error(error.message));
-        else resolve(stdout);
-      });
-    });
-    // Token-exact marker match: the marker is a single argv token, so it must appear delimited by
-    // whitespace or string boundaries. A plain substring test would let restarting session
-    // `sales` SIGKILL the LIVE browser of sibling `sales2` (their markers share a prefix).
     const marker = `--openwa-session=${sessionId}`;
     const markerRe = new RegExp('(?:^|\\s)' + marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=\\s|$)');
     const killedPids: number[] = [];
-    for (const line of psOutput.split('\n')) {
-      const match = /^\s*(\d+)\s+(.*)$/.exec(line);
-      if (!match) continue;
-      const pid = Number(match[1]);
-      const args = match[2];
-      if (pid === process.pid || !markerRe.test(args)) continue;
-      // Never kill a non-browser process that happens to carry the marker string
-      // (e.g. a `grep --openwa-session=…` probing the process table).
-      if (!/chrome|chromium|headless/i.test(args)) continue;
-      try {
-        process.kill(pid, 'SIGKILL');
-        killedPids.push(pid);
-      } catch (error) {
-        // ESRCH: the process exited between `ps` and the kill — nothing left to do.
-        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
-          logger.debug(`Could not SIGKILL orphaned Chromium pid ${pid}`, { error: String(error) });
+
+    if (isWindows) {
+      // Query Windows process table for Chromium processes matching the session marker
+      const psScript = `Get-CimInstance Win32_Process | Where-Object { ($_.Name -like '*chrome*' -or $_.Name -like '*chromium*') -and $_.CommandLine -like '*--openwa-session=*' } | Select-Object -Property ProcessId, CommandLine | ConvertTo-Json -Compress`;
+      const psOutput = await new Promise<string>((resolve, reject) => {
+        execFile(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-Command', psScript],
+          { maxBuffer: 8 * 1024 * 1024, timeout: 5000 },
+          (error, stdout) => {
+            if (error) reject(error instanceof Error ? error : new Error(error.message));
+            else resolve(stdout.trim());
+          },
+        );
+      });
+
+      if (psOutput) {
+        let items: Array<{ ProcessId: number; CommandLine: string }> = [];
+        try {
+          const parsed = JSON.parse(psOutput);
+          items = Array.isArray(parsed) ? parsed : [parsed];
+        } catch {
+          items = [];
+        }
+
+        for (const item of items) {
+          const pid = Number(item.ProcessId);
+          const args = item.CommandLine || '';
+          if (!pid || pid === process.pid || !markerRe.test(args)) continue;
+          try {
+            execFile('taskkill', ['/F', '/T', '/PID', String(pid)], () => {});
+            killedPids.push(pid);
+          } catch (error) {
+            logger.debug(`Could not taskkill orphaned Chromium pid ${pid}`, { error: String(error) });
+          }
+        }
+      }
+    } else {
+      // Unix: ps -eo pid=,args=
+      const psOutput = await new Promise<string>((resolve, reject) => {
+        execFile('ps', ['-eo', 'pid=,args='], { maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+          if (error) reject(error instanceof Error ? error : new Error(error.message));
+          else resolve(stdout);
+        });
+      });
+
+      for (const line of psOutput.split('\n')) {
+        const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+        if (!match) continue;
+        const pid = Number(match[1]);
+        const args = match[2];
+        if (pid === process.pid || !markerRe.test(args)) continue;
+        if (!/chrome|chromium|headless/i.test(args)) continue;
+        try {
+          process.kill(pid, 'SIGKILL');
+          killedPids.push(pid);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+            logger.debug(`Could not SIGKILL orphaned Chromium pid ${pid}`, { error: String(error) });
+          }
         }
       }
     }
+
     if (killedPids.length > 0) {
       logger.log(
         `Killed ${killedPids.length} orphaned Chromium process(es) left over from a previous process lifetime`,

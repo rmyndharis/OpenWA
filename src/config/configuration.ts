@@ -193,6 +193,8 @@ export default () => ({
     type: process.env.ENGINE_TYPE || 'whatsapp-web.js',
     puppeteer: {
       headless: process.env.PUPPETEER_HEADLESS !== 'false',
+      // CDP protocol timeout in ms. Default 0 (disabled) to prevent Runtime.callFunctionOn timeouts during long evaluations like getChats.
+      protocolTimeout: resolveNonNegativeIntEnv(process.env.PUPPETEER_PROTOCOL_TIMEOUT, 0),
       // Accept either delimiter: .env/compose use commas, the dashboard Infrastructure form
       // persists space-separated. Splitting on both keeps each flag a discrete argv token —
       // a single glued token like "--no-sandbox --disable-gpu" silently neuters --no-sandbox.

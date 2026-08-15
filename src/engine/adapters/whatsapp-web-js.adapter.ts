@@ -122,6 +122,7 @@ export interface WhatsAppWebJsConfig {
     headless?: boolean;
     args?: string[];
     executablePath?: string;
+    protocolTimeout?: number;
   };
   // Phase 3: Proxy per session
   proxy?: {
@@ -375,13 +376,19 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       resolveBounded = resolve;
     });
     const slotHeld = this.inboundLimiter.run(() => {
-      const download = msg.downloadMedia();
+      const download = msg.downloadMedia().catch((error: unknown) => {
+        this.logger.warn('Inbound media download failed; emitting message with declared metadata only', {
+          msgId: msg.id?._serialized,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      });
       resolveBounded(
         withInboundDownloadTimeout(download, inboundMediaTimeoutMs(), () =>
           this.logger.warn(
             'Inbound media download timed out (MEDIA_DOWNLOAD_TIMEOUT_MS); emitting message without media',
             {
-              msgId: msg.id._serialized,
+              msgId: msg.id?._serialized,
             },
           ),
         ),
@@ -612,6 +619,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         handleSIGINT: false,
         handleSIGTERM: false,
         handleSIGHUP: false,
+        protocolTimeout: this.config.puppeteer?.protocolTimeout ?? 0,
         // Only override the executable when explicitly configured; otherwise let
         // whatsapp-web.js fall back to Puppeteer's bundled Chromium.
         ...(this.config.puppeteer?.executablePath ? { executablePath: this.config.puppeteer.executablePath } : {}),
@@ -1110,11 +1118,16 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
    * process, the renderer, or the CDP connection is gone (e.g. 'Protocol error: Target closed').
    */
   private static readonly PAGE_TRANSPORT_ERROR_PATTERN =
-    /protocol error|target closed|targetclosederror|detached frame|session closed|connection closed/i;
+    /protocol error|target closed|targetclosederror|detached frame|session closed|connection closed|execution context was destroyed/i;
 
   /** Whether the error carries a dead page/transport signature (see PAGE_TRANSPORT_ERROR_PATTERN). */
   private isPageTransportError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
+    // A command timeout (e.g. 'ProtocolError: Runtime.callFunctionOn timed out') is an execution
+    // timeout during heavy page ops (like getChats), NOT a browser/page crash or transport death.
+    if (/timed out/i.test(message)) {
+      return false;
+    }
     return WhatsAppWebJsAdapter.PAGE_TRANSPORT_ERROR_PATTERN.test(message);
   }
 

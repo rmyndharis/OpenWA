@@ -154,7 +154,7 @@ services:
       # Re-start previously authenticated sessions at boot. Opt-in: the app reads the exact string
       # "true", so a blank forward (nothing set) keeps the default off. Without this line the value in
       # .env never reaches the container and the flag silently does nothing.
-      - AUTO_START_SESSIONS=${AUTO_START_SESSIONS:-}
+      - AUTO_START_SESSIONS=${AUTO_START_SESSIONS:-true}
       # Fetching status@broadcast immediately after a fresh pairing can make affected accounts lose
       # the companion at WhatsApp Web's first scheduled reload. Disabled by default; live statuses
       # still arrive normally. Opt in only after validating the account.

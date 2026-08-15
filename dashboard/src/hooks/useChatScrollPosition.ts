@@ -76,6 +76,7 @@ export function useChatScrollPosition(
   containerRef: RefObject<HTMLDivElement | null>;
   onMessageAppended: (direction: ScrollDirection) => void;
   onMediaLoad: () => void;
+  onOlderMessagesPrepended: (previousScrollHeight: number) => void;
 } {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const scrollMap = useRef<Map<string, number>>(new Map());
@@ -193,5 +194,17 @@ export function useChatScrollPosition(
     });
   }, [pinToBottom, writeScrollTop]);
 
-  return { containerRef, onMessageAppended, onMediaLoad };
+  const onOlderMessagesPrepended = useCallback(
+    (previousScrollHeight: number) => {
+      const el = containerRef.current;
+      if (!el) return;
+      const delta = el.scrollHeight - previousScrollHeight;
+      if (delta > 0) {
+        writeScrollTop(el, el.scrollTop + delta);
+      }
+    },
+    [writeScrollTop],
+  );
+
+  return { containerRef, onMessageAppended, onMediaLoad, onOlderMessagesPrepended };
 }

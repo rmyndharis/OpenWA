@@ -173,8 +173,11 @@ COPY --from=builder /app/dashboard/dist ./dashboard/dist
 # entrypoint re-chowns /app/data at every container start for the mounted-volume case. A full
 # /app chown walks every production dependency file (issue #1045: ~35 minutes on a small VPS) and
 # duplicates their metadata into a new image layer.
-RUN mkdir -p ./data/sessions ./data/media ./data/plugins && \
+RUN mkdir -p ./data/sessions ./data/baileys ./data/media ./data/plugins && \
     chown -R openwa:openwa ./data
+
+# Declare persistent data volume so session credentials, SQLite DBs, media and plugins survive container rebuilds
+VOLUME ["/app/data"]
 
 # The non-root openwa user has no home of its own (`useradd -r`, no -m). Chromium resolves the home
 # dir from the passwd entry via glib's getpwuid() — it IGNORES $HOME — so it tries to read/write

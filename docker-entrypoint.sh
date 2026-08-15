@@ -3,7 +3,7 @@
 # openwa user via gosu so the Node process never holds root privileges.
 set -e
 
-mkdir -p /app/data/sessions /app/data/media /app/data/plugins
+mkdir -p /app/data/sessions /app/data/baileys /app/data/media /app/data/plugins
 chown -R openwa:openwa /app/data
 
 # Chromium leaves SingletonLock/SingletonSocket/SingletonCookie in each session profile and does

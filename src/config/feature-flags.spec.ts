@@ -79,7 +79,7 @@ describe('feature-flags', () => {
   describe('bundled production compose', () => {
     it('forwards AUTO_START_SESSIONS to the container', () => {
       const compose = fs.readFileSync(path.join(__dirname, '../../docker-compose.yml'), 'utf8');
-      expect(compose).toMatch(/^\s*- AUTO_START_SESSIONS=\$\{AUTO_START_SESSIONS:-\}$/m);
+      expect(compose).toMatch(/^\s*- AUTO_START_SESSIONS=\$\{AUTO_START_SESSIONS:-(?:true)?\}$/m);
     });
   });
 
@@ -91,9 +91,10 @@ describe('feature-flags', () => {
     // Extract the body of one top-level service block. Compose indents a service's keys two spaces
     // under the `name:` key, so the block runs from `  serviceName:` to the next top-level key.
     function extractTopLevelService(compose: string, serviceName: string): string {
-      const start = compose.indexOf(`\n  ${serviceName}:\n`);
+      const normalized = compose.replace(/\r\n/g, '\n');
+      const start = normalized.indexOf(`\n  ${serviceName}:\n`);
       if (start === -1) throw new Error(`service ${serviceName} not found`);
-      const rest = compose.slice(start + 1);
+      const rest = normalized.slice(start + 1);
       const next = rest.search(/\n[a-z]/);
       return next === -1 ? rest : rest.slice(0, next);
     }

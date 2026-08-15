@@ -22,6 +22,9 @@ interface ChatThreadProps {
   messages: ChatMessageView[];
   loadingMessages: boolean;
   messagesError: boolean;
+  isLoadingMore?: boolean;
+  hasMore?: boolean;
+  onFetchPreviousMessages?: () => void;
   messagesContainerRef: RefObject<HTMLDivElement | null>;
   onMediaLoad: () => void;
   onOpenImage: (messageId: string) => void;
@@ -40,6 +43,9 @@ function ChatThread({
   messages,
   loadingMessages,
   messagesError,
+  isLoadingMore = false,
+  hasMore = false,
+  onFetchPreviousMessages,
   messagesContainerRef,
   onMediaLoad,
   onOpenImage,
@@ -90,10 +96,7 @@ function ChatThread({
     [sessionId, activeChat.id],
   );
 
-  // Scroll-to-bottom button visibility. The main scroll-position memory is owned by
-  // useChatScrollPosition, which doesn't expose its pin state (intentionally — that would re-render
-  // the whole room on every scroll). This small listener tracks only the boolean "user is far from
-  // the bottom" so we can float the jump button.
+  // Scroll-to-bottom button visibility & top infinite scroll for older messages.
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   useEffect(() => {
     const el = messagesContainerRef.current;
@@ -101,8 +104,13 @@ function ChatThread({
     const onScroll = () => {
       // 120px gap = a couple of message bubbles before counting as "scrolled up".
       setShowJumpToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
+
+      // Trigger pagination fetch when scrolled near top
+      if (el.scrollTop < 100 && hasMore && !isLoadingMore && onFetchPreviousMessages) {
+        onFetchPreviousMessages();
+      }
     };
-    onScroll(); // sync initial position (e.g. saved restore landed above the bottom)
+    onScroll(); // sync initial position
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
   });
@@ -113,8 +121,7 @@ function ChatThread({
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, [messagesContainerRef]);
 
-  // Reset the jump button whenever the active chat changes: the new chat's content is restored by
-  // useChatScrollPosition and our listener will resync on its first scroll tick.
+  // Reset the jump button whenever the active chat changes
   useEffect(() => {
     setShowJumpToBottom(false);
   }, [activeChat?.id]);
@@ -157,7 +164,14 @@ function ChatThread({
           <span>{t('chats.noMessagesInChat')}</span>
         </div>
       ) : (
-        messages.map((msg, index) => {
+        <>
+          {isLoadingMore && (
+            <div className="messages-loading-more" style={{ textAlign: 'center', padding: '8px 0', opacity: 0.8 }}>
+              <Loader2 className="animate-spin" size={18} style={{ display: 'inline-block', marginRight: 6 }} />
+              <span style={{ fontSize: '0.85rem' }}>Loading previous messages...</span>
+            </div>
+          )}
+          {messages.map((msg, index) => {
           const isMe = msg.direction === 'outgoing';
           const formattedTime = formatTime(msg.timestamp || Math.floor(new Date(msg.createdAt).getTime() / 1000));
 
@@ -392,7 +406,8 @@ function ChatThread({
               </div>
             </div>
           );
-        })
+        })}
+        </>
       )}
     </div>
   );
