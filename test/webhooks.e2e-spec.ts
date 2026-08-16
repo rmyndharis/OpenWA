@@ -134,7 +134,7 @@ describe('Webhooks (e2e)', () => {
     it('creates a webhook and never leaks the secret or headers in the response', async () => {
       const session = await nextSession();
       const dto = await createWebhook(session, {
-        secret: 'top-secret',
+        secret: 'top-secret-0123456789',
         headers: { 'X-Custom': 'v' },
         filters: { conditions: [{ field: 'sender', operator: 'is', value: ['a@c.us'] }] },
       });
@@ -288,7 +288,7 @@ describe('Webhooks (e2e)', () => {
   describe('dispatch over real HTTP', () => {
     it('delivers a correctly HMAC-signed POST when a filter matches', async () => {
       const session = await nextSession();
-      const secret = 'sig-secret';
+      const secret = 'sig-secret-0123456789';
       await createWebhook(session, {
         secret,
         filters: { conditions: [{ field: 'sender', operator: 'is', value: ['boss@c.us'] }] },
@@ -362,7 +362,7 @@ describe('Webhooks (e2e)', () => {
 
     it('keeps server identity fields on the signed body when a webhook:before hook tampers with them', async () => {
       const session = await nextSession();
-      const secret = 'sig-secret';
+      const secret = 'sig-secret-0123456789';
       await createWebhook(session, { secret });
 
       const hookManager = app.get(HookManager);
@@ -424,7 +424,7 @@ describe('Webhooks (e2e)', () => {
 
     it('delivers over-threshold media as an omitted marker, signed over the exact shed bytes', async () => {
       const session = await nextSession();
-      const secret = 'media-secret';
+      const secret = 'media-secret-0123456789';
       await createWebhook(session, { secret });
 
       const base64 = Buffer.alloc(2048, 11).toString('base64'); // 2048 decoded bytes > 1024 inline cap

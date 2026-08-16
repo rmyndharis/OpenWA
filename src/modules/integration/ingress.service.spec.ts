@@ -47,7 +47,9 @@ describe('redactSensitiveHeaders (persisted ingress payloads)', () => {
   });
 
   it('the persisted payload carries redacted headers (wiring, not just the helper)', async () => {
+    const recordOrSkip = jest.fn().mockResolvedValue(true);
     const d = deps();
+    d.events.recordOrSkip = recordOrSkip;
     const svc = new IngressService(d);
     await svc.handle({
       pluginId: 'chatwoot',
@@ -57,10 +59,13 @@ describe('redactSensitiveHeaders (persisted ingress payloads)', () => {
       headers: { 'x-delivery': 'd1', authorization: 'Bearer tok' },
       query: {},
       rawBody: '{}',
-    } as never);
-    const recorded = (d.events.recordOrSkip as jest.Mock).mock.calls[0][0].payload;
-    expect(recorded.headers.authorization).toBe('[redacted]');
-    expect(recorded.headers['x-delivery']).toBe('d1');
+    });
+    // jest's mock.calls typing erodes through the deps() override — one explicit cast at the
+    // boundary beats a chain of eslint suppressions.
+    const calls = recordOrSkip.mock.calls as unknown as [[{ payload: { headers: Record<string, string> } }]];
+    const recorded = calls[0][0];
+    expect(recorded.payload.headers.authorization).toBe('[redacted]');
+    expect(recorded.payload.headers['x-delivery']).toBe('d1');
   });
 });
 

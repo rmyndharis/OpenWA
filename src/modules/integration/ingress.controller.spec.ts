@@ -8,11 +8,12 @@ const RAW = '{\n  "event": "message_created",\n  "id": 42\n}\n';
 
 function fakeRes() {
   const captured: { status?: number; body?: string; headers?: Record<string, string>; contentType?: string } = {};
+  const type = jest.fn((contentType: string) => {
+    captured.contentType = contentType;
+    return res;
+  });
   const res = {
-    type: jest.fn((contentType: string) => {
-      captured.contentType = contentType;
-      return res;
-    }),
+    type,
     status: jest.fn((code: number) => {
       captured.status = code;
       return res;
@@ -35,7 +36,7 @@ describe('reflection content type', () => {
   it('answers with Content-Type text/plain, never the Express default text/html', async () => {
     const handle = jest.fn().mockResolvedValue({ status: 200, body: '<script>alert(1)</script>' });
     const controller = new IngressController({ handle } as unknown as IngressService);
-    const { res } = fakeRes();
+    const { res, captured } = fakeRes();
     const req = {
       method: 'POST',
       params: { path: ['chatwoot'] },
@@ -45,7 +46,7 @@ describe('reflection content type', () => {
 
     await controller.receive('chatwoot', 'acct1', {}, req, res);
 
-    expect(res.type).toHaveBeenCalledWith('text/plain');
+    expect(captured.contentType).toBe('text/plain');
   });
 });
 
