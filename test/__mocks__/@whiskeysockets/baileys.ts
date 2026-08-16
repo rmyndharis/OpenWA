@@ -11,7 +11,7 @@
  */
 export default jest.fn();
 export const useMultiFileAuthState = jest.fn();
-export const fetchLatestBaileysVersion = jest.fn();
+export const fetchLatestWaWebVersion = jest.fn();
 export const getContentType = jest.fn();
 export const DisconnectReason = { loggedOut: 401 };
 

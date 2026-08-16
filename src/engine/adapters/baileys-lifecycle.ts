@@ -180,7 +180,12 @@ export class BaileysLifecycle {
     }
     const b = await this.loadLib();
     const { state, saveCreds } = await b.useMultiFileAuthState(this.host.authPath);
-    const { version } = await b.fetchLatestBaileysVersion();
+    // fetchLatestBaileysVersion() scrapes a hardcoded version out of the Baileys GitHub repo, which
+    // lags what WhatsApp's own servers actually expect — the confirmed root cause of pairing links
+    // (and, per upstream reports, some ordinary connections) silently failing on a stale protocol
+    // version. fetchLatestWaWebVersion() reads the version directly out of web.whatsapp.com/sw.js,
+    // matching what WhatsApp's servers are actually serving.
+    const { version } = await b.fetchLatestWaWebVersion();
     // BaileysLogger matches ILogger exactly; cast needed because the module resolves the type
     // through a deep import path that TypeScript does not auto-unify here. Shared by the key
     // store wrapper below and the socket itself, rather than constructing two instances.
@@ -528,7 +533,7 @@ export class BaileysLifecycle {
         return; // stopped while waiting — abort
       }
       void this.connect().catch(err => {
-        // A failed attempt (e.g. fetchLatestBaileysVersion offline mid-outage) is NOT terminal —
+        // A failed attempt (e.g. fetchLatestWaWebVersion offline mid-outage) is NOT terminal —
         // the outage may outlast any fixed attempt budget, so schedule the following attempt.
         this.host.logger.warn('Baileys reconnect attempt failed; will retry', {
           attempt: this.reconnectAttempts,

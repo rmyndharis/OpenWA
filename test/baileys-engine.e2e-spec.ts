@@ -5,7 +5,7 @@ jest.mock('@whiskeysockets/baileys', () => ({
   __esModule: true,
   default: jest.fn(),
   useMultiFileAuthState: jest.fn(),
-  fetchLatestBaileysVersion: jest.fn(),
+  fetchLatestWaWebVersion: jest.fn(),
   getContentType: jest.fn(),
   DisconnectReason: { loggedOut: 401 },
 }));

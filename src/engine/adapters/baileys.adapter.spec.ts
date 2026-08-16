@@ -92,7 +92,7 @@ jest.mock('@whiskeysockets/baileys', () => ({
     return fakeSock;
   }),
   useMultiFileAuthState: jest.fn().mockResolvedValue({ state: { creds: {}, keys: {} }, saveCreds }),
-  fetchLatestBaileysVersion: jest.fn().mockResolvedValue({ version: [2, 3000, 0] }),
+  fetchLatestWaWebVersion: jest.fn().mockResolvedValue({ version: [2, 3000, 0] }),
   // Identity passthrough — the adapter wraps state.keys with this for session-store caching; tests
   // don't exercise the caching behavior itself, just need the real store object to flow through.
   makeCacheableSignalKeyStore: jest.fn((store: unknown) => store),
@@ -585,22 +585,22 @@ describe('BaileysAdapter lifecycle & status', () => {
   it('C2: disconnect() during in-flight connect does NOT assign a socket or reach READY', async () => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     const baileys = jest.requireMock('@whiskeysockets/baileys') as {
-      fetchLatestBaileysVersion: jest.Mock;
+      fetchLatestWaWebVersion: jest.Mock;
       default: jest.Mock;
     };
 
-    // Make fetchLatestBaileysVersion block until we manually resolve it.
+    // Make fetchLatestWaWebVersion block until we manually resolve it.
     let resolveVersion!: (v: { version: number[] }) => void;
     const versionPromise = new Promise<{ version: number[] }>(res => {
       resolveVersion = res;
     });
-    baileys.fetchLatestBaileysVersion.mockReturnValueOnce(versionPromise);
+    baileys.fetchLatestWaWebVersion.mockReturnValueOnce(versionPromise);
     baileys.default.mockClear();
 
     const adapter = newAdapter();
     const initPromise = adapter.initialize(noopCallbacks({}));
 
-    // While connect() is blocked waiting for fetchLatestBaileysVersion, call disconnect().
+    // While connect() is blocked waiting for fetchLatestWaWebVersion, call disconnect().
     await adapter.disconnect();
 
     // Now resolve the version fetch.
@@ -616,9 +616,9 @@ describe('BaileysAdapter lifecycle & status', () => {
   it('I5: first connect failure → initialize() rejects, status FAILED, onError fired', async () => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     const baileys = jest.requireMock('@whiskeysockets/baileys') as {
-      fetchLatestBaileysVersion: jest.Mock;
+      fetchLatestWaWebVersion: jest.Mock;
     };
-    baileys.fetchLatestBaileysVersion.mockRejectedValueOnce(new Error('network error'));
+    baileys.fetchLatestWaWebVersion.mockRejectedValueOnce(new Error('network error'));
 
     const onError = jest.fn();
     const adapter = newAdapter();
@@ -671,7 +671,7 @@ describe('BaileysAdapter lifecycle & status', () => {
 describe('BaileysAdapter reconnect policy — unlimited backoff (I4 hardening)', () => {
   const baileys = () =>
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-    jest.requireMock('@whiskeysockets/baileys') as { default: jest.Mock; fetchLatestBaileysVersion: jest.Mock };
+    jest.requireMock('@whiskeysockets/baileys') as { default: jest.Mock; fetchLatestWaWebVersion: jest.Mock };
 
   const fireRecoverableClose = (): void => {
     fakeSock.fire('connection.update', {
@@ -793,8 +793,8 @@ describe('BaileysAdapter reconnect policy — unlimited backoff (I4 hardening)',
     jest.useFakeTimers();
     jest.spyOn(Math, 'random').mockReturnValue(0);
 
-    // The first reconnect attempt fails inside connect() (e.g. fetchLatestBaileysVersion offline).
-    baileys().fetchLatestBaileysVersion.mockRejectedValueOnce(new Error('network down'));
+    // The first reconnect attempt fails inside connect() (e.g. fetchLatestWaWebVersion offline).
+    baileys().fetchLatestWaWebVersion.mockRejectedValueOnce(new Error('network down'));
 
     fireRecoverableClose(); // attempt 1 (1 s)
     await jest.advanceTimersByTimeAsync(1_000); // attempt 1 runs and FAILS → must schedule attempt 2 (2 s)

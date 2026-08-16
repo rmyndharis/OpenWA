@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Baileys engine reads the WhatsApp Web protocol version from `web.whatsapp.com/sw.js` instead of the version pinned in the Baileys repository. The pinned value lags what WhatsApp's servers accept, and a stale version fails the handshake silently, so pairing links (and some ordinary connections) never completed and gave no reason.
 - The Go and Java SDKs can @mention on an audio send. `SendAudioRequest` was flattened off the shared media type and lost the field, so the typed path could not set it while every other client could.
 - Three routes declare the `409` they can answer: a duplicate template name on create or rename, and an integration instance id that already exists. Clients generated from the contract modelled those calls as unable to conflict.
 - `DOMAIN` is dropped from `.env.example`. Nothing read it, so an operator setting it to their real hostname changed nothing.
