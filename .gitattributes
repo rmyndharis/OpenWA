@@ -4,3 +4,7 @@ Dockerfile* text eol=lf
 # A unified diff must keep LF: a CRLF context line is not a marker any applier accepts, so a Windows
 # checkout would hand `git apply`/`patch` a diff both call corrupt (#889).
 *.patch     text eol=lf
+# An ASCII-armored GPG key must keep LF: apt's signature check cannot parse a CRLF armor block, so a
+# Windows checkout (core.autocrlf=true) makes the PGDG key unreadable and the production stage's
+# `apt-get update` fails with NO_PUBKEY 7FCC7D46ACCC4CF8 / "repository is not signed".
+*.asc       text eol=lf
