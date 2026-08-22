@@ -4,11 +4,13 @@ import { ConfigModule } from '@nestjs/config';
 import { MetricsController } from './metrics.controller';
 import { MetricsService } from './metrics.service';
 import { StatsModule } from '../stats/stats.module';
+import { SessionModule } from '../session/session.module';
 import { RequestMetricsInterceptor } from '../../common/interceptors/request-metrics.interceptor';
 import { requestMetricsBoundaryMiddleware } from '../../common/middleware/request-metrics.middleware';
 
 @Module({
-  imports: [ConfigModule, StatsModule],
+  // SessionModule supplies the node-capacity snapshot for the openwa_node_* gauges.
+  imports: [ConfigModule, StatsModule, SessionModule],
   controllers: [MetricsController],
   providers: [
     MetricsService,

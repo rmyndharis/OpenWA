@@ -33,6 +33,7 @@ import { Message, MessageDirection, MessageStatus } from '../message/entities/me
 import { MessageBatch, BatchStatus } from '../message/entities/message-batch.entity';
 import { Template } from '../template/entities/template.entity';
 import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
+import { BaileysAuthState } from '../../engine/adapters/baileys-auth-state.entity';
 import { LidMapping } from '../../engine/identity/lid-mapping.entity';
 import { PluginInstance } from '../integration/entities/plugin-instance.entity';
 import { ConversationMapping } from '../integration/entities/conversation-mapping.entity';
@@ -70,6 +71,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
         MessageBatch,
         Template,
         BaileysStoredMessage,
+        BaileysAuthState,
         LidMapping,
         PluginInstance,
         ConversationMapping,
@@ -1210,6 +1212,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
         MessageBatch,
         Template,
         BaileysStoredMessage,
+        BaileysAuthState,
         LidMapping,
         PluginInstance,
         ConversationMapping,
@@ -1442,6 +1445,7 @@ describe('InfraDataController audit trail — import emits only on a committed r
         MessageBatch,
         Template,
         BaileysStoredMessage,
+        BaileysAuthState,
         LidMapping,
         PluginInstance,
         ConversationMapping,
@@ -1587,6 +1591,7 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
         MessageBatch,
         Template,
         BaileysStoredMessage,
+        BaileysAuthState,
         LidMapping,
         PluginInstance,
         ConversationMapping,

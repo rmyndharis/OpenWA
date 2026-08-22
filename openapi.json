@@ -49,7 +49,8 @@
                 "infra_data_exported",
                 "infra_data_imported",
                 "infra_storage_exported",
-                "infra_storage_imported"
+                "infra_storage_imported",
+                "infra_node_drained"
               ],
               "type": "string"
             }
@@ -3905,6 +3906,28 @@
         "security": []
       }
     },
+    "/api/health/sessions": {
+      "get": {
+        "operationId": "HealthController_sessionsHealth",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Per-node session/engine counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionsHealthResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Session warm-up and capacity for this node — counts only, safe for probes and autoscalers",
+        "tags": [
+          "health"
+        ]
+      }
+    },
     "/api/health/ready": {
       "get": {
         "operationId": "HealthController_readiness",
@@ -3953,316 +3976,24 @@
         ]
       }
     },
-    "/api/infra/status": {
-      "get": {
-        "operationId": "InfraStatusController_getStatus",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Infrastructure status",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InfraStatusResponseDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Get infrastructure status",
-        "tags": [
-          "infrastructure"
-        ]
-      }
-    },
-    "/api/infra/engines": {
-      "get": {
-        "operationId": "InfraStatusController_getEngines",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "List of available engines",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AvailableEngineDto"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "summary": "Get available WhatsApp engines",
-        "tags": [
-          "infrastructure"
-        ]
-      }
-    },
-    "/api/infra/engines/current": {
-      "get": {
-        "operationId": "InfraStatusController_getCurrentEngine",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Current engine info",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InfraCurrentEngineResponseDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Get current active engine",
-        "tags": [
-          "infrastructure"
-        ]
-      }
-    },
-    "/api/infra/health": {
-      "get": {
-        "operationId": "InfraStatusController_healthCheck",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Process is up. This route does not probe dependencies — read /infra/status for those.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InfraHealthResponseDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Health check endpoint",
-        "tags": [
-          "infrastructure"
-        ],
-        "security": []
-      }
-    },
-    "/api/infra/config": {
-      "get": {
-        "operationId": "InfraConfigController_getConfig",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Effective configuration (secrets omitted)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InfraConfigResponseDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Read the effective infrastructure configuration for the dashboard form",
-        "tags": [
-          "infrastructure"
-        ]
-      },
-      "put": {
-        "operationId": "InfraConfigController_saveConfig",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "description": "Configuration to save",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SaveConfigDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Save outcome. A failed write also answers 200 with `saved: false` — read the flag, not the status.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InfraConfigSaveResponseDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Save infrastructure configuration to .env file",
-        "tags": [
-          "infrastructure"
-        ]
-      }
-    },
-    "/api/infra/restart": {
+    "/api/infra/drain": {
       "post": {
-        "operationId": "InfraConfigController_requestRestart",
+        "description": "Flips readiness to 503, tears down every local engine, stops lease renewal and forgets the claims WITHOUT clearing them, so peer nodes adopt the sessions once the leases lapse (within the lease TTL plus one takeover sweep). One-way for this process — terminate or restart it afterwards. In-flight HTTP requests keep being served while the load balancer reacts to the readiness change.",
+        "operationId": "InfraNodeController_drain",
         "parameters": [],
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RestartDto"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
-            "description": "Server will restart with new profiles",
+            "description": "Node drained",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/InfraRestartResponseDto"
+                  "$ref": "#/components/schemas/InfraDrainResponseDto"
                 }
               }
             }
           }
         },
-        "summary": "Request server restart with Docker orchestration",
-        "tags": [
-          "infrastructure"
-        ]
-      }
-    },
-    "/api/infra/export-data": {
-      "get": {
-        "operationId": "InfraDataController_exportData",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Exported data as JSON",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InfraExportDataResponseDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Export all data from Data DB for migration",
-        "tags": [
-          "infrastructure"
-        ]
-      }
-    },
-    "/api/infra/import-data": {
-      "post": {
-        "operationId": "InfraDataController_importData",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "description": "Exported data from export-data endpoint",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ImportDataDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Data imported successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InfraImportDataResponseDto"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Body rejected before the restore ran: `tables` absent or not an object, a table whose value is not an array of rows, a row that is not an object (`null`, a bare string, a nested array), a flag spelled as anything but a boolean or exact `true`/`false`, or a property this route does not accept. Nothing was written. Field-level detail is suppressed in production unless VALIDATION_ERROR_DETAIL=true."
-          },
-          "409": {
-            "description": "Refused, with the reason in `code`. IMPORT_ALREADY_RUNNING: another import is running — wait for it. IMPORT_NESTED_TRANSACTION: another database transaction holds this connection, so a restore could not be made durable — retry with nothing else in flight. IMPORT_WOULD_ORPHAN_ENGINES: live engines exist for sessions the backup would remove — retry with stopOrphans=true to stop them in-request, or force=true to proceed and restart after. Only the last of these is retryable with stopOrphans; the others leave nothing to decide"
-          }
-        },
-        "summary": "Import data to Data DB (replaces existing data)",
-        "tags": [
-          "infrastructure"
-        ]
-      }
-    },
-    "/api/infra/storage/files/count": {
-      "get": {
-        "operationId": "InfraStorageController_getStorageFileCount",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "File count and size",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StorageFileCountResponseDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Get file count in current storage",
-        "tags": [
-          "infrastructure"
-        ]
-      }
-    },
-    "/api/infra/storage/export": {
-      "get": {
-        "operationId": "InfraStorageController_exportStorage",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "JSON pointing at the archive that was written under data/exports/. This route does NOT stream the tar.gz itself — fetch it from the returned `download` path.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StorageExportResponseDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Export all storage files as tar.gz",
-        "tags": [
-          "infrastructure"
-        ]
-      }
-    },
-    "/api/infra/storage/import": {
-      "post": {
-        "operationId": "InfraStorageController_importStorage",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "description": "Path to tar.gz file to import",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ImportStorageDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Import result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StorageImportResponseDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Import storage files from tar.gz",
+        "summary": "Drain this node: stop hosting sessions and hand them to peers via lease lapse",
         "tags": [
           "infrastructure"
         ]
@@ -9420,6 +9151,321 @@
           "search"
         ]
       }
+    },
+    "/api/infra/status": {
+      "get": {
+        "operationId": "InfraStatusController_getStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Infrastructure status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InfraStatusResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get infrastructure status",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/engines": {
+      "get": {
+        "operationId": "InfraStatusController_getEngines",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of available engines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AvailableEngineDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get available WhatsApp engines",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/engines/current": {
+      "get": {
+        "operationId": "InfraStatusController_getCurrentEngine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Current engine info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InfraCurrentEngineResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get current active engine",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/health": {
+      "get": {
+        "operationId": "InfraStatusController_healthCheck",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Process is up. This route does not probe dependencies — read /infra/status for those.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InfraHealthResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Health check endpoint",
+        "tags": [
+          "infrastructure"
+        ],
+        "security": []
+      }
+    },
+    "/api/infra/config": {
+      "get": {
+        "operationId": "InfraConfigController_getConfig",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Effective configuration (secrets omitted)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InfraConfigResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read the effective infrastructure configuration for the dashboard form",
+        "tags": [
+          "infrastructure"
+        ]
+      },
+      "put": {
+        "operationId": "InfraConfigController_saveConfig",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "description": "Configuration to save",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveConfigDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Save outcome. A failed write also answers 200 with `saved: false` — read the flag, not the status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InfraConfigSaveResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Save infrastructure configuration to .env file",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/restart": {
+      "post": {
+        "operationId": "InfraConfigController_requestRestart",
+        "parameters": [],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestartDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Server will restart with new profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InfraRestartResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Request server restart with Docker orchestration",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/export-data": {
+      "get": {
+        "operationId": "InfraDataController_exportData",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Exported data as JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InfraExportDataResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Export all data from Data DB for migration",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/import-data": {
+      "post": {
+        "operationId": "InfraDataController_importData",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "description": "Exported data from export-data endpoint",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportDataDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Data imported successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InfraImportDataResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Body rejected before the restore ran: `tables` absent or not an object, a table whose value is not an array of rows, a row that is not an object (`null`, a bare string, a nested array), a flag spelled as anything but a boolean or exact `true`/`false`, or a property this route does not accept. Nothing was written. Field-level detail is suppressed in production unless VALIDATION_ERROR_DETAIL=true."
+          },
+          "409": {
+            "description": "Refused, with the reason in `code`. IMPORT_ALREADY_RUNNING: another import is running — wait for it. IMPORT_NESTED_TRANSACTION: another database transaction holds this connection, so a restore could not be made durable — retry with nothing else in flight. IMPORT_WOULD_ORPHAN_ENGINES: live engines exist for sessions the backup would remove — retry with stopOrphans=true to stop them in-request, or force=true to proceed and restart after. Only the last of these is retryable with stopOrphans; the others leave nothing to decide"
+          }
+        },
+        "summary": "Import data to Data DB (replaces existing data)",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/storage/files/count": {
+      "get": {
+        "operationId": "InfraStorageController_getStorageFileCount",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "File count and size",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageFileCountResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get file count in current storage",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/storage/export": {
+      "get": {
+        "operationId": "InfraStorageController_exportStorage",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON pointing at the archive that was written under data/exports/. This route does NOT stream the tar.gz itself — fetch it from the returned `download` path.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageExportResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Export all storage files as tar.gz",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/storage/import": {
+      "post": {
+        "operationId": "InfraStorageController_importStorage",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "description": "Path to tar.gz file to import",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportStorageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Import result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageImportResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Import storage files from tar.gz",
+        "tags": [
+          "infrastructure"
+        ]
+      }
     }
   },
   "info": {
@@ -12600,6 +12646,51 @@
           "status"
         ]
       },
+      "SessionsHealthResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Always `ok`; the numbers carry the signal, not the status.",
+            "example": "ok"
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "This node’s ownership identity (NODE_ID, defaulting to the hostname)."
+          },
+          "draining": {
+            "type": "boolean",
+            "description": "True once the node is draining (shutdown or POST /infra/drain): readiness is 503 and no new sessions start here.",
+            "example": false
+          },
+          "engines": {
+            "type": "number",
+            "description": "Engines currently live or initializing in this process.",
+            "example": 4
+          },
+          "sessions": {
+            "type": "object",
+            "description": "Session rows assigned to this node, by state. `assigned` is the total; warm-up progress is `ready` approaching `assigned`.",
+            "example": {
+              "assigned": 5,
+              "ready": 4,
+              "connecting": 1,
+              "disconnected": 0,
+              "failed": 0
+            },
+            "additionalProperties": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "status",
+          "nodeId",
+          "draining",
+          "engines",
+          "sessions"
+        ]
+      },
       "ReadinessResponseDto": {
         "type": "object",
         "properties": {
@@ -12720,1322 +12811,40 @@
           "notifications"
         ]
       },
-      "InfraDatabaseStatusDto": {
-        "type": "object",
-        "properties": {
-          "connected": {
-            "type": "boolean",
-            "description": "Whether a `SELECT 1` probe succeeded just now.",
-            "example": true
-          },
-          "type": {
-            "type": "string",
-            "description": "Configured driver.",
-            "example": "postgres"
-          },
-          "host": {
-            "type": "string",
-            "description": "Host the app is configured to reach.",
-            "example": "openwa-postgres"
-          },
-          "builtIn": {
-            "type": "boolean",
-            "description": "Whether OpenWA's own bundled container is actually running and backing this service, detected live from the labelled container rather than read from the saved intent. Falls back to the saved flag when Docker is unavailable.",
-            "example": true
-          }
-        },
-        "required": [
-          "connected",
-          "type",
-          "host",
-          "builtIn"
-        ]
-      },
-      "InfraRedisStatusDto": {
-        "type": "object",
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "description": "Whether Redis is switched on in configuration.",
-            "example": true
-          },
-          "connected": {
-            "type": "boolean",
-            "description": "Whether a live probe reached it.",
-            "example": true
-          },
-          "host": {
-            "type": "string",
-            "example": "openwa-redis"
-          },
-          "port": {
-            "type": "number",
-            "example": 6379
-          },
-          "builtIn": {
-            "type": "boolean",
-            "description": "Whether OpenWA's bundled Redis container is backing this.",
-            "example": true
-          }
-        },
-        "required": [
-          "enabled",
-          "connected",
-          "host",
-          "port",
-          "builtIn"
-        ]
-      },
-      "InfraQueueDepthDto": {
-        "type": "object",
-        "properties": {
-          "pending": {
-            "type": "number",
-            "description": "Jobs waiting to be delivered.",
-            "example": 0
-          },
-          "completed": {
-            "type": "number",
-            "description": "Jobs delivered successfully.",
-            "example": 128
-          },
-          "failed": {
-            "type": "number",
-            "description": "Jobs that exhausted their retries.",
-            "example": 2
-          }
-        },
-        "required": [
-          "pending",
-          "completed",
-          "failed"
-        ]
-      },
-      "InfraQueueStatusDto": {
-        "type": "object",
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "description": "Whether queue processing is switched on.",
-            "example": true
-          },
-          "webhooks": {
-            "description": "Webhook queue depths.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/InfraQueueDepthDto"
-              }
-            ]
-          }
-        },
-        "required": [
-          "enabled",
-          "webhooks"
-        ]
-      },
-      "InfraStorageStatusDto": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": [
-              "local",
-              "s3"
-            ],
-            "example": "local"
-          },
-          "path": {
-            "type": "string",
-            "description": "Local storage root. Present only for `local`.",
-            "example": "./data/storage"
-          },
-          "bucket": {
-            "type": "string",
-            "description": "Bucket name. Present only for `s3`.",
-            "example": "openwa-media"
-          },
-          "builtIn": {
-            "type": "boolean",
-            "description": "Whether OpenWA's bundled MinIO container is backing this.",
-            "example": false
-          },
-          "s3Available": {
-            "type": "boolean",
-            "description": "Whether the S3 endpoint answered a probe. Present only for `s3`."
-          }
-        },
-        "required": [
-          "type",
-          "builtIn"
-        ]
-      },
-      "InfraEngineStatusDto": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "description": "Active engine.",
-            "example": "baileys"
-          },
-          "headless": {
-            "type": "boolean",
-            "description": "Whether Chromium runs headless. Meaningful for whatsapp-web.js only.",
-            "example": true
-          },
-          "sessionDataPath": {
-            "type": "string",
-            "example": "./data/sessions"
-          },
-          "browserArgs": {
-            "type": "string",
-            "description": "Extra Chromium arguments, as configured.",
-            "example": ""
-          },
-          "webVersion": {
-            "type": "string",
-            "nullable": true,
-            "description": "whatsapp-web.js only: the WhatsApp Web build actually in use, which is distinct from the library version. Omitted for other engines.",
-            "example": "2.3000.1234567890"
-          },
-          "webVersionSource": {
-            "type": "string",
-            "enum": [
-              "pinned",
-              "auto",
-              "native"
-            ],
-            "description": "How that build was chosen. Omitted for other engines.",
-            "example": "pinned"
-          }
-        },
-        "required": [
-          "type",
-          "headless",
-          "sessionDataPath",
-          "browserArgs"
-        ]
-      },
-      "InfraStatusResponseDto": {
-        "type": "object",
-        "properties": {
-          "database": {
-            "$ref": "#/components/schemas/InfraDatabaseStatusDto"
-          },
-          "redis": {
-            "$ref": "#/components/schemas/InfraRedisStatusDto"
-          },
-          "queue": {
-            "$ref": "#/components/schemas/InfraQueueStatusDto"
-          },
-          "storage": {
-            "$ref": "#/components/schemas/InfraStorageStatusDto"
-          },
-          "engine": {
-            "$ref": "#/components/schemas/InfraEngineStatusDto"
-          },
-          "envPinned": {
-            "description": "Which of the four settings the dashboard can edit are supplied by a layer ABOVE `data/.env.generated` — the container environment or a project `.env` — and so cannot be changed from the dashboard until that layer is. Reported, not inferred from a running-vs-saved mismatch: a save that has not been restarted yet looks identical and needs the opposite advice.",
-            "example": [
-              "ENGINE_TYPE"
-            ],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "database",
-          "redis",
-          "queue",
-          "storage",
-          "engine",
-          "envPinned"
-        ]
-      },
-      "EngineLibraryDto": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "The underlying library, distinct from the engine plugin's own manifest name.",
-            "example": "whatsapp-web.js"
-          },
-          "version": {
-            "type": "string",
-            "description": "Library version actually loaded.",
-            "example": "1.34.7"
-          }
-        },
-        "required": [
-          "name",
-          "version"
-        ]
-      },
-      "AvailableEngineDto": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "Engine plugin id — the value ENGINE_TYPE takes.",
-            "example": "baileys"
-          },
-          "name": {
-            "type": "string",
-            "description": "Display name from the plugin manifest.",
-            "example": "Baileys"
-          },
-          "enabled": {
-            "type": "boolean",
-            "description": "Whether the plugin is enabled. Disabled engines are still listed.",
-            "example": true
-          },
-          "features": {
-            "description": "Capabilities the engine declares.",
-            "example": [
-              "text-messages",
-              "media-messages",
-              "group-management"
-            ],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "library": {
-            "description": "Absent when the plugin does not report a library, which includes any disabled engine.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/EngineLibraryDto"
-              }
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "enabled",
-          "features"
-        ]
-      },
-      "InfraCurrentEngineResponseDto": {
-        "type": "object",
-        "properties": {
-          "engineType": {
-            "type": "string",
-            "description": "Engine the process resolved at boot.",
-            "example": "baileys"
-          }
-        },
-        "required": [
-          "engineType"
-        ]
-      },
-      "InfraHealthResponseDto": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "type": "string",
-            "description": "Liveness marker. This route does not probe dependencies.",
-            "example": "ok"
-          },
-          "timestamp": {
-            "type": "string",
-            "description": "ISO-8601 timestamp of the reply.",
-            "example": "2026-08-07T12:00:00.000Z"
-          }
-        },
-        "required": [
-          "status",
-          "timestamp"
-        ]
-      },
-      "InfraConfigDatabaseDto": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": [
-              "sqlite",
-              "postgres"
-            ],
-            "example": "postgres"
-          },
-          "builtIn": {
-            "type": "boolean",
-            "example": true
-          },
-          "host": {
-            "type": "string",
-            "example": "openwa-postgres"
-          },
-          "port": {
-            "type": "string",
-            "description": "Kept as a string: it is echoed back from the saved env verbatim.",
-            "example": "5432"
-          },
-          "username": {
-            "type": "string",
-            "example": "openwa"
-          },
-          "database": {
-            "type": "string",
-            "description": "Database name, or the SQLite file path.",
-            "example": "openwa"
-          },
-          "schema": {
-            "type": "string",
-            "example": "public"
-          },
-          "poolSize": {
-            "type": "number",
-            "example": 10
-          },
-          "sslEnabled": {
-            "type": "boolean",
-            "example": false
-          },
-          "sslRejectUnauthorized": {
-            "type": "boolean",
-            "example": true
-          },
-          "passwordSet": {
-            "type": "boolean",
-            "description": "Whether a password is stored. The secret itself is never returned.",
-            "example": true
-          }
-        },
-        "required": [
-          "type",
-          "builtIn",
-          "host",
-          "port",
-          "username",
-          "database",
-          "schema",
-          "poolSize",
-          "sslEnabled",
-          "sslRejectUnauthorized",
-          "passwordSet"
-        ]
-      },
-      "InfraConfigRedisDto": {
-        "type": "object",
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "example": true
-          },
-          "builtIn": {
-            "type": "boolean",
-            "example": true
-          },
-          "host": {
-            "type": "string",
-            "example": "openwa-redis"
-          },
-          "port": {
-            "type": "string",
-            "description": "Echoed from the saved env verbatim.",
-            "example": "6379"
-          },
-          "passwordSet": {
-            "type": "boolean",
-            "description": "Whether a password is stored. The secret itself is never returned.",
-            "example": false
-          }
-        },
-        "required": [
-          "enabled",
-          "builtIn",
-          "host",
-          "port",
-          "passwordSet"
-        ]
-      },
-      "InfraConfigQueueDto": {
-        "type": "object",
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "example": true
-          }
-        },
-        "required": [
-          "enabled"
-        ]
-      },
-      "InfraConfigStorageDto": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": [
-              "local",
-              "s3"
-            ],
-            "example": "local"
-          },
-          "builtIn": {
-            "type": "boolean",
-            "example": false
-          },
-          "localPath": {
-            "type": "string",
-            "example": "./data/storage"
-          },
-          "s3Bucket": {
-            "type": "string",
-            "example": ""
-          },
-          "s3Region": {
-            "type": "string",
-            "example": ""
-          },
-          "s3Endpoint": {
-            "type": "string",
-            "example": ""
-          },
-          "s3CredentialsSet": {
-            "type": "boolean",
-            "description": "Whether both an access key id and a secret are stored. Neither is ever returned.",
-            "example": false
-          }
-        },
-        "required": [
-          "type",
-          "builtIn",
-          "localPath",
-          "s3Bucket",
-          "s3Region",
-          "s3Endpoint",
-          "s3CredentialsSet"
-        ]
-      },
-      "InfraConfigEngineDto": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "example": "whatsapp-web.js"
-          },
-          "headless": {
-            "type": "boolean",
-            "example": true
-          },
-          "sessionDataPath": {
-            "type": "string",
-            "example": "./data/sessions"
-          },
-          "browserArgs": {
-            "type": "string",
-            "example": ""
-          }
-        },
-        "required": [
-          "type",
-          "headless",
-          "sessionDataPath",
-          "browserArgs"
-        ]
-      },
-      "InfraConfigResponseDto": {
-        "type": "object",
-        "properties": {
-          "database": {
-            "$ref": "#/components/schemas/InfraConfigDatabaseDto"
-          },
-          "redis": {
-            "$ref": "#/components/schemas/InfraConfigRedisDto"
-          },
-          "queue": {
-            "$ref": "#/components/schemas/InfraConfigQueueDto"
-          },
-          "storage": {
-            "$ref": "#/components/schemas/InfraConfigStorageDto"
-          },
-          "engine": {
-            "$ref": "#/components/schemas/InfraConfigEngineDto"
-          }
-        },
-        "required": [
-          "database",
-          "redis",
-          "queue",
-          "storage",
-          "engine"
-        ]
-      },
-      "DatabaseConfigDto": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": [
-              "sqlite",
-              "postgres"
-            ]
-          },
-          "builtIn": {
-            "type": "boolean"
-          },
-          "host": {
-            "type": "string"
-          },
-          "port": {
-            "type": "string"
-          },
-          "username": {
-            "type": "string"
-          },
-          "password": {
-            "type": "string"
-          },
-          "database": {
-            "type": "string"
-          },
-          "schema": {
-            "type": "string"
-          },
-          "poolSize": {
-            "type": "number"
-          },
-          "sslEnabled": {
-            "type": "boolean"
-          },
-          "sslRejectUnauthorized": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "RedisConfigDto": {
-        "type": "object",
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          },
-          "builtIn": {
-            "type": "boolean"
-          },
-          "host": {
-            "type": "string"
-          },
-          "port": {
-            "type": "string"
-          },
-          "password": {
-            "type": "string"
-          }
-        }
-      },
-      "QueueConfigDto": {
-        "type": "object",
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          }
-        }
-      },
-      "StorageConfigDto": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": [
-              "local",
-              "s3"
-            ]
-          },
-          "builtIn": {
-            "type": "boolean"
-          },
-          "localPath": {
-            "type": "string"
-          },
-          "s3Bucket": {
-            "type": "string"
-          },
-          "s3Region": {
-            "type": "string"
-          },
-          "s3AccessKey": {
-            "type": "string"
-          },
-          "s3SecretKey": {
-            "type": "string"
-          },
-          "s3Endpoint": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "type"
-        ]
-      },
-      "EngineConfigDto": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string"
-          },
-          "headless": {
-            "type": "boolean"
-          },
-          "sessionDataPath": {
-            "type": "string"
-          },
-          "browserArgs": {
-            "type": "string"
-          }
-        }
-      },
-      "SaveConfigDto": {
-        "type": "object",
-        "properties": {
-          "database": {
-            "$ref": "#/components/schemas/DatabaseConfigDto"
-          },
-          "redis": {
-            "$ref": "#/components/schemas/RedisConfigDto"
-          },
-          "queue": {
-            "$ref": "#/components/schemas/QueueConfigDto"
-          },
-          "storage": {
-            "$ref": "#/components/schemas/StorageConfigDto"
-          },
-          "engine": {
-            "$ref": "#/components/schemas/EngineConfigDto"
-          }
-        }
-      },
-      "InfraConfigSaveResponseDto": {
+      "InfraDrainResponseDto": {
         "type": "object",
         "properties": {
           "message": {
             "type": "string",
-            "example": "Configuration saved successfully. Server restart required to apply changes."
+            "example": "Node drained. Peers adopt the abandoned sessions once their leases lapse."
           },
-          "saved": {
+          "draining": {
             "type": "boolean",
-            "description": "False when the write failed. This route answers 200 either way, so a client must read this flag rather than the status code.",
+            "description": "Readiness now reports 503; the node keeps serving in-flight traffic.",
             "example": true
           },
-          "envPath": {
-            "type": "string",
-            "description": "Path of the env file written, relative to the working directory so the host layout is not disclosed.",
-            "example": "data/.env.generated"
+          "stoppedEngines": {
+            "type": "number",
+            "description": "Engines torn down by the drain.",
+            "example": 4
           },
-          "profiles": {
-            "description": "Docker profiles the saved selection requires.",
-            "example": [
-              "postgres"
-            ],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
+          "abandonedClaims": {
+            "type": "number",
+            "description": "Session claims forgotten locally and left to lapse (the adoptable handoff).",
+            "example": 4
+          },
+          "leaseTtlMs": {
+            "type": "number",
+            "description": "Lease TTL in ms — the worst-case delay before a peer may adopt an abandoned session.",
+            "example": 60000
           }
         },
         "required": [
           "message",
-          "saved",
-          "envPath",
-          "profiles"
-        ]
-      },
-      "RestartDto": {
-        "type": "object",
-        "properties": {
-          "profiles": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "profilesToRemove": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        }
-      },
-      "InfraRestartResponseDto": {
-        "type": "object",
-        "properties": {
-          "message": {
-            "type": "string",
-            "example": "Restart scheduled."
-          },
-          "restarting": {
-            "type": "boolean",
-            "description": "Whether a restart was actually scheduled.",
-            "example": true
-          },
-          "profiles": {
-            "description": "Docker profiles to bring up.",
-            "example": [
-              "postgres"
-            ],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "profilesToRemove": {
-            "description": "Profiles to tear down. Teardown is stop-only: containers are stopped and retained for re-enable, never deleted.",
-            "example": [],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "estimatedTime": {
-            "type": "number",
-            "description": "Rough seconds before the process is expected back.",
-            "example": 15
-          },
-          "orchestration": {
-            "type": "object",
-            "description": "Raw per-service orchestration outcome, present only when profiles were started."
-          },
-          "removal": {
-            "type": "object",
-            "description": "Raw per-service stop outcome, present only when profiles were torn down."
-          }
-        },
-        "required": [
-          "message",
-          "restarting",
-          "profiles",
-          "profilesToRemove",
-          "estimatedTime"
-        ]
-      },
-      "MigrationTablesDto": {
-        "type": "object",
-        "properties": {
-          "sessions": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "webhooks": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "messages": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "messageBatches": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "templates": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "baileysStoredMessages": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "lidMappings": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "pluginInstances": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "conversationMappings": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "ingressEvents": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "webhookDeliveryFailures": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "webhookOutboxEvents": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "integrationDeliveryFailures": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "statusUpdates": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "automationRules": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          }
-        },
-        "required": [
-          "sessions",
-          "webhooks",
-          "messages",
-          "messageBatches",
-          "templates",
-          "baileysStoredMessages",
-          "lidMappings",
-          "pluginInstances",
-          "conversationMappings",
-          "ingressEvents",
-          "webhookDeliveryFailures",
-          "webhookOutboxEvents",
-          "integrationDeliveryFailures",
-          "statusUpdates",
-          "automationRules"
-        ]
-      },
-      "TableCountsDto": {
-        "type": "object",
-        "properties": {
-          "sessions": {
-            "type": "number",
-            "example": 2
-          },
-          "webhooks": {
-            "type": "number",
-            "example": 1
-          },
-          "messages": {
-            "type": "number",
-            "example": 1024
-          },
-          "messageBatches": {
-            "type": "number",
-            "example": 0
-          },
-          "templates": {
-            "type": "number",
-            "example": 3
-          },
-          "baileysStoredMessages": {
-            "type": "number",
-            "example": 512
-          },
-          "lidMappings": {
-            "type": "number",
-            "example": 64
-          },
-          "pluginInstances": {
-            "type": "number",
-            "example": 12
-          },
-          "conversationMappings": {
-            "type": "number",
-            "example": 8
-          },
-          "ingressEvents": {
-            "type": "number",
-            "example": 40
-          },
-          "webhookDeliveryFailures": {
-            "type": "number",
-            "example": 0
-          },
-          "webhookOutboxEvents": {
-            "type": "number",
-            "example": 0
-          },
-          "integrationDeliveryFailures": {
-            "type": "number",
-            "example": 0
-          },
-          "statusUpdates": {
-            "type": "number",
-            "example": 5
-          },
-          "automationRules": {
-            "type": "number",
-            "example": 2
-          }
-        },
-        "required": [
-          "sessions",
-          "webhooks",
-          "messages",
-          "messageBatches",
-          "templates",
-          "baileysStoredMessages",
-          "lidMappings",
-          "pluginInstances",
-          "conversationMappings",
-          "ingressEvents",
-          "webhookDeliveryFailures",
-          "webhookOutboxEvents",
-          "integrationDeliveryFailures",
-          "statusUpdates",
-          "automationRules"
-        ]
-      },
-      "OmittedInlineMediaDto": {
-        "type": "object",
-        "properties": {
-          "messages": {
-            "type": "number",
-            "description": "Message attachments replaced with an omitted marker.",
-            "example": 0
-          },
-          "messageBatches": {
-            "type": "number",
-            "description": "Batch attachments replaced with an omitted marker.",
-            "example": 0
-          }
-        },
-        "required": [
-          "messages",
-          "messageBatches"
-        ]
-      },
-      "InfraExportDataResponseDto": {
-        "type": "object",
-        "properties": {
-          "exportedAt": {
-            "type": "string",
-            "description": "ISO-8601 timestamp the export was taken.",
-            "example": "2026-08-07T12:00:00.000Z"
-          },
-          "dataDbType": {
-            "type": "string",
-            "description": "Driver the data came from.",
-            "example": "postgres"
-          },
-          "tables": {
-            "$ref": "#/components/schemas/MigrationTablesDto"
-          },
-          "counts": {
-            "description": "Row counts, so a truncated restore is detectable.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/TableCountsDto"
-              }
-            ]
-          },
-          "skippedTables": {
-            "description": "Tables the running database does not have, which were skipped rather than exported. A restore from this file will not repopulate them.",
-            "example": [],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "omittedInlineMedia": {
-            "description": "Inline media dropped for exceeding the export budget. Non-zero means the archive is TRUNCATED — the rows are present but their attachments are replaced with an omitted marker.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/OmittedInlineMediaDto"
-              }
-            ]
-          }
-        },
-        "required": [
-          "exportedAt",
-          "dataDbType",
-          "tables",
-          "counts",
-          "skippedTables",
-          "omittedInlineMedia"
-        ]
-      },
-      "ImportDataDto": {
-        "type": "object",
-        "properties": {
-          "tables": {
-            "type": "object",
-            "description": "Every one of the 14 migration tables is emptied before the restore runs, so a key omitted here is restored EMPTY rather than left untouched. Post the whole GET /api/infra/export-data payload, not a hand-built subset.",
-            "properties": {
-              "sessions": {
-                "type": "array"
-              },
-              "webhooks": {
-                "type": "array"
-              },
-              "messages": {
-                "type": "array"
-              },
-              "messageBatches": {
-                "type": "array"
-              },
-              "templates": {
-                "type": "array"
-              },
-              "baileysStoredMessages": {
-                "type": "array"
-              },
-              "lidMappings": {
-                "type": "array"
-              },
-              "pluginInstances": {
-                "type": "array"
-              },
-              "conversationMappings": {
-                "type": "array"
-              },
-              "ingressEvents": {
-                "type": "array"
-              },
-              "webhookDeliveryFailures": {
-                "type": "array"
-              },
-              "webhookOutboxEvents": {
-                "type": "array"
-              },
-              "integrationDeliveryFailures": {
-                "type": "array"
-              },
-              "statusUpdates": {
-                "type": "array"
-              },
-              "automationRules": {
-                "type": "array"
-              }
-            }
-          },
-          "force": {
-            "type": "boolean",
-            "description": "Allow the replace to proceed even while engines are running for sessions the backup does not contain (they keep running until restart; see restartRequired). Prefer stopOrphans, which closes that window inside this request instead."
-          },
-          "stopOrphans": {
-            "type": "boolean",
-            "description": "Stop the running engines for sessions the backup does not contain, inside this request and before the replace runs. Supersedes force for the orphan case: with stopOrphans the engines no longer need a process restart to reconcile, so restartRequired stays false on the success path."
-          },
-          "exportedAt": {
-            "type": "string",
-            "description": "Ignored. Present so the export file posts back unmodified."
-          },
-          "dataDbType": {
-            "type": "string",
-            "description": "Ignored. Present so the export file posts back unmodified."
-          },
-          "counts": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "number"
-            },
-            "description": "Ignored. Present so the export file posts back unmodified."
-          },
-          "skippedTables": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Ignored. Present so the export file posts back unmodified."
-          },
-          "omittedInlineMedia": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "number"
-            },
-            "description": "Ignored. Present so the export file posts back unmodified."
-          }
-        },
-        "required": [
-          "tables"
-        ]
-      },
-      "InfraImportDataResponseDto": {
-        "type": "object",
-        "properties": {
-          "imported": {
-            "type": "boolean",
-            "example": true
-          },
-          "counts": {
-            "description": "Rows written per table.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/TableCountsDto"
-              }
-            ]
-          },
-          "warnings": {
-            "description": "Problems that did not stop the import.",
-            "example": [],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "notices": {
-            "description": "Informational messages about what the import did.",
-            "example": [],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "restartRequired": {
-            "type": "boolean",
-            "description": "Whether the process must restart before the imported state is live.",
-            "example": true
-          },
-          "orphanedEngines": {
-            "description": "Sessions running here that the imported set does not contain — they were about to be deleted.",
-            "example": [],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "stoppedOrphanEngines": {
-            "description": "Of those, the ones successfully stopped.",
-            "example": [],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "failedOrphanEngines": {
-            "description": "Of those, the ones that could not be stopped.",
-            "example": [],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "imported",
-          "counts",
-          "warnings",
-          "notices",
-          "restartRequired",
-          "orphanedEngines",
-          "stoppedOrphanEngines",
-          "failedOrphanEngines"
-        ]
-      },
-      "StorageFileCountResponseDto": {
-        "type": "object",
-        "properties": {
-          "storageType": {
-            "type": "string",
-            "enum": [
-              "local",
-              "s3"
-            ],
-            "example": "local"
-          },
-          "count": {
-            "type": "number",
-            "description": "Number of stored objects.",
-            "example": 128
-          },
-          "sizeBytes": {
-            "type": "number",
-            "description": "Total size in bytes.",
-            "example": 10485760
-          },
-          "sizeMB": {
-            "type": "string",
-            "description": "The same size in MB, pre-rendered to two decimals.",
-            "example": "10.00"
-          }
-        },
-        "required": [
-          "storageType",
-          "count",
-          "sizeBytes",
-          "sizeMB"
-        ]
-      },
-      "StorageExportResponseDto": {
-        "type": "object",
-        "properties": {
-          "message": {
-            "type": "string",
-            "example": "Storage archive created."
-          },
-          "download": {
-            "type": "string",
-            "description": "Path to download the archive from.",
-            "example": "/api/infra/storage/download/xyz.tar"
-          }
-        },
-        "required": [
-          "message",
-          "download"
-        ]
-      },
-      "ImportStorageDto": {
-        "type": "object",
-        "properties": {
-          "filePath": {
-            "type": "string",
-            "description": "Path to the tar.gz file to import (must be inside the data directory)"
-          }
-        },
-        "required": [
-          "filePath"
-        ]
-      },
-      "StorageImportResponseDto": {
-        "type": "object",
-        "properties": {
-          "imported": {
-            "type": "boolean",
-            "example": true
-          },
-          "count": {
-            "type": "number",
-            "description": "Objects written.",
-            "example": 128
-          },
-          "storageType": {
-            "type": "string",
-            "enum": [
-              "local",
-              "s3"
-            ],
-            "example": "local"
-          }
-        },
-        "required": [
-          "imported",
-          "count",
-          "storageType"
+          "draining",
+          "stoppedEngines",
+          "abandonedClaims",
+          "leaseTtlMs"
         ]
       },
       "ContactDto": {
@@ -16552,6 +15361,1339 @@
           "total",
           "tookMs",
           "provider"
+        ]
+      },
+      "InfraDatabaseStatusDto": {
+        "type": "object",
+        "properties": {
+          "connected": {
+            "type": "boolean",
+            "description": "Whether a `SELECT 1` probe succeeded just now.",
+            "example": true
+          },
+          "type": {
+            "type": "string",
+            "description": "Configured driver.",
+            "example": "postgres"
+          },
+          "host": {
+            "type": "string",
+            "description": "Host the app is configured to reach.",
+            "example": "openwa-postgres"
+          },
+          "builtIn": {
+            "type": "boolean",
+            "description": "Whether OpenWA's own bundled container is actually running and backing this service, detected live from the labelled container rather than read from the saved intent. Falls back to the saved flag when Docker is unavailable.",
+            "example": true
+          }
+        },
+        "required": [
+          "connected",
+          "type",
+          "host",
+          "builtIn"
+        ]
+      },
+      "InfraRedisStatusDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether Redis is switched on in configuration.",
+            "example": true
+          },
+          "connected": {
+            "type": "boolean",
+            "description": "Whether a live probe reached it.",
+            "example": true
+          },
+          "host": {
+            "type": "string",
+            "example": "openwa-redis"
+          },
+          "port": {
+            "type": "number",
+            "example": 6379
+          },
+          "builtIn": {
+            "type": "boolean",
+            "description": "Whether OpenWA's bundled Redis container is backing this.",
+            "example": true
+          }
+        },
+        "required": [
+          "enabled",
+          "connected",
+          "host",
+          "port",
+          "builtIn"
+        ]
+      },
+      "InfraQueueDepthDto": {
+        "type": "object",
+        "properties": {
+          "pending": {
+            "type": "number",
+            "description": "Jobs waiting to be delivered.",
+            "example": 0
+          },
+          "completed": {
+            "type": "number",
+            "description": "Jobs delivered successfully.",
+            "example": 128
+          },
+          "failed": {
+            "type": "number",
+            "description": "Jobs that exhausted their retries.",
+            "example": 2
+          }
+        },
+        "required": [
+          "pending",
+          "completed",
+          "failed"
+        ]
+      },
+      "InfraQueueStatusDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether queue processing is switched on.",
+            "example": true
+          },
+          "webhooks": {
+            "description": "Webhook queue depths.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InfraQueueDepthDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "enabled",
+          "webhooks"
+        ]
+      },
+      "InfraStorageStatusDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "local",
+              "s3"
+            ],
+            "example": "local"
+          },
+          "path": {
+            "type": "string",
+            "description": "Local storage root. Present only for `local`.",
+            "example": "./data/storage"
+          },
+          "bucket": {
+            "type": "string",
+            "description": "Bucket name. Present only for `s3`.",
+            "example": "openwa-media"
+          },
+          "builtIn": {
+            "type": "boolean",
+            "description": "Whether OpenWA's bundled MinIO container is backing this.",
+            "example": false
+          },
+          "s3Available": {
+            "type": "boolean",
+            "description": "Whether the S3 endpoint answered a probe. Present only for `s3`."
+          }
+        },
+        "required": [
+          "type",
+          "builtIn"
+        ]
+      },
+      "InfraEngineStatusDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Active engine.",
+            "example": "baileys"
+          },
+          "headless": {
+            "type": "boolean",
+            "description": "Whether Chromium runs headless. Meaningful for whatsapp-web.js only.",
+            "example": true
+          },
+          "sessionDataPath": {
+            "type": "string",
+            "example": "./data/sessions"
+          },
+          "browserArgs": {
+            "type": "string",
+            "description": "Extra Chromium arguments, as configured.",
+            "example": ""
+          },
+          "webVersion": {
+            "type": "string",
+            "nullable": true,
+            "description": "whatsapp-web.js only: the WhatsApp Web build actually in use, which is distinct from the library version. Omitted for other engines.",
+            "example": "2.3000.1234567890"
+          },
+          "webVersionSource": {
+            "type": "string",
+            "enum": [
+              "pinned",
+              "auto",
+              "native"
+            ],
+            "description": "How that build was chosen. Omitted for other engines.",
+            "example": "pinned"
+          }
+        },
+        "required": [
+          "type",
+          "headless",
+          "sessionDataPath",
+          "browserArgs"
+        ]
+      },
+      "InfraStatusResponseDto": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/InfraDatabaseStatusDto"
+          },
+          "redis": {
+            "$ref": "#/components/schemas/InfraRedisStatusDto"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/InfraQueueStatusDto"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/InfraStorageStatusDto"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/InfraEngineStatusDto"
+          },
+          "envPinned": {
+            "description": "Which of the four settings the dashboard can edit are supplied by a layer ABOVE `data/.env.generated` — the container environment or a project `.env` — and so cannot be changed from the dashboard until that layer is. Reported, not inferred from a running-vs-saved mismatch: a save that has not been restarted yet looks identical and needs the opposite advice.",
+            "example": [
+              "ENGINE_TYPE"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "database",
+          "redis",
+          "queue",
+          "storage",
+          "engine",
+          "envPinned"
+        ]
+      },
+      "EngineLibraryDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The underlying library, distinct from the engine plugin's own manifest name.",
+            "example": "whatsapp-web.js"
+          },
+          "version": {
+            "type": "string",
+            "description": "Library version actually loaded.",
+            "example": "1.34.7"
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ]
+      },
+      "AvailableEngineDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Engine plugin id — the value ENGINE_TYPE takes.",
+            "example": "baileys"
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name from the plugin manifest.",
+            "example": "Baileys"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the plugin is enabled. Disabled engines are still listed.",
+            "example": true
+          },
+          "features": {
+            "description": "Capabilities the engine declares.",
+            "example": [
+              "text-messages",
+              "media-messages",
+              "group-management"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "library": {
+            "description": "Absent when the plugin does not report a library, which includes any disabled engine.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EngineLibraryDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "features"
+        ]
+      },
+      "InfraCurrentEngineResponseDto": {
+        "type": "object",
+        "properties": {
+          "engineType": {
+            "type": "string",
+            "description": "Engine the process resolved at boot.",
+            "example": "baileys"
+          }
+        },
+        "required": [
+          "engineType"
+        ]
+      },
+      "InfraHealthResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Liveness marker. This route does not probe dependencies.",
+            "example": "ok"
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "ISO-8601 timestamp of the reply.",
+            "example": "2026-08-07T12:00:00.000Z"
+          }
+        },
+        "required": [
+          "status",
+          "timestamp"
+        ]
+      },
+      "InfraConfigDatabaseDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "sqlite",
+              "postgres"
+            ],
+            "example": "postgres"
+          },
+          "builtIn": {
+            "type": "boolean",
+            "example": true
+          },
+          "host": {
+            "type": "string",
+            "example": "openwa-postgres"
+          },
+          "port": {
+            "type": "string",
+            "description": "Kept as a string: it is echoed back from the saved env verbatim.",
+            "example": "5432"
+          },
+          "username": {
+            "type": "string",
+            "example": "openwa"
+          },
+          "database": {
+            "type": "string",
+            "description": "Database name, or the SQLite file path.",
+            "example": "openwa"
+          },
+          "schema": {
+            "type": "string",
+            "example": "public"
+          },
+          "poolSize": {
+            "type": "number",
+            "example": 10
+          },
+          "sslEnabled": {
+            "type": "boolean",
+            "example": false
+          },
+          "sslRejectUnauthorized": {
+            "type": "boolean",
+            "example": true
+          },
+          "passwordSet": {
+            "type": "boolean",
+            "description": "Whether a password is stored. The secret itself is never returned.",
+            "example": true
+          }
+        },
+        "required": [
+          "type",
+          "builtIn",
+          "host",
+          "port",
+          "username",
+          "database",
+          "schema",
+          "poolSize",
+          "sslEnabled",
+          "sslRejectUnauthorized",
+          "passwordSet"
+        ]
+      },
+      "InfraConfigRedisDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "example": true
+          },
+          "builtIn": {
+            "type": "boolean",
+            "example": true
+          },
+          "host": {
+            "type": "string",
+            "example": "openwa-redis"
+          },
+          "port": {
+            "type": "string",
+            "description": "Echoed from the saved env verbatim.",
+            "example": "6379"
+          },
+          "passwordSet": {
+            "type": "boolean",
+            "description": "Whether a password is stored. The secret itself is never returned.",
+            "example": false
+          }
+        },
+        "required": [
+          "enabled",
+          "builtIn",
+          "host",
+          "port",
+          "passwordSet"
+        ]
+      },
+      "InfraConfigQueueDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
+      "InfraConfigStorageDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "local",
+              "s3"
+            ],
+            "example": "local"
+          },
+          "builtIn": {
+            "type": "boolean",
+            "example": false
+          },
+          "localPath": {
+            "type": "string",
+            "example": "./data/storage"
+          },
+          "s3Bucket": {
+            "type": "string",
+            "example": ""
+          },
+          "s3Region": {
+            "type": "string",
+            "example": ""
+          },
+          "s3Endpoint": {
+            "type": "string",
+            "example": ""
+          },
+          "s3CredentialsSet": {
+            "type": "boolean",
+            "description": "Whether both an access key id and a secret are stored. Neither is ever returned.",
+            "example": false
+          }
+        },
+        "required": [
+          "type",
+          "builtIn",
+          "localPath",
+          "s3Bucket",
+          "s3Region",
+          "s3Endpoint",
+          "s3CredentialsSet"
+        ]
+      },
+      "InfraConfigEngineDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "example": "whatsapp-web.js"
+          },
+          "headless": {
+            "type": "boolean",
+            "example": true
+          },
+          "sessionDataPath": {
+            "type": "string",
+            "example": "./data/sessions"
+          },
+          "browserArgs": {
+            "type": "string",
+            "example": ""
+          }
+        },
+        "required": [
+          "type",
+          "headless",
+          "sessionDataPath",
+          "browserArgs"
+        ]
+      },
+      "InfraConfigResponseDto": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/InfraConfigDatabaseDto"
+          },
+          "redis": {
+            "$ref": "#/components/schemas/InfraConfigRedisDto"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/InfraConfigQueueDto"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/InfraConfigStorageDto"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/InfraConfigEngineDto"
+          }
+        },
+        "required": [
+          "database",
+          "redis",
+          "queue",
+          "storage",
+          "engine"
+        ]
+      },
+      "DatabaseConfigDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "sqlite",
+              "postgres"
+            ]
+          },
+          "builtIn": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "poolSize": {
+            "type": "number"
+          },
+          "sslEnabled": {
+            "type": "boolean"
+          },
+          "sslRejectUnauthorized": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "RedisConfigDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "builtIn": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "QueueConfigDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "StorageConfigDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "local",
+              "s3"
+            ]
+          },
+          "builtIn": {
+            "type": "boolean"
+          },
+          "localPath": {
+            "type": "string"
+          },
+          "s3Bucket": {
+            "type": "string"
+          },
+          "s3Region": {
+            "type": "string"
+          },
+          "s3AccessKey": {
+            "type": "string"
+          },
+          "s3SecretKey": {
+            "type": "string"
+          },
+          "s3Endpoint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "EngineConfigDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "headless": {
+            "type": "boolean"
+          },
+          "sessionDataPath": {
+            "type": "string"
+          },
+          "browserArgs": {
+            "type": "string"
+          }
+        }
+      },
+      "SaveConfigDto": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/DatabaseConfigDto"
+          },
+          "redis": {
+            "$ref": "#/components/schemas/RedisConfigDto"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueueConfigDto"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageConfigDto"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/EngineConfigDto"
+          }
+        }
+      },
+      "InfraConfigSaveResponseDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "Configuration saved successfully. Server restart required to apply changes."
+          },
+          "saved": {
+            "type": "boolean",
+            "description": "False when the write failed. This route answers 200 either way, so a client must read this flag rather than the status code.",
+            "example": true
+          },
+          "envPath": {
+            "type": "string",
+            "description": "Path of the env file written, relative to the working directory so the host layout is not disclosed.",
+            "example": "data/.env.generated"
+          },
+          "profiles": {
+            "description": "Docker profiles the saved selection requires.",
+            "example": [
+              "postgres"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "message",
+          "saved",
+          "envPath",
+          "profiles"
+        ]
+      },
+      "RestartDto": {
+        "type": "object",
+        "properties": {
+          "profiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "profilesToRemove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "InfraRestartResponseDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "Restart scheduled."
+          },
+          "restarting": {
+            "type": "boolean",
+            "description": "Whether a restart was actually scheduled.",
+            "example": true
+          },
+          "profiles": {
+            "description": "Docker profiles to bring up.",
+            "example": [
+              "postgres"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "profilesToRemove": {
+            "description": "Profiles to tear down. Teardown is stop-only: containers are stopped and retained for re-enable, never deleted.",
+            "example": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "estimatedTime": {
+            "type": "number",
+            "description": "Rough seconds before the process is expected back.",
+            "example": 15
+          },
+          "orchestration": {
+            "type": "object",
+            "description": "Raw per-service orchestration outcome, present only when profiles were started."
+          },
+          "removal": {
+            "type": "object",
+            "description": "Raw per-service stop outcome, present only when profiles were torn down."
+          }
+        },
+        "required": [
+          "message",
+          "restarting",
+          "profiles",
+          "profilesToRemove",
+          "estimatedTime"
+        ]
+      },
+      "MigrationTablesDto": {
+        "type": "object",
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "webhooks": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "messageBatches": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "baileysStoredMessages": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "baileysAuthState": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "lidMappings": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "pluginInstances": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "conversationMappings": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "ingressEvents": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "webhookDeliveryFailures": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "webhookOutboxEvents": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "integrationDeliveryFailures": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "statusUpdates": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "automationRules": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "sessions",
+          "webhooks",
+          "messages",
+          "messageBatches",
+          "templates",
+          "baileysStoredMessages",
+          "baileysAuthState",
+          "lidMappings",
+          "pluginInstances",
+          "conversationMappings",
+          "ingressEvents",
+          "webhookDeliveryFailures",
+          "webhookOutboxEvents",
+          "integrationDeliveryFailures",
+          "statusUpdates",
+          "automationRules"
+        ]
+      },
+      "TableCountsDto": {
+        "type": "object",
+        "properties": {
+          "sessions": {
+            "type": "number",
+            "example": 2
+          },
+          "webhooks": {
+            "type": "number",
+            "example": 1
+          },
+          "messages": {
+            "type": "number",
+            "example": 1024
+          },
+          "messageBatches": {
+            "type": "number",
+            "example": 0
+          },
+          "templates": {
+            "type": "number",
+            "example": 3
+          },
+          "baileysStoredMessages": {
+            "type": "number",
+            "example": 512
+          },
+          "baileysAuthState": {
+            "type": "number",
+            "example": 128
+          },
+          "lidMappings": {
+            "type": "number",
+            "example": 64
+          },
+          "pluginInstances": {
+            "type": "number",
+            "example": 12
+          },
+          "conversationMappings": {
+            "type": "number",
+            "example": 8
+          },
+          "ingressEvents": {
+            "type": "number",
+            "example": 40
+          },
+          "webhookDeliveryFailures": {
+            "type": "number",
+            "example": 0
+          },
+          "webhookOutboxEvents": {
+            "type": "number",
+            "example": 0
+          },
+          "integrationDeliveryFailures": {
+            "type": "number",
+            "example": 0
+          },
+          "statusUpdates": {
+            "type": "number",
+            "example": 5
+          },
+          "automationRules": {
+            "type": "number",
+            "example": 2
+          }
+        },
+        "required": [
+          "sessions",
+          "webhooks",
+          "messages",
+          "messageBatches",
+          "templates",
+          "baileysStoredMessages",
+          "baileysAuthState",
+          "lidMappings",
+          "pluginInstances",
+          "conversationMappings",
+          "ingressEvents",
+          "webhookDeliveryFailures",
+          "webhookOutboxEvents",
+          "integrationDeliveryFailures",
+          "statusUpdates",
+          "automationRules"
+        ]
+      },
+      "OmittedInlineMediaDto": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "number",
+            "description": "Message attachments replaced with an omitted marker.",
+            "example": 0
+          },
+          "messageBatches": {
+            "type": "number",
+            "description": "Batch attachments replaced with an omitted marker.",
+            "example": 0
+          }
+        },
+        "required": [
+          "messages",
+          "messageBatches"
+        ]
+      },
+      "InfraExportDataResponseDto": {
+        "type": "object",
+        "properties": {
+          "exportedAt": {
+            "type": "string",
+            "description": "ISO-8601 timestamp the export was taken.",
+            "example": "2026-08-07T12:00:00.000Z"
+          },
+          "dataDbType": {
+            "type": "string",
+            "description": "Driver the data came from.",
+            "example": "postgres"
+          },
+          "tables": {
+            "$ref": "#/components/schemas/MigrationTablesDto"
+          },
+          "counts": {
+            "description": "Row counts, so a truncated restore is detectable.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TableCountsDto"
+              }
+            ]
+          },
+          "skippedTables": {
+            "description": "Tables the running database does not have, which were skipped rather than exported. A restore from this file will not repopulate them.",
+            "example": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "omittedInlineMedia": {
+            "description": "Inline media dropped for exceeding the export budget. Non-zero means the archive is TRUNCATED — the rows are present but their attachments are replaced with an omitted marker.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OmittedInlineMediaDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "exportedAt",
+          "dataDbType",
+          "tables",
+          "counts",
+          "skippedTables",
+          "omittedInlineMedia"
+        ]
+      },
+      "ImportDataDto": {
+        "type": "object",
+        "properties": {
+          "tables": {
+            "type": "object",
+            "description": "Every one of the 14 migration tables is emptied before the restore runs, so a key omitted here is restored EMPTY rather than left untouched. Post the whole GET /api/infra/export-data payload, not a hand-built subset.",
+            "properties": {
+              "sessions": {
+                "type": "array"
+              },
+              "webhooks": {
+                "type": "array"
+              },
+              "messages": {
+                "type": "array"
+              },
+              "messageBatches": {
+                "type": "array"
+              },
+              "templates": {
+                "type": "array"
+              },
+              "baileysStoredMessages": {
+                "type": "array"
+              },
+              "baileysAuthState": {
+                "type": "array"
+              },
+              "lidMappings": {
+                "type": "array"
+              },
+              "pluginInstances": {
+                "type": "array"
+              },
+              "conversationMappings": {
+                "type": "array"
+              },
+              "ingressEvents": {
+                "type": "array"
+              },
+              "webhookDeliveryFailures": {
+                "type": "array"
+              },
+              "webhookOutboxEvents": {
+                "type": "array"
+              },
+              "integrationDeliveryFailures": {
+                "type": "array"
+              },
+              "statusUpdates": {
+                "type": "array"
+              },
+              "automationRules": {
+                "type": "array"
+              }
+            }
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Allow the replace to proceed even while engines are running for sessions the backup does not contain (they keep running until restart; see restartRequired). Prefer stopOrphans, which closes that window inside this request instead."
+          },
+          "stopOrphans": {
+            "type": "boolean",
+            "description": "Stop the running engines for sessions the backup does not contain, inside this request and before the replace runs. Supersedes force for the orphan case: with stopOrphans the engines no longer need a process restart to reconcile, so restartRequired stays false on the success path."
+          },
+          "exportedAt": {
+            "type": "string",
+            "description": "Ignored. Present so the export file posts back unmodified."
+          },
+          "dataDbType": {
+            "type": "string",
+            "description": "Ignored. Present so the export file posts back unmodified."
+          },
+          "counts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "Ignored. Present so the export file posts back unmodified."
+          },
+          "skippedTables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ignored. Present so the export file posts back unmodified."
+          },
+          "omittedInlineMedia": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "Ignored. Present so the export file posts back unmodified."
+          }
+        },
+        "required": [
+          "tables"
+        ]
+      },
+      "InfraImportDataResponseDto": {
+        "type": "object",
+        "properties": {
+          "imported": {
+            "type": "boolean",
+            "example": true
+          },
+          "counts": {
+            "description": "Rows written per table.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TableCountsDto"
+              }
+            ]
+          },
+          "warnings": {
+            "description": "Problems that did not stop the import.",
+            "example": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notices": {
+            "description": "Informational messages about what the import did.",
+            "example": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "restartRequired": {
+            "type": "boolean",
+            "description": "Whether the process must restart before the imported state is live.",
+            "example": true
+          },
+          "orphanedEngines": {
+            "description": "Sessions running here that the imported set does not contain — they were about to be deleted.",
+            "example": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stoppedOrphanEngines": {
+            "description": "Of those, the ones successfully stopped.",
+            "example": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "failedOrphanEngines": {
+            "description": "Of those, the ones that could not be stopped.",
+            "example": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "imported",
+          "counts",
+          "warnings",
+          "notices",
+          "restartRequired",
+          "orphanedEngines",
+          "stoppedOrphanEngines",
+          "failedOrphanEngines"
+        ]
+      },
+      "StorageFileCountResponseDto": {
+        "type": "object",
+        "properties": {
+          "storageType": {
+            "type": "string",
+            "enum": [
+              "local",
+              "s3"
+            ],
+            "example": "local"
+          },
+          "count": {
+            "type": "number",
+            "description": "Number of stored objects.",
+            "example": 128
+          },
+          "sizeBytes": {
+            "type": "number",
+            "description": "Total size in bytes.",
+            "example": 10485760
+          },
+          "sizeMB": {
+            "type": "string",
+            "description": "The same size in MB, pre-rendered to two decimals.",
+            "example": "10.00"
+          }
+        },
+        "required": [
+          "storageType",
+          "count",
+          "sizeBytes",
+          "sizeMB"
+        ]
+      },
+      "StorageExportResponseDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "Storage archive created."
+          },
+          "download": {
+            "type": "string",
+            "description": "Path to download the archive from.",
+            "example": "/api/infra/storage/download/xyz.tar"
+          }
+        },
+        "required": [
+          "message",
+          "download"
+        ]
+      },
+      "ImportStorageDto": {
+        "type": "object",
+        "properties": {
+          "filePath": {
+            "type": "string",
+            "description": "Path to the tar.gz file to import (must be inside the data directory)"
+          }
+        },
+        "required": [
+          "filePath"
+        ]
+      },
+      "StorageImportResponseDto": {
+        "type": "object",
+        "properties": {
+          "imported": {
+            "type": "boolean",
+            "example": true
+          },
+          "count": {
+            "type": "number",
+            "description": "Objects written.",
+            "example": 128
+          },
+          "storageType": {
+            "type": "string",
+            "enum": [
+              "local",
+              "s3"
+            ],
+            "example": "local"
+          }
+        },
+        "required": [
+          "imported",
+          "count",
+          "storageType"
         ]
       }
     }

@@ -30,7 +30,10 @@ export interface FeatureFlags {
  */
 export function computeFeatureFlags(env: NodeJS.ProcessEnv = process.env): FeatureFlags {
   return {
-    autoStartSessions: env.AUTO_START_SESSIONS === 'true',
+    // The api role NEVER hosts engines, whatever the flag says: boot auto-start and the takeover
+    // sweep are the two spontaneous engine-launch paths, and both consult this flag. Forcing it off
+    // for ROLE=api is what makes that role structurally engine-free rather than merely configured so.
+    autoStartSessions: env.AUTO_START_SESSIONS === 'true' && env.ROLE !== 'api',
     storeEphemeralMessages: env.STORE_EPHEMERAL_MESSAGES !== 'false',
     resolveLidToPhone: env.RESOLVE_LID_TO_PHONE === 'true',
     simulateTyping: env.SIMULATE_TYPING !== 'false',

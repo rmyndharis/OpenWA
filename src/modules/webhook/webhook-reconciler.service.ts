@@ -49,11 +49,12 @@ export interface WebhookReconcileStats {
  * Mirrors IngressReconcilerService on the inbound side: an unref'd interval started on module init,
  * an overlap guard so a slow pass never stacks, a bounded batch, and a per-row replay budget.
  *
- * The sweep does NOT claim a row, so two nodes running against one database can both replay the
- * same delivery. That is deliberate and matches the inbound reconciler: the replay carries the
- * stored idempotency key, which is exactly the header a receiver dedups on, so the cost of the
- * race is a duplicate the contract already tells consumers to expect. Claiming would trade that
- * for a lock whose holder can die mid-flight.
+ * The sweep CLAIMS each row before replaying it — an optimistic CAS on the observed attempts count
+ * inside countAttempt(), not a lock — so N nodes sweeping one database replay each stranded row
+ * once per pass instead of N times. There is no held lock to die with: a claimer that crashes
+ * mid-flight has merely spent one attempt, and the row (still 'pending') is claimed again next
+ * pass. Delivery stays at-least-once end to end, and the replay still carries the stored
+ * idempotency key — the header receivers dedup on — for every duplicate that remains possible.
  */
 @Injectable()
 export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
@@ -108,7 +109,12 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
           stats.skipped++;
           continue;
         }
-        await this.outbox.countAttempt(row.id, row.attempts);
+        // The attempt count doubles as the row claim (a CAS on the observed attempts): when several
+        // nodes sweep one database, exactly one wins each row and the rest skip it.
+        if (!(await this.outbox.countAttempt(row.id, row.attempts))) {
+          stats.skipped++;
+          continue;
+        }
         try {
           await this.delivery.redeliver(webhook, row.sessionId, row.event, row.idempotencyKey, row.payload);
           await this.outbox.close(row.webhookId, row.idempotencyKey, 'dispatched');

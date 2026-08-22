@@ -9,6 +9,7 @@ import { WhatsAppWebJsPlugin } from './builtin/whatsapp-web-js';
 import { BaileysPlugin } from './builtin/baileys';
 import { createLogger } from '../common/services/logger.service';
 import { BaileysMessageStoreService } from './adapters/baileys-message-store.service';
+import { BaileysAuthStateService } from './adapters/baileys-auth-state.service';
 import { LidMappingStoreService } from './identity/lid-mapping-store.service';
 import { isSafeSessionName } from '../common/utils/path-safety';
 import { ensurePrivateDir } from '../common/utils/private-dir.util';
@@ -32,6 +33,7 @@ export class EngineFactory implements OnModuleInit {
     private readonly pluginLoader: PluginLoaderService,
     private readonly baileysMessageStore: BaileysMessageStoreService,
     private readonly lidMappingStore: LidMappingStoreService,
+    private readonly baileysAuthState: BaileysAuthStateService,
   ) {
     this.engineType = this.configService.get<string>('engine.type') ?? 'whatsapp-web.js';
   }
@@ -75,7 +77,7 @@ export class EngineFactory implements OnModuleInit {
     };
     this.pluginLoader.registerBuiltInPlugin(
       baileysManifest,
-      new BaileysPlugin(this.baileysMessageStore, engineConfig, this.lidMappingStore),
+      new BaileysPlugin(this.baileysMessageStore, engineConfig, this.lidMappingStore, this.baileysAuthState),
       engineConfig,
     );
 
@@ -181,6 +183,18 @@ export class EngineFactory implements OnModuleInit {
           error: error instanceof Error ? error.message : String(error),
         });
       }
+    }
+    // The database auth-state rows are keyed by the same session NAME as the dirs above; a deleted
+    // session must not leave portable credentials behind on any backend.
+    try {
+      await this.baileysAuthState.clear(sessionName);
+    } catch (error) {
+      this.logger.warn('Failed to purge database auth state', {
+        action: 'engine_purge_failed',
+        engine: 'baileys',
+        sessionName,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

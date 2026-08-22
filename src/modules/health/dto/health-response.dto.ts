@@ -25,6 +25,32 @@ export class LivenessResponseDto {
   status!: string;
 }
 
+export class SessionsHealthResponseDto {
+  @ApiProperty({ description: 'Always `ok`; the numbers carry the signal, not the status.', example: 'ok' })
+  status!: string;
+
+  @ApiProperty({ description: 'This node’s ownership identity (NODE_ID, defaulting to the hostname).' })
+  nodeId!: string;
+
+  @ApiProperty({
+    description:
+      'True once the node is draining (shutdown or POST /infra/drain): readiness is 503 and no new sessions start here.',
+    example: false,
+  })
+  draining!: boolean;
+
+  @ApiProperty({ description: 'Engines currently live or initializing in this process.', example: 4 })
+  engines!: number;
+
+  @ApiProperty({
+    description:
+      'Session rows assigned to this node, by state. `assigned` is the total; warm-up progress is `ready` approaching `assigned`.',
+    example: { assigned: 5, ready: 4, connecting: 1, disconnected: 0, failed: 0 },
+    additionalProperties: { type: 'number' },
+  })
+  sessions!: { [state: string]: number };
+}
+
 export class ReadinessResponseDto {
   @ApiProperty({
     description: 'Only `ok` reaches a 200 — a failing dependency answers 503 with this same shape.',

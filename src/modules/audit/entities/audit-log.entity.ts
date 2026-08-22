@@ -66,6 +66,9 @@ export enum AuditAction {
   INFRA_DATA_IMPORTED = 'infra_data_imported',
   INFRA_STORAGE_EXPORTED = 'infra_storage_exported',
   INFRA_STORAGE_IMPORTED = 'infra_storage_imported',
+  // Node drain (ADMIN-only): the node stopped hosting sessions and left its leases to lapse so
+  // peers adopt them — the graceful scale-down verb.
+  INFRA_NODE_DRAINED = 'infra_node_drained',
 }
 
 export enum AuditSeverity {

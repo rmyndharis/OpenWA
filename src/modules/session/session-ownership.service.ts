@@ -39,8 +39,12 @@ function leaseParam(at: Date): string | Date {
 export class SessionOwnershipService {
   private readonly logger = createLogger('SessionOwnershipService');
   private heartbeat?: ReturnType<typeof setInterval>;
-  /** Sessions this process believes it owns, so the heartbeat knows what to renew. */
-  private readonly owned = new Set<string>();
+  /**
+   * Sessions this process believes it owns, mapped to the lease GENERATION its claim wrote — the
+   * fencing token. The heartbeat renews the keys; the generation is what tells this incarnation's
+   * writes apart from a previous incarnation of the same nodeId (see Session.leaseGeneration).
+   */
+  private readonly owned = new Map<string, number>();
   /** Notified when a renewal proves this process no longer holds sessions it thought it did. */
   private onLeaseLost?: (sessionIds: string[]) => Promise<void> | void;
 
@@ -77,6 +81,25 @@ export class SessionOwnershipService {
 
   private get leaseTtlMs(): number {
     return this.configService?.get<number>('session.leaseTtlMs') ?? 60_000;
+  }
+
+  /**
+   * On Postgres, lease math runs on the DATABASE clock (NOW()) instead of each node's wall clock.
+   * Multiple nodes only ever share lease state through a shared Postgres, so its clock is the one
+   * time authority they all agree on — with node clocks, a skew larger than the TTL made healthy
+   * peers steal each other's sessions, and nothing in the logs said why. SQLite keeps wall-clock
+   * timestamps: it is single-node by construction, where skew-with-itself cannot happen (and its
+   * ISO-string date storage would not compare correctly against datetime('now') anyway).
+   */
+  private get usesDbClock(): boolean {
+    // Optional-chained: direct-construction specs hand in a bare mock repository with no manager,
+    // and "unknown dialect" must mean wall-clock (the historic behavior), not a crash.
+    return this.sessions.manager?.connection?.options?.type === 'postgres';
+  }
+
+  /** Raw SQL for "now + lease TTL" on the database clock. Postgres only — see {@link usesDbClock}. */
+  private dbLeaseExpiry(): string {
+    return `NOW() + ${Math.floor(this.leaseTtlMs)} * interval '1 millisecond'`;
   }
 
   private get heartbeatMs(): number {
@@ -118,22 +141,52 @@ export class SessionOwnershipService {
       .set({
         nodeId: this.nodeId,
         claimedAt: now,
-        leaseExpiresAt: new Date(now.getTime() + this.leaseTtlMs),
+        // DB-clock expiry on Postgres (see usesDbClock); the raw expression bypasses the column
+        // transformer, which is correct there — the column is a real timestamp on that dialect.
+        leaseExpiresAt: this.usesDbClock
+          ? (): string => this.dbLeaseExpiry()
+          : new Date(now.getTime() + this.leaseTtlMs),
         nodeUrl: this.nodeUrl || null,
+        // Fencing token: every successful claim is a NEW ownership epoch, atomically.
+        leaseGeneration: () => '"leaseGeneration" + 1',
       })
       .where('id = :id', { id: sessionId })
       // Without leaseParam this clause would silently never match, so an expired claim would never
       // be taken over — stranding every session a crashed process was holding.
-      .andWhere('("nodeId" IS NULL OR "nodeId" = :me OR "leaseExpiresAt" < :now)', {
-        me: this.nodeId,
-        now: leaseParam(now),
-      })
+      .andWhere(
+        this.usesDbClock
+          ? '("nodeId" IS NULL OR "nodeId" = :me OR "leaseExpiresAt" < NOW())'
+          : '("nodeId" IS NULL OR "nodeId" = :me OR "leaseExpiresAt" < :now)',
+        { me: this.nodeId, now: leaseParam(now) },
+      )
       .execute();
 
     const claimed = (result.affected ?? 0) > 0;
-    if (claimed) this.owned.add(sessionId);
-    else this.logger.warn('Session is held by another node', { sessionId, nodeId: this.nodeId });
+    if (claimed) {
+      // Read the generation the UPDATE just wrote. A racing claim between the two statements can
+      // only make the stored value HIGHER than ours, in which case our later generation-conditional
+      // writes match nothing — the safe direction (we treat it as loss), never silent corruption.
+      let generation = 0;
+      try {
+        const row = await this.sessions.findOne({ where: { id: sessionId }, select: { leaseGeneration: true } });
+        generation = row?.leaseGeneration ?? 0;
+      } catch {
+        // Direct-construction specs stub the repository without findOne; generation 0 preserves
+        // their pre-fencing behavior (renew's generation check compares against the same 0).
+      }
+      this.owned.set(sessionId, generation);
+    } else {
+      this.logger.warn('Session is held by another node', { sessionId, nodeId: this.nodeId });
+    }
     return claimed;
+  }
+
+  /**
+   * The fencing token this process's claim on `sessionId` wrote, or undefined when it holds none.
+   * Carry it in any write that must only land while this incarnation's ownership is current.
+   */
+  generationOf(sessionId: string): number | undefined {
+    return this.owned.get(sessionId);
   }
 
   /**
@@ -153,13 +206,33 @@ export class SessionOwnershipService {
       .update(Session)
       .set({ nodeId: null, claimedAt: null, leaseExpiresAt: null, nodeUrl: null })
       .where('id = :id', { id: sessionId })
-      .andWhere('("nodeId" = :me OR "leaseExpiresAt" < :now)', { me: this.nodeId, now: leaseParam(now) })
+      .andWhere(
+        this.usesDbClock
+          ? '("nodeId" = :me OR "leaseExpiresAt" < NOW())'
+          : '("nodeId" = :me OR "leaseExpiresAt" < :now)',
+        { me: this.nodeId, now: leaseParam(now) },
+      )
       .execute();
+  }
+
+  /**
+   * Forget every local claim WITHOUT clearing the rows — the deliberate-handoff counterpart of
+   * {@link releaseAll}. A released row (`nodeId` NULL) is invisible to the takeover sweep by design
+   * (see {@link lapsedHeldByOthers}), which is right for an operator stop and exactly wrong for a
+   * drain, where the whole point is that peers adopt the sessions. Leaving the rows to lapse on
+   * schedule is what makes them adoptable; forgetting them locally is what makes a later
+   * releaseAll() (the process's eventual shutdown) a no-op that cannot undo the handoff. Only
+   * meaningful after the heartbeat is stopped — a renewing lease never lapses.
+   */
+  abandonAll(): string[] {
+    const ids = [...this.owned.keys()];
+    this.owned.clear();
+    return ids;
   }
 
   /** Release everything this process holds, on the way down. */
   async releaseAll(): Promise<void> {
-    const ids = [...this.owned];
+    const ids = [...this.owned.keys()];
     this.owned.clear();
     if (ids.length === 0) return;
     await this.sessions
@@ -237,7 +310,7 @@ export class SessionOwnershipService {
    * moment to notice, because it is the only regular contact with the row.
    */
   async renew(): Promise<void> {
-    const held = [...this.owned];
+    const held = [...this.owned.keys()];
     if (held.length === 0) return;
 
     // Only claims that still cover something alive on this process are pushed out. A claim whose
@@ -253,12 +326,32 @@ export class SessionOwnershipService {
         await this.sessions
           .createQueryBuilder()
           .update(Session)
-          .set({ leaseExpiresAt: new Date(Date.now() + this.leaseTtlMs) })
+          .set({
+            leaseExpiresAt: this.usesDbClock
+              ? (): string => this.dbLeaseExpiry()
+              : new Date(Date.now() + this.leaseTtlMs),
+          })
           .where({ id: In(live), nodeId: this.nodeId })
           .execute();
       }
-      const rows = await this.sessions.find({ where: { id: In(held), nodeId: this.nodeId }, select: { id: true } });
-      kept = new Set(rows.map(row => row.id));
+      const rows = await this.sessions.find({
+        where: { id: In(held), nodeId: this.nodeId },
+        select: { id: true, leaseGeneration: true },
+      });
+      // Generation-fenced: a row that still names this nodeId but carries a NEWER generation belongs
+      // to another incarnation of this node (a restart claimed it while this process was paused).
+      // nodeId alone cannot see that difference; treating it as kept would leave two engines on one
+      // WhatsApp account — the exact split-brain the fencing token exists to close. Rows or local
+      // state without a generation (stubbed repositories in direct-construction specs) fall back to
+      // the pre-fencing nodeId-only answer rather than fabricating a loss.
+      kept = new Set(
+        rows
+          .filter(row => {
+            const ours = this.owned.get(row.id);
+            return row.leaseGeneration === undefined || ours === undefined || row.leaseGeneration === ours;
+          })
+          .map(row => row.id),
+      );
     } catch (error) {
       // A failed renewal is survivable — the next tick tries again, and the TTL is long enough to
       // absorb a transient database blip. Crucially it must NOT be read as having lost anything:
@@ -310,11 +403,43 @@ export class SessionOwnershipService {
    * recreate changes). These are the adoptable orphans the takeover sweep starts here; a
    * deliberately released session (stop, graceful shutdown) has `nodeId` NULL and is not one.
    */
+  /**
+   * Runnable sessions nobody holds: desiredState 'running', unclaimed, and in a state a fresh
+   * launch can serve (created/disconnected — never failed, which stays operator-owned, and never a
+   * state that implies a live engine). The worker claim loop's second feed (beside
+   * {@link lapsedHeldByOthers}): a session an api node marked runnable without hosting it — this is
+   * how ROLE=api QR pairing reaches a worker at all — a start whose launch failed after the claim
+   * was handed back, or a released row after its holder stopped renewing. Unlike crash adoption,
+   * no `phone` requirement: desiredState IS someone explicitly asking, so rendering a QR is the
+   * requested outcome, not a spurious one. Reconciliation, not event-chasing — whatever put the row
+   * in this state, the loop converges it back to running.
+   */
+  async unclaimedRunnable(now = new Date()): Promise<Session[]> {
+    return (
+      this.sessions
+        .createQueryBuilder('session')
+        // Unheld OR held on a lapsed lease — including a lapse under THIS node's own id (a previous
+        // incarnation's leftover), which neither lapsedHeldByOthers (excludes self) nor a bare
+        // nodeId-IS-NULL check can see: an unpaired runnable session stranded that way was in no
+        // feed at all. claim() re-verifies the same predicate atomically, so widening the scan
+        // cannot steal a live peer's session.
+        .where(
+          this.usesDbClock
+            ? '("nodeId" IS NULL OR "leaseExpiresAt" < NOW())'
+            : '("nodeId" IS NULL OR "leaseExpiresAt" < :now)',
+          { now: leaseParam(now) },
+        )
+        .andWhere(`"desiredState" = 'running'`)
+        .andWhere(`"status" IN ('created', 'disconnected')`)
+        .getMany()
+    );
+  }
+
   async lapsedHeldByOthers(now = new Date()): Promise<Session[]> {
     return this.sessions
       .createQueryBuilder('session')
       .where('"nodeId" IS NOT NULL AND "nodeId" <> :me', { me: this.nodeId })
-      .andWhere('"leaseExpiresAt" < :now', { now: leaseParam(now) })
+      .andWhere(this.usesDbClock ? '"leaseExpiresAt" < NOW()' : '"leaseExpiresAt" < :now', { now: leaseParam(now) })
       .getMany();
   }
 
@@ -337,7 +462,7 @@ export class SessionOwnershipService {
       .createQueryBuilder('session')
       .where('id = :id', { id: sessionId })
       .andWhere('"nodeId" IS NOT NULL AND "nodeId" <> :me', { me: this.nodeId })
-      .andWhere('"leaseExpiresAt" > :now', { now: leaseParam(now) })
+      .andWhere(this.usesDbClock ? '"leaseExpiresAt" > NOW()' : '"leaseExpiresAt" > :now', { now: leaseParam(now) })
       .getCount();
     return count > 0;
   }
@@ -347,14 +472,14 @@ export class SessionOwnershipService {
       .createQueryBuilder('session')
       .select('session.id', 'id')
       .where('"nodeId" IS NOT NULL AND "nodeId" <> :me', { me: this.nodeId })
-      .andWhere('"leaseExpiresAt" > :now', { now: leaseParam(now) })
+      .andWhere(this.usesDbClock ? '"leaseExpiresAt" > NOW()' : '"leaseExpiresAt" > :now', { now: leaseParam(now) })
       .getRawMany<{ id: string }>();
     return rows.map(row => row.id);
   }
 
   /** Test seam: what this process currently believes it holds. */
   ownedIds(): string[] {
-    return [...this.owned];
+    return [...this.owned.keys()];
   }
 
   /**

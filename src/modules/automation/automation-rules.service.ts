@@ -36,7 +36,14 @@ const MAX_MESSAGE_AGE_SECONDS = 300;
 export class AutomationRulesService {
   private readonly logger = createLogger('AutomationRulesService');
 
-  /** `${ruleId}:${chatId}` -> epoch ms until which the rule stays quiet in that chat. Per-process. */
+  /**
+   * `${ruleId}:${chatId}` -> epoch ms until which the rule stays quiet in that chat. Per-process —
+   * and that is CORRECT under multiple nodes, not an oversight: rules evaluate on the inbound
+   * dispatch path, which runs only on the node hosting the session's engine (the ownership lease
+   * pins a session to one node). The one loss is a takeover: cooldown state does not follow the
+   * session, so a rule may answer once more on the adopting node. Accepted — a rare duplicate
+   * auto-reply beats a Redis round-trip on every inbound message.
+   */
   private readonly cooldowns = new Map<string, number>();
 
   private messagePort?: PluginMessagePort;

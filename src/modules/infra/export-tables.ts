@@ -205,6 +205,13 @@ export const EXPORT_TABLES: AnyExportTable[] = [
   defineExportTable({ key: 'templates', table: 'templates', optional: true }),
   defineExportTable({ key: 'baileysStoredMessages', table: 'baileys_stored_messages', optional: true }),
 
+  // Database-backed Baileys auth state (BAILEYS_AUTH_STORE=database). Keyed by session NAME with
+  // no FK, so the import's sessions DELETE never clears it — export + re-insert, or restoring a
+  // backup into a fresh DB silently costs every database-mode session its pairing (a QR re-scan
+  // per session). These are live WhatsApp credentials: the archive must be treated as secret, the
+  // same standing rule the sessions table's own auth artifacts already impose on backups.
+  defineExportTable({ key: 'baileysAuthState', table: 'baileys_auth_state', optional: true }),
+
   // The persisted lid->phone resolution cache. Not a FK to sessions (provenance only), so the
   // import's `DELETE FROM sessions` never clears it — it must be exported + re-inserted explicitly
   // or a backup→restore into a fresh DB loses the whole cache (it self-heals, but lossily).

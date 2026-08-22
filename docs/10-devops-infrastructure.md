@@ -931,6 +931,9 @@ export class MetricsService {
 | `openwa_process_resident_memory_bytes`       | gauge     | —                                   | RSS                                                                                          |
 | `openwa_process_heap_used_bytes`             | gauge     | —                                   | V8 heap used                                                                                 |
 | `openwa_stats_available`                     | gauge     | —                                   | 1 when the database-derived series below could be read on this scrape, 0 when they could not |
+| `openwa_node_engines`                        | gauge     | —                                   | Engines currently live or initializing in this process                                       |
+| `openwa_node_sessions_assigned`              | gauge     | —                                   | Session rows assigned to this node by the ownership lease                                    |
+| `openwa_node_session_capacity`               | gauge     | —                                   | MAX_CONCURRENT_SESSIONS for this node; 0 means unlimited                                     |
 | `openwa_sessions_total`                      | gauge     | —                                   | Configured sessions                                                                          |
 | `openwa_sessions_active`                     | gauge     | —                                   | READY (active) sessions                                                                      |
 | `openwa_sessions`                            | gauge     | `status`                            | Session count per status                                                                     |

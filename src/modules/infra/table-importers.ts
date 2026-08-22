@@ -7,6 +7,7 @@ import type {
   MessageBatchRow,
   TemplateRow,
   BaileysStoredMessageRow,
+  BaileysAuthStateRow,
   LidMappingRow,
   PluginInstanceRow,
   ConversationMappingRow,
@@ -210,6 +211,16 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       bsm.serializedMessage,
       bsm.createdAt,
     ],
+  }),
+
+  // Import database-backed Baileys auth state (optional; keyed by session NAME, no FK)
+  defineTableImporter({
+    key: 'baileysAuthState',
+    label: 'baileys auth-state value',
+    sql: `INSERT INTO baileys_auth_state ("sessionName", "keyType", "keyId", "value", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5)`,
+    id: (row: BaileysAuthStateRow) => `${row.sessionName}/${row.keyType}/${row.keyId}`,
+    map: (row: BaileysAuthStateRow) => [row.sessionName, row.keyType, row.keyId, row.value, row.updatedAt],
   }),
 
   // Import lid mappings (optional; not a FK, restored as a standalone cache table)
@@ -418,6 +429,7 @@ const EXPECTED_TABLE_KEYS: ReadonlyArray<keyof MigrationTables> = [
   'messageBatches',
   'templates',
   'baileysStoredMessages',
+  'baileysAuthState',
   'lidMappings',
   'pluginInstances',
   'conversationMappings',

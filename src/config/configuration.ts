@@ -138,18 +138,30 @@ export default () => ({
     enabled: process.env.CACHE_ENABLED === 'true',
   },
 
-  // Main Database configuration (always SQLite for boot config)
+  // Main Database configuration (auth/audit). SQLite by default; MAIN_DATABASE_TYPE=postgres moves
+  // it to a shared server, which every multi-node deployment REQUIRES — with per-node SQLite files,
+  // each replica holds a different api_keys store and a request forwarded between nodes fails auth.
   database: {
-    type: 'sqlite' as const,
-    // SQLite file for the auth/audit DB. Overridable (e.g. e2e points it at a temp file) so tests
-    // never write api keys into the developer's ./data/main.sqlite.
-    database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
+    type: process.env.MAIN_DATABASE_TYPE === 'postgres' ? ('postgres' as const) : ('sqlite' as const),
+    // SQLite file for the auth/audit DB, or the Postgres DATABASE NAME in postgres mode (default
+    // 'openwa_main' there — deliberately distinct from the data DB so the two schemas never mix).
+    database:
+      process.env.MAIN_DATABASE_NAME ||
+      (process.env.MAIN_DATABASE_TYPE === 'postgres' ? 'openwa_main' : './data/main.sqlite'),
+    // Postgres connection details; each defaults to the data connection's DATABASE_* value so one
+    // server serves both without repeating credentials.
+    host: process.env.MAIN_DATABASE_HOST || process.env.DATABASE_HOST || 'localhost',
+    port: parseInt(process.env.MAIN_DATABASE_PORT || process.env.DATABASE_PORT || '5432', 10),
+    username: process.env.MAIN_DATABASE_USERNAME || process.env.DATABASE_USERNAME || 'openwa',
+    password: process.env.MAIN_DATABASE_PASSWORD || process.env.DATABASE_PASSWORD || '',
     // Schema management for the auth/audit DB. Default ON (zero-config first boot).
     // Set MAIN_DATABASE_SYNCHRONIZE=false to manage schema via the main-owned migrations
     // instead (migrationsRun then creates api_keys/audit_logs). When disabled, run the
     // main-connection migrations explicitly with `npm run migration:run:main` (or
     // `migration:run:main:prod` for the compiled image) — the plain `migration:run` only
-    // manages the data connection.
+    // manages the data connection. Postgres mode ignores this and ALWAYS uses the migrations
+    // under the same cross-replica advisory lock the data connection boots with — synchronize
+    // racing on N replicas is exactly the failure mode that lock exists to prevent.
     synchronize: process.env.MAIN_DATABASE_SYNCHRONIZE !== 'false',
     logging: process.env.DATABASE_LOGGING === 'true',
   },
@@ -211,6 +223,12 @@ export default () => ({
     // gets its own subdirectory. Read by the Baileys plugin from the opaque engine config blob.
     baileys: {
       authDir: process.env.BAILEYS_AUTH_DIR || './data/baileys',
+      // Where auth state (credentials + Signal keys) lives. 'file' (default) keeps the historic
+      // multi-file directory. 'database' stores it on the shared data connection, which makes the
+      // session PORTABLE: any node sharing that database can start it — the prerequisite for
+      // horizontal scaling and takeover without re-pairing. First database-mode start imports an
+      // existing multi-file directory automatically, so flipping this never forces a re-scan.
+      authStore: process.env.BAILEYS_AUTH_STORE === 'database' ? 'database' : 'file',
     },
   },
 
@@ -218,6 +236,14 @@ export default () => ({
     // 0 = unlimited/backwards-compatible. Set to a positive integer to cap concurrently running or
     // initializing WhatsApp engines, which protects memory/Chromium-constrained deployments.
     maxConcurrent: parseInt(process.env.MAX_CONCURRENT_SESSIONS || '0', 10),
+    // How many boot-restore launches may be IN FLIGHT at once (default 3). Restore used to be
+    // strictly sequential, so with a >= 60s init deadline per engine a node hosting N sessions took
+    // up to N minutes to come back. Launch STARTS remain spaced by the restore throttle regardless
+    // of this value — the concurrency parallelizes the long init tails, not the boot spikes.
+    restoreConcurrency: (() => {
+      const n = parseInt(process.env.SESSION_RESTORE_CONCURRENCY ?? '', 10);
+      return Number.isFinite(n) && n > 0 ? n : 3;
+    })(),
   },
 
   // Webhook configuration
@@ -404,6 +430,14 @@ export default () => ({
     })(),
   },
 
+  // Which plane this process serves. 'all' (default) is the historic single-container behavior.
+  // 'worker' hosts engines and answers proxied session-scoped calls, but serves no dashboard, MCP,
+  // infra-config or Docker orchestration. 'api' is the stateless front door: full REST/dashboard,
+  // never constructs an engine — start() records desired state and a worker's claim loop launches
+  // it (workers must set NODE_URL so the proxy can route session traffic to them).
+  role: (['api', 'worker', 'all'].includes(process.env.ROLE ?? '') ? process.env.ROLE : 'all') as
+    'api' | 'worker' | 'all',
+
   // Session ownership across processes. A session's engine runs in exactly one process; these
   // record which, so a second process booting beside a live one does not disturb its sessions.
   session: {
@@ -502,6 +536,10 @@ export default () => ({
   storage: {
     type: process.env.STORAGE_TYPE || 'local',
     localPath: process.env.STORAGE_LOCAL_PATH || './data/media',
+    // STORAGE_TYPE=s3 only: fail writes loudly when S3 is unreachable instead of silently landing
+    // them in the pod-local fallback dir. Mandatory in multi-pod deployments — the silent fallback
+    // shards media invisibly across pods. Default false preserves single-node behavior.
+    strict: process.env.STORAGE_STRICT === 'true',
     s3: {
       bucket: process.env.S3_BUCKET,
       region: process.env.S3_REGION,

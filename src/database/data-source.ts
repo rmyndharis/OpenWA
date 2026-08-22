@@ -74,6 +74,7 @@ export function buildPostgresDataSourceOptions(env: NodeJS.ProcessEnv = process.
     database: env.DATABASE_NAME || 'openwa',
     entities: dataEntities,
     migrations: dataMigrations,
+    useUTC: true,
     synchronize: false, // Never auto-sync in production
     logging: env.DATABASE_LOGGING === 'true',
     ssl:

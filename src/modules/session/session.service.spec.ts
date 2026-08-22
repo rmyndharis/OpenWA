@@ -5890,6 +5890,39 @@ describe('SessionService', () => {
       }
     });
 
+    // Restore is bounded-parallel: the >= 60s init deadlines ride out together instead of
+    // serializing, while launch STARTS stay AUTOSTART_THROTTLE_MS apart. The second launch must be
+    // admitted while the first is still unresolved — the old sequential loop could never do that,
+    // and regressing to it makes node warm-up scale linearly with session count again.
+    // Real timers: the pacing sleep is node:timers/promises, which jest's fake timers do not reach
+    // (the import binds the native promise timer before any test installs fakes), so this test
+    // genuinely waits out one throttle (~2s).
+    it('overlaps launches up to the restore concurrency instead of serializing them', async () => {
+      process.env.AUTO_START_SESSIONS = 'true';
+      (repository.find as jest.Mock).mockResolvedValue([
+        { id: 'a', name: 'A' },
+        { id: 'b', name: 'B' },
+      ]);
+      const resolvers: Array<() => void> = [];
+      let launches = 0;
+      let secondLaunch: () => void = () => undefined;
+      const bothLaunched = new Promise<void>(resolve => (secondLaunch = resolve));
+      const startSpy = jest.spyOn(service, 'start').mockImplementation(() => {
+        launches++;
+        if (launches === 2) secondLaunch();
+        return new Promise<never>(resolve => resolvers.push(() => resolve(undefined as never)));
+      });
+
+      service.onApplicationBootstrap();
+      // Resolves only when the second launch STARTS — and no launch has been released, so at that
+      // instant two launches are provably in flight together.
+      await bothLaunched;
+
+      expect(startSpy).toHaveBeenCalledTimes(2);
+      resolvers.forEach(release => release());
+      await autoStartRun();
+    }, 10_000);
+
     // Nest binds the HTTP listener only after every bootstrap hook settles, and a launch is a
     // Chromium start bounded by resolveEngineInitTimeoutMs (>= 60s) with a 2s throttle between
     // sessions. Awaiting the loop here kept the port CLOSED for that whole time, so every liveness

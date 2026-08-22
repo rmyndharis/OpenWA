@@ -11,6 +11,7 @@ import { EngineEventCallbacks, EngineStatus } from '../interfaces/whatsapp-engin
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { type createLogger } from '../../common/services/logger.service';
 import { BaileysAdapterConfig } from '../types/baileys.types';
+import { useDatabaseAuthState } from './baileys-db-auth-state';
 import { createBaileysLogger } from './baileys-logger';
 import { BaileysVersionResolver } from './baileys-version-resolver';
 import type { BaileysEvents } from './baileys-events';
@@ -188,7 +189,17 @@ export class BaileysLifecycle {
       this.host.logger.log(`Using proxy: ${protocol}//${host}`, { sessionId: this.host.config.sessionId });
     }
     const b = await this.loadLib();
-    const { state, saveCreds } = await b.useMultiFileAuthState(this.host.authPath);
+    // Auth-state backend: the database store makes the session portable across nodes (any worker
+    // sharing the data DB can start it), with a one-shot import of the multi-file directory so
+    // flipping BAILEYS_AUTH_STORE never forces a re-pair. File mode stays byte-for-byte the old path.
+    const authStore = this.host.config.authStateStore;
+    const { state, saveCreds } =
+      this.host.config.authStore === 'database' && authStore
+        ? await useDatabaseAuthState(b, authStore, this.host.config.sessionId, {
+            importFromDir: this.host.authPath,
+            logger: this.host.logger,
+          })
+        : await b.useMultiFileAuthState(this.host.authPath);
     const version = await this.versionResolver.resolve(b, { dispatcher: proxyAgent });
     // BaileysLogger matches ILogger exactly; cast needed because the module resolves the type
     // through a deep import path that TypeScript does not auto-unify here. Shared by the key
@@ -705,16 +716,20 @@ export class BaileysLifecycle {
   }
 
   /**
-   * Delete this session's on-disk multi-file auth state (`authDir/sessionId`). Required after a terminal
-   * logout: Baileys would otherwise reload the now-invalid creds on the next connect() and retry them
-   * instead of emitting a fresh QR, leaving re-linking stuck. `force` makes a missing dir a no-op.
-   * Logs the outcome and RETHROWS on failure: completion of an engine-native unlink (logout 200) AND
-   * the loggedOut close path both require cleanup, so a removal failure must propagate (the operation
-   * is incomplete), not be swallowed.
+   * Delete this session's auth state — the on-disk multi-file dir (`authDir/sessionId`) AND, when a
+   * database store is wired, its rows. Required after a terminal logout: Baileys would otherwise
+   * reload the now-invalid creds on the next connect() and retry them instead of emitting a fresh
+   * QR, leaving re-linking stuck. Both backends are always cleared regardless of the active mode —
+   * a session that once imported from disk must not resurrect stale creds from the other backend
+   * after a mode flip. `force` makes a missing dir a no-op. Logs the outcome and RETHROWS on
+   * failure: completion of an engine-native unlink (logout 200) AND the loggedOut close path both
+   * require cleanup, so a removal failure must propagate (the operation is incomplete), not be
+   * swallowed.
    */
   private async clearAuthState(): Promise<void> {
     try {
       await fs.promises.rm(this.host.authPath, { recursive: true, force: true });
+      await this.host.config.authStateStore?.clear(this.host.config.sessionId);
       this.host.logger.log('Cleared Baileys auth state', { authPath: this.host.authPath });
     } catch (err) {
       this.host.logger.warn('Failed to clear Baileys auth state', {

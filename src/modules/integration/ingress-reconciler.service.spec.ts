@@ -225,8 +225,10 @@ describe('IngressReconcilerService.sweep', () => {
     await service.sweep(OPTS);
 
     expect(saveSpy).toHaveBeenCalledTimes(1);
-    expect(updateSpy).toHaveBeenCalledTimes(1);
-    expect(saveSpy.mock.invocationCallOrder[0]).toBeLessThan(updateSpy.mock.invocationCallOrder[0]);
+    // Two updates now: the claim (CAS on the observed attempts, before dispatch) and the terminal
+    // mark. The DLQ save must land before the TERMINAL mark — the claim rightly precedes both.
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    expect(saveSpy.mock.invocationCallOrder[0]).toBeLessThan(updateSpy.mock.invocationCallOrder[1]);
     saveSpy.mockRestore();
     updateSpy.mockRestore();
   });
@@ -338,9 +340,11 @@ describe('IngressReconcilerService.sweep', () => {
   it('keeps the batch alive when one row throws during bookkeeping', async () => {
     await insertEvent();
     await insertEvent();
-    // First row's state update blows up; the second row must still be replayed.
+    // First row's POST-dispatch retire blows up (its claim — the first update — succeeds); the
+    // second row must still be replayed.
     const updateSpy = jest
       .spyOn(events, 'update')
+      .mockResolvedValueOnce({ affected: 1, raw: {}, generatedMaps: [] })
       .mockRejectedValueOnce(new Error('db hiccup'))
       .mockResolvedValue({ affected: 1, raw: {}, generatedMaps: [] });
 

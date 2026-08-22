@@ -8,6 +8,7 @@ import { ShutdownService } from '../../common/services/shutdown.service';
 import { AuthService } from '../auth/auth.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
+import { SessionService } from '../session/session.service';
 
 describe('HealthController', () => {
   let controller: HealthController;
@@ -16,6 +17,8 @@ describe('HealthController', () => {
   const isShuttingDown = jest.fn();
   const validateApiKey = jest.fn();
   const logWarn = jest.fn().mockResolvedValue(null);
+  // /health/sessions delegates capacity math to the session capability service.
+  const nodeSessionsHealth = jest.fn();
 
   const reqWith = (headers: Record<string, string> = {}): Request =>
     ({ headers, socket: { remoteAddress: '127.0.0.1' } }) as unknown as Request;
@@ -34,6 +37,7 @@ describe('HealthController', () => {
         { provide: AuthService, useValue: { validateApiKey } },
         { provide: AuditService, useValue: { logWarn } },
         { provide: ConfigService, useValue: { get: () => undefined } },
+        { provide: SessionService, useValue: { nodeSessionsHealth } },
       ],
     }).compile();
 
@@ -163,6 +167,42 @@ describe('HealthController', () => {
       await expect(controller.readiness()).rejects.toBeInstanceOf(ServiceUnavailableException);
       expect(mainQuery).not.toHaveBeenCalled();
       expect(dataQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('sessionsHealth', () => {
+    it('reports the capability service snapshot with the draining flag layered on', async () => {
+      nodeSessionsHealth.mockResolvedValue({
+        nodeId: 'test-node',
+        engines: 4,
+        sessions: { assigned: 7, ready: 3, connecting: 2, actionRequired: 0, disconnected: 0, failed: 2 },
+      });
+
+      const result = await controller.sessionsHealth();
+
+      expect(result.status).toBe('ok');
+      expect(result.nodeId).toBe('test-node');
+      expect(result.draining).toBe(false);
+      expect(result.engines).toBe(4);
+      expect(result.sessions).toEqual({
+        assigned: 7,
+        ready: 3,
+        connecting: 2,
+        actionRequired: 0,
+        disconnected: 0,
+        failed: 2,
+      });
+    });
+
+    it('stays a 200 while draining and says so — capacity reporting must survive the drain window', async () => {
+      isShuttingDown.mockReturnValue(true);
+      nodeSessionsHealth.mockResolvedValue({ nodeId: 'test-node', engines: 0, sessions: { assigned: 0 } });
+
+      const result = await controller.sessionsHealth();
+
+      expect(result.draining).toBe(true);
+      expect(result.engines).toBe(0);
+      expect(result.sessions.assigned).toBe(0);
     });
   });
 });

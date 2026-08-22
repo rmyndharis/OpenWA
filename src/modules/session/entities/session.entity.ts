@@ -80,6 +80,27 @@ export class Session {
   @Column({ type: dateColumnType(), nullable: true, transformer: DateTransformer })
   leaseExpiresAt!: Date | null;
 
+  /**
+   * What the operator WANTS, independent of what currently runs: 'running' after a successful
+   * start, 'stopped' after stop/logout/force-kill. `status` is observed engine state; this is
+   * desired state — the difference is what lets a reconciliation loop (takeover sweep, worker
+   * claim loop) restart a session that should be up but is not, without re-running sessions an
+   * operator deliberately stopped. Also what makes a stop finally SURVIVE a process restart: boot
+   * auto-start used to relaunch every authenticated disconnected session regardless.
+   */
+  @Column({ type: 'varchar', length: 10, default: 'stopped' })
+  desiredState!: 'running' | 'stopped';
+
+  /**
+   * Fencing token: bumped by every successful claim. `nodeId` alone cannot tell two incarnations of
+   * the SAME node apart (the default id is the hostname, which a restart keeps), so a GC-paused or
+   * half-dead previous process could still renew and write as if it owned the session. Writes that
+   * carry the generation match only while the writer's claim is the CURRENT one — a zombie's
+   * conditional UPDATE matches zero rows, which is how it learns it lost.
+   */
+  @Column({ type: 'integer', default: 0 })
+  leaseGeneration!: number;
+
   @CreateDateColumn()
   createdAt!: Date;
 

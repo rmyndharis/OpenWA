@@ -33,6 +33,12 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'INBOUND_MEDIA_CONCURRENCY',
   // Database selection + connection details (#488)
   'DATABASE_TYPE',
+  // Main (auth/audit) DB backend + connection details — blank-forwarded by compose like DATABASE_*.
+  'MAIN_DATABASE_TYPE',
+  'MAIN_DATABASE_HOST',
+  'MAIN_DATABASE_PORT',
+  'MAIN_DATABASE_USERNAME',
+  'MAIN_DATABASE_PASSWORD',
   'DATABASE_HOST',
   'DATABASE_PORT',
   'DATABASE_USERNAME',
@@ -42,6 +48,8 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'POSTGRES_SCHEMA',
   // Storage selection + S3 details (#488)
   'STORAGE_TYPE',
+  // S3 strict mode + local path — blank-forwarded with the other storage keys.
+  'STORAGE_STRICT',
   'STORAGE_LOCAL_PATH',
   'S3_BUCKET',
   'S3_ENDPOINT',
@@ -81,6 +89,10 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'SESSION_LEASE_HEARTBEAT_MS',
   'SESSION_TAKEOVER_SWEEP_MS',
   'SESSION_PROXY_TIMEOUT_MS',
+  // Plane role + restore/auth-store knobs — blank-forwarded with the multi-node keys above.
+  'ROLE',
+  'SESSION_RESTORE_CONCURRENCY',
+  'BAILEYS_AUTH_STORE',
   // Autoreply rule cap, blank-forwarded like the knobs above so an operator who sets nothing does
   // not have an empty string shadow a value in .env / data/.env.generated.
   'AUTOMATION_MAX_PER_SESSION',

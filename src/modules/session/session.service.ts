@@ -25,6 +25,7 @@ import { PresenceStore, type ChatPresence } from './presence-store.service';
 import { SessionEngineLifecycle, resolveReconnectConfig } from './session-engine-lifecycle.service';
 import { SessionOwnershipService } from './session-ownership.service';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
+import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { isUniqueViolation } from '../../common/utils/db-errors';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { IWhatsAppEngine, ChatSummary, ChatState } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -66,8 +67,14 @@ function isTransientLaunchFailure(error: unknown): boolean {
   return /connection|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|terminating connection/i.test(error.message);
 }
 
-/** Pause between sequential auto-start launches so a burst of Chromium boots does not spike the host. */
+/** Minimum spacing between auto-start launch STARTS so a burst of Chromium boots does not spike the host. */
 export const AUTOSTART_THROTTLE_MS = 2_000;
+
+/** How many restore launches may be in flight at once. Fallback mirrors configuration.ts (default 3). */
+export function resolveRestoreConcurrency(configService?: ConfigService): number {
+  const configured = configService?.get<number>('sessions.restoreConcurrency');
+  return typeof configured === 'number' && Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 3;
+}
 
 /**
  * The session-record API: CRUD over the sessions table, aggregate stats, and the thin engine query
@@ -186,10 +193,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   /**
-   * Launch every previously authenticated session this node may claim, one at a time.
+   * Launch every previously authenticated session this node may claim, bounded-parallel.
    *
-   * Sequential with a throttle by design — these are Chromium launches — which is exactly why it
-   * cannot run inside the bootstrap hook. See onApplicationBootstrap.
+   * Two orthogonal bounds, because they answer two different failure modes:
+   * - Launch STARTS stay >= AUTOSTART_THROTTLE_MS apart across all lanes. A host spike is about
+   *   simultaneous Chromium boots, and the spacing also paces a failure storm where every launch
+   *   rejects within milliseconds.
+   * - At most `restoreConcurrency` launches are IN FLIGHT at once. The old strictly-sequential loop
+   *   serialized the >= 60s init deadlines too, so a node hosting N sessions took up to N minutes to
+   *   warm up; the deadlines are where the time went, and they parallelize safely.
+   * Unbounded duration is still why it cannot run inside the bootstrap hook. See onApplicationBootstrap.
    */
   private async autoStartSessions(): Promise<void> {
     // Restricted to sessions this node may claim. Without it every replica scans the same rows and
@@ -197,44 +210,138 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // duplicated work.
     const claimable = this.ownership?.claimableWhere() ?? [{}];
     const sessions = await this.sessionRepository.find({
-      where: claimable.map(clause => ({ ...clause, phone: Not(IsNull()), status: SessionStatus.DISCONNECTED })),
+      where: claimable.map(clause => ({
+        ...clause,
+        phone: Not(IsNull()),
+        status: SessionStatus.DISCONNECTED,
+        // Intent gate: a session an operator stopped stays stopped across restarts now. Before
+        // desiredState existed, every authenticated disconnected session was relaunched on boot.
+        desiredState: 'running' as const,
+      })),
     });
 
     if (sessions.length === 0) return;
 
+    const concurrency = resolveRestoreConcurrency(this.configService);
     this.logger.log(`Auto-starting ${sessions.length} previously authenticated session(s)`, {
       action: 'auto_start',
       count: sessions.length,
+      concurrency,
     });
 
-    for (let i = 0; i < sessions.length; i++) {
-      // A shutdown landing mid-run must not launch anything further: onModuleDestroy tears down what
-      // exists, and a browser launched after that point is never destroyed.
-      if (this.shuttingDown) {
-        this.logger.log(`Auto-start stopped at ${i} of ${sessions.length} session(s): shutting down`, {
-          action: 'auto_start_aborted',
-        });
-        return;
-      }
-      const session = sessions[i];
-      try {
-        await this.start(session.id);
-        this.logger.log(`Auto-started session: ${session.name}`, {
-          sessionId: session.id,
-          action: 'auto_start_success',
-        });
-      } catch (error: unknown) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        this.logger.error(`Auto-start failed for session: ${session.name}`, errorMessage, {
-          sessionId: session.id,
-          action: 'auto_start_failed',
-        });
-      }
-      // Throttle between sequential Chromium launches; no need to wait after the last one.
-      if (i < sessions.length - 1) {
-        await setTimeout(AUTOSTART_THROTTLE_MS);
-      }
+    const limiter = new ConcurrencyLimiter(concurrency);
+    // Next instant a launch may START (min-gap pacing shared by every lane). Monotonic under fake
+    // and real timers alike because it only ever moves forward from max(now, itself).
+    let nextLaunchAt = 0;
+    let skipped = 0;
+
+    await Promise.all(
+      sessions.map(session =>
+        limiter.run(async () => {
+          // A shutdown landing mid-run must not launch anything further: onModuleDestroy tears down
+          // what exists, and a browser launched after that point is never destroyed. Re-checked after
+          // the pacing sleep — the flag can land while this lane is parked.
+          if (this.shuttingDown) {
+            skipped++;
+            return;
+          }
+          const now = Date.now();
+          const wait = Math.max(0, nextLaunchAt - now);
+          nextLaunchAt = Math.max(now, nextLaunchAt) + AUTOSTART_THROTTLE_MS;
+          if (wait > 0) {
+            await setTimeout(wait);
+            if (this.shuttingDown) {
+              skipped++;
+              return;
+            }
+          }
+          try {
+            await this.start(session.id);
+            this.logger.log(`Auto-started session: ${session.name}`, {
+              sessionId: session.id,
+              action: 'auto_start_success',
+            });
+          } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            this.logger.error(`Auto-start failed for session: ${session.name}`, errorMessage, {
+              sessionId: session.id,
+              action: 'auto_start_failed',
+            });
+          }
+        }),
+      ),
+    );
+
+    if (skipped > 0) {
+      this.logger.log(`Auto-start skipped ${skipped} of ${sessions.length} session(s): shutting down`, {
+        action: 'auto_start_aborted',
+      });
     }
+  }
+
+  /** Engines currently live or initializing in this process — the takeover sweep's capacity input. */
+  activeEngineCount(): number {
+    return this.engines.activeIds().length;
+  }
+
+  /**
+   * Per-node capacity snapshot for /health/sessions: how many engines run here and what state this
+   * node's assigned session rows are in. Counts only — the route is as public as its health
+   * siblings, so nothing identifying (names/ids) leaves this method.
+   */
+  async nodeSessionsHealth(): Promise<{ nodeId: string; engines: number; sessions: { [state: string]: number } }> {
+    const nodeId = this.ownership?.nodeId ?? '';
+    const rows: Array<{ status: SessionStatus; count: string | number }> = await this.sessionRepository
+      .createQueryBuilder('session')
+      .select('session.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .where('"nodeId" = :me', { me: nodeId })
+      .groupBy('session.status')
+      .getRawMany();
+
+    const byStatus = new Map(rows.map(row => [row.status, Number(row.count)]));
+    const sum = (...statuses: SessionStatus[]): number =>
+      statuses.reduce((total, status) => total + (byStatus.get(status) ?? 0), 0);
+
+    return {
+      nodeId,
+      engines: this.engines.activeIds().length,
+      sessions: {
+        assigned: [...byStatus.values()].reduce((a, b) => a + b, 0),
+        ready: sum(SessionStatus.READY),
+        connecting: sum(SessionStatus.INITIALIZING, SessionStatus.QR_READY, SessionStatus.AUTHENTICATING),
+        actionRequired: sum(SessionStatus.ACTION_REQUIRED),
+        disconnected: sum(SessionStatus.DISCONNECTED),
+        failed: sum(SessionStatus.FAILED),
+      },
+    };
+  }
+
+  /**
+   * Stop hosting sessions WITHOUT stopping the process: tear down every local engine, stop renewing
+   * leases, and forget the claims while leaving the rows intact. The leases then lapse on schedule
+   * and a peer's takeover sweep adopts the sessions — release() would instead make them invisible
+   * to the sweep (nodeId NULL is "deliberately stopped", not "adoptable orphan"). One-way for this
+   * process: auto-start, the watchdog and the heartbeat stay off until it restarts. The caller owns
+   * flipping readiness (ShutdownService) so the LB pulls the node while in-flight calls finish.
+   */
+  async drain(): Promise<{ stoppedEngines: number; abandonedClaims: number; leaseTtlMs: number }> {
+    this.shuttingDown = true;
+    this.watchdog.stop();
+    this.ownership?.stopHeartbeat();
+    // A launch in flight registers an engine; let it settle so the teardown below accounts for it.
+    await this.autoStartRun;
+    const stoppedEngines = this.engines.activeIds().length;
+    await this.engineLifecycle.shutdown();
+    const abandonedClaims = this.ownership?.abandonAll().length ?? 0;
+    const leaseTtlMs = this.configService?.get<number>('session.leaseTtlMs') ?? 60_000;
+    this.logger.log(`Drained node: ${stoppedEngines} engine(s) stopped, ${abandonedClaims} claim(s) left to lapse`, {
+      action: 'node_drained',
+      stoppedEngines,
+      abandonedClaims,
+      leaseTtlMs,
+    });
+    return { stoppedEngines, abandonedClaims, leaseTtlMs };
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -436,6 +543,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   async start(id: string): Promise<Session> {
+    // The api role never launches an engine: it records intent and a worker's claim loop launches
+    // the session, with the proxy interceptor routing subsequent session-scoped calls (QR, sends)
+    // to the owner. 'all' and 'worker' keep the local-launch path below.
+    if ((this.configService?.get<string>('role') ?? 'all') === 'api') {
+      return this.startViaWorker(id);
+    }
     // Claimed before the engine is launched, never after: launching first and discovering the
     // session belongs elsewhere would already have opened a second connection to the account.
     if (this.ownership && !(await this.ownership.claim(id))) {
@@ -444,6 +557,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       await this.findOne(id);
       throw new ConflictException(`Session ${id} is running on another node`);
     }
+    // Intent is recorded at launch and survives a failed one on purpose: a session that should be
+    // running but is not is exactly what the reconciling sweep retries; only an explicit
+    // stop/logout/force-kill withdraws the intent. NOT awaited: the in-flight start reservation
+    // (controls.start's synchronous add) must stay visible before the first suspension point — the
+    // import pre-flight depends on that — and a failed intent write is self-healing (the next
+    // heartbeat-driven sweep pass or restart records it again).
+    void Promise.resolve(this.sessionRepository.update(id, { desiredState: 'running' })).catch((error: unknown) => {
+      this.logger.warn('Failed to record desiredState=running', {
+        sessionId: id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     try {
       return await this.startWithTransientRetry(id);
     } catch (error) {
@@ -453,6 +578,27 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // runs the engine, and releasing then would invite a peer to open a second connection.
       await this.releaseUnlessEngineActive(id);
       throw error;
+    }
+  }
+
+  /**
+   * The api role's start: record desiredState='running' and wait (bounded) for a worker's claim
+   * loop to pick the session up, so the caller usually gets back a row that already shows progress
+   * (nodeId set, status moving). Timing out is NOT an error — the intent is durable and a worker
+   * with headroom converges it on its next sweep tick; the caller polls GET /sessions/{id} the same
+   * way they already do for QR pairing. The wait is one takeover sweep interval plus slack, because
+   * that is the worst-case pickup latency for a healthy fleet.
+   */
+  private async startViaWorker(id: string): Promise<Session> {
+    await this.findOne(id); // 404 fence
+    await this.sessionRepository.update(id, { desiredState: 'running' });
+    const sweepMs = this.configService?.get<number>('session.takeoverSweepMs') ?? 30_000;
+    const deadline = Date.now() + sweepMs + 5_000;
+    for (;;) {
+      const row = await this.findOne(id);
+      if (row.nodeId != null) return row;
+      if (Date.now() >= deadline || this.shuttingDown) return row;
+      await setTimeout(500);
     }
   }
 
@@ -504,6 +650,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       this.discardStopMarkForMissingSession(id, error);
       throw error;
     }
+    // Intent withdrawn only on the success path: the reconciling sweep must not relaunch a session
+    // the operator just stopped, and the foreign-node 409 above must not rewrite a peer's intent.
+    await this.sessionRepository.update(id, { desiredState: 'stopped' });
     // Handed back on the way out so a peer can pick it up immediately rather than waiting for the
     // lease to lapse. Stop is the deliberate end of this process's ownership — but a start() that
     // began before this stop and is still mid-launch owns the claim now, so the same
@@ -519,6 +668,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     try {
       const session = await this.engineLifecycle.logout(id);
       // Torn down locally on the 200 path — hand the claim back the way stop() does.
+      await this.sessionRepository.update(id, { desiredState: 'stopped' });
       await this.releaseUnlessEngineActive(id);
       return session;
     } catch (error) {
@@ -532,6 +682,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   async forceKill(id: string): Promise<Session> {
     try {
       const session = await this.engineLifecycle.forceKill(id);
+      await this.sessionRepository.update(id, { desiredState: 'stopped' });
       await this.releaseUnlessEngineActive(id);
       return session;
     } catch (error) {

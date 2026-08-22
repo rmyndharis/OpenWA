@@ -6,7 +6,7 @@
 import { PluginContext, PluginType, IEnginePlugin } from '../../../core/plugins';
 import { IWhatsAppEngine } from '../../interfaces/whatsapp-engine.interface';
 import { BaileysAdapter } from '../../adapters/baileys.adapter';
-import { BaileysMessageStore } from '../../types/baileys.types';
+import { BaileysAuthStateStore, BaileysMessageStore } from '../../types/baileys.types';
 import { LidMappingStore } from '../../identity/lid-mapping-store.service';
 
 export class BaileysPlugin implements IEnginePlugin {
@@ -20,6 +20,7 @@ export class BaileysPlugin implements IEnginePlugin {
     private readonly messageStore?: BaileysMessageStore,
     private readonly registeredConfig?: Record<string, unknown>,
     private readonly lidMappingStore?: LidMappingStore,
+    private readonly authStateStore?: BaileysAuthStateStore,
   ) {}
 
   onLoad(context: PluginContext): Promise<void> {
@@ -47,8 +48,13 @@ export class BaileysPlugin implements IEnginePlugin {
     // Baileys' own config namespace, read from the opaque per-engine blob the factory supplies via
     // context.config (the `engine` sub-tree in configuration.ts). Per-call config carries only
     // engine-neutral fields (sessionId, proxy).
-    const engineConfig = (this.context?.config ?? this.registeredConfig ?? {}) as { baileys?: { authDir?: string } };
+    const engineConfig = (this.context?.config ?? this.registeredConfig ?? {}) as {
+      baileys?: { authDir?: string; authStore?: string };
+    };
     const authDir = engineConfig.baileys?.authDir ?? './data/baileys';
+    // 'database' makes the session portable (auth state rides the shared data DB); anything else —
+    // including a store that failed to wire — stays on the multi-file default.
+    const authStore = engineConfig.baileys?.authStore === 'database' && this.authStateStore ? 'database' : 'file';
 
     return new BaileysAdapter({
       sessionId,
@@ -58,6 +64,8 @@ export class BaileysPlugin implements IEnginePlugin {
       proxyType,
       messageStore: this.messageStore,
       lidMappingStore: this.lidMappingStore,
+      authStateStore: this.authStateStore,
+      authStore,
     });
   }
 

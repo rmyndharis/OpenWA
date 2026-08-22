@@ -21,6 +21,7 @@ import { EngineModule } from './engine/engine.module';
 import { LoggerModule } from './common/services/logger.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { InfraModule } from './modules/infra/infra.module';
+import { InfraNodeModule } from './modules/infra/infra-node.module';
 import { EventsModule } from './modules/events/events.module';
 import { ContactModule } from './modules/contact/contact.module';
 import { GroupModule } from './modules/group/group.module';
@@ -47,6 +48,12 @@ import { IntegrationModule } from './modules/integration/integration.module';
 import { SearchModule } from './modules/search/search.module';
 import { SqlitePermissionsBoot } from './database/sqlite-file-permissions';
 
+// Which plane this process serves (see configuration.ts `role`). Read from process.env because
+// this file computes its conditional module arrays at module-eval time, before ConfigModule loads.
+const ROLE = ['api', 'worker', 'all'].includes(process.env.ROLE ?? '') ? (process.env.ROLE as string) : 'all';
+const isWorkerRole = ROLE === 'worker';
+const isApiRole = ROLE === 'api';
+
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors
 const queueModules: Array<Type | DynamicModule> = [];
 if (process.env.QUEUE_ENABLED === 'true') {
@@ -61,14 +68,14 @@ if (process.env.QUEUE_ENABLED === 'true') {
 // is absent entirely — zero footprint, no DI wiring. Mirrors the queueModules/MCP conditional shape so
 // an opt-out deployment never even loads the search providers. Default is ON for zero-config first boot.
 const searchModules: Array<Type | DynamicModule> = [];
-if (process.env.SEARCH_ENABLED !== 'false') {
+if (process.env.SEARCH_ENABLED !== 'false' && !isWorkerRole) {
   searchModules.push(SearchModule);
 }
 
 // Only mount the MCP server if explicitly enabled to avoid startup cost and
 // the SDK import (which pulls in @modelcontextprotocol/sdk) in non-MCP deployments.
 const mcpModules: Array<Type | DynamicModule> = [];
-if (process.env.MCP_ENABLED === 'true') {
+if (process.env.MCP_ENABLED === 'true' && !isWorkerRole) {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { McpModule } = require('./modules/mcp/mcp.module') as typeof import('./modules/mcp/mcp.module');
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -91,7 +98,7 @@ export const dashboardServingEnabled = process.env.SERVE_DASHBOARD !== 'false';
 export const dashboardBuildPresent = fs.existsSync(path.join(DASHBOARD_DIST, 'index.html'));
 
 const serveStaticModules: Array<Type | DynamicModule> = [];
-if (dashboardServingEnabled && dashboardBuildPresent) {
+if (dashboardServingEnabled && dashboardBuildPresent && !isWorkerRole) {
   serveStaticModules.push(
     ServeStaticModule.forRoot({
       rootPath: DASHBOARD_DIST,
@@ -115,6 +122,20 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
   );
 }
 
+// InfraModule is the operator/config surface (dashboard backplane, Docker orchestration, data
+// import/export, .env.generated writer) — control-plane concerns, absent on workers. The node-level
+// drain verb lives in its own InfraNodeModule below so EVERY role keeps it: draining is exactly a
+// worker operation. TakeoverModule is the engine-adopting claim loop — engine-hosting roles only;
+// the api role must never launch an engine (its auto-start flag is also forced off in
+// feature-flags.ts, so this exclusion is belt AND braces).
+const roleModules: Array<Type | DynamicModule> = [];
+if (!isWorkerRole) {
+  roleModules.push(InfraModule);
+}
+if (!isApiRole) {
+  roleModules.push(TakeoverModule);
+}
+
 @Module({
   imports: [
     // Configuration
@@ -124,20 +145,18 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
       validate: validateEnv,
     }),
 
-    // Main Database (always SQLite - boot config)
+    // Main Database (auth/audit). SQLite by default; MAIN_DATABASE_TYPE=postgres moves it to a
+    // shared server — required for multi-node, where per-node SQLite files mean per-node key stores.
     TypeOrmModule.forRootAsync({
       name: 'main',
       imports: [ConfigModule],
       inject: [ConfigService],
+      // Postgres boots its migrations under the same cross-replica advisory lock as the data
+      // connection; the sqlite branch keeps the library's default construction + initialize.
+      dataSourceFactory: createBootDataSource,
       useFactory: (configService: ConfigService) => {
-        // Default ON for zero-config first boot. When disabled
-        // (MAIN_DATABASE_SYNCHRONIZE=false), the main-owned migrations create the
-        // api_keys/audit_logs schema instead — never both at once.
-        const synchronize = configService.get<boolean>('database.synchronize', true);
-        return {
+        const baseConfig = {
           name: 'main',
-          type: 'better-sqlite3' as const,
-          database: configService.get<string>('database.database', './data/main.sqlite'),
           entities: [
             __dirname + '/modules/auth/**/*.entity{.ts,.js}',
             __dirname + '/modules/audit/**/*.entity{.ts,.js}',
@@ -145,9 +164,36 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
           // Dedicated migrations dir for the main connection only (must NOT run the
           // data-connection migrations, which target session/webhook/message tables).
           migrations: [__dirname + '/database/migrations-main/*{.ts,.js}'],
+          logging: configService.get<boolean>('database.logging', false),
+        };
+        if (configService.get<string>('database.type') === 'postgres') {
+          return {
+            ...baseConfig,
+            type: 'postgres' as const,
+            host: configService.get<string>('database.host'),
+            port: configService.get<number>('database.port'),
+            username: configService.get<string>('database.username'),
+            password: configService.get<string>('database.password'),
+            database: configService.get<string>('database.database', 'openwa_main'),
+            // Never synchronize on postgres: N replicas racing DDL is the failure the advisory-
+            // locked migration boot exists to prevent. The migration chain is idempotent
+            // (IF NOT EXISTS), so it also adopts a database created by an earlier synchronize.
+            synchronize: false,
+            migrationsRun: true,
+            // Same UTC discipline as the data connection (see its comment).
+            useUTC: true,
+            extra: { options: '-c timezone=UTC' },
+          };
+        }
+        // Default ON for zero-config first boot. When disabled (MAIN_DATABASE_SYNCHRONIZE=false),
+        // the main-owned migrations create the api_keys/audit_logs schema instead — never both.
+        const synchronize = configService.get<boolean>('database.synchronize', true);
+        return {
+          ...baseConfig,
+          type: 'better-sqlite3' as const,
+          database: configService.get<string>('database.database', './data/main.sqlite'),
           synchronize,
           migrationsRun: !synchronize,
-          logging: configService.get<boolean>('database.logging', false),
         };
       },
     }),
@@ -213,6 +259,11 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
             migrationsRun: true,
             retryAttempts: 10,
             retryDelay: 3000,
+            // Read/write timestamp-without-timezone columns as UTC. With DB-clock leases, NOW()
+            // writes the database's naive UTC into leaseExpiresAt; without this, node-postgres
+            // parses that value back in the NODE's local timezone, and every JS-side date the app
+            // touches is shifted by the tz offset — an IST reader saw a live lease as 5.5h lapsed.
+            useUTC: true,
             extra: {
               max: configService.get<number>('dataDatabase.poolSize', 10),
               // Runtime query/pool timeouts so a stuck query or saturated pool fails fast instead of
@@ -222,9 +273,11 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
               statement_timeout: configService.get<number>('dataDatabase.statementTimeoutMs', 30000),
               idleTimeoutMillis: configService.get<number>('dataDatabase.idleTimeoutMs', 30000),
               connectionTimeoutMillis: configService.get<number>('dataDatabase.connectionTimeoutMs', 10000),
-              // Only set for a non-public schema (see above). `<schema>,public` keeps public on the
-              // path so pg_catalog + any public helpers still resolve; the configured schema wins.
-              ...(useCustomSearchPath ? { options: `-c search_path=${schema},public` } : {}),
+              // Pin the session timezone so NOW() renders UTC whatever the server default is —
+              // the other half of useUTC above (a managed PG with a non-UTC default would
+              // otherwise write local-naive lease expiries). search_path rides the same startup
+              // options string for a non-public schema (see above).
+              options: `-c timezone=UTC${useCustomSearchPath ? ` -c search_path=${schema},public` : ''}`,
             },
           };
         }
@@ -297,7 +350,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     WebhookModule,
     HealthModule,
     SettingsModule,
-    InfraModule,
+    InfraNodeModule, // node drain verb — every role (see roleModules note)
     ContactModule,
     GroupModule,
     ProfileModule, // Own-profile API (name / status / picture)
@@ -311,7 +364,6 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     StatusStoreModule, // Phase 3: inbound status/story TTL store (24h purge + media persistence)
     ChatMediaModule, // opt-in chat-media archive (retention purge + orphan sweep)
     AutomationModule, // single-message autoreply rules, evaluated on the inbound dispatch
-    TakeoverModule, // adopts sessions whose holder's lease lapsed (crashed peer / recreated node)
     CatalogModule, // Phase 3: Catalog API (WhatsApp Business)
     PluginsApiModule, // Phase 5: Plugins API
     AgentToolsModule, // Agent-invocable tool registry (protocol-neutral)
@@ -319,6 +371,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     ...searchModules, // Global message search (opt-out via SEARCH_ENABLED=false; default ON)
     ...mcpModules, // MCP Streamable-HTTP server (opt-in via MCP_ENABLED=true)
     ...serveStaticModules, // Bundled dashboard SPA (production single-port setup)
+    ...roleModules, // role-gated control-plane / engine-hosting modules (ROLE=api|worker|all)
   ],
   // Runs after every DataSource has initialized (they initialize eagerly in their provider
   // factories, and onApplicationBootstrap fires after every onModuleInit), tightening the SQLite

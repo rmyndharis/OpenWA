@@ -4878,6 +4878,30 @@ Readiness probe — verifies the `main` (auth/audit) and `data` TypeORM datasour
 
 During shutdown the `details` instead read `{ "shutdown": { "status": "draining" } }`. Probes run in parallel via `Promise.all`. There is no `health/detailed` route.
 
+#### GET /api/health/sessions
+
+Session warm-up and capacity for THIS node — counts only, safe for probes and autoscalers. The DB readiness probe deliberately ignores sessions (a pod reports Ready with zero engines restored), so this route is the capacity signal: an HPA scales on `assigned` vs `engines`, a rollout gates on `ready` approaching `assigned`, and a drain watcher waits for `engines` to reach zero. Stays `200` while draining (`draining: true`).
+
+**Auth:** public
+
+**Response** `200`
+
+```json
+{
+  "status": "ok",
+  "nodeId": "worker-1",
+  "draining": false,
+  "engines": 4,
+  "sessions": {
+    "assigned": 5,
+    "ready": 4,
+    "connecting": 1,
+    "actionRequired": 0,
+    "disconnected": 0,
+    "failed": 0
+  }
+}
+```
 #### GET /api/metrics
 
 Prometheus exposition scrape of OpenWA process + session + message metrics; gated by a `METRICS_TOKEN` bearer (disabled when the token is unset).
@@ -5324,6 +5348,24 @@ Write/IO errors are caught and returned as HTTP `200` with `{ "saved": false, "e
 `engine.type`, or CR-LF in a value · `401` · `403`
 
 ---
+
+#### POST /api/infra/drain
+
+Drain this node: flip readiness to `503`, tear down every local engine, stop lease renewal and forget the claims WITHOUT clearing them, so peer nodes adopt the sessions once the leases lapse (within the lease TTL plus one takeover sweep). One-way for this process — terminate or restart it afterwards. In-flight HTTP requests keep being served while the load balancer reacts. The graceful scale-down verb for `ROLE=worker` pods (wire it into a `preStop` hook).
+
+**Auth:** API key (ADMIN, unscoped)
+
+**Response** `200`
+
+```json
+{
+  "message": "Node drained. Peers adopt the abandoned sessions once their leases lapse.",
+  "draining": true,
+  "stoppedEngines": 4,
+  "abandonedClaims": 4,
+  "leaseTtlMs": 60000
+}
+```
 
 #### POST /api/infra/restart
 

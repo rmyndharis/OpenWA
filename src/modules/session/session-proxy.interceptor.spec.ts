@@ -65,10 +65,18 @@ describe('SessionProxyInterceptor', () => {
     const req = opts.req ?? request();
     const res = makeResponse();
     const findOne = jest.fn().mockResolvedValue(opts.row === undefined ? row() : opts.row);
+    // The interceptor asks the ownership service (a SQL predicate in production — the database is
+    // the one clock all nodes share) rather than comparing dates in JS; the fake answers from the
+    // same seeded row, mirroring that predicate's semantics.
+    const isHeldByOtherNode = jest.fn().mockImplementation(() => {
+      const seeded = opts.row === undefined ? row() : opts.row;
+      if (!seeded?.nodeId || seeded.nodeId === 'me') return Promise.resolve(false);
+      return Promise.resolve(seeded.leaseExpiresAt != null && seeded.leaseExpiresAt > new Date());
+    });
     const interceptor = new SessionProxyInterceptor(
       { getAllAndOverride: jest.fn().mockReturnValue(opts.sessionScoped ?? false) } as never,
       { findOne } as never,
-      { nodeId: 'me', nodeUrl: opts.myUrl ?? 'http://127.0.0.1:2785' } as never,
+      { nodeId: 'me', nodeUrl: opts.myUrl ?? 'http://127.0.0.1:2785', isHeldByOtherNode } as never,
       { get: jest.fn().mockReturnValue(opts.timeoutMs ?? 5000) } as never,
     );
     const context = {

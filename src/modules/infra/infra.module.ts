@@ -21,6 +21,8 @@ if (process.env.QUEUE_ENABLED === 'true') {
   // SessionModule gives InfraDataService the live-engine registry for the import pre-flight
   // orphan check. Its own imports (WebhookModule, StatusStoreModule) never point back here — no cycle.
   imports: [EngineModule, DockerModule, SessionModule, ...queueModules],
+  // InfraNodeController is deliberately NOT here — it lives in InfraNodeModule so the drain verb
+  // survives on ROLE=worker, where this module (the control-plane operator surface) is absent.
   controllers: [InfraStatusController, InfraConfigController, InfraDataController, InfraStorageController],
   providers: [InfraDataService],
 })

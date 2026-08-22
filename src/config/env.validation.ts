@@ -25,9 +25,11 @@ export function sqliteDataMainPathCollision(config: EnvConfig): string | null {
     const value = config[key];
     return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
   };
-  // Postgres uses a bare database NAME, never a file path — no collision is possible there.
+  // Postgres uses a bare database NAME, never a file path — no collision is possible there,
+  // on either connection's side.
   const dbType = read('DATABASE_TYPE');
   if (dbType !== undefined && dbType !== 'sqlite') return null;
+  if (read('MAIN_DATABASE_TYPE') === 'postgres') return null;
   const dataDbName = read('DATABASE_NAME');
   if (!dataDbName) return null;
   const mainDbPath = read('MAIN_DATABASE_NAME') || MAIN_DB_DEFAULT_PATH;
@@ -70,6 +72,15 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   };
   checkEnum('ENGINE_TYPE', ['whatsapp-web.js', 'baileys']);
   checkEnum('STORAGE_TYPE', ['local', 's3']);
+  // A typo here would silently fall back to file mode and quietly re-pin sessions to local disk —
+  // the exact portability regression the database mode exists to prevent.
+  checkEnum('BAILEYS_AUTH_STORE', ['file', 'database']);
+  // A typo here would silently fall back to per-node SQLite key stores — the exact multi-node
+  // auth failure postgres mode exists to prevent.
+  checkEnum('MAIN_DATABASE_TYPE', ['sqlite', 'postgres']);
+  // A typo here would silently run the full single-container role ('all') — on a pod meant to be a
+  // stateless api front door, that means engines launching where none should exist.
+  checkEnum('ROLE', ['api', 'worker', 'all']);
   // Every production hardening in the repo gates on the exact string 'production', so an
   // unrecognised value silently selects the permissive branch of each one — CORS, Swagger, DTO
   // error detail, the default-secret guard and the ALLOW_DEV_API_KEY rejection that stops the public
@@ -284,6 +295,8 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'SESSION_LEASE_HEARTBEAT_MS',
     'SESSION_TAKEOVER_SWEEP_MS',
     'SESSION_PROXY_TIMEOUT_MS',
+    // 0 would be clamped to 1 by the limiter anyway; reject it loudly instead of silently serializing.
+    'SESSION_RESTORE_CONCURRENCY',
   ]) {
     checkPositiveInt(key);
   }

@@ -155,6 +155,8 @@ services:
       # "true", so a blank forward (nothing set) keeps the default off. Without this line the value in
       # .env never reaches the container and the flag silently does nothing.
       - AUTO_START_SESSIONS=${AUTO_START_SESSIONS:-}
+      # Which plane this container serves: all (default) | api | worker. See .env.example.
+      - ROLE=${ROLE:-}
       # Fetching status@broadcast immediately after a fresh pairing can make affected accounts lose
       # the companion at WhatsApp Web's first scheduled reload. Disabled by default; live statuses
       # still arrive normally. Opt in only after validating the account.
@@ -178,6 +180,8 @@ services:
       # as a fallback by the storage layer) so existing .env files keep working unchanged. S3_REGION is
       # forwarded so external-S3 works.
       - STORAGE_TYPE=${STORAGE_TYPE:-}
+      # S3 mode only: fail writes loudly during an S3 outage instead of silently writing pod-local.
+      - STORAGE_STRICT=${STORAGE_STRICT:-}
       - STORAGE_LOCAL_PATH=${STORAGE_LOCAL_PATH:-}
       - S3_ENDPOINT=${S3_ENDPOINT:-}
       - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-}
@@ -324,12 +328,22 @@ services:
       - DATABASE_IDLE_TIMEOUT_MS=${DATABASE_IDLE_TIMEOUT_MS:-}
       - DATABASE_CONNECTION_TIMEOUT_MS=${DATABASE_CONNECTION_TIMEOUT_MS:-}
       - MAIN_DATABASE_NAME=${MAIN_DATABASE_NAME:-}
+      # sqlite (default) | postgres — postgres is required for multi-node (shared api_keys store).
+      - MAIN_DATABASE_TYPE=${MAIN_DATABASE_TYPE:-}
+      - MAIN_DATABASE_HOST=${MAIN_DATABASE_HOST:-}
+      - MAIN_DATABASE_PORT=${MAIN_DATABASE_PORT:-}
+      - MAIN_DATABASE_USERNAME=${MAIN_DATABASE_USERNAME:-}
+      - MAIN_DATABASE_PASSWORD=${MAIN_DATABASE_PASSWORD:-}
       - REDIS_USERNAME=${REDIS_USERNAME:-}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_CONNECT_TIMEOUT_MS=${REDIS_CONNECT_TIMEOUT_MS:-}
       # Engine / session tuning.
       - MAX_CONCURRENT_SESSIONS=${MAX_CONCURRENT_SESSIONS:-}
+      # Bounded-parallel boot restore lanes (default 3).
+      - SESSION_RESTORE_CONCURRENCY=${SESSION_RESTORE_CONCURRENCY:-}
       - BAILEYS_AUTH_DIR=${BAILEYS_AUTH_DIR:-}
+      # file (default) | database — database makes Baileys sessions portable across nodes.
+      - BAILEYS_AUTH_STORE=${BAILEYS_AUTH_STORE:-}
       - BAILEYS_BROWSER_NAME=${BAILEYS_BROWSER_NAME:-}
       - BAILEYS_LOG_LEVEL=${BAILEYS_LOG_LEVEL:-}
       - BAILEYS_MESSAGE_STORE_LIMIT=${BAILEYS_MESSAGE_STORE_LIMIT:-}

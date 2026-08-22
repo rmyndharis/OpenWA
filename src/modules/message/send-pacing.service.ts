@@ -108,6 +108,11 @@ const MAX_REFUSAL_KEYS = 1000;
 @Injectable()
 export class SendPacingService {
   private readonly logger = createLogger('SendPacingService');
+  // Every map below is keyed per SESSION, and a session's sends run only on the node holding its
+  // ownership lease (the proxy forwards to the owner) — so per-process state here stays correct
+  // under multiple nodes; N pods do NOT multiply a session's send budget. A takeover moves the
+  // session and forgets breaker/tally state on the old node — the daily chat budget re-derives from
+  // the messages table, so only the in-memory halves reset (documented on each field).
   private readonly breakers = new Map<string, BreakerState>();
   /**
    * Per-session count of cold GROUP-ADD reachouts used today. Group adds (createGroup/

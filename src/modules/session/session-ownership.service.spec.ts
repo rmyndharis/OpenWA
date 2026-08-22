@@ -140,6 +140,82 @@ describe('SessionOwnershipService', () => {
     });
   });
 
+  describe('lease generations (fencing)', () => {
+    it('bumps the generation on every successful claim', async () => {
+      const session = await seed();
+      const nodeA = service('node-a');
+
+      await nodeA.claim(session.id);
+      expect((await sessions.findOneByOrFail({ id: session.id })).leaseGeneration).toBe(1);
+      expect(nodeA.generationOf(session.id)).toBe(1);
+
+      await nodeA.release(session.id);
+      await nodeA.claim(session.id);
+      expect((await sessions.findOneByOrFail({ id: session.id })).leaseGeneration).toBe(2);
+    });
+
+    // The zombie scenario nodeId cannot see: a previous incarnation of the SAME node (default id is
+    // the hostname, which a restart keeps) wakes from a pause after its lease lapsed and a new
+    // incarnation reclaimed. Its renew must conclude loss — not "still mine because nodeId matches" —
+    // or two engines serve one WhatsApp account.
+    it('a stale incarnation of the same node loses on renew, even though nodeId matches', async () => {
+      const session = await seed();
+      const zombie = service('node-a');
+      await zombie.claim(session.id);
+
+      // Lease lapses while the zombie is paused; a NEW incarnation with the same nodeId reclaims.
+      await sessions.update(session.id, { leaseExpiresAt: new Date(Date.now() - 1000) });
+      const fresh = service('node-a');
+      await fresh.claim(session.id);
+      expect(fresh.generationOf(session.id)).toBe(2);
+
+      const lost: string[][] = [];
+      zombie.onLeaseLoss(ids => void lost.push(ids));
+      await zombie.renew();
+
+      expect(lost).toEqual([[session.id]]);
+      expect(zombie.owns(session.id)).toBe(false);
+      // The current incarnation is untouched.
+      expect(fresh.owns(session.id)).toBe(true);
+    });
+  });
+
+  describe('abandoning (drain handoff)', () => {
+    // A released row (nodeId NULL) is invisible to the takeover sweep — right for an operator stop,
+    // wrong for a drain, whose whole point is that peers adopt. Abandoning forgets the claims
+    // locally while leaving the rows to lapse, and makes a later releaseAll a no-op for them.
+    it('forgets local claims without touching the rows, so the leases lapse and peers can adopt', async () => {
+      const [one, two] = [await seed(), await seed()];
+      const nodeA = service('node-a');
+      await nodeA.claim(one.id);
+      await nodeA.claim(two.id);
+
+      const abandoned = nodeA.abandonAll();
+
+      expect(abandoned.sort()).toEqual([one.id, two.id].sort());
+      expect(nodeA.ownedIds()).toEqual([]);
+      // Rows still name node-a with their lease intact — adoptable once it lapses.
+      expect((await sessions.findOneByOrFail({ id: one.id })).nodeId).toBe('node-a');
+      expect((await sessions.findOneByOrFail({ id: one.id })).leaseExpiresAt).not.toBeNull();
+      // The shutdown that follows a drain must not undo the handoff.
+      await nodeA.releaseAll();
+      expect((await sessions.findOneByOrFail({ id: two.id })).nodeId).toBe('node-a');
+    });
+
+    it('after the lease lapses, an abandoned session feeds the takeover sweep', async () => {
+      const session = await seed();
+      const nodeA = service('node-a');
+      await nodeA.claim(session.id);
+      nodeA.abandonAll();
+
+      // Simulate the lapse instead of waiting a TTL out.
+      await sessions.update(session.id, { leaseExpiresAt: new Date(Date.now() - 1000) });
+
+      const adoptable = await service('node-b').lapsedHeldByOthers();
+      expect(adoptable.map(row => row.id)).toContain(session.id);
+    });
+  });
+
   describe('releasing a lapsed foreign claim', () => {
     // A deliberate teardown of a session whose crashed owner's lease expired must actually leave it
     // down. A row still naming the dead node reads as an abandoned orphan, and the takeover sweep

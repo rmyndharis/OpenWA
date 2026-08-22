@@ -593,6 +593,9 @@ export class InfraDataService {
         await clearTable('message_batches');
         await clearTable('templates');
         await clearTable('baileys_stored_messages');
+        // baileys_auth_state is keyed by session NAME with no FK, so the sessions DELETE below won't
+        // clear it; clear explicitly so a restore replaces credentials instead of colliding on PKs.
+        await clearTable('baileys_auth_state');
         // lid_mappings is not a FK to sessions, so the sessions DELETE below won't clear it; clear it
         // explicitly so a restore replaces the cache rather than colliding on existing lid PKs.
         await clearTable('lid_mappings');

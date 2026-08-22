@@ -45,7 +45,8 @@ describe('WebhookOutboxService', () => {
 
     repo.update.mockRejectedValue(new Error('disk full'));
     await expect(service.close('wh-1', 'key_wh-1', 'dispatched')).resolves.toBeUndefined();
-    await expect(service.countAttempt('row-1', 0)).resolves.toBeUndefined();
+    // A failed increment resolves false — the caller must not claim a row it cannot count.
+    await expect(service.countAttempt('row-1', 0)).resolves.toBe(false);
   });
 
   it('retires the payload when recording an outcome, so a settled row stops carrying a message body', async () => {
@@ -74,10 +75,17 @@ describe('WebhookOutboxService', () => {
     expect(stale.map(r => r.id)).toEqual(['keep']);
   });
 
-  it('counts an attempt by incrementing the stored number, not by recomputing it', async () => {
+  it('counts an attempt by incrementing the observed number — which doubles as the row claim', async () => {
     await service.countAttempt('row-1', 2);
 
-    expect(repo.update).toHaveBeenCalledWith({ id: 'row-1' }, expect.objectContaining({ attempts: 3 }));
+    // The observed count rides in the WHERE: when two nodes sweep the same row, only the one whose
+    // observation still matches wins the increment; the loser is told so and skips the replay.
+    expect(repo.update).toHaveBeenCalledWith({ id: 'row-1', attempts: 2 }, expect.objectContaining({ attempts: 3 }));
+  });
+
+  it('reports a lost claim: an increment that matched no row resolves false', async () => {
+    repo.update.mockResolvedValue({ affected: 0 });
+    await expect(service.countAttempt('row-1', 2)).resolves.toBe(false);
   });
 });
 

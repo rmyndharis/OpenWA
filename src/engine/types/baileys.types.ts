@@ -15,6 +15,24 @@ export interface BaileysMessageStore {
 }
 
 /**
+ * Persistence boundary for Baileys authentication state — the credentials and Signal keys that
+ * `useMultiFileAuthState` writes to local disk. Backing them with a shared database instead is what
+ * makes a session PORTABLE: any node can start it without the auth directory following it around.
+ * A dumb string K/V on purpose: (de)serialization (BufferJSON, proto revival) stays adapter-side in
+ * `useDatabaseAuthState`, so the store never needs the Baileys library.
+ */
+export interface BaileysAuthStateStore {
+  /** Values for the given ids of one key type, keyed by id; absent ids are simply missing. */
+  read(sessionName: string, keyType: string, keyIds: string[]): Promise<Record<string, string>>;
+  /** Upsert (value string) or delete (value null) entries — one batch, atomically where the dialect allows. */
+  write(sessionName: string, entries: Array<{ keyType: string; keyId: string; value: string | null }>): Promise<void>;
+  /** Whether stored credentials exist (drives the one-shot disk import on first database-mode start). */
+  hasCreds(sessionName: string): Promise<boolean>;
+  /** Remove every row of a session (terminal logout / session delete). */
+  clear(sessionName: string): Promise<void>;
+}
+
+/**
  * Per-call construction config for {@link BaileysAdapter}. Engine-neutral fields come from the
  * factory; `authDir` is the base multi-file auth directory from the opaque `engine.baileys.*` blob
  * (the adapter appends the session id to isolate each session).
@@ -31,6 +49,10 @@ export interface BaileysAdapterConfig {
   messageStore?: BaileysMessageStore;
   /** Persisted, cross-session lid->phone resolution table. Backs lid resolution beyond the in-memory map. */
   lidMappingStore?: LidMappingStore;
+  /** Database-backed auth state (see {@link BaileysAuthStateStore}); required for authStore='database'. */
+  authStateStore?: BaileysAuthStateStore;
+  /** Where auth state lives: 'file' (multi-file dir, the default) or 'database' (portable sessions). */
+  authStore?: 'file' | 'database';
 }
 
 /**

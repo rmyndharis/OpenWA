@@ -14,6 +14,9 @@ export class CreateAuthAuditTables1779900000000 implements MigrationInterface {
   name = 'CreateAuthAuditTables1779900000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    // SQLite DDL only (datetime('now') defaults). The Postgres main connection is created by the
+    // pg twin migration below in the chain; on that dialect this one is a recorded no-op.
+    if (queryRunner.connection.options.type === 'postgres') return;
     await queryRunner.query(
       `CREATE TABLE IF NOT EXISTS "api_keys" (` +
         `"id" varchar PRIMARY KEY NOT NULL, ` +

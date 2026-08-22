@@ -1,6 +1,12 @@
 import { Controller, Get, Req, ServiceUnavailableException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
-import { HealthCheckResponseDto, LivenessResponseDto, ReadinessResponseDto } from './dto/health-response.dto';
+import {
+  HealthCheckResponseDto,
+  LivenessResponseDto,
+  ReadinessResponseDto,
+  SessionsHealthResponseDto,
+} from './dto/health-response.dto';
+import { SessionService } from '../session/session.service';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -44,6 +50,7 @@ export class HealthController {
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
     private readonly auditService: AuditService,
+    private readonly sessionService: SessionService,
   ) {
     // Bounds the audit rows one source IP can write per minute through this deliberately
     // unthrottled route: the health probes themselves must never be rate-limited, but without a
@@ -110,6 +117,25 @@ export class HealthController {
     // Liveness only reflects process liveness — deliberately static so a transient
     // dependency outage doesn't trigger a pod KILL (that's readiness' job).
     return { status: 'ok' };
+  }
+
+  @Get('sessions')
+  @ApiOperation({
+    summary: 'Session warm-up and capacity for this node — counts only, safe for probes and autoscalers',
+  })
+  @ApiResponse({ status: 200, description: 'Per-node session/engine counts', type: SessionsHealthResponseDto })
+  async sessionsHealth(): Promise<SessionsHealthResponseDto> {
+    // The DB readiness probe deliberately ignores sessions, so a pod reports Ready with zero engines
+    // restored — this route is the missing capacity signal: an HPA scales on assigned/engines, a
+    // rollout can gate on ready approaching assigned, and a drain watcher can wait for engines to
+    // reach zero. Counts come from the session capability service (controllers must not touch the
+    // engine registry directly), which also keeps the payload to numbers only.
+    const capacity = await this.sessionService.nodeSessionsHealth();
+    return {
+      status: 'ok',
+      draining: this.shutdownService.isShuttingDown(),
+      ...capacity,
+    };
   }
 
   @Get('ready')

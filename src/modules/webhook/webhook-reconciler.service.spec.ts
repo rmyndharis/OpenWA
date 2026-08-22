@@ -42,7 +42,13 @@ describe('WebhookReconcilerService', () => {
   let service: WebhookReconcilerService;
 
   beforeEach(() => {
-    outbox = { findStale: jest.fn().mockResolvedValue([]), close: jest.fn(), countAttempt: jest.fn() };
+    outbox = {
+      findStale: jest.fn().mockResolvedValue([]),
+      close: jest.fn(),
+      // Resolves TRUE by default: the count doubles as the row claim, and these tests exercise the
+      // winning-node path unless they say otherwise.
+      countAttempt: jest.fn().mockResolvedValue(true),
+    };
     delivery = { redeliver: jest.fn().mockResolvedValue(undefined) };
     webhooks = { findOne: jest.fn().mockResolvedValue({ id: 'wh-1', active: true }) };
     service = new WebhookReconcilerService(webhooks as never, outbox as never, delivery as never);

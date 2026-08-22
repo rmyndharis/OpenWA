@@ -8,7 +8,7 @@ import { IntegrationDeliveryFailure } from '../../integration/entities/integrati
 import { PluginLoaderService } from '../../../core/plugins/plugin-loader.service';
 import { HookManager } from '../../../core/hooks';
 import { createLogger } from '../../../common/services/logger.service';
-import { KeyedAsyncLock, orderingKeyFor } from '../../integration/ordering-lock';
+import { createOrderingLock, orderingKeyFor } from '../../integration/ordering-lock';
 
 export interface IngressJobData {
   pluginId: string;
@@ -38,7 +38,8 @@ export interface IngressJobData {
 @Processor(QUEUE_NAMES.INGRESS, { connection: workerConnectionOptions(), concurrency: ingressWorkerConcurrency() })
 export class IngressProcessor extends WorkerHost {
   private readonly logger = createLogger('IngressProcessor');
-  private readonly lock = new KeyedAsyncLock();
+  // Redis-backed when REDIS_ENABLED: two pods' ingress workers must not interleave one conversation.
+  private readonly lock = createOrderingLock('ingress');
 
   constructor(
     private readonly loader: PluginLoaderService,

@@ -26,7 +26,7 @@ describe('SessionTakeoverService', () => {
 
   const build = (
     rows: Session[],
-    opts: { autoStart?: boolean; startImpl?: jest.Mock } = {},
+    opts: { autoStart?: boolean; startImpl?: jest.Mock; unclaimed?: Session[] } = {},
   ): { svc: SessionTakeoverService; start: jest.Mock; reap: jest.Mock } => {
     const start = opts.startImpl ?? jest.fn().mockResolvedValue({});
     const reap = jest.fn().mockResolvedValue(0);
@@ -38,8 +38,11 @@ describe('SessionTakeoverService', () => {
         })[key as 'features'] ?? def,
     } as unknown as ConfigService;
     const svc = new SessionTakeoverService(
-      { start } as unknown as SessionService,
-      { lapsedHeldByOthers: jest.fn().mockResolvedValue(rows) } as unknown as SessionOwnershipService,
+      { start, activeEngineCount: () => 0 } as unknown as SessionService,
+      {
+        lapsedHeldByOthers: jest.fn().mockResolvedValue(rows),
+        unclaimedRunnable: jest.fn().mockResolvedValue(opts.unclaimed ?? []),
+      } as unknown as SessionOwnershipService,
       { reapProcessingBatches: reap } as unknown as BulkMessageService,
       config,
     );
@@ -175,7 +178,10 @@ describe('SessionTakeoverService', () => {
     } as unknown as ConfigService;
     const svc = new SessionTakeoverService(
       { start } as unknown as SessionService,
-      { lapsedHeldByOthers: ownershipCalls } as unknown as SessionOwnershipService,
+      {
+        lapsedHeldByOthers: ownershipCalls,
+        unclaimedRunnable: jest.fn().mockResolvedValue([]),
+      } as unknown as SessionOwnershipService,
       { reapProcessingBatches: jest.fn().mockResolvedValue(0) } as unknown as BulkMessageService,
       config,
     );
@@ -216,7 +222,10 @@ describe('SessionTakeoverService', () => {
     } as unknown as ConfigService;
     const svc = new SessionTakeoverService(
       { start } as unknown as SessionService,
-      { lapsedHeldByOthers: ownershipCalls } as unknown as SessionOwnershipService,
+      {
+        lapsedHeldByOthers: ownershipCalls,
+        unclaimedRunnable: jest.fn().mockResolvedValue([]),
+      } as unknown as SessionOwnershipService,
       { reapProcessingBatches: jest.fn().mockResolvedValue(0) } as unknown as BulkMessageService,
       config,
       { isShuttingDown: () => true } as unknown as ShutdownService,
@@ -238,7 +247,10 @@ describe('SessionTakeoverService', () => {
     } as unknown as ConfigService;
     const svc = new SessionTakeoverService(
       { start: jest.fn().mockResolvedValue(undefined) } as unknown as SessionService,
-      { lapsedHeldByOthers: ownershipCalls } as unknown as SessionOwnershipService,
+      {
+        lapsedHeldByOthers: ownershipCalls,
+        unclaimedRunnable: jest.fn().mockResolvedValue([]),
+      } as unknown as SessionOwnershipService,
       { reapProcessingBatches: jest.fn().mockResolvedValue(0) } as unknown as BulkMessageService,
       config,
     );
@@ -247,5 +259,36 @@ describe('SessionTakeoverService', () => {
     await svc.sweep();
 
     expect(ownershipCalls).not.toHaveBeenCalled();
+  });
+
+  describe('desired-state reconciliation', () => {
+    it('adopts a runnable session nobody holds — not only lapsed ones', async () => {
+      const orphan = lapsed({ name: 'orphan', nodeId: null, status: SessionStatus.DISCONNECTED });
+      const { svc, start } = build([], { unclaimed: [orphan] });
+
+      await svc.sweep();
+
+      expect(start).toHaveBeenCalledWith(orphan.id);
+    });
+
+    it('never resurrects a session whose desiredState is stopped', async () => {
+      const stopped = lapsed({ name: 'stopped-on-purpose', desiredState: 'stopped' });
+      const running = lapsed({ name: 'wants-to-run', desiredState: 'running' });
+      const { svc, start } = build([stopped, running]);
+
+      await svc.sweep();
+
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledWith(running.id);
+    });
+
+    it('does not adopt the same session twice when both feeds return it', async () => {
+      const twice = lapsed({ name: 'dup' });
+      const { svc, start } = build([twice], { unclaimed: [twice] });
+
+      await svc.sweep();
+
+      expect(start).toHaveBeenCalledTimes(1);
+    });
   });
 });

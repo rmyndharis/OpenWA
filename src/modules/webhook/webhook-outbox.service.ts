@@ -149,11 +149,25 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Count one replay attempt against the row's budget. */
-  async countAttempt(id: string, attempts: number): Promise<void> {
+  /**
+   * Count a replay attempt — and CLAIM the row doing it. The WHERE carries the attempts value the
+   * sweep OBSERVED, so when two nodes sweep the same backlog against one database, exactly one
+   * increment matches and the loser sees `false` and skips the row. This is what turned the sweep's
+   * documented "two nodes can both replay the same delivery" from deliberate simplicity into a
+   * claimed pass: same at-least-once guarantee, without the N× duplicate replays under N api pods.
+   */
+  async countAttempt(id: string, attempts: number): Promise<boolean> {
     try {
-      await this.outbox.update({ id }, { attempts: attempts + 1, lastAttemptAt: new Date() });
+      const result = await this.outbox.update(
+        { id, attempts },
+        { attempts: attempts + 1, lastAttemptAt: new Date() },
+      );
+      return (result.affected ?? 0) > 0;
     } catch (error) {
       this.logger.warn(`Could not count a replay attempt: ${String(error)}`);
+      // An errored count must not spend the budget silently NOR double-deliver eagerly: without
+      // knowing whether the increment landed, refusing the claim is the at-most-once-per-sweep side.
+      return false;
     }
   }
 }

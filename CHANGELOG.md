@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Split-plane deployment via `ROLE=api|worker|all` (default `all`, unchanged single-container behavior). `worker` hosts WhatsApp engines and answers proxied session-scoped calls without the dashboard, MCP, infra-config or Docker orchestration surfaces; `api` is the stateless front door that never constructs an engine — `POST /sessions/{id}/start` records intent and a worker's claim loop launches the session within one sweep interval.
+- Database-backed Baileys auth state (`BAILEYS_AUTH_STORE=database`): credentials and Signal keys live on the shared data connection, making a session portable across nodes — the prerequisite for takeover and autoscaling without re-pairing. The first database-mode start imports an existing multi-file directory automatically, so flipping the setting never costs a QR re-scan. Auth-state rows ride the data export/import like every other table.
+- `sessions.desiredState` ('running'/'stopped'): operator intent, distinct from observed status. The takeover sweep is now a desired-state reconciler — it adopts lapsed-lease sessions AND unclaimed runnable ones, bounded by `MAX_CONCURRENT_SESSIONS` — and a deliberate stop finally survives a restart (boot auto-start used to relaunch every authenticated disconnected session).
+- Boot restore is bounded-parallel (`SESSION_RESTORE_CONCURRENCY`, default 3): launch starts stay 2 s apart, but the ≥ 60 s engine-init tails ride out together instead of serializing, so a node hosting N sessions no longer takes up to N minutes to warm up.
+- `GET /api/health/sessions`: per-node session warm-up/capacity counts (public, numbers only) — the signal the DB-only readiness probe deliberately lacks. `POST /api/infra/drain` (ADMIN, unscoped): tear down local engines and hand every session to peers via deliberate lease lapse — the graceful scale-down verb.
+- `MAIN_DATABASE_TYPE=postgres`: the auth/audit connection can share a Postgres server (schema managed by migrations under the same cross-replica advisory lock as the data connection). Required for multi-node, where per-node SQLite files mean per-node API-key stores.
+- Node-capacity Prometheus gauges (`openwa_node_engines`, `openwa_node_sessions_assigned`, `openwa_node_session_capacity`) for session-shaped autoscaling.
+- `STORAGE_STRICT=true`: an S3 outage fails media writes loudly instead of silently landing them in the pod-local fallback dir, which sharded media invisibly across pods.
+
 ### Fixed
 
+- Lease fencing (`sessions.leaseGeneration`): every successful claim starts a new ownership epoch, so a paused previous incarnation of the same node — which `nodeId` alone cannot distinguish — concludes loss on its next renew instead of writing (and keeping an engine) as if it still owned the session.
+- On Postgres, lease timestamps are computed on the database clock (`NOW()` + TTL) instead of each node's wall clock, so clock skew between nodes can no longer make healthy peers steal each other's sessions.
+- The webhook outbox sweep and the ingress reconciler claim each row (a CAS on the observed attempt count) before replaying, so N nodes sweeping one database replay a stranded delivery once per pass instead of N times.
+- The integration per-conversation ordering lock is Redis-backed when `REDIS_ENABLED=true`, so two pods' ingress workers can no longer interleave dispatches for one conversation; single-node deployments keep the in-process chain.
 - The dashboard CSP nonce is substituted at every occurrence in the served document, not only the first. One placeholder exists today, so a second would have been left reading the literal text and its script refused by the browser.
 - Outbound webhook deliveries survive a hard crash. Fan-out is fire-and-forget, so a crash between persisting a message and completing its POST lost the delivery with no record in either mode, while the documented contract promises at-least-once. Each delivery is now recorded before it is attempted, retired once the queue or the inline send owns it, and a bounded sweep replays whatever is left stranded using the stored idempotency key so the retry stays deduplicable at the receiver.
 - Settled outbound delivery records are pruned after `WEBHOOK_OUTBOX_RETENTION_DAYS` (default 7). A record that can still be replayed is never pruned on age, and a non-positive window falls back to the default rather than letting the table grow without bound.

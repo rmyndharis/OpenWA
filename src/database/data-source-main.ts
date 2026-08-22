@@ -28,16 +28,38 @@ if (sqlitePathCollision) {
  *
  * Usage: `npm run migration:run:main` (dev) / `migration:run:main:prod` (compiled).
  */
-const mainDataSource = new DataSource({
-  type: 'better-sqlite3',
-  // Mirrors the runtime main path (configuration.ts) — MAIN_DATABASE_NAME overrides the default
-  // ./data/main.sqlite (e.g. e2e points it at a temp file), so the CLI and the app never target
-  // different main databases.
-  database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
-  entities: [__dirname + '/../modules/auth/**/*.entity{.ts,.js}', __dirname + '/../modules/audit/**/*.entity{.ts,.js}'],
-  migrations: [__dirname + '/migrations-main/*{.ts,.js}'],
-  synchronize: false,
-  logging: process.env.DATABASE_LOGGING === 'true',
-});
+const mainEntities = [
+  __dirname + '/../modules/auth/**/*.entity{.ts,.js}',
+  __dirname + '/../modules/audit/**/*.entity{.ts,.js}',
+];
+const mainMigrations = [__dirname + '/migrations-main/*{.ts,.js}'];
+
+// Mirrors the runtime main connection (configuration.ts): sqlite file by default, or the shared
+// Postgres server when MAIN_DATABASE_TYPE=postgres (connection details defaulting to DATABASE_*).
+const mainDataSource =
+  process.env.MAIN_DATABASE_TYPE === 'postgres'
+    ? new DataSource({
+        type: 'postgres',
+        host: process.env.MAIN_DATABASE_HOST || process.env.DATABASE_HOST || 'localhost',
+        port: parseInt(process.env.MAIN_DATABASE_PORT || process.env.DATABASE_PORT || '5432', 10),
+        username: process.env.MAIN_DATABASE_USERNAME || process.env.DATABASE_USERNAME || 'openwa',
+        password: process.env.MAIN_DATABASE_PASSWORD || process.env.DATABASE_PASSWORD || '',
+        database: process.env.MAIN_DATABASE_NAME || 'openwa_main',
+        useUTC: true,
+        entities: mainEntities,
+        migrations: mainMigrations,
+        synchronize: false,
+        logging: process.env.DATABASE_LOGGING === 'true',
+      })
+    : new DataSource({
+        type: 'better-sqlite3',
+        // MAIN_DATABASE_NAME overrides the default ./data/main.sqlite (e.g. e2e points it at a temp
+        // file), so the CLI and the app never target different main databases.
+        database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
+        entities: mainEntities,
+        migrations: mainMigrations,
+        synchronize: false,
+        logging: process.env.DATABASE_LOGGING === 'true',
+      });
 
 export default mainDataSource;

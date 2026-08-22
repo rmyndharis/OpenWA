@@ -115,6 +115,17 @@ export interface LidMappingRow {
   updatedAt: string;
 }
 
+// Database-backed Baileys auth state (BAILEYS_AUTH_STORE=database). Keyed by session NAME, no FK,
+// so the import's sessions DELETE never clears it; restored explicitly, or every database-mode
+// session loses its pairing on restore. Values are BufferJSON-serialized credential/key strings.
+export interface BaileysAuthStateRow {
+  sessionName: string;
+  keyType: string;
+  keyId: string;
+  value: string;
+  updatedAt: string | Date;
+}
+
 export interface PluginInstanceRow {
   id: string;
   pluginId: string;
@@ -249,6 +260,7 @@ export interface MigrationTables {
   messageBatches: MessageBatchRow[];
   templates: TemplateRow[];
   baileysStoredMessages: BaileysStoredMessageRow[];
+  baileysAuthState: BaileysAuthStateRow[];
   lidMappings: LidMappingRow[];
   pluginInstances: PluginInstanceRow[];
   conversationMappings: ConversationMappingRow[];

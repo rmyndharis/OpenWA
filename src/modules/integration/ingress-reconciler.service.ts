@@ -1,6 +1,6 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThan, Repository } from 'typeorm';
+import { IsNull, LessThan, Repository } from 'typeorm';
 import { IngressEvent } from './entities/ingress-event.entity';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
 import { IngressEnqueueService, buildIngressDeadLetterRow } from './ingress-enqueue.service';
@@ -148,6 +148,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
           stats.scanned++;
           const outcome = await this.reconcileRow(row, opts.maxAttempts, now);
           if (outcome === 'replayed') stats.replayed++;
+          else if (outcome === 'skipped') stats.skipped++;
           else stats.failed++;
         } catch (err) {
           // A bookkeeping failure (repo update/DLQ write) must not abort the batch; the row stays
@@ -171,7 +172,17 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     row: IngressEvent & { payload: NonNullable<IngressEvent['payload']> },
     maxAttempts: number,
     now: Date,
-  ): Promise<'replayed' | 'failed'> {
+  ): Promise<'replayed' | 'failed' | 'skipped'> {
+    // Claim the row FIRST — an optimistic CAS on the observed attempt count, mirroring the webhook
+    // outbox sweep — so N nodes sweeping one database replay each stranded event once per pass
+    // instead of N times. The loser of the race sees zero rows updated and skips.
+    const observed = row.dispatchAttempts ?? 0;
+    const attempts = observed + 1;
+    const claim = await this.events.update(
+      { id: row.id, dispatchAttempts: row.dispatchAttempts == null ? IsNull() : row.dispatchAttempts },
+      { dispatchAttempts: attempts, lastDispatchAt: now },
+    );
+    if ((claim.affected ?? 0) === 0) return 'skipped';
     const jobData = this.jobDataFor(row);
     // jobId = the ORIGINAL deliveryId: BullMQ dedups a replay against a job that did get enqueued
     // before the crash, so re-dispatch never double-delivers on the queue path.
@@ -202,17 +213,14 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       return 'replayed';
     }
 
-    const attempts = (row.dispatchAttempts ?? 0) + 1;
     const terminal = attempts >= maxAttempts;
     if (terminal) {
       // DLQ BEFORE the terminal mark + payload retirement: the dead-letter row is the payload's new
       // home, so it must exist first. ensureDeadLetterRow is idempotent (count-guarded), so a crash
       // between the two writes just makes the next sweep re-take this path and finish the mark.
+      // (The attempt itself was already counted by the claim above.)
       await this.ensureDeadLetterRow(jobData, attempts, error);
-      await this.events.update(
-        { id: row.id },
-        { dispatchAttempts: attempts, lastDispatchAt: now, dispatchState: 'failed', payload: null },
-      );
+      await this.events.update({ id: row.id }, { dispatchState: 'failed', payload: null });
       this.logger.warn('Ingress event replay budget exhausted; event is dead-lettered', {
         pluginId: row.pluginId,
         instanceId: row.instanceId,
@@ -222,8 +230,8 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       });
       return 'failed';
     }
-    // Non-terminal: keep the payload — the next sweep replays from it.
-    await this.events.update({ id: row.id }, { dispatchAttempts: attempts, lastDispatchAt: now });
+    // Non-terminal: keep the payload — the next sweep replays from it. The attempt was already
+    // counted by the claim, so there is nothing further to write.
     return 'failed';
   }
 

@@ -59,10 +59,19 @@ export class StorageService implements OnModuleDestroy {
   private s3Available = false;
   private s3ReprobeTimer: NodeJS.Timeout | null = null;
   private readonly s3ReprobeIntervalMs = positiveIntFromEnv('S3_REPROBE_INTERVAL_MS', DEFAULT_S3_REPROBE_INTERVAL_MS);
+  /**
+   * STORAGE_STRICT=true: an S3 outage FAILS writes loudly instead of silently landing them in this
+   * pod's local dir. The silent fallback is a single-node convenience; under multiple pods it shards
+   * media invisibly — a file written to pod A's fallback dir does not exist for pod B, and nothing
+   * tells the operator which pod holds what. Reads keep their local read-through either way (it only
+   * recovers files that already fell through; it cannot shard anything new).
+   */
+  private readonly strict: boolean;
 
   constructor(private readonly configService: ConfigService) {
     this.storageType = this.configService.get<string>('storage.type') || 'local';
     this.localPath = this.configService.get<string>('storage.localPath') || './data/media';
+    this.strict = this.configService.get<boolean>('storage.strict') ?? false;
 
     // Initialize S3 client if storage type is s3
     if (this.storageType === 's3') {
@@ -275,6 +284,17 @@ export class StorageService implements OnModuleDestroy {
     }
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
       return this.putS3File(filePath, data);
+    }
+    if (this.strict && this.storageType === 's3') {
+      // One immediate (internally throttled) recovery attempt before refusing — a blip should not
+      // fail a write that a 100ms-later probe would have served.
+      if ((await this.refreshS3Availability()) && this.s3Client) {
+        return this.putS3File(filePath, data);
+      }
+      throw new Error(
+        `S3 bucket '${this.s3Bucket}' is unavailable and STORAGE_STRICT=true — refusing the silent local ` +
+          `fallback write for '${filePath}' (it would shard media across pods)`,
+      );
     }
     return this.putLocalFile(filePath, data);
   }

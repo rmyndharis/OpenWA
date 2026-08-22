@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Optional, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { constantTimeEqual } from '../../common/security/constantTimeEqual';
 import { StatsService } from '../stats/stats.service';
+import { SessionService } from '../session/session.service';
 import { getWebhookDeliveryFailuresTotal } from '../../common/metrics/webhook-delivery-metrics';
 import {
   getSessionReconnectAttemptsTotal,
@@ -37,6 +38,10 @@ export class MetricsService {
   constructor(
     private readonly config: ConfigService,
     private readonly statsService: StatsService,
+    // Trailing @Optional: the running app always provides it (MetricsModule imports SessionModule);
+    // direct-construction specs omit it and simply render no node-capacity series.
+    @Optional()
+    private readonly sessionService?: SessionService,
   ) {}
 
   private get token(): string {
@@ -97,6 +102,27 @@ export class MetricsService {
     };
 
     gauge('openwa_up', 'Whether the OpenWA process is up (always 1 when scraped).', 1);
+
+    // Node capacity: THIS process's engine load against its configured ceiling — the pair an
+    // autoscaler should watch (scale on assigned/capacity, not CPU: engine load is session-shaped).
+    if (this.sessionService) {
+      try {
+        const capacity = await this.sessionService.nodeSessionsHealth();
+        gauge('openwa_node_engines', 'Engines currently live or initializing in this process.', capacity.engines);
+        gauge(
+          'openwa_node_sessions_assigned',
+          'Session rows assigned to this node by the ownership lease.',
+          capacity.sessions.assigned,
+        );
+        gauge(
+          'openwa_node_session_capacity',
+          'MAX_CONCURRENT_SESSIONS for this node; 0 means unlimited.',
+          this.config.get<number>('sessions.maxConcurrent') ?? 0,
+        );
+      } catch {
+        // Capacity is best-effort on a scrape; the DB-derived block below has its own availability flag.
+      }
+    }
     gauge('openwa_process_uptime_seconds', 'Process uptime in seconds.', Math.round(process.uptime()));
     gauge('openwa_process_resident_memory_bytes', 'Resident set size in bytes.', mem.rss);
     gauge('openwa_process_heap_used_bytes', 'V8 heap used in bytes.', mem.heapUsed);

@@ -138,21 +138,18 @@ Since WhatsApp sessions maintain active connections (a browser instance for `wha
 
 ### Strategy 1: Session-to-Node Mapping (Recommended)
 
-Store session-node mapping in the database. **(Not implemented — no `node_id` / `node_url` column
-exists in any entity or migration; the DDL below is illustrative of the future design.)**
-
-```sql
--- Illustrative only: these columns do not exist in the shipped schema
-ALTER TABLE sessions ADD COLUMN node_id VARCHAR(50);
-ALTER TABLE sessions ADD COLUMN node_url VARCHAR(255);
-```
-
-The load balancer reads the mapping and routes accordingly.
+Store session-node mapping in the database. **(Implemented.)** The `sessions` table carries
+`nodeId`, `nodeUrl`, `claimedAt`, `leaseExpiresAt`, `leaseGeneration` and `desiredState`
+(migrations `AddSessionOwnership`, `AddSessionNodeUrl`, `AddSessionLeaseGeneration`,
+`AddSessionDesiredState`). Routing is done in-app rather than at the load balancer:
+`SessionProxyInterceptor` forwards a session-scoped request to the owner's `NODE_URL`, one hop,
+verified against the live lease.
 
 ### Strategy 2: Consistent Hashing
 
-Route sessions based on session ID hash. **(Not implemented — no such routing helper exists in
-code; the sketch below is illustrative of the future design.)**
+Route sessions based on session ID hash. **(Not implemented, and no longer the plan — superseded
+by Strategy 3, which shipped.)** Hash placement cannot respect capacity or survive a node's death
+without remapping every session; the claim loop does both.
 
 ```typescript
 function getNodeForSession(sessionId: string, nodes: string[]): string {
@@ -164,7 +161,14 @@ function getNodeForSession(sessionId: string, nodes: string[]): string {
 
 ### Strategy 3: Session Claim
 
-Each node "claims" sessions on startup and releases them on shutdown. **(Not implemented — no claim/lease logic exists in code; this is the design target.)**
+Each node "claims" sessions it may run. **(Implemented — this is the shipped mechanism.)**
+`SessionOwnershipService` takes a conditional-UPDATE claim with a TTL lease (renewed on a
+heartbeat, computed on the database clock on Postgres, fenced by `leaseGeneration` so a stale
+incarnation of the same node cannot write as owner). `SessionTakeoverService` is the reconciling
+claim loop: it adopts lapsed-lease sessions AND unclaimed sessions whose `desiredState` is
+`running`, bounded by `MAX_CONCURRENT_SESSIONS`. `POST /infra/drain` hands a node's sessions to
+peers via deliberate lease lapse. See also `ROLE=api|worker|all` in `.env.example` for the
+split-plane topology this enables.
 
 ## 13.3 Docker Swarm Deployment
 

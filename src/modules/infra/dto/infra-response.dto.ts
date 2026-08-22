@@ -331,6 +331,31 @@ export class InfraConfigSaveResponseDto {
   profiles!: string[];
 }
 
+// ---------- POST /infra/drain ----------
+
+export class InfraDrainResponseDto {
+  @ApiProperty({ example: 'Node drained. Peers adopt the abandoned sessions once their leases lapse.' })
+  message!: string;
+
+  @ApiProperty({ description: 'Readiness now reports 503; the node keeps serving in-flight traffic.', example: true })
+  draining!: boolean;
+
+  @ApiProperty({ description: 'Engines torn down by the drain.', example: 4 })
+  stoppedEngines!: number;
+
+  @ApiProperty({
+    description: 'Session claims forgotten locally and left to lapse (the adoptable handoff).',
+    example: 4,
+  })
+  abandonedClaims!: number;
+
+  @ApiProperty({
+    description: 'Lease TTL in ms — the worst-case delay before a peer may adopt an abandoned session.',
+    example: 60000,
+  })
+  leaseTtlMs!: number;
+}
+
 // ---------- POST /infra/restart ----------
 
 export class InfraRestartResponseDto {
@@ -383,6 +408,8 @@ export class MigrationTablesDto {
   @ApiProperty({ type: [Object] }) messageBatches!: object[];
   @ApiProperty({ type: [Object] }) templates!: object[];
   @ApiProperty({ type: [Object] }) baileysStoredMessages!: object[];
+
+  @ApiProperty({ type: [Object] }) baileysAuthState!: object[];
   @ApiProperty({ type: [Object] }) lidMappings!: object[];
   @ApiProperty({ type: [Object] }) pluginInstances!: object[];
   @ApiProperty({ type: [Object] }) conversationMappings!: object[];
@@ -402,6 +429,8 @@ export class TableCountsDto {
   @ApiProperty({ example: 0 }) messageBatches!: number;
   @ApiProperty({ example: 3 }) templates!: number;
   @ApiProperty({ example: 512 }) baileysStoredMessages!: number;
+
+  @ApiProperty({ example: 128 }) baileysAuthState!: number;
   @ApiProperty({ example: 64 }) lidMappings!: number;
   @ApiProperty({ example: 12 }) pluginInstances!: number;
   @ApiProperty({ example: 8 }) conversationMappings!: number;

@@ -5,7 +5,7 @@ import { IntegrationDeliveryFailure } from './entities/integration-delivery-fail
 import { IngressEvent } from './entities/ingress-event.entity';
 import { IngressEnqueueService } from './ingress-enqueue.service';
 import { IngressJobData } from '../queue/processors/ingress.processor';
-import { KeyedAsyncLock } from './ordering-lock';
+import { createOrderingLock } from './ordering-lock';
 
 const REDRIVE_BATCH_SIZE = 100;
 
@@ -21,7 +21,8 @@ interface StoredDlqPayload {
 
 @Injectable()
 export class RedriveService {
-  private readonly lock = new KeyedAsyncLock();
+  // Redis-backed when REDIS_ENABLED so concurrent redrives of one instance across pods serialize.
+  private readonly lock = createOrderingLock('redrive');
 
   constructor(
     @InjectRepository(IntegrationDeliveryFailure, 'data') private readonly repo: Repository<IntegrationDeliveryFailure>,

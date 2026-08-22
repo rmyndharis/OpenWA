@@ -104,11 +104,35 @@ export class SessionTakeoverService implements OnApplicationBootstrap, OnModuleD
     }
   }
 
-  /** One pass: adopt every eligible lapsed session. Exposed for the spec; the timer drives it. */
+  /**
+   * One pass of the claim loop: adopt every eligible lapsed session, then any runnable session
+   * nobody holds. Exposed for the spec; the timer drives it. Two feeds, one loop — the sweep is a
+   * desired-state reconciler, not just a crash detector: "should be running, is not running
+   * anywhere" converges here regardless of how the session got into that state.
+   */
   async sweep(): Promise<void> {
     if (this.stopping) return;
     const lapsed = await this.ownership.lapsedHeldByOthers();
-    const eligible = lapsed.filter(session => this.isEligible(session));
+    const unclaimed = await this.ownership.unclaimedRunnable();
+    const seen = new Set<string>();
+    // Two feeds, two eligibility rules. Crash adoption (lapsed) resumes only what saved credentials
+    // can restore silently — isEligible's phone/status gate. The unclaimed feed is EXPLICIT intent:
+    // its query already filters to runnable states, and an unpaired session with desiredState
+    // 'running' must be launched (that QR is how ROLE=api pairing reaches a worker at all).
+    let eligible = [...lapsed.filter(session => this.isEligible(session)), ...unclaimed].filter(session => {
+      if (seen.has(session.id)) return false;
+      seen.add(session.id);
+      return true;
+    });
+    // Capacity fence: never adopt past MAX_CONCURRENT_SESSIONS (0 = unlimited). start() enforces
+    // the cap too, but refusing here keeps the loop from burning its stagger budget on launches
+    // that will be refused — and leaves the rows for a peer with headroom to claim instead.
+    const maxConcurrent = this.configService?.get<number>('sessions.maxConcurrent') ?? 0;
+    if (maxConcurrent > 0) {
+      const headroom = Math.max(0, maxConcurrent - this.sessionService.activeEngineCount());
+      if (headroom === 0) return;
+      eligible = eligible.slice(0, headroom);
+    }
     if (eligible.length === 0) return;
 
     for (let i = 0; i < eligible.length; i++) {
@@ -146,7 +170,11 @@ export class SessionTakeoverService implements OnApplicationBootstrap, OnModuleD
 
   private isEligible(session: Session): boolean {
     // Only authenticated sessions (phone set): an engine is worth relaunching exactly when the
-    // saved credentials can restore the link without a human scanning anything.
-    return Boolean(session.phone) && TAKEOVER_STATUSES.has(session.status);
+    // saved credentials can restore the link without a human scanning anything. And only sessions
+    // the operator WANTS running — a deliberate stop must never be undone by reconciliation.
+    // Rows predating the desiredState column read as undefined in stubbed specs; the migration
+    // backfills real rows, so undefined here means "no gate", preserving pre-column behavior.
+    const wantsRunning = session.desiredState === undefined || session.desiredState === 'running';
+    return wantsRunning && Boolean(session.phone) && TAKEOVER_STATUSES.has(session.status);
   }
 }

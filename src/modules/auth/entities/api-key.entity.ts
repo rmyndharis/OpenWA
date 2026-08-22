@@ -1,4 +1,5 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
+import { mainDateColumnType } from '../../../common/utils/column-types';
 
 export enum ApiKeyRole {
   ADMIN = 'admin',
@@ -39,10 +40,12 @@ export class ApiKey {
   @Column({ type: 'boolean', default: true })
   isActive!: boolean;
 
-  @Column({ type: 'datetime', nullable: true })
+  // mainDateColumnType, not a hardcoded 'datetime': the main connection can be Postgres now
+  // (MAIN_DATABASE_TYPE), whose driver rejects 'datetime'. SQLite keeps the historic type.
+  @Column({ type: mainDateColumnType(), nullable: true })
   expiresAt!: Date | null;
 
-  @Column({ type: 'datetime', nullable: true })
+  @Column({ type: mainDateColumnType(), nullable: true })
   lastUsedAt!: Date | null;
 
   @Column({ type: 'int', default: 0 })

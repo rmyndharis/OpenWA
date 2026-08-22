@@ -7,15 +7,16 @@
  * PostgreSQL has native `jsonb` and `timestamp` types with better
  * indexing and query performance.
  *
- * DATA CONNECTION ONLY. These resolve the dialect of the *data* connection from the global
- * `DATABASE_TYPE` env var. Use them only on entities bound to the data connection. Entities on the
- * MAIN connection (auth, audit) are ALWAYS SQLite — it is hardcoded `type: 'better-sqlite3'` in
- * app.module.ts regardless of DATABASE_TYPE — so they must hardcode `simple-json` / `datetime`
- * (see audit-log.entity.ts) and must NOT call these helpers, or a Postgres deployment would emit a
- * `jsonb`/`timestamp` column on the always-SQLite main DB.
+ * CONNECTION-SCOPED. `dateColumnType()` resolves the dialect of the *data* connection
+ * (`DATABASE_TYPE`); `mainDateColumnType()` resolves the *main* auth/audit connection
+ * (`MAIN_DATABASE_TYPE`, sqlite by default). The two connections can run different dialects, so an
+ * entity must use the helper of the connection it is bound to — the data helper on a main entity
+ * would emit a `timestamp` column on a SQLite main DB (and vice versa) whenever the two settings
+ * diverge.
  */
 
 const isPostgres = (): boolean => process.env.DATABASE_TYPE === 'postgres';
+const isMainPostgres = (): boolean => process.env.MAIN_DATABASE_TYPE === 'postgres';
 
 /**
  * Always 'simple-json' (TypeORM JSON.stringify/parse over a `text` column), on BOTH dialects.
@@ -34,3 +35,11 @@ export const jsonColumnType = (): 'simple-json' => 'simple-json';
  * Use with DateTransformer for SQLite compatibility.
  */
 export const dateColumnType = (): 'timestamp' | 'text' => (isPostgres() ? 'timestamp' : 'text');
+
+/**
+ * MAIN-connection date columns: 'timestamp' on Postgres, and the historic 'datetime' on SQLite —
+ * byte-identical to what every existing install's api_keys schema already carries, so flipping
+ * MAIN_DATABASE_TYPE never rewrites the SQLite schema. No transformer needed on either dialect:
+ * both column types round-trip Date objects natively.
+ */
+export const mainDateColumnType = (): 'timestamp' | 'datetime' => (isMainPostgres() ? 'timestamp' : 'datetime');

@@ -56,6 +56,7 @@ services:
       # engine, and without this flag sessions sit at `disconnected` until started by hand. Default
       # ON for the dev compose (single-operator box); the app-level default stays OFF.
       - AUTO_START_SESSIONS=${AUTO_START_SESSIONS:-true}
+      - ROLE=${ROLE:-}
       - DATABASE_TYPE=${DATABASE_TYPE:-sqlite}
       - DATABASE_NAME=${DATABASE_NAME:-}
       - DATABASE_SYNCHRONIZE=${DATABASE_SYNCHRONIZE:-true}
@@ -78,6 +79,7 @@ services:
       # Forward the plain-HTTP dashboard CSP override; unset preserves the application default.
       - CSP_UPGRADE_INSECURE_REQUESTS=${CSP_UPGRADE_INSECURE_REQUESTS:-}
       - STORAGE_TYPE=${STORAGE_TYPE:-local}
+      - STORAGE_STRICT=${STORAGE_STRICT:-}
       - STORAGE_LOCAL_PATH=${STORAGE_LOCAL_PATH:-/app/data/media}
       # Install plugins into the writable, persistent data volume (the root FS is read-only). Matches
       # docker-compose.yml and the application default; set explicitly so the path stays correct even
@@ -227,8 +229,16 @@ services:
       - DATABASE_IDLE_TIMEOUT_MS=${DATABASE_IDLE_TIMEOUT_MS:-}
       - DATABASE_CONNECTION_TIMEOUT_MS=${DATABASE_CONNECTION_TIMEOUT_MS:-}
       - MAIN_DATABASE_NAME=${MAIN_DATABASE_NAME:-}
+      # sqlite (default) | postgres — postgres is required for multi-node (shared api_keys store).
+      - MAIN_DATABASE_TYPE=${MAIN_DATABASE_TYPE:-}
+      - MAIN_DATABASE_HOST=${MAIN_DATABASE_HOST:-}
+      - MAIN_DATABASE_PORT=${MAIN_DATABASE_PORT:-}
+      - MAIN_DATABASE_USERNAME=${MAIN_DATABASE_USERNAME:-}
+      - MAIN_DATABASE_PASSWORD=${MAIN_DATABASE_PASSWORD:-}
       # Engine / session tuning.
       - MAX_CONCURRENT_SESSIONS=${MAX_CONCURRENT_SESSIONS:-}
+      - SESSION_RESTORE_CONCURRENCY=${SESSION_RESTORE_CONCURRENCY:-}
+      - BAILEYS_AUTH_STORE=${BAILEYS_AUTH_STORE:-}
       - BAILEYS_AUTH_DIR=${BAILEYS_AUTH_DIR:-}
       - BAILEYS_BROWSER_NAME=${BAILEYS_BROWSER_NAME:-}
       - BAILEYS_LOG_LEVEL=${BAILEYS_LOG_LEVEL:-}

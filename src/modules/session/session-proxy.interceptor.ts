@@ -117,8 +117,13 @@ export class SessionProxyInterceptor implements NestInterceptor {
   async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<unknown>> {
     if (context.getType() !== 'http' || !this.ownership) return next.handle();
     // Routing is opt-in per deployment: a node that never announced its own URL is not part of a
-    // routed topology, and the per-request ownership lookup would be pure overhead.
-    if (!this.ownership.nodeUrl) return next.handle();
+    // routed topology, and the per-request ownership lookup would be pure overhead. ROLE=api is the
+    // exception — an api node is IN the routed topology by definition (it hosts no engines, so a
+    // session-scoped call it receives is always someone else's to answer), yet it has no URL to
+    // announce because nothing ever routes TO it. Without this, every proxied read on an api pod
+    // answered 400 "Session is not started".
+    const isApiRole = this.configService?.get<string>('role') === 'api';
+    if (!this.ownership.nodeUrl && !isApiRole) return next.handle();
 
     const request = context.switchToHttp().getRequest<Request>();
 
@@ -140,7 +145,10 @@ export class SessionProxyInterceptor implements NestInterceptor {
       select: { id: true, nodeId: true, nodeUrl: true, leaseExpiresAt: true },
     });
     if (!owner?.nodeId || owner.nodeId === this.ownership.nodeId) return next.handle();
-    const leaseLive = owner.leaseExpiresAt != null && owner.leaseExpiresAt > new Date();
+    // Liveness comes from the ownership service's SQL predicate, not a JS date comparison: with
+    // DB-clock leases on Postgres, the database is the one clock all nodes agree on, and a JS
+    // compare re-introduces exactly the reader-timezone skew the DB clock removed.
+    const leaseLive = await this.ownership.isHeldByOtherNode(sessionId);
     if (!leaseLive) return next.handle();
 
     // One hop only — but never "execute anywhere": the hop marker is client-settable, so a request
