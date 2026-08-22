@@ -63,6 +63,7 @@
 | 29  | [Engine Capability Matrix](./29-engine-capability-matrix.md)             | Per-engine capability support, gaps, and roadmap                                   |
 | 30  | [Plugin Sandboxing](./30-plugin-sandboxing.md)                           | Worker isolation, capabilities, and plugin limits                                  |
 | 31  | [Session Lifecycle: Invariant Catalog](./31-session-lifecycle-design.md) | The race windows the lifecycle defends, where each is defended, which spec pins it |
+| 32  | [Split-Plane Refactor: Change Document](./32-split-plane-refactor.md) | What the ROLE=api\|worker refactor changed, why each change was made, and the capability it unlocks |
 
 **Examples**
 
