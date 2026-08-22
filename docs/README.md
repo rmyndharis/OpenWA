@@ -64,6 +64,7 @@
 | 30  | [Plugin Sandboxing](./30-plugin-sandboxing.md)                           | Worker isolation, capabilities, and plugin limits                                  |
 | 31  | [Session Lifecycle: Invariant Catalog](./31-session-lifecycle-design.md) | The race windows the lifecycle defends, where each is defended, which spec pins it |
 | 32  | [Split-Plane Refactor: Change Document](./32-split-plane-refactor.md) | What the ROLE=api\|worker refactor changed, why each change was made, and the capability it unlocks |
+| 33  | [Split-Plane Deployment: User Guide](./33-split-plane-user-guide.md) | How to deploy, migrate to, scale, monitor and troubleshoot the api/worker topology |
 
 **Examples**
 
