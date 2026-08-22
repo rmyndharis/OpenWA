@@ -145,8 +145,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # (Debian essential, present before this layer), so the layer adds 0 distinct vulnerabilities.
 # libpq5 and the postgresql-client packages themselves are clean. Recheck with:
 #   trivy image --vuln-type os,library --severity CRITICAL,HIGH --ignore-unfixed --ignorefile .trivyignore <image>
+#
+# The armored key must reach the image with LF endings. apt dearmors a `signed-by=` .asc through
+# apt-key, whose awk advances on the blank armor separator line, so a CR there yields an empty
+# keyring and NO_PUBKEY 7FCC7D46ACCC4CF8. The `.gitattributes` rule keeps fresh clones on LF; the
+# strip below repairs the Windows clones already on disk, which that rule cannot reach.
 COPY scripts/pgdg-ACCC4CF8.asc /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
-RUN echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+RUN sed -i 's/\r$//' /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
 http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
     && apt-get update && apt-get install -y --no-install-recommends postgresql-client-17 \
     && rm -rf /var/lib/apt/lists/*
