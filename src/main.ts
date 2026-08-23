@@ -248,4 +248,36 @@ async function bootstrap() {
 void runBootstrapOrExit(bootstrap, {
   logger: createLogger('Bootstrap'),
   closeApp: () => (appInstance ? appInstance.close() : Promise.resolve()),
+    // ... rest of your existing main.ts file ...
+
+  // 1. Fetch config settings safely from NestJS ConfigService
+  const configService = app.get(ConfigService);
+  const port = process.env.PORT || configService.get('PORT') || 8080;
+
+  // 2. Bind the server to the port immediately so Render's health check passes
+  await app.listen(port, '0.0.0.0', () => {
+    bootstrapLogger.log(`NestJS Server successfully listening on port ${port}`);
+    
+    // 3. Trigger OpenWA asynchronously AFTER the web server goes online
+    // Do NOT await this function. Let it execute in the background.
+    initializeOpenWaBackground(app);
+  });
+}
+
+function initializeOpenWaBackground(app: INestApplication) {
+  const logger = createLogger('OpenWA-Init');
+  logger.log('Web server is online. Starting OpenWA engine sessions in the background...');
+  
+  try {
+    // Locate your WhatsApp or Session Management service instance from the Nest container
+    // Example: const sessionService = app.get(SessionService);
+    // sessionService.initAllActiveSessions();
+  } catch (error) {
+    logger.error('Failed to spin up background WhatsApp sessions:', error);
+  }
+}
+
+// Fallback fatal wrapper already built into your architecture
+runBootstrapOrExit(bootstrap);
+
 });
