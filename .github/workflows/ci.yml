@@ -24,37 +24,41 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Run ESLint
-        run: npm run lint
+        run: bun run lint
 
       # `nest build` uses tsconfig.build.json which excludes **/*spec.ts, and ts-jest/eslint don't
       # full-program type-check specs — so without this gate, type errors in spec files are invisible
       # to CI. tsconfig.json already includes both `src` and `test`, so this is the cheapest full-program
       # check covering specs (no separate tsconfig.spec.json needed).
       - name: Type-check full program (including specs)
-        run: npx tsc --noEmit -p tsconfig.json
+        run: bunx tsc --noEmit -p tsconfig.json
 
       - name: Check formatting
-        run: npm run format:check
+        run: bun run format:check
 
       - name: Check version consistency (docs track package.json)
-        run: npm run check:versions
+        run: bun run check:versions
 
       # The builder stage ends with `COPY . .` — fail if .dockerignore stops rejecting non-build
       # material (or starts rejecting a build input) before a Docker build finds out.
       - name: Check Docker build context (.dockerignore)
-        run: npm run check:dockerignore
+        run: bun run check:dockerignore
 
       # The committed openapi.json is the machine-readable API contract. Fail if a controller/DTO
       # change landed without regenerating the snapshot (npm run openapi:export). The generator
       # bootstraps the app hermetically (in-memory/temp SQLite, no listen), so this is a static check.
       - name: Check OpenAPI snapshot is up to date
-        run: npm run openapi:check
+        run: bun run openapi:check
 
   # Deliberately its own job rather than a step inside Lint. `npm audit` reports against the
   # advisory database, not against the diff, so a newly published advisory turns red on unrelated
@@ -72,10 +76,13 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Generate lockfile for audit
+        # npm audit reads its own lockfile format, which bun.lock isn't. This project no longer
+        # keeps a committed package-lock.json (bun is the installer of record), so generate one
+        # here purely for npm's advisory-tree resolution — package-lock-only skips node_modules
+        # entirely, so it doesn't fight bun's install anywhere else in this job or its cache.
+        run: npm install --package-lock-only
 
       - name: Security audit
         # high (not critical): the `overrides` in package.json clear the root tree's HIGH advisories
@@ -107,21 +114,28 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      # bun compiles native addons (better-sqlite3) against Bun's own ABI, not the Node
+      # version above — the root `postinstall` script chains an `npm rebuild` to recompile
+      # it for the active Node, so it's already correct after this one install step.
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Run unit tests
-        run: npm test -- --coverage
+        run: bun run test -- --coverage
 
       # node:test specs for the repo-level scripts (postinstall exit-code propagation) — jest's
       # rootDir is src/, so these live outside its reach and run on the plain node runner.
       - name: Run script unit tests
-        run: npm run test:scripts
+        run: bun run test:scripts
 
       - name: Run e2e smoke tests
-        run: npm run test:e2e
+        run: bun run test:e2e
         # Point the queue-on suite at the service container (it self-skips without one). Every other
         # suite keeps QUEUE_ENABLED=false via setup-e2e.ts and never touches Redis.
         env:
@@ -159,18 +173,22 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Build (compiles the data migrations to dist/)
-        run: npm run build
+        run: bun run build
 
       # Applies the full data-migration chain to a real Postgres and asserts every generated-uuid PK
       # has a DB DEFAULT — the dialect gap SQLite-only tests can't see.
       - name: Migrate + uuid-default smoke against PostgreSQL
-        run: npm run test:pg-smoke
+        run: bun run test:pg-smoke
         env:
           DATABASE_TYPE: postgres
           DATABASE_HOST: localhost
@@ -183,7 +201,7 @@ jobs:
       # STORED body_ts tsvector). The spec self-skips unless DATABASE_TYPE=postgres, so it is a no-op
       # in the default test job and only executes here against the postgres:16 service.
       - name: Postgres FTS provider spec
-        run: npx jest src/database/migrations/__tests__/1782400000000-AddMessagesFts.pg.spec.ts
+        run: bunx jest src/database/migrations/__tests__/1782400000000-AddMessagesFts.pg.spec.ts
         env:
           DATABASE_TYPE: postgres
           DATABASE_HOST: localhost
@@ -261,13 +279,17 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Build project
-        run: npm run build
+        run: bun run build
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

@@ -4,12 +4,16 @@
 # ===== Stage 1: Builder =====
 # Pin the builder to the BUILD host's platform (not the target's). It only produces arch-INDEPENDENT
 # artifacts (the NestJS dist/ JS and the static dashboard SPA), so it never needs to run emulated for
-# the non-native target. On a multi-arch buildx build this avoids QEMU emulating the whole npm ci +
+# the non-native target. On a multi-arch buildx build this avoids QEMU emulating the whole bun install +
 # Vite build for arm64 — which is slow AND is where the arm64 lightningcss (Vite 8's native CSS
 # minifier) optional dependency fails to install ("Cannot find module lightningcss.linux-arm64-gnu.node").
 # The per-arch runtime deps are installed natively in the target-platform production stage below.
 # NOTE: $BUILDPLATFORM requires BuildKit (CI uses buildx; modern `docker build`/compose default to it).
 FROM --platform=$BUILDPLATFORM docker.io/node:22-slim AS builder
+
+# Bun as installer, Node as runtime: grab the static binary from oven's image rather than
+# curl-installing or npm-installing it, so it costs one COPY instead of a network round trip.
+COPY --from=oven/bun:1-slim /usr/local/bin/bun /usr/local/bin/bun
 
 WORKDIR /app
 
@@ -21,38 +25,40 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy package files
-COPY package*.json ./
+COPY package.json bun.lock ./
 
-# The postinstall hook is a real file (scripts/postinstall.js), and `npm ci` fails outright when
+# The postinstall hook is a real file (scripts/postinstall.js), and the install fails outright when
 # a lifecycle script is missing — copy it BEFORE the install. dashboard/ and the backport patcher
 # are deliberately still absent at this point, so the hook cleanly no-ops here (dashboard deps are
 # installed explicitly below; the patcher only matters for the production stage).
 COPY scripts/postinstall.js ./scripts/
 
-# Install all dependencies INCLUDING devDependencies — the build needs them (`nest` from
-# @nestjs/cli, plus `vite`/`typescript` for the dashboard). `--include=dev` is REQUIRED, not
-# cosmetic: npm omits devDependencies whenever NODE_ENV=production is present in the build env.
-# Coolify (and similar PaaS) promote every ${VAR} referenced in the compose file to a build-time
-# variable, so docker-compose.yml's `NODE_ENV=${NODE_ENV:-production}` leaks NODE_ENV=production
-# into this stage and a bare `npm ci` would skip @nestjs/cli → `sh: 1: nest: not found` (exit 127).
-# (docker-compose.dev.yml hardcodes NODE_ENV=development, which is why the dev build never hit this.)
-RUN npm ci --include=dev
+# Unlike npm, bun does not omit devDependencies just because NODE_ENV=production is set in the
+# build env — it installs everything package.json lists regardless, so the NODE_ENV leak that used
+# to strip @nestjs/cli under npm (Coolify and similar PaaS promote every ${VAR} referenced in the
+# compose file to a build-time variable, and docker-compose.yml's `NODE_ENV=${NODE_ENV:-production}`
+# leaked in) is no longer a footgun here. The root postinstall script also chains an `npm rebuild
+# better-sqlite3 --update-binary`, so the native binding still ends up compiled against this stage's
+# actual Node ABI even though bun did the install.
+RUN bun install --frozen-lockfile
 
 # Copy source code
 COPY . .
 
-# Build the API (dist/) and the dashboard SPA (dashboard/dist/). The root `npm ci` above
+# Build the API (dist/) and the dashboard SPA (dashboard/dist/). The root install above
 # ran before the dashboard source was copied, so its postinstall hook skipped the dashboard
-# deps - install them explicitly here (npm ci, reproducible from dashboard/package-lock.json).
-# `--include=dev` for the same reason as above: the dashboard build needs vite/typescript
-# (devDependencies), which a NODE_ENV=production build env would otherwise omit.
-# Drop the incremental-build cache afterwards: it is pinned inside dist/ (so nest's deleteOutDir
-# wipes it with the output), and the production stage copies dist/ wholesale — it would otherwise
-# ship dead compiler metadata in every image.
-RUN npm run build && npm run dashboard:ci -- --include=dev && npm run dashboard:build && rm -f dist/*.tsbuildinfo
+# deps - install them explicitly here (dashboard:ci wraps `cd dashboard && npm ci`, reproducible
+# from dashboard/package-lock.json — the dashboard subproject stays on npm, untouched by this
+# migration). Drop the incremental-build cache afterwards: it is pinned inside dist/ (so nest's
+# deleteOutDir wipes it with the output), and the production stage copies dist/ wholesale — it
+# would otherwise ship dead compiler metadata in every image.
+RUN bun run build && bun run dashboard:ci -- --include=dev && bun run dashboard:build && rm -f dist/*.tsbuildinfo
 
 # ===== Stage 2: Production =====
 FROM docker.io/node:22-slim AS production
+
+# Bun as installer only — the process still runs on Node (see CMD at the bottom).
+COPY --from=oven/bun:1-slim /usr/local/bin/bun /usr/local/bin/bun
 
 # Chrome for Testing has no linux-arm64 build, and Puppeteer's chromium snapshot
 # is x86_64-only on Linux too. So: amd64 uses Chrome for Testing (downloaded below)
@@ -104,29 +110,31 @@ RUN groupadd -r openwa && useradd -r -g openwa openwa
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package.json bun.lock ./
 
 # Backport upstream whatsapp-web.js#201832 (id._serialized -> id.$1 normalization,
 # broken by WA Web 2.3000.x ~2026-07-14) into the installed dep at build time.
 # The patcher self-disables once whatsapp-web.js ships the fix upstream.
-# scripts/postinstall.js rides along: `npm ci` below runs the hook, which fails
+# scripts/postinstall.js rides along: the install below runs the hook, which fails
 # when the file is missing. With the patcher present the hook applies it in
 # --best-effort mode; the explicit fatal run right after is the real gate.
 COPY scripts/postinstall.js scripts/patch-wwebjs-201832.js scripts/wwebjs-201832.patch scripts/patch-wwebjs-newsletter-preview.js ./scripts/
 
-# Install production dependencies only, then apply the backports.
-RUN npm ci --omit=dev \
+# Install production dependencies only, then apply the backports. The postinstall hook's chained
+# `npm rebuild better-sqlite3` still runs here and targets this stage's own Node — same prebuilt-
+# binary fetch path better-sqlite3 always used under plain npm, no compiler toolchain needed.
+RUN bun install --frozen-lockfile --production \
     && node scripts/patch-wwebjs-201832.js \
     && node scripts/patch-wwebjs-newsletter-preview.js \
-    && npm cache clean --force
+    && rm -rf /root/.bun/install/cache
 
 # Replace the npm the base image bundles. npm is not on the request path — the entrypoint runs
 # `node dist/main` — but it stays in the image because the operator runbooks drive it
 # (`docker exec openwa npm run cli …`, `npm run export`), and its own bundled dependency tree is
 # what the release image scan reports. node:22-slim currently ships npm 10.9.8, whose bundle
 # carries a critical node-tar advisory plus sigstore/picomatch ones; npm 12 fixes all three.
-# Deliberately AFTER `npm ci`, so the application tree is still resolved by the npm the lockfile
-# was generated with and only the global CLI is swapped.
+# Deliberately AFTER the install above, so the application tree is still resolved by bun and
+# only the global npm CLI binary is swapped.
 RUN npm install -g npm@12 && npm cache clean --force
 
 # amd64: download Chrome for Testing via Puppeteer and symlink it.
