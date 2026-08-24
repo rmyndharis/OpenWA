@@ -85,12 +85,20 @@ export class SessionEngineEventWiring {
     this.logger = deps.logger;
   }
 
+  /**
+   * `previouslyLinked` is whether the session row carried a phone when this engine started, i.e.
+   * it had completed a link before. A QR from such an engine means the stored credentials are gone
+   * or no longer accepted, and when that happened while the engine was down nothing else in the
+   * log says so, hence the one-shot warning below.
+   */
   buildCallbacks(
     id: string,
     engine: IWhatsAppEngine,
     sessionName: string,
     host: SessionEngineWiringHost,
+    previouslyLinked = false,
   ): EngineEventCallbacks {
+    let relinkWarned = false;
     /**
      * Persist an engine-driven status, but only while this node still owns the session.
      *
@@ -119,6 +127,22 @@ export class SessionEngineEventWiring {
           sessionId: id,
           action: 'qr_generated',
         });
+        // A whatsapp-web.js revocation that happened while the engine was down leaves no other trace:
+        // the engine simply boots into the QR screen, with no LOGOUT, no auth failure and no audit
+        // row. The paths where OpenWA itself discarded the credentials (a LOGOUT close, the
+        // stuck-auth recovery) also end here, but each of those has already logged its own warning,
+        // and starting a session under a different ENGINE_TYPE than it was linked with lands here too.
+        if (previouslyLinked && !relinkWarned) {
+          relinkWarned = true;
+          this.logger.warn(
+            'Previously linked session is asking for a QR again: its stored credentials are missing or no ' +
+              'longer accepted. Unless an earlier warning for this session (LOGOUT, auth_cleared) or a changed ' +
+              'ENGINE_TYPE explains it, WhatsApp dropped the link while the engine was down (unlinked from the ' +
+              "phone, expired while offline, or the engine's stored auth state was lost). Check Linked devices " +
+              'on the phone before re-pairing.',
+            { sessionId: id, action: 'relink_required' },
+          );
+        }
 
         void host.webhookService.dispatch(id, 'session.qr', { sessionId: id, qr });
 
