@@ -19,6 +19,7 @@ const Users = lazy(() => import('./pages/Users').then(m => ({ default: m.Users }
 const MessageTester = lazy(() => import('./pages/MessageTester').then(m => ({ default: m.MessageTester })));
 const Infrastructure = lazy(() => import('./pages/Infrastructure').then(m => ({ default: m.Infrastructure })));
 const Plugins = lazy(() => import('./pages/Plugins'));
+const Billing = lazy(() => import('./pages/Billing').then(m => ({ default: m.Billing })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -96,6 +97,7 @@ function AppContent() {
               }
             >
               <Route path="dashboard" element={<Dashboard />} />
+              <Route path="billing" element={<Billing />} />
               <Route path="sessions" element={<Sessions />} />
               <Route path="webhooks" element={<Webhooks />} />
             <Route path="api-keys" element={<ApiKeys />} />

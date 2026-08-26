@@ -74,6 +74,11 @@ export interface LoginResponse {
   user: User;
 }
 
+export interface BillingStatus {
+  active: boolean;
+  paidUntil?: string;
+}
+
 export interface AuditLog {
   id: string;
   action: string;
@@ -202,6 +207,11 @@ export const authApi = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+};
+
+export const billingApi = {
+  status: () => request<BillingStatus>('/billing/status'),
+  checkout: () => request<{ active: boolean; url?: string }>('/billing/checkout', { method: 'POST' }),
 };
 
 export const userApi = {

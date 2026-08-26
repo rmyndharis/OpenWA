@@ -55,6 +55,7 @@
   },
   "nav": {
     "dashboard": "דאשבורד",
+    "billing": "חיוב",
     "sessions": "Sessions",
     "webhooks": "Webhooks",
     "apiKeys": "מפתחות API",

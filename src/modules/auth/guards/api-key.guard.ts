@@ -4,8 +4,10 @@ import { Request } from 'express';
 import { AuthService } from '../auth.service';
 import { ApiKey, ApiKeyRole } from '../entities/api-key.entity';
 import { REQUIRED_ROLE_KEY, PUBLIC_KEY } from '../decorators/auth.decorators';
+import { BILLING_EXEMPT_KEY } from '../decorators/auth.decorators';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/entities/audit-log.entity';
+import { BillingService } from '../../billing/billing.service';
 
 @Injectable()
 export class ApiKeyGuard implements CanActivate {
@@ -13,6 +15,7 @@ export class ApiKeyGuard implements CanActivate {
     private readonly authService: AuthService,
     private readonly reflector: Reflector,
     private readonly auditService: AuditService,
+    private readonly billingService: BillingService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -45,6 +48,14 @@ export class ApiKeyGuard implements CanActivate {
 
     if (requiredRole && !this.authService.hasPermission(principal, requiredRole)) {
       throw new UnauthorizedException(`Insufficient permissions. Required: ${requiredRole}`);
+    }
+
+    const isBillingExempt = this.reflector.getAllAndOverride<boolean>(BILLING_EXEMPT_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (!isBillingExempt) {
+      await this.billingService.assertAccess(principal);
     }
 
     if (credentials.type === 'user') {

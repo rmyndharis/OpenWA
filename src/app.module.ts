@@ -8,6 +8,7 @@ import { MessageModule } from './modules/message/message.module';
 import { WebhookModule } from './modules/webhook/webhook.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { BillingAccount } from './modules/billing/entities/billing-account.entity';
 import { AuditModule } from './modules/audit/audit.module';
 import { EngineModule } from './engine/engine.module';
 import { LoggerModule } from './common/services/logger.module';
@@ -53,7 +54,11 @@ if (process.env.QUEUE_ENABLED === 'true') {
       useFactory: (configService: ConfigService) => ({
         type: 'sqlite' as const,
         database: configService.get<string>('database.database', './data/main.sqlite'),
-        entities: [__dirname + '/modules/auth/**/*.entity{.ts,.js}', __dirname + '/modules/audit/**/*.entity{.ts,.js}'],
+        entities: [
+          __dirname + '/modules/auth/**/*.entity{.ts,.js}',
+          __dirname + '/modules/audit/**/*.entity{.ts,.js}',
+          BillingAccount,
+        ],
         synchronize: true,
         logging: configService.get<boolean>('database.logging', false),
       }),

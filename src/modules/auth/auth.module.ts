@@ -9,10 +9,11 @@ import { AuthController } from './auth.controller';
 import { AuthValidateController } from './auth-validate.controller';
 import { UsersController } from './users.controller';
 import { ApiKeyGuard } from './guards/api-key.guard';
+import { BillingModule } from '../billing/billing.module';
 
 @Global()
 @Module({
-  imports: [TypeOrmModule.forFeature([ApiKey, User], 'main')],
+  imports: [TypeOrmModule.forFeature([ApiKey, User], 'main'), BillingModule],
   controllers: [AuthController, AuthValidateController, UsersController],
   providers: [
     AuthService,

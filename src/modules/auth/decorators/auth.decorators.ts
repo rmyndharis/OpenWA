@@ -6,6 +6,7 @@ import { User } from '../entities/user.entity';
 
 export const REQUIRED_ROLE_KEY = 'requiredRole';
 export const PUBLIC_KEY = 'isPublic';
+export const BILLING_EXEMPT_KEY = 'isBillingExempt';
 
 /**
  * Mark a route as requiring a specific role
@@ -18,6 +19,9 @@ export const RequireRole = (role: ApiKeyRole) => SetMetadata(REQUIRED_ROLE_KEY, 
  * @example @Public()
  */
 export const Public = () => SetMetadata(PUBLIC_KEY, true);
+
+/** Allow authenticated users to reach payment and account-status routes when billing is overdue. */
+export const BillingExempt = () => SetMetadata(BILLING_EXEMPT_KEY, true);
 
 /**
  * Get the current API key from request

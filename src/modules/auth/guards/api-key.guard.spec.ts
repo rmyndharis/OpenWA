@@ -4,6 +4,7 @@ import { ApiKeyGuard } from './api-key.guard';
 import { AuthService } from '../auth.service';
 import { ApiKey, ApiKeyRole } from '../entities/api-key.entity';
 import { User } from '../entities/user.entity';
+import { BillingService } from '../../billing/billing.service';
 
 function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
   return {
@@ -68,6 +69,7 @@ describe('ApiKeyGuard', () => {
   let authService: jest.Mocked<Partial<AuthService>>;
   let reflector: jest.Mocked<Reflector>;
   const auditService = { logInfo: jest.fn() };
+  const billingService = { assertAccess: jest.fn() };
 
   beforeEach(() => {
     authService = {
@@ -81,7 +83,8 @@ describe('ApiKeyGuard', () => {
     } as unknown as jest.Mocked<Reflector>;
 
     auditService.logInfo.mockReset();
-    guard = new ApiKeyGuard(authService as AuthService, reflector, auditService as never);
+    billingService.assertAccess.mockReset();
+    guard = new ApiKeyGuard(authService as AuthService, reflector, auditService as never, billingService as never);
   });
 
   it('should allow access to @Public() routes without API key', async () => {
@@ -117,6 +120,7 @@ describe('ApiKeyGuard', () => {
     expect(result).toBe(true);
     expect(authService.validateApiKey).toHaveBeenCalledWith('my-key', '127.0.0.1', undefined);
     expect(auditService.logInfo).toHaveBeenCalled();
+    expect(billingService.assertAccess).toHaveBeenCalledWith(apiKey);
   });
 
   it('should accept Authorization Bearer header', async () => {

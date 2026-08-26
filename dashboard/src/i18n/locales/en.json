@@ -55,6 +55,7 @@
   },
   "nav": {
     "dashboard": "Dashboard",
+    "billing": "Billing",
     "sessions": "Sessions",
     "webhooks": "Webhooks",
     "apiKeys": "API Keys",
