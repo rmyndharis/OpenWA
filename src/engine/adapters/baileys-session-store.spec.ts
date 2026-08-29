@@ -64,6 +64,7 @@ describe('BaileysSessionStore', () => {
         unreadCount: 2,
         timestamp: 200,
         lastMessage: 'newest',
+        isMuted: false, // no muteEndTime on the chat -> not muted
       },
     ]);
     expect(store.lastMessage('628111@s.whatsapp.net')).toEqual({
@@ -108,6 +109,38 @@ describe('BaileysSessionStore', () => {
 
   it('lastMessage returns null for an unknown chat', () => {
     expect(store.lastMessage('unknown@s.whatsapp.net')).toBeNull();
+  });
+
+  // Mute state exposure (#1473). Baileys stores muteEndTime as epoch MILLISECONDS with a negative
+  // sentinel for "indefinitely"; the neutral shape reports epoch SECONDS with 0 = indefinite.
+  describe('mute state (#1473)', () => {
+    const chat = (muteEndTime: number | null): void =>
+      store.upsertChats([{ id: '628111@s.whatsapp.net', name: 'Alice', muteEndTime }]);
+
+    it('reports isMuted:false and no expiration for a chat with no mute set', () => {
+      chat(null);
+      expect(store.listChats()[0]).toEqual(expect.objectContaining({ isMuted: false }));
+      expect(store.listChats()[0]).not.toHaveProperty('muteExpiration');
+    });
+
+    it('reports a future mute end as muted, converting milliseconds to seconds', () => {
+      const endMs = Date.now() + 3_600_000; // 1h out
+      chat(endMs);
+      expect(store.listChats()[0]).toEqual(
+        expect.objectContaining({ isMuted: true, muteExpiration: Math.floor(endMs / 1000) }),
+      );
+    });
+
+    it('treats a negative sentinel as muted indefinitely (expiration 0)', () => {
+      chat(-1);
+      expect(store.listChats()[0]).toEqual(expect.objectContaining({ isMuted: true, muteExpiration: 0 }));
+    });
+
+    it('treats an elapsed mute end as no longer muted', () => {
+      chat(Date.now() - 1000); // already passed
+      expect(store.listChats()[0]).toEqual(expect.objectContaining({ isMuted: false }));
+      expect(store.listChats()[0]).not.toHaveProperty('muteExpiration');
+    });
   });
 
   describe('getEphemeralExpiration (#473)', () => {

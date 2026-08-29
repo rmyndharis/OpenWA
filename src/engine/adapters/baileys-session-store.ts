@@ -388,7 +388,33 @@ export class BaileysSessionStore {
       unreadCount: c.unreadCount ?? 0,
       timestamp: last?.timestamp ?? this.toUnixSeconds(c.conversationTimestamp),
       lastMessage: last?.text,
+      ...this.neutralMuteState(c.muteEndTime),
     };
+  }
+
+  /**
+   * Map Baileys' `muteEndTime` to the neutral `{ isMuted, muteExpiration }` shape. Unlike
+   * `conversationTimestamp`, `muteEndTime` is epoch MILLISECONDS (measured, not read off the proto —
+   * see the note in `chat-mute.spec.ts`), with a negative sentinel for "muted indefinitely" and
+   * null/0 for "not muted". `muteExpiration` is returned in epoch SECONDS to match `timestamp`
+   * (`0` = indefinite), and a mute whose end is already in the past reads as unmuted — the same
+   * elapsed-aware view whatsapp-web.js's own `isMuted` gives.
+   */
+  private neutralMuteState(muteEndTime: number | { toNumber(): number } | null | undefined): {
+    isMuted?: boolean;
+    muteExpiration?: number;
+  } {
+    const raw = muteEndTime == null ? 0 : typeof muteEndTime === 'number' ? muteEndTime : muteEndTime.toNumber();
+    if (raw === 0) {
+      return { isMuted: false };
+    }
+    if (raw < 0) {
+      return { isMuted: true, muteExpiration: 0 };
+    }
+    if (Date.now() >= raw) {
+      return { isMuted: false };
+    }
+    return { isMuted: true, muteExpiration: Math.floor(raw / 1000) };
   }
 
   /**

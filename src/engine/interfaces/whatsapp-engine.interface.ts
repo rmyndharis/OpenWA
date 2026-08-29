@@ -491,6 +491,17 @@ export interface ChatSummary {
   unreadCount: number;
   timestamp: number;
   lastMessage?: string;
+  /**
+   * Whether the chat is currently muted. Left `undefined` when the active engine cannot report mute
+   * state, so a consumer can distinguish "unknown" from "not muted" and fail closed (e.g. an
+   * automation rule that must never reply in a muted chat).
+   */
+  isMuted?: boolean;
+  /**
+   * Epoch SECONDS at which the mute expires — same unit as `timestamp`. `0` means muted with no
+   * expiry (indefinitely). Only meaningful when `isMuted` is true; omitted otherwise.
+   */
+  muteExpiration?: number;
 }
 
 /**

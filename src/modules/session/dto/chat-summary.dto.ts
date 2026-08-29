@@ -25,4 +25,20 @@ export class ChatSummaryDto {
 
   @ApiPropertyOptional({ example: 'hi' })
   lastMessage?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether the chat is currently muted. Absent when the active engine cannot report mute state ' +
+      '(so a consumer can tell "unknown" apart from "not muted").',
+    example: true,
+  })
+  isMuted?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Unix seconds at which the mute expires (same unit as `timestamp`). `0` means muted ' +
+      'indefinitely. Only present when `isMuted` is true.',
+    example: 1700003600,
+  })
+  muteExpiration?: number;
 }

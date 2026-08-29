@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `GET /sessions/{sessionId}/chats` now reports each chat's mute state: `isMuted` and, when muted,
+  `muteExpiration` (Unix seconds, `0` = muted indefinitely). Both fields are optional and absent when the
+  active engine cannot report mute state, so a consumer can tell "unknown" apart from "not muted" — e.g. an
+  automation rule that must never reply in a muted chat. Mapped on both engines. Closes #1473.
+
 ## [0.23.3] - 2026-08-24
 
 ### Added

@@ -203,3 +203,45 @@ describe('BaileysContacts.muteChat', () => {
     await expect(contacts.muteChat('628123@c.us', MUTE_UNTIL)).rejects.toBeInstanceOf(EngineTransportError);
   });
 });
+
+// Read-back of mute state through getChats (#1473). whatsapp-web.js exposes an authoritative
+// isMuted plus muteExpiration in epoch SECONDS (-1 = indefinitely); the neutral shape reports the
+// same seconds with 0 = indefinitely, and only when the chat is muted.
+describe('WwebjsChats.getChats mute mapping (#1473)', () => {
+  function makeChatsWith(rawChats: unknown[]): WwebjsChats {
+    const client = { getChats: jest.fn().mockResolvedValue(rawChats) };
+    const host = {
+      ensureReady: jest.fn(),
+      getClient: () => client as unknown as Client,
+      logger,
+      isPageTransportError: () => false,
+      reportIfPageTransportError: jest.fn(),
+    } as unknown as WwebjsEngineHost;
+    return new WwebjsChats(host, {} as unknown as WwebjsMessaging);
+  }
+
+  const raw = (over: Record<string, unknown>): Record<string, unknown> => ({
+    id: { _serialized: '628123@c.us' },
+    name: 'Alice',
+    isGroup: false,
+    unreadCount: 0,
+    timestamp: 1700000000,
+    ...over,
+  });
+
+  it('maps a timed mute to isMuted:true and the same epoch-seconds expiration', async () => {
+    const [chat] = await makeChatsWith([raw({ isMuted: true, muteExpiration: 1700003600 })]).getChats();
+    expect(chat).toEqual(expect.objectContaining({ isMuted: true, muteExpiration: 1700003600 }));
+  });
+
+  it('normalises the -1 "indefinitely" sentinel to 0', async () => {
+    const [chat] = await makeChatsWith([raw({ isMuted: true, muteExpiration: -1 })]).getChats();
+    expect(chat).toEqual(expect.objectContaining({ isMuted: true, muteExpiration: 0 }));
+  });
+
+  it('reports isMuted:false and omits the expiration for an unmuted chat', async () => {
+    const [chat] = await makeChatsWith([raw({ isMuted: false, muteExpiration: 0 })]).getChats();
+    expect(chat).toEqual(expect.objectContaining({ isMuted: false }));
+    expect(chat).not.toHaveProperty('muteExpiration');
+  });
+});

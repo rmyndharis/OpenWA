@@ -4250,6 +4250,7 @@ describe('BaileysAdapter contact + chat reads', () => {
       unreadCount: 1,
       timestamp: 1700000010,
       lastMessage: 'hi',
+      isMuted: false, // no muteEndTime on the history chat -> not muted (#1473)
     });
   });
 

@@ -51,6 +51,12 @@ export class WwebjsChats {
         continue;
       }
 
+      // whatsapp-web.js populates isMuted (authoritative — it already accounts for an elapsed mute)
+      // and muteExpiration in epoch SECONDS, with -1 for "muted indefinitely". Normalise -1 (and any
+      // non-positive value) to the neutral 0-means-indefinite contract, and only surface an
+      // expiration when the chat is actually muted.
+      const isMuted = Boolean(chat.isMuted);
+
       summaries.push({
         id,
         name: chat.name || id,
@@ -60,6 +66,8 @@ export class WwebjsChats {
         timestamp: chat.timestamp || 0,
         // A location message's body is the base64 map thumbnail; don't surface it as the chat preview.
         lastMessage: chat.lastMessage?.type === MessageTypes.LOCATION ? '📍' : chat.lastMessage?.body || undefined,
+        isMuted,
+        ...(isMuted ? { muteExpiration: chat.muteExpiration > 0 ? chat.muteExpiration : 0 } : {}),
       });
     }
 
