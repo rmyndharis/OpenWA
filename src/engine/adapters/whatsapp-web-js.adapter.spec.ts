@@ -5732,9 +5732,13 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
       );
     });
 
-    // The nine write routes that previously threw a bare Error('Chat is not a group') for a
-    // non-group id (surfacing as an opaque 500) now share this guard: unknown id, 1:1 id and
-    // status id are all GroupNotFoundError (404), like the guarded settings writes above.
+    // The write routes that previously threw a bare Error('Chat is not a group') for a non-group id
+    // (surfacing as an opaque 500) now share this guard: unknown id, 1:1 id and status id are all
+    // GroupNotFoundError (404), like the guarded settings writes above.
+    //
+    // setGroupDescription is deliberately absent: it refuses with EngineNotSupportedError (501)
+    // before resolving a chat at all, so there is no id for a 404 to describe. Which id was passed
+    // does not change the answer when the operation does not work on any of them.
     it.each([
       ['addParticipants', (a: WhatsAppWebJsAdapter) => a.addParticipants('628111@c.us', ['628222@c.us'])],
       ['removeParticipants', (a: WhatsAppWebJsAdapter) => a.removeParticipants('628111@c.us', ['628222@c.us'])],
@@ -5742,7 +5746,6 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
       ['demoteParticipants', (a: WhatsAppWebJsAdapter) => a.demoteParticipants('628111@c.us', ['628222@c.us'])],
       ['leaveGroup', (a: WhatsAppWebJsAdapter) => a.leaveGroup('628111@c.us')],
       ['setGroupSubject', (a: WhatsAppWebJsAdapter) => a.setGroupSubject('628111@c.us', 'New subject')],
-      ['setGroupDescription', (a: WhatsAppWebJsAdapter) => a.setGroupDescription('628111@c.us', 'New description')],
       ['getGroupInviteCode', (a: WhatsAppWebJsAdapter) => a.getGroupInviteCode('628111@c.us')],
       ['revokeGroupInviteCode', (a: WhatsAppWebJsAdapter) => a.revokeGroupInviteCode('628111@c.us')],
     ])('%s answers 404 (GroupNotFoundError) when the id is not a group', async (_name, call) => {
@@ -6117,27 +6120,36 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
     },
   );
 
-  describe('setGroupSubject / setGroupDescription (library boolean is honored)', () => {
-    it.each([
-      ['setGroupSubject', 'setSubject'],
-      ['setGroupDescription', 'setDescription'],
-    ] as const)('%s throws EngineRefusedError when wwebjs resolves false', async (method, libMethod) => {
-      const chat = groupChat({ [libMethod]: jest.fn().mockResolvedValue(false) });
+  describe('setGroupSubject (library boolean is honored)', () => {
+    it('throws EngineRefusedError when wwebjs resolves false', async () => {
+      const chat = groupChat({ setSubject: jest.fn().mockResolvedValue(false) });
       const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
-      await expect(
-        (adapter as unknown as Record<string, (g: string, v: string) => Promise<void>>)[method](GROUP, 'New'),
-      ).rejects.toBeInstanceOf(EngineRefusedError);
+      await expect(adapter.setGroupSubject(GROUP, 'New')).rejects.toBeInstanceOf(EngineRefusedError);
     });
 
-    it.each([
-      ['setGroupSubject', 'setSubject'],
-      ['setGroupDescription', 'setDescription'],
-    ] as const)('%s resolves on true', async (method, libMethod) => {
-      const chat = groupChat({ [libMethod]: jest.fn().mockResolvedValue(true) });
+    it('resolves on true', async () => {
+      const chat = groupChat({ setSubject: jest.fn().mockResolvedValue(true) });
       const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
-      await expect(
-        (adapter as unknown as Record<string, (g: string, v: string) => Promise<void>>)[method](GROUP, 'New'),
-      ).resolves.toBeUndefined();
+      await expect(adapter.setGroupSubject(GROUP, 'New')).resolves.toBeUndefined();
+    });
+  });
+
+  describe('setGroupDescription (non-functional against the live page)', () => {
+    // Paired with setGroupSubject above on purpose: the two used to share one it.each because both
+    // were believed to honour the same boolean. They no longer behave alike, and the split is the
+    // point — subject still works, description does not, and a shared case would hide that.
+    //
+    // wwebjs's setDescription is typed Promise<boolean>, so a mock resolving true made this look
+    // supported for as long as the test never left the mock. Live, the injected evaluate reaches
+    // widToGroupJid with an undefined Wid and throws, surfacing as a 500. Asserting the 501 keeps
+    // a green suite from re-implying support the engine does not have.
+    it('throws EngineNotSupportedError even when the library would resolve true', async () => {
+      const setDescription = jest.fn().mockResolvedValue(true);
+      const chat = groupChat({ setDescription });
+      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
+      await expect(adapter.setGroupDescription(GROUP, 'New')).rejects.toBeInstanceOf(EngineNotSupportedError);
+      // Never reaches the library: no evaluate is injected, so no 500 can escape.
+      expect(setDescription).not.toHaveBeenCalled();
     });
   });
 

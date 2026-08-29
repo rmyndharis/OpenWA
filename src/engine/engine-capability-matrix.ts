@@ -329,10 +329,10 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
       "wwjs Message.star()/unstar() → Promise<void> (index.d.ts:1336-1338) — void, so there is no refusal signal to map, unlike pin; baileys chatModify({star:{messages:[{id,fromMe}],star}}, jid) (Types/Chat.d.ts:83-89) — needs the stored key's fromMe, since the same id means different messages depending on direction",
   },
   setGroupDescription: {
-    wwjs: { status: 'supported' },
+    wwjs: { status: 'not-available', rootCause: 'library-limitation' },
     baileys: { status: 'supported' },
     evidence:
-      'wwjs GroupChat.setDescription(description) → boolean (index.d.ts:1984; false → adapter throws EngineRefusedError); baileys groupUpdateDescription(jid, description?) (Socket/groups.d.ts:21)',
+      "baileys groupUpdateDescription(jid, description?) (Socket/groups.d.ts:21). wwjs GroupChat.setDescription is typed Promise<boolean> (index.d.ts:1984) but its injected evaluate calls the page's WAWebGroupModifyInfoJob.setGroupDescription(chatWid, description, newId, descId) (GroupChat.js:439), which reaches widToGroupJid with an undefined Wid and throws TypeError \"Cannot read properties of undefined (reading 'toJid')\" — measured live on wwjs 1.34.7, the latest published release, reaching the caller as a bare 500. Measured BOTH with descId undefined (group had no description) and with it defined (description added from the phone first): identical throw, so the first-description case is not the variable. setGroupSubject builds its Wid via the same WAWebWidFactory.createWid and succeeds on the same group in the same session, so createWid is not at fault — the description job's parameter shape is what drifted, and wwjs's argument list no longer lands the Wid where the page reads it. The signature lives in the minified page bundle rather than the library, so it cannot be patched around; adapter throws EngineNotSupportedError. Same class as createGroup/findImpl",
   },
   setGroupEphemeral: {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },

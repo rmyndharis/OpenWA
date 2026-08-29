@@ -325,13 +325,23 @@ export class WwebjsGroups {
     }
   }
 
-  async setGroupDescription(groupId: string, description: string): Promise<void> {
-    const chat = await this.requireGroupChat(groupId);
-    // Same discarded-boolean contract as setSubject (index.d.ts:1984).
-    const ok = await chat.setDescription(description);
-    if (!ok) {
-      throw new EngineRefusedError(`Failed to set the description for group ${groupId} — admin rights required`);
-    }
+  // Typed as supported (index.d.ts:1984) but non-functional against the current WhatsApp Web
+  // build. GroupChat.setDescription injects an evaluate that calls the page's
+  // WAWebGroupModifyInfoJob.setGroupDescription(chatWid, description, newId, descId); inside the
+  // page that reaches widToGroupJid with an undefined Wid and throws
+  // "Cannot read properties of undefined (reading 'toJid')", which surfaced to callers as a bare
+  // 500. setGroupSubject builds its Wid through the same createWid call and works, so the Wid
+  // itself is fine — the description job's parameter shape is what drifted, and the argument list
+  // wwjs sends no longer lands the Wid where the page reads it. Measured live on this account both
+  // with descId undefined (group had no description) and defined (description added first): the
+  // same throw either way, so it is not the first-description case. The signature belongs to the
+  // minified page bundle, not to the library, so there is nothing here to patch around. An honest
+  // 501 beats a 500 that reads like an outage. Baileys sets descriptions normally on the same
+  // account.
+  // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars
+  async setGroupDescription(_groupId: string, _description: string): Promise<void> {
+    this.host.ensureReady();
+    throw new EngineNotSupportedError('setGroupDescription');
   }
 
   async getGroupInviteCode(groupId: string): Promise<string> {
