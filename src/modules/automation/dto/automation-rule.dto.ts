@@ -15,6 +15,17 @@ const CONDITIONS_DESCRIPTION =
   'isGroup, fromMe, hasMedia, mentions). All conditions must match (AND). Omitted or empty means ' +
   'the rule matches every inbound message.';
 
+const NEW_CONTACT_ONLY_DESCRIPTION =
+  'Reply only on a chat with no earlier message history — a first-contact greeting. Checked against ' +
+  'stored messages in either direction, so a contact this account has ever talked to is skipped. ' +
+  'This is a gate on the chat, not a `conditions` filter field.';
+
+const PAUSE_ON_HUMAN_REPLY_DESCRIPTION =
+  'Stop replying in a chat for good once a human sends into it — from the API, the dashboard, or a ' +
+  "linked phone. The rule's own autoreplies do not count. Permanent by design: it does not expire " +
+  'on a timer, so the rule cannot talk over a conversation an operator has taken over. This is a ' +
+  'gate on the chat, not a `conditions` filter field.';
+
 const COOLDOWN_DESCRIPTION =
   'Quiet period per chat, in seconds: after the rule replies in a chat it stays silent there for ' +
   'this long (default 60, 0 disables). This is the guard against two auto-repliers answering each ' +
@@ -60,6 +71,18 @@ export class CreateAutomationRuleDto {
   @ToStrictBoolean()
   @IsBoolean()
   enabled?: boolean;
+
+  @ApiPropertyOptional({ description: NEW_CONTACT_ONLY_DESCRIPTION, default: false })
+  @IsOptional()
+  @ToStrictBoolean()
+  @IsBoolean()
+  newContactOnly?: boolean;
+
+  @ApiPropertyOptional({ description: PAUSE_ON_HUMAN_REPLY_DESCRIPTION, default: false })
+  @IsOptional()
+  @ToStrictBoolean()
+  @IsBoolean()
+  pauseOnHumanReply?: boolean;
 }
 
 export class UpdateAutomationRuleDto {
@@ -98,6 +121,18 @@ export class UpdateAutomationRuleDto {
   @ToStrictBoolean()
   @IsBoolean()
   enabled?: boolean;
+
+  @ApiPropertyOptional({ description: NEW_CONTACT_ONLY_DESCRIPTION })
+  @IsOptional()
+  @ToStrictBoolean()
+  @IsBoolean()
+  newContactOnly?: boolean;
+
+  @ApiPropertyOptional({ description: PAUSE_ON_HUMAN_REPLY_DESCRIPTION })
+  @IsOptional()
+  @ToStrictBoolean()
+  @IsBoolean()
+  pauseOnHumanReply?: boolean;
 }
 
 export class AutomationRuleResponseDto {
@@ -128,6 +163,14 @@ export class AutomationRuleResponseDto {
   @ApiProperty()
   @Expose()
   cooldownSeconds!: number;
+
+  @ApiProperty({ description: NEW_CONTACT_ONLY_DESCRIPTION })
+  @Expose()
+  newContactOnly!: boolean;
+
+  @ApiProperty({ description: PAUSE_ON_HUMAN_REPLY_DESCRIPTION })
+  @Expose()
+  pauseOnHumanReply!: boolean;
 
   @ApiProperty()
   @Expose()

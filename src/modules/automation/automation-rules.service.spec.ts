@@ -8,6 +8,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { AutomationRulesService } from './automation-rules.service';
 import { AutomationRule } from './entities/automation-rule.entity';
 import { Session, SessionStatus } from '../session/entities/session.entity';
+import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import type { MessageService } from '../message/message.service';
 import type { ModuleRef } from '@nestjs/core';
 import type { ConfigService } from '@nestjs/config';
@@ -15,13 +16,18 @@ import type { ConfigService } from '@nestjs/config';
 describe('AutomationRulesService', () => {
   let ds: DataSource;
   let service: AutomationRulesService;
-  let sends: Array<{ sessionId: string; chatId: string; text: string }>;
-  let sendImpl: (sessionId: string, dto: { chatId: string; text: string }) => Promise<unknown>;
+  let sends: Array<{ sessionId: string; chatId: string; text: string; opts?: { automated?: boolean } }>;
+  let sendImpl: (
+    sessionId: string,
+    dto: { chatId: string; text: string },
+    opts?: { automated?: boolean },
+  ) => Promise<unknown>;
 
   const moduleRefStub = {
     get: () =>
       ({
-        sendText: (sessionId: string, dto: { chatId: string; text: string }) => sendImpl(sessionId, dto),
+        sendText: (sessionId: string, dto: { chatId: string; text: string }, opts?: { automated?: boolean }) =>
+          sendImpl(sessionId, dto, opts),
       }) as unknown as MessageService,
   } as unknown as ModuleRef;
 
@@ -29,7 +35,7 @@ describe('AutomationRulesService', () => {
     ds = new DataSource({
       type: 'better-sqlite3',
       database: ':memory:',
-      entities: [Session, AutomationRule],
+      entities: [Session, AutomationRule, Message],
       synchronize: true,
     });
     await ds.initialize();
@@ -38,11 +44,17 @@ describe('AutomationRulesService', () => {
       await sessions.save(sessions.create({ id, name: id, status: SessionStatus.READY, config: {} }));
     }
     sends = [];
-    sendImpl = (sessionId, dto) => {
-      sends.push({ sessionId, chatId: dto.chatId, text: dto.text });
+    sendImpl = (sessionId, dto, opts) => {
+      sends.push({ sessionId, chatId: dto.chatId, text: dto.text, opts });
       return Promise.resolve({});
     };
-    service = new AutomationRulesService(ds.getRepository(AutomationRule), moduleRefStub, undefined);
+    service = new AutomationRulesService(
+      ds.getRepository(AutomationRule),
+      moduleRefStub,
+      undefined,
+      undefined,
+      ds.getRepository(Message),
+    );
   });
 
   afterEach(async () => {
@@ -128,7 +140,9 @@ describe('AutomationRulesService', () => {
 
       await service.evaluateInbound('sessA', inbound());
 
-      expect(sends).toEqual([{ sessionId: 'sessA', chatId: '628111@c.us', text: 'welcome!' }]);
+      expect(sends).toEqual([
+        { sessionId: 'sessA', chatId: '628111@c.us', text: 'welcome!', opts: { automated: true } },
+      ]);
     });
 
     it('a rule without conditions matches every inbound message', async () => {
@@ -245,6 +259,245 @@ describe('AutomationRulesService', () => {
       await service.evaluateInbound('sessA', inbound({ chatId: undefined }));
 
       expect(sends).toHaveLength(0);
+    });
+  });
+
+  // ── chat-history gates ────────────────────────────────────────────
+  //
+  // Both gates ask about the CHAT, not the message, so they read the messages table. The two facts
+  // worth pinning hardest: the inbound message is ALREADY persisted when a rule is evaluated (so
+  // "no history" means "nothing but this row"), and the rule's own reply must never register as the
+  // human whose arrival silences it.
+  describe('chat-history gates', () => {
+    const CHAT = '628111@c.us';
+
+    const row = (over: Partial<Message> = {}): Promise<Message> => {
+      const messages = ds.getRepository(Message);
+      return messages.save(
+        messages.create({
+          sessionId: 'sessA',
+          chatId: CHAT,
+          from: '628111@c.us',
+          to: '628222@c.us',
+          body: 'text',
+          type: 'text',
+          direction: MessageDirection.INCOMING,
+          status: MessageStatus.SENT,
+          ...over,
+        }),
+      );
+    };
+
+    /** The row the projector has already committed for the message being evaluated. */
+    const currentInboundRow = (): Promise<Message> => row({ waMessageId: 'wamid.1' });
+
+    describe('newContactOnly', () => {
+      it('replies when the chat holds nothing but the message being evaluated', async () => {
+        await service.create('sessA', { name: 'greet', replyText: 'welcome', newContactOnly: true });
+        await currentInboundRow();
+
+        await service.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(1);
+      });
+
+      it('stays silent when the chat has any earlier message', async () => {
+        await service.create('sessA', { name: 'greet', replyText: 'welcome', newContactOnly: true });
+        await row({ waMessageId: 'wamid.0' });
+        await currentInboundRow();
+
+        await service.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(0);
+      });
+
+      it('counts an earlier OUTBOUND message as history too — a contact we reached out to is not new', async () => {
+        await service.create('sessA', { name: 'greet', replyText: 'welcome', newContactOnly: true });
+        await row({ waMessageId: 'wamid.0', direction: MessageDirection.OUTGOING });
+        await currentInboundRow();
+
+        await service.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(0);
+      });
+
+      it('recognises history stored under the other user-id dialect', async () => {
+        // Inbound rows are neutralized to @c.us while outbound rows keep the caller's raw form, so a
+        // byte-exact probe would greet a contact the account already knows.
+        await service.create('sessA', { name: 'greet', replyText: 'welcome', newContactOnly: true });
+        await row({ waMessageId: 'wamid.0', chatId: '628111@s.whatsapp.net' });
+        await currentInboundRow();
+
+        await service.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(0);
+      });
+
+      it('counts an earlier id-less row as history (SQL `<>` never matches NULL)', async () => {
+        // An engine that could not read a message id back stores NULL. Excluding the current row
+        // with `waMessageId <> 'wamid.1'` alone would drop those rows from the probe entirely and
+        // report a well-known chat as a first contact.
+        await service.create('sessA', { name: 'greet', replyText: 'welcome', newContactOnly: true });
+        await row({ waMessageId: undefined });
+        await currentInboundRow();
+
+        await service.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(0);
+      });
+
+      it("is scoped to the chat: another chat's history does not block the greeting", async () => {
+        await service.create('sessA', { name: 'greet', replyText: 'welcome', newContactOnly: true });
+        await row({ waMessageId: 'wamid.0', chatId: '628999@c.us' });
+        await currentInboundRow();
+
+        await service.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(1);
+      });
+
+      it('is scoped to the session: the same chat under another session does not block it', async () => {
+        await service.create('sessA', { name: 'greet', replyText: 'welcome', newContactOnly: true });
+        await row({ waMessageId: 'wamid.0', sessionId: 'sessB' });
+        await currentInboundRow();
+
+        await service.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(1);
+      });
+
+      it('skips the greeting when the message carries no engine id to exclude itself by', async () => {
+        // Fail-closed: with the current row indistinguishable from prior history, the safe reading
+        // is "known contact".
+        await service.create('sessA', { name: 'greet', replyText: 'welcome', newContactOnly: true });
+        await row({ waMessageId: undefined });
+
+        await service.evaluateInbound('sessA', inbound({ id: '' }));
+
+        expect(sends).toHaveLength(0);
+      });
+    });
+
+    describe('pauseOnHumanReply', () => {
+      it('replies while only the bot has answered the chat', async () => {
+        await service.create('sessA', { name: 'ack', replyText: 'ack', pauseOnHumanReply: true });
+        await row({ waMessageId: 'wamid.0', direction: MessageDirection.OUTGOING, automated: true });
+        await currentInboundRow();
+
+        await service.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(1);
+      });
+
+      it('goes quiet once a human has sent into the chat', async () => {
+        await service.create('sessA', { name: 'ack', replyText: 'ack', pauseOnHumanReply: true });
+        await row({ waMessageId: 'wamid.0', direction: MessageDirection.OUTGOING, automated: false });
+        await currentInboundRow();
+
+        await service.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(0);
+      });
+
+      it('treats a message composed on the linked phone as the human — it lands OUTGOING like any send', async () => {
+        await service.create('sessA', { name: 'ack', replyText: 'ack', pauseOnHumanReply: true });
+        await row({
+          waMessageId: 'wamid.phone',
+          direction: MessageDirection.OUTGOING,
+          chatId: '628111@s.whatsapp.net',
+        });
+        await currentInboundRow();
+
+        await service.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(0);
+      });
+
+      it('is not silenced by the inbound side of the conversation', async () => {
+        await service.create('sessA', { name: 'ack', replyText: 'ack', pauseOnHumanReply: true, cooldownSeconds: 0 });
+        await row({ waMessageId: 'wamid.0', direction: MessageDirection.INCOMING });
+        await currentInboundRow();
+
+        await service.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(1);
+      });
+
+      it('does not silence itself on its own reply', async () => {
+        // The whole reason messages.automated exists. Replay the round trip: the rule replies, the
+        // send path persists that reply as an OUTGOING row, and the next inbound message must still
+        // be answered.
+        await service.create('sessA', { name: 'ack', replyText: 'ack', pauseOnHumanReply: true, cooldownSeconds: 0 });
+        await currentInboundRow();
+
+        await service.evaluateInbound('sessA', inbound());
+        expect(sends).toHaveLength(1);
+        expect(sends[0].opts).toEqual({ automated: true });
+
+        // What MessageSendService would have written for that reply.
+        await row({ waMessageId: 'wamid.reply', direction: MessageDirection.OUTGOING, automated: true });
+        await row({ waMessageId: 'wamid.2' });
+
+        await service.evaluateInbound('sessA', inbound({ id: 'wamid.2' }));
+
+        expect(sends).toHaveLength(2);
+      });
+    });
+
+    describe('gate plumbing', () => {
+      it('marks its reply as automated so the send path can persist the marker', async () => {
+        await service.create('sessA', { name: 'all', replyText: 'ack' });
+
+        await service.evaluateInbound('sessA', inbound());
+
+        expect(sends[0].opts).toEqual({ automated: true });
+      });
+
+      it('never touches the messages table for a rule that declares no gate', async () => {
+        // Every rule of every session is evaluated on every inbound message; an unconditional second
+        // round-trip here would be a per-message cost paid by deployments using none of this.
+        const messages = ds.getRepository(Message);
+        const exists = jest.spyOn(messages, 'exists');
+        const svc = new AutomationRulesService(
+          ds.getRepository(AutomationRule),
+          moduleRefStub,
+          undefined,
+          undefined,
+          messages,
+        );
+        await svc.create('sessA', { name: 'all', replyText: 'ack' });
+
+        await svc.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(1);
+        expect(exists).not.toHaveBeenCalled();
+      });
+
+      it('refuses to reply when the history probe fails, rather than replying past the gate', async () => {
+        const messages = ds.getRepository(Message);
+        jest.spyOn(messages, 'exists').mockRejectedValue(new Error('database is locked'));
+        const svc = new AutomationRulesService(
+          ds.getRepository(AutomationRule),
+          moduleRefStub,
+          undefined,
+          undefined,
+          messages,
+        );
+        await svc.create('sessA', { name: 'greet', replyText: 'welcome', newContactOnly: true });
+
+        await expect(svc.evaluateInbound('sessA', inbound())).resolves.toBeUndefined();
+
+        expect(sends).toHaveLength(0);
+      });
+
+      it('refuses to reply when a gate is declared but no message repository is wired', async () => {
+        const svc = new AutomationRulesService(ds.getRepository(AutomationRule), moduleRefStub, undefined);
+        await svc.create('sessA', { name: 'greet', replyText: 'welcome', pauseOnHumanReply: true });
+
+        await svc.evaluateInbound('sessA', inbound());
+
+        expect(sends).toHaveLength(0);
+      });
     });
   });
 });

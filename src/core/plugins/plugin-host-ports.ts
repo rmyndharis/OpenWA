@@ -21,6 +21,13 @@ export interface PluginMessagePort {
   sendText(
     sessionId: string,
     dto: { chatId: string; text: string; linkPreview?: boolean },
+    /**
+     * Out-of-band send options; `automated: true` marks the persisted row as bot-written (see
+     * `Message.automated`), which is what keeps the automation rules' human-reply gate from
+     * mistaking an autoreply for the operator answering. Carried on the port because the automation
+     * reply path reaches MessageService only through this token.
+     */
+    opts?: { automated?: boolean },
   ): Promise<MessageResponseDto>;
   reply(sessionId: string, dto: { chatId: string; quotedMessageId: string; text: string }): Promise<MessageResponseDto>;
   sendImage(sessionId: string, dto: { chatId: string; url?: string; caption?: string }): Promise<MessageResponseDto>;

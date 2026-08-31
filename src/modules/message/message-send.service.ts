@@ -50,6 +50,21 @@ export interface SaveOutgoingMessageData {
    * look the quoted message up, and '' is already reply()'s own value when that lookup fails.
    */
   quotedMessageId?: string;
+  /**
+   * Marks the row as written by a bot rather than by a human — see `Message.automated`. Only the
+   * automation autoreply path sets it; every other sender leaves it undefined and persists false.
+   */
+  automated?: boolean;
+}
+
+/**
+ * Out-of-band send options — deliberately a separate argument rather than fields on the send DTOs:
+ * these are decided by the CALLER's identity, not by the request body, and a REST client must not
+ * be able to pass `automated: true` and make its own send invisible to the human-reply gates.
+ */
+export interface SendOrigin {
+  /** See `Message.automated`. Set only by the automation autoreply path. */
+  automated?: boolean;
 }
 
 /**
@@ -89,7 +104,7 @@ export class MessageSendService {
     private readonly chatMediaArchive?: ChatMediaArchiveService,
   ) {}
 
-  async sendText(sessionId: string, dto: SendTextMessageDto): Promise<MessageResponseDto> {
+  async sendText(sessionId: string, dto: SendTextMessageDto, opts?: SendOrigin): Promise<MessageResponseDto> {
     // Asking to suppress the preview AND to attach one is a contradiction, and guessing which half
     // the caller meant would send a message they did not ask for either way.
     if (dto.linkPreview === false && dto.customLinkPreview) {
@@ -105,6 +120,7 @@ export class MessageSendService {
       body: finalDto.text,
       type: 'text',
       quotedMessageId: finalDto.quotedMessageId,
+      automated: opts?.automated,
     });
 
     // Opt-in humanising "typing…" pause before the actual send (anti-automation signal).
@@ -570,6 +586,7 @@ export class MessageSendService {
       direction: MessageDirection.OUTGOING,
       timestamp: data.timestamp,
       status: data.status ?? MessageStatus.PENDING,
+      automated: data.automated ?? false,
       metadata: data.quotedMessageId
         ? { ...data.metadata, quotedMessage: { id: data.quotedMessageId, body: '' } }
         : data.metadata,
@@ -581,6 +598,10 @@ export class MessageSendService {
         status: message.status,
         timestamp: message.timestamp,
       };
+      // Carry the bot marker onto the surviving row. The echo writer cannot know a send was
+      // automated, so losing this race would leave an autoreply looking human — and a
+      // `pauseOnHumanReply` rule would then silence itself on its own reply.
+      if (message.automated) patch.automated = true;
       // Only when this write actually carries metadata worth merging: a text item must not blank
       // the echo's, and a URL pointer must not replace bytes the engine already downloaded.
       if (message.metadata && !isUrlPointerMetadata(message.metadata)) {
@@ -674,6 +695,9 @@ export class MessageSendService {
           },
         );
         const patch: QueryDeepPartialEntity<Message> = { status: MessageStatus.SENT, timestamp: result.timestamp };
+        // Same reason as in saveOutgoingMessage: the echo row defaults to automated=false, so the
+        // marker has to ride the merge or the autoreply is indistinguishable from a human send.
+        if (message.automated) patch.automated = true;
         if (message.metadata && !isUrlPointerMetadata(message.metadata)) {
           patch.metadata = message.metadata as QueryDeepPartialEntity<Record<string, unknown>>;
         }

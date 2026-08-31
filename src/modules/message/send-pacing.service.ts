@@ -7,6 +7,7 @@ import { Session } from '../session/entities/session.entity';
 import { resolveSendPacingConfig, type SendPacingConfig } from './send-pacing.config';
 import { incrementSendPacingRefusals, type SendPacingRefusalReason } from '../../common/metrics/send-pacing-metrics';
 import { createLogger } from '../../common/services/logger.service';
+import { dialectVariants } from '../../common/utils/chat-id-dialects';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { AuditService } from '../audit/audit.service';
@@ -486,36 +487,12 @@ export class SendPacingService {
 const DAY_MS = 86_400_000;
 
 /**
- * Both spellings of a user id. Stored rows carry either dialect — inbound rows are neutralized to
- * `@c.us`, outbound rows keep the caller's raw form — so a byte-exact history probe misreads a
- * known contact addressed the other way as cold and over-draws the budget. Non-user ids (groups,
- * lids, …) pass through unchanged; a lid has no derivable phone twin to probe.
- */
-/**
  * SQL for both user-id spellings of `<alias>."chatId"`, for use as an `IN (…)` list. The same idea
  * as {@link dialectVariants}, expressed portably: REPLACE exists on SQLite and Postgres alike, and
  * for a non-user id (a group, a lid) both branches collapse to the raw value.
  */
 const DIALECT_PAIR = (alias: string): string =>
   `REPLACE(${alias}."chatId", '@s.whatsapp.net', '@c.us'), REPLACE(${alias}."chatId", '@c.us', '@s.whatsapp.net')`;
-
-function dialectVariants(chatId: string): string[] {
-  const lower = chatId.toLowerCase();
-  if (lower.endsWith('@c.us')) {
-    return [chatId, chatId.slice(0, chatId.length - '@c.us'.length) + '@s.whatsapp.net'];
-  }
-  if (lower.endsWith('@s.whatsapp.net')) {
-    return [chatId, chatId.slice(0, chatId.length - '@s.whatsapp.net'.length) + '@c.us'];
-  }
-  // A bare number is a user id with the suffix left off — the group-participant endpoints accept
-  // one and the engines qualify it themselves, so the history probe has to look under both
-  // spellings too or a contact the account already knows is charged as a stranger.
-  if (/^\d{5,}$/.test(chatId.trim())) {
-    const digits = chatId.trim();
-    return [digits, `${digits}@c.us`, `${digits}@s.whatsapp.net`];
-  }
-  return [chatId];
-}
 
 /**
  * The cap's day boundary is UTC, not the server's local midnight: a deployment that moves timezone,

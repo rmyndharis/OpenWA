@@ -6335,14 +6335,33 @@ Single-message autoreply rules, managed under `/api/sessions/:sessionId/automati
 (`AutomationRuleController`). Every route requires an API key with **OPERATOR** role or higher.
 
 When an inbound message arrives, the session's enabled rules are evaluated in order — creation
-time, `id` as the same-second tiebreak — and the **first** rule whose `conditions` match replies
-into the chat with its `replyText`. The reply goes through the ordinary send path, so send pacing
+time, `id` as the same-second tiebreak — and the **first** rule whose `conditions` match, and whose
+chat-history gates allow it, replies into the chat with its `replyText`. The reply goes through the ordinary send path, so send pacing
 and plugin vetoes apply to it like any other outbound message. Evaluation is fire-and-forget off
 the receive path and runs at most once per message (engine re-fires are deduplicated).
 
 `conditions` uses the **webhook filter format** (`message` family — see 6.4.8): a flat AND list of
 conditions over `sender`, `recipient`, `body`, `type`, `isGroup`, `fromMe`, `hasMedia`, `mentions`.
-Omitted or empty conditions match every inbound message.
+Omitted or empty conditions match every inbound message — unless a chat-history gate is set.
+
+**Chat-history gates.** Two optional rule fields answer questions about the CHAT rather than about
+the message, which is why they are top-level fields and **not** `conditions` entries — a filter
+condition resolves out of the message payload alone, and `{ "field": "newContactOnly" }` inside
+`conditions` is rejected with a `400`:
+
+- `newContactOnly` — reply only when the chat has no earlier stored message in either direction, so
+  the rule is a first-contact greeting. A contact this account has ever exchanged a message with is
+  skipped, under either user-id spelling (`@c.us` / `@s.whatsapp.net`). "Ever" is bounded by
+  retention: a chat whose rows have been reaped reads as new again.
+- `pauseOnHumanReply` — stop replying in a chat once a **human** sends into it, whether from the
+  API, the dashboard, or a linked phone. The rule's own autoreplies are exempt: they are persisted
+  with `messages.automated = true`, which is what tells them apart from an operator's send. This is
+  **permanent**, not a window — a conversation an operator has taken over does not become the bot's
+  again on a timer. Clearing the chat's stored history is what re-arms the rule.
+
+Both gates read the `messages` table, and only for a rule that declares one. If that read fails,
+the rule does **not** reply: talking into a chat the operator fenced off is the worse of the two
+mistakes.
 
 Loop safety: a rule never answers the account's own (`fromMe`) messages, messages older than
 5 minutes get no automated answer (so a reconnect never burst-replies the offline-queued backlog),
@@ -6358,13 +6377,15 @@ Create a rule. **Auth:** API key (OPERATOR)
 
 **Request body**
 
-| Field           | Type    | Required | Description                                                        |
-| --------------- | ------- | -------- | ------------------------------------------------------------------ |
-| name            | string  | yes      | Display name, max 100 chars.                                       |
-| replyText       | string  | yes      | Reply content, max 4096 chars (the send-text limit).               |
-| conditions      | object  | no       | Webhook-filter conditions (`message` family). Omitted = match all. |
-| cooldownSeconds | number  | no       | Per-chat quiet period, 0–86400. Default `60`.                      |
-| enabled         | boolean | no       | Default `true`.                                                    |
+| Field             | Type    | Required | Description                                                          |
+| ----------------- | ------- | -------- | -------------------------------------------------------------------- |
+| name              | string  | yes      | Display name, max 100 chars.                                         |
+| replyText         | string  | yes      | Reply content, max 4096 chars (the send-text limit).                 |
+| conditions        | object  | no       | Webhook-filter conditions (`message` family). Omitted = match all.   |
+| cooldownSeconds   | number  | no       | Per-chat quiet period, 0–86400. Default `60`.                        |
+| enabled           | boolean | no       | Default `true`.                                                      |
+| newContactOnly    | boolean | no       | Reply only on a chat with no prior history. Default `false`.         |
+| pauseOnHumanReply | boolean | no       | Go quiet for good once a human sends into the chat. Default `false`. |
 
 **Response** `201`
 
@@ -6377,6 +6398,8 @@ Create a rule. **Auth:** API key (OPERATOR)
   "conditions": { "conditions": [{ "field": "body", "operator": "contains", "value": "price" }] },
   "replyText": "Thanks for reaching out — we reply within the hour.",
   "cooldownSeconds": 60,
+  "newContactOnly": false,
+  "pauseOnHumanReply": false,
   "createdAt": "2026-08-04T10:00:00.000Z",
   "updatedAt": "2026-08-04T10:00:00.000Z"
 }

@@ -14,7 +14,7 @@ import { parseWaId } from '../../engine/identity/wa-id';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
 import { StorageService, isMissingObjectError } from '../../common/storage/storage.service';
-import { MessageSendService, SaveOutgoingMessageData } from './message-send.service';
+import { MessageSendService, SaveOutgoingMessageData, SendOrigin } from './message-send.service';
 // Type-only: the module binds this class to PLUGIN_MESSAGE_PORT with a `useExisting` alias, which
 // TypeScript does not check, so `implements` is what keeps the two in step.
 import type { PluginMessagePort } from '../../core/plugins/plugin-host-ports';
@@ -141,8 +141,8 @@ export class MessageService implements PluginMessagePort {
   // surface stable for the controller, agent tools, plugin capabilities and bulk send, which were
   // all wired here before the split.
 
-  sendText(sessionId: string, dto: SendTextMessageDto): Promise<MessageResponseDto> {
-    return this.sender.sendText(sessionId, dto);
+  sendText(sessionId: string, dto: SendTextMessageDto, opts?: SendOrigin): Promise<MessageResponseDto> {
+    return this.sender.sendText(sessionId, dto, opts);
   }
 
   sendTemplate(sessionId: string, dto: SendTemplateMessageDto): Promise<MessageResponseDto> {

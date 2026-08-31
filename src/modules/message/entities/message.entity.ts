@@ -107,6 +107,25 @@ export class Message {
   @Column({ nullable: true })
   mediaMimetype?: string;
 
+  /**
+   * True only for an outbound row a bot wrote by itself — today, an automation rule's autoreply.
+   * Every other row is false: a human's REST/bulk/template send, a message composed on the linked
+   * phone, and every inbound message.
+   *
+   * It exists because the two are otherwise indistinguishable. A phone-composed send and an
+   * API send land through different writers (`MessageProjector.handleOwnSendEcho` and
+   * `MessageSendService.saveOutgoingMessage`) as byte-identical row shapes, so the automation
+   * rules' `pauseOnHumanReply` gate had no way to ask "has a HUMAN answered this chat?" without
+   * counting the bot's own first reply and silencing itself forever after one message.
+   *
+   * NOT NULL DEFAULT false rather than nullable: the default is stored in the catalog on both
+   * dialects (an O(1) ADD COLUMN even on this hot, high-volume table), every pre-existing row
+   * reads back as "not automated" — which is true, nothing wrote automated replies before — and
+   * the gate's query stays a plain equality instead of an `IS NULL OR <>` pair.
+   */
+  @Column({ type: 'boolean', default: false })
+  automated!: boolean;
+
   @Column({
     type: 'varchar',
     default: MessageStatus.SENT,

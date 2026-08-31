@@ -444,6 +444,11 @@ CREATE TABLE webhooks (
 Per-session single-message autoreply rules. `conditions` reuses the webhook filter shape verbatim
 (null/empty matches every inbound message); the reply goes through the ordinary send path.
 
+`newContactOnly` and `pauseOnHumanReply` gate on the CHAT's history rather than on the message, so
+they are rule columns and not `conditions` entries — the filter shape resolves each field out of the
+message payload alone. With either set, an empty `conditions` no longer means "every inbound
+message". The second reads `messages.automated` to tell the rule's own replies from a human's.
+
 ```sql
 CREATE TABLE automation_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -453,6 +458,8 @@ CREATE TABLE automation_rules (
     conditions JSONB,                    -- webhook filter shape; null = match every inbound message
     "replyText" TEXT NOT NULL,
     "cooldownSeconds" INTEGER NOT NULL DEFAULT 60,  -- per-(rule, chat) quiet period; 0 disables
+    "newContactOnly" BOOLEAN NOT NULL DEFAULT false,     -- reply only on a chat with no prior history
+    "pauseOnHumanReply" BOOLEAN NOT NULL DEFAULT false,  -- permanently quiet once a human sends into the chat
     "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
@@ -482,7 +489,8 @@ CREATE TABLE messages (
     status VARCHAR NOT NULL DEFAULT 'sent',          -- pending | sent | delivered | read | failed
     "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     "mediaPath" VARCHAR,                  -- nullable; storage key of the archived media copy
-    "mediaMimetype" VARCHAR               -- nullable; mimetype of that archived copy
+    "mediaMimetype" VARCHAR,              -- nullable; mimetype of that archived copy
+    automated BOOLEAN NOT NULL DEFAULT false  -- true only for a bot-written outbound row (autoreply)
 );
 
 -- Indexes (declared on the entity). Names TypeORM derives are hashes, not readable slugs —

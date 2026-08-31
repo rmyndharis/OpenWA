@@ -112,8 +112,28 @@ describe('MessageService', () => {
 
       const result = await facade.sendText('sess-1', { chatId: 'test@c.us', text: 'hi' });
 
-      expect(sendText).toHaveBeenCalledWith('sess-1', { chatId: 'test@c.us', text: 'hi' });
+      expect(sendText).toHaveBeenCalledWith('sess-1', { chatId: 'test@c.us', text: 'hi' }, undefined);
       expect(result).toEqual({ messageId: 'wa-msg-1', timestamp: 1706868000 });
+    });
+
+    it('forwards the out-of-band send origin, which is how an autoreply marks its own row', async () => {
+      // The automation reply path reaches the sender only through this facade (bound to
+      // PLUGIN_MESSAGE_PORT). Dropping the third argument here would silently un-mark every
+      // autoreply, and a `pauseOnHumanReply` rule would then read its own reply as a human's.
+      const sendText = jest.fn().mockResolvedValue({ messageId: 'wa-msg-1', timestamp: 1706868000 });
+      const facade = new MessageService(
+        repository as Repository<Message>,
+        engines,
+        messageProjector as unknown as MessageProjector,
+        hookManager as HookManager,
+        lidMappingStore as unknown as LidMappingStoreService,
+        inertPacing(),
+        { sendText } as unknown as MessageSendService,
+      );
+
+      await facade.sendText('sess-1', { chatId: 'test@c.us', text: 'hi' }, { automated: true });
+
+      expect(sendText).toHaveBeenCalledWith('sess-1', { chatId: 'test@c.us', text: 'hi' }, { automated: true });
     });
 
     it('passes a reply straight through with its tag list intact', async () => {

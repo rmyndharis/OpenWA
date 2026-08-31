@@ -19,6 +19,8 @@ function ruleEntity(overrides: Partial<AutomationRule> = {}): AutomationRule {
     conditions: null,
     replyText: 'Thanks for reaching out — we reply within the hour.',
     cooldownSeconds: 60,
+    newContactOnly: false,
+    pauseOnHumanReply: false,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     updatedAt: new Date('2026-01-02T00:00:00.000Z'),
     ...overrides,

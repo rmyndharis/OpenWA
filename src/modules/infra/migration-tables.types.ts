@@ -65,6 +65,12 @@ export interface MessageRow {
    * it, and the import's explicit column list ignores it. Declared so both directions type-check.
    */
   body_ts?: unknown;
+  /**
+   * Bot-written marker (added after the chat-media pointers — keep the import list in sync). NOT
+   * NULL in the table; archives predating it restore to false, which is the truth for every row
+   * written before automated replies could mark themselves.
+   */
+  automated: boolean | number | null;
 }
 
 export interface MessageBatchRow {
@@ -238,6 +244,12 @@ export interface AutomationRuleRow {
   conditions: string | null;
   replyText: string;
   cooldownSeconds: number;
+  /**
+   * Chat-history gates (added after cooldownSeconds — keep the import list in sync). Archives
+   * predating them restore ungated, the pre-feature behaviour: every match replies.
+   */
+  newContactOnly: boolean | number | null;
+  pauseOnHumanReply: boolean | number | null;
   createdAt: string | Date;
   updatedAt: string | Date;
 }

@@ -11034,6 +11034,16 @@
             "type": "boolean",
             "description": "Whether the rule is active",
             "default": true
+          },
+          "newContactOnly": {
+            "type": "boolean",
+            "description": "Reply only on a chat with no earlier message history — a first-contact greeting. Checked against stored messages in either direction, so a contact this account has ever talked to is skipped. This is a gate on the chat, not a `conditions` filter field.",
+            "default": false
+          },
+          "pauseOnHumanReply": {
+            "type": "boolean",
+            "description": "Stop replying in a chat for good once a human sends into it — from the API, the dashboard, or a linked phone. The rule's own autoreplies do not count. Permanent by design: it does not expire on a timer, so the rule cannot talk over a conversation an operator has taken over. This is a gate on the chat, not a `conditions` filter field.",
+            "default": false
           }
         },
         "required": [
@@ -11067,6 +11077,14 @@
           "cooldownSeconds": {
             "type": "number"
           },
+          "newContactOnly": {
+            "type": "boolean",
+            "description": "Reply only on a chat with no earlier message history — a first-contact greeting. Checked against stored messages in either direction, so a contact this account has ever talked to is skipped. This is a gate on the chat, not a `conditions` filter field."
+          },
+          "pauseOnHumanReply": {
+            "type": "boolean",
+            "description": "Stop replying in a chat for good once a human sends into it — from the API, the dashboard, or a linked phone. The rule's own autoreplies do not count. Permanent by design: it does not expire on a timer, so the rule cannot talk over a conversation an operator has taken over. This is a gate on the chat, not a `conditions` filter field."
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -11083,6 +11101,8 @@
           "enabled",
           "replyText",
           "cooldownSeconds",
+          "newContactOnly",
+          "pauseOnHumanReply",
           "createdAt",
           "updatedAt"
         ]
@@ -11113,6 +11133,14 @@
           "enabled": {
             "type": "boolean",
             "description": "Whether the rule is active"
+          },
+          "newContactOnly": {
+            "type": "boolean",
+            "description": "Reply only on a chat with no earlier message history — a first-contact greeting. Checked against stored messages in either direction, so a contact this account has ever talked to is skipped. This is a gate on the chat, not a `conditions` filter field."
+          },
+          "pauseOnHumanReply": {
+            "type": "boolean",
+            "description": "Stop replying in a chat for good once a human sends into it — from the API, the dashboard, or a linked phone. The rule's own autoreplies do not count. Permanent by design: it does not expire on a timer, so the rule cannot talk over a conversation an operator has taken over. This is a gate on the chat, not a `conditions` filter field."
           }
         }
       },

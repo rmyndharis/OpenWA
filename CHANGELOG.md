@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Automation rules can gate on the conversation instead of only on the message: `newContactOnly`
+  replies only in a chat with no earlier history (a first-contact greeting), and
+  `pauseOnHumanReply` silences the rule in a chat for good once a human sends into it — from the
+  API, the dashboard, or a linked phone. Both default to `false`, so existing rules are unchanged.
+- `messages.automated` marks an outbound row a bot wrote by itself, which is what lets
+  `pauseOnHumanReply` tell an autoreply apart from an operator's send; every pre-existing and
+  human-sent row reads `false`.
 - `PUPPETEER_PROTOCOL_TIMEOUT_MS` raises the per-browser-command budget on the whatsapp-web.js
   engine, for large accounts whose reads fail with `Runtime.callFunctionOn timed out`. Unset keeps
   Puppeteer's own budget, so nothing changes for a deployment that does not set it. The gateway

@@ -120,8 +120,8 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
   defineTableImporter({
     key: 'messages',
     label: 'message',
-    sql: `INSERT INTO messages (id, "sessionId", "waMessageId", "chatId", "chatName", author, "from", "to", body, type, direction, "timestamp", metadata, status, "createdAt", "mediaPath", "mediaMimetype")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+    sql: `INSERT INTO messages (id, "sessionId", "waMessageId", "chatId", "chatName", author, "from", "to", body, type, direction, "timestamp", metadata, status, "createdAt", "mediaPath", "mediaMimetype", automated)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
     id: (msg: MessageRow) => msg.id,
     map: (msg: MessageRow) => [
       msg.id,
@@ -146,6 +146,9 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       // without their pointers would turn every archived file into an orphan the sweep then reaps.
       msg.mediaPath ?? null,
       msg.mediaMimetype ?? null,
+      // NOT NULL in the table, so an archive predating the column restores as false rather than
+      // failing the whole import — and false is correct: nothing marked its sends before it existed.
+      msg.automated ?? false,
     ],
   }),
 
@@ -391,8 +394,8 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
   defineTableImporter({
     key: 'automationRules',
     label: 'automation rule',
-    sql: `INSERT INTO automation_rules (id, "sessionId", name, enabled, conditions, "replyText", "cooldownSeconds", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    sql: `INSERT INTO automation_rules (id, "sessionId", name, enabled, conditions, "replyText", "cooldownSeconds", "newContactOnly", "pauseOnHumanReply", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     id: (rule: AutomationRuleRow) => rule.id,
     map: (rule: AutomationRuleRow) => [
       rule.id,
@@ -402,6 +405,9 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       rule.conditions ?? null,
       rule.replyText,
       rule.cooldownSeconds ?? 60,
+      // Both NOT NULL; an archive predating the gates restores ungated, the pre-feature behaviour.
+      rule.newContactOnly ?? false,
+      rule.pauseOnHumanReply ?? false,
       rule.createdAt,
       rule.updatedAt,
     ],
