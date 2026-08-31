@@ -1,0 +1,408 @@
+========================================================================
+RETOMADA — MÓDULO DE FLUXOS DE CHATBOT (OpenWA / MFactor)
+Gerado em 2026-08-31. Cole este arquivo inteiro como primeira mensagem
+numa nova sessão do Claude Code, dentro da pasta do projeto.
+========================================================================
+
+## O QUE EU QUERO QUE VOCÊ FAÇA
+
+Continuar a construção de um módulo de FLUXOS DE CHATBOT no OpenWA:
+conversas com múltiplos passos, menus, captura de respostas em variáveis,
+resumo interno e transferência para atendimento humano. Eu quero poder
+montar e editar esses fluxos VISUALMENTE, não só por API.
+
+A pesquisa técnica já foi feita (resultados abaixo). NENHUMA linha de
+código do módulo de fluxos foi escrita ainda. Comece pelo desenho,
+me apresente, e então implemente.
+
+ATENÇÃO: os 7 fluxos de conversa da MFactor (o conteúdo real, com os
+textos exatos) NÃO estão neste arquivo — só a estrutura. Vou colar os
+scripts completos junto com este prompt. Use os meus textos literalmente;
+o tom foi escrito com cuidado.
+
+------------------------------------------------------------------------
+## 1. ONDE O PROJETO ESTÁ
+------------------------------------------------------------------------
+
+Pasta:      ~/Documentos/whatsapp/OpenWA
+Upstream:   rmyndharis/OpenWA (público)
+Meus forks: github.com/alexandremartinx/OpenWA-MFactor      (org)
+            github.com/alexandremartinxx/OpenWA-MFactor     (conta pessoal)
+            -> os dois têm o mesmo commit; decidir qual é o oficial.
+
+Branch de trabalho: feat/automation-chat-history-gates
+Commit:             aa342177
+Base:               26bc425f (igual ao upstream)
+
+------------------------------------------------------------------------
+## 2. O QUE JÁ ESTÁ PRONTO (não refazer)
+------------------------------------------------------------------------
+
+FEATURE ENTREGUE — portões de histórico nas regras de automação:
+
+  - automation_rules.newContactOnly    -> só responde chat sem histórico
+  - automation_rules.pauseOnHumanReply -> cala de vez quando humano envia
+  - messages.automated (boolean)       -> marca linha escrita pelo bot
+
+  Por que a coluna `automated` existe: um autoreply e um envio do
+  operador viram linhas OUTGOING idênticas, escritas por escritores
+  diferentes (saveOutgoingMessage para envios via API,
+  handleOwnSendEcho para mensagens digitadas no celular pareado).
+  Sem a marca, uma regra pauseOnHumanReply leria a própria resposta
+  como "humano assumiu" e ficaria muda para sempre. A marca é
+  propagada nas DUAS fusões de corrida com o eco do próprio envio
+  (message-send.service.ts, ~linhas 604 e 700) — se perder essa
+  corrida, a marca some.
+
+  Ambos os portões falham FECHADO: se a consulta ao histórico falhar,
+  a regra NÃO responde.
+
+  Verificação feita: 5.963 testes unitários, 264 de docs, 181 e2e,
+  tsc limpo, lint sem erros novos, openapi:check verde.
+
+  Arquivos tocados: 21 (+715/-59). Inclui migração
+  1786400000000-AddAutomationChatHistoryGates.ts, o utilitário novo
+  src/common/utils/chat-id-dialects.ts, docs/05, docs/06, CHANGELOG,
+  openapi.json regenerado, infra export/import e o snapshot fixado de
+  drift de migração.
+
+------------------------------------------------------------------------
+## 3. VEREDITO TÉCNICO QUE DECIDE O DESENHO DOS MENUS
+------------------------------------------------------------------------
+
+>>> NÃO É POSSÍVEL usar botões interativos estilo Meta Cloud API. <<<
+
+Verificado lendo o código, não suposição:
+
+  - IWhatsAppEngine tem 11 compositores de saída (text, image, video,
+    audio, document, location, contact, sticker, poll, reply, forward)
+    + sendProduct/sendCatalog. As palavras "button", "list",
+    "interactive" e "template" NÃO aparecem na interface do motor.
+    grep por sendButtons|sendList|sendInteractive em src/, sdk/,
+    dashboard/ e docs/ retorna ZERO.
+
+  - whatsapp-web.js 1.34.7 ainda exporta as classes Buttons/List, mas
+    o Client.js emite "Buttons are now deprecated" / "Lists are now
+    deprecated" a cada envio. Baileys 7.0.0-rc14 não tem compositor de
+    botão/lista (só buttonReply/listReply, que RESPONDEM ao prompt de
+    outra pessoa).
+
+  - docs/20-community-guidelines.md:274 já diz: "capabilities such as
+    interactive Buttons / List messages are not supported on
+    whatsapp-web.js, the default engine".
+
+  - ENQUETE (poll) é tappable de verdade e FUNCIONA nos dois motores
+    (POST /messages/:sessionId/send-poll, 2 a 12 opções). MAS é
+    inútil como menu: NÃO existe caminho de entrada para o voto.
+    O evento vote_update do wwjs não é assinado, decryptPollVote do
+    Baileys nunca é chamado, e votePoll é "not-available" no Baileys.
+    O bot envia a enquete e nunca fica sabendo o que foi tocado.
+
+CONCLUSÃO: o menu mais rico possível hoje é TEXTO NUMERADO nos dois
+motores. Então capriche na apresentação do texto: numeração limpa,
+uma pergunta por vez, separadores, e aceitar tanto o número quanto
+palavras-chave equivalentes ("1", "sistema", "quero um sistema").
+
+Se um dia houver Cloud API oficial da Meta, aí sim botões reais.
+
+------------------------------------------------------------------------
+## 4. PRIMITIVAS DO REPO PARA REAPROVEITAR (não reinventar)
+------------------------------------------------------------------------
+
+  src/common/utils/template-render.ts
+      renderTemplate(body, vars) — é o ÚNICO renderizador do repo.
+      Substitui {{chave}} (e {chave} legado), tolera espaços, deixa
+      placeholder desconhecido literal (falha visível, não vazia),
+      não re-escaneia valores substituídos. Serve exatamente para o
+      {{nome}} dos fluxos. NÃO escreva um segundo renderizador.
+
+  src/common/utils/chat-id-dialects.ts  (dialectVariants)
+      OBRIGATÓRIO em qualquer busca por chatId. Linhas de entrada são
+      normalizadas para @c.us, as de saída guardam a forma crua do
+      chamador. Estado de fluxo indexado byte-a-byte por chatId PERDE
+      o estado quando o id chega na outra grafia.
+
+  src/modules/automation/automation-rules.service.ts (~255-268)
+      A sonda pauseOnHumanReply — hoje é o único primitivo funcional
+      de "um humano assumiu, cale-se para sempre". É uma CONSULTA à
+      tabela messages, não uma flag. Um fluxo deve respeitá-la também,
+      para não falar por cima de um chat já cercado por uma regra.
+
+  src/core/plugins/plugin-host-ports.ts (PLUGIN_MESSAGE_PORT)
+      sendText(sessionId, dto, { automated: true }).
+      TODA mensagem do fluxo precisa passar automated:true, senão uma
+      regra pauseOnHumanReply lê o menu do próprio bot como humano.
+
+  src/common/utils/keyed-mutation-queue.ts (KeyedMutationQueue)
+      Serializa trabalho assíncrono por chave. O read-modify-write do
+      estado do fluxo para o mesmo chat precisa exatamente disso.
+
+  src/modules/webhook/filters/filter-evaluator.ts (evaluateFilters)
+      Condições de entrada do fluxo devem usar o MESMO JSON, validador
+      e avaliador das regras de automação e dos webhooks.
+
+  Reapers para copiar (expiração de estado de fluxo abandonado):
+      src/modules/integration/integration-retention.service.ts:63-106
+      src/modules/message/pending-message-reaper.service.ts:52-117
+
+------------------------------------------------------------------------
+## 5. ARMADILHAS JÁ MAPEADAS (custaram pesquisa; não redescubra)
+------------------------------------------------------------------------
+
+  * handoverState NÃO é um kill-switch do bot.
+    conversation_mappings.handoverState ('bot'|'human'|'closed') só é
+    consultado em UM lugar: plugin-sandbox-bridge.ts:453, para o evento
+    message:received de plugins EM SANDBOX — e ainda isenta o plugin
+    dono da linha. Não afeta webhooks, regras de automação, WebSocket,
+    hooks em processo nem message:persisted. O projector
+    (message-projector.service.ts:335-340) despacha tudo isso
+    incondicionalmente, sem consultar handover.
+
+  * O módulo de fluxos NÃO pode usar conversation_mappings como
+    armazenamento de estado. pluginId, instanceId e
+    providerConversationId são todos NOT NULL, e o único caminho de
+    insert exige providerConversationId. Inventar valores colocaria as
+    linhas do fluxo dentro do índice único
+    UQ_conversation_mappings_reverse, o mesmo namespace de adaptadores
+    reais (ex.: relay do Chatwoot).
+    => O módulo de fluxos precisa da PRÓPRIA entidade de estado.
+
+  * Não existe nenhum outro estado por chat no repo. Sem tabela de
+    contexto/sessão, sem mapa por chat no Redis (o Redis só serve
+    cache TTL, throttling, BullMQ e fan-out do Socket.IO). O cooldown
+    das regras de automação é um Map em processo, morre no restart e
+    não é compartilhado entre nós.
+
+  * O avaliador de entrada é fire-and-forget e ENGOLE toda falha
+    (`void ... .catch(() => undefined)`), e tem um corte de frescor de
+    300s. Um passo de fluxo no mesmo ponto de entrada herda os dois:
+    transição que estoura some em silêncio, e replay de backlog após
+    reconexão NÃO avança fluxos.
+
+  * A entidade nova precisa de createdAt E updatedAt se quiser as duas
+    semânticas de expiração (conversation_mappings só tem updatedAt).
+
+  * Decidir deliberadamente sobre cascade: automation_rules tem
+    ON DELETE CASCADE para sessions; conversation_mappings não tem FK
+    nenhuma ("a mapping outlives a session").
+
+------------------------------------------------------------------------
+## 6. O EDITOR VISUAL — O QUE O DASHBOARD TEM
+------------------------------------------------------------------------
+
+  Stack: React 19 + TypeScript, Vite 8, react-router-dom 7,
+         TanStack Query 5, react-i18next (13 locales),
+         lucide-react (ícones), CSS escrito à mão com tokens em
+         src/App.css. NÃO há kit de componentes (sem shadcn, MUI,
+         Chakra ou Tailwind).
+
+  Cliente HTTP: dashboard/src/services/api.ts — fetch à mão, injeta
+  X-API-Key a partir do sessionStorage.
+
+  >>> NÃO existe biblioteca de grafo nem de drag-and-drop. <<<
+  Sem reactflow/@xyflow/react, sem dagre, elkjs, cytoscape, mermaid,
+  @dnd-kit, react-dnd, react-draggable, konva. Os pacotes d3-* que
+  aparecem são dependências transitivas do recharts (gráficos).
+
+  Ou seja, o editor visual exige uma decisão:
+    (a) adicionar @xyflow/react — canvas de nós de verdade, mas é uma
+        dependência nova num repo que não tem nenhuma parecida; ou
+    (b) construir à mão (SVG / posicionamento absoluto); ou
+    (c) editor em ÁRVORE/lista aninhada, sem canvas — muito mais
+        barato, cabe no CSS existente, e para menu numerado
+        (que é uma árvore, não um grafo) pode ser suficiente.
+
+  PÁGINA MODELO A COPIAR: dashboard/src/pages/Templates.tsx
+  — lista com escopo de sessão + criar/editar/excluir, extração de
+  {{placeholder}} com exatamente a regex que as variáveis do fluxo
+  precisam, e painel de pré-visualização que substitui as variáveis.
+  Alternativa com modal: pages/Webhooks.tsx.
+
+  As regras de automação NÃO têm nenhuma tela no dashboard — vale
+  considerar criar a tela delas junto, já que fluxos e regras dividem
+  o mesmo caminho de entrada.
+
+------------------------------------------------------------------------
+## 7. DECISÕES DE DESENHO AINDA EM ABERTO
+------------------------------------------------------------------------
+
+  1. Fluxo x regra de automação: qual vence quando os dois casam na
+     mesma mensagem? Nada no código estabelece precedência hoje.
+  2. Onde o fluxo engancha: mesmo ponto do projector
+     (dispatchInboundMessage) ou um estágio próprio antes das regras?
+  3. Handoff: escrever estado terminal próprio no fluxo, e/ou marcar
+     algo que as regras de automação respeitem. Lembre que
+     handoverState não silencia nada relevante.
+  4. Expiração do estado: quanto tempo um fluxo pela metade sobrevive?
+  5. Editor visual: opção (a), (b) ou (c) da seção 6.
+  6. Resumo interno ({{nome}}, {{empresa}}...): entregue por webhook,
+     por mensagem numa conversa interna, ou só persistido para a tela?
+  7. Reconhecimento de intenção fora do menu ("quero falar com alguém"
+     em qualquer ponto) — lista de palavras-chave por fluxo ou global?
+
+------------------------------------------------------------------------
+## 8. ESTRUTURA DOS 7 FLUXOS (textos exatos virão colados à parte)
+------------------------------------------------------------------------
+
+  Fluxo 1 — TRIAGEM GERAL MFACTOR
+    Menu principal de 8 opções: 1 Sistemas/plataformas/apps,
+    2 Sites/e-commerce/presença digital, 3 IA e automações,
+    4 Cloud/infra/dados, 5 Parceria ou terceirização,
+    6 Já sou cliente, 7 Falar com pessoa, 8 Não sei do que preciso.
+    Cada trilha tem submenu e, em vários casos, um terceiro nível
+    (ex.: 1 -> tipo de projeto -> estágio -> objetivo).
+    Depois converge para TRIAGEM COMUM.
+
+  Fluxo 2 — MLABS (Desenvolvimento de Software) — 8 opções
+  Fluxo 3 — MREACH (E-commerce e Presença Digital) — 8 opções
+  Fluxo 4 — MHOST (Infraestrutura Cloud) — 8 opções
+  Fluxo 5 — M-AI & ML (IA e Machine Learning) — 8 opções
+  Fluxo 6 — MPARTNER (White Label / agências) — 8 opções
+  Fluxo 7 — ROTEADOR DE ENTRADA
+    Pergunta primeiro se o assunto é MFactor ou PESSOAL com Alexandre.
+    Se pessoal: PERSONAL_CONTACT=TRUE, encerra o bot, não responde mais.
+    Se MFactor: menu de 8 que despacha para os fluxos 2 a 6.
+
+  TRIAGEM COMUM (final de toda trilha), captura em variáveis:
+    {{nome}}, {{empresa}}, {{cargo}}, momento do projeto, prazo,
+    contexto adicional (aceita texto, áudio, link, documento, print).
+
+  RESUMO INTERNO (nunca enviado ao cliente), campos:
+    nome, empresa, cargo, categoria, subcategoria, objetivo,
+    cenario_atual, estagio, prazo, observacoes, anexos,
+    origem (WhatsApp / Site MFactor),
+    classificacao (novo_projeto|oportunidade|parceria|suporte|
+    cliente_atual), prioridade (normal|alta|urgente).
+
+  REGRA GLOBAL EM TODOS OS FLUXOS:
+    Se o usuário escrever "atendente", "humano", "falar com alguém",
+    "pessoa", "falar com vendedor", "falar com Alexandre", "não quero
+    falar com robô" ou equivalente, em QUALQUER momento:
+      -> responder com a mensagem curta de encaminhamento
+      -> HUMAN_HANDOFF = TRUE
+      -> PAUSAR_AUTOMACAO = TRUE
+      -> parar imediatamente toda mensagem automática
+    Nunca insistir na triagem, nunca exigir concluir a triagem antes
+    de falar com uma pessoa.
+
+  REGRAS DE COMPORTAMENTO (resumo — texto completo vem colado):
+    sempre se identificar como assistente virtual; nunca fingir ser
+    pessoa; mensagens curtas, uma pergunta por vez; não inventar preço,
+    prazo ou viabilidade técnica; não pressionar; aceitar texto, áudio,
+    link, print e documento; interpretar respostas fora do menu quando
+    possível; não repetir pergunta já respondida; usar informação dada
+    espontaneamente para pular etapas; após o handoff, silêncio total.
+
+------------------------------------------------------------------------
+## 9. CONVENÇÕES DO REPO (aprendidas na feature anterior)
+------------------------------------------------------------------------
+
+  Migrações: escritas à mão em src/database/migrations/, nome
+    <Verbo><Assunto><timestamp> no arquivo E na classe, com
+    propriedade `name` redundante. Descobertas por glob, sem índice
+    para registrar. ADD COLUMN sempre idempotente (hasColumn) com
+    down() espelhado. Dialeto: ramificar em
+    queryRunner.dataSource.options.type === 'postgres';
+    booleano é `true`/`false` no Postgres e `(1)`/`(0)` no SQLite.
+    Não existe coluna type:'enum' no projeto — usa varchar + enum TS.
+    Último timestamp usado: 1786400000000.
+
+  Testes que travam mudança de esquema:
+    - src/database/migrations/__tests__/migration-drift.spec.ts
+      compara contra o snapshot fixado em
+      __fixtures__/known-migration-drift.json — coluna nova FALHA até
+      atualizar o snapshot.
+    - src/database/docs-schema-accuracy.spec.ts confere que todo
+      CREATE TABLE documentado em docs/05 bate com a entidade real.
+    - Rodam em `npm run test:docs`, NÃO em `npm test`.
+
+  openapi.json é GERADO: `npm run openapi:export`, conferido em CI por
+    `npm run openapi:check`. Nunca editar à mão.
+
+  Backup/restore tem lista de colunas EXPLÍCITA — coluna nova precisa
+    entrar em src/modules/infra/table-importers.ts e
+    migration-tables.types.ts, senão o restore perde o dado.
+
+  CHANGELOG: um bloco de release não pode ter dois títulos iguais;
+    adicionar sob o `### Added` existente, frase única começando pelo
+    comportamento.
+
+  docs/ vai de 01 a 31 e o índice fica em docs/README.md — não há
+    número livre; feature nova entra nas seções existentes
+    (docs/06 §6.4.16 para a API, docs/05 §5.3.2a para o esquema).
+
+  Ferramentas MCP: automation.tools.ts não precisa mudar para campo
+    novo (não há schema de saída). ADICIONAR ferramenta é caro:
+    tool-registry.spec.ts fixa toHaveLength(51) e os números aparecem
+    em README.md:330 e docs/24.
+
+  Comandos: npm test | npm run test:e2e | npm run test:docs |
+    npm run lint | npx tsc --noEmit -p tsconfig.json |
+    npm run openapi:export
+
+------------------------------------------------------------------------
+## 10. AMBIENTE LOCAL (pegadinhas já resolvidas)
+------------------------------------------------------------------------
+
+  npm ci  -> instala também o dashboard
+  npm run dev -> API em :2785, dashboard em :2886, Swagger em
+                 :2785/api/docs. Config gerada sozinha em
+                 data/.env.generated; a chave de API nasce em
+                 data/.api-key (header X-API-Key).
+
+  PEGADINHA DO CHROME: o `npm ci` baixou o Chrome do Puppeteer
+  (146.0.7680.31) mas a EXTRAÇÃO morreu pela metade — 18 MB de 371 MB,
+  sem o binário. Pior: `npx puppeteer browsers install chrome` repete
+  a extração parcial e SAI COM CÓDIGO 0. O zip está íntegro.
+  Correção que funcionou:
+      C=~/.cache/puppeteer/chrome
+      rm -rf "$C/linux-146.0.7680.31"
+      mkdir -p "$C/linux-146.0.7680.31"
+      unzip -q "$C/146.0.7680.31-chrome-linux64.zip" -d "$C/linux-146.0.7680.31"
+  Alternativas: PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome,
+  ou docker compose -f docker-compose.dev.yml up -d (caminho que o
+  README marca como recomendado), ou ENGINE_TYPE=baileys (não usa
+  navegador nenhum; perde histórico sob demanda, voto em enquete,
+  leitura de reações e de labels; README avisa risco de ban maior).
+
+  Sessão criada não sobreviveu a um restart no meu teste — a data/ só
+  tinha main.sqlite. Vale investigar antes de confiar em produção.
+
+------------------------------------------------------------------------
+## 11. PENDÊNCIAS SOLTAS (fora dos fluxos)
+------------------------------------------------------------------------
+
+  - Vercel: NÃO serve para hospedar este gateway. O modo Docker publica
+    como Vercel Function, que desliga após 5 min sem tráfego (SIGTERM
+    + 30s); Sandboxes são microVMs efêmeras com teto de 24h. Nenhum
+    dos dois sustenta o WebSocket permanente com o WhatsApp. Destinos
+    que funcionam: Railway, Fly.io, Render ou VPS — o Dockerfile e o
+    docker-compose.yml já estão prontos na raiz. Nenhum foi
+    configurado ainda.
+  - Dois forks com o mesmo commit; escolher o oficial.
+  - Commit aa342177 saiu com alexandremartinx@hotmail.com, que não é o
+    e-mail da conta GitHub.
+  - Repositórios estão PÚBLICOS.
+  - Achado para corrigir: docs/29-engine-capability-matrix.md diz
+    "Engine is chosen per session", mas o código lê ENGINE_TYPE uma
+    única vez no construtor do EngineFactory — é global, exige restart.
+  - Achado para documentar: docs/12-troubleshooting-faq.md não tem
+    nenhuma entrada sobre "Could not find Chrome" nem sobre instalação
+    do Puppeteer que sai com código 0 sem extrair.
+
+------------------------------------------------------------------------
+## 12. PRÓXIMO PASSO SUGERIDO
+------------------------------------------------------------------------
+
+  1. Ler este arquivo e os 7 fluxos colados.
+  2. Propor o modelo de dados (entidade de fluxo + entidade de estado
+     por chat), o ponto de engate na entrada e a resposta às 7
+     decisões em aberto da seção 7. Me apresentar ANTES de codar.
+  3. Implementar backend + migração + testes seguindo as convenções
+     da seção 9.
+  4. Semear os 7 fluxos como conteúdo.
+  5. Construir a tela do editor visual copiando Templates.tsx.
+
+========================================================================
+
+chave da api:  owa_k1_159092dfa8e959227d0a620c51325edb72cc3b49f5b2ace22354d1abe56a8a8c
