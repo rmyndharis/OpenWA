@@ -5603,6 +5603,9 @@
           "409": {
             "description": "The session is not connected — an engine exists for it but is not `ready`: disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it — for those few seconds the answer is a `409` naming the reload; retry shortly."
           },
+          "501": {
+            "description": "The active engine cannot set a group description. Answered by whatsapp-web.js only: the library types GroupChat.setDescription as supported, but the page job it calls no longer accepts the argument list it sends, so the change can never be applied. Baileys answers this route normally — see docs/29 for the measurement."
+          },
           "503": {
             "description": "WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came."
           }

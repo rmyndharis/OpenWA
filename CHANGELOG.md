@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `PUT /sessions/{sessionId}/groups/{groupId}/description` now answers `501` on the whatsapp-web.js
+  engine instead of failing with a bare `500`. The library types `GroupChat.setDescription` as
+  supported, but the page job it calls (`WAWebGroupModifyInfoJob.setGroupDescription`) no longer
+  accepts the argument list it sends and throws inside the page. The description was never applied
+  either way; the route now says so. Measured on wwjs 1.34.7 with the group's description both
+  unset and set, with `setGroupSubject` as a control on the same group in the same session. Baileys
+  is unaffected and remains the engine for this route. The capability matrix and docs/29 record it
+  as a library limitation.
 - A whatsapp-web.js protocol timeout is no longer eligible to be classified as a dead page.
   Behaviour is unchanged on the current Puppeteer; the guard keeps a future bump from reporting a
   slow command as a transport death.

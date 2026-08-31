@@ -402,6 +402,14 @@ export class GroupController {
   @ApiResponse({ status: 200, description: 'Description updated', type: GroupAckResponseDto })
   @ApiResponse({ status: 403, description: 'The engine refused the change — admin rights are required' })
   @ApiResponse({
+    status: 501,
+    description:
+      'The active engine cannot set a group description. Answered by whatsapp-web.js only: the ' +
+      'library types GroupChat.setDescription as supported, but the page job it calls no longer ' +
+      'accepts the argument list it sends, so the change can never be applied. Baileys answers ' +
+      'this route normally — see docs/29 for the measurement.',
+  })
+  @ApiResponse({
     status: 503,
     description:
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +

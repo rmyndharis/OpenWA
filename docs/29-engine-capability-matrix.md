@@ -307,7 +307,7 @@ socket is caught by the transport instead. No REST route: the session watchdog p
 | `revokeGroupInviteCode`          | ✅                  | ✅               | ✅              |
 | `getGroupJoinInfo`               | ✅                  | ✅               | ✅              |
 | `setGroupSubject`                | ✅                  | ✅               | ✅              |
-| `setGroupDescription`            | ✅                  | ✅               | ✅              |
+| `setGroupDescription`            | ✅                  | ❌ lib           | ⚠️ baileys only |
 | `setGroupPicture`                | ✅                  | ✅               | ✅              |
 | `deleteGroupPicture`             | ✅                  | ✅               | ✅              |
 | `setGroupMessagesAdminsOnly`     | ✅                  | ✅               | ✅              |
@@ -386,9 +386,9 @@ answers 501.
 | `rejectCall`          | ✅                  | ✅               | ✅              |
 | `createCallLink`      | ✅                  | ✅               | ✅              |
 
-**Totals:** 112 methods → 224 adapter cells: **199 ✅, 25 ❌** (2 adapter-gaps, 23
-library-limitations, 0 uncertain) across 24 methods. From the REST caller's side: **90** methods
-work on any engine (89 fully supported + 2 store-backed status reads), **11** are Baileys-only,
+**Totals:** 112 methods → 224 adapter cells: **198 ✅, 26 ❌** (2 adapter-gaps, 24
+library-limitations, 0 uncertain) across 25 methods. From the REST caller's side: **89** methods
+work on any engine (87 fully supported + 2 store-backed status reads), **13** are Baileys-only,
 **9** are wwjs-only (the 2 store-backed rows excluded); `sendCatalog`, unavailable on both engines,
 is not exposed.
 
@@ -658,17 +658,17 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 
 **Chats** (9)
 
-| Library method   | OpenWA exposure                                                                                                                                                                                                                                                                                                                                                                          |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `archiveChat`    | ✅ `archiveChat`                                                                                                                                                                                                                                                                                                                                                                         |
-| `getChatById`    | ✅ `muteChannel`, `sendSeen`, `clearChatMessages`, `markUnread`, `deleteChat`, `sendChatState`, `getGroupInfo`, `addParticipants`, `leaveGroup`, `setGroupSubject`, `setGroupDescription`, `getGroupInviteCode`, `revokeGroupInviteCode`, `getChatLabels`, `replyToMessage`, `forwardMessage`, `reactToMessage`, `getMessageReactions`, `getChatHistory`, `deleteMessage`, `editMessage` |
-| `getChats`       | ✅ `getChats`, `getGroups`                                                                                                                                                                                                                                                                                                                                                               |
-| `markChatUnread` | ❌ **not exposed**                                                                                                                                                                                                                                                                                                                                                                       |
-| `muteChat`       | ✅ `muteChat`                                                                                                                                                                                                                                                                                                                                                                            |
-| `pinChat`        | ✅ `pinChat`                                                                                                                                                                                                                                                                                                                                                                             |
-| `unarchiveChat`  | ✅ `archiveChat`                                                                                                                                                                                                                                                                                                                                                                         |
-| `unmuteChat`     | ✅ `muteChat`                                                                                                                                                                                                                                                                                                                                                                            |
-| `unpinChat`      | ✅ `pinChat`                                                                                                                                                                                                                                                                                                                                                                             |
+| Library method   | OpenWA exposure                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `archiveChat`    | ✅ `archiveChat`                                                                                                                                                                                                                                                                                                                                                  |
+| `getChatById`    | ✅ `muteChannel`, `sendSeen`, `clearChatMessages`, `markUnread`, `deleteChat`, `sendChatState`, `getGroupInfo`, `addParticipants`, `leaveGroup`, `setGroupSubject`, `getGroupInviteCode`, `revokeGroupInviteCode`, `getChatLabels`, `replyToMessage`, `forwardMessage`, `reactToMessage`, `getMessageReactions`, `getChatHistory`, `deleteMessage`, `editMessage` |
+| `getChats`       | ✅ `getChats`, `getGroups`                                                                                                                                                                                                                                                                                                                                        |
+| `markChatUnread` | ❌ **not exposed**                                                                                                                                                                                                                                                                                                                                                |
+| `muteChat`       | ✅ `muteChat`                                                                                                                                                                                                                                                                                                                                                     |
+| `pinChat`        | ✅ `pinChat`                                                                                                                                                                                                                                                                                                                                                      |
+| `unarchiveChat`  | ✅ `archiveChat`                                                                                                                                                                                                                                                                                                                                                  |
+| `unmuteChat`     | ✅ `muteChat`                                                                                                                                                                                                                                                                                                                                                     |
+| `unpinChat`      | ✅ `pinChat`                                                                                                                                                                                                                                                                                                                                                      |
 
 **Groups** (7)
 
@@ -947,14 +947,14 @@ adapter boundary — none silently stubs.
 Recomputed from `engine-capability-matrix.ts`, `upstream-surface.snapshot.json`, and a scan of the
 adapter sources — re-derive the same way when anything changes:
 
-- **112** interface methods → **224** adapter cells: **199 ✅** / **25 ❌** (2 adapter-gaps, 23
-  library-limitations, 0 uncertain), spanning **24** methods.
-- Of the 199 ✅ cells, **9 wwjs cells carry an explicit patch dependency** (4 × 🔧² status send,
+- **112** interface methods → **224** adapter cells: **198 ✅** / **26 ❌** (2 adapter-gaps, 24
+  library-limitations, 0 uncertain), spanning **25** methods.
+- Of the 198 ✅ cells, **9 wwjs cells carry an explicit patch dependency** (4 × 🔧² status send,
   1 × 🔧³ channel link preview, 1 × 🔧⁴ ready-sync, 3 × 🔧⁷ participant arity) and one baileys cell
   does (1 × 🔧⁶ newsletter-create parse); the whole wwjs column additionally
   depends on 🔧¹, the whole Baileys column on 🔧⁵ — so every row rests on a patch on each side,
   even though no row carries a row-level mark on both.
-- REST caller's view: **90** engine-neutral (88 + 2 store-backed status reads), **12** Baileys-only,
+- REST caller's view: **89** engine-neutral (87 + 2 store-backed status reads), **13** Baileys-only,
   **9** wwjs-only; `sendCatalog` (unavailable on both engines) is not exposed.
 - Full engine inventory (29.5), split by the exposure legend rather than lumped: Baileys **152**
   socket methods — 48 wired into interface methods, 5 internal wiring, 29 plumbing, **70 ❌ not

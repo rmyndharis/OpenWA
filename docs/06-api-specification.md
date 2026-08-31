@@ -2858,7 +2858,12 @@ No `@HttpCode`; PUT default is `200`.
 
 Change the group description. An empty string clears the description.
 
-**Auth:** API key (OPERATOR)
+**Auth:** API key (OPERATOR) · **Engines:** Baileys only — whatsapp-web.js returns `501`
+
+> **whatsapp-web.js returns `501`.** The library types `GroupChat.setDescription` as supported, but
+> the page job it calls (`WAWebGroupModifyInfoJob.setGroupDescription`) no longer accepts the
+> argument list it sends, so the description is never applied. This was previously a bare `500`.
+> See docs/29 §29.4.6 for the measurement.
 
 **Path parameters**
 
@@ -2885,7 +2890,7 @@ No `@HttpCode`; PUT default is `200`.
 { "success": true, "message": "Group description updated" }
 ```
 
-**Errors:** `400` validation (`description` missing / not a string) / session not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable)
+**Errors:** `400` validation (`description` missing / not a string) / session not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role · `409` conflict or engine not ready (retryable) · `501` the active engine cannot set a group description (whatsapp-web.js) · `503` session not ready or dependency unavailable (retryable)
 
 #### POST /api/sessions/:sessionId/groups/:groupId/leave
 
