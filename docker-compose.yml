@@ -93,7 +93,7 @@ services:
     pids_limit: ${OPENWA_PIDS_LIMIT:-2048}
     mem_limit: ${OPENWA_MEM_LIMIT:-2g} # tune up for many concurrent sessions
     ports:
-      - '127.0.0.1:${API_PORT:-2785}:2785'
+      - '${API_PORT:-2785}:2785'
     expose:
       - '2785'
     environment:
@@ -377,7 +377,7 @@ services:
       # Docker socket proxy (openwa-api never touches /var/run/docker.sock directly)
       - DOCKER_HOST=tcp://docker-proxy:2375
     volumes:
-      - openwa-data:/app/data
+      - /opt/openwa/openwa-data:/app/data
       - ./docker-compose.yml:/app/docker-compose.yml:ro
     depends_on:
       docker-proxy:
@@ -433,7 +433,7 @@ services:
       # so the built-in container works zero-config with a custom schema. Ignored when 'public'.
       POSTGRES_SCHEMA: ${POSTGRES_SCHEMA:-public}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - /opt/openwa/postgres-data:/var/lib/postgresql/data
       # Runs only on first init (postgres image docker-entrypoint-initdb.d semantics): creates the
       # configured schema and sets the DB default search_path. No-op for 'public'; does not re-run
       # on an already-initialized volume (see the note in scripts/postgres-init-schema.sh).
@@ -461,7 +461,7 @@ services:
     # maxmemory is reached, silently dropping queued jobs.
     command: redis-server --appendonly yes --maxmemory-policy noeviction
     volumes:
-      - redis-data:/data
+      - /opt/openwa/redis-data:/data
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
@@ -490,7 +490,7 @@ services:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-}}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-}}
     volumes:
-      - minio-data:/data
+      - /opt/openwa/minio-data:/data
     ports:
       - '127.0.0.1:9000:9000'
       - '127.0.0.1:9001:9001'
@@ -502,23 +502,6 @@ services:
     labels:
       - 'com.openwa.service=storage'
       - 'com.openwa.builtin=true'
-
-volumes:
-  # Pin explicit volume names so the compose path and the Docker-API orchestration path (which uses
-  # the literal `openwa_<svc>-data` names in docker.service.ts) bind the SAME volume regardless of the
-  # compose project name — otherwise re-enabling a built-in service could mount a fresh empty volume.
-  openwa-data:
-    name: openwa_openwa-data
-    driver: local
-  postgres-data:
-    name: openwa_postgres-data
-    driver: local
-  redis-data:
-    name: openwa_redis-data
-    driver: local
-  minio-data:
-    name: openwa_minio-data
-    driver: local
 
 networks:
   # Application network — datastores and openwa-api. Keep the name `openwa-network`:
