@@ -98,7 +98,10 @@ export class Message {
   // every un-archived row (archiving is opt-in), so the WHERE clause keeps the index to rows that
   // can ever match. The explicit name matches the migration that creates it on synchronize-disabled
   // deployments, so both schema paths converge on one index.
-  @Index('IDX_messages_mediaPath', { where: 'mediaPath IS NOT NULL' })
+  // The column name is QUOTED in the predicate on purpose: PostgreSQL folds a bare identifier to
+  // lower case, so `mediaPath IS NOT NULL` makes synchronize fail on `column "mediapath" does not
+  // exist`. The migration below already quotes it, so this is also what keeps the two in step.
+  @Index('IDX_messages_mediaPath', { where: '"mediaPath" IS NOT NULL' })
   @Column({ nullable: true })
   mediaPath?: string;
 
