@@ -76,6 +76,13 @@ export class MessageController {
   })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Max messages to return (default 50)' })
   @ApiQuery({ name: 'offset', required: false, type: Number, description: 'Offset for pagination' })
+  @ApiQuery({
+    name: 'after',
+    required: false,
+    description:
+      'Keyset cursor: the id of the last message of the previous page. Anchors the window to a row ' +
+      'rather than a count, so a message arriving mid-walk cannot shift it. Takes precedence over offset.',
+  })
   @ApiResponse({
     status: 200,
     description: 'Message history',
@@ -87,12 +94,14 @@ export class MessageController {
     @Query('from') from?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
+    @Query('after') after?: string,
   ) {
     return this.messageService.getMessages(sessionId, {
       chatId,
       from,
       limit: limit ? parseInt(limit, 10) : undefined,
       offset: offset ? parseInt(offset, 10) : undefined,
+      after,
     });
   }
 

@@ -454,7 +454,8 @@ class SendPollRequest(TypedDict):
 # ``from`` is a Python keyword, so use the functional TypedDict form.
 ListMessagesQuery = TypedDict(
     "ListMessagesQuery",
-    {"chatId": Jid, "from": Jid, "limit": int, "offset": int},
+    # ``after`` is a keyset cursor: the id of the last message of the previous page.
+    {"chatId": Jid, "from": Jid, "limit": int, "offset": int, "after": str},
     total=False,
 )
 

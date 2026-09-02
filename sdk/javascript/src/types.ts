@@ -468,6 +468,8 @@ export interface ListMessagesQuery {
   from?: Jid;
   limit?: number;
   offset?: number;
+  /** Keyset cursor: the `id` of the last message of the previous page. Takes precedence over `offset`. */
+  after?: string;
 }
 
 export interface MessageHistoryQuery {

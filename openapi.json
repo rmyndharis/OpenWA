@@ -2297,6 +2297,15 @@
             "schema": {
               "type": "number"
             }
+          },
+          {
+            "name": "after",
+            "required": false,
+            "in": "query",
+            "description": "Keyset cursor: the id of the last message of the previous page. Anchors the window to a row rather than a count, so a message arriving mid-walk cannot shift it. Takes precedence over offset.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {

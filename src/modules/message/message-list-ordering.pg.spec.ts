@@ -116,4 +116,81 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
     expect(served).toHaveLength(ROWS);
     expect(distinct.size).toBe(ROWS); // no row repeated, and therefore none missed
   });
+
+  /**
+   * The tiebreaker gives the list a total order; it does not stop the WINDOW drifting, because
+   * `offset` addresses a position by count. A message arriving mid-walk pushes every older row down
+   * one, so the next offset re-reads a row the previous page already served. `after` anchors on the
+   * last row instead, which a concurrent insert cannot move.
+   */
+  describe('a message arriving between pages', () => {
+    const LIVE_SESSION = 'sess-live-walk';
+    const LIVE_ROWS = 500;
+    const LIVE_PAGE = 100;
+
+    const arrive = (n: number): Promise<unknown> =>
+      repository.insert({
+        id: randomUUID(),
+        sessionId: LIVE_SESSION,
+        chatId: 'peer@c.us',
+        from: 'peer@c.us',
+        to: 'me@c.us',
+        body: `live-${n}`,
+        direction: MessageDirection.INCOMING,
+        createdAt: new Date('2026-06-01T00:00:00.000Z'), // newer than the fixture: lands on page 0
+      });
+
+    beforeEach(async () => {
+      await repository.delete({ sessionId: LIVE_SESSION });
+      await repository.insert(
+        Array.from({ length: LIVE_ROWS }, (_, i) => ({
+          id: randomUUID(),
+          sessionId: LIVE_SESSION,
+          chatId: 'peer@c.us',
+          from: 'peer@c.us',
+          to: 'me@c.us',
+          body: `m${i}`,
+          direction: MessageDirection.INCOMING,
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        })),
+      );
+    });
+
+    afterAll(async () => {
+      await repository.delete({ sessionId: LIVE_SESSION });
+    });
+
+    it('shifts an offset walk, so it serves a row twice', async () => {
+      const served: string[] = [];
+      for (let page = 0; page * LIVE_PAGE < LIVE_ROWS; page++) {
+        const { messages } = await service.getMessages(LIVE_SESSION, { limit: LIVE_PAGE, offset: page * LIVE_PAGE });
+        served.push(...messages.map(m => m.id));
+        await arrive(page);
+      }
+
+      expect(served.length - new Set(served).size).toBeGreaterThan(0);
+    });
+
+    it('does not shift an `after` walk', async () => {
+      const served: string[] = [];
+      let after: string | undefined;
+      for (let page = 0; page * LIVE_PAGE < LIVE_ROWS; page++) {
+        const { messages } = await service.getMessages(LIVE_SESSION, { limit: LIVE_PAGE, after });
+        served.push(...messages.map(m => m.id));
+        after = messages[messages.length - 1]?.id;
+        await arrive(page);
+      }
+
+      expect(served).toHaveLength(LIVE_ROWS);
+      expect(new Set(served).size).toBe(LIVE_ROWS);
+    });
+
+    it('rejects a cursor naming a row in another session', async () => {
+      const foreign = await repository.findOne({ where: { sessionId: SESSION_ID } });
+
+      await expect(service.getMessages(LIVE_SESSION, { limit: LIVE_PAGE, after: foreign!.id })).rejects.toThrow(
+        /Unknown cursor/,
+      );
+    });
+  });
 });

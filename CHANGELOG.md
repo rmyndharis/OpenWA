@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `GET /sessions/{sessionId}/messages` accepts `after`, a keyset cursor holding the `id` of the last
+  message of the previous page. It anchors the window to a row instead of a count, so a message
+  arriving mid-walk can no longer shift it and make a page repeat or skip rows. `offset` keeps
+  working unchanged; an `after` that names no row in the session gives `400`
+  ([#1479](https://github.com/rmyndharis/OpenWA/issues/1479)).
 - Each engine now names the install-time patches its library is missing as it starts, rather than
   only the message-id backport. A source install applies them with `--best-effort`, so a patch that
   could not apply left one line in the `npm install` transcript and nothing afterwards; the

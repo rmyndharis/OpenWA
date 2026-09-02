@@ -186,6 +186,62 @@ describe('MessageService', () => {
     });
   });
 
+  // ── getMessages keyset cursor ─────────────────────────────────────
+
+  describe('getMessages anchors on `after` instead of a count', () => {
+    /** The cursor path clones for the count and reads rows separately, so getManyAndCount is unused. */
+    const makeCursorQb = (rows: Message[]) => {
+      const qb = {
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        clone: jest.fn(),
+        getCount: jest.fn().mockResolvedValue(7),
+        getMany: jest.fn().mockResolvedValue(rows),
+        getManyAndCount: jest.fn(),
+      };
+      qb.clone.mockReturnValue(qb);
+      return qb;
+    };
+
+    it('narrows on the anchor row and leaves skip() unused, so a concurrent write cannot shift the window', async () => {
+      const qb = makeCursorQb([{ id: 'm-2' } as Message]);
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+      const result = await service.getMessages('sess-1', { after: 'm-1', offset: 500 });
+
+      expect(qb.skip).not.toHaveBeenCalled();
+      expect(qb.getManyAndCount).not.toHaveBeenCalled();
+      const [clause, params] = qb.andWhere.mock.calls[0] as [string, Record<string, unknown>];
+      expect(clause).toContain('(message.createdAt, message.id) <');
+      // The anchor's sort key is resolved in SQL; only the id crosses the JS boundary.
+      expect(clause).toContain('FROM messages anchor');
+      expect(params).toEqual({ after: 'm-1', sessionId: 'sess-1' });
+      // `total` counts the filter match, not the post-cursor remainder, so it stays stable per page.
+      expect(result.total).toBe(7);
+    });
+
+    it('rejects a cursor that names no row in this session rather than reading as end-of-history', async () => {
+      const qb = makeCursorQb([]);
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+      repository.exists = jest.fn().mockResolvedValue(false);
+
+      await expect(service.getMessages('sess-1', { after: 'nope' })).rejects.toThrow(BadRequestException);
+      expect(repository.exists).toHaveBeenCalledWith({ where: { id: 'nope', sessionId: 'sess-1' } });
+    });
+
+    it('returns an empty page, not an error, when a valid cursor reaches the end of the history', async () => {
+      const qb = makeCursorQb([]);
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+      repository.exists = jest.fn().mockResolvedValue(true);
+
+      await expect(service.getMessages('sess-1', { after: 'm-last' })).resolves.toEqual({ messages: [], total: 7 });
+    });
+  });
+
   // ── getMessages from-filter (lid resolution becomes a hit) ─────────
   describe('getMessages from-filter resolves a lid to a phone', () => {
     // A group message whose stored author is an unresolved lid, plus a plain DM from the same person.
