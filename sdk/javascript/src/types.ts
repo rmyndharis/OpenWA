@@ -470,6 +470,8 @@ export interface ListMessagesQuery {
   offset?: number;
   /** Keyset cursor: the `id` of the last message of the previous page. Takes precedence over `offset`. */
   after?: string;
+  /** Set false to omit inline media payloads. The budget is per response, so a walk repays it per page. */
+  inlineMedia?: boolean;
 }
 
 export interface MessageHistoryQuery {

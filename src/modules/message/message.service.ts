@@ -34,6 +34,12 @@ export interface GetMessagesOptions {
    * `offset`, which is left working unchanged for callers that already use it.
    */
   after?: string;
+  /**
+   * Set false to omit every inline media payload, leaving each row's `{ omitted, sizeBytes }` marker
+   * and the media endpoint. The budget below is per RESPONSE, so a walk pulls it afresh on every
+   * page; a client reading many pages usually wants the rows, not the bytes. Defaults to true.
+   */
+  inlineMedia?: boolean;
 }
 
 /**
@@ -229,7 +235,7 @@ export class MessageService implements PluginMessagePort {
     sessionId: string,
     options: GetMessagesOptions = {},
   ): Promise<{ messages: Message[]; total: number }> {
-    const { chatId, from, after } = options;
+    const { chatId, from, after, inlineMedia } = options;
     // Sanitize pagination: a non-finite limit/offset — e.g. `?limit=abc` -> NaN —
     // must never reach TypeORM's take()/skip(). Clamp to sane bounds; fall back to defaults.
     const rawLimit = options.limit;
@@ -282,6 +288,10 @@ export class MessageService implements PluginMessagePort {
       });
     }
 
+    // A budget of 0 means "never inline" and grants no single-payload allowance, which is exactly
+    // what an opted-out caller asks for, so the flag picks the budget rather than a second code path.
+    const inlineMediaBudget = inlineMedia === false ? 0 : resolveMessageListInlineMediaBudgetBytes();
+
     if (after !== undefined) {
       // `total` keeps its documented meaning, rows matching the filters, so count before narrowing.
       const total = await query.clone().getCount();
@@ -304,14 +314,14 @@ export class MessageService implements PluginMessagePort {
       if (messages.length === 0 && !(await this.messageRepository.exists({ where: { id: after, sessionId } }))) {
         throw new BadRequestException(`Unknown cursor '${after}' for this session`);
       }
-      return { messages: spendInlineMediaBudget(messages, resolveMessageListInlineMediaBudgetBytes()), total };
+      return { messages: spendInlineMediaBudget(messages, inlineMediaBudget), total };
     }
 
     const [messages, total] = await query.getManyAndCount();
     // The 1..100 clamp above bounds the ROW COUNT, not the response: each row carries its inline
     // base64 in metadata.media.data. Spent newest-first (the query orders createdAt DESC), so the
     // most recently viewed media still arrives inline and the rest keeps its omitted marker.
-    return { messages: spendInlineMediaBudget(messages, resolveMessageListInlineMediaBudgetBytes()), total };
+    return { messages: spendInlineMediaBudget(messages, inlineMediaBudget), total };
   }
 
   /**

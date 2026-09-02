@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `GET /sessions/{sessionId}/messages` accepts `inlineMedia=false`, which omits every inline media
+  payload and leaves each row's `{ omitted, sizeBytes }` marker plus the media endpoint. The budget
+  bounds one response, so a paged walk pulls up to 8 MiB of base64 per page; a client reading many
+  pages can now ask for the rows without the bytes
+  ([#1516](https://github.com/rmyndharis/OpenWA/issues/1516)).
 - `GET /sessions/{sessionId}/messages` accepts `after`, a keyset cursor holding the `id` of the last
   message of the previous page. It anchors the window to a row instead of a count, so a message
   arriving mid-walk can no longer shift it and make a page repeat or skip rows. `offset` keeps

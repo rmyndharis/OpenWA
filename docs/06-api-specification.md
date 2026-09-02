@@ -1207,13 +1207,14 @@ Get persisted message history for a session from the local DB (paginated, filter
 
 **Query parameters**
 
-| Name   | Type    | Required | Default | Description                                                                                                                                                                                                                             |
-| ------ | ------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| chatId | string  | No       | —       | Filter by chat ID. Matched across `@c.us` / `@s.whatsapp.net` dialects via the lid-mapping table.                                                                                                                                       |
-| from   | string  | No       | —       | Filter by sender. A phone also matches any lid that resolves to it.                                                                                                                                                                     |
-| limit  | integer | No       | 50      | Clamped to `[1,100]`; a non-finite value falls back to 50.                                                                                                                                                                              |
-| offset | integer | No       | 0       | Clamped to `>=0`; a non-finite value falls back to 0.                                                                                                                                                                                   |
-| after  | string  | No       | —       | Keyset cursor: the `id` of the last message of the previous page. Anchors the window to a row rather than a count, so a message arriving mid-walk cannot shift it. Takes precedence over `offset`. Unknown in this session gives `400`. |
+| Name        | Type    | Required | Default | Description                                                                                                                                                                                                                             |
+| ----------- | ------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| chatId      | string  | No       | —       | Filter by chat ID. Matched across `@c.us` / `@s.whatsapp.net` dialects via the lid-mapping table.                                                                                                                                       |
+| from        | string  | No       | —       | Filter by sender. A phone also matches any lid that resolves to it.                                                                                                                                                                     |
+| limit       | integer | No       | 50      | Clamped to `[1,100]`; a non-finite value falls back to 50.                                                                                                                                                                              |
+| offset      | integer | No       | 0       | Clamped to `>=0`; a non-finite value falls back to 0.                                                                                                                                                                                   |
+| after       | string  | No       | —       | Keyset cursor: the `id` of the last message of the previous page. Anchors the window to a row rather than a count, so a message arriving mid-walk cannot shift it. Takes precedence over `offset`. Unknown in this session gives `400`. |
+| inlineMedia | boolean | No       | true    | Set `false` (or `0`) to omit every inline media payload, leaving each row's `{ omitted, sizeBytes }` marker and the media endpoint. The budget below is per response, so a paged walk pulls it afresh on every page.                    |
 
 **Response** `200`
 

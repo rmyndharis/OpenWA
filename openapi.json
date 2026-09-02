@@ -2306,6 +2306,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "inlineMedia",
+            "required": false,
+            "in": "query",
+            "description": "Set false to omit inline media payloads, leaving each row's { omitted, sizeBytes } marker and the media endpoint. The inline-media budget is per response, so a paged walk pulls it afresh on every page; default true.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {

@@ -455,7 +455,7 @@ class SendPollRequest(TypedDict):
 ListMessagesQuery = TypedDict(
     "ListMessagesQuery",
     # ``after`` is a keyset cursor: the id of the last message of the previous page.
-    {"chatId": Jid, "from": Jid, "limit": int, "offset": int, "after": str},
+    {"chatId": Jid, "from": Jid, "limit": int, "offset": int, "after": str, "inlineMedia": bool},
     total=False,
 )
 

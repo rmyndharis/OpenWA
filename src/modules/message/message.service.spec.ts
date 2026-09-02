@@ -967,6 +967,38 @@ describe('MessageService', () => {
         else process.env.MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES = prev;
       }
     });
+
+    // The budget is per response, so a walk pulls it afresh on every page. `inlineMedia: false` is
+    // how a client reading many pages asks for the rows without the bytes.
+    it('omits every payload when the caller opts out, including the one the allowance would let through', async () => {
+      const rows = Array.from(
+        { length: 3 },
+        (_, i) =>
+          ({
+            id: `m${i}`,
+            metadata: { media: { mimetype: 'image/jpeg', data: 'x'.repeat(10_000) } },
+          }) as unknown as Message,
+      );
+      const builder = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn().mockResolvedValue([rows, 3]),
+      };
+      (repository.createQueryBuilder as unknown as jest.Mock).mockReturnValue(builder);
+
+      const result = await service.getMessages('sess-1', { limit: 100, inlineMedia: false });
+
+      expect(result.messages).toHaveLength(3); // the rows survive, only the payloads go
+      for (const message of result.messages) {
+        const media = (message.metadata as { media: Record<string, unknown> }).media;
+        expect(media.data).toBeUndefined();
+        expect(media).toMatchObject({ mimetype: 'image/jpeg', omitted: true, sizeBytes: 7500 });
+      }
+    });
   });
 });
 
