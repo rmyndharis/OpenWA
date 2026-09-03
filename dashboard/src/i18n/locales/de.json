@@ -645,7 +645,9 @@
       "sticker": "Sticker",
       "poll": "Umfrage",
       "forward": "Weiterleiten",
-      "bulk": "Massenversand"
+      "bulk": "Massenversand",
+      "template": "Vorlagen"
+
     },
     "messageContent": "Nachrichteninhalt",
     "messagePlaceholder": "Gib hier deine Nachricht ein...",

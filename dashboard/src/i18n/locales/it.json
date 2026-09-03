@@ -645,7 +645,8 @@
       "sticker": "Sticker",
       "poll": "Sondaggio",
       "forward": "Inoltra",
-      "bulk": "Multiplo"
+      "bulk": "Multiplo",
+      "template":"Template"
     },
     "messageContent": "Contenuto del Messaggio",
     "messagePlaceholder": "Inserisci qui il tuo messaggio...",

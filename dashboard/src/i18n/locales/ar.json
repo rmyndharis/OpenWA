@@ -660,7 +660,8 @@
       "sticker": "ملصق",
       "poll": "استطلاع",
       "forward": "إعادة توجيه",
-      "bulk": "جماعي"
+      "bulk": "جماعي",
+      "template": "قوالب"
     },
     "messageContent": "محتوى الرسالة",
     "messagePlaceholder": "أدخل رسالتك هنا...",

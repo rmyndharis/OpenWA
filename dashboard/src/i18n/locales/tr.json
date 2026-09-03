@@ -645,7 +645,9 @@
       "sticker": "Çıkartma",
       "poll": "Anket",
       "forward": "İlet",
-      "bulk": "Toplu"
+      "bulk": "Toplu",
+      "template": "Şablonlar"
+
     },
     "messageContent": "Mesaj İçeriği",
     "messagePlaceholder": "Mesajınızı buraya girin...",

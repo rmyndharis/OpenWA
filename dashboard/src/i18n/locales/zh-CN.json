@@ -645,7 +645,8 @@
       "sticker": "贴纸",
       "poll": "投票",
       "forward": "转发",
-      "bulk": "批量"
+      "bulk": "批量",
+      "template":"Template"
     },
     "messageContent": "消息内容",
     "messagePlaceholder": "在此输入你的消息...",

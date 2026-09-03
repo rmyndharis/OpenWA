@@ -645,7 +645,9 @@
       "sticker": "స్టిక్కర్",
       "poll": "పోల్",
       "forward": "ఫార్వార్డ్",
-      "bulk": "బల్క్"
+      "bulk": "బల్క్",
+            "template": "Template"
+
     },
     "messageContent": "సందేశం కంటెంట్",
     "messagePlaceholder": "మీ సందేశాన్ని ఇక్కడ ఎంటర్ చేయండి...",

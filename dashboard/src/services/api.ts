@@ -1070,6 +1070,14 @@ export const messageApi = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  sendTemplate: (
+  sessionId: string,
+  data: { chatId: string; templateId: string },
+) =>
+  request<MessageResponse>(`/sessions/${sessionId}/messages/send-template`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
 };
 
 // =============================================================================
@@ -1390,3 +1398,8 @@ export const statsApi = {
   getOverview: () => request<OverviewStats>('/stats/overview'),
   getMessages: (period: StatsPeriod) => request<MessageStats>(`/stats/messages?period=${period}`),
 };
+
+
+
+
+

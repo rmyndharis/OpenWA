@@ -599,7 +599,10 @@
       "sticker": "Sticker",
       "poll": "Encuesta",
       "forward": "Reenviar",
-      "bulk": "Masivo"
+      "bulk": "Masivo",
+          "template": "Plantilla"
+
+      
     },
     "messageContent": "Contenido del mensaje",
     "messagePlaceholder": "Escribe tu mensaje aquí...",

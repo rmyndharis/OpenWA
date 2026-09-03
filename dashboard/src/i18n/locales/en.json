@@ -645,7 +645,9 @@
       "sticker": "Sticker",
       "poll": "Poll",
       "forward": "Forward",
-      "bulk": "Bulk"
+      "bulk": "Bulk",
+      "template": "Template"
+
     },
     "messageContent": "Message Content",
     "messagePlaceholder": "Enter your message here...",

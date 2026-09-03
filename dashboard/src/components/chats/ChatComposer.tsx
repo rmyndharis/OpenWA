@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Paperclip, Send, Smile, X } from 'lucide-react';
-import { messageApi, type Chat, type MessageType } from '../../services/api';
-import { mergeOrAppend, type ChatMessageView } from '../../utils/chatMessages';
+import { Loader2, Paperclip, Send, Smile, X,FileText  } from 'lucide-react';
+import {
+  messageApi,
+  templateApi,
+  type Chat,
+  type MessageType,
+  type MessageTemplate,
+} from '../../services/api';import { mergeOrAppend, type ChatMessageView } from '../../utils/chatMessages';
 import { promoteChatWithSnippet } from '../../utils/chatList';
 import { buildMediaSendPayload, buildOptimisticMetadata, quotedIdOf } from '../../utils/composerSend';
 import { messagesQueryKey, useChatMessagesActions } from '../../hooks/useChatMessages';
@@ -75,6 +80,65 @@ function ChatComposer({
   const [sending, setSending] = useState<boolean>(false);
 
   const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
+
+  const [showTemplatePicker, setShowTemplatePicker] = useState<boolean>(false);
+  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState<boolean>(false);
+
+
+
+    /**
+   * Loads the message templates belonging to the currently selected WhatsApp session.
+   *
+   * The composer receives `selectedSessionId` from Chats.tsx, so templates are always
+   * scoped to the same session as the open conversation.
+   *
+   * A small cancellation guard prevents an old request from updating state after the
+   * user switches sessions or the composer is unmounted.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTemplates = async () => {
+      if (!selectedSessionId) {
+        setTemplates([]);
+        setLoadingTemplates(false);
+        return;
+      }
+
+      setLoadingTemplates(true);
+
+      try {
+        const result = await templateApi.list(selectedSessionId);
+
+        if (!cancelled) {
+          setTemplates(result);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setTemplates([]);
+          showErrorToast(
+            t('chats.errors.loadTemplates'),
+            err instanceof Error ? err.message : undefined,
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingTemplates(false);
+        }
+      }
+    };
+
+    void loadTemplates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSessionId, t, showErrorToast]);
+
+
+
+
   // Monotonic token invalidating an in-flight attachment FileReader: picking a second file (or
   // removing the attachment) before `onload` fires must win over the late-arriving bytes —
   // otherwise the slower read overwrites the newer pick. Same pattern as composeImageReadSeq.
@@ -160,6 +224,17 @@ function ChatComposer({
     setMessageInput(prev => prev + emoji);
     setShowEmojiPicker(false);
   };
+
+  // 6.5. Handle sending a Templates
+  const handleTemplateSelect = (template: MessageTemplate) => {
+    const message = [template.header, template.body, template.footer]
+      .filter((part): part is string => Boolean(part?.trim()))
+      .join('\n\n');
+
+    setMessageInput(message);
+    setShowTemplatePicker(false);
+  };
+
 
   // 7. Handle sending a message / media
   const handleSend = async (e?: React.FormEvent) => {
@@ -297,6 +372,48 @@ function ChatComposer({
         </div>
       )}
 
+            {/* Template picker:
+          Shows templates belonging to the current session.
+          Selecting one only fills the message input; it does not send anything.
+          The user can edit the generated text and use the normal Send button. */}
+        {showTemplatePicker && (
+          <div className="chats-template-picker">
+            {loadingTemplates ? (
+              <div className="template-picker-loading">
+                <Loader2 className="animate-spin" size={18} />
+                <span>{t('chats.loadingTemplates')}</span>
+              </div>
+            ) : templates.length === 0 ? (
+              <div className="template-picker-empty">
+                {t('chats.noTemplates')}
+              </div>
+            ) : (
+              <select
+                className="template-select"
+                value=""
+                onChange={e => {
+                  const template = templates.find(item => item.id === e.target.value);
+                  if (template) {
+                    handleTemplateSelect(template);
+                  }
+                }}
+              >
+                <option value="">
+                  {t('Select Tempate')}
+                </option>
+
+                {templates.map(template => (
+                  <option key={template.id} value={template.id}>
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
+
+
+
       {/* Replying preview banner */}
       {replyingTo && (
         <div className="replying-preview-banner">
@@ -342,8 +459,22 @@ function ChatComposer({
             <Smile size={20} />
           </button>
 
-          <input
-            type="text"
+          <button
+            type="button"
+            onClick={() => {
+              setShowEmojiPicker(false);
+              setShowTemplatePicker(prev => !prev);
+            }}
+            disabled={!canWrite || sending}
+            className={`btn-input-accessory ${showTemplatePicker ? 'active' : ''}`}
+            title="Templates"
+            aria-label="Templates"
+          >
+            <FileText size={20} />
+          </button>
+
+
+          <textarea
             placeholder={
               canWrite
                 ? attachment
@@ -355,6 +486,7 @@ function ChatComposer({
             onChange={e => setMessageInput(e.target.value)}
             disabled={!canWrite || sending}
             className="message-text-input"
+            rows={1}
           />
           <button
             type="submit"

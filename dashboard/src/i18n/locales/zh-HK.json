@@ -645,7 +645,9 @@
       "sticker": "貼圖",
       "poll": "投票",
       "forward": "轉發",
-      "bulk": "批量"
+      "bulk": "批量",
+            "template":"Template"
+
     },
     "messageContent": "訊息內容",
     "messagePlaceholder": "在此輸入你的訊息...",

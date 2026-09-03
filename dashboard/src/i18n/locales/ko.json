@@ -645,7 +645,8 @@
       "sticker": "스티커",
       "poll": "투표",
       "forward": "전달",
-      "bulk": "대량"
+      "bulk": "대량",
+      "template":"템플릿"
     },
     "messageContent": "메시지 내용",
     "messagePlaceholder": "메시지를 입력하세요...",

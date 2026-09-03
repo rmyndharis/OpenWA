@@ -599,7 +599,11 @@
       "sticker": "Figurinha",
       "poll": "Enquete",
       "forward": "Encaminhar",
-      "bulk": "Em massa"
+      "bulk": "Em massa",
+      "template":"Modelos"
+
+
+      
     },
     "messageContent": "Conteúdo da mensagem",
     "messagePlaceholder": "Digite sua mensagem aqui...",
