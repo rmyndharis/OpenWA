@@ -252,6 +252,8 @@ export const MESSAGE_TYPES = [
   'poll',
   'call',
   'revoked',
+  'order',
+  'product',
   'masked',
   'unknown',
 ] as const;
@@ -352,6 +354,10 @@ export interface EngineHistoryMessage {
   };
   quotedMessage?: { id: string; body: string };
   location?: { latitude: number; longitude: number; description?: string; address?: string; url?: string };
+  /** Present on `order` messages only: the placed cart, plus the single-order token for its items. */
+  order?: { orderId: string; token?: string };
+  /** Present on `product` messages only: the catalog product shared into the chat. */
+  product?: { productId: string; title?: string; description?: string; businessOwnerJid?: string };
 }
 
 // Mirrors the backend engine Channel / ChannelMessage (GET /sessions/:id/channels[/:id/messages]).

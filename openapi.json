@@ -12087,6 +12087,49 @@
           "longitude"
         ]
       },
+      "ChatHistoryOrderDto": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "string",
+            "description": "Id of the cart the customer placed from the business catalog.",
+            "example": "1000000000000001"
+          },
+          "token": {
+            "type": "string",
+            "description": "Opaque single-order credential that accompanies `orderId`. Pass through unchanged; do not log it."
+          }
+        },
+        "required": [
+          "orderId"
+        ]
+      },
+      "ChatHistoryProductDto": {
+        "type": "object",
+        "properties": {
+          "productId": {
+            "type": "string",
+            "description": "Id of the shared catalog product.",
+            "example": "2000000000000002"
+          },
+          "title": {
+            "type": "string",
+            "example": "Sample product"
+          },
+          "description": {
+            "type": "string",
+            "example": "A sample product description."
+          },
+          "businessOwnerJid": {
+            "type": "string",
+            "description": "JID of the catalog's owner.",
+            "example": "628123456789@c.us"
+          }
+        },
+        "required": [
+          "productId"
+        ]
+      },
       "ChatHistoryMessageDto": {
         "type": "object",
         "properties": {
@@ -12125,6 +12168,8 @@
               "poll",
               "call",
               "revoked",
+              "order",
+              "product",
               "masked",
               "unknown"
             ],
@@ -12223,6 +12268,22 @@
           },
           "location": {
             "$ref": "#/components/schemas/ChatHistoryLocationDto"
+          },
+          "order": {
+            "description": "Set for `order` messages.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChatHistoryOrderDto"
+              }
+            ]
+          },
+          "product": {
+            "description": "Set for `product` messages.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChatHistoryProductDto"
+              }
+            ]
           }
         },
         "required": [

@@ -2,7 +2,9 @@ import {
   BaileysIncomingFields,
   buildIncomingMessageFromBaileys,
   extractBaileysBody,
+  extractBaileysCommerce,
   extractBaileysContext,
+  isBaileysCatalogShare,
   mapBaileysMessageType,
   mapBaileysStatus,
 } from './baileys-message-mapper';
@@ -37,6 +39,10 @@ describe('mapBaileysMessageType (baileys content-type -> neutral MessageType)', 
     // Regression trap: calls arrive via the `call` socket event, never as a message content type,
     // so any call-ish token must stay 'unknown' (no accidental mapping).
     ['callLogMessage', false, 'unknown'],
+    // WhatsApp Business commerce shapes carry ids the commerce APIs need, so they get their own
+    // types instead of collapsing to a bodyless `unknown`.
+    ['orderMessage', false, 'order'],
+    ['productMessage', false, 'product'],
   ])('maps %s (ptt=%s) -> %s', (raw, ptt, expected) => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     expect(mapBaileysMessageType(raw as string | undefined, ptt as boolean)).toBe(expected);
@@ -334,5 +340,101 @@ describe('buildIncomingMessageFromBaileys', () => {
   it('omits mentionedIds when absent or empty', () => {
     expect(buildIncomingMessageFromBaileys(base).mentionedIds).toBeUndefined();
     expect(buildIncomingMessageFromBaileys({ ...base, mentionedJids: [] }).mentionedIds).toBeUndefined();
+  });
+
+  it('normalizes the catalog owner JID, so no commerce field escapes the @c.us convention', () => {
+    const normalize = (jid: string) => jid.replace('@s.whatsapp.net', '@c.us');
+    const r = buildIncomingMessageFromBaileys(
+      {
+        ...base,
+        contentType: 'productMessage',
+        product: { productId: '2', title: 'Sample', businessOwnerJid: '100000000000@s.whatsapp.net' },
+      },
+      normalize,
+    );
+    expect(r.product).toEqual({ productId: '2', title: 'Sample', businessOwnerJid: '100000000000@c.us' });
+  });
+
+  it('carries the order through untouched, and types a catalog share as unknown', () => {
+    expect(
+      buildIncomingMessageFromBaileys({ ...base, contentType: 'orderMessage', order: { orderId: '1', token: 't' } })
+        .order,
+    ).toEqual({ orderId: '1', token: 't' });
+    expect(buildIncomingMessageFromBaileys({ ...base, contentType: 'productMessage', isCatalogShare: true }).type).toBe(
+      'unknown',
+    );
+  });
+});
+
+describe('extractBaileysCommerce (order / product ids)', () => {
+  // Field-for-field shape of an inbound order as WhatsApp sends it; ids and token are placeholders.
+  const orderContent = {
+    orderMessage: {
+      orderId: '1000000000000001',
+      token: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+    },
+  };
+
+  it('extracts the order id and its single-order token', () => {
+    expect(extractBaileysCommerce(orderContent, 'orderMessage').order).toEqual({
+      orderId: '1000000000000001',
+      token: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+    });
+  });
+
+  it('keeps the order id when no token came with it', () => {
+    const { order } = extractBaileysCommerce({ orderMessage: { orderId: '1' } }, 'orderMessage');
+    expect(order).toEqual({ orderId: '1', token: undefined });
+  });
+
+  it('extracts the product id and its descriptive fields from a shared product card', () => {
+    const { product } = extractBaileysCommerce(
+      {
+        productMessage: {
+          businessOwnerJid: '100000000000@s.whatsapp.net',
+          product: { productId: '2000000000000002', title: 'Sample', description: 'A sample' },
+        },
+      },
+      'productMessage',
+    );
+    expect(product).toEqual({
+      productId: '2000000000000002',
+      title: 'Sample',
+      description: 'A sample',
+      businessOwnerJid: '100000000000@s.whatsapp.net',
+    });
+  });
+
+  it('yields nothing when the id that makes it actionable is missing', () => {
+    expect(extractBaileysCommerce({ orderMessage: { token: 'x' } }, 'orderMessage')).toEqual({});
+    expect(extractBaileysCommerce({ productMessage: { product: { title: 'A' } } }, 'productMessage')).toEqual({});
+  });
+
+  it('yields nothing for a non-commerce content type', () => {
+    expect(extractBaileysCommerce(orderContent, 'conversation')).toEqual({});
+    expect(extractBaileysCommerce({}, undefined)).toEqual({});
+  });
+});
+
+describe('isBaileysCatalogShare (the productMessage arm with no product)', () => {
+  // There is no `catalogMessage` content type: sharing a whole catalog sends a `productMessage`
+  // carrying `catalog` instead of `product`, which would otherwise surface as a `product` message
+  // with no product object and an empty body.
+  it('detects the catalog arm and maps it to unknown rather than product', () => {
+    const content = { productMessage: { catalog: { title: 'Storefront' } } };
+    expect(isBaileysCatalogShare(content)).toBe(true);
+    expect(mapBaileysMessageType('productMessage', false, true)).toBe('unknown');
+    expect(extractBaileysCommerce(content, 'productMessage')).toEqual({});
+  });
+
+  it('flattens the catalog title into the body so the message is not empty', () => {
+    expect(extractBaileysBody({ productMessage: { catalog: { title: 'Storefront' } } })).toBe('Storefront');
+  });
+
+  it('is false for a real product card, and for a productMessage carrying both arms', () => {
+    expect(isBaileysCatalogShare({ productMessage: { product: { productId: '2' } } })).toBe(false);
+    expect(isBaileysCatalogShare({ productMessage: { product: { productId: '2' }, catalog: { title: 'S' } } })).toBe(
+      false,
+    );
   });
 });
