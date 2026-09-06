@@ -201,10 +201,10 @@
     "coverageDirectory": "../coverage",
     "coverageThreshold": {
       "global": {
-        "branches": 61,
-        "functions": 70,
-        "lines": 68,
-        "statements": 67
+        "branches": 54,
+        "functions": 68,
+        "lines": 60,
+        "statements": 61
       },
       "./src/common/cache/": {
         "branches": 34,
@@ -415,6 +415,54 @@
         "functions": 89,
         "lines": 90,
         "statements": 87
+      },
+      "./src/modules/call/": {
+        "branches": 62,
+        "functions": 57,
+        "lines": 82,
+        "statements": 79
+      },
+      "./src/modules/catalog/": {
+        "branches": 68,
+        "functions": 88,
+        "lines": 89,
+        "statements": 87
+      },
+      "./src/modules/channel/": {
+        "branches": 73,
+        "functions": 41,
+        "lines": 76,
+        "statements": 75
+      },
+      "./src/modules/health/": {
+        "branches": 77,
+        "functions": 66,
+        "lines": 90,
+        "statements": 87
+      },
+      "./src/modules/label/": {
+        "branches": 39,
+        "functions": 42,
+        "lines": 45,
+        "statements": 44
+      },
+      "./src/modules/profile/": {
+        "branches": 78,
+        "functions": 84,
+        "lines": 88,
+        "statements": 85
+      },
+      "./src/modules/settings/": {
+        "branches": 50,
+        "functions": 0,
+        "lines": 85,
+        "statements": 81
+      },
+      "./src/modules/takeover/": {
+        "branches": 74,
+        "functions": 70,
+        "lines": 85,
+        "statements": 83
       }
     },
     "testEnvironment": "node",
