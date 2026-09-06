@@ -172,7 +172,7 @@ const MAPPINGS = {
 const MINIMUM_MAPPED = {
   'sdk/javascript/src/types.ts': 82,
   'dashboard/src/services/api.ts': 21,
-  'sdk/python/openwa/types.py': 77,
+  'sdk/python/openwa/types.py': 78,
   'sdk/go': 78,
   'sdk/java': 82,
 };
@@ -220,6 +220,7 @@ const PYTHON_MAPPING = {
   BulkMessageItem: 'BulkMessageItemDto',
   BulkMessageResponse: 'BulkMessageResponseDto',
   CallLinkResponse: 'CallLinkResponseDto',
+  ChatHistoryMessage: 'ChatHistoryMessageDto',
   ChatSummary: 'ChatSummaryDto',
   CreateCallLinkRequest: 'CreateCallLinkDto',
   CreateChannelRequest: 'CreateChannelDto',

@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself resolve. On Baileys the message `body` now falls back to the customer's order note or the product
   title instead of arriving empty; whatsapp-web.js already supplied a body of its own. Sharing a whole
   catalog rather than one product carries no product id and stays `unknown`.
+- The Python SDK's `ChatHistoryMessage` carries the commerce `order` and `product` blocks the other
+  clients already ship, and now models the payload faithfully: the contract-required fields are
+  required, the rest are `NotRequired`, and `type`/`kind` are Literal vocabularies (`MessageType`
+  reuses the JavaScript union, `kind` the existing `ChatKind`) instead of plain strings.
 
 ### Fixed
 
