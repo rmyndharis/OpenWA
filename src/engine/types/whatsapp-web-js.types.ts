@@ -123,6 +123,7 @@ export interface BusinessClient extends Omit<
   | 'getLabels'
   | 'getLabelById'
   | 'getChannels'
+  | 'getChannelByInviteCode'
   | 'getChatsByLabelId'
   | 'createChannel'
   | 'deleteChannel'
@@ -146,6 +147,7 @@ export interface BusinessClient extends Omit<
       | undefined
     >
   >;
+  getChannelByInviteCode(inviteCode: string): Promise<WwjsChannelData | null>;
   getChannels(): Promise<WwjsChannelData[]>;
   /** Takes a channel ID (`…@newsletter`), NOT an invite code; resolves true only on success. */
   subscribeToChannel(channelId: string): Promise<boolean>;

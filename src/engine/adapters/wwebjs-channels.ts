@@ -24,15 +24,8 @@ export class WwebjsChannels {
     return withPage(this.host, context, op);
   }
 
-  async getSubscribedChannels(): Promise<Channel[]> {
-    this.host.ensureReady();
-    const channels = await this.withPage('getSubscribedChannels', () =>
-      (this.client() as unknown as BusinessClient).getChannels(),
-    );
-    if (!channels) {
-      return [];
-    }
-    return channels.map((ch: WwjsChannelData) => ({
+  private mapChannel(ch: WwjsChannelData): Channel {
+    return {
       // Read `$1` before giving up (#747: WA Web's minifier renamed the serialized property), and
       // never String() the object branch — that manufactures the literal "undefined" as an id.
       id: (typeof ch.id === 'object' ? (ch.id._serialized ?? ch.id.$1) : String(ch.id)) || '',
@@ -41,7 +34,18 @@ export class WwebjsChannels {
       inviteCode: ch.inviteCode ? String(ch.inviteCode) : undefined,
       subscriberCount: ch.subscriberCount ? Number(ch.subscriberCount) : undefined,
       verified: ch.verified ? Boolean(ch.verified) : undefined,
-    }));
+    };
+  }
+
+  async getSubscribedChannels(): Promise<Channel[]> {
+    this.host.ensureReady();
+    const channels = await this.withPage('getSubscribedChannels', () =>
+      (this.client() as unknown as BusinessClient).getChannels(),
+    );
+    if (!channels) {
+      return [];
+    }
+    return channels.map((ch: WwjsChannelData) => this.mapChannel(ch));
   }
 
   /**
@@ -185,15 +189,27 @@ export class WwebjsChannels {
 
   // whatsapp-web.js `Client.subscribeToChannel(channelId)` takes a channel ID and resolves a
   // boolean (index.d.ts:71; Client.js:2533) — the interface contract here is subscribe-by-INVITE-CODE
-  // returning the subscribed Channel. The old wiring passed the invite code straight in and mapped
-  // the returned boolean as if it were a Channel, fabricating `{ id: "undefined" }`: a reported
-  // success that never subscribed anything. A real wiring is the two-step
-  // `getChannelByInviteCode(inviteCode)` (Client.js:1707) → `subscribeToChannel(channel.id)` flow;
-  // until that is verified against a live session, an honest 501 beats a phantom success.
-  // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars
-  async subscribeToChannel(_inviteCode: string): Promise<Channel> {
+  // returning the subscribed Channel.
+  async subscribeToChannel(inviteCode: string): Promise<Channel> {
     this.host.ensureReady();
-    throw new EngineNotSupportedError('subscribeToChannel');
+    const wwebjsChannel = await this.withPage('getChannelByInviteCode', () =>
+      (this.client() as unknown as BusinessClient).getChannelByInviteCode(inviteCode),
+    );
+    if (!wwebjsChannel) {
+      throw new EngineRefusedError(`Failed to resolve channel from invite code: ${inviteCode}`);
+    }
+    const channelId = (typeof wwebjsChannel.id === 'object' ? (wwebjsChannel.id._serialized ?? wwebjsChannel.id.$1) : String(wwebjsChannel.id)) || '';
+    if (!channelId) {
+      throw new EngineRefusedError(`Channel found but id was unreadable for invite code: ${inviteCode}`);
+    }
+    const ok = await this.withPage('subscribeToChannel', () =>
+      (this.client() as unknown as BusinessClient).subscribeToChannel(channelId),
+    );
+    if (!ok) {
+      throw new EngineRefusedError(`Failed to subscribe to channel: ${channelId}`);
+    }
+    this.host.logger.log(`Subscribed to channel: ${channelId}`);
+    return this.mapChannel(wwebjsChannel);
   }
 
   async unsubscribeFromChannel(channelId: string): Promise<void> {

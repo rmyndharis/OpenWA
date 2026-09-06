@@ -5960,14 +5960,36 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
     ...over,
   });
 
-  describe('subscribeToChannel (phantom → honest 501)', () => {
-    it('throws EngineNotSupportedError instead of fabricating a Channel from the library boolean', async () => {
-      // wwebjs Client.subscribeToChannel(channelId) takes a channel id and resolves a boolean; the
-      // old wiring passed the invite code and mapped the boolean as a Channel ({ id: "undefined" }).
+  describe('subscribeToChannel', () => {
+    it('uses the two-step flow: resolves invite code, then subscribes by id', async () => {
+      const getChannelByInviteCode = jest.fn().mockResolvedValue({
+        id: { _serialized: '120363@newsletter' },
+        name: 'The Channel',
+      });
       const subscribeToChannel = jest.fn().mockResolvedValue(true);
-      const adapter = readyAdapter({ subscribeToChannel });
-      await expect(adapter.subscribeToChannel('INVITE123')).rejects.toBeInstanceOf(EngineNotSupportedError);
-      expect(subscribeToChannel).not.toHaveBeenCalled();
+      const adapter = readyAdapter({ getChannelByInviteCode, subscribeToChannel });
+
+      const channel = await adapter.subscribeToChannel('INVITE123');
+
+      expect(getChannelByInviteCode).toHaveBeenCalledWith('INVITE123');
+      expect(subscribeToChannel).toHaveBeenCalledWith('120363@newsletter');
+      expect(channel).toEqual({
+        id: '120363@newsletter',
+        name: 'The Channel',
+      });
+    });
+
+    it('throws EngineRefusedError if the invite code cannot be resolved', async () => {
+      const getChannelByInviteCode = jest.fn().mockResolvedValue(null);
+      const adapter = readyAdapter({ getChannelByInviteCode });
+      await expect(adapter.subscribeToChannel('INVITE123')).rejects.toThrow(/resolve channel from invite code/);
+    });
+
+    it('throws EngineRefusedError if the server refuses the subscription', async () => {
+      const getChannelByInviteCode = jest.fn().mockResolvedValue({ id: { _serialized: '120363@newsletter' } });
+      const subscribeToChannel = jest.fn().mockResolvedValue(false);
+      const adapter = readyAdapter({ getChannelByInviteCode, subscribeToChannel });
+      await expect(adapter.subscribeToChannel('INVITE123')).rejects.toThrow(/Failed to subscribe/);
     });
   });
 
