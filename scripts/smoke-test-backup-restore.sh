@@ -9,6 +9,9 @@
 #   (d) the cp fallback writes a CONSISTENCY-WARNING marker into the archive, restore warns
 #       but continues, and restore --strict refuses
 #   (e) the archive min-content check rejects (and deletes) an archive missing a required DB
+#   (f) data/.env.generated supplies paths the environment does not
+#   (g) PLUGIN_STATE_DIR plugin state is archived and restored at the configured root
+#   (h) restore refuses a live target without --force, before touching anything
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c)).
@@ -329,6 +332,62 @@ if [ ! -f "$G/restored-elsewhere/plugins/registry.json" ]; then
   fail "(g) restore ignored PLUGIN_STATE_DIR: the registry did not land under the configured root"
 fi
 pass "(g) PLUGIN_STATE_DIR is honoured by backup and by restore"
+
+echo ""
+echo "==> (h) restore refuses a live target without --force, before touching anything"
+# The data-loss guard: both target databases hold a working install's data, so a plain restore
+# must refuse (non-zero, clear message) before ANY state changes, and --force must be the exact
+# switch that changes the answer.
+H="$WORK/h"
+mkdir -p "$H/src/data" "$H/live" "$H/out"
+make_fixture "$H/src/data/main.sqlite" "hotel-archive-main"
+make_fixture "$H/src/data/openwa.sqlite" "hotel-archive-data"
+(
+  cd "$H/src"
+  BACKUP_DIR="$H/out" "$BACKUP" >/dev/null
+)
+ARCHIVE_H="$(ls "$H"/out/openwa-backup-*.tar.gz)"
+make_fixture "$H/live/main.sqlite" "hotel-live-main"
+make_fixture "$H/live/openwa.sqlite" "hotel-live-data"
+set +e
+OUT_H="$(cd "$H" && MAIN_DATABASE_NAME="$H/live/main.sqlite" \
+  DATABASE_NAME="$H/live/openwa.sqlite" OPENWA_DATA_DIR="$H/live" \
+  "$RESTORE" "$ARCHIVE_H" 2>&1)"
+RC_H=$?
+set -e
+if [ "$RC_H" -eq 0 ]; then
+  fail "(h) restore exited 0 on a live target without --force"
+fi
+# ASCII anchors only: the second refusal line carries a UTF-8 dash that must not be grep'd.
+if ! printf '%s' "$OUT_H" | grep -q 'appear live'; then
+  fail "(h) refusal message does not say the target appears live"
+fi
+if ! printf '%s' "$OUT_H" | grep -q -- '--force'; then
+  fail "(h) refusal message does not point at --force"
+fi
+if ! printf '%s' "$OUT_H" | grep -qF "$H/live/main.sqlite"; then
+  fail "(h) refusal message does not name the live target"
+fi
+if [ "$(db_fingerprint "$H/live/main.sqlite")" != "hotel-live-main" ]; then
+  fail "(h) the refused restore modified the live main DB"
+fi
+if [ "$(db_fingerprint "$H/live/openwa.sqlite")" != "hotel-live-data" ]; then
+  fail "(h) the refused restore modified the live data DB"
+fi
+# $H/live is non-empty, so an execution that reached the safety-snapshot step would have left a
+# $H/live.pre-restore-* sibling; its absence proves the guard fired before any state was touched.
+if [ -n "$(ls -d "$H"/live.pre-restore-* 2>/dev/null || true)" ]; then
+  fail "(h) the refused restore left a pre-restore snapshot behind"
+fi
+(
+  cd "$H"
+  MAIN_DATABASE_NAME="$H/live/main.sqlite" DATABASE_NAME="$H/live/openwa.sqlite" \
+    OPENWA_DATA_DIR="$H/live" "$RESTORE" "$ARCHIVE_H" --force >/dev/null
+)
+if [ "$(db_fingerprint "$H/live/main.sqlite")" != "hotel-archive-main" ]; then
+  fail "(h) --force did not overwrite the live main DB after the refusal"
+fi
+pass "(h) live target refused before any state was touched; --force overwrites"
 
 echo ""
 echo "All smoke tests passed!"
