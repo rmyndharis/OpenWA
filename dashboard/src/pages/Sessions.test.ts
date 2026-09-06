@@ -45,6 +45,20 @@ const SESSION_STALE_ENGINE: Session = {
   updatedAt: '2026-01-01T00:00:00.000Z',
 };
 
+// `initializing` on a session that is STILL LINKED: the Baileys adapter parks one there for the
+// whole reconnect backoff after a transient close. The card used to branch on status alone and paint
+// it as the pairing placeholder, hiding the phone, so a linked account read as an unlinked one.
+const SESSION_RECONNECTING: Session = {
+  id: 'sess-reconnecting-1',
+  name: 'reconnecting-bot',
+  status: 'initializing',
+  engineLoaded: true,
+  phone: '15550002222',
+  lastActive: '2026-01-01T00:00:00.000Z',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+};
+
 // A reachout timelock leaves the account fully connected — `ready` plus a restriction is the normal
 // shape, and the card must show it there. A restriction hidden behind a failed/disconnected status
 // (the rule `lastError` follows) would be invisible in exactly the case that matters.
@@ -59,7 +73,7 @@ const SESSION_TIMELOCKED: Session = {
   restriction: { kind: 'reachout_timelock', code: 'BIZ_QUALITY', expiresAt: '2026-08-04T09:00:00.000Z' },
 };
 
-const SESSIONS = [SESSION_QR, SESSION_STALE_ENGINE, SESSION_TIMELOCKED];
+const SESSIONS = [SESSION_QR, SESSION_STALE_ENGINE, SESSION_TIMELOCKED, SESSION_RECONNECTING];
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -274,6 +288,36 @@ test('the session list renders, and action buttons gate on engineLoaded rather t
   const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
   within(qrCard).getByRole('button', { name: 'Show QR' });
   within(qrCard).getByRole('button', { name: 'Proxy' });
+});
+
+test('a linked session that is reconnecting keeps its identity rows, not the pairing placeholder', async () => {
+  const { screen, within } = rtl;
+  resetFetchCalls();
+  renderSessions();
+
+  await screen.findByText('reconnecting-bot');
+  const card = screen.getByText('reconnecting-bot').closest('.session-card') as HTMLElement;
+
+  // The pill still says Starting..., which is honest: the engine really is between attempts.
+  within(card).getByText('Starting...');
+  // What must NOT be there: the pairing placeholder, which claims a QR is coming for an account that
+  // is already linked.
+  assert.equal(within(card).queryByText('Preparing QR code...'), null);
+  assert.equal(card.querySelector('.qr-placeholder'), null);
+  // What must be there: the number the operator needs to recognise the account.
+  within(card).getByText('15550002222');
+});
+
+test('a never-linked session still gets the pairing placeholder', async () => {
+  const { screen, within } = rtl;
+  resetFetchCalls();
+  renderSessions();
+
+  // Same status family, no bound phone: this one really is waiting to be paired.
+  await screen.findByText('new-device');
+  const card = screen.getByText('new-device').closest('.session-card') as HTMLElement;
+  assert.ok(card.querySelector('.qr-placeholder'));
+  within(card).getByRole('button', { name: 'Show QR' });
 });
 
 test('creating a session issues POST /api/sessions with the entered name', async () => {

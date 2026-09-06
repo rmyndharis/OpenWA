@@ -758,6 +758,23 @@ export interface EngineEventCallbacks {
    */
   onHistoryMessages?: (messages: IncomingMessage[]) => void;
   onDisconnected?: (reason: string) => void;
+  /**
+   * Fired each time the engine schedules an INTERNAL reconnect attempt: a drop it retries on its own
+   * and deliberately does NOT report through `onDisconnected`, because the session is still linked and
+   * the credentials are still good. Purely informational, so a consumer must not tear anything down on
+   * it; the engine keeps owning the retry.
+   *
+   * `attempt` is the 1-based number of the attempt being scheduled, and it resets once the connection
+   * is back (or after a long enough healthy stretch), so attempt 1 always opens a fresh episode.
+   * `nextDelayMs` is how long the engine waits before making it. Together they are what a consumer
+   * needs to tell a one-second blip from a session that has been down for an hour, which the status
+   * alone cannot: the engine reports INITIALIZING for the whole episode, exactly as it does for a
+   * session that has never been paired.
+   *
+   * Optional: an engine that hands every drop to its consumer instead of retrying internally
+   * (whatsapp-web.js does) simply never invokes this, because that consumer already has the drop.
+   */
+  onReconnecting?: (attempt: number, nextDelayMs: number) => void;
   onStateChanged?: (state: EngineStatus) => void;
   /**
    * Fired when the engine needs an operator action to keep the session healthy — currently only the

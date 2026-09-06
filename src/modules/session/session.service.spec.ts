@@ -2451,6 +2451,147 @@ describe('SessionService', () => {
     });
   });
 
+  // A row whose owning node never came back: the boot reset cannot touch it (it is fenced to what
+  // this node may claim, and a foreign claim on an unexpired lease is not claimable), so without this
+  // it reports READY for an engine no process runs.
+  describe('markLapsedDisconnected', () => {
+    const GONE_BEFORE = new Date('2026-01-01T00:00:00.000Z');
+    const stranded = (over: Partial<Session> = {}): Session =>
+      ({
+        id: 'stranded-1',
+        name: 'stranded',
+        status: SessionStatus.READY,
+        nodeId: 'dead-node',
+        leaseExpiresAt: new Date('2025-12-31T23:00:00.000Z'),
+        ...over,
+      }) as Session;
+
+    beforeEach(() => {
+      (repository.update as jest.Mock).mockClear();
+      (webhookService.dispatch as jest.Mock).mockClear();
+    });
+
+    it('writes under the predicate it read on, never by id alone', async () => {
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      const marked = await service.markLapsedDisconnected([stranded()], GONE_BEFORE);
+
+      expect(marked).toEqual(['stranded-1']);
+      const [where, patch] = (repository.update as jest.Mock).mock.calls[0] as [
+        Record<string, unknown>,
+        Record<string, unknown>,
+      ];
+      // A claim rewrites nodeId, so a row a peer took between the read and this write matches nothing.
+      expect(where).toMatchObject({ id: 'stranded-1', nodeId: 'dead-node', status: SessionStatus.READY });
+      expect(where.leaseExpiresAt).toBeDefined();
+      expect(patch).toEqual({ status: SessionStatus.DISCONNECTED });
+    });
+
+    it('announces the correction so the dashboard and webhooks see it', async () => {
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      await service.markLapsedDisconnected([stranded()], GONE_BEFORE);
+
+      expect(webhookService.dispatch).toHaveBeenCalledWith('stranded-1', 'session.status', {
+        sessionId: 'stranded-1',
+        status: SessionStatus.DISCONNECTED,
+      });
+    });
+
+    it('stays silent when the row was claimed between the read and the write', async () => {
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 0 });
+
+      const marked = await service.markLapsedDisconnected([stranded()], GONE_BEFORE);
+
+      expect(marked).toEqual([]);
+      expect(webhookService.dispatch).not.toHaveBeenCalledWith('stranded-1', 'session.status', expect.anything());
+    });
+
+    it('leaves a holder that lapsed only recently alone: a live peer re-extends its lease', async () => {
+      const recent = stranded({ leaseExpiresAt: new Date('2026-01-01T00:00:30.000Z') });
+
+      const marked = await service.markLapsedDisconnected([recent], GONE_BEFORE);
+
+      expect(marked).toEqual([]);
+      expect(repository.update).not.toHaveBeenCalled();
+    });
+
+    it('leaves FAILED and DISCONNECTED rows alone: one needs a human, the other is already right', async () => {
+      const rows = [
+        stranded({ id: 'f', status: SessionStatus.FAILED }),
+        stranded({ id: 'd', status: SessionStatus.DISCONNECTED }),
+      ];
+
+      const marked = await service.markLapsedDisconnected(rows, GONE_BEFORE);
+
+      expect(marked).toEqual([]);
+      expect(repository.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // An engine that retries a dropped connection ON ITS OWN never reaches the service-level reconnect
+  // loop, so before this wiring a Baileys session could sit at INITIALIZING for hours with no
+  // webhook, no lastError and a flat reconnect counter. #1546 was reported with an empty logs box for
+  // exactly that reason.
+  describe('engine-internal reconnect reporting', () => {
+    const startAndCapture = async (): Promise<EngineEventCallbacks> => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+      const calls = mockEngine.initialize.mock.calls as [EngineEventCallbacks][];
+      return calls[0][0];
+    };
+
+    const loopDispatches = (): unknown[][] =>
+      ((webhookService.dispatch as jest.Mock).mock.calls as unknown[][]).filter(c => c[1] === 'session.reconnect_loop');
+
+    it('stays quiet below the alert threshold: a blip is not an outage', async () => {
+      const callbacks = await startAndCapture();
+      (webhookService.dispatch as jest.Mock).mockClear();
+
+      for (let attempt = 1; attempt <= 4; attempt++) callbacks.onReconnecting?.(attempt, 1_000);
+
+      expect(loopDispatches()).toHaveLength(0);
+      const sessionErrors = (service as unknown as { sessionErrors: Map<string, string> }).sessionErrors;
+      expect(sessionErrors.get('sess-uuid-1')).toBeUndefined();
+    });
+
+    it('alerts on every fifth attempt, with the attempt number and the next delay', async () => {
+      const callbacks = await startAndCapture();
+      (webhookService.dispatch as jest.Mock).mockClear();
+
+      for (let attempt = 1; attempt <= 10; attempt++) callbacks.onReconnecting?.(attempt, 60_000);
+
+      const dispatches = loopDispatches();
+      expect(dispatches).toHaveLength(2);
+      expect(dispatches[0][2]).toEqual({ sessionId: 'sess-uuid-1', attempts: 5, nextDelayMs: 60_000 });
+      expect(dispatches[1][2]).toEqual({ sessionId: 'sess-uuid-1', attempts: 10, nextDelayMs: 60_000 });
+    });
+
+    it('records the loop on lastError, so GET /sessions/:id says why it is stuck at initializing', async () => {
+      const callbacks = await startAndCapture();
+
+      for (let attempt = 1; attempt <= 5; attempt++) callbacks.onReconnecting?.(attempt, 60_000);
+
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ status: SessionStatus.INITIALIZING }));
+      const result = await service.findOne('sess-uuid-1');
+
+      expect(result.lastError).toMatch(/^Reconnecting after a dropped connection \(attempt 5, down for /);
+    });
+
+    it('never fires onDisconnected: the session is still linked and the engine owns the retry', async () => {
+      const callbacks = await startAndCapture();
+      (repository.update as jest.Mock).mockClear();
+
+      for (let attempt = 1; attempt <= 5; attempt++) callbacks.onReconnecting?.(attempt, 60_000);
+
+      const statusWrites = ((repository.update as jest.Mock).mock.calls as unknown[][]).filter(
+        c => (c[1] as { status?: SessionStatus }).status === SessionStatus.DISCONNECTED,
+      );
+      expect(statusWrites).toHaveLength(0);
+    });
+  });
+
   // A restriction is WhatsApp judging the account, not a fault on our side, so it has its own
   // channel: a webhook, a field on the session, and a gauge — never a status change. Both engines
   // repeat themselves (whatsapp-web.js on every reconnect attempt, the Baileys probe on every

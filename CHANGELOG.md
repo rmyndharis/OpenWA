@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Baileys session retrying a dropped connection now reports the loop: `lastError` on
+  `GET /sessions/{sessionId}` says which attempt it is on and how long it has been down, the
+  `session.reconnect_loop` webhook fires every fifth attempt, and the reconnect metrics move. The
+  engine retries internally and never reported a disconnect, so an operator had nothing to look at
+  while a session sat at `initializing` for hours
+  ([#1546](https://github.com/rmyndharis/OpenWA/issues/1546)). Thanks @OdaiAhmed99 for the report.
+- The dashboard session card keeps showing the phone number, session id and last-active time while a
+  linked session reconnects, instead of the pairing placeholder that read as an unlinked account
+  ([#1546](https://github.com/rmyndharis/OpenWA/issues/1546)). Thanks @OdaiAhmed99 for the report.
+- The Sessions page reports a dead live-event feed and offers a retry, and re-reads the list once the
+  feed comes back. The socket gives up after five attempts, and the page kept rendering whatever
+  status arrived last with no indication that it had stopped updating.
+- A session left `ready` or `initializing` by a node that never came back is marked disconnected by
+  the takeover sweep. The boot reset skips a row still claimed by another node id, and a container
+  recreate changes that id by default, so with `AUTO_START_SESSIONS` off nothing revisited the row and
+  it went on reporting an engine no process was running. The sweep now runs regardless of that flag;
+  adopting a session still requires it.
+
 ## [0.23.4] - 2026-09-05
 
 ### Added

@@ -1174,4 +1174,9 @@ export class SessionEngineLifecycle {
   updateStatus(id: string, status: SessionStatus): Promise<void> {
     return this.broadcaster.updateStatus(id, status);
   }
+
+  /** Public delegate: the fan-out half only, for a caller that wrote the row under its own predicate. */
+  announceStatus(id: string, status: SessionStatus): void {
+    this.broadcaster.announce(id, status);
+  }
 }

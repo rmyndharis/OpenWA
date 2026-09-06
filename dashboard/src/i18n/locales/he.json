@@ -254,6 +254,7 @@
   "sessions": {
     "title": "Sessions",
     "subtitle": "ניהול Sessions של WhatsApp והתחברות באמצעות QR",
+    "feedDisconnected": "עדכונים בזמן אמת נותקו",
     "newSession": "Session חדש",
     "searchPlaceholder": "חיפוש Sessions...",
     "filter": {

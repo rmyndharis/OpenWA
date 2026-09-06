@@ -247,6 +247,7 @@
   "sessions": {
     "title": "Sitzungen",
     "subtitle": "WhatsApp-Sitzungen und QR-Code-Verbindungen verwalten",
+    "feedDisconnected": "Live-Updates getrennt",
     "newSession": "Neue Sitzung",
     "searchPlaceholder": "Sitzungen durchsuchen...",
     "filter": {

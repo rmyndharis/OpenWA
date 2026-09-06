@@ -247,6 +247,7 @@
   "sessions": {
     "title": "세션",
     "subtitle": "WhatsApp 세션과 QR 코드 연결을 관리하세요",
+    "feedDisconnected": "실시간 업데이트 연결 끊김",
     "newSession": "새 세션",
     "searchPlaceholder": "세션 검색...",
     "filter": {

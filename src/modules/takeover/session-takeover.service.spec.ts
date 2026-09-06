@@ -27,9 +27,15 @@ describe('SessionTakeoverService', () => {
   const build = (
     rows: Session[],
     opts: { autoStart?: boolean; startImpl?: jest.Mock } = {},
-  ): { svc: SessionTakeoverService; start: jest.Mock; reap: jest.Mock } => {
+  ): {
+    svc: SessionTakeoverService;
+    start: jest.Mock;
+    reap: jest.Mock;
+    markLapsedDisconnected: jest.Mock;
+  } => {
     const start = opts.startImpl ?? jest.fn().mockResolvedValue({});
     const reap = jest.fn().mockResolvedValue(0);
+    const markLapsedDisconnected = jest.fn().mockResolvedValue([]);
     const config = {
       get: (key: string, def?: unknown) =>
         ({
@@ -38,12 +44,15 @@ describe('SessionTakeoverService', () => {
         })[key as 'features'] ?? def,
     } as unknown as ConfigService;
     const svc = new SessionTakeoverService(
-      { start } as unknown as SessionService,
-      { lapsedHeldByOthers: jest.fn().mockResolvedValue(rows) } as unknown as SessionOwnershipService,
+      { start, markLapsedDisconnected } as unknown as SessionService,
+      {
+        lapsedHeldByOthers: jest.fn().mockResolvedValue(rows),
+        leaseTtlMs: 60_000,
+      } as unknown as SessionOwnershipService,
       { reapProcessingBatches: reap } as unknown as BulkMessageService,
       config,
     );
-    return { svc, start, reap };
+    return { svc, start, reap, markLapsedDisconnected };
   };
 
   afterEach(() => {
@@ -139,13 +148,50 @@ describe('SessionTakeoverService', () => {
     expect(start).toHaveBeenCalledTimes(2);
   });
 
-  it('the AUTO_START_SESSIONS opt-out disables the sweep timer entirely', () => {
+  it('the AUTO_START_SESSIONS opt-out arms the sweep but starts nothing', async () => {
+    // The opt-out means "no spontaneous engine starts", not "leave a dead node's sessions reporting
+    // READY forever". The sweep is the only thing that revisits those rows, so it has to keep
+    // running; only the adopting half is gated.
     jest.useFakeTimers();
-    const { svc } = build([], { autoStart: false });
+    const { svc, start, markLapsedDisconnected } = build([lapsed({ name: 'a' })], { autoStart: false });
 
     svc.onApplicationBootstrap();
+    expect(jest.getTimerCount()).toBe(1);
 
-    expect(jest.getTimerCount()).toBe(0);
+    jest.useRealTimers();
+    await svc.sweep();
+
+    expect(markLapsedDisconnected).toHaveBeenCalledTimes(1);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('corrects stale statuses BEFORE adopting, so the write cannot land on a live engine', async () => {
+    const order: string[] = [];
+    const { svc, start, markLapsedDisconnected } = build([lapsed({ name: 'a' })]);
+    markLapsedDisconnected.mockImplementation(() => {
+      order.push('mark');
+      return Promise.resolve([]);
+    });
+    start.mockImplementation(() => {
+      order.push('start');
+      return Promise.resolve({});
+    });
+
+    await svc.sweep();
+
+    expect(order).toEqual(['mark', 'start']);
+  });
+
+  it('gives the reset a cutoff of two lease TTLs, so a healthy peer that lapsed once is left alone', async () => {
+    const { svc, markLapsedDisconnected } = build([lapsed({ name: 'a' })]);
+    const before = Date.now();
+
+    await svc.sweep();
+
+    const [, goneBefore] = markLapsedDisconnected.mock.calls[0] as [Session[], Date];
+    // 60s TTL x 2: anything whose lease expired inside the last two minutes is still presumed alive.
+    expect(before - goneBefore.getTime()).toBeGreaterThanOrEqual(120_000);
+    expect(before - goneBefore.getTime()).toBeLessThan(121_000);
   });
 
   it('arms the timer when auto-start is on, and tears it down on destroy', () => {
@@ -174,8 +220,8 @@ describe('SessionTakeoverService', () => {
         ({ features: { autoStartSessions: true }, 'session.takeoverSweepMs': 1000 })[key as 'features'] ?? def,
     } as unknown as ConfigService;
     const svc = new SessionTakeoverService(
-      { start } as unknown as SessionService,
-      { lapsedHeldByOthers: ownershipCalls } as unknown as SessionOwnershipService,
+      { start, markLapsedDisconnected: jest.fn().mockResolvedValue([]) } as unknown as SessionService,
+      { lapsedHeldByOthers: ownershipCalls, leaseTtlMs: 60_000 } as unknown as SessionOwnershipService,
       { reapProcessingBatches: jest.fn().mockResolvedValue(0) } as unknown as BulkMessageService,
       config,
     );

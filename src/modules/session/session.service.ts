@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, In, Not, IsNull, DataSource, FindManyOptions } from 'typeorm';
+import { Repository, In, Not, IsNull, LessThan, DataSource, FindManyOptions } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { setTimeout } from 'node:timers/promises';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
@@ -80,6 +80,19 @@ function isTransientLaunchFailure(error: unknown): boolean {
 export const AUTOSTART_THROTTLE_MS = 2_000;
 
 /**
+ * Statuses that assert an engine is running somewhere. The boot reset clears them for every row this
+ * node may claim; markLapsedDisconnected clears them for a row whose holder never came back. FAILED
+ * and CREATED stay out of both: an operator has to see them.
+ */
+const ACTIVE_STATUSES = [
+  SessionStatus.READY,
+  SessionStatus.INITIALIZING,
+  SessionStatus.QR_READY,
+  SessionStatus.AUTHENTICATING,
+  SessionStatus.ACTION_REQUIRED,
+];
+
+/**
  * The session-record API: CRUD over the sessions table, aggregate stats, and the thin engine query
  * proxies (QR/pairing/chats/groups/chat-state) behind the controller routes. Every engine LIFECYCLE
  * verb (start/stop/logout/forceKill/delete/stopOrphanEngines), the reconnect machinery, the engine
@@ -134,17 +147,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * serving traffic. A row held by another node with an unexpired lease is therefore left alone.
    */
   async onModuleInit(): Promise<void> {
-    const activeStatuses = [
-      SessionStatus.READY,
-      SessionStatus.INITIALIZING,
-      SessionStatus.QR_READY,
-      SessionStatus.AUTHENTICATING,
-      SessionStatus.ACTION_REQUIRED,
-    ];
-
     const claimable = this.ownership?.claimableWhere() ?? [{}];
     const result = await this.sessionRepository.update(
-      claimable.map(clause => ({ ...clause, status: In(activeStatuses) })),
+      claimable.map(clause => ({ ...clause, status: In(ACTIVE_STATUSES) })),
       { status: SessionStatus.DISCONNECTED },
     );
 
@@ -854,5 +859,56 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     sessionIds: string[],
   ): Promise<{ stopped: string[]; notRunning: string[]; failed: string[] }> {
     return this.engineLifecycle.stopOrphanEngines(sessionIds);
+  }
+
+  /**
+   * Mark disconnected every session a vanished node left in a running status.
+   *
+   * A lapsed claim means no process hosts that engine any more: a crashed peer, or this container's
+   * own previous identity after a recreate (the default nodeId is the hostname, which a recreate
+   * changes). The boot reset cannot touch those rows because it is fenced to what this node may
+   * claim, and a row still naming a foreign node on an unexpired lease is not one of them, so
+   * without this the row goes on reporting READY for an engine nobody runs. The claim itself is
+   * deliberately left in place, so the row stays the adoptable orphan the takeover sweep looks for.
+   *
+   * `goneBefore` is the caller's "really gone" cutoff, not simply now: a lease lapses while its
+   * holder is perfectly healthy whenever a query runs long, and the next heartbeat re-extends it.
+   * Acting on a single lapse would report a live peer's sessions as disconnected, and nothing would
+   * correct it, because that peer's renewal still finds its own nodeId and detects no loss.
+   */
+  async markLapsedDisconnected(sessions: Session[], goneBefore: Date): Promise<string[]> {
+    const marked: string[] = [];
+    for (const session of sessions) {
+      if (!ACTIVE_STATUSES.includes(session.status)) continue;
+      // Both are guaranteed non-null by the lapsed-claim query that produced these rows, and both are
+      // load-bearing in the predicate below: TypeORM drops an `undefined` value from a where clause
+      // rather than matching on it, so a null here would silently widen the update.
+      if (session.nodeId == null) continue;
+      if (session.leaseExpiresAt == null || session.leaseExpiresAt >= goneBefore) continue;
+      // Written on the same predicate the read used, never by id alone: a peer, or this node's own
+      // adopt loop, can claim and start this row at any moment, and a claim rewrites `nodeId`, so a
+      // row that was taken matches nothing here and keeps the status its start gave it.
+      const { affected } = await this.sessionRepository.update(
+        {
+          id: session.id,
+          nodeId: session.nodeId,
+          leaseExpiresAt: LessThan(goneBefore),
+          status: session.status,
+        },
+        { status: SessionStatus.DISCONNECTED },
+      );
+      if (!affected) continue;
+      this.logger.warn(`Session ${session.name} was left ${session.status} by a node that never came back`, {
+        sessionId: session.id,
+        action: 'lapsed_claim_reset',
+        fromNode: session.nodeId,
+      });
+      // Fan-out only. The row is already written above, under the predicate that makes it safe;
+      // going back through updateStatus would re-write it by id and could land on a row a peer has
+      // since claimed and started.
+      this.engineLifecycle.announceStatus(session.id, SessionStatus.DISCONNECTED);
+      marked.push(session.id);
+    }
+    return marked;
   }
 }

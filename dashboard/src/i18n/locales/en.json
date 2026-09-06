@@ -247,6 +247,7 @@
   "sessions": {
     "title": "Sessions",
     "subtitle": "Manage your WhatsApp sessions and QR code connections",
+    "feedDisconnected": "Live updates disconnected",
     "newSession": "New Session",
     "searchPlaceholder": "Search sessions...",
     "filter": {
