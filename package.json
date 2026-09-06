@@ -97,7 +97,7 @@
     "https-proxy-agent": "^9.1.0",
     "ioredis": "^6.0.0",
     "pg": "^8.23.0",
-    "puppeteer": "24.38.0",
+    "puppeteer": "25.10.0",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
