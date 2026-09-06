@@ -46,6 +46,24 @@ BulkMessageType = Literal["text", "image", "video", "audio", "document"]
 BatchMessageStatus = Literal["pending", "sent", "failed", "cancelled"]
 BatchLifecycleStatus = Literal["pending", "processing", "completed", "failed", "cancelled"]
 ChatKind = Literal["individual", "group", "channel", "status", "broadcast", "unknown"]
+MessageType = Literal[
+    "text",
+    "image",
+    "video",
+    "audio",
+    "voice",
+    "document",
+    "sticker",
+    "location",
+    "contact",
+    "poll",
+    "call",
+    "revoked",
+    "order",
+    "product",
+    "masked",
+    "unknown",
+]
 WebhookEvent = Literal[
     "message.received", "message.sent", "message.ack", "message.failed", "message.revoked",
     "message.reaction", "message.edited", "session.status", "session.qr", "session.authenticated",
@@ -523,6 +541,24 @@ class MessageCall(TypedDict, total=False):
     missed: bool
 
 
+class MessageOrder(TypedDict):
+    """Order block on a live history message, present on ``order`` messages only: the cart the
+    customer placed from the business catalog, plus the single-order token for its items."""
+
+    orderId: str
+    token: NotRequired[str]
+
+
+class MessageProduct(TypedDict):
+    """Product block on a live history message, present on ``product`` messages only: the catalog
+    product shared into the chat."""
+
+    productId: str
+    title: NotRequired[str]
+    description: NotRequired[str]
+    businessOwnerJid: NotRequired[str]
+
+
 class MessageContact(TypedDict, total=False):
     """Sender contact block. History carries ``pushName`` only; the richer fields arrive on
     ``message.received`` when ``WEBHOOK_CONTACT_DETAILS`` is enabled."""
@@ -553,26 +589,27 @@ ChatHistoryMessage = TypedDict(
         "to": Jid,
         "chatId": Jid,
         "body": str,
-        "type": str,
+        "type": MessageType,
         "timestamp": int,
         "fromMe": bool,
         "isGroup": bool,
-        "isStatusBroadcast": bool,
-        "kind": str,
-        "ephemeralDuration": int,
-        "author": Jid,
-        "mentionedIds": list,
-        "call": MessageCall,
-        "isLidSender": bool,
-        "senderPhone": Optional[str],
-        "contact": MessageContact,
-        "backgroundColor": str,
-        "font": int,
-        "media": ChatHistoryMedia,
-        "quotedMessage": QuotedMessage,
-        "location": MessageLocation,
+        "kind": ChatKind,
+        "isStatusBroadcast": NotRequired[bool],
+        "ephemeralDuration": NotRequired[int],
+        "author": NotRequired[Jid],
+        "mentionedIds": NotRequired[list],
+        "call": NotRequired[MessageCall],
+        "isLidSender": NotRequired[bool],
+        "senderPhone": NotRequired[Optional[str]],
+        "contact": NotRequired[MessageContact],
+        "backgroundColor": NotRequired[str],
+        "font": NotRequired[int],
+        "media": NotRequired[ChatHistoryMedia],
+        "quotedMessage": NotRequired[QuotedMessage],
+        "location": NotRequired[MessageLocation],
+        "order": NotRequired[MessageOrder],
+        "product": NotRequired[MessageProduct],
     },
-    total=False,
 )
 
 
