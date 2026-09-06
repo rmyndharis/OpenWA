@@ -613,6 +613,7 @@
     "removeFile": "Remover arquivo",
     "fileReadError": "Falha ao ler o arquivo",
     "fileTooLarge": "O arquivo é muito grande (máx. 18 MB)",
+    "recipientsFileTooLarge": "O arquivo de destinatários é muito grande (máx. 2 MB)",
     "caption": "Legenda",
     "filename": "Nome do arquivo",
     "captionPlaceholder": "Digite uma legenda...",

@@ -659,6 +659,7 @@
     "removeFile": "移除文件",
     "fileReadError": "文件读取失败",
     "fileTooLarge": "文件过大（最大 18 MB）",
+    "recipientsFileTooLarge": "收件人文件过大（最大 2 MB）",
     "caption": "说明文字",
     "filename": "文件名",
     "captionPlaceholder": "输入说明文字...",

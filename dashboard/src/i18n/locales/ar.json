@@ -674,6 +674,7 @@
     "removeFile": "إزالة الملف",
     "fileReadError": "فشل قراءة الملف",
     "fileTooLarge": "الملف كبير جدًا (الحد الأقصى 18 ميغابايت)",
+    "recipientsFileTooLarge": "ملف المستلمين كبير جدًا (الحد الأقصى 2 ميغابايت)",
     "caption": "التعليق",
     "filename": "اسم الملف",
     "captionPlaceholder": "أدخل التعليق...",

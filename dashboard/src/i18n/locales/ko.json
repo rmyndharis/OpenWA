@@ -659,6 +659,7 @@
     "removeFile": "파일 제거",
     "fileReadError": "파일 읽기 실패",
     "fileTooLarge": "파일이 너무 큽니다 (최대 18 MB)",
+    "recipientsFileTooLarge": "수신자 파일이 너무 큽니다 (최대 2 MB)",
     "caption": "설명",
     "filename": "파일 이름",
     "captionPlaceholder": "설명을 입력하세요...",

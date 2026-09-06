@@ -659,6 +659,7 @@
     "removeFile": "Rimuovi file",
     "fileReadError": "Lettura del file non riuscita",
     "fileTooLarge": "Il file è troppo grande (max 18 MB)",
+    "recipientsFileTooLarge": "Il file dei destinatari è troppo grande (max 2 MB)",
     "caption": "Didascalia",
     "filename": "Nome File",
     "captionPlaceholder": "Inserisci una didascalia...",

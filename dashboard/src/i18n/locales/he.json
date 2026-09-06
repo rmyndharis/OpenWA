@@ -668,6 +668,7 @@
     "removeFile": "הסרת קובץ",
     "fileReadError": "קריאת הקובץ נכשלה",
     "fileTooLarge": "הקובץ גדול מדי (מקסימום 18 MB)",
+    "recipientsFileTooLarge": "קובץ הנמענים גדול מדי (מקסימום 2 MB)",
     "caption": "כיתוב",
     "filename": "שם קובץ",
     "captionPlaceholder": "יש להזין כיתוב...",

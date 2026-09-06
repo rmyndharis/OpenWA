@@ -659,6 +659,7 @@
     "removeFile": "Dosyayı kaldır",
     "fileReadError": "Dosya okunamadı",
     "fileTooLarge": "Dosya çok büyük (maks 18 MB)",
+    "recipientsFileTooLarge": "Alıcı dosyası çok büyük (maks 2 MB)",
     "caption": "Açıklama",
     "filename": "Dosya Adı",
     "captionPlaceholder": "Açıklama girin...",
