@@ -659,6 +659,7 @@
     "removeFile": "Remove file",
     "fileReadError": "File read failed",
     "fileTooLarge": "File is too large (max 18 MB)",
+    "recipientsFileTooLarge": "The recipients file is too large (max 2 MB)",
     "caption": "Caption",
     "filename": "Filename",
     "captionPlaceholder": "Enter caption...",

@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `:main` and sha Docker images rebuild the production stage's apt layer on every build instead
   of serving it from cache, so a branch image cannot ship OS packages that Debian has since patched.
   The release path already worked this way, after a cached layer shipped stale chromium twice.
+- The Message Tester's bulk-recipients file picker refuses files over 2 MB before reading them.
 
 ## [0.23.4] - 2026-09-05
 

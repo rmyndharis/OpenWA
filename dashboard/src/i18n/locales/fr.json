@@ -659,6 +659,7 @@
     "removeFile": "Supprimer le fichier",
     "fileReadError": "Échec de lecture du fichier",
     "fileTooLarge": "Le fichier est trop volumineux (max 18 Mo)",
+    "recipientsFileTooLarge": "Le fichier de destinataires est trop volumineux (max 2 Mo)",
     "caption": "Légende",
     "filename": "Nom du fichier",
     "captionPlaceholder": "Entrez une légende...",

@@ -12,7 +12,7 @@ import {
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
 import { useSessionsQuery, useSessionGroupsQuery } from '../hooks/queries';
-import { parseBulkRecipients, BULK_MAX_RECIPIENTS } from '../utils/bulkRecipients';
+import { parseBulkRecipients, BULK_MAX_RECIPIENTS, BULK_RECIPIENTS_FILE_MAX_BYTES } from '../utils/bulkRecipients';
 import { PageHeader } from '../components/PageHeader';
 import './MessageTester.css';
 
@@ -194,6 +194,16 @@ export function MessageTester() {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    // Reject before reading, mirroring the media pick above: FileReader would materialize the whole
+    // file as a string before any backend cap could weigh in.
+    if (file.size > BULK_RECIPIENTS_FILE_MAX_BYTES) {
+      setResponse({
+        success: false,
+        timestamp: new Date().toISOString(),
+        error: t('messageTester.recipientsFileTooLarge'),
+      });
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = () => {

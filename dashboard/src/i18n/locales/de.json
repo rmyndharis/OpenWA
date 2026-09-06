@@ -659,6 +659,7 @@
     "removeFile": "Datei entfernen",
     "fileReadError": "Datei konnte nicht gelesen werden",
     "fileTooLarge": "Die Datei ist zu groß (max. 18 MB)",
+    "recipientsFileTooLarge": "Die Empfängerdatei ist zu groß (max. 2 MB)",
     "caption": "Beschriftung",
     "filename": "Dateiname",
     "captionPlaceholder": "Beschriftung eingeben...",

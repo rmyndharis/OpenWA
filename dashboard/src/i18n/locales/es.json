@@ -613,6 +613,7 @@
     "removeFile": "Quitar archivo",
     "fileReadError": "Error al leer el archivo",
     "fileTooLarge": "El archivo es demasiado grande (máx. 18 MB)",
+    "recipientsFileTooLarge": "El archivo de destinatarios es demasiado grande (máx. 2 MB)",
     "caption": "Pie de foto",
     "filename": "Nombre de archivo",
     "captionPlaceholder": "Escribe un pie de foto...",
