@@ -75,7 +75,8 @@ export class SessionOwnershipService {
     return this.configService?.get<string>('session.nodeUrl') || process.env.NODE_URL || '';
   }
 
-  private get leaseTtlMs(): number {
+  /** Public because the takeover sweep sizes its "this holder is really gone" cutoff against it. */
+  get leaseTtlMs(): number {
     return this.configService?.get<number>('session.leaseTtlMs') ?? 60_000;
   }
 

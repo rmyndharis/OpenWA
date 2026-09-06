@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Sessions page reports a dead live-event feed and offers a retry, and re-reads the list once the
   feed comes back. The socket gives up after five attempts, and the page kept rendering whatever
   status arrived last with no indication that it had stopped updating.
+- A session left `ready` or `initializing` by a node that never came back is marked disconnected by
+  the takeover sweep. The boot reset skips a row still claimed by another node id, and a container
+  recreate changes that id by default, so with `AUTO_START_SESSIONS` off nothing revisited the row and
+  it went on reporting an engine no process was running. The sweep now runs regardless of that flag;
+  adopting a session still requires it.
 
 ## [0.23.4] - 2026-09-05
 

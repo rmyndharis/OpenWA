@@ -45,6 +45,18 @@ export class SessionStatusBroadcaster {
       status,
       action: 'status_update',
     });
+    this.announce(id, status);
+  }
+
+  /**
+   * The fan-out half of updateStatus, for a caller that has ALREADY written the row itself.
+   *
+   * One caller needs that split: a row whose owning node is gone has to be corrected under a
+   * predicate (still that node's, still lapsed, still claiming to run), never by id, because a peer
+   * can claim and start it at any moment. Writing by id afterwards to get the fan-out would undo the
+   * predicate. Everything else must keep using updateStatus.
+   */
+  announce(id: string, status: SessionStatus): void {
     // Mirror the status change to WS clients AND subscribed webhooks — both de-duped. Some engines signal
     // one transition via both onStateChanged AND a dedicated callback (onQRCode/onDisconnected), which
     // would otherwise emit/POST the same status twice; only act when it actually changed from the last one.

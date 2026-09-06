@@ -27,6 +27,17 @@ const TAKEOVER_STATUSES = new Set<SessionStatus>([
 const TAKEOVER_START_STAGGER_MS = 2000;
 
 /**
+ * How many lease TTLs of silence make a holder "really gone".
+ *
+ * Two, not one. A lease lapses while its holder is perfectly healthy whenever a query runs long, and
+ * the next heartbeat re-extends it; correcting a status on a single lapse would report a live peer's
+ * sessions as disconnected, and nothing would put that right, because the peer's own renewal still
+ * finds its nodeId and detects no loss. Adoption is unaffected and still acts on the first lapse: it
+ * goes through claim(), which a live holder wins back.
+ */
+const STRANDED_LEASE_TTL_MULTIPLE = 2;
+
+/**
  * Adopts sessions whose holder's lease has lapsed.
  *
  * Boot auto-start runs exactly once, so it misses two real cases, both observed live: a peer that
@@ -74,9 +85,12 @@ export class SessionTakeoverService implements OnApplicationBootstrap, OnModuleD
   }
 
   onApplicationBootstrap(): void {
-    // The same flag that governs boot auto-start: a deployment that opted out of automatic engine
-    // starts must not get spontaneous ones from the sweep either.
-    if (!resolveFeatureFlags(this.configService).autoStartSessions) return;
+    // Deliberately NOT gated on auto-start any more. The sweep now has a second job that starts
+    // nothing: correcting a status whose owner is gone. Nothing else revisits one, because the boot
+    // reset skips a foreign claim that is still live and after a container recreate the previous
+    // hostname IS foreign, so with auto-start off the row went on reporting a running engine no
+    // process holds. The adopt loop below is still behind the flag: an operator who disabled
+    // auto-start asked for no spontaneous engine starts, not for a dashboard that lies.
     const sweepMs = this.configService?.get<number>('session.takeoverSweepMs', 30_000) ?? 30_000;
     this.sweepTimer = setInterval(() => {
       // At most one sweep at a time: a slow start (Chromium launch) must not stack a second sweep
@@ -104,10 +118,21 @@ export class SessionTakeoverService implements OnApplicationBootstrap, OnModuleD
     }
   }
 
-  /** One pass: adopt every eligible lapsed session. Exposed for the spec; the timer drives it. */
+  /**
+   * One pass: correct every stale status a vanished node left behind, then adopt every eligible
+   * lapsed session. Exposed for the spec; the timer drives it.
+   */
   async sweep(): Promise<void> {
     if (this.stopping) return;
     const lapsed = await this.ownership.lapsedHeldByOthers();
+
+    // Correct the stale statuses BEFORE adopting: a row this pass goes on to start gets its
+    // INITIALIZING written by start() afterwards, so the correction can never land on a live engine.
+    // Idempotent, because DISCONNECTED is not one of the statuses it acts on.
+    const goneBefore = new Date(Date.now() - this.ownership.leaseTtlMs * STRANDED_LEASE_TTL_MULTIPLE);
+    await this.sessionService.markLapsedDisconnected(lapsed, goneBefore);
+
+    if (!resolveFeatureFlags(this.configService).autoStartSessions) return;
     const eligible = lapsed.filter(session => this.isEligible(session));
     if (eligible.length === 0) return;
 

@@ -29,13 +29,16 @@
 > because another node is running them.
 >
 > **Failover now completes on its own.** A periodic takeover sweep (default every 30s,
-> `SESSION_TAKEOVER_SWEEP_MS`, gated by the same `AUTO_START_SESSIONS` flag as boot
-> auto-start) adopts sessions whose holder's lease lapsed — a crashed peer, or a recreated
+> `SESSION_TAKEOVER_SWEEP_MS`) adopts sessions whose holder's lease lapsed — a crashed peer, or a recreated
 > container whose new identity boots before its old lease expires. Only authenticated
 > sessions in a running-or-should-be state are adopted; mid-pairing and operator-`failed`
 > ones are left alone, and a cleanly stopped session releases its claim so it is never
 > "lapsed". Adopting a session fails its stuck in-flight batches (no auto-resume — the dead
-> node's already-sent messages are unknowable).
+> node's already-sent messages are unknowable). Adopting is gated by the same
+> `AUTO_START_SESSIONS` flag as boot auto-start; the sweep itself is not, because it also has a job
+> that starts nothing: a row a vanished node left in a running status is marked disconnected once its
+> lease has been silent for two TTLs. Nothing else revisits such a row, since the boot reset skips a
+> foreign claim that is still live.
 >
 > **Request routing now exists, opt-in via `NODE_URL`.** When every node sets its own
 > reachable URL (e.g. `NODE_URL=http://10.0.0.5:2785`), a session-scoped request landing on
