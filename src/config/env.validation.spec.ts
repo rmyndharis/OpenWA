@@ -317,6 +317,22 @@ describe('validateEnv', () => {
     expect(() => validateEnv({})).not.toThrow();
   });
 
+  it('rejects a LOG_LEVEL misspelling instead of silently logging at info', () => {
+    // Plausible spellings from neighbouring vocabularies that this repo's LogLevel does not carry;
+    // every one of them silently meant INFO before this check existed.
+    expect(() => validateEnv({ LOG_LEVEL: 'warning' })).toThrow(/LOG_LEVEL/);
+    expect(() => validateEnv({ LOG_LEVEL: 'log' })).toThrow(/LOG_LEVEL/); // Nest's spelling
+    expect(() => validateEnv({ LOG_LEVEL: 'trace' })).toThrow(/LOG_LEVEL/); // Baileys' vocabulary
+    // The reader (main.ts) trims and lowercases before matching, so these keep booting.
+    expect(() => validateEnv({ LOG_LEVEL: 'DEBUG' })).not.toThrow();
+    expect(() => validateEnv({ LOG_LEVEL: ' warn ' })).not.toThrow();
+    // The five real levels, and unset (meaning INFO), all pass.
+    for (const level of ['error', 'warn', 'info', 'debug', 'verbose']) {
+      expect(() => validateEnv({ LOG_LEVEL: level })).not.toThrow();
+    }
+    expect(() => validateEnv({})).not.toThrow();
+  });
+
   it('rejects a sqlite data DB path that collides with the internal main database file', () => {
     // The 'main' (auth/audit) and 'data' connections must be separate SQLite files; sharing one
     // file means two migration ledgers + synchronize policies on the same tables.

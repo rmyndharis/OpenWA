@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recreate changes that id by default, so with `AUTO_START_SESSIONS` off nothing revisited the row and
   it went on reporting an engine no process was running. The sweep now runs regardless of that flag;
   adopting a session still requires it.
+- A misspelled `LOG_LEVEL` now fails the boot naming the five accepted values instead of silently
+  logging at info (more logging than the operator asked for; Nest's `log` and Baileys' `trace` were
+  silent-info typos). Mixed case and surrounding spaces still work, matching how the value is read.
 
 ## [0.23.4] - 2026-09-05
 

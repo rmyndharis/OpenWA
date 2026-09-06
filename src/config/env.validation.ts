@@ -480,6 +480,20 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     errors.push(`SEARCH_PROVIDER must be one of: auto, builtin-fts, none (got ${JSON.stringify(provider)})`);
   }
 
+  // LOG_LEVEL is read in main.ts by exact match after trim+toLowerCase, so any casing works today
+  // and only a MISSPELLING differs: every unrecognised value silently means INFO, which is MORE
+  // logging than the operator asked for (Nest-adjacent spellings like 'log', 'trace' or 'fatal'
+  // included, none of them this repo's vocabulary). Validate the normalised form, mirroring the
+  // read site exactly (same philosophy as MEDIA_DOWNLOAD_ENABLED above): nothing that works today
+  // is refused, and a misspelling fails the boot instead of quietly logging at info.
+  const LOG_LEVEL_VALUES = ['error', 'warn', 'info', 'debug', 'verbose'];
+  const rawLogLevel = str('LOG_LEVEL');
+  if (rawLogLevel !== undefined && !LOG_LEVEL_VALUES.includes(rawLogLevel.toLowerCase())) {
+    errors.push(
+      `LOG_LEVEL must be one of ${LOG_LEVEL_VALUES.map(v => `"${v}"`).join(', ')} (got ${JSON.stringify(rawLogLevel)})`,
+    );
+  }
+
   if (errors.length > 0) {
     throw new Error(`Invalid environment configuration:\n  - ${errors.join('\n  - ')}`);
   }
