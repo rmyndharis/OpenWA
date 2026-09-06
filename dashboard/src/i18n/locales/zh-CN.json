@@ -247,6 +247,7 @@
   "sessions": {
     "title": "会话",
     "subtitle": "管理你的 WhatsApp 会话和 QR 码连接",
+    "feedDisconnected": "实时更新已断开",
     "newSession": "新建会话",
     "searchPlaceholder": "搜索会话...",
     "filter": {

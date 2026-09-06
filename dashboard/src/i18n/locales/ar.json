@@ -258,6 +258,7 @@
   "sessions": {
     "title": "الجلسات",
     "subtitle": "إدارة جلسات واتساب واتصالات رمز QR",
+    "feedDisconnected": "انقطعت التحديثات المباشرة",
     "newSession": "جلسة جديدة",
     "searchPlaceholder": "بحث في الجلسات...",
     "filter": {

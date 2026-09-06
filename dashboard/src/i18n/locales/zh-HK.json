@@ -247,6 +247,7 @@
   "sessions": {
     "title": "工作階段",
     "subtitle": "管理你的 WhatsApp 工作階段及 QR 碼連線",
+    "feedDisconnected": "即時更新已中斷",
     "newSession": "新增工作階段",
     "searchPlaceholder": "搜尋工作階段...",
     "filter": {

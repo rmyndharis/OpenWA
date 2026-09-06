@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The dashboard session card keeps showing the phone number, session id and last-active time while a
   linked session reconnects, instead of the pairing placeholder that read as an unlinked account
   ([#1546](https://github.com/rmyndharis/OpenWA/issues/1546)). Thanks @OdaiAhmed99 for the report.
+- The Sessions page reports a dead live-event feed and offers a retry, and re-reads the list once the
+  feed comes back. The socket gives up after five attempts, and the page kept rendering whatever
+  status arrived last with no indication that it had stopped updating.
 
 ## [0.23.4] - 2026-09-05
 

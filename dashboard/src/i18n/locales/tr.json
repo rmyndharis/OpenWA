@@ -247,6 +247,7 @@
   "sessions": {
     "title": "Oturumlar",
     "subtitle": "WhatsApp oturumlarınızı ve QR kodu bağlantılarınızı yönetin",
+    "feedDisconnected": "Canlı güncellemeler kesildi",
     "newSession": "Yeni Oturum",
     "searchPlaceholder": "Oturumlarda ara...",
     "filter": {

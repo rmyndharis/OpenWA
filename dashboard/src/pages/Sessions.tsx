@@ -15,6 +15,7 @@ import {
   Skull,
   Unlink,
   Globe,
+  AlertCircle,
 } from 'lucide-react';
 import {
   sessionApi,
@@ -188,16 +189,22 @@ export function Sessions() {
     [queryClient, dismissQrForSession],
   );
 
-  useSessionFeed({
+  // A restriction push and a recovered socket mean the same thing to this page: the local list may be
+  // behind the server, re-read it. (The badge renders from the server projection
+  // `session.restriction`, and a restriction can arrive with no status transition at all, because the
+  // Baileys reachout timelock rides a connect probe, so that push is purely a refetch signal.)
+  const refetchSessions = useCallback(() => {
+    void fetchSessions();
+  }, [fetchSessions]);
+
+  const { connectionFailed, reconnect } = useSessionFeed({
     sessions,
     sessionsRef,
     onQRCode: applyQrPush,
-    // The badge renders from the server projection (`session.restriction`), and a restriction can
-    // arrive with no status transition at all (the Baileys reachout timelock rides a connect
-    // probe) — so the push is purely a refetch signal.
-    onSessionRestriction: useCallback(() => {
-      void fetchSessions();
-    }, [fetchSessions]),
+    onSessionRestriction: refetchSessions,
+    // Everything pushed during a socket gap is lost, and nothing else on this page re-reads the list
+    // after mount, so a card would sit on its pre-gap status until the operator reloaded.
+    onReconnect: refetchSessions,
     onSessionStatus: useCallback(
       (event: { sessionId: string; status: string }) => {
         const prev = sessionsRef.current.find(s => s.id === event.sessionId);
@@ -511,6 +518,19 @@ export function Sessions() {
           )
         }
       />
+
+      {/* The live feed is dead until the operator retries: the socket exhausted its attempts, or the
+          server closed it. Without this the cards freeze on their last pushed status and a session
+          that has since dropped is indistinguishable from a healthy idle page. */}
+      {connectionFailed && (
+        <div className="error-banner" role="alert">
+          <AlertCircle size={20} />
+          <span className="error-banner-text">{t('sessions.feedDisconnected')}</span>
+          <button className="btn-secondary" style={{ marginLeft: 'auto' }} onClick={reconnect}>
+            {t('common.refresh')}
+          </button>
+        </div>
+      )}
 
       <div className="filters-bar">
         <div className="search-input">
