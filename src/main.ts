@@ -35,7 +35,8 @@ import { RedisIoAdapter } from './modules/events/redis-io.adapter';
 let appInstance: INestApplication | undefined;
 
 async function bootstrap() {
-  // Apply the operator-configured log verbosity (LOG_LEVEL) before anything logs. Unset/invalid → INFO.
+  // Apply the operator-configured log verbosity (LOG_LEVEL) before anything logs. Unset means INFO;
+  // a misspelling never reaches here, env.validation.ts rejects it at boot.
   const requestedLevel = process.env.LOG_LEVEL?.trim().toLowerCase();
   if (requestedLevel && (Object.values(LogLevel) as string[]).includes(requestedLevel)) {
     LoggerService.setLogLevel(requestedLevel as LogLevel);
