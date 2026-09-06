@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recreate changes that id by default, so with `AUTO_START_SESSIONS` off nothing revisited the row and
   it went on reporting an engine no process was running. The sweep now runs regardless of that flag;
   adopting a session still requires it.
+- The `:main` and sha Docker images rebuild the production stage's apt layer on every build instead
+  of serving it from cache, so a branch image cannot ship OS packages that Debian has since patched.
+  The release path already worked this way, after a cached layer shipped stale chromium twice.
 
 ## [0.23.4] - 2026-09-05
 
