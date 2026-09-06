@@ -671,10 +671,11 @@ updates:
       # TypeScript 7 is the native port: typescript-eslint and ts-jest cannot load it (#727/#729).
       - dependency-name: 'typescript'
         versions: ['>=7.0.0']
-      # better-sqlite3 v13: every released TypeORM caps its peer at ^12, and the linux-arm64
-      # prebuild needs glibc 2.38 (the node:22-slim base has 2.36).
+      # better-sqlite3 v14: v13 is the shipped line (^13.0.3, TypeORM's optional ^12 peer pinned
+      # to the root version via overrides, prebuild proven on both architectures by the release
+      # boot smoke). The next major stays frozen until re-evaluated.
       - dependency-name: 'better-sqlite3'
-        versions: ['>=13.0.0']
+        versions: ['>=14.0.0']
 ```
 
 Majors are **not** ignored — they arrive as their own grouped PR, separate from the minor/patch

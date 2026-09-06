@@ -29,16 +29,19 @@ updates:
       # a separate matter from this ignore; pin with ~ rather than ^ when a 6.0.x bump lands.
       - dependency-name: "typescript"
         versions: [">=7.0.0"]
-      # better-sqlite3 v13 cannot be adopted yet, on three independent grounds (all as of 13.0.1):
-      # every released TypeORM (0.3.31 and 1.1.0) caps its peer at ^12, so the bump fails npm's peer
-      # resolution outright; the bundled linux-arm64 prebuild is built against glibc 2.38, which does
-      # not load on the node:22-slim (Debian bookworm, glibc 2.36) production image — the same failure
-      # class that broke the 0.10.3 image with sqlite3@6; and its implicit `node-gyp rebuild` install
-      # step needs python3/make even when the prebuild exists, which the toolchain-less production
-      # stage does not have. Lift when TypeORM's peer range admits v13 AND the arm64 prebuild loads on
-      # bookworm (or the base image moves past glibc 2.38).
+      # better-sqlite3 v13 is now the SHIPPED line (manifest ^13.0.3, and the package.json override
+      # `better-sqlite3: $better-sqlite3` forces TypeORM's optional ^12 peer onto the root version,
+      # so npm ci resolves clean), and the release boot smoke proves the 13.x prebuild loads on
+      # both architectures in the toolchain-less node:22-slim image. The original three grounds
+      # for freezing v13 (TypeORM peer cap, linux-arm64 prebuild vs bookworm glibc, node-gyp install
+      # step) were all resolved in adopting it, so this ignore no longer describes the tree: pinned
+      # at >=13.0.0 it only blocked patch/minor PRs on the line the manifest itself ships.
+      # A 13.x bump now flows: PR CI proves x64, and an arm64 prebuild regression fails the release
+      # boot smoke visibly rather than silently. v14 re-opens every unknown (peer range, prebuild
+      # targets, install toolchain), so the NEXT major stays frozen until re-evaluated on those
+      # same three grounds.
       - dependency-name: "better-sqlite3"
-        versions: [">=13.0.0"]
+        versions: [">=14.0.0"]
       # audio-decode v3 collides with Baileys: every 7.0.0-rc line so far (through rc14) declares
       # `peerOptional audio-decode@"^2.1.3"`, so the bump fails `npm ci` with ERESOLVE before any
       # CI job runs. The pairing is load-bearing, not incidental — Baileys uses audio-decode to
