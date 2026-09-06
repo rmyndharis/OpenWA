@@ -293,6 +293,24 @@ type ChatHistoryMessage struct {
 	Media         *ChatHistoryMedia `json:"media,omitempty"`
 	QuotedMessage *QuotedMessage    `json:"quotedMessage,omitempty"`
 	Location      *MessageLocation  `json:"location,omitempty"`
+	Order         *MessageOrder     `json:"order,omitempty"`
+	Product       *MessageProduct   `json:"product,omitempty"`
+}
+
+// MessageOrder is the order block on a live history message, present on order messages only: the
+// cart the customer placed from the business catalog, plus the single-order token for its items.
+type MessageOrder struct {
+	OrderID string `json:"orderId"`
+	Token   string `json:"token,omitempty"`
+}
+
+// MessageProduct is the product block on a live history message, present on product messages only:
+// the catalog product shared into the chat.
+type MessageProduct struct {
+	ProductID        string `json:"productId"`
+	Title            string `json:"title,omitempty"`
+	Description      string `json:"description,omitempty"`
+	BusinessOwnerJID string `json:"businessOwnerJid,omitempty"`
 }
 
 // MessageCall is the call block on a live history message, present on call messages only.
@@ -438,6 +456,8 @@ const (
 	MsgPoll     MessageType = "poll"
 	MsgCall     MessageType = "call"
 	MsgRevoked  MessageType = "revoked"
+	MsgOrder    MessageType = "order"
+	MsgProduct  MessageType = "product"
 	MsgMasked   MessageType = "masked"
 	MsgUnknown  MessageType = "unknown"
 )

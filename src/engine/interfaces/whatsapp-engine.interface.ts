@@ -78,6 +78,10 @@ export type MessageType =
   | 'poll'
   | 'call'
   | 'revoked'
+  // WhatsApp Business commerce: a customer's cart placed from the catalog, and a single product
+  // card shared into a chat. Both carry the ids the commerce APIs need — see `IncomingMessage`.
+  | 'order'
+  | 'product'
   // A message WhatsApp deliberately withheld from linked/companion devices (e.g. high-security
   // business OTPs): the payload is absent by design, not unparseable. See `mapBaileysMessageType`.
   | 'masked'
@@ -110,6 +114,28 @@ export interface IncomingMessage {
   mentionedIds?: string[];
   /** Set for `call` (call_log) messages: video vs voice, and whether an incoming call went unanswered. */
   call?: { video: boolean; missed: boolean };
+  /**
+   * Set for `order` messages: a cart the customer placed from the business catalog. The message
+   * carries no line items — `orderId` plus the single-order `token` are the correlation handle a
+   * caller redeems against WhatsApp's own order lookup, which this project does not expose, so both
+   * must survive to that caller. Both engines populate them.
+   */
+  order?: {
+    orderId: string;
+    /** Opaque, single-order credential. Pass through unchanged; do not log it. */
+    token?: string;
+  };
+  /**
+   * Set for `product` messages: the catalog product shared into the chat. `productId` identifies it
+   * within `businessOwnerJid`'s catalog, so it resolves through the catalog routes only when that
+   * catalog is the session's own. Both engines populate `productId`; the rest are best-effort.
+   */
+  product?: {
+    productId: string;
+    title?: string;
+    description?: string;
+    businessOwnerJid?: string;
+  };
   /**
    * Set by the adapter when the sender is identified by a privacy id (e.g. a WhatsApp `@lid`) rather
    * than a phone number, so engine-neutral code can decide whether to attempt phone resolution without

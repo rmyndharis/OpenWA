@@ -16,6 +16,8 @@ public enum MessageType {
     @SerializedName("poll") POLL,
     @SerializedName("call") CALL,
     @SerializedName("revoked") REVOKED,
+    @SerializedName("order") ORDER,
+    @SerializedName("product") PRODUCT,
     @SerializedName("masked") MASKED,
     @SerializedName("unknown") UNKNOWN
 }

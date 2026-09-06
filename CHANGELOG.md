@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Inbound WhatsApp Business commerce messages are no longer flattened to a bodyless `unknown`. A cart placed
+  from the catalog arrives as type `order`, carrying `order { orderId, token? }`, and a shared product card
+  as type `product`, carrying `product { productId, title?, description?, businessOwnerJid? }`. Both engines
+  populate them, and both types are accepted by webhook and automation-rule message-type filters. The order
+  token is scoped to that one order and is a correlation handle for its line items, which this API does not
+  itself resolve. On Baileys the message `body` now falls back to the customer's order note or the product
+  title instead of arriving empty; whatsapp-web.js already supplied a body of its own. Sharing a whole
+  catalog rather than one product carries no product id and stays `unknown`.
+
 ### Fixed
 
 - A Baileys session retrying a dropped connection now reports the loop: `lastError` on

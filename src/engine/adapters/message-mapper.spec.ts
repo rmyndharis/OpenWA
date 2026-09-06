@@ -126,6 +126,45 @@ describe('buildIncomingMessageBase', () => {
     expect(buildIncomingMessageBase(base).mentionedIds).toBeUndefined();
     expect(buildIncomingMessageBase({ ...base, mentionedIds: [] }).mentionedIds).toBeUndefined();
   });
+
+  it('maps an order id and its single-order token', () => {
+    const r = buildIncomingMessageBase({ ...base, type: 'order', orderId: '1000000000000001', token: 'tok' });
+    expect(r.order).toEqual({ orderId: '1000000000000001', token: 'tok' });
+    expect(r.product).toBeUndefined();
+  });
+
+  it('maps an order that arrived without a token', () => {
+    expect(buildIncomingMessageBase({ ...base, type: 'order', orderId: '1' }).order).toEqual({ orderId: '1' });
+  });
+
+  it('maps a shared product card with the fields whatsapp-web.js exposes', () => {
+    const r = buildIncomingMessageBase({
+      ...base,
+      type: 'product',
+      productId: '2000000000000002',
+      title: 'Sample',
+      description: 'A sample',
+      businessOwnerJid: '100000000000@c.us',
+    });
+    expect(r.product).toEqual({
+      productId: '2000000000000002',
+      title: 'Sample',
+      description: 'A sample',
+      businessOwnerJid: '100000000000@c.us',
+    });
+    expect(r.order).toBeUndefined();
+  });
+
+  it('yields nothing when the id that makes the message actionable is missing', () => {
+    expect(buildIncomingMessageBase({ ...base, type: 'order', token: 'tok' }).order).toBeUndefined();
+    expect(buildIncomingMessageBase({ ...base, type: 'product', title: 'Sample' }).product).toBeUndefined();
+  });
+
+  it('does not fabricate a product from a title on a non-commerce message', () => {
+    const r = buildIncomingMessageBase({ ...base, title: 'Sample', productId: '2', orderId: '1' });
+    expect(r.product).toBeUndefined();
+    expect(r.order).toBeUndefined();
+  });
 });
 
 describe('mapWwebjsMessageType (engine type-token -> neutral MessageType boundary, #265)', () => {
@@ -143,6 +182,8 @@ describe('mapWwebjsMessageType (engine type-token -> neutral MessageType boundar
     ['call_log', 'call'],
     ['revoked', 'revoked'],
     ['poll_creation', 'poll'],
+    ['order', 'order'],
+    ['product', 'product'],
     ['e2e_notification', 'unknown'], // any unmapped wwebjs type
   ])('maps wwebjs type %s -> %s', (raw, expected) => {
     expect(mapWwebjsMessageType(raw)).toBe(expected);
