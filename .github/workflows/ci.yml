@@ -458,6 +458,11 @@ jobs:
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Never serve the production stage's apt layer from cache on branch builds either: a
+          # cached hit installs whatever the apt index held when the layer was first built, so a
+          # `:main` image can ship OS packages Debian has since patched. release.yml's docker
+          # build carries the same line plus the incident record that motivated it.
+          no-cache-filters: production
 
       # The image carries no USER directive by design: docker-entrypoint.sh starts as root to fix
       # named-volume ownership, then drops with `exec gosu openwa`. Nothing verified that drop —

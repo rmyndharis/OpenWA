@@ -48,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `>=13.0.0` predated the manifest itself shipping `^13.0.3` (with TypeORM's optional `^12` peer
   pinned to the root version), so it only blocked updates, security ones included, on the line in
   use; the freeze now starts at v14.
+- The `:main` and sha Docker images rebuild the production stage's apt layer on every build instead
+  of serving it from cache, so a branch image cannot ship OS packages that Debian has since patched.
+  The release path already worked this way, after a cached layer shipped stale chromium twice.
 
 ## [0.23.4] - 2026-09-05
 
