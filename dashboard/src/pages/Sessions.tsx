@@ -26,6 +26,7 @@ import {
 import { queryKeys } from '../hooks/queries';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
+  awaitsPairing,
   canForceKillSession,
   canUnlinkSession,
   classifyUnlinkError,
@@ -1038,7 +1039,7 @@ export function Sessions() {
                 <span className={`status-pill ${session.status}`}>{formatStatus(session.status)}</span>
               </div>
 
-              {session.status === 'initializing' || session.status === 'qr_ready' ? (
+              {awaitsPairing(session) ? (
                 <div className="qr-placeholder">
                   <QrCode size={80} className="qr-icon" />
                   <p>{session.status === 'qr_ready' ? t('sessions.qr.scanToConnect') : t('sessions.qr.preparing')}</p>

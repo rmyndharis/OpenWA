@@ -566,6 +566,54 @@ describe('BaileysAdapter lifecycle & status', () => {
     }
   });
 
+  it('on a recoverable close: reports the scheduled attempt through onReconnecting', async () => {
+    // The only signal a consumer gets for an engine-internal retry loop: onDisconnected is
+    // deliberately silent here and the status sits at INITIALIZING for the whole episode, so without
+    // this callback an operator cannot tell a one-second blip from an hour-long outage.
+    const onReconnecting = jest.fn();
+    const onDisconnected = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize(noopCallbacks({ onReconnecting, onDisconnected }));
+
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+    try {
+      fakeSock.fire('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 515 } } },
+      });
+      expect(onDisconnected).not.toHaveBeenCalled();
+      expect(onReconnecting).toHaveBeenCalledTimes(1);
+      const [attempt, nextDelayMs] = onReconnecting.mock.calls[0] as [number, number];
+      expect(attempt).toBe(1);
+      // First attempt: the 1 s base plus up to 1 s of jitter.
+      expect(nextDelayMs).toBeGreaterThanOrEqual(1_000);
+      expect(nextDelayMs).toBeLessThan(2_000);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('a duplicate close while a reconnect is already pending does not inflate the attempt count', async () => {
+    // Baileys can emit more than one close per drop. The attempt number rides `lastError` and the
+    // reconnect_loop alert cadence, so double-counting would report a loop that is not happening.
+    const onReconnecting = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize(noopCallbacks({ onReconnecting }));
+
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+    try {
+      const close = {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 515 } } },
+      };
+      fakeSock.fire('connection.update', close);
+      fakeSock.fire('connection.update', close);
+      expect(onReconnecting).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('disconnect() ends the socket and does not reconnect', async () => {
     const adapter = newAdapter();
     await adapter.initialize(noopCallbacks({}));

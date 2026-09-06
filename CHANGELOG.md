@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Baileys session retrying a dropped connection now reports the loop: `lastError` on
+  `GET /sessions/{sessionId}` says which attempt it is on and how long it has been down, the
+  `session.reconnect_loop` webhook fires every fifth attempt, and the reconnect metrics move. The
+  engine retries internally and never reported a disconnect, so an operator had nothing to look at
+  while a session sat at `initializing` for hours
+  ([#1546](https://github.com/rmyndharis/OpenWA/issues/1546)). Thanks @OdaiAhmed99 for the report.
+- The dashboard session card keeps showing the phone number, session id and last-active time while a
+  linked session reconnects, instead of the pairing placeholder that read as an unlinked account
+  ([#1546](https://github.com/rmyndharis/OpenWA/issues/1546)). Thanks @OdaiAhmed99 for the report.
+
 ## [0.23.4] - 2026-09-05
 
 ### Added

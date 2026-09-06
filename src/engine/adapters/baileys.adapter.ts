@@ -191,6 +191,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       getOnQRCode: () => this.callbacks.onQRCode,
       getOnReady: () => this.callbacks.onReady,
       getOnDisconnected: () => this.callbacks.onDisconnected,
+      getOnReconnecting: () => this.callbacks.onReconnecting,
       getOnError: () => this.callbacks.onError,
       getOnStateChanged: () => this.callbacks.onStateChanged,
       getOnCredentialTeardownStarted: () => this.callbacks.onCredentialTeardownStarted,

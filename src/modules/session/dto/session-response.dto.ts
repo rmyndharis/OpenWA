@@ -65,8 +65,9 @@ export class SessionResponseDto {
   @ApiPropertyOptional({
     type: String,
     description:
-      'Human-readable reason carried while the status is FAILED (a terminal engine failure) or ' +
-      'ACTION_REQUIRED (the engine is running but something needs a human). Cleared on any other status.',
+      'Human-readable reason carried while the status is FAILED (a terminal engine failure), ' +
+      'ACTION_REQUIRED (the engine is running but something needs a human), or INITIALIZING while the ' +
+      'engine is retrying a dropped connection on its own. Cleared on any other status.',
     example: 'Failed to launch the browser process: spawn /usr/bin/chromium ENOENT',
     nullable: true,
   })
