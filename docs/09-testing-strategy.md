@@ -186,7 +186,7 @@ authoritative gate. Current policy:
 
 | Scope                       | Branches | Functions | Lines | Statements |
 | --------------------------- | -------- | --------- | ----- | ---------- |
-| Global                      | 61%      | 70%       | 68%   | 67%        |
+| Global                      | 54%      | 68%       | 60%   | 61%        |
 | `src/common/cache/`         | 34%      | 33%       | 42%   | 42%        |
 | `src/common/security/`      | 85%      | 95%       | 93%   | 92%        |
 | `src/common/services/`      | 82%      | 91%       | 90%   | 88%        |
@@ -202,25 +202,33 @@ authoritative gate. Current policy:
 | `src/modules/audit/`        | 59%      | 45%       | 73%   | 70%        |
 | `src/modules/auth/`         | 76%      | 85%       | 86%   | 86%        |
 | `src/modules/automation/`   | 67%      | 86%       | 83%   | 79%        |
+| `src/modules/call/`         | 62%      | 57%       | 82%   | 79%        |
+| `src/modules/catalog/`      | 68%      | 88%       | 89%   | 87%        |
+| `src/modules/channel/`      | 73%      | 41%       | 76%   | 75%        |
 | `src/modules/chat-media/`   | 75%      | 72%       | 84%   | 84%        |
 | `src/modules/contact/`      | 82%      | 92%       | 89%   | 88%        |
 | `src/modules/docker/`       | 84%      | 93%       | 92%   | 92%        |
 | `src/modules/events/`       | 72%      | 84%       | 84%   | 82%        |
 | `src/modules/group/`        | 67%      | 65%       | 79%   | 79%        |
+| `src/modules/health/`       | 77%      | 66%       | 90%   | 87%        |
 | `src/modules/infra/`        | 75%      | 76%       | 89%   | 88%        |
 | `src/modules/integration/`  | 76%      | 83%       | 90%   | 89%        |
+| `src/modules/label/`        | 39%      | 42%       | 45%   | 44%        |
 | `src/modules/mcp/`          | 62%      | 76%       | 78%   | 78%        |
 | `src/modules/media/`        | 69%      | 86%       | 89%   | 88%        |
 | `src/modules/message/`      | 75%      | 66%       | 86%   | 85%        |
 | `src/modules/metrics/`      | 64%      | 58%       | 70%   | 67%        |
 | `src/modules/plugins/`      | 69%      | 64%       | 77%   | 76%        |
+| `src/modules/profile/`      | 78%      | 84%       | 88%   | 85%        |
 | `src/modules/queue/`        | 74%      | 81%       | 95%   | 95%        |
 | `src/modules/search/`       | 69%      | 86%       | 78%   | 78%        |
 | `src/modules/session/`      | 75%      | 79%       | 88%   | 87%        |
+| `src/modules/settings/`     | 50%      | 0%        | 85%   | 81%        |
 | `src/modules/stats/`        | 67%      | 63%       | 78%   | 76%        |
 | `src/modules/status-store/` | 79%      | 79%       | 92%   | 91%        |
 | `src/modules/status/`       | 70%      | 60%       | 83%   | 82%        |
 | `src/modules/template/`     | 76%      | 87%       | 91%   | 89%        |
+| `src/modules/takeover/`     | 74%      | 70%       | 85%   | 83%        |
 | `src/modules/webhook/`      | 72%      | 89%       | 90%   | 87%        |
 
 When raising a floor, set it about five points below that scope's measured coverage, so it catches
