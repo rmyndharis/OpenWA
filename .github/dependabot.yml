@@ -42,6 +42,13 @@ updates:
       # same three grounds.
       - dependency-name: "better-sqlite3"
         versions: [">=14.0.0"]
+      # puppeteer is pinned EXACTLY at whatsapp-web.js's own pin (both 24.38.0 today). The root pin
+      # exists to hold the whole tree on the Chromium/CDP line the engine and its specs are written
+      # against, and any bump the two manifests do not agree on desyncs the mirror: a 25.x proposal
+      # already fails lint and the unit suite on wwebjs-protocol-timeout.spec.ts. Lift when
+      # whatsapp-web.js moves its pin, and move the root pin in the same commit.
+      - dependency-name: "puppeteer"
+        versions: [">24.38.0"]
       # audio-decode v3 collides with Baileys: every 7.0.0-rc line so far (through rc14) declares
       # `peerOptional audio-decode@"^2.1.3"`, so the bump fails `npm ci` with ERESOLVE before any
       # CI job runs. The pairing is load-bearing, not incidental — Baileys uses audio-decode to
