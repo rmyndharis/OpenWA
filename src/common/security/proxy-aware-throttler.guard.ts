@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { ExecutionContext, Injectable } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { resolveClientIp, RequestLike } from '../utils/ip';
@@ -16,15 +17,24 @@ const logger = createLogger('ProxyAwareThrottlerGuard');
 const LIBRARY_DEFAULT_SKIP_KEY = 'THROTTLER:SKIPdefault';
 
 /**
- * Rate-limit bucket keyed on the resolved client IP.
+ * Rate-limit bucket keyed on the client's identity.
  *
  * The stock ThrottlerGuard keys on `req.ip`, which — behind the documented reverse
  * proxy with Express `trust proxy` disabled — resolves to the proxy for every client,
  * so all traffic shares ONE bucket and a single abuser rate-limits everyone (self-DoS).
  *
- * This reuses the same trusted-proxy-aware resolution as ApiKeyGuard: with no
- * TRUSTED_PROXIES configured it falls back to the socket IP (no behavior change and no
- * XFF-spoofing risk); with trusted proxies it keys on the real forwarded client IP.
+ * This guard keys on a per-caller identity instead:
+ *  - When the request presents an API key (`x-api-key` or `Authorization: Bearer`, the two
+ *    spellings ApiKeyGuard accepts), the bucket is keyed on a SHA-256 hash of that key. This is
+ *    the per-key bound that server-to-server gateways need: a SaaS control-plane (or any proxy)
+ *    forwards many tenants from ONE egress IP, and an IP-keyed bucket would lump every tenant
+ *    into a single budget — a busy tenant's polling rate-limits all its neighbours. Keying on the
+ *    API key gives each tenant an independent bucket, and the hash keeps the raw key out of Redis
+ *    key names and logs.
+ *  - Otherwise the bucket stays keyed on the same trusted-proxy-aware client-IP resolution as
+ *    ApiKeyGuard: with no TRUSTED_PROXIES configured it falls back to the socket IP (no behavior
+ *    change and no XFF-spoofing risk); with trusted proxies it keys on the real forwarded client
+ *    IP. Anonymous traffic still has a flood bound per origin.
  */
 @Injectable()
 export class ProxyAwareThrottlerGuard extends ThrottlerGuard {
@@ -33,6 +43,9 @@ export class ProxyAwareThrottlerGuard extends ThrottlerGuard {
    * In practice that is once per process: this guard runs as the singleton APP_GUARD. The only other
    * instance is InstanceThrottlerGuard, whose defensive super.getTracker fallback (missing route
    * params) is unreachable on the real ingress route, so at most one extra line could ever appear.
+   *
+   * The warning only applies to the IP-keyed (anonymous) path: on every API-key route the keyed
+   * bucket is keyed per-tenant, not on the proxy address, so a per-IP collapse cannot occur there.
    */
   private warnedSharedProxyBucket = false;
 
@@ -41,6 +54,11 @@ export class ProxyAwareThrottlerGuard extends ThrottlerGuard {
       .split(',')
       .map(proxy => proxy.trim())
       .filter(Boolean);
+    const apiKey = this.extractApiKey(req);
+    if (apiKey) {
+      // Per-tenant bucket. Hash so the raw key never appears in the throttler's Redis key names.
+      return Promise.resolve(createHash('sha256').update(`apikey:${apiKey}`).digest('hex'));
+    }
     // An X-Forwarded-For header with an empty TRUSTED_PROXIES is the silent self-DoS this guard
     // exists to prevent: every client collapses onto the proxy's socket address, so all traffic
     // shares ONE bucket per tier and one abuser rate-limits everyone. The header itself must stay
@@ -58,6 +76,23 @@ export class ProxyAwareThrottlerGuard extends ThrottlerGuard {
       }
     }
     return Promise.resolve(resolveClientIp(req as unknown as RequestLike, trustedProxies));
+  }
+
+  /**
+   * The two API-key spellings ApiKeyGuard accepts (see its extractApiKey): an `x-api-key` header
+   * or an `Authorization: Bearer` value. Mirrored here so the bucket tracks the same identity the
+   * auth layer will validate — a request carrying either header is bucketed per key, not per IP.
+   */
+  private extractApiKey(req: Record<string, unknown>): string | undefined {
+    const headers = (req.headers ?? {}) as Record<string, string | string[] | undefined>;
+    const xApiKey = headers['x-api-key'];
+    if (xApiKey !== undefined) {
+      return Array.isArray(xApiKey) ? xApiKey[0] : xApiKey;
+    }
+    const authHeader = headers['authorization'];
+    const bearer = authHeader !== undefined ? (Array.isArray(authHeader) ? authHeader[0] : authHeader) : undefined;
+    if (bearer?.startsWith('Bearer ')) return bearer.substring(7);
+    return undefined;
   }
 
   /**

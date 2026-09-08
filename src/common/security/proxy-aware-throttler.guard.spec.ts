@@ -1,15 +1,16 @@
 import type { ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
+import { createHash } from 'node:crypto';
 import { ProxyAwareThrottlerGuard } from './proxy-aware-throttler.guard';
 
 /**
  * Regression lock: the throttler must bucket on the resolved client IP, not the
  * proxy IP — so one abusive client cannot rate-limit everyone behind a reverse proxy.
  */
-const reqFrom = (socketIp: string, xff?: string): unknown => ({
+const reqFrom = (socketIp: string, xff?: string, extras?: Record<string, unknown>): unknown => ({
   ip: socketIp,
   socket: { remoteAddress: socketIp },
-  headers: xff !== undefined ? { 'x-forwarded-for': xff } : {},
+  headers: xff !== undefined ? { 'x-forwarded-for': xff, ...extras } : { ...extras },
 });
 
 describe('ProxyAwareThrottlerGuard.getTracker', () => {
@@ -54,6 +55,33 @@ describe('ProxyAwareThrottlerGuard.getTracker', () => {
     process.env.TRUSTED_PROXIES = '172.18.0.0/16';
     // peer 203.0.113.9 is NOT a trusted proxy → its XFF is ignored, key on the socket IP
     expect(await track(reqFrom('203.0.113.9', '10.0.0.1'))).toBe('203.0.113.9');
+  });
+
+  it('keys on a hash of the x-api-key when one is presented', async () => {
+    process.env.TRUSTED_PROXIES = '172.18.0.0/16';
+    const expected = createHash('sha256').update('apikey:owsk_tenant-a').digest('hex');
+    expect(await track(reqFrom('172.18.0.5', undefined, { 'x-api-key': 'owsk_tenant-a' }))).toBe(expected);
+  });
+
+  it('keys on a hash of the Bearer token when presented via Authorization', async () => {
+    delete process.env.TRUSTED_PROXIES;
+    const expected = createHash('sha256').update('apikey:owsk_tenant-b').digest('hex');
+    expect(await track(reqFrom('203.0.113.9', undefined, { authorization: 'Bearer owsk_tenant-b' }))).toBe(expected);
+  });
+
+  it('gives tenants behind the same proxy IP independent per-key buckets', async () => {
+    process.env.TRUSTED_PROXIES = '172.18.0.0/16';
+    // Two tenants share one forwarded client IP (the SaaS control-plane): each must get its own
+    // bucket so a busy tenant cannot rate-limit its neighbours (the self-DoS this guard prevents).
+    const a = await track(reqFrom('172.18.0.5', '203.0.113.9', { 'x-api-key': 'owsk_tenant-a' }));
+    const b = await track(reqFrom('172.18.0.5', '203.0.113.9', { 'x-api-key': 'owsk_tenant-b' }));
+    expect(a).not.toBe(b);
+    expect(a).toBe(createHash('sha256').update('apikey:owsk_tenant-a').digest('hex'));
+  });
+
+  it('still buckets a request carrying no API key on the client IP', async () => {
+    delete process.env.TRUSTED_PROXIES;
+    expect(await track(reqFrom('203.0.113.9'))).toBe('203.0.113.9');
   });
 });
 
