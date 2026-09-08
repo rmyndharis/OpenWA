@@ -517,10 +517,25 @@ export function Chats() {
     [queryClient],
   );
 
+  // A WhatsApp session can reconnect while the dashboard socket remains connected. In that case
+  // changing the browser page does not change selectedSessionId, so the normal session-change effect
+  // never reloads the engine-backed chat/contact snapshots. Re-read them when the engine is ready.
+  const handleSessionStatus = useCallback(
+    (event: { sessionId: string; status: string }) => {
+      if (event.sessionId !== selectedSessionId || event.status !== 'ready') return;
+      void loadChats(event.sessionId);
+      queryClient.invalidateQueries({ queryKey: ['messages', event.sessionId] });
+      queryClient.invalidateQueries({ queryKey: ['status-compose-contacts', event.sessionId] });
+      queryClient.invalidateQueries({ queryKey: ['contact-statuses', event.sessionId] });
+    },
+    [selectedSessionId, loadChats, queryClient],
+  );
+
   // The events object must be referentially stable: useWebSocket re-registers its socket handler
   // on every identity change, so an inline literal would tear down and re-attach per render.
   const wsEvents = useMemo(
     () => ({
+      onSessionStatus: handleSessionStatus,
       onMessage: handleIncomingMessage,
       onMessageAck: handleIncomingMessageAck,
       onMessageReaction: handleIncomingMessageReaction,
@@ -529,6 +544,7 @@ export function Chats() {
       onStatusReceived: handleStatusReceived,
     }),
     [
+      handleSessionStatus,
       handleIncomingMessage,
       handleIncomingMessageAck,
       handleIncomingMessageReaction,
