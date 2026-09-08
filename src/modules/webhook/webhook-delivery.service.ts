@@ -97,6 +97,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   >();
   /** Late bookkeeping (dead-letter rows) written by tasks the limiter already released — awaited on shutdown. */
   private readonly pendingBookkeeping = new Set<Promise<void>>();
+  /** In-memory cache of active webhooks per session to avoid per-event DB queries on the hot dispatch path. */
+  private readonly webhookCache = new Map<string, { webhooks: Webhook[]; expiresAt: number }>();
+  private readonly webhookCacheTtlMs = 60_000;
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -173,7 +176,17 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         action: 'webhook_delivery_abandoned_shutdown',
       });
     }
+    this.webhookCache.clear();
     this.inFlightDeliveries.clear();
+  }
+
+  /** Invalidate cached active webhooks for a specific session or for all sessions. */
+  invalidateWebhooks(sessionId?: string): void {
+    if (sessionId) {
+      this.webhookCache.delete(sessionId);
+    } else {
+      this.webhookCache.clear();
+    }
   }
 
   async dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
@@ -208,16 +221,27 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * logged and swallowed here — otherwise it surfaces as an unhandled promise rejection.
    */
   private async loadActiveWebhooks(sessionId: string, event: string): Promise<Webhook[]> {
+    const now = Date.now();
+    const cached = this.webhookCache.get(sessionId);
+    if (cached && cached.expiresAt > now) {
+      return cached.webhooks;
+    }
+
     try {
-      return await this.webhookRepository.find({
+      const webhooks = await this.webhookRepository.find({
         where: { sessionId, active: true },
       });
+      this.webhookCache.set(sessionId, {
+        webhooks,
+        expiresAt: now + this.webhookCacheTtlMs,
+      });
+      return webhooks;
     } catch (error) {
       this.logger.error(`Webhook dispatch lookup failed for ${event}`, String(error), {
         sessionId,
         action: 'webhook_dispatch_lookup_failed',
       });
-      return [];
+      return cached ? cached.webhooks : [];
     }
   }
 

@@ -145,12 +145,19 @@ export class CacheService implements OnModuleDestroy {
     return this.ping();
   }
 
+  private ensureReadyClient(): Redis | null {
+    if (!this.enabled) return null;
+    this.ensureClient();
+    return this.redis;
+  }
+
   // ========== Session Status ==========
 
   async getSessionStatus(id: string): Promise<string | null> {
-    if (!(await this.isAvailable())) return null;
+    const client = this.ensureReadyClient();
+    if (!client) return null;
     try {
-      return await this.redis!.get(`session:${id}:status`);
+      return await client.get(`session:${id}:status`);
     } catch (error) {
       this.logger.warn(`Cache read failed (session:status): ${String(error)}`);
       return null;
@@ -158,9 +165,10 @@ export class CacheService implements OnModuleDestroy {
   }
 
   async setSessionStatus(id: string, status: string): Promise<void> {
-    if (!(await this.isAvailable())) return;
+    const client = this.ensureReadyClient();
+    if (!client) return;
     try {
-      await this.redis!.setex(`session:${id}:status`, TTL.SESSION_STATUS, status);
+      await client.setex(`session:${id}:status`, TTL.SESSION_STATUS, status);
     } catch (error) {
       this.logger.warn(`Cache write failed (session:status): ${String(error)}`);
     }
@@ -169,9 +177,10 @@ export class CacheService implements OnModuleDestroy {
   // ========== Session Info ==========
 
   async getSessionInfo(id: string): Promise<SessionInfo | null> {
-    if (!(await this.isAvailable())) return null;
+    const client = this.ensureReadyClient();
+    if (!client) return null;
     try {
-      const data = await this.redis!.get(`session:${id}:info`);
+      const data = await client.get(`session:${id}:info`);
       return data ? (JSON.parse(data) as SessionInfo) : null;
     } catch (error) {
       this.logger.warn(`Cache read failed (session:info): ${String(error)}`);
@@ -180,9 +189,10 @@ export class CacheService implements OnModuleDestroy {
   }
 
   async setSessionInfo(id: string, info: SessionInfo): Promise<void> {
-    if (!(await this.isAvailable())) return;
+    const client = this.ensureReadyClient();
+    if (!client) return;
     try {
-      await this.redis!.setex(`session:${id}:info`, TTL.SESSION_INFO, JSON.stringify(info));
+      await client.setex(`session:${id}:info`, TTL.SESSION_INFO, JSON.stringify(info));
     } catch (error) {
       this.logger.warn(`Cache write failed (session:info): ${String(error)}`);
     }
@@ -191,9 +201,10 @@ export class CacheService implements OnModuleDestroy {
   // ========== Session QR ==========
 
   async getSessionQR(id: string): Promise<string | null> {
-    if (!(await this.isAvailable())) return null;
+    const client = this.ensureReadyClient();
+    if (!client) return null;
     try {
-      return await this.redis!.get(`session:${id}:qr`);
+      return await client.get(`session:${id}:qr`);
     } catch (error) {
       this.logger.warn(`Cache read failed (session:qr): ${String(error)}`);
       return null;
@@ -201,9 +212,10 @@ export class CacheService implements OnModuleDestroy {
   }
 
   async setSessionQR(id: string, qr: string): Promise<void> {
-    if (!(await this.isAvailable())) return;
+    const client = this.ensureReadyClient();
+    if (!client) return;
     try {
-      await this.redis!.setex(`session:${id}:qr`, TTL.SESSION_QR, qr);
+      await client.setex(`session:${id}:qr`, TTL.SESSION_QR, qr);
     } catch (error) {
       this.logger.warn(`Cache write failed (session:qr): ${String(error)}`);
     }
@@ -212,9 +224,10 @@ export class CacheService implements OnModuleDestroy {
   // ========== Sessions List ==========
 
   async getSessionsList(): Promise<string[] | null> {
-    if (!(await this.isAvailable())) return null;
+    const client = this.ensureReadyClient();
+    if (!client) return null;
     try {
-      const data = await this.redis!.get('sessions:list');
+      const data = await client.get('sessions:list');
       return data ? (JSON.parse(data) as string[]) : null;
     } catch (error) {
       this.logger.warn(`Cache read failed (sessions:list): ${String(error)}`);
@@ -223,9 +236,10 @@ export class CacheService implements OnModuleDestroy {
   }
 
   async setSessionsList(ids: string[]): Promise<void> {
-    if (!(await this.isAvailable())) return;
+    const client = this.ensureReadyClient();
+    if (!client) return;
     try {
-      await this.redis!.setex('sessions:list', TTL.SESSIONS_LIST, JSON.stringify(ids));
+      await client.setex('sessions:list', TTL.SESSIONS_LIST, JSON.stringify(ids));
     } catch (error) {
       this.logger.warn(`Cache write failed (sessions:list): ${String(error)}`);
     }
@@ -234,9 +248,10 @@ export class CacheService implements OnModuleDestroy {
   // ========== Sessions Stats ==========
 
   async getSessionsStats(): Promise<SessionStats | null> {
-    if (!(await this.isAvailable())) return null;
+    const client = this.ensureReadyClient();
+    if (!client) return null;
     try {
-      const data = await this.redis!.get('sessions:stats');
+      const data = await client.get('sessions:stats');
       return data ? (JSON.parse(data) as SessionStats) : null;
     } catch (error) {
       this.logger.warn(`Cache read failed (sessions:stats): ${String(error)}`);
@@ -245,9 +260,10 @@ export class CacheService implements OnModuleDestroy {
   }
 
   async setSessionsStats(stats: SessionStats): Promise<void> {
-    if (!(await this.isAvailable())) return;
+    const client = this.ensureReadyClient();
+    if (!client) return;
     try {
-      await this.redis!.setex('sessions:stats', TTL.SESSIONS_STATS, JSON.stringify(stats));
+      await client.setex('sessions:stats', TTL.SESSIONS_STATS, JSON.stringify(stats));
     } catch (error) {
       this.logger.warn(`Cache write failed (sessions:stats): ${String(error)}`);
     }

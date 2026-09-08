@@ -10,9 +10,7 @@ import react from '@vitejs/plugin-react';
 // gateway moved on. The sidebar hid the drift by replacing the build-time value with the live
 // version from the API (see Layout.tsx); the Login screen has no session yet, so it shows this
 // constant verbatim. APP_VERSION env still overrides if explicitly provided.
-const { version: pkgVersion } = JSON.parse(
-  readFileSync(new URL('../package.json', import.meta.url), 'utf-8'),
-) as {
+const { version: pkgVersion } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as {
   version: string;
 };
 
@@ -38,6 +36,30 @@ export default defineConfig({
         target: 'http://localhost:2785',
         ws: true,
         changeOrigin: true,
+      },
+    },
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          const normalized = id.replace(/\\/g, '/');
+          if (normalized.includes('/node_modules/')) {
+            if (
+              normalized.includes('/react/') ||
+              normalized.includes('/react-dom/') ||
+              normalized.includes('/react-router-dom/')
+            ) {
+              return 'vendor-react';
+            }
+            if (normalized.includes('/recharts/')) {
+              return 'vendor-charts';
+            }
+            if (normalized.includes('/lucide-react/') || normalized.includes('/yet-another-react-lightbox/')) {
+              return 'vendor-ui';
+            }
+          }
+        },
       },
     },
   },

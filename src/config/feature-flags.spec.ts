@@ -10,28 +10,28 @@ describe('feature-flags', () => {
         autoStartSessions: false, // opt-in
         storeEphemeralMessages: true, // opt-out
         resolveLidToPhone: false, // opt-in
-        simulateTyping: true, // opt-out
+        simulateTyping: false, // opt-in
         simulateTypingMaxMs: 5000,
       });
     });
 
-    it('treats opt-in flags (autoStart, resolveLid) as ON only for the exact string "true"', () => {
+    it('treats opt-in flags (autoStart, resolveLid, simulateTyping) as ON only for the exact string "true"', () => {
       expect(computeFeatureFlags({ AUTO_START_SESSIONS: 'true' }).autoStartSessions).toBe(true);
       expect(computeFeatureFlags({ RESOLVE_LID_TO_PHONE: 'true' }).resolveLidToPhone).toBe(true);
+      expect(computeFeatureFlags({ SIMULATE_TYPING: 'true' }).simulateTyping).toBe(true);
       // Anything else stays OFF.
       for (const v of ['false', 'TRUE', '1', 'yes', '']) {
         expect(computeFeatureFlags({ AUTO_START_SESSIONS: v }).autoStartSessions).toBe(false);
         expect(computeFeatureFlags({ RESOLVE_LID_TO_PHONE: v }).resolveLidToPhone).toBe(false);
+        expect(computeFeatureFlags({ SIMULATE_TYPING: v }).simulateTyping).toBe(false);
       }
     });
 
-    it('treats opt-out flags (storeEphemeral, simulateTyping) as OFF only for the exact string "false"', () => {
+    it('treats opt-out flags (storeEphemeral) as OFF only for the exact string "false"', () => {
       expect(computeFeatureFlags({ STORE_EPHEMERAL_MESSAGES: 'false' }).storeEphemeralMessages).toBe(false);
-      expect(computeFeatureFlags({ SIMULATE_TYPING: 'false' }).simulateTyping).toBe(false);
       // Anything else stays ON.
       for (const v of ['true', 'FALSE', '0', 'no', '']) {
         expect(computeFeatureFlags({ STORE_EPHEMERAL_MESSAGES: v }).storeEphemeralMessages).toBe(true);
-        expect(computeFeatureFlags({ SIMULATE_TYPING: v }).simulateTyping).toBe(true);
       }
     });
 
@@ -91,9 +91,10 @@ describe('feature-flags', () => {
     // Extract the body of one top-level service block. Compose indents a service's keys two spaces
     // under the `name:` key, so the block runs from `  serviceName:` to the next top-level key.
     function extractTopLevelService(compose: string, serviceName: string): string {
-      const start = compose.indexOf(`\n  ${serviceName}:\n`);
+      const normalized = compose.replace(/\r\n/g, '\n');
+      const start = normalized.indexOf(`\n  ${serviceName}:\n`);
       if (start === -1) throw new Error(`service ${serviceName} not found`);
-      const rest = compose.slice(start + 1);
+      const rest = normalized.slice(start + 1);
       const next = rest.search(/\n[a-z]/);
       return next === -1 ? rest : rest.slice(0, next);
     }

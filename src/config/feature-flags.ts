@@ -13,7 +13,7 @@ export interface FeatureFlags {
   storeEphemeralMessages: boolean;
   /** Inline @lid -> phone resolution for inbound privacy-id senders. Opt-in — default OFF. */
   resolveLidToPhone: boolean;
-  /** Humanising typing indicator before single (non-bulk) sends. Default ON. */
+  /** Humanising typing indicator before single (non-bulk) sends. Opt-in — default OFF. */
   simulateTyping: boolean;
   /** Upper bound (ms) on the humanising typing pause. Default 5000. */
   simulateTypingMaxMs: number;
@@ -33,7 +33,7 @@ export function computeFeatureFlags(env: NodeJS.ProcessEnv = process.env): Featu
     autoStartSessions: env.AUTO_START_SESSIONS === 'true',
     storeEphemeralMessages: env.STORE_EPHEMERAL_MESSAGES !== 'false',
     resolveLidToPhone: env.RESOLVE_LID_TO_PHONE === 'true',
-    simulateTyping: env.SIMULATE_TYPING !== 'false',
+    simulateTyping: env.SIMULATE_TYPING === 'true',
     simulateTypingMaxMs: Number(env.SIMULATE_TYPING_MAX_MS) || 5000,
   };
 }

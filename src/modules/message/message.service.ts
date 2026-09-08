@@ -85,7 +85,8 @@ export function spendInlineMediaBudget(messages: Message[], budgetBytes: number)
     const media = metadata.media as { data?: unknown; sizeBytes?: number } | null | undefined;
     if (!media || typeof media.data !== 'string' || MEDIA_URL_POINTER.test(media.data)) continue;
 
-    const encoded = Buffer.byteLength(media.data, 'utf8');
+    // media.data is verified string and base64-encoded ASCII, so length matches UTF-8 byte length directly
+    const encoded = media.data.length;
     // The newest payload is always let through when inlining is enabled at all. Without this an
     // item larger than the whole budget was omitted even as the ONLY media on the page, so a single
     // large photo or video — well inside the bytes the gateway stores inline — could never be read
