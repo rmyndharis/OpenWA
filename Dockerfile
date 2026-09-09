@@ -57,7 +57,82 @@ COPY . .
 # ship dead compiler metadata in every image.
 RUN npm run build && npm run dashboard:ci -- --include=dev && npm run dashboard:build && rm -f dist/*.tsbuildinfo
 
-# ===== Stage 2: Production =====
+# ===== Stage 2: Production Slim (Baileys / Headless API) =====
+# A lightweight production image (~180 MB vs ~1.2 GB) for operators deploying Baileys or
+# headless API workloads that do not require Chromium, X11, ffmpeg, or Puppeteer browser binaries.
+# Build explicitly via `docker build --target production-slim -t openwa:slim .`
+FROM docker.io/node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS production-slim
+
+ENV NODE_ENV=production
+
+# Minimal runtime packages: dumb-init (PID 1 signal forwarding), gosu (root->openwa drop),
+# curl (health probes), ca-certificates (outbound TLS), sqlite3 (online database snapshots).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    dumb-init \
+    gosu \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Non-root system user (deterministic UID 10001 matching production stage)
+RUN useradd -r -s /bin/false -u 10001 openwa
+
+# Copy package manifests and patches for clean production install
+COPY package*.json ./
+COPY scripts/postinstall.js ./scripts/
+COPY scripts/patch-wwebjs-newsletter-preview.js \
+     scripts/patch-wwebjs-status.js \
+     scripts/patch-wwebjs-ready-sync.js \
+     scripts/patch-wwebjs-participant-arity.js \
+     scripts/patch-wwebjs-block.js \
+     scripts/patch-wwebjs-group-description.js \
+     scripts/patch-baileys-appstate.js \
+     scripts/patch-baileys-newsletter-create.js \
+     ./scripts/
+
+RUN PUPPETEER_SKIP_DOWNLOAD=true npm ci --omit=dev \
+    && node scripts/patch-wwebjs-newsletter-preview.js \
+    && node scripts/patch-wwebjs-status.js \
+    && node scripts/patch-wwebjs-ready-sync.js \
+    && node scripts/patch-wwebjs-participant-arity.js \
+    && node scripts/patch-wwebjs-block.js \
+    && node scripts/patch-wwebjs-group-description.js \
+    && node scripts/patch-baileys-appstate.js \
+    && node scripts/patch-baileys-newsletter-create.js \
+    && npm cache clean --force
+
+RUN npm install -g npm@12.0.2 && npm cache clean --force
+
+# Copy built application & dashboard SPA from builder stage
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/dashboard/dist ./dashboard/dist
+
+# Create runtime directories
+RUN mkdir -p ./data/sessions ./data/media ./data/plugins ./data/baileys && \
+    chown -R openwa:openwa ./data
+
+ENV HOME=/app/data
+ENV XDG_CONFIG_HOME=/tmp/.config
+ENV XDG_CACHE_HOME=/tmp/.cache
+
+COPY scripts/backup.sh scripts/restore.sh scripts/lib-env.sh ./scripts/
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+EXPOSE 2785
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:2785/api/health/ready || exit 1
+
+ENTRYPOINT ["dumb-init", "--", "/usr/local/bin/docker-entrypoint.sh"]
+CMD ["node", "dist/main"]
+
+# ===== Stage 3: Production (Full / WhatsApp Web.js) =====
+# Default production target: includes Chromium for Testing, X11/ALSA/Pango runtime libs,
+# and ffmpeg for animated stickers / media transcoding.
 # Same digest-pinned node:22-slim base as the builder stage.
 FROM docker.io/node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS production
 

@@ -113,9 +113,18 @@ describe('MessageSendService', () => {
 
   // ── sendText ──────────────────────────────────────────────────────
 
-  describe('auto-typing before send (SIMULATE_TYPING, on by default)', () => {
-    it('sends a typing presence before the message by default', async () => {
-      delete process.env.SIMULATE_TYPING; // default = on
+  describe('auto-typing before send (SIMULATE_TYPING, opt-in)', () => {
+    it('does not send typing presence by default when SIMULATE_TYPING is unset', async () => {
+      delete process.env.SIMULATE_TYPING;
+
+      await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'Hello' });
+
+      expect(mockEngine.sendChatState).not.toHaveBeenCalled();
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('628123456789@c.us', 'Hello');
+    });
+
+    it('sends a typing presence before the message when SIMULATE_TYPING=true', async () => {
+      process.env.SIMULATE_TYPING = 'true';
       process.env.SIMULATE_TYPING_MAX_MS = '1'; // keep the humanising delay ~instant in tests
 
       await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'Hello' });

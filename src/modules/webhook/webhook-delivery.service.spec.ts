@@ -940,6 +940,7 @@ describe('WebhookDeliveryService', () => {
       event: string,
       data: Record<string, unknown>,
     ): Promise<number> {
+      service.invalidateWebhooks();
       mockFetch.mockClear();
       const webhook = createMockWebhook({ events: ['*'], filters });
       (repository.find as jest.Mock).mockResolvedValue([webhook]);
@@ -1453,6 +1454,33 @@ describe('WebhookDeliveryService', () => {
       );
       // The terminal failure also bumps the Prometheus counter exactly once.
       expect(getWebhookDeliveryFailuresTotal()).toBe(failuresBefore + 1);
+      mockFetch.mockReset();
+    });
+  });
+
+  describe('active webhooks in-memory cache', () => {
+    it('caches loaded webhooks per session to avoid DB lookups on repeated dispatches', async () => {
+      const webhook = createMockWebhook({ events: ['*'] });
+      (repository.find as jest.Mock).mockClear();
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      const mockFetch = undiciFetch as jest.Mock;
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+      service.invalidateWebhooks();
+      expect(repository.find).toHaveBeenCalledTimes(0);
+
+      await service.dispatch('sess-cache-1', 'message.received', { text: 'one' });
+      expect(repository.find).toHaveBeenCalledTimes(1);
+
+      await service.dispatch('sess-cache-1', 'message.received', { text: 'two' });
+      // Served from memory cache: find was NOT called again
+      expect(repository.find).toHaveBeenCalledTimes(1);
+
+      // Invalidation forces a fresh DB lookup
+      service.invalidateWebhooks('sess-cache-1');
+      await service.dispatch('sess-cache-1', 'message.received', { text: 'three' });
+      expect(repository.find).toHaveBeenCalledTimes(2);
+
       mockFetch.mockReset();
     });
   });

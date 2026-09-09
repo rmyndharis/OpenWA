@@ -206,7 +206,8 @@ describe('EngineFactory', () => {
       };
     };
 
-    it.each([false, true])('hardens both engine shapes on a %s install', preLoosen => {
+    const testOnPosix = process.platform === 'win32' ? it.skip : it;
+    testOnPosix.each([false, true])('hardens both engine shapes on a %s install', preLoosen => {
       const { factory, wwjsDir, baileysDir } = buildTmpFactory(preLoosen);
 
       factory.create({ sessionId: 'alice', dbSessionId: 'db-1' });

@@ -157,7 +157,9 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
       retryCount: dto.retryCount ?? 3,
     });
 
-    return this.webhookRepository.save(webhook);
+    const saved = await this.webhookRepository.save(webhook);
+    this.delivery.invalidateWebhooks(sessionId);
+    return saved;
   }
 
   async findBySession(sessionId: string): Promise<Webhook[]> {
@@ -233,12 +235,15 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     if (dto.active !== undefined) webhook.active = dto.active;
     if (dto.retryCount !== undefined) webhook.retryCount = dto.retryCount;
 
-    return this.webhookRepository.save(webhook);
+    const saved = await this.webhookRepository.save(webhook);
+    this.delivery.invalidateWebhooks(sessionId);
+    return saved;
   }
 
   async delete(sessionId: string, id: string): Promise<void> {
     const webhook = await this.findOne(sessionId, id);
     await this.webhookRepository.remove(webhook);
+    this.delivery.invalidateWebhooks(sessionId);
   }
 
   async test(sessionId: string, webhookId: string): Promise<{ success: boolean; statusCode?: number; error?: string }> {

@@ -67,9 +67,26 @@ function normalizeScopeList(list: string[] | null | undefined): string[] | null 
   return cleaned.length > 0 ? cleaned : null;
 }
 
+interface CachedApiKey {
+  apiKey: ApiKey;
+  expiresAt: number;
+}
+
+function cloneApiKey(key: ApiKey): ApiKey {
+  const clone = Object.assign(Object.create(Object.getPrototypeOf(key)), key);
+  if (key.allowedIps) clone.allowedIps = [...key.allowedIps];
+  if (key.allowedSessions) clone.allowedSessions = [...key.allowedSessions];
+  if (key.expiresAt) clone.expiresAt = new Date(key.expiresAt);
+  if (key.lastUsedAt) clone.lastUsedAt = new Date(key.lastUsedAt);
+  return clone;
+}
+
 @Injectable()
 export class AuthService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('AuthService');
+  private readonly apiKeyCache = new Map<string, CachedApiKey>();
+  private readonly apiKeyCacheTtlMs = 60_000;
+  private readonly apiKeyCacheMaxEntries = 1_000;
 
   constructor(
     @InjectRepository(ApiKey, 'main')
@@ -77,6 +94,19 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     private readonly usageTracker: ApiKeyUsageTracker,
     private readonly moduleRef: ModuleRef,
   ) {}
+
+  /** Clear all cached API keys (useful in tests or administrative resets). */
+  clearCache(): void {
+    this.apiKeyCache.clear();
+  }
+
+  private invalidateCacheForKey(id: string): void {
+    for (const [hash, entry] of this.apiKeyCache.entries()) {
+      if (entry.apiKey.id === id) {
+        this.apiKeyCache.delete(hash);
+      }
+    }
+  }
 
   async onModuleInit(): Promise<void> {
     // Seed a default API key if none exist
@@ -128,6 +158,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
 
   /** Flush the coalesced usage counters before the DB connection closes. See ApiKeyUsageTracker. */
   async onModuleDestroy(): Promise<void> {
+    this.apiKeyCache.clear();
     await this.usageTracker.flushOnShutdown();
   }
 
@@ -293,6 +324,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     if (authzChanged) {
       this.evictActiveSockets(id, 'authorization_changed');
     }
+    this.invalidateCacheForKey(id);
     return saved;
   }
 
@@ -308,6 +340,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       // A non-admin target cannot strand the system — no guard needed.
       await this.apiKeyRepository.remove(apiKey);
     }
+    this.invalidateCacheForKey(id);
     // Drop any un-flushed usage accumulator so a deleted key leaves nothing behind in the Map.
     this.usageTracker.forget(id);
     this.removeBootstrapKeyFileIfMatching(apiKey);
@@ -333,6 +366,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       await this.applyUnguardedUpdate({ isActive: false }, id);
       saved = await this.findOne(id);
     }
+    this.invalidateCacheForKey(id);
     // A revoked key fails validation before its next flush, so its accumulator would orphan —
     // drop it here.
     this.usageTracker.forget(id);
@@ -454,7 +488,29 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     // literal string) — the dashboard then runs commands fine while never receiving events, and the
     // session looks permanently disconnected. Whitespace is never part of a key.
     const keyHash = this.hashKey(rawKey?.trim());
-    const apiKey = await this.apiKeyRepository.findOne({ where: { keyHash } });
+
+    let apiKey: ApiKey | null = null;
+    const now = Date.now();
+    const cached = this.apiKeyCache.get(keyHash);
+
+    if (cached && cached.expiresAt > now) {
+      apiKey = cloneApiKey(cached.apiKey);
+      // Refresh LRU order
+      this.apiKeyCache.delete(keyHash);
+      this.apiKeyCache.set(keyHash, cached);
+    } else {
+      apiKey = await this.apiKeyRepository.findOne({ where: { keyHash } });
+      if (apiKey && apiKey.isActive) {
+        if (this.apiKeyCache.size >= this.apiKeyCacheMaxEntries) {
+          const firstKey = this.apiKeyCache.keys().next().value;
+          if (firstKey) this.apiKeyCache.delete(firstKey);
+        }
+        this.apiKeyCache.set(keyHash, {
+          apiKey: cloneApiKey(apiKey),
+          expiresAt: now + this.apiKeyCacheTtlMs,
+        });
+      }
+    }
 
     if (!apiKey) {
       throw new UnauthorizedException('Invalid API key');

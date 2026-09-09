@@ -766,6 +766,73 @@ describe('AuthService', () => {
     });
   });
 
+  describe('in-memory LRU cache for validateApiKey', () => {
+    it('serves repeated validations from cache without querying repository', async () => {
+      const rawKey = 'cached-key-test';
+      const key = createMockApiKey({
+        id: 'cached-id-1',
+        keyHash: hashKey(rawKey),
+        isActive: true,
+      });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+
+      const first = await service.validateApiKey(rawKey);
+      expect(first.id).toBe('cached-id-1');
+      expect(repository.findOne).toHaveBeenCalledTimes(1);
+
+      const second = await service.validateApiKey(rawKey);
+      expect(second.id).toBe('cached-id-1');
+      // findOne was NOT called again: served directly from memory cache
+      expect(repository.findOne).toHaveBeenCalledTimes(1);
+    });
+
+    it('invalidates cache when key is revoked', async () => {
+      const rawKey = 'revoke-cache-key';
+      const key = createMockApiKey({
+        id: 'revoke-id-1',
+        keyHash: hashKey(rawKey),
+        isActive: true,
+      });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+
+      await service.validateApiKey(rawKey);
+      expect(repository.findOne).toHaveBeenCalledTimes(1);
+
+      // Revoking the key invalidates cache
+      await service.revoke(key.id);
+
+      (repository.findOne as jest.Mock).mockClear();
+      (repository.findOne as jest.Mock).mockResolvedValue({ ...key, isActive: false });
+
+      // Next validation queries the DB again and rejects
+      await expect(service.validateApiKey(rawKey)).rejects.toThrow('API key is revoked');
+      expect(repository.findOne).toHaveBeenCalledTimes(1);
+    });
+
+    it('invalidates cache when key is deleted', async () => {
+      const rawKey = 'delete-cache-key';
+      const key = createMockApiKey({
+        id: 'delete-id-1',
+        keyHash: hashKey(rawKey),
+        isActive: true,
+      });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+
+      await service.validateApiKey(rawKey);
+      expect(repository.findOne).toHaveBeenCalledTimes(1);
+
+      // Deleting the key invalidates cache
+      await service.delete(key.id);
+
+      (repository.findOne as jest.Mock).mockClear();
+      (repository.findOne as jest.Mock).mockResolvedValue(null);
+
+      // Next validation queries the DB again and rejects
+      await expect(service.validateApiKey(rawKey)).rejects.toThrow('Invalid API key');
+      expect(repository.findOne).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ── usage-stat lost-update safety + shutdown flush ────────────────
 
   describe('usage-stat lost-update safety', () => {

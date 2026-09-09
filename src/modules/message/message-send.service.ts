@@ -89,6 +89,39 @@ export class MessageSendService {
     private readonly chatMediaArchive?: ChatMediaArchiveService,
   ) {}
 
+  /** In-memory cache for session phone numbers to avoid redundant DB lookups on every message send. */
+  private readonly sessionPhoneCache = new Map<string, { phone: string | null; expiresAt: number }>();
+  private readonly sessionPhoneCacheTtlMs = 60_000;
+
+  /** Clear cached session phone (useful in tests or when a session phone rotates). */
+  clearSessionPhoneCache(sessionId?: string): void {
+    if (sessionId) {
+      this.sessionPhoneCache.delete(sessionId);
+    } else {
+      this.sessionPhoneCache.clear();
+    }
+  }
+
+  private async resolveSessionPhone(sessionId: string): Promise<string> {
+    const now = Date.now();
+    const cached = this.sessionPhoneCache.get(sessionId);
+    if (cached && cached.expiresAt > now) {
+      return cached.phone || 'me';
+    }
+
+    try {
+      const session = await this.sessionService.findOne(sessionId);
+      const phone = session?.phone || null;
+      this.sessionPhoneCache.set(sessionId, {
+        phone,
+        expiresAt: now + this.sessionPhoneCacheTtlMs,
+      });
+      return phone || 'me';
+    } catch {
+      return 'me';
+    }
+  }
+
   async sendText(sessionId: string, dto: SendTextMessageDto): Promise<MessageResponseDto> {
     // Asking to suppress the preview AND to attach one is a contradiction, and guessing which half
     // the caller meant would send a message they did not ask for either way.
@@ -552,7 +585,7 @@ export class MessageSendService {
    * Baileys API send, a media-less marker), so dropping this write would lose the media payload.
    */
   async saveOutgoingMessage(sessionId: string, data: SaveOutgoingMessageData): Promise<Message> {
-    const session = await this.sessionService.findOne(sessionId);
+    const fromPhone = await this.resolveSessionPhone(sessionId);
     const message = this.messageRepository.create({
       sessionId,
       // An engine that sent a message but could not read its id back reports an empty id (see the
@@ -563,7 +596,7 @@ export class MessageSendService {
       // every caller instead of relying on each to remember.
       waMessageId: data.waMessageId || undefined,
       chatId: data.chatId,
-      from: session?.phone || 'me',
+      from: fromPhone,
       to: data.chatId,
       body: data.body,
       type: data.type,
@@ -724,7 +757,7 @@ export class MessageSendService {
   /**
    * Humanising delay: show the engine's typing indicator and pause for a length-scaled, jittered
    * interval before the real send, so automated single sends don't look instantaneous (anti-ban).
-   * ON by default — set `SIMULATE_TYPING=false` to disable. Engine-agnostic (goes through
+   * Opt-in (default OFF) — set `SIMULATE_TYPING=true` to enable. Engine-agnostic (goes through
    * `sendChatState`) and strictly best-effort — it never throws and never blocks the send if presence
    * fails or the engine has no presence concept. `SIMULATE_TYPING_MAX_MS` (default 5000) caps the pause.
    * Note: this covers single sends only; bulk sends use their own `delayBetweenMessages` throttle.
