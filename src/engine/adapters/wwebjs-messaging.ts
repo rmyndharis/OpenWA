@@ -18,7 +18,7 @@ import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import { chatKind, userPart } from '../identity/wa-id';
 import { chatHistoryMediaBudgetBytes, coerceDeclaredSize, ingestMediaBudgetBytes } from './inbound-media-cap';
-import { buildIncomingMessageBase } from './message-mapper';
+import { buildIncomingMessageBase, mapContactFields } from './message-mapper';
 import { buildVCard } from './vcard';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
@@ -715,6 +715,24 @@ export class WwebjsMessaging {
       out.isGroup = chatId.endsWith('@g.us');
       out.isStatusBroadcast = chatId === 'status@broadcast';
       out.kind = chatKind(chatId);
+      // buildIncomingMessageBase only fills `contact` from the raw payload's synchronous
+      // notifyName, which is frequently absent on a history-fetched message object (unlike a
+      // freshly delivered one). Without this, a group participant not in the account's own
+      // contacts (author-only, no saved name) shows no sender label at all in the chat view,
+      // even though the live `message` event handler resolves one via getContact() for the
+      // exact same message. Mirror that here so history and live rendering agree.
+      try {
+        const contact = await msg.getContact();
+        if (contact) {
+          const full = process.env.WEBHOOK_CONTACT_DETAILS === 'true';
+          const merged = { ...out.contact, ...mapContactFields(contact, full) };
+          if (Object.keys(merged).length > 0) {
+            out.contact = merged;
+          }
+        }
+      } catch (error) {
+        this.host.logger.warn(`Failed to resolve contact for history message ${msg.id._serialized}: ${String(error)}`);
+      }
       const call = extractWwebjsCall(msg);
       if (call) out.call = call;
       // Mirror the live handler's location + quoted-message enrichment so history renders identically —

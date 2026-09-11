@@ -38,6 +38,7 @@
     "check:contract-shapes": "node scripts/check-contract-shapes.mjs",
     "openapi:export": "ts-node scripts/export-openapi.ts openapi.json",
     "openapi:check": "ts-node scripts/export-openapi.ts /tmp/openapi.generated.json && diff -u openapi.json /tmp/openapi.generated.json",
+    "client-mappings:preview-merge": "ts-node scripts/preview-client-mapping-merge.ts",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "lint:fix": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",

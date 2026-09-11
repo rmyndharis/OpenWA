@@ -1,8 +1,14 @@
-import { useCallback, useEffect, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, ChevronDown, CornerUpLeft, Loader2, MessageSquare, Smile, Trash2 } from 'lucide-react';
+import { AlertCircle, ChevronDown, CornerUpLeft, Loader2, MessageSquare, Smile, Trash2, UserPlus } from 'lucide-react';
 import { sessionApi, type Chat } from '../../services/api';
-import { getMediaSrc, senderKey, type ChatMessageView } from '../../utils/chatMessages';
+import {
+  buildMentionNameMap,
+  getMediaSrc,
+  resolveMentions,
+  senderKey,
+  type ChatMessageView,
+} from '../../utils/chatMessages';
 import { shouldFetchOlderMessages } from '../../utils/scrollDecision';
 import MessageBody from './MessageBody';
 
@@ -35,6 +41,14 @@ interface ChatThreadProps {
   onReply: (message: ChatMessageView) => void;
   onReact: (message: ChatMessageView, emoji: string) => void;
   onDelete: (message: ChatMessageView) => void;
+  /** Gates the per-sender "add to mapping" button below — Client Mapping is an admin-only surface. */
+  showTagSender?: boolean;
+  /** Group participant JIDs that already have a Client Mapping row in this session. */
+  mappedContactJids?: Set<string>;
+  onTagSender?: (senderJid: string, senderName: string) => void;
+  /** JID currently mid phone-number lookup (see Chats.tsx handleTagSender) — swaps that one button
+   * to a spinner so a double-click can't fire a second lookup while the first is in flight. */
+  resolvingSenderJid?: string | null;
 }
 
 // The messages area of the active chat room: the bubble list (media, quotes, reactions, hover
@@ -57,8 +71,17 @@ function ChatThread({
   onReply,
   onReact,
   onDelete,
+  showTagSender,
+  mappedContactJids,
+  onTagSender,
+  resolvingSenderJid,
 }: ChatThreadProps) {
   const { t } = useTranslation();
+
+  // "@<digits>" in a message body only ever means something once resolved against a participant
+  // this thread has already seen post (see buildMentionNameMap) — recomputed only when the message
+  // list itself changes, not per-render.
+  const mentionNames = useMemo(() => buildMentionNameMap(messages), [messages]);
 
   // Media the message list did not inline. The route serves the bytes as an attachment
   // (Content-Disposition), and the list only carries payloads up to
@@ -338,20 +361,43 @@ function ChatThread({
                     isMediaMessage ? 'media-type' : ''
                   } ${isRevoked ? 'revoked-type' : ''}`}
                 >
-                  {/* Group sender label (WhatsApp-style: coloured name atop the bubble) */}
                   {/* Group sender label (WhatsApp-style: coloured name atop the bubble).
                       Colour keys on the stable sender id, so same-named participants
                       still get distinct colours; the label shows the human name. */}
                   {showSender && (
-                    <div className="message-sender" style={{ color: senderColor(senderKey(msg)!) }}>
-                      {msg.chatName}
+                    <div className="message-sender-row">
+                      <span className="message-sender" style={{ color: senderColor(senderKey(msg)!) }}>
+                        {msg.chatName}
+                      </span>
+                      {/* Only meaningful with a real participant JID (author) — a chatName-only
+                          fallback has nothing stable to map. Hidden once mapped, or for a
+                          non-admin key (Client Mapping is admin-only; see Chats.tsx). */}
+                      {showTagSender && msg.author && !mappedContactJids?.has(msg.author) && (
+                        <button
+                          type="button"
+                          className="message-sender-tag-btn"
+                          onClick={() => onTagSender?.(msg.author!, msg.chatName!)}
+                          disabled={resolvingSenderJid === msg.author}
+                          title={t('chats.actions.tagAsClient')}
+                          aria-label={t('chats.actions.tagAsClient')}
+                        >
+                          {resolvingSenderJid === msg.author ? (
+                            <Loader2 size={12} className="animate-spin" />
+                          ) : (
+                            <UserPlus size={12} />
+                          )}
+                        </button>
+                      )}
                     </div>
                   )}
 
                   {/* Quoted message display */}
                   {msg.metadata?.quotedMessage && (
                     <div className="message-quote-box">
-                      <MessageBody text={msg.metadata.quotedMessage.body} className="quote-body" />
+                      <MessageBody
+                        text={resolveMentions(msg.metadata.quotedMessage.body, mentionNames)}
+                        className="quote-body"
+                      />
                     </div>
                   )}
 
@@ -365,7 +411,9 @@ function ChatThread({
                     msg.body &&
                     (!mediaInfo || msg.body !== mediaInfo.filename) &&
                     msg.type !== 'location' &&
-                    msg.type !== 'call' && <MessageBody text={msg.body} className="message-text" />
+                    msg.type !== 'call' && (
+                      <MessageBody text={resolveMentions(msg.body, mentionNames)} className="message-text" />
+                    )
                   )}
 
                   <div className="message-meta">

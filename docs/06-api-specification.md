@@ -6639,6 +6639,132 @@ the provider sees via its declarative `ack` config (doc 25); the plugin itself a
 
 **Errors:** `401` signature verification failed (missing, stale, or wrong secret) · `403` `GET` verification challenge failed (`verifyToken` mismatch) · `404` unknown pluginId/instanceId, or no such claimed route · `413` body over the route's `maxBodyBytes` · `429` rate limit: the per-instance bucket (`INGRESS_INSTANCE_LIMIT`) or the per-client-IP bucket (`INGRESS_IP_LIMIT`), both per `INGRESS_INSTANCE_TTL`; the global per-IP tiers skip this route, so these two are its bounds, and `Retry-After-instance` / `Retry-After-ingress-ip` names the one that shed the request
 
+### 6.4.18 Client/Teammate/Group Mapping
+
+Deployment-global directory (`ClientMappingController`, `/api/client-mappings`) mapping a WhatsApp
+contact/group JID — or an internal teammate identifier — onto organizational context: which
+company/client this identity belongs to, which team, which role, a time zone, free-text notes, and
+an optional backup/secondary contact. Useful for anyone running OpenWA across multiple clients,
+teams, or projects (agencies, community managers, support desks) who wants to tag WhatsApp
+identities for reporting, export, or downstream automation, without building a separate contacts
+system. Not session-scoped by a route param (there is no `:sessionId` in the path), so every route
+requires an **unscoped** API key with **ADMIN** role; a session-restricted key is rejected outright
+regardless of role.
+
+`kind` is one of `contact`, `group`, `teammate`. `sessionId` is required for `contact`/`group` (a
+JID is only unique within a session) and must be omitted for `teammate` (a teammate has no
+WhatsApp session). `backupOwnerId`, if set, must reference another existing mapping's `id` and may
+not reference itself.
+
+**A note on WhatsApp identity:** WhatsApp can address the same real contact through two different
+JIDs — a `@c.us` JID from a direct 1:1 chat, and a separate `@lid` (privacy id) JID from a group's
+participant list. `POST /api/client-mappings/resolve-and-upsert` (below) exists specifically to
+avoid creating two rows for what is really one person; see the `phone` field and that endpoint's
+description.
+
+#### POST /api/client-mappings
+
+Create a mapping. **Auth:** API key (ADMIN, unscoped)
+
+**Request body**
+
+| Field             | Type    | Required  | Description                                                             |
+| ----------------- | ------- | --------- | ----------------------------------------------------------------------- |
+| sessionId         | string  | see above | Required for `contact`/`group`; must be omitted for `teammate`.         |
+| jid               | string  | yes       | WhatsApp JID, or an internal teammate identifier for `kind=teammate`.   |
+| kind              | string  | yes       | `contact` \| `group` \| `teammate`.                                     |
+| name              | string  | yes       | Max 200 chars.                                                          |
+| phone             | string  | no        | Max 32 chars. Groups do not have one.                                   |
+| company           | string  | yes       | Your own company, or a client/customer name. Max 200 chars.             |
+| team              | string  | no        | Department, e.g. `Sales`, `Support`. Max 100 chars.                     |
+| role              | string  | no        | Job title/function within `team`. Max 100 chars.                        |
+| timezone          | string  | no        | IANA time zone name, e.g. `Asia/Jakarta`.                               |
+| status            | string  | no        | `active` \| `inactive`. Default `active`.                               |
+| backupOwnerId     | string  | no        | Another mapping's `id` — a designated backup/secondary contact.         |
+| sentimentTracking | boolean | no        | Reserved opt-out flag for future analytics; not consumed by core today. |
+| notes             | string  | no        | Free-text context about this contact/group. Max 4000 chars.             |
+
+**Response** `201`
+
+```json
+{
+  "id": "f1e2d3c4-b5a6-7890-1234-567890abcdef",
+  "sessionId": "0d7a2a4e-...",
+  "jid": "628111@c.us",
+  "kind": "contact",
+  "name": "Alice",
+  "phone": null,
+  "company": "Acme",
+  "team": null,
+  "role": null,
+  "timezone": null,
+  "status": "active",
+  "backupOwnerId": null,
+  "sentimentTracking": true,
+  "notes": null,
+  "aliasJids": null,
+  "createdAt": "2026-08-04T10:00:00.000Z",
+  "updatedAt": "2026-08-04T10:00:00.000Z"
+}
+```
+
+**Errors:** `400` missing `sessionId` for `contact`/`group`, `sessionId` set for `teammate`,
+invalid `timezone`, or an unknown/self-referencing `backupOwnerId` · `409` a mapping for this
+`(sessionId, jid, kind)` — or, for `teammate`, this `jid` — already exists, or this `(sessionId,
+phone)` is already mapped under a different jid
+
+#### POST /api/client-mappings/resolve-and-upsert
+
+Resolve a `contact`/`group` jid to its mapping, creating one only if none exists yet — matching by
+**resolved phone first, then by jid**. This is the endpoint to use for any automated write path
+(an import job, an auto-tagging feature, a sync from another system) instead of hand-rolling
+create-if-missing logic, because it is `@lid`-aware: given a `@lid` jid (WhatsApp's privacy-id form,
+as seen in a group's participant list), it resolves the underlying phone number through the active
+WhatsApp engine and checks whether that phone is already mapped under a different jid (e.g. a
+`@c.us` jid from a direct chat) before creating a new row. This is what prevents the same real
+contact from ending up as two separate mappings. **Auth:** API key (ADMIN, unscoped)
+
+**Request body**
+
+| Field     | Type   | Required | Description                                                                |
+| --------- | ------ | -------- | -------------------------------------------------------------------------- |
+| sessionId | string | yes      | WhatsApp session this mapping belongs to.                                  |
+| jid       | string | yes      | WhatsApp contact/group JID.                                                |
+| kind      | string | yes      | `contact` \| `group`.                                                      |
+| nameHint  | string | no       | Display name to use only if this call creates a new row. Max 200 chars.    |
+| phoneHint | string | no       | Phone already known by the caller (skips server-side resolution).          |
+| company   | string | no       | Company to use only if this call creates a new row. Defaults to `Unknown`. |
+
+**Response** `200`
+
+```json
+{
+  "mapping": { "...": "same shape as POST /api/client-mappings" },
+  "created": false
+}
+```
+
+`created` is `true` only when this call inserted a new row; `false` means an existing row (matched
+by jid, or by phone under a different jid) was returned untouched.
+
+#### GET /api/client-mappings
+
+List mappings. **Auth:** API key (ADMIN, unscoped) · **Response** `200` — array of the shape above.
+Optional query params: `sessionId`, `kind` (`contact` \| `group` \| `teammate`), `company`.
+
+#### GET /api/client-mappings/:id
+
+Get one mapping. **Auth:** API key (ADMIN, unscoped) · `200` or `404`.
+
+#### PUT /api/client-mappings/:id
+
+Partial update (any subset of the create fields except `jid`/`kind`/`sessionId`, which are
+immutable after creation). **Auth:** API key (ADMIN, unscoped) · `200` or `404`.
+
+#### DELETE /api/client-mappings/:id
+
+Delete a mapping. **Auth:** API key (ADMIN, unscoped) · **Response** `204`.
+
 ## 6.5 Real-time API (WebSocket)
 
 Live events are delivered over a **Socket.IO** connection (not a raw WebSocket). The server mounts a single Socket.IO namespace, **`/events`**, on the same port as the REST API. There are no REST routes in this module.

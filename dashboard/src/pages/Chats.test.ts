@@ -1,8 +1,9 @@
 // Render smoke test for the Chats page under the bare `node --test` runner (no vitest/jest).
 // It exists to catch the classic god-component extraction bugs: a missing prop that crashes the
 // render, or a lost provider (QueryClient / Role / Toast / i18n). The page is wrapped in the
-// same providers App.tsx uses (QueryClientProvider → RoleProvider → ToastProvider; i18n via the
-// side-effect import; Chats uses no router hooks, so no Router is needed) and the backend is
+// same providers App.tsx uses (QueryClientProvider → RoleProvider → ToastProvider → MemoryRouter,
+// the last for useNavigate/useLocation — the "Tag as Client" handoff to /client-mappings; i18n via
+// the side-effect import) and the backend is
 // stubbed at the fetch layer with canned JSON for every endpoint the page hits on mount,
 // on chat open, on send, and on status-compose. Every stubbed request is recorded so tests can
 // assert the wire effect (POST body) of a UI action, not just its optimistic DOM echo.
@@ -316,11 +317,13 @@ type RTL = typeof import('@testing-library/react');
 type ChatsModule = typeof import('./Chats.tsx');
 type RoleModule = typeof import('../components/RoleProvider.tsx');
 type ToastModule = typeof import('../components/Toast.tsx');
+type RouterModule = typeof import('react-router-dom');
 
 let rtl: RTL;
 let Chats: ChatsModule['Chats'];
 let RoleProvider: RoleModule['RoleProvider'];
 let ToastProvider: ToastModule['ToastProvider'];
+let MemoryRouter: RouterModule['MemoryRouter'];
 let installJsdomGlobals: typeof installJsdomGlobalsFn;
 let queryClient: QueryClient | undefined;
 
@@ -344,6 +347,7 @@ before(async () => {
   rtl = await import('@testing-library/react');
   ({ RoleProvider } = await import('../components/RoleProvider.tsx'));
   ({ ToastProvider } = await import('../components/Toast.tsx'));
+  ({ MemoryRouter } = await import('react-router-dom'));
   ({ Chats } = await import('./Chats.tsx'));
 });
 
@@ -366,7 +370,11 @@ function renderChats(): { container: HTMLElement } {
     createElement(
       QueryClientProvider,
       { client: queryClient },
-      createElement(RoleProvider, null, createElement(ToastProvider, null, createElement(Chats))),
+      createElement(
+        RoleProvider,
+        null,
+        createElement(ToastProvider, null, createElement(MemoryRouter, null, createElement(Chats))),
+      ),
     ),
   );
 }

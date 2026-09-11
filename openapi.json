@@ -2250,6 +2250,230 @@
         ]
       }
     },
+    "/api/client-mappings": {
+      "post": {
+        "operationId": "ClientMappingController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClientMappingDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Mapping created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientMappingResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid mapping (missing sessionId for contact/group, bad timezone, etc)."
+          },
+          "409": {
+            "description": "A mapping for this jid/kind (/session) already exists."
+          }
+        },
+        "summary": "Create a client/teammate/group mapping",
+        "tags": [
+          "client-mapping"
+        ]
+      },
+      "get": {
+        "operationId": "ClientMappingController_findAll",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "contact",
+                "group",
+                "teammate"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "company",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClientMappingResponseDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "List mappings, optionally filtered",
+        "tags": [
+          "client-mapping"
+        ]
+      }
+    },
+    "/api/client-mappings/resolve-and-upsert": {
+      "post": {
+        "operationId": "ClientMappingController_resolveAndUpsert",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveAndUpsertClientMappingDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resolved (existing or newly created).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveAndUpsertResultDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Resolve a contact/group jid to phone (@lid aware) and return its mapping, creating one only if none exists — by resolved phone first, then by jid. The shared path every automatic writer (auto-tag, Import from Chats) should use instead of its own create-if-missing logic — see docs/32 §5.",
+        "tags": [
+          "client-mapping"
+        ]
+      }
+    },
+    "/api/client-mappings/{id}": {
+      "get": {
+        "operationId": "ClientMappingController_findOne",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientMappingResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such mapping."
+          }
+        },
+        "summary": "Get one mapping",
+        "tags": [
+          "client-mapping"
+        ]
+      },
+      "put": {
+        "operationId": "ClientMappingController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClientMappingDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientMappingResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such mapping."
+          }
+        },
+        "summary": "Update a mapping",
+        "tags": [
+          "client-mapping"
+        ]
+      },
+      "delete": {
+        "operationId": "ClientMappingController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Mapping deleted."
+          },
+          "404": {
+            "description": "No such mapping."
+          }
+        },
+        "summary": "Delete a mapping",
+        "tags": [
+          "client-mapping"
+        ]
+      }
+    },
     "/api/sessions/{sessionId}/messages": {
       "get": {
         "operationId": "MessageController_getMessages",
@@ -11354,6 +11578,273 @@
           "enabled": {
             "type": "boolean",
             "description": "Whether the rule is active"
+          }
+        }
+      },
+      "CreateClientMappingDto": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "WhatsApp session this mapping belongs to. Required for kind=contact/group (a JID is only unique within a session); omit for kind=teammate."
+          },
+          "jid": {
+            "type": "string",
+            "description": "WhatsApp contact/group JID, or an internal teammate identifier for kind=teammate."
+          },
+          "kind": {
+            "type": "string",
+            "description": "What this row identifies: contact | group | teammate.",
+            "enum": [
+              "contact",
+              "group",
+              "teammate"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "phone": {
+            "type": "object",
+            "description": "Nullable — groups do not have one.",
+            "maxLength": 32
+          },
+          "company": {
+            "type": "string",
+            "description": "The organization this mapping belongs to — your own company, or a client/customer name.",
+            "maxLength": 200
+          },
+          "team": {
+            "type": "object",
+            "description": "Department, e.g. 'Performance', 'Design'.",
+            "maxLength": 100
+          },
+          "role": {
+            "type": "object",
+            "description": "Job title/function within team, e.g. 'Account Manager'.",
+            "maxLength": 100
+          },
+          "timezone": {
+            "type": "object",
+            "description": "IANA time zone, e.g. \"Asia/Jakarta\"."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ],
+            "default": "active"
+          },
+          "backupOwnerId": {
+            "type": "object",
+            "description": "Designated backup/secondary contact for this mapping: another mapping row's id."
+          },
+          "sentimentTracking": {
+            "type": "boolean",
+            "description": "Per-group opt-out flag reserved for future sentiment/analytics features; not consumed by OpenWA core today.",
+            "default": true
+          },
+          "notes": {
+            "type": "object",
+            "description": "Free-text context about this contact/group."
+          }
+        },
+        "required": [
+          "jid",
+          "kind",
+          "name",
+          "company"
+        ]
+      },
+      "ClientMappingResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "object",
+            "nullable": true
+          },
+          "jid": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "contact",
+              "group",
+              "teammate"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "object",
+            "nullable": true
+          },
+          "company": {
+            "type": "string"
+          },
+          "team": {
+            "type": "object",
+            "nullable": true
+          },
+          "role": {
+            "type": "object",
+            "nullable": true
+          },
+          "timezone": {
+            "type": "object",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ]
+          },
+          "backupOwnerId": {
+            "type": "object",
+            "nullable": true
+          },
+          "sentimentTracking": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "object",
+            "nullable": true
+          },
+          "aliasJids": {
+            "nullable": true,
+            "description": "Every other jid WhatsApp has used for this same real contact (e.g. a @lid seen in a group), matched by phone rather than by jid — see docs/32 §5. Informational — jid stays the address to use.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "jid",
+          "kind",
+          "name",
+          "company",
+          "status",
+          "sentimentTracking",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ResolveAndUpsertClientMappingDto": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "WhatsApp session this mapping belongs to."
+          },
+          "jid": {
+            "type": "string",
+            "description": "WhatsApp contact/group JID."
+          },
+          "kind": {
+            "type": "string",
+            "description": "contact or group — teammate rows have no WhatsApp identity to resolve.",
+            "enum": [
+              "contact",
+              "group"
+            ]
+          },
+          "nameHint": {
+            "type": "string",
+            "description": "Display name to use only if this creates a new row.",
+            "maxLength": 200
+          },
+          "phoneHint": {
+            "type": "object",
+            "description": "Phone already known by the caller (e.g. parsed straight off a @c.us jid) — skips resolution.",
+            "maxLength": 32
+          },
+          "company": {
+            "type": "string",
+            "description": "Company to use only if this creates a new row. Defaults to \"Unknown\"."
+          }
+        },
+        "required": [
+          "sessionId",
+          "jid",
+          "kind"
+        ]
+      },
+      "ResolveAndUpsertResultDto": {
+        "type": "object",
+        "properties": {
+          "mapping": {
+            "$ref": "#/components/schemas/ClientMappingResponseDto"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "True if this call created a new row; false if an existing row (by jid or by resolved phone) was returned instead."
+          }
+        },
+        "required": [
+          "mapping",
+          "created"
+        ]
+      },
+      "UpdateClientMappingDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "phone": {
+            "type": "object",
+            "maxLength": 32
+          },
+          "company": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "team": {
+            "type": "object",
+            "maxLength": 100
+          },
+          "role": {
+            "type": "object",
+            "maxLength": 100
+          },
+          "timezone": {
+            "type": "object"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ]
+          },
+          "backupOwnerId": {
+            "type": "object"
+          },
+          "sentimentTracking": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "object"
           }
         }
       },

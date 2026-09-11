@@ -712,6 +712,55 @@ describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live p
     expect(out[0].isGroup).toBe(true);
   });
 
+  it("resolves the sender name via getContact() when the raw payload carries no notifyName (group participant not in the account's own contacts)", async () => {
+    // A participant identified only by @lid, with no push name on the stored message object — the
+    // shape that made the chat view render a group message with no sender label at all, even though
+    // the live `message` event handler resolves a name for the identical message via getContact().
+    const groupMsg = {
+      id: { _serialized: 'M6' },
+      from: '120363000@g.us',
+      to: 'me',
+      author: '999@lid',
+      body: 'hi all',
+      type: 'chat',
+      timestamp: 500,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: false,
+      getContact: jest.fn().mockResolvedValue({ pushname: 'Alice' }),
+    };
+    const chat = { fetchMessages: jest.fn().mockResolvedValue([groupMsg]) };
+    const client = { getChatById: jest.fn().mockResolvedValue(chat) };
+
+    const out = await readyAdapter(client).getChatHistory('120363000@g.us', 50, false);
+
+    expect(groupMsg.getContact).toHaveBeenCalled();
+    expect(out[0].contact).toEqual({ pushName: 'Alice' });
+  });
+
+  it('tolerates a getContact() failure on a historical message instead of failing the whole history fetch', async () => {
+    const groupMsg = {
+      id: { _serialized: 'M7' },
+      from: '120363000@g.us',
+      to: 'me',
+      author: '999@lid',
+      body: 'hi all',
+      type: 'chat',
+      timestamp: 600,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: false,
+      getContact: jest.fn().mockRejectedValue(new Error('boom')),
+    };
+    const chat = { fetchMessages: jest.fn().mockResolvedValue([groupMsg]) };
+    const client = { getChatById: jest.fn().mockResolvedValue(chat) };
+
+    const out = await readyAdapter(client).getChatHistory('120363000@g.us', 50, false);
+
+    expect(out[0].contact).toBeUndefined();
+    expect(out[0].body).toBe('hi all');
+  });
+
   it('skips the media download when the declared size exceeds a caller-tightened mediaMaxBytes', async () => {
     // 12 MB passes the global 50 MiB default but not the seed's 10 MB store cap — proving the
     // override (not the default) did the gating, and the blob is never downloaded.

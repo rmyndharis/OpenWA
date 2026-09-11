@@ -369,6 +369,29 @@
   color: var(--text-primary);
 }
 
+.chats-page .room-tag-client-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+
+.chats-page .room-tag-client-btn:hover {
+  background: var(--bg-light);
+  border-color: var(--primary);
+  color: var(--primary-text);
+}
+
 .chats-page .room-avatar {
   width: 40px;
   height: 40px;
@@ -576,12 +599,45 @@
 }
 
 /* Group sender label: the poster's name atop an incoming group bubble (colour set inline per sender). */
+.chats-page .message-sender-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 0.15rem;
+}
+
 .chats-page .message-sender {
   font-size: 0.78rem;
   font-weight: 600;
   line-height: 1.2;
-  margin-bottom: 0.15rem;
   word-break: break-word;
+}
+
+.chats-page .message-sender-tag-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  color: var(--text-muted);
+  opacity: 0.7;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.chats-page .message-sender-tag-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chats-page .message-sender-tag-btn:hover:not(:disabled) {
+  opacity: 1;
+  color: var(--primary-text);
+  border-color: var(--primary-text);
 }
 
 .chats-page .message-meta {

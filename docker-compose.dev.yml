@@ -186,6 +186,7 @@ services:
       # Fetch statuses on ready (off unless the exact string 'true', matching docker-compose.yml).
       - STATUS_SEED_ON_READY=${STATUS_SEED_ON_READY:-false}
       - AUTOMATION_MAX_PER_SESSION=${AUTOMATION_MAX_PER_SESSION:-}
+      - CLIENT_MAPPING_AUTO_TAG_ENABLED=${CLIENT_MAPPING_AUTO_TAG_ENABLED:-}
       # HTTP server tuning.
       - REQUEST_TIMEOUT_MS=${REQUEST_TIMEOUT_MS:-}
       - HEADERS_TIMEOUT_MS=${HEADERS_TIMEOUT_MS:-}

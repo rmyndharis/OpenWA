@@ -480,6 +480,15 @@ export default () => ({
     })(),
   },
 
+  // Client mapping (docs/32): auto-tag every new chat into the directory as it's first seen.
+  clientMapping: {
+    // Default ON: a fresh contact/group should show up in Client Mapping without anyone having to
+    // remember to run "Import from Chats" for it. Set CLIENT_MAPPING_AUTO_TAG_ENABLED=false to turn
+    // it off (e.g. a session with heavy broadcast/spam traffic that would otherwise flood the
+    // directory with rows nobody wants).
+    autoTagEnabled: process.env.CLIENT_MAPPING_AUTO_TAG_ENABLED !== 'false',
+  },
+
   // Server-side media conversion (opt-in): transcodes caller-supplied audio and video into the
   // shapes WhatsApp clients actually play, by running the ffmpeg binary. Nothing is converted
   // implicitly — only the explicit conversion endpoints use this.

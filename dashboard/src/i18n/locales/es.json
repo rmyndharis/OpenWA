@@ -60,6 +60,7 @@
     "chats": "Chats",
     "webhooks": "Webhooks",
     "apiKeys": "Claves API",
+    "clientMappings": "Client Mapping",
     "messageTester": "Probador de mensajes",
     "infrastructure": "Infraestructura",
     "plugins": "Plugins",
@@ -95,7 +96,8 @@
     "actions": {
       "reply": "Responder",
       "react": "Reaccionar",
-      "delete": "Eliminar mensaje"
+      "delete": "Eliminar mensaje",
+      "tagAsClient": "Add to Client Mapping"
     },
     "replyingTo": "Respondiendo a {{name}}",
     "you": "Tú",
@@ -1009,5 +1011,91 @@
       "current": "Esta sesión"
     },
     "loading": "Buscando…"
+  },
+  "clientMappings": {
+    "title": "Client Mapping",
+    "subtitle": "Map WhatsApp contacts, groups and teammates to client, team, and company context",
+    "createBtn": "Add Mapping",
+    "modalTitleCreate": "Add Mapping",
+    "modalTitleEdit": "Edit Mapping",
+    "kinds": {
+      "contact": "Contact",
+      "group": "Group",
+      "teammate": "Teammate"
+    },
+    "statuses": {
+      "active": "Active",
+      "inactive": "Inactive"
+    },
+    "fields": {
+      "sessionId": "Session",
+      "sessionIdPlaceholder": "Select a session",
+      "sessionIdHint": "Required for contact/group — a JID is only unique within a session.",
+      "jid": "JID / Identifier",
+      "jidPlaceholder": "WhatsApp JID, or a teammate identifier",
+      "kind": "Kind",
+      "name": "Name",
+      "phone": "Phone",
+      "company": "Company",
+      "team": "Team",
+      "role": "Role",
+      "timezone": "Timezone",
+      "status": "Status",
+      "backupOwnerId": "Backup owner",
+      "backupOwnerNone": "None",
+      "sentimentTracking": "Track sentiment for this group",
+      "notes": "Notes",
+      "notesPlaceholder": "Free-text context about this contact or group, e.g. preferred contact hours",
+      "timezoneNotSet": "Not set"
+    },
+    "columns": {
+      "name": "Name",
+      "kind": "Kind",
+      "company": "Company",
+      "team": "Team",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "filters": {
+      "allKinds": "All kinds",
+      "allCompanies": "All companies",
+      "searchPlaceholder": "Search name, JID, phone, company, team..."
+    },
+    "actions": {
+      "edit": "Edit"
+    },
+    "empty": {
+      "title": "No mappings yet",
+      "description": "Add a mapping to start organizing your contacts and groups by client, team, and company.",
+      "noResultsTitle": "No matches",
+      "noResultsDescription": "No mappings match your search or filters."
+    },
+    "confirm": {
+      "deleteTitle": "Delete Mapping",
+      "deleteMessage": "Are you sure you want to permanently delete <strong>{{name}}</strong>? This action cannot be undone."
+    },
+    "toasts": {
+      "created": "Mapping created",
+      "updated": "Mapping updated",
+      "deleted": "Mapping deleted",
+      "createFailed": "Failed to create mapping",
+      "updateFailed": "Failed to update mapping",
+      "deleteFailed": "Failed to delete mapping"
+    },
+    "importBtn": "Import from Chats",
+    "badges": {
+      "incomplete": "Incomplete — needs review (company and/or name could not be resolved)"
+    },
+    "import": {
+      "title": "Import from Chats",
+      "description": "Creates a mapping for every chat in the selected session that isn't mapped yet, using the name/number WhatsApp already resolved. Company is left as \"Unknown\" until a rep fills it in.",
+      "confirmBtn": "Import",
+      "noSessions": "No sessions available to import from",
+      "done": "Imported {{created}}, skipped {{skipped}} (already mapped)",
+      "someFailed": "{{failed}} chat(s) failed to import",
+      "failed": "Import failed",
+      "includeGroupMembers": "Also import each group's members as contacts",
+      "includeGroupMembersHint": "Someone who only ever posts inside a group (never a 1:1 with this number) has no chat of their own, so the option above is what actually adds them — otherwise only the group itself gets a row."
+    }
   }
 }

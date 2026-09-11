@@ -105,6 +105,39 @@ export function capMediaPayloads(list: ChatMessageView[], keep = MEDIA_PAYLOAD_C
  */
 export const senderKey = (m: Pick<ChatMessage, 'author' | 'chatName'>): string | undefined => m.author ?? m.chatName;
 
+/**
+ * Maps a group participant's numeric id (the local part of their `author` JID, `:device` suffix
+ * stripped) to their resolved display name — built from every message in the thread that carries
+ * both. An @mention in a message body is just "@<digits>" (WhatsApp never sends a resolved name in
+ * the text itself), and those digits are the same id a mentioned participant's OWN messages carry
+ * as `author` — so any thread where the mentioned person has posted at least once already has
+ * everything needed to resolve the mention, with no separate contact lookup.
+ */
+export function buildMentionNameMap(messages: Pick<ChatMessage, 'author' | 'chatName'>[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const m of messages) {
+    if (!m.author || !m.chatName) continue;
+    const local = m.author.split('@')[0].split(':')[0];
+    if (/^\d+$/.test(local) && !map.has(local)) map.set(local, m.chatName);
+  }
+  return map;
+}
+
+/**
+ * Replace "@<digits>" mention tokens with "@<FirstName>" wherever the digits match a known
+ * participant (see buildMentionNameMap). An unmatched token is left exactly as WhatsApp sent it —
+ * the same fallback WhatsApp's own official clients show for a participant they can't resolve
+ * either, rather than guessing. First name only, matching WhatsApp's own mention convention (a
+ * bare "@FirstName Last Name" reads as the mention swallowing following prose).
+ */
+export function resolveMentions(text: string, names: Map<string, string>): string {
+  if (names.size === 0 || !text.includes('@')) return text;
+  return text.replace(/@(\d{7,})/g, (full: string, digits: string) => {
+    const name = names.get(digits);
+    return name ? `@${name.split(' ')[0]}` : full;
+  });
+}
+
 // ChatMessageView extends ChatMessage with the view-only fields the chat page renders.
 // Lifted from Chats.tsx so hooks/utils can share the same shape.
 export type MessageMedia = {

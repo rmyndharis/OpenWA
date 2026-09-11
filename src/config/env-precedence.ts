@@ -84,6 +84,9 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   // Autoreply rule cap, blank-forwarded like the knobs above so an operator who sets nothing does
   // not have an empty string shadow a value in .env / data/.env.generated.
   'AUTOMATION_MAX_PER_SESSION',
+  // Client Mapping auto-tag toggle (docs/32) — same reasoning: blank-forwarded so a value set in
+  // .env / data/.env.generated is never shadowed by an unset compose var.
+  'CLIENT_MAPPING_AUTO_TAG_ENABLED',
   // Behaviour flags with no dashboard route: before they were forwarded, a value set in .env simply
   // never reached the container. They are blank-forwarded like everything else here so the forward
   // itself cannot pin them off.

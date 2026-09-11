@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Client Mapping**: a new `client_mappings` directory tagging WhatsApp contacts, groups, and
+  internal teammates with organizational context (company, team, role, time zone, notes) — useful
+  for anyone running OpenWA across multiple clients or teams. Full CRUD REST API
+  (`/api/client-mappings`, see [docs/06 §6.4.18](docs/06-api-specification.md#6418-clientteammategroup-mapping)),
+  an admin dashboard page (search, filters, tag-from-chat, per-sender tagging on group messages,
+  bulk "Import from Chats" including group member lists), and optional auto-tagging of new contacts
+  and groups (`CLIENT_MAPPING_AUTO_TAG_ENABLED`, default on). Ships with `@lid`/`@c.us` identity
+  resolution (`POST /api/client-mappings/resolve-and-upsert`) and a DB-level uniqueness guarantee
+  so the same real WhatsApp contact can't end up mapped twice under two different jids — see
+  [docs/32](docs/32-client-mapping.md) for the full design.
+- A `npm run client-mappings:preview-merge` script previews (or, with `--apply`, performs) the
+  duplicate-phone merge that the Client Mapping migration otherwise runs automatically.
 - Inbound commerce messages arrive typed `order` and `product` instead of a bodyless `unknown`, on both engines, and are accepted by webhook and automation-rule message-type filters.
 - The Python SDK's `ChatHistoryMessage` carries the commerce `order` and `product` blocks, with required fields and enums matching the contract.
 

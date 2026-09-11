@@ -173,6 +173,9 @@ services:
       # Autoreply rules per session (0 = unlimited). Blank forwards to the app default (32); an
       # unforwarded key could not be set from .env at all, which is the whole point of this list.
       - AUTOMATION_MAX_PER_SESSION=${AUTOMATION_MAX_PER_SESSION:-}
+      # Auto-seed a Client Mapping row for every new chat (docs/32). Blank forwards to the app
+      # default (on); set false in .env to turn it off for this deployment.
+      - CLIENT_MAPPING_AUTO_TAG_ENABLED=${CLIENT_MAPPING_AUTO_TAG_ENABLED:-}
       # Storage. Blank-forwarded (see Database note) so a dashboard local↔S3 switch applies; a real
       # host value pins. Credentials use the canonical S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY names the
       # app and dashboard write; the legacy S3_ACCESS_KEY / S3_SECRET_KEY are ALSO forwarded (and read
