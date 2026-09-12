@@ -1001,6 +1001,22 @@ describe('AuthService', () => {
       const key = createMockApiKey({ role: ApiKeyRole.OPERATOR });
       expect(service.hasPermission(key, ApiKeyRole.ADMIN)).toBe(false);
     });
+
+    it('treats companion_operator as viewer-level for OPERATOR checks', () => {
+      const key = { role: ApiKeyRole.COMPANION_OPERATOR } as ApiKey;
+      expect(service.hasPermission(key, ApiKeyRole.VIEWER)).toBe(true);
+      expect(service.hasPermission(key, ApiKeyRole.OPERATOR)).toBe(false);
+      expect(service.hasPermission(key, ApiKeyRole.ADMIN)).toBe(false);
+    });
+
+    it('allows admin and companion_operator on remote queues helper', () => {
+      expect(service.canAccessOpenWaRemoteQueues({ role: ApiKeyRole.ADMIN } as ApiKey)).toBe(true);
+      expect(
+        service.canAccessOpenWaRemoteQueues({ role: ApiKeyRole.COMPANION_OPERATOR } as ApiKey),
+      ).toBe(true);
+      expect(service.canAccessOpenWaRemoteQueues({ role: ApiKeyRole.OPERATOR } as ApiKey)).toBe(false);
+      expect(service.canAccessOpenWaRemoteQueues({ role: ApiKeyRole.VIEWER } as ApiKey)).toBe(false);
+    });
   });
 
   // ── hashKey (via validateApiKey) ──────────────────────────────────
