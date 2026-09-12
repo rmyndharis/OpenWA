@@ -30,7 +30,7 @@ export const queryKeys = {
   apiKeys: ['apiKeys'] as const,
   logs: (params: { severity?: string; page: number; limit: number }) => ['logs', params] as const,
   infraStatus: ['infra', 'status'] as const,
-  openWaQueues: ['admin', 'openwa-queues'] as const,
+  openWaQueues: ['admin', 'queues', 'bull-board'] as const,
   plugins: ['plugins'] as const,
   pluginInstances: (pluginId: string) => ['plugins', pluginId, 'instances'] as const,
   engines: ['engines'] as const,

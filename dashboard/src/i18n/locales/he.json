@@ -1025,7 +1025,7 @@
     "completed": "הושלמו",
     "failed": "נכשלו",
     "refresh": "רענון",
-    "sourceLocal": "מקור: תורים מקומיים (BullMQ)"
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "חיפוש הודעות…",

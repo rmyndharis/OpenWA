@@ -1016,7 +1016,7 @@
     "completed": "已完成",
     "failed": "失败",
     "refresh": "刷新",
-    "sourceLocal": "来源：本地队列（BullMQ）"
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "搜索消息…",

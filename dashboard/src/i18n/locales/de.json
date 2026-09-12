@@ -1016,7 +1016,7 @@
     "completed": "Abgeschlossen",
     "failed": "Fehlgeschlagen",
     "refresh": "Aktualisieren",
-    "sourceLocal": "Quelle: lokale Warteschlangen (BullMQ)"
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "Nachrichten durchsuchen…",

@@ -1,19 +1,29 @@
 // Render smoke test for the OpenWaQueues page under the bare `node --test` runner. Mirrors
 // Infrastructure.test.ts / Sessions.test.ts: QueryClientProvider → RoleProvider → ToastProvider,
-// stub fetch for /admin/openwa-queues, companion_operator role via localStorage.
+// stub fetch for Bull Board `/admin/queues/api/queues`, companion_operator role via localStorage.
 import '../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { OpenWaQueuesStatus } from '../services/api';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
 
 // ── Fixtures + fetch stub ────────────────────────────────────────────────────
 
-const LOCAL_QUEUES: OpenWaQueuesStatus = {
-  configured: true,
-  source: 'local',
-  queues: [{ name: 'webhook-queue', counts: { pending: 1, completed: 2, failed: 0 } }],
+const BULL_BOARD_QUEUES = {
+  queues: [
+    {
+      name: 'webhook-queue',
+      counts: {
+        waiting: 1,
+        active: 0,
+        delayed: 0,
+        completed: 2,
+        failed: 0,
+        prioritized: 0,
+        'waiting-children': 0,
+      },
+    },
+  ],
 };
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -29,8 +39,8 @@ function installFetchStub(): void {
     const method = init?.method ?? 'GET';
     const path = url.replace(/^https?:\/\/[^/]+/, '');
 
-    if (method === 'GET' && path === '/api/admin/openwa-queues') {
-      return Promise.resolve(jsonResponse(LOCAL_QUEUES));
+    if (method === 'GET' && path === '/api/admin/queues/api/queues') {
+      return Promise.resolve(jsonResponse(BULL_BOARD_QUEUES));
     }
 
     return Promise.resolve(jsonResponse({ message: `unstubbed ${method} ${path}` }, 404));
@@ -83,7 +93,7 @@ function renderOpenWaQueues() {
 
 // ── Smoke tests ──────────────────────────────────────────────────────────────
 
-test('renders local queue names for companion_operator', async () => {
+test('renders Bull Board queue names for companion_operator', async () => {
   const { screen } = rtl;
   renderOpenWaQueues();
 

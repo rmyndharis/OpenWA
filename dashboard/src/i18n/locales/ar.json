@@ -1031,7 +1031,7 @@
     "completed": "مكتمل",
     "failed": "فشل",
     "refresh": "تحديث",
-    "sourceLocal": "المصدر: صفوف محلية (BullMQ)"
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "ابحث في الرسائل…",

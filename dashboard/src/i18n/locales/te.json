@@ -1016,7 +1016,7 @@
     "completed": "పూర్తయినవి",
     "failed": "విఫలమైనవి",
     "refresh": "రిఫ్రెష్",
-    "sourceLocal": "మూలం: స్థానిక క్యూలు (BullMQ)"
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "సందేశాలను శోధించండి…",

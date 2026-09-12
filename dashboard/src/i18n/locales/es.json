@@ -1016,7 +1016,7 @@
     "completed": "Completados",
     "failed": "Fallos",
     "refresh": "Actualizar",
-    "sourceLocal": "Fuente: colas locales (BullMQ)"
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "Buscar mensajes…",

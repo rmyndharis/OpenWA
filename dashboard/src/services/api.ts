@@ -2,7 +2,9 @@
 // Centralized API client with TypeScript types
 
 import { warnIfInsecureHttpUrl } from '../utils/urlSecurity';
+import { mapBullBoardQueues, type BullBoardQueuesResponse, type OpenWaQueuesStatus } from './mapBullBoardQueues';
 
+export type { OpenWaQueuesStatus, BullBoardQueuesResponse };
 // Resolve the API base URL. By default this is the same-origin relative path '/api',
 // correct when the dashboard and API are served from the same origin (the default
 // single-container setup). For a split-origin deployment (dashboard hosted separately
@@ -562,13 +564,6 @@ export interface InfraStatus {
    */
   envPinned?: string[];
 }
-
-/** GET /admin/openwa-queues — mirrors backend OpenWaQueuesStatus (same instance). */
-export type OpenWaQueuesStatus = {
-  configured: boolean;
-  source: 'local' | 'unconfigured';
-  queues: Array<{ name: string; counts: { pending: number; completed: number; failed: number } }>;
-};
 
 // Saved infrastructure config (from data/.env.generated) used to hydrate the form.
 // Secrets are never returned — `*Set` flags indicate whether a value is stored.
@@ -1183,11 +1178,15 @@ export const infraApi = {
 };
 
 // =============================================================================
-// Admin — OpenWA Queues API (same instance)
+// Admin — OpenWA Queues via Bull Board JSON API
 // =============================================================================
 
 export const openWaQueuesApi = {
-  getStatus: () => request<OpenWaQueuesStatus>('/admin/openwa-queues'),
+  /** Same-origin Bull Board JSON: `/api/admin/queues/api/queues` (X-API-Key from session). */
+  getStatus: async (): Promise<OpenWaQueuesStatus> => {
+    const raw = await request<BullBoardQueuesResponse>('/admin/queues/api/queues');
+    return mapBullBoardQueues(raw);
+  },
 };
 
 // =============================================================================

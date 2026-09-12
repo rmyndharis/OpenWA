@@ -4,15 +4,13 @@ import { InfraConfigController } from './infra-config.controller';
 import { InfraDataController } from './infra-data.controller';
 import { InfraDataService } from './infra-data.service';
 import { InfraStorageController } from './infra-storage.controller';
-import { OpenWaQueuesController } from './openwa-queues.controller';
-import { OpenWaQueuesService } from './openwa-queues.service';
 import { EngineModule } from '../../engine/engine.module';
 import { DockerModule } from '../docker';
 import { SessionModule } from '../session/session.module';
 
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors. It registers and
-// exports the webhook/ingress queues, which InfraStatusController and OpenWaQueuesService inject
-// (@Optional) to report live job counts.
+// exports the webhook/ingress queues, which InfraStatusController injects (@Optional) to report
+// live job counts.
 const queueModules: Array<Type | DynamicModule> = [];
 if (process.env.QUEUE_ENABLED === 'true') {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -24,13 +22,7 @@ if (process.env.QUEUE_ENABLED === 'true') {
   // SessionModule gives InfraDataService the live-engine registry for the import pre-flight
   // orphan check. Its own imports (WebhookModule, StatusStoreModule) never point back here — no cycle.
   imports: [EngineModule, DockerModule, SessionModule, ...queueModules],
-  controllers: [
-    InfraStatusController,
-    InfraConfigController,
-    InfraDataController,
-    InfraStorageController,
-    OpenWaQueuesController,
-  ],
-  providers: [InfraDataService, OpenWaQueuesService],
+  controllers: [InfraStatusController, InfraConfigController, InfraDataController, InfraStorageController],
+  providers: [InfraDataService],
 })
 export class InfraModule {}

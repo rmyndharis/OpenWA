@@ -1016,7 +1016,7 @@
     "completed": "완료",
     "failed": "실패",
     "refresh": "새로고침",
-    "sourceLocal": "출처: 로컬 대기열 (BullMQ)"
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "메시지 검색…",
