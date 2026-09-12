@@ -10,9 +10,9 @@ import { resolveClientIp } from '../utils/ip';
 import { setRequestActor } from '../services/request-context';
 
 /**
- * Protects the Bull Board UI (/admin/queues).
+ * Protects the Bull Board UI (/api/admin/queues).
  *
- * Bull Board is mounted as raw Express middleware by @bull-board/nestjs, so the
+ * Bull Board is mounted as raw Express middleware (see bull-board-mount.ts), so the
  * global ApiKeyGuard — which only runs on Nest controller handlers — does not
  * cover it. This middleware requires a valid ADMIN-role API key, supplied via
  * the X-API-Key header or an Authorization: Bearer token.

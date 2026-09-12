@@ -26,8 +26,8 @@ import {
 import { BullBoardAuthMiddleware } from './common/security/bull-board-auth.middleware';
 import { AuthService } from './modules/auth/auth.service';
 import { AuditService } from './modules/audit/audit.service';
-import { Request, Response, NextFunction } from 'express';
 import { RedisIoAdapter } from './modules/events/redis-io.adapter';
+import { mountBullBoard } from './modules/queue/bull-board-mount';
 
 // The created app, exposed at module scope so the fatal handler below can run a best-effort teardown
 // (engine sessions, Redis/pg) when bootstrap fails AFTER NestFactory.create succeeded — notably a
@@ -165,19 +165,17 @@ async function bootstrap() {
     SwaggerModule.setup('api/docs', app, document);
   }
 
-  // Protect the Bull Board queue UI (/api/admin/queues). It is mounted by
-  // @bull-board/nestjs as raw Express middleware that the global ApiKeyGuard
-  // does not cover; registering this before app.listen() ensures it runs ahead
-  // of the Bull Board router. Requires a valid ADMIN API key. The middleware also
-  // writes the audit trail for this mount (auth failures + queue mutations).
+  // Protect + serve the Bull Board queue UI (/api/admin/queues).
+  // Must run after app.init() so we can splice the Express layer *before* Nest's not-found
+  // handler — registering via app.use() before listen() was skipped in production (Nest 404),
+  // and @bull-board/nestjs MiddlewareConsumer has the same failure mode on Nest 11 + Express 5.
+  await app.init();
   const bullBoardAuth = new BullBoardAuthMiddleware(
     app.get(AuthService),
     app.get(ConfigService),
     app.get(AuditService),
   );
-  app.use('/api/admin/queues', (req: Request, res: Response, next: NextFunction) => {
-    void bullBoardAuth.use(req, res, next);
-  });
+  mountBullBoard(app, bullBoardAuth);
 
   // Apply explicit HTTP server timeouts so they are operator-tunable (REQUEST_TIMEOUT_MS /
   // HEADERS_TIMEOUT_MS / KEEPALIVE_TIMEOUT_MS) and observable at boot, instead of Node's implicit
@@ -205,6 +203,9 @@ async function bootstrap() {
   console.log(`🚀 OpenWA is running on: ${publicUrl}`);
   if (swaggerEnabled) {
     console.log(`📚 Swagger docs: ${publicUrl}/api/docs`);
+  }
+  if (process.env.QUEUE_ENABLED === 'true') {
+    console.log(`📋 Bull Board queues: ${publicUrl}/api/admin/queues`);
   }
 
   // Make the dashboard-serving outcome explicit so a missing build (no UI on `/`)
