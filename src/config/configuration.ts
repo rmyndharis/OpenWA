@@ -524,6 +524,12 @@ export default () => ({
     })(),
   },
 
+  remoteOpenWa: {
+    baseUrl: process.env.REMOTE_OPENWA_BASE_URL || '',
+    adminApiKey: process.env.REMOTE_OPENWA_ADMIN_API_KEY || '',
+    timeoutMs: parseInt(process.env.REMOTE_OPENWA_TIMEOUT_MS || '10000', 10) || 10000,
+  },
+
   // Storage configuration
   storage: {
     type: process.env.STORAGE_TYPE || 'local',
