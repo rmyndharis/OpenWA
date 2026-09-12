@@ -64,7 +64,8 @@
     "messageTester": "메시지 테스터",
     "infrastructure": "인프라",
     "plugins": "플러그인",
-    "logs": "로그"
+    "logs": "로그",
+    "filasOpenWa": "OpenWA 대기열"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "관리자",
       "operator": "운영자",
+      "companion_operator": "동반 운영자",
       "viewer": "뷰어"
     },
     "roleDescriptions": {
       "admin": "모든 리소스에 대한 전체 접근 권한",
       "operator": "세션 및 메시지 관리",
+      "companion_operator": "원격 OpenWA 대기열 모니터링(운영 쓰기 권한 없음)",
       "viewer": "읽기 전용 접근"
     },
     "columns": {
@@ -998,6 +1001,23 @@
       "updateAvailable": "업데이트 사용 가능",
       "updated": "플러그인이 업데이트되었습니다"
     }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA 대기열",
+    "subtitle": "원격 OpenWA 인스턴스의 대기열 상태",
+    "loadError": "원격 대기열을 불러올 수 없습니다",
+    "unconfigured": "서버에 원격 통합이 구성되지 않았습니다",
+    "unconfiguredHint": "백엔드에서 REMOTE_OPENWA_BASE_URL 및 REMOTE_OPENWA_ADMIN_API_KEY를 설정하세요",
+    "empty": {
+      "title": "반환된 대기열 없음",
+      "description": "원격 인스턴스가 현재 대기열을 보고하지 않았습니다"
+    },
+    "pending": "대기 중",
+    "completed": "완료",
+    "failed": "실패",
+    "refresh": "새로고침",
+    "sourceBullBoard": "출처: 원격 Bull Board",
+    "sourceInfraStatus": "출처: 원격 인프라 상태"
   },
   "search": {
     "placeholder": "메시지 검색…",

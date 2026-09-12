@@ -64,7 +64,8 @@
     "messageTester": "בדיקת הודעות",
     "infrastructure": "תשתית",
     "plugins": "תוספים",
-    "logs": "לוגים"
+    "logs": "לוגים",
+    "filasOpenWa": "תורים OpenWA"
   },
   "chats": {
     "media": {
@@ -552,11 +553,13 @@
     "roles": {
       "admin": "Admin",
       "operator": "Operator",
+      "companion_operator": "מפעיל נלווה",
       "viewer": "Viewer"
     },
     "roleDescriptions": {
       "admin": "גישה מלאה לכל המשאבים",
       "operator": "ניהול Sessions והודעות",
+      "companion_operator": "ניטור תורים מרוחקים של OpenWA (ללא כתיבה תפעולית)",
       "viewer": "גישת קריאה בלבד"
     },
     "columns": {
@@ -1007,6 +1010,23 @@
       "updateAvailable": "עדכון זמין",
       "updated": "התוסף עודכן"
     }
+  },
+  "filasOpenWa": {
+    "title": "תורים OpenWA",
+    "subtitle": "מצב התורים במופע OpenWA המרוחק",
+    "loadError": "לא ניתן לטעון תורים מרוחקים",
+    "unconfigured": "אינטגרציה מרוחקת לא מוגדרת בשרת",
+    "unconfiguredHint": "הגדר REMOTE_OPENWA_BASE_URL ו-REMOTE_OPENWA_ADMIN_API_KEY ב-backend",
+    "empty": {
+      "title": "לא הוחזרו תורים",
+      "description": "המופע המרוחק לא דיווח על תורים כרגע"
+    },
+    "pending": "ממתינים",
+    "completed": "הושלמו",
+    "failed": "נכשלו",
+    "refresh": "רענון",
+    "sourceBullBoard": "מקור: Bull Board מרוחק",
+    "sourceInfraStatus": "מקור: סטטוס תשתית מרוחק"
   },
   "search": {
     "placeholder": "חיפוש הודעות…",

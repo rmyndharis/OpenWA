@@ -64,7 +64,8 @@
     "messageTester": "Nachrichtentester",
     "infrastructure": "Infrastruktur",
     "plugins": "Plugins",
-    "logs": "Protokolle"
+    "logs": "Protokolle",
+    "filasOpenWa": "OpenWA-Warteschlangen"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "Administrator",
       "operator": "Operator",
+      "companion_operator": "Begleitender Operator",
       "viewer": "Betrachter"
     },
     "roleDescriptions": {
       "admin": "Vollzugriff auf alle Ressourcen",
       "operator": "Verwaltung von Sitzungen und Nachrichten",
+      "companion_operator": "Überwachung entfernter OpenWA-Warteschlangen (ohne operative Schreibrechte)",
       "viewer": "Nur Lesezugriff"
     },
     "columns": {
@@ -998,6 +1001,23 @@
       "updateAvailable": "Update verfügbar",
       "updated": "Plugin aktualisiert"
     }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA-Warteschlangen",
+    "subtitle": "Status der Warteschlangen auf der entfernten OpenWA-Instanz",
+    "loadError": "Entfernte Warteschlangen konnten nicht geladen werden",
+    "unconfigured": "Remote-Integration ist auf dem Server nicht konfiguriert",
+    "unconfiguredHint": "Setzen Sie REMOTE_OPENWA_BASE_URL und REMOTE_OPENWA_ADMIN_API_KEY im Backend",
+    "empty": {
+      "title": "Keine Warteschlangen zurückgegeben",
+      "description": "Die entfernte Instanz hat derzeit keine Warteschlangen gemeldet"
+    },
+    "pending": "Ausstehend",
+    "completed": "Abgeschlossen",
+    "failed": "Fehlgeschlagen",
+    "refresh": "Aktualisieren",
+    "sourceBullBoard": "Quelle: entferntes Bull Board",
+    "sourceInfraStatus": "Quelle: entfernter Infrastrukturstatus"
   },
   "search": {
     "placeholder": "Nachrichten durchsuchen…",

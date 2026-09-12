@@ -64,7 +64,8 @@
     "messageTester": "Testeur de messages",
     "infrastructure": "Infrastructure",
     "plugins": "Plugins",
-    "logs": "Journaux"
+    "logs": "Journaux",
+    "filasOpenWa": "Files OpenWA"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "Administrateur",
       "operator": "Opérateur",
+      "companion_operator": "Opérateur accompagnateur",
       "viewer": "Spectateur"
     },
     "roleDescriptions": {
       "admin": "Accès complet à toutes les ressources",
       "operator": "Gestion des sessions et des messages",
+      "companion_operator": "Surveillance des files OpenWA distantes (sans écriture opérationnelle)",
       "viewer": "Accès en lecture seule"
     },
     "columns": {
@@ -998,6 +1001,23 @@
       "updateAvailable": "Mise à jour disponible",
       "updated": "Plugin mis à jour"
     }
+  },
+  "filasOpenWa": {
+    "title": "Files OpenWA",
+    "subtitle": "État des files sur l'instance OpenWA distante",
+    "loadError": "Impossible de charger les files distantes",
+    "unconfigured": "Intégration distante non configurée sur le serveur",
+    "unconfiguredHint": "Définissez REMOTE_OPENWA_BASE_URL et REMOTE_OPENWA_ADMIN_API_KEY sur le backend",
+    "empty": {
+      "title": "Aucune file retournée",
+      "description": "L'instance distante n'a signalé aucune file pour le moment"
+    },
+    "pending": "En attente",
+    "completed": "Terminés",
+    "failed": "Échecs",
+    "refresh": "Actualiser",
+    "sourceBullBoard": "Source : Bull Board distant",
+    "sourceInfraStatus": "Source : statut d'infrastructure distant"
   },
   "search": {
     "placeholder": "Rechercher des messages…",

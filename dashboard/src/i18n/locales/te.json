@@ -64,7 +64,8 @@
     "messageTester": "మెసేజ్ టెస్టర్",
     "infrastructure": "ఇన్‌ఫ్రాస్ట్రక్చర్",
     "plugins": "ప్లగిన్స్",
-    "logs": "లాగ్స్"
+    "logs": "లాగ్స్",
+    "filasOpenWa": "OpenWA క్యూలు"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "అడ్మిన్",
       "operator": "ఆపరేటర్",
+      "companion_operator": "కంపానియన్ ఆపరేటర్",
       "viewer": "వీక్షకుడు (Viewer)"
     },
     "roleDescriptions": {
       "admin": "అన్ని వనరులకు పూర్తి యాక్సెస్",
       "operator": "సెషన్ & సందేశాల నిర్వహణ",
+      "companion_operator": "రిమోట్ OpenWA క్యూ మానిటరింగ్ (ఆపరేషనల్ రైట్ లేదు)",
       "viewer": "చదవడానికి మాత్రమే యాక్సెస్ (Read-only)"
     },
     "columns": {
@@ -998,6 +1001,23 @@
       "updateAvailable": "అప్‌డేట్ అందుబాటులో ఉంది",
       "updated": "ప్లగిన్ అప్‌డేట్ చేయబడింది"
     }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA క్యూలు",
+    "subtitle": "రిమోట్ OpenWA ఇన్‌స్టాన్స్‌లో క్యూ స్థితి",
+    "loadError": "రిమోట్ క్యూలను లోడ్ చేయలేకపోయింది",
+    "unconfigured": "రిమోట్ ఇంటిగ్రేషన్ సర్వర్‌లో కాన్ఫిగర్ చేయబడలేదు",
+    "unconfiguredHint": "బ్యాకెండ్‌లో REMOTE_OPENWA_BASE_URL మరియు REMOTE_OPENWA_ADMIN_API_KEY సెట్ చేయండి",
+    "empty": {
+      "title": "క్యూలు తిరిగి రాలేదు",
+      "description": "రిమోట్ ఇన్‌స్టాన్స్ ప్రస్తుతం క్యూలను నివేదించలేదు"
+    },
+    "pending": "పెండింగ్",
+    "completed": "పూర్తయినవి",
+    "failed": "విఫలమైనవి",
+    "refresh": "రిఫ్రెష్",
+    "sourceBullBoard": "మూలం: రిమోట్ Bull Board",
+    "sourceInfraStatus": "మూలం: రిమోట్ ఇన్‌ఫ్రా స్థితి"
   },
   "search": {
     "placeholder": "సందేశాలను శోధించండి…",

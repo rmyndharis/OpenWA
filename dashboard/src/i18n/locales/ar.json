@@ -64,7 +64,8 @@
     "messageTester": "اختبار الرسائل",
     "infrastructure": "البنية التحتية",
     "plugins": "الإضافات",
-    "logs": "السجلات"
+    "logs": "السجلات",
+    "filasOpenWa": "صفوف OpenWA"
   },
   "chats": {
     "media": {
@@ -558,11 +559,13 @@
     "roles": {
       "admin": "مدير",
       "operator": "مشغّل",
+      "companion_operator": "مشغّل مرافق",
       "viewer": "مشاهد"
     },
     "roleDescriptions": {
       "admin": "وصول كامل لجميع الموارد",
       "operator": "إدارة الجلسات والرسائل",
+      "companion_operator": "مراقبة صفوف OpenWA البعيدة (بدون كتابة تشغيلية)",
       "viewer": "وصول للقراءة فقط"
     },
     "columns": {
@@ -1013,6 +1016,23 @@
       "updateAvailable": "يتوفر تحديث",
       "updated": "تم تحديث الإضافة"
     }
+  },
+  "filasOpenWa": {
+    "title": "صفوف OpenWA",
+    "subtitle": "حالة الصفوف في مثيل OpenWA البعيد",
+    "loadError": "تعذّر تحميل الصفوف البعيدة",
+    "unconfigured": "التكامل البعيد غير مُعدّ على الخادم",
+    "unconfiguredHint": "عيّن REMOTE_OPENWA_BASE_URL و REMOTE_OPENWA_ADMIN_API_KEY في الخادم الخلفي",
+    "empty": {
+      "title": "لم تُرجَع أي صفوف",
+      "description": "المثيل البعيد لم يُبلّغ عن صفوف في الوقت الحالي"
+    },
+    "pending": "قيد الانتظار",
+    "completed": "مكتمل",
+    "failed": "فاشل",
+    "refresh": "تحديث",
+    "sourceBullBoard": "المصدر: Bull Board بعيد",
+    "sourceInfraStatus": "المصدر: حالة البنية التحتية البعيدة"
   },
   "search": {
     "placeholder": "ابحث في الرسائل…",
