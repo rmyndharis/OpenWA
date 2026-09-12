@@ -1009,13 +1009,11 @@ describe('AuthService', () => {
       expect(service.hasPermission(key, ApiKeyRole.ADMIN)).toBe(false);
     });
 
-    it('allows admin and companion_operator on remote queues helper', () => {
-      expect(service.canAccessOpenWaRemoteQueues({ role: ApiKeyRole.ADMIN } as ApiKey)).toBe(true);
-      expect(
-        service.canAccessOpenWaRemoteQueues({ role: ApiKeyRole.COMPANION_OPERATOR } as ApiKey),
-      ).toBe(true);
-      expect(service.canAccessOpenWaRemoteQueues({ role: ApiKeyRole.OPERATOR } as ApiKey)).toBe(false);
-      expect(service.canAccessOpenWaRemoteQueues({ role: ApiKeyRole.VIEWER } as ApiKey)).toBe(false);
+    it('allows admin and companion_operator on OpenWA queues helper', () => {
+      expect(service.canAccessOpenWaQueues({ role: ApiKeyRole.ADMIN } as ApiKey)).toBe(true);
+      expect(service.canAccessOpenWaQueues({ role: ApiKeyRole.COMPANION_OPERATOR } as ApiKey)).toBe(true);
+      expect(service.canAccessOpenWaQueues({ role: ApiKeyRole.OPERATOR } as ApiKey)).toBe(false);
+      expect(service.canAccessOpenWaQueues({ role: ApiKeyRole.VIEWER } as ApiKey)).toBe(false);
     });
   });
 

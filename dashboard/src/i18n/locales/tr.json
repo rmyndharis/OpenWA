@@ -1004,20 +1004,19 @@
   },
   "filasOpenWa": {
     "title": "OpenWA Kuyrukları",
-    "subtitle": "Uzak OpenWA örneğindeki kuyruk durumu",
-    "loadError": "Uzak kuyruklar yüklenemedi",
-    "unconfigured": "Uzak entegrasyon sunucuda yapılandırılmamış",
-    "unconfiguredHint": "Backend'de REMOTE_OPENWA_BASE_URL ve REMOTE_OPENWA_ADMIN_API_KEY ayarlayın",
+    "subtitle": "Bu OpenWA örneğindeki kuyruk durumu",
+    "loadError": "Kuyruklar yüklenemedi",
+    "unconfigured": "Bu sunucuda kuyruklar devre dışı",
+    "unconfiguredHint": "Yerel kuyrukları izlemek için QUEUE_ENABLED=true (ve Redis) ayarlayın",
     "empty": {
       "title": "Kuyruk döndürülmedi",
-      "description": "Uzak örnek şu anda kuyruk bildirmedi"
+      "description": "Şu anda kuyruk derinliği yok"
     },
     "pending": "Bekleyen",
     "completed": "Tamamlanan",
     "failed": "Başarısız",
     "refresh": "Yenile",
-    "sourceBullBoard": "Kaynak: uzak Bull Board",
-    "sourceInfraStatus": "Kaynak: uzak altyapı durumu"
+    "sourceLocal": "Kaynak: yerel kuyruklar (BullMQ)"
   },
   "search": {
     "placeholder": "Mesajlarda ara…",

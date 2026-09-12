@@ -1004,20 +1004,19 @@
   },
   "filasOpenWa": {
     "title": "Code OpenWA",
-    "subtitle": "Stato delle code sull'istanza OpenWA remota",
-    "loadError": "Impossibile caricare le code remote",
-    "unconfigured": "Integrazione remota non configurata sul server",
-    "unconfiguredHint": "Impostare REMOTE_OPENWA_BASE_URL e REMOTE_OPENWA_ADMIN_API_KEY nel backend",
+    "subtitle": "Stato delle code su questa istanza OpenWA",
+    "loadError": "Impossibile caricare le code",
+    "unconfigured": "Code disabilitate su questo server",
+    "unconfiguredHint": "Impostare QUEUE_ENABLED=true (e Redis) per monitorare le code locali",
     "empty": {
       "title": "Nessuna coda restituita",
-      "description": "L'istanza remota non ha segnalato code al momento"
+      "description": "Nessuna profondità di coda disponibile al momento"
     },
-    "pending": "In attesa",
+    "pending": "In sospeso",
     "completed": "Completati",
-    "failed": "Falliti",
+    "failed": "Non riusciti",
     "refresh": "Aggiorna",
-    "sourceBullBoard": "Fonte: Bull Board remoto",
-    "sourceInfraStatus": "Fonte: stato infrastruttura remoto"
+    "sourceLocal": "Fonte: code locali (BullMQ)"
   },
   "search": {
     "placeholder": "Cerca messaggi…",

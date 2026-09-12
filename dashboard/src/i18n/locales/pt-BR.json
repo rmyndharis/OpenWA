@@ -1004,20 +1004,19 @@
   },
   "filasOpenWa": {
     "title": "Filas OpenWA",
-    "subtitle": "Estado das filas na instância remota OpenWA",
-    "loadError": "Não foi possível carregar as filas remotas",
-    "unconfigured": "Integração remota não configurada no servidor",
-    "unconfiguredHint": "Defina REMOTE_OPENWA_BASE_URL e REMOTE_OPENWA_ADMIN_API_KEY no backend",
+    "subtitle": "Estado das filas nesta instância OpenWA",
+    "loadError": "Não foi possível carregar as filas",
+    "unconfigured": "Filas desabilitadas neste servidor",
+    "unconfiguredHint": "Defina QUEUE_ENABLED=true (e Redis) para monitorar as filas locais",
     "empty": {
       "title": "Nenhuma fila retornada",
-      "description": "A instância remota não reportou filas no momento"
+      "description": "Nenhuma profundidade de fila disponível no momento"
     },
     "pending": "Pendentes",
     "completed": "Concluídos",
     "failed": "Falhas",
     "refresh": "Atualizar",
-    "sourceBullBoard": "Fonte: Bull Board remoto",
-    "sourceInfraStatus": "Fonte: status de infraestrutura remoto"
+    "sourceLocal": "Fonte: filas locais (BullMQ)"
   },
   "search": {
     "placeholder": "Pesquisar mensagens…",

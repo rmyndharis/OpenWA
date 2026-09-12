@@ -1013,20 +1013,19 @@
   },
   "filasOpenWa": {
     "title": "תורים OpenWA",
-    "subtitle": "מצב התורים במופע OpenWA המרוחק",
-    "loadError": "לא ניתן לטעון תורים מרוחקים",
-    "unconfigured": "אינטגרציה מרוחקת לא מוגדרת בשרת",
-    "unconfiguredHint": "הגדר REMOTE_OPENWA_BASE_URL ו-REMOTE_OPENWA_ADMIN_API_KEY ב-backend",
+    "subtitle": "מצב התורים במופע OpenWA זה",
+    "loadError": "לא ניתן לטעון תורים",
+    "unconfigured": "תורים מושבתים בשרת זה",
+    "unconfiguredHint": "הגדר QUEUE_ENABLED=true (ו-Redis) כדי לנטר תורים מקומיים",
     "empty": {
       "title": "לא הוחזרו תורים",
-      "description": "המופע המרוחק לא דיווח על תורים כרגע"
+      "description": "אין עומק תור זמין כרגע"
     },
     "pending": "ממתינים",
     "completed": "הושלמו",
     "failed": "נכשלו",
     "refresh": "רענון",
-    "sourceBullBoard": "מקור: Bull Board מרוחק",
-    "sourceInfraStatus": "מקור: סטטוס תשתית מרוחק"
+    "sourceLocal": "מקור: תורים מקומיים (BullMQ)"
   },
   "search": {
     "placeholder": "חיפוש הודעות…",

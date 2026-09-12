@@ -518,7 +518,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     return roleHierarchy[apiKey.role] >= roleHierarchy[requiredRole];
   }
 
-  canAccessOpenWaRemoteQueues(apiKey: ApiKey): boolean {
+  canAccessOpenWaQueues(apiKey: ApiKey): boolean {
     return apiKey.role === ApiKeyRole.ADMIN || apiKey.role === ApiKeyRole.COMPANION_OPERATOR;
   }
 }

@@ -1004,20 +1004,19 @@
   },
   "filasOpenWa": {
     "title": "Colas OpenWA",
-    "subtitle": "Estado de las colas en la instancia remota OpenWA",
-    "loadError": "No se pudieron cargar las colas remotas",
-    "unconfigured": "La integración remota no está configurada en el servidor",
-    "unconfiguredHint": "Defina REMOTE_OPENWA_BASE_URL y REMOTE_OPENWA_ADMIN_API_KEY en el backend",
+    "subtitle": "Estado de las colas en esta instancia OpenWA",
+    "loadError": "No se pudieron cargar las colas",
+    "unconfigured": "Colas deshabilitadas en este servidor",
+    "unconfiguredHint": "Defina QUEUE_ENABLED=true (y Redis) para monitorear las colas locales",
     "empty": {
-      "title": "No se devolvieron colas",
-      "description": "La instancia remota no reportó colas en este momento"
+      "title": "Ninguna cola devuelta",
+      "description": "No hay profundidad de cola disponible en este momento"
     },
     "pending": "Pendientes",
     "completed": "Completados",
-    "failed": "Fallidos",
+    "failed": "Fallos",
     "refresh": "Actualizar",
-    "sourceBullBoard": "Fuente: Bull Board remoto",
-    "sourceInfraStatus": "Fuente: estado de infraestructura remoto"
+    "sourceLocal": "Fuente: colas locales (BullMQ)"
   },
   "search": {
     "placeholder": "Buscar mensajes…",

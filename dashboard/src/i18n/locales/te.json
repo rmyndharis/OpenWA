@@ -1004,20 +1004,19 @@
   },
   "filasOpenWa": {
     "title": "OpenWA క్యూలు",
-    "subtitle": "రిమోట్ OpenWA ఇన్‌స్టాన్స్‌లో క్యూ స్థితి",
-    "loadError": "రిమోట్ క్యూలను లోడ్ చేయలేకపోయింది",
-    "unconfigured": "రిమోట్ ఇంటిగ్రేషన్ సర్వర్‌లో కాన్ఫిగర్ చేయబడలేదు",
-    "unconfiguredHint": "బ్యాకెండ్‌లో REMOTE_OPENWA_BASE_URL మరియు REMOTE_OPENWA_ADMIN_API_KEY సెట్ చేయండి",
+    "subtitle": "ఈ OpenWA ఇన్‌స్టన్స్‌లో క్యూ స్థితి",
+    "loadError": "క్యూలను లోడ్ చేయలేకపోయాం",
+    "unconfigured": "ఈ సర్వర్‌లో క్యూలు నిలిపివేయబడ్డాయి",
+    "unconfiguredHint": "స్థానిక క్యూలను పర్యవేక్షించడానికి QUEUE_ENABLED=true (మరియు Redis) సెట్ చేయండి",
     "empty": {
-      "title": "క్యూలు తిరిగి రాలేదు",
-      "description": "రిమోట్ ఇన్‌స్టాన్స్ ప్రస్తుతం క్యూలను నివేదించలేదు"
+      "title": "క్యూలు రాలేదు",
+      "description": "ప్రస్తుతం క్యూ లోతు అందుబాటులో లేదు"
     },
     "pending": "పెండింగ్",
     "completed": "పూర్తయినవి",
     "failed": "విఫలమైనవి",
     "refresh": "రిఫ్రెష్",
-    "sourceBullBoard": "మూలం: రిమోట్ Bull Board",
-    "sourceInfraStatus": "మూలం: రిమోట్ ఇన్‌ఫ్రా స్థితి"
+    "sourceLocal": "మూలం: స్థానిక క్యూలు (BullMQ)"
   },
   "search": {
     "placeholder": "సందేశాలను శోధించండి…",
