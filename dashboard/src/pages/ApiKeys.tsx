@@ -41,7 +41,7 @@ import { copyToClipboard } from '../utils/clipboard';
 import { canScopeSessions, sameSessionScope, sessionScopeNames } from '../utils/sessionScope';
 import './ApiKeys.css';
 
-const roleNames = ['admin', 'operator', 'viewer'] as const;
+const roleNames = ['admin', 'operator', 'companion_operator', 'viewer'] as const;
 
 const emptyKeyForm = { name: '', role: 'operator', allowedSessions: [] as string[] };
 

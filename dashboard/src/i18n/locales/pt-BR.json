@@ -64,7 +64,8 @@
     "infrastructure": "Infraestrutura",
     "plugins": "Plugins",
     "logs": "Registros",
-    "templates": "Modelos"
+    "templates": "Modelos",
+    "filasOpenWa": "Filas OpenWA"
   },
   "chats": {
     "media": {
@@ -497,11 +498,13 @@
     "roles": {
       "admin": "Administrador",
       "operator": "Operador",
+      "companion_operator": "Operador Acompanhador",
       "viewer": "Visualizador"
     },
     "roleDescriptions": {
       "admin": "Acesso completo a todos os recursos",
       "operator": "Gerenciamento de sessões e mensagens",
+      "companion_operator": "Monitoramento de filas remotas OpenWA (sem escrita operacional)",
       "viewer": "Acesso somente leitura"
     },
     "columns": {
@@ -998,6 +1001,23 @@
       "updateAvailable": "Atualização disponível",
       "updated": "Plugin atualizado"
     }
+  },
+  "filasOpenWa": {
+    "title": "Filas OpenWA",
+    "subtitle": "Estado das filas na instância remota OpenWA",
+    "loadError": "Não foi possível carregar as filas remotas",
+    "unconfigured": "Integração remota não configurada no servidor",
+    "unconfiguredHint": "Defina REMOTE_OPENWA_BASE_URL e REMOTE_OPENWA_ADMIN_API_KEY no backend",
+    "empty": {
+      "title": "Nenhuma fila retornada",
+      "description": "A instância remota não reportou filas no momento"
+    },
+    "pending": "Pendentes",
+    "completed": "Concluídos",
+    "failed": "Falhas",
+    "refresh": "Atualizar",
+    "sourceBullBoard": "Fonte: Bull Board remoto",
+    "sourceInfraStatus": "Fonte: status de infraestrutura remoto"
   },
   "search": {
     "placeholder": "Pesquisar mensagens…",

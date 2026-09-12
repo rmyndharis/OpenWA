@@ -4,6 +4,8 @@ import { InfraConfigController } from './infra-config.controller';
 import { InfraDataController } from './infra-data.controller';
 import { InfraDataService } from './infra-data.service';
 import { InfraStorageController } from './infra-storage.controller';
+import { RemoteOpenWaQueuesController } from './remote-openwa-queues.controller';
+import { RemoteOpenWaQueuesService } from './remote-openwa-queues.service';
 import { EngineModule } from '../../engine/engine.module';
 import { DockerModule } from '../docker';
 import { SessionModule } from '../session/session.module';
@@ -21,7 +23,13 @@ if (process.env.QUEUE_ENABLED === 'true') {
   // SessionModule gives InfraDataService the live-engine registry for the import pre-flight
   // orphan check. Its own imports (WebhookModule, StatusStoreModule) never point back here — no cycle.
   imports: [EngineModule, DockerModule, SessionModule, ...queueModules],
-  controllers: [InfraStatusController, InfraConfigController, InfraDataController, InfraStorageController],
-  providers: [InfraDataService],
+  controllers: [
+    InfraStatusController,
+    InfraConfigController,
+    InfraDataController,
+    InfraStorageController,
+    RemoteOpenWaQueuesController,
+  ],
+  providers: [InfraDataService, RemoteOpenWaQueuesService],
 })
 export class InfraModule {}

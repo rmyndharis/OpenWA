@@ -64,7 +64,8 @@
     "messageTester": "Mesaj Test Aracı",
     "infrastructure": "Altyapı",
     "plugins": "Eklentiler",
-    "logs": "Kayıtlar (Logs)"
+    "logs": "Kayıtlar (Logs)",
+    "filasOpenWa": "OpenWA Kuyrukları"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "Yönetici (Admin)",
       "operator": "Operatör",
+      "companion_operator": "Eşlik Operatörü",
       "viewer": "İzleyici"
     },
     "roleDescriptions": {
       "admin": "Tüm kaynaklara tam erişim",
       "operator": "Oturum ve mesaj yönetimi",
+      "companion_operator": "Uzak OpenWA kuyruk izleme (operasyonel yazma yok)",
       "viewer": "Salt okunur erişim"
     },
     "columns": {
@@ -998,6 +1001,23 @@
       "updateAvailable": "Güncelleme mevcut",
       "updated": "Eklenti güncellendi"
     }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA Kuyrukları",
+    "subtitle": "Uzak OpenWA örneğindeki kuyruk durumu",
+    "loadError": "Uzak kuyruklar yüklenemedi",
+    "unconfigured": "Uzak entegrasyon sunucuda yapılandırılmamış",
+    "unconfiguredHint": "Backend'de REMOTE_OPENWA_BASE_URL ve REMOTE_OPENWA_ADMIN_API_KEY ayarlayın",
+    "empty": {
+      "title": "Kuyruk döndürülmedi",
+      "description": "Uzak örnek şu anda kuyruk bildirmedi"
+    },
+    "pending": "Bekleyen",
+    "completed": "Tamamlanan",
+    "failed": "Başarısız",
+    "refresh": "Yenile",
+    "sourceBullBoard": "Kaynak: uzak Bull Board",
+    "sourceInfraStatus": "Kaynak: uzak altyapı durumu"
   },
   "search": {
     "placeholder": "Mesajlarda ara…",

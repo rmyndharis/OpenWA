@@ -64,7 +64,8 @@
     "messageTester": "Messaggio di prova",
     "infrastructure": "Infrastruttura",
     "plugins": "Plugin",
-    "logs": "Log"
+    "logs": "Log",
+    "filasOpenWa": "Code OpenWA"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "Amministratore",
       "operator": "Operatore",
+      "companion_operator": "Operatore accompagnatore",
       "viewer": "Visualizzatore"
     },
     "roleDescriptions": {
       "admin": "Accesso completo a tutte le risorse",
       "operator": "Gestione delle sessioni e dei messaggi",
+      "companion_operator": "Monitoraggio code OpenWA remote (senza scrittura operativa)",
       "viewer": "Accesso in sola lettura"
     },
     "columns": {
@@ -998,6 +1001,23 @@
       "updateAvailable": "Aggiornamento disponibile",
       "updated": "Plugin aggiornato"
     }
+  },
+  "filasOpenWa": {
+    "title": "Code OpenWA",
+    "subtitle": "Stato delle code sull'istanza OpenWA remota",
+    "loadError": "Impossibile caricare le code remote",
+    "unconfigured": "Integrazione remota non configurata sul server",
+    "unconfiguredHint": "Impostare REMOTE_OPENWA_BASE_URL e REMOTE_OPENWA_ADMIN_API_KEY nel backend",
+    "empty": {
+      "title": "Nessuna coda restituita",
+      "description": "L'istanza remota non ha segnalato code al momento"
+    },
+    "pending": "In attesa",
+    "completed": "Completati",
+    "failed": "Falliti",
+    "refresh": "Aggiorna",
+    "sourceBullBoard": "Fonte: Bull Board remoto",
+    "sourceInfraStatus": "Fonte: stato infrastruttura remoto"
   },
   "search": {
     "placeholder": "Cerca messaggi…",

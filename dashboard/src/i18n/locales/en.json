@@ -64,7 +64,8 @@
     "messageTester": "Message Tester",
     "infrastructure": "Infrastructure",
     "plugins": "Plugins",
-    "logs": "Logs"
+    "logs": "Logs",
+    "filasOpenWa": "OpenWA Queues"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "Admin",
       "operator": "Operator",
+      "companion_operator": "Companion Operator",
       "viewer": "Viewer"
     },
     "roleDescriptions": {
       "admin": "Full access to all resources",
       "operator": "Session & message management",
+      "companion_operator": "Remote OpenWA queue monitoring (no operational write access)",
       "viewer": "Read-only access"
     },
     "columns": {
@@ -997,6 +1000,23 @@
       "updateAvailable": "Update available",
       "updated": "Plugin updated"
     }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA Queues",
+    "subtitle": "Queue state on the remote OpenWA instance",
+    "loadError": "Could not load remote queues",
+    "unconfigured": "Remote integration is not configured on the server",
+    "unconfiguredHint": "Set REMOTE_OPENWA_BASE_URL and REMOTE_OPENWA_ADMIN_API_KEY on the backend",
+    "empty": {
+      "title": "No queues returned",
+      "description": "The remote instance did not report any queues at this time"
+    },
+    "pending": "Pending",
+    "completed": "Completed",
+    "failed": "Failed",
+    "refresh": "Refresh",
+    "sourceBullBoard": "Source: remote Bull Board",
+    "sourceInfraStatus": "Source: remote infrastructure status"
   },
   "search": {
     "placeholder": "Search messages…",

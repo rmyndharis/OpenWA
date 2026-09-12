@@ -53,11 +53,21 @@ test('startup validation: ok without a usable role keeps the cached role', () =>
   assert.deepEqual(resolveStartupValidation(200, null), { action: 'keep' });
 });
 
-test('isUserRole accepts exactly the three known roles', () => {
-  assert.deepEqual(['admin', 'operator', 'viewer'].filter(isUserRole), ['admin', 'operator', 'viewer']);
+test('isUserRole accepts exactly the four known roles', () => {
+  assert.deepEqual(
+    ['admin', 'operator', 'companion_operator', 'viewer'].filter(isUserRole),
+    ['admin', 'operator', 'companion_operator', 'viewer'],
+  );
   for (const value of ['superuser', '', undefined, null, 42, 'ADMIN']) {
     assert.equal(isUserRole(value), false, `expected ${String(value)} to be rejected`);
   }
+});
+
+test('startup validation: ok + companion_operator refreshes the cached role from the server', () => {
+  assert.deepEqual(resolveStartupValidation(200, { valid: true, role: 'companion_operator' }), {
+    action: 'role',
+    role: 'companion_operator',
+  });
 });
 
 // ── App-level auth flow: exactly one /auth/validate per sign-in ──────────────

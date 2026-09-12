@@ -22,6 +22,7 @@ const Logs = lazy(() => import('./pages/Logs').then(m => ({ default: m.Logs })))
 const ApiKeys = lazy(() => import('./pages/ApiKeys').then(m => ({ default: m.ApiKeys })));
 const MessageTester = lazy(() => import('./pages/MessageTester').then(m => ({ default: m.MessageTester })));
 const Infrastructure = lazy(() => import('./pages/Infrastructure').then(m => ({ default: m.Infrastructure })));
+const OpenWaQueues = lazy(() => import('./pages/OpenWaQueues').then(m => ({ default: m.OpenWaQueues })));
 const Plugins = lazy(() => import('./pages/Plugins'));
 
 const queryClient = new QueryClient({
@@ -118,6 +119,9 @@ function AppContent() {
               <Route path="logs" element={<Logs />} />
               <Route path="message-tester" element={<MessageTester />} />
               {role === 'admin' && <Route path="infrastructure" element={<Infrastructure />} />}
+              {(role === 'admin' || role === 'companion_operator') && (
+                <Route path="filas-openwa" element={<OpenWaQueues />} />
+              )}
               {role === 'admin' && <Route path="plugins" element={<Plugins />} />}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

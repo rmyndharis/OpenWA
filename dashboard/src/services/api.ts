@@ -176,7 +176,7 @@ export interface ApiKey {
   id: string;
   name: string;
   keyPrefix: string;
-  role: 'admin' | 'operator' | 'viewer';
+  role: 'admin' | 'operator' | 'companion_operator' | 'viewer';
   allowedIps?: string[];
   allowedSessions?: string[];
   isActive: boolean;
@@ -562,6 +562,13 @@ export interface InfraStatus {
    */
   envPinned?: string[];
 }
+
+/** GET /admin/openwa-remote-queues — mirrors backend RemoteOpenWaQueuesStatus. */
+export type OpenWaRemoteQueuesStatus = {
+  configured: boolean;
+  source: 'bull-board' | 'infra-status' | 'unconfigured';
+  queues: Array<{ name: string; counts: { pending: number; completed: number; failed: number } }>;
+};
 
 // Saved infrastructure config (from data/.env.generated) used to hydrate the form.
 // Secrets are never returned — `*Set` flags indicate whether a value is stored.
@@ -1173,6 +1180,14 @@ export const infraApi = {
       method: 'POST',
       body: JSON.stringify({ tables, ...options }),
     }),
+};
+
+// =============================================================================
+// Admin — Remote OpenWA Queues API
+// =============================================================================
+
+export const openWaQueuesApi = {
+  getStatus: () => request<OpenWaRemoteQueuesStatus>('/admin/openwa-remote-queues'),
 };
 
 // =============================================================================

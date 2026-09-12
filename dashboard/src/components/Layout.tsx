@@ -21,6 +21,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Languages,
+  ListOrdered,
 } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { type UserRole } from '../hooks/useRole';
@@ -33,18 +34,36 @@ interface LayoutProps {
   userRole: UserRole | null;
 }
 
-const allNavItems = [
-  { to: '/', icon: LayoutDashboard, key: 'dashboard' as const, adminOnly: false },
-  { to: '/sessions', icon: Smartphone, key: 'sessions' as const, adminOnly: false },
-  { to: '/chats', icon: MessageSquare, key: 'chats' as const, adminOnly: false },
-  { to: '/webhooks', icon: Webhook, key: 'webhooks' as const, adminOnly: false },
-  { to: '/templates', icon: ClipboardList, key: 'templates' as const, adminOnly: false },
-  { to: '/api-keys', icon: Key, key: 'apiKeys' as const, adminOnly: true },
-  { to: '/message-tester', icon: Send, key: 'messageTester' as const, adminOnly: false },
-  // Backend /infra/* is ADMIN-only; hide the nav item from non-admins (UX + defense-in-depth).
-  { to: '/infrastructure', icon: Server, key: 'infrastructure' as const, adminOnly: true },
-  { to: '/plugins', icon: Puzzle, key: 'plugins' as const, adminOnly: true },
-  { to: '/logs', icon: FileText, key: 'logs' as const, adminOnly: false },
+type NavItem = {
+  to: string;
+  icon: typeof LayoutDashboard;
+  key:
+    | 'dashboard'
+    | 'sessions'
+    | 'chats'
+    | 'webhooks'
+    | 'templates'
+    | 'apiKeys'
+    | 'messageTester'
+    | 'infrastructure'
+    | 'plugins'
+    | 'logs'
+    | 'filasOpenWa';
+  roles?: readonly UserRole[];
+};
+
+const allNavItems: NavItem[] = [
+  { to: '/', icon: LayoutDashboard, key: 'dashboard' },
+  { to: '/sessions', icon: Smartphone, key: 'sessions' },
+  { to: '/chats', icon: MessageSquare, key: 'chats' },
+  { to: '/webhooks', icon: Webhook, key: 'webhooks' },
+  { to: '/templates', icon: ClipboardList, key: 'templates' },
+  { to: '/api-keys', icon: Key, key: 'apiKeys', roles: ['admin'] },
+  { to: '/message-tester', icon: Send, key: 'messageTester' },
+  { to: '/infrastructure', icon: Server, key: 'infrastructure', roles: ['admin'] },
+  { to: '/filas-openwa', icon: ListOrdered, key: 'filasOpenWa', roles: ['admin', 'companion_operator'] },
+  { to: '/plugins', icon: Puzzle, key: 'plugins', roles: ['admin'] },
+  { to: '/logs', icon: FileText, key: 'logs' },
 ];
 
 const themeIcons = { light: Sun, dark: Moon, system: Monitor };
@@ -55,7 +74,9 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   const ThemeIcon = themeIcons[theme];
   const themeLabel = t(`theme.${theme}`);
 
-  const navItems = allNavItems.filter(item => !item.adminOnly || userRole === 'admin');
+  const navItems = allNavItems.filter(
+    item => !item.roles || (userRole != null && item.roles.includes(userRole)),
+  );
 
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
