@@ -49,33 +49,6 @@ export function mountBullBoard(
   expressApp.use(
     BULL_BOARD_BASE_PATH,
     (req: Request, res: Response, next: NextFunction) => {
-      // #region agent log
-      fetch('http://127.0.0.1:7561/ingest/7486b250-535d-4960-a74a-aeb736bdd3fd', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'a6c155' },
-        body: JSON.stringify({
-          sessionId: 'a6c155',
-          runId: 'post-fix',
-          hypothesisId: 'H1',
-          location: 'bull-board-mount.ts:mount',
-          message: 'bull-board middleware hit',
-          data: {
-            path: req.originalUrl?.split('?')[0] ?? req.path,
-            method: req.method,
-            hasApiKey: Boolean(req.headers['x-api-key']),
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      console.log(
-        JSON.stringify({
-          evt: 'bull_board_mw_hit',
-          path: req.originalUrl?.split('?')[0] ?? req.path,
-          method: req.method,
-          hasApiKey: Boolean(req.headers['x-api-key']),
-        }),
-      );
-      // #endregion
       void bullBoardAuth.use(req, res, next);
     },
     boardRouter,
