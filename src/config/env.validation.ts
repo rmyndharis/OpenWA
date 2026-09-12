@@ -360,9 +360,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   const remoteBase = str('REMOTE_OPENWA_BASE_URL');
   const remoteKey = str('REMOTE_OPENWA_ADMIN_API_KEY');
   if ((remoteBase && !remoteKey) || (!remoteBase && remoteKey)) {
-    errors.push(
-      'REMOTE_OPENWA_BASE_URL and REMOTE_OPENWA_ADMIN_API_KEY must both be set or both be unset',
-    );
+    errors.push('REMOTE_OPENWA_BASE_URL and REMOTE_OPENWA_ADMIN_API_KEY must both be set or both be unset');
   }
   if (remoteBase) {
     let parsed: URL | undefined;
@@ -374,9 +372,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
       errors.push(`REMOTE_OPENWA_BASE_URL must be an absolute http(s) URL (got "${remoteBase}")`);
     } else if (parsed.username || parsed.password) {
-      errors.push(
-        'REMOTE_OPENWA_BASE_URL must not embed credentials — put the API key in REMOTE_OPENWA_ADMIN_API_KEY',
-      );
+      errors.push('REMOTE_OPENWA_BASE_URL must not embed credentials — put the API key in REMOTE_OPENWA_ADMIN_API_KEY');
     }
   }
 

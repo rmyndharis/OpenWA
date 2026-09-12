@@ -48,9 +48,7 @@ export class RemoteOpenWaQueuesService {
       redirect: 'manual',
     });
     if (!statusRes.ok) {
-      throw new ServiceUnavailableException(
-        `Remote OpenWA queues unavailable (HTTP ${statusRes.status})`,
-      );
+      throw new ServiceUnavailableException(`Remote OpenWA queues unavailable (HTTP ${statusRes.status})`);
     }
     const statusBody = (await statusRes.json()) as {
       queue?: { webhooks?: RemoteOpenWaQueueDepth };
