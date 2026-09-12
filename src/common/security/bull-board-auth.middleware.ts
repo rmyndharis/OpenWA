@@ -10,12 +10,14 @@ import { resolveClientIp } from '../utils/ip';
 import { setRequestActor } from '../services/request-context';
 
 /**
- * Protects the Bull Board UI (/admin/queues).
+ * Protects the Bull Board UI (/api/admin/queues).
  *
- * Bull Board is mounted as raw Express middleware by @bull-board/nestjs, so the
+ * Bull Board is mounted as raw Express middleware (see bull-board-mount.ts), so the
  * global ApiKeyGuard — which only runs on Nest controller handlers — does not
- * cover it. This middleware requires a valid ADMIN-role API key, supplied via
- * the X-API-Key header or an Authorization: Bearer token.
+ * cover it. Auth is via X-API-Key or Authorization: Bearer:
+ *  - ADMIN: full access (read + mutate)
+ *  - companion_operator: GET/HEAD only (Filas OpenWA read-only surface)
+ *  - everyone else: forbidden
  *
  * The ?apiKey query-string fallback was removed: an ADMIN key in the
  * URL leaks into proxy/access logs, browser history, bookmarks, and the Referer header.
@@ -80,8 +82,16 @@ export class BullBoardAuthMiddleware implements NestMiddleware {
       // ahead of it in main.ts), so the stamp reaches AuditService.
       setRequestActor({ apiKeyId: apiKey.id, apiKeyName: apiKey.name, ipAddress: clientIp });
 
-      if (!this.authService.hasPermission(apiKey, ApiKeyRole.ADMIN)) {
-        throw new ForbiddenException('Admin role required to access the queue dashboard');
+      const isAdmin = this.authService.hasPermission(apiKey, ApiKeyRole.ADMIN);
+      const canRead = this.authService.canAccessOpenWaQueues(apiKey);
+      if (!canRead) {
+        throw new ForbiddenException('Admin or companion operator role required to access the queue dashboard');
+      }
+
+      // companion_operator may poll the board JSON/UI but cannot retry/remove/pause jobs.
+      const isReadMethod = req.method === 'GET' || req.method === 'HEAD';
+      if (!isAdmin && !isReadMethod) {
+        throw new ForbiddenException('Admin role required to mutate the queue dashboard');
       }
 
       // The board shows and mutates every queue in the deployment, and carries no session dimension
@@ -95,7 +105,7 @@ export class BullBoardAuthMiddleware implements NestMiddleware {
       // Boundary trace of queue-mutation attempts. GET/HEAD are the UI's read/poll traffic; every
       // other method reaching the Bull Board router mutates queue state, so record it with the
       // authenticated key, the resolved client IP, and the method + full path (no query string).
-      if (req.method !== 'GET' && req.method !== 'HEAD') {
+      if (!isReadMethod) {
         void this.auditService?.logInfo(AuditAction.QUEUE_BOARD_MUTATED, {
           apiKey,
           ipAddress: clientIp,

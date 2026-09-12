@@ -64,7 +64,8 @@
     "messageTester": "Mesaj Test Aracı",
     "infrastructure": "Altyapı",
     "plugins": "Eklentiler",
-    "logs": "Kayıtlar (Logs)"
+    "logs": "Kayıtlar (Logs)",
+    "filasOpenWa": "OpenWA Kuyrukları"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "Yönetici (Admin)",
       "operator": "Operatör",
+      "companion_operator": "Eşlik Operatörü",
       "viewer": "İzleyici"
     },
     "roleDescriptions": {
       "admin": "Tüm kaynaklara tam erişim",
       "operator": "Oturum ve mesaj yönetimi",
+      "companion_operator": "Uzak OpenWA kuyruk izleme (operasyonel yazma yok)",
       "viewer": "Salt okunur erişim"
     },
     "columns": {
@@ -998,6 +1001,22 @@
       "updateAvailable": "Güncelleme mevcut",
       "updated": "Eklenti güncellendi"
     }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA Kuyrukları",
+    "subtitle": "Bu OpenWA örneğindeki kuyruk durumu",
+    "loadError": "Kuyruklar yüklenemedi",
+    "unconfigured": "Bu sunucuda kuyruklar devre dışı",
+    "unconfiguredHint": "Yerel kuyrukları izlemek için QUEUE_ENABLED=true (ve Redis) ayarlayın",
+    "empty": {
+      "title": "Kuyruk döndürülmedi",
+      "description": "Şu anda kuyruk derinliği yok"
+    },
+    "pending": "Bekleyen",
+    "completed": "Tamamlanan",
+    "failed": "Başarısız",
+    "refresh": "Yenile",
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "Mesajlarda ara…",

@@ -64,7 +64,8 @@
     "messageTester": "Message Tester",
     "infrastructure": "Infrastructure",
     "plugins": "Plugins",
-    "logs": "Logs"
+    "logs": "Logs",
+    "filasOpenWa": "OpenWA Queues"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "Admin",
       "operator": "Operator",
+      "companion_operator": "Companion Operator",
       "viewer": "Viewer"
     },
     "roleDescriptions": {
       "admin": "Full access to all resources",
       "operator": "Session & message management",
+      "companion_operator": "Remote OpenWA queue monitoring (no operational write access)",
       "viewer": "Read-only access"
     },
     "columns": {
@@ -997,6 +1000,22 @@
       "updateAvailable": "Update available",
       "updated": "Plugin updated"
     }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA Queues",
+    "subtitle": "Queue state on this OpenWA instance",
+    "loadError": "Could not load queues",
+    "unconfigured": "Queues are disabled on this server",
+    "unconfiguredHint": "Set QUEUE_ENABLED=true (and Redis) to monitor local queues",
+    "empty": {
+      "title": "No queues returned",
+      "description": "No queue depth is available right now"
+    },
+    "pending": "Pending",
+    "completed": "Completed",
+    "failed": "Failed",
+    "refresh": "Refresh",
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "Search messages…",

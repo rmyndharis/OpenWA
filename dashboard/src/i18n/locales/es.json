@@ -64,7 +64,8 @@
     "infrastructure": "Infraestructura",
     "plugins": "Plugins",
     "logs": "Registros",
-    "templates": "Plantillas"
+    "templates": "Plantillas",
+    "filasOpenWa": "Colas OpenWA"
   },
   "chats": {
     "media": {
@@ -497,11 +498,13 @@
     "roles": {
       "admin": "Administrador",
       "operator": "Operador",
+      "companion_operator": "Operador acompañante",
       "viewer": "Lector"
     },
     "roleDescriptions": {
       "admin": "Acceso completo a todos los recursos",
       "operator": "Gestión de sesiones y mensajes",
+      "companion_operator": "Supervisión de colas remotas OpenWA (sin escritura operativa)",
       "viewer": "Acceso de solo lectura"
     },
     "columns": {
@@ -998,6 +1001,22 @@
       "updateAvailable": "Actualización disponible",
       "updated": "Plugin actualizado"
     }
+  },
+  "filasOpenWa": {
+    "title": "Colas OpenWA",
+    "subtitle": "Estado de las colas en esta instancia OpenWA",
+    "loadError": "No se pudieron cargar las colas",
+    "unconfigured": "Colas deshabilitadas en este servidor",
+    "unconfiguredHint": "Defina QUEUE_ENABLED=true (y Redis) para monitorear las colas locales",
+    "empty": {
+      "title": "Ninguna cola devuelta",
+      "description": "No hay profundidad de cola disponible en este momento"
+    },
+    "pending": "Pendientes",
+    "completed": "Completados",
+    "failed": "Fallos",
+    "refresh": "Actualizar",
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "Buscar mensajes…",

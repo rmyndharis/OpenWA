@@ -64,7 +64,8 @@
     "messageTester": "Nachrichtentester",
     "infrastructure": "Infrastruktur",
     "plugins": "Plugins",
-    "logs": "Protokolle"
+    "logs": "Protokolle",
+    "filasOpenWa": "OpenWA-Warteschlangen"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "Administrator",
       "operator": "Operator",
+      "companion_operator": "Begleitender Operator",
       "viewer": "Betrachter"
     },
     "roleDescriptions": {
       "admin": "Vollzugriff auf alle Ressourcen",
       "operator": "Verwaltung von Sitzungen und Nachrichten",
+      "companion_operator": "Überwachung entfernter OpenWA-Warteschlangen (ohne operative Schreibrechte)",
       "viewer": "Nur Lesezugriff"
     },
     "columns": {
@@ -998,6 +1001,22 @@
       "updateAvailable": "Update verfügbar",
       "updated": "Plugin aktualisiert"
     }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA-Warteschlangen",
+    "subtitle": "Warteschlangenstatus auf dieser OpenWA-Instanz",
+    "loadError": "Warteschlangen konnten nicht geladen werden",
+    "unconfigured": "Warteschlangen auf diesem Server deaktiviert",
+    "unconfiguredHint": "Setzen Sie QUEUE_ENABLED=true (und Redis), um lokale Warteschlangen zu überwachen",
+    "empty": {
+      "title": "Keine Warteschlangen zurückgegeben",
+      "description": "Derzeit ist keine Warteschlangentiefe verfügbar"
+    },
+    "pending": "Ausstehend",
+    "completed": "Abgeschlossen",
+    "failed": "Fehlgeschlagen",
+    "refresh": "Aktualisieren",
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "Nachrichten durchsuchen…",

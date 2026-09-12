@@ -64,7 +64,8 @@
     "infrastructure": "Infraestrutura",
     "plugins": "Plugins",
     "logs": "Registros",
-    "templates": "Modelos"
+    "templates": "Modelos",
+    "filasOpenWa": "Filas OpenWA"
   },
   "chats": {
     "media": {
@@ -497,11 +498,13 @@
     "roles": {
       "admin": "Administrador",
       "operator": "Operador",
+      "companion_operator": "Operador Acompanhador",
       "viewer": "Visualizador"
     },
     "roleDescriptions": {
       "admin": "Acesso completo a todos os recursos",
       "operator": "Gerenciamento de sessões e mensagens",
+      "companion_operator": "Monitoramento de filas remotas OpenWA (sem escrita operacional)",
       "viewer": "Acesso somente leitura"
     },
     "columns": {
@@ -998,6 +1001,22 @@
       "updateAvailable": "Atualização disponível",
       "updated": "Plugin atualizado"
     }
+  },
+  "filasOpenWa": {
+    "title": "Filas OpenWA",
+    "subtitle": "Estado das filas nesta instância OpenWA",
+    "loadError": "Não foi possível carregar as filas",
+    "unconfigured": "Filas desabilitadas neste servidor",
+    "unconfiguredHint": "Defina QUEUE_ENABLED=true (e Redis) para monitorar as filas locais",
+    "empty": {
+      "title": "Nenhuma fila retornada",
+      "description": "Nenhuma profundidade de fila disponível no momento"
+    },
+    "pending": "Pendentes",
+    "completed": "Concluídos",
+    "failed": "Falhas",
+    "refresh": "Atualizar",
+    "sourceBullBoard": "Fonte: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "Pesquisar mensagens…",

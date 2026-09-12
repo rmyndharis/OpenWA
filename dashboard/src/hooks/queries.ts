@@ -6,6 +6,7 @@ import {
   apiKeyApi,
   auditApi,
   infraApi,
+  openWaQueuesApi,
   pluginsApi,
   pluginInstancesApi,
   statsApi,
@@ -29,6 +30,7 @@ export const queryKeys = {
   apiKeys: ['apiKeys'] as const,
   logs: (params: { severity?: string; page: number; limit: number }) => ['logs', params] as const,
   infraStatus: ['infra', 'status'] as const,
+  openWaQueues: ['admin', 'queues', 'bull-board'] as const,
   plugins: ['plugins'] as const,
   pluginInstances: (pluginId: string) => ['plugins', pluginId, 'instances'] as const,
   engines: ['engines'] as const,
@@ -270,6 +272,15 @@ export function useInfraConfigQuery() {
     queryKey: ['infra', 'config'],
     queryFn: infraApi.getConfig,
     staleTime: 30_000,
+  });
+}
+
+export function useOpenWaQueuesQuery() {
+  return useQuery({
+    queryKey: queryKeys.openWaQueues,
+    queryFn: openWaQueuesApi.getStatus,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
   });
 }
 

@@ -64,7 +64,8 @@
     "messageTester": "اختبار الرسائل",
     "infrastructure": "البنية التحتية",
     "plugins": "الإضافات",
-    "logs": "السجلات"
+    "logs": "السجلات",
+    "filasOpenWa": "صفوف OpenWA"
   },
   "chats": {
     "media": {
@@ -558,11 +559,13 @@
     "roles": {
       "admin": "مدير",
       "operator": "مشغّل",
+      "companion_operator": "مشغّل مرافق",
       "viewer": "مشاهد"
     },
     "roleDescriptions": {
       "admin": "وصول كامل لجميع الموارد",
       "operator": "إدارة الجلسات والرسائل",
+      "companion_operator": "مراقبة صفوف OpenWA البعيدة (بدون كتابة تشغيلية)",
       "viewer": "وصول للقراءة فقط"
     },
     "columns": {
@@ -1013,6 +1016,22 @@
       "updateAvailable": "يتوفر تحديث",
       "updated": "تم تحديث الإضافة"
     }
+  },
+  "filasOpenWa": {
+    "title": "صفوف OpenWA",
+    "subtitle": "حالة الصفوف على مثيل OpenWA هذا",
+    "loadError": "تعذر تحميل الصفوف",
+    "unconfigured": "الصفوف معطّلة على هذا الخادم",
+    "unconfiguredHint": "عيّن QUEUE_ENABLED=true (و Redis) لمراقبة الصفوف المحلية",
+    "empty": {
+      "title": "لم تُرجع أي صفوف",
+      "description": "لا يتوفر عمق صف في الوقت الحالي"
+    },
+    "pending": "قيد الانتظار",
+    "completed": "مكتمل",
+    "failed": "فشل",
+    "refresh": "تحديث",
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "ابحث في الرسائل…",

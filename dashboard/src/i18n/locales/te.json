@@ -64,7 +64,8 @@
     "messageTester": "మెసేజ్ టెస్టర్",
     "infrastructure": "ఇన్‌ఫ్రాస్ట్రక్చర్",
     "plugins": "ప్లగిన్స్",
-    "logs": "లాగ్స్"
+    "logs": "లాగ్స్",
+    "filasOpenWa": "OpenWA క్యూలు"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "అడ్మిన్",
       "operator": "ఆపరేటర్",
+      "companion_operator": "కంపానియన్ ఆపరేటర్",
       "viewer": "వీక్షకుడు (Viewer)"
     },
     "roleDescriptions": {
       "admin": "అన్ని వనరులకు పూర్తి యాక్సెస్",
       "operator": "సెషన్ & సందేశాల నిర్వహణ",
+      "companion_operator": "రిమోట్ OpenWA క్యూ మానిటరింగ్ (ఆపరేషనల్ రైట్ లేదు)",
       "viewer": "చదవడానికి మాత్రమే యాక్సెస్ (Read-only)"
     },
     "columns": {
@@ -998,6 +1001,22 @@
       "updateAvailable": "అప్‌డేట్ అందుబాటులో ఉంది",
       "updated": "ప్లగిన్ అప్‌డేట్ చేయబడింది"
     }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA క్యూలు",
+    "subtitle": "ఈ OpenWA ఇన్‌స్టన్స్‌లో క్యూ స్థితి",
+    "loadError": "క్యూలను లోడ్ చేయలేకపోయాం",
+    "unconfigured": "ఈ సర్వర్‌లో క్యూలు నిలిపివేయబడ్డాయి",
+    "unconfiguredHint": "స్థానిక క్యూలను పర్యవేక్షించడానికి QUEUE_ENABLED=true (మరియు Redis) సెట్ చేయండి",
+    "empty": {
+      "title": "క్యూలు రాలేదు",
+      "description": "ప్రస్తుతం క్యూ లోతు అందుబాటులో లేదు"
+    },
+    "pending": "పెండింగ్",
+    "completed": "పూర్తయినవి",
+    "failed": "విఫలమైనవి",
+    "refresh": "రిఫ్రెష్",
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "సందేశాలను శోధించండి…",

@@ -64,7 +64,8 @@
     "messageTester": "메시지 테스터",
     "infrastructure": "인프라",
     "plugins": "플러그인",
-    "logs": "로그"
+    "logs": "로그",
+    "filasOpenWa": "OpenWA 대기열"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "관리자",
       "operator": "운영자",
+      "companion_operator": "동반 운영자",
       "viewer": "뷰어"
     },
     "roleDescriptions": {
       "admin": "모든 리소스에 대한 전체 접근 권한",
       "operator": "세션 및 메시지 관리",
+      "companion_operator": "원격 OpenWA 대기열 모니터링(운영 쓰기 권한 없음)",
       "viewer": "읽기 전용 접근"
     },
     "columns": {
@@ -998,6 +1001,22 @@
       "updateAvailable": "업데이트 사용 가능",
       "updated": "플러그인이 업데이트되었습니다"
     }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA 대기열",
+    "subtitle": "이 OpenWA 인스턴스의 대기열 상태",
+    "loadError": "대기열을 불러올 수 없습니다",
+    "unconfigured": "이 서버에서 대기열이 비활성화됨",
+    "unconfiguredHint": "로컬 대기열을 모니터링하려면 QUEUE_ENABLED=true(및 Redis)를 설정하세요",
+    "empty": {
+      "title": "반환된 대기열 없음",
+      "description": "현재 사용 가능한 대기열 깊이가 없습니다"
+    },
+    "pending": "대기 중",
+    "completed": "완료",
+    "failed": "실패",
+    "refresh": "새로고침",
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "메시지 검색…",

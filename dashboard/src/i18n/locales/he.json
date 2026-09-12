@@ -64,7 +64,8 @@
     "messageTester": "בדיקת הודעות",
     "infrastructure": "תשתית",
     "plugins": "תוספים",
-    "logs": "לוגים"
+    "logs": "לוגים",
+    "filasOpenWa": "תורים OpenWA"
   },
   "chats": {
     "media": {
@@ -552,11 +553,13 @@
     "roles": {
       "admin": "Admin",
       "operator": "Operator",
+      "companion_operator": "מפעיל נלווה",
       "viewer": "Viewer"
     },
     "roleDescriptions": {
       "admin": "גישה מלאה לכל המשאבים",
       "operator": "ניהול Sessions והודעות",
+      "companion_operator": "ניטור תורים מרוחקים של OpenWA (ללא כתיבה תפעולית)",
       "viewer": "גישת קריאה בלבד"
     },
     "columns": {
@@ -1007,6 +1010,22 @@
       "updateAvailable": "עדכון זמין",
       "updated": "התוסף עודכן"
     }
+  },
+  "filasOpenWa": {
+    "title": "תורים OpenWA",
+    "subtitle": "מצב התורים במופע OpenWA זה",
+    "loadError": "לא ניתן לטעון תורים",
+    "unconfigured": "תורים מושבתים בשרת זה",
+    "unconfiguredHint": "הגדר QUEUE_ENABLED=true (ו-Redis) כדי לנטר תורים מקומיים",
+    "empty": {
+      "title": "לא הוחזרו תורים",
+      "description": "אין עומק תור זמין כרגע"
+    },
+    "pending": "ממתינים",
+    "completed": "הושלמו",
+    "failed": "נכשלו",
+    "refresh": "רענון",
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "חיפוש הודעות…",

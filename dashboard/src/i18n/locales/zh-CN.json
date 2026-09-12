@@ -64,7 +64,8 @@
     "messageTester": "消息测试器",
     "infrastructure": "基础设施",
     "plugins": "插件",
-    "logs": "日志"
+    "logs": "日志",
+    "filasOpenWa": "OpenWA 队列"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "管理员",
       "operator": "操作员",
+      "companion_operator": "伴随操作员",
       "viewer": "查看者"
     },
     "roleDescriptions": {
       "admin": "可完全访问所有资源",
       "operator": "会话和消息管理",
+      "companion_operator": "远程 OpenWA 队列监控（无操作写入权限）",
       "viewer": "只读访问"
     },
     "columns": {
@@ -998,6 +1001,22 @@
       "updateAvailable": "有可用更新",
       "updated": "插件已更新"
     }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA 队列",
+    "subtitle": "此 OpenWA 实例上的队列状态",
+    "loadError": "无法加载队列",
+    "unconfigured": "此服务器上已禁用队列",
+    "unconfiguredHint": "设置 QUEUE_ENABLED=true（以及 Redis）以监控本地队列",
+    "empty": {
+      "title": "未返回队列",
+      "description": "当前没有可用的队列深度"
+    },
+    "pending": "待处理",
+    "completed": "已完成",
+    "failed": "失败",
+    "refresh": "刷新",
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "搜索消息…",

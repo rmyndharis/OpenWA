@@ -9,7 +9,8 @@ import { DockerModule } from '../docker';
 import { SessionModule } from '../session/session.module';
 
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors. It registers and
-// exports the webhook queue, which InfraStatusController injects (@Optional) to report live job counts.
+// exports the webhook/ingress queues, which InfraStatusController injects (@Optional) to report
+// live job counts.
 const queueModules: Array<Type | DynamicModule> = [];
 if (process.env.QUEUE_ENABLED === 'true') {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
