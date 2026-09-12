@@ -563,10 +563,10 @@ export interface InfraStatus {
   envPinned?: string[];
 }
 
-/** GET /admin/openwa-remote-queues — mirrors backend RemoteOpenWaQueuesStatus. */
-export type OpenWaRemoteQueuesStatus = {
+/** GET /admin/openwa-queues — mirrors backend OpenWaQueuesStatus (same instance). */
+export type OpenWaQueuesStatus = {
   configured: boolean;
-  source: 'bull-board' | 'infra-status' | 'unconfigured';
+  source: 'local' | 'unconfigured';
   queues: Array<{ name: string; counts: { pending: number; completed: number; failed: number } }>;
 };
 
@@ -1183,11 +1183,11 @@ export const infraApi = {
 };
 
 // =============================================================================
-// Admin — Remote OpenWA Queues API
+// Admin — OpenWA Queues API (same instance)
 // =============================================================================
 
 export const openWaQueuesApi = {
-  getStatus: () => request<OpenWaRemoteQueuesStatus>('/admin/openwa-remote-queues'),
+  getStatus: () => request<OpenWaQueuesStatus>('/admin/openwa-queues'),
 };
 
 // =============================================================================

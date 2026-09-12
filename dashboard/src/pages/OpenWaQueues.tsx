@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, ListOrdered, Loader2, RefreshCw } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { useOpenWaRemoteQueuesQuery } from '../hooks/queries';
+import { useOpenWaQueuesQuery } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
 import './Infrastructure.css';
 import './OpenWaQueues.css';
@@ -9,7 +9,7 @@ import './OpenWaQueues.css';
 export function OpenWaQueues() {
   const { t } = useTranslation();
   useDocumentTitle(t('filasOpenWa.title'));
-  const { data, isLoading, isError, refetch, isFetching } = useOpenWaRemoteQueuesQuery();
+  const { data, isLoading, isError, refetch, isFetching } = useOpenWaQueuesQuery();
 
   if (isLoading) {
     return (
@@ -57,7 +57,7 @@ export function OpenWaQueues() {
       {data?.configured && data.queues.length > 0 && (
         <>
           <p className="openwa-queues-source">
-            {data.source === 'bull-board' ? t('filasOpenWa.sourceBullBoard') : t('filasOpenWa.sourceInfraStatus')}
+            {data.source === 'local' ? t('filasOpenWa.sourceLocal') : t('filasOpenWa.unconfigured')}
           </p>
           <div className="queue-stats">
             <div className="stats-row">

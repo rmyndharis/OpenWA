@@ -1003,20 +1003,19 @@
   },
   "filasOpenWa": {
     "title": "OpenWA Queues",
-    "subtitle": "Queue state on the remote OpenWA instance",
-    "loadError": "Could not load remote queues",
-    "unconfigured": "Remote integration is not configured on the server",
-    "unconfiguredHint": "Set REMOTE_OPENWA_BASE_URL and REMOTE_OPENWA_ADMIN_API_KEY on the backend",
+    "subtitle": "Queue state on this OpenWA instance",
+    "loadError": "Could not load queues",
+    "unconfigured": "Queues are disabled on this server",
+    "unconfiguredHint": "Set QUEUE_ENABLED=true (and Redis) to monitor local queues",
     "empty": {
       "title": "No queues returned",
-      "description": "The remote instance did not report any queues at this time"
+      "description": "No queue depth is available right now"
     },
     "pending": "Pending",
     "completed": "Completed",
     "failed": "Failed",
     "refresh": "Refresh",
-    "sourceBullBoard": "Source: remote Bull Board",
-    "sourceInfraStatus": "Source: remote infrastructure status"
+    "sourceLocal": "Source: local queues (BullMQ)"
   },
   "search": {
     "placeholder": "Search messages…",

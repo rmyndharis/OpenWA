@@ -1004,20 +1004,19 @@
   },
   "filasOpenWa": {
     "title": "OpenWA 隊列",
-    "subtitle": "遠端 OpenWA 實例的隊列狀態",
-    "loadError": "無法載入遠端隊列",
-    "unconfigured": "伺服器未設定遠端整合",
-    "unconfiguredHint": "在後端設定 REMOTE_OPENWA_BASE_URL 和 REMOTE_OPENWA_ADMIN_API_KEY",
+    "subtitle": "此 OpenWA 實例上的隊列狀態",
+    "loadError": "無法載入隊列",
+    "unconfigured": "此伺服器上已停用隊列",
+    "unconfiguredHint": "設定 QUEUE_ENABLED=true（以及 Redis）以監控本機隊列",
     "empty": {
-      "title": "未返回隊列",
-      "description": "遠端實例目前未回報任何隊列"
+      "title": "未傳回隊列",
+      "description": "目前沒有可用的隊列深度"
     },
     "pending": "待處理",
     "completed": "已完成",
     "failed": "失敗",
     "refresh": "重新整理",
-    "sourceBullBoard": "來源：遠端 Bull Board",
-    "sourceInfraStatus": "來源：遠端基礎設施狀態"
+    "sourceLocal": "來源：本機隊列（BullMQ）"
   },
   "search": {
     "placeholder": "搜尋訊息…",

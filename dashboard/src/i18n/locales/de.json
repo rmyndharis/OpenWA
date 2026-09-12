@@ -1004,20 +1004,19 @@
   },
   "filasOpenWa": {
     "title": "OpenWA-Warteschlangen",
-    "subtitle": "Status der Warteschlangen auf der entfernten OpenWA-Instanz",
-    "loadError": "Entfernte Warteschlangen konnten nicht geladen werden",
-    "unconfigured": "Remote-Integration ist auf dem Server nicht konfiguriert",
-    "unconfiguredHint": "Setzen Sie REMOTE_OPENWA_BASE_URL und REMOTE_OPENWA_ADMIN_API_KEY im Backend",
+    "subtitle": "Warteschlangenstatus auf dieser OpenWA-Instanz",
+    "loadError": "Warteschlangen konnten nicht geladen werden",
+    "unconfigured": "Warteschlangen auf diesem Server deaktiviert",
+    "unconfiguredHint": "Setzen Sie QUEUE_ENABLED=true (und Redis), um lokale Warteschlangen zu überwachen",
     "empty": {
       "title": "Keine Warteschlangen zurückgegeben",
-      "description": "Die entfernte Instanz hat derzeit keine Warteschlangen gemeldet"
+      "description": "Derzeit ist keine Warteschlangentiefe verfügbar"
     },
     "pending": "Ausstehend",
     "completed": "Abgeschlossen",
     "failed": "Fehlgeschlagen",
     "refresh": "Aktualisieren",
-    "sourceBullBoard": "Quelle: entferntes Bull Board",
-    "sourceInfraStatus": "Quelle: entfernter Infrastrukturstatus"
+    "sourceLocal": "Quelle: lokale Warteschlangen (BullMQ)"
   },
   "search": {
     "placeholder": "Nachrichten durchsuchen…",

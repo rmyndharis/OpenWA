@@ -1004,20 +1004,19 @@
   },
   "filasOpenWa": {
     "title": "OpenWA 队列",
-    "subtitle": "远程 OpenWA 实例的队列状态",
-    "loadError": "无法加载远程队列",
-    "unconfigured": "服务器未配置远程集成",
-    "unconfiguredHint": "在后端设置 REMOTE_OPENWA_BASE_URL 和 REMOTE_OPENWA_ADMIN_API_KEY",
+    "subtitle": "此 OpenWA 实例上的队列状态",
+    "loadError": "无法加载队列",
+    "unconfigured": "此服务器上已禁用队列",
+    "unconfiguredHint": "设置 QUEUE_ENABLED=true（以及 Redis）以监控本地队列",
     "empty": {
       "title": "未返回队列",
-      "description": "远程实例当前未报告任何队列"
+      "description": "当前没有可用的队列深度"
     },
     "pending": "待处理",
     "completed": "已完成",
     "failed": "失败",
     "refresh": "刷新",
-    "sourceBullBoard": "来源：远程 Bull Board",
-    "sourceInfraStatus": "来源：远程基础设施状态"
+    "sourceLocal": "来源：本地队列（BullMQ）"
   },
   "search": {
     "placeholder": "搜索消息…",
