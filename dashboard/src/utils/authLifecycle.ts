@@ -2,7 +2,7 @@
 
 import type { UserRole } from '../types/role';
 
-const USER_ROLES: readonly UserRole[] = ['admin', 'operator', 'viewer'];
+const USER_ROLES: readonly UserRole[] = ['admin', 'operator', 'companion_operator', 'viewer'];
 
 export function isUserRole(value: unknown): value is UserRole {
   return typeof value === 'string' && (USER_ROLES as readonly string[]).includes(value);

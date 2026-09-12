@@ -176,7 +176,7 @@ export interface ApiKey {
   id: string;
   name: string;
   keyPrefix: string;
-  role: 'admin' | 'operator' | 'viewer';
+  role: 'admin' | 'operator' | 'companion_operator' | 'viewer';
   allowedIps?: string[];
   allowedSessions?: string[];
   isActive: boolean;

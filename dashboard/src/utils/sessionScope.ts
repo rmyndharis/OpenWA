@@ -1,10 +1,11 @@
 /**
- * Operator and viewer (reader) API keys may be limited to an explicit session
- * allowlist. An empty or missing list means the key can reach every session,
- * including ones created later. Admin keys stay unscoped in the dashboard UI.
+ * Operator, companion operator, and viewer (reader) API keys may be limited to an
+ * explicit session allowlist. An empty or missing list means the key can reach
+ * every session, including ones created later. Admin keys stay unscoped in the
+ * dashboard UI.
  */
 export function canScopeSessions(role: string): boolean {
-  return role === 'operator' || role === 'viewer';
+  return role === 'operator' || role === 'companion_operator' || role === 'viewer';
 }
 
 /** The picker starts open only when the key already has an explicit allowlist. */
