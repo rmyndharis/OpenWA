@@ -483,29 +483,14 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ MEDIA_CONVERSION_MAX_OUTPUT_BYTES: '52428800' })).not.toThrow();
   });
 
-  it('rejects REMOTE_OPENWA_BASE_URL that is not absolute http(s) or embeds credentials', () => {
-    expect(() =>
-      validateEnv({ REMOTE_OPENWA_BASE_URL: 'openwa.insightsmt.com.br' }),
-    ).toThrow(/absolute http/);
-    expect(() =>
-      validateEnv({ REMOTE_OPENWA_BASE_URL: 'https://user:pw@openwa.insightsmt.com.br' }),
-    ).toThrow(/must not embed credentials/);
-  });
-
-  it('accepts https REMOTE_OPENWA_BASE_URL without userinfo when key is set or both unset', () => {
+  it('does not require REMOTE_OPENWA_* (Filas Opção A is same-instance)', () => {
     expect(() =>
       validateEnv({
         REMOTE_OPENWA_BASE_URL: 'https://openwa.insightsmt.com.br',
-        REMOTE_OPENWA_ADMIN_API_KEY: 'test-admin-key',
+        REMOTE_OPENWA_ADMIN_API_KEY: 'orphan-key',
       }),
     ).not.toThrow();
-    expect(() => validateEnv({})).not.toThrow();
-  });
-
-  it('rejects when only one of base URL / admin key is set', () => {
-    expect(() =>
-      validateEnv({ REMOTE_OPENWA_BASE_URL: 'https://openwa.insightsmt.com.br' }),
-    ).toThrow(/REMOTE_OPENWA/);
-    expect(() => validateEnv({ REMOTE_OPENWA_ADMIN_API_KEY: 'k' })).toThrow(/REMOTE_OPENWA/);
+    expect(() => validateEnv({ REMOTE_OPENWA_BASE_URL: 'not-a-url' })).not.toThrow();
+    expect(() => validateEnv({ REMOTE_OPENWA_ADMIN_API_KEY: 'k' })).not.toThrow();
   });
 });
