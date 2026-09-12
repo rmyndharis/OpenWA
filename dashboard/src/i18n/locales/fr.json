@@ -1016,7 +1016,7 @@
     "completed": "Terminés",
     "failed": "Échecs",
     "refresh": "Actualiser",
-    "sourceLocal": "Source : files locales (BullMQ)"
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "Rechercher des messages…",

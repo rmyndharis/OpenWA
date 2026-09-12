@@ -1016,7 +1016,7 @@
     "completed": "已完成",
     "failed": "失敗",
     "refresh": "重新整理",
-    "sourceLocal": "來源：本機隊列（BullMQ）"
+    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
   },
   "search": {
     "placeholder": "搜尋訊息…",

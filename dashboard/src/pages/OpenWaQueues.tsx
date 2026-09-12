@@ -57,7 +57,7 @@ export function OpenWaQueues() {
       {data?.configured && data.queues.length > 0 && (
         <>
           <p className="openwa-queues-source">
-            {data.source === 'local' ? t('filasOpenWa.sourceLocal') : t('filasOpenWa.unconfigured')}
+            {data.source === 'bull-board' ? t('filasOpenWa.sourceBullBoard') : t('filasOpenWa.unconfigured')}
           </p>
           <div className="queue-stats">
             <div className="stats-row">
