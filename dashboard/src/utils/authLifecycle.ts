@@ -1,5 +1,6 @@
 // Auth-lifecycle helpers: logout cleanup and startup re-validation decisions.
 
+import { queuesBoardSessionApi } from '../services/api';
 import type { UserRole } from '../types/role';
 
 const USER_ROLES: readonly UserRole[] = ['admin', 'operator', 'companion_operator', 'viewer'];
@@ -20,6 +21,8 @@ export interface ClearableCache {
  */
 export function clearActorState(...caches: ClearableCache[]): void {
   for (const cache of caches) cache.clear();
+  // Best-effort: drop the Bull Board embed cookie so the next actor cannot inherit it.
+  void queuesBoardSessionApi.clear().catch(() => {});
 }
 
 export type StartupValidation = { action: 'role'; role: UserRole } | { action: 'logout' } | { action: 'keep' };

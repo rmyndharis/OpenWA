@@ -4,7 +4,15 @@ import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient } from '@tanstack/react-query';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
-import { clearActorState, isUserRole, resolveStartupValidation } from './authLifecycle.ts';
+
+type AuthLifecycleModule = typeof import('./authLifecycle.ts');
+let clearActorState: AuthLifecycleModule['clearActorState'];
+let isUserRole: AuthLifecycleModule['isUserRole'];
+let resolveStartupValidation: AuthLifecycleModule['resolveStartupValidation'];
+
+before(async () => {
+  ({ clearActorState, isUserRole, resolveStartupValidation } = await import('./authLifecycle.ts'));
+});
 
 test('logout cleanup wipes the React Query cache (no cross-actor residue)', () => {
   const queryClient = new QueryClient();
@@ -24,6 +32,42 @@ test('logout cleanup calls clear() on every provided cache', () => {
   const cache = (name: string) => ({ clear: () => calls.push(name) });
   clearActorState(cache('a'), cache('b'));
   assert.deepEqual(calls, ['a', 'b']);
+});
+
+test('logout cleanup DELETEs the Bull Board session cookie (best-effort)', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: { method: string; path: string }[] = [];
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const path = url.replace(/^https?:\/\/[^/]+/, '');
+      calls.push({ method: init?.method ?? 'GET', path });
+      return new Response(null, { status: 204 });
+    };
+    clearActorState({ clear: () => {} });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(
+      calls.some(c => c.method === 'DELETE' && c.path === '/api/admin/queues-board-session'),
+      `expected DELETE /api/admin/queues-board-session, got ${JSON.stringify(calls)}`,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('logout cleanup still clears caches when Bull Board DELETE fails', async () => {
+  const originalFetch = globalThis.fetch;
+  const cacheClears: string[] = [];
+  try {
+    globalThis.fetch = async () => {
+      throw new Error('network down');
+    };
+    clearActorState({ clear: () => cacheClears.push('cleared') });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(cacheClears, ['cleared']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('startup validation: 401/403 (revoked/demoted/restricted key) → logout', () => {
