@@ -1005,6 +1005,8 @@
   "filasOpenWa": {
     "title": "Files OpenWA",
     "subtitle": "État des files sur cette instance OpenWA",
+    "embedLoading": "Opening Bull Board…",
+    "embedError": "Could not open the queue board session",
     "migrating": {
       "title": "Intégration Bull Board à venir",
       "description": "Cette page affichera la vraie UI Bull Board dans le dashboard. Les cartes compteurs et le mapping JSON ont été retirés."

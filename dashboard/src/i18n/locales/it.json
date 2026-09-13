@@ -1005,6 +1005,8 @@
   "filasOpenWa": {
     "title": "Code OpenWA",
     "subtitle": "Stato delle code su questa istanza OpenWA",
+    "embedLoading": "Opening Bull Board…",
+    "embedError": "Could not open the queue board session",
     "migrating": {
       "title": "Embed Bull Board in arrivo",
       "description": "Questa pagina mostrerà la vera UI Bull Board nel dashboard. Le card contatori e il mapping JSON sono stati rimossi."

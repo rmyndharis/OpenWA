@@ -1,8 +1,9 @@
-// Render smoke test for the OpenWaQueues placeholder under the bare `node --test` runner.
+// Render smoke test for OpenWaQueues Bull Board embed under the bare `node --test` runner.
 // Mirrors Infrastructure.test.ts harness: QueryClientProvider → RoleProvider → ToastProvider,
-// companion_operator role via localStorage. No Bull Board JSON fetch — counter UI removed.
+// companion_operator role via localStorage. Mint stubs via fetch before iframe appears.
 import '../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
@@ -18,10 +19,12 @@ let RoleProvider: RoleModule['RoleProvider'];
 let ToastProvider: ToastModule['ToastProvider'];
 let installJsdomGlobals: typeof installJsdomGlobalsFn;
 let queryClient: QueryClient | undefined;
+let originalFetch: typeof fetch;
 
 before(async () => {
   ({ installJsdomGlobals } = await import('../test-helpers/jsdom.ts'));
   await installJsdomGlobals();
+  originalFetch = globalThis.fetch;
   window.localStorage.setItem('openwa_user_role', 'companion_operator');
   const { i18nReady } = await import('../i18n/index.ts');
   await i18nReady;
@@ -35,6 +38,7 @@ afterEach(() => {
   rtl.cleanup();
   queryClient?.clear();
   queryClient = undefined;
+  globalThis.fetch = originalFetch;
 });
 
 function renderOpenWaQueues() {
@@ -48,11 +52,18 @@ function renderOpenWaQueues() {
   );
 }
 
-test('renders Filas migrating placeholder for companion_operator', async () => {
-  const { screen } = rtl;
+test('mints board session then renders iframe to /api/admin/queues', async () => {
+  let minted = false;
+  globalThis.fetch = async (input, init) => {
+    const path = String(input).replace(/^https?:\/\/[^/]+/, '');
+    if ((init?.method ?? 'GET') === 'POST' && path.includes('/admin/queues-board-session')) {
+      minted = true;
+      return new Response(null, { status: 204 });
+    }
+    return new Response('{}', { status: 404 });
+  };
   renderOpenWaQueues();
-
-  await screen.findByRole('heading', { name: /OpenWA Queues|Filas OpenWA/i });
-  screen.getByRole('status');
-  screen.getByRole('heading', { name: /Bull Board|Embed/i });
+  const iframe = await rtl.screen.findByTitle(/Bull Board|Filas|Queues/i);
+  assert.equal(minted, true);
+  assert.match(iframe.getAttribute('src') ?? '', /\/api\/admin\/queues\/?$/);
 });

@@ -1005,6 +1005,8 @@
   "filasOpenWa": {
     "title": "OpenWA Kuyrukları",
     "subtitle": "Bu OpenWA örneğindeki kuyruk durumu",
+    "embedLoading": "Opening Bull Board…",
+    "embedError": "Could not open the queue board session",
     "migrating": {
       "title": "Bull Board gömme yakında",
       "description": "Bu sayfa dashboard içinde gerçek Bull Board arayüzünü gösterecek. Sayaç kartları ve JSON eşlemesi kaldırıldı."

@@ -1005,6 +1005,8 @@
   "filasOpenWa": {
     "title": "OpenWA-Warteschlangen",
     "subtitle": "Warteschlangenstatus auf dieser OpenWA-Instanz",
+    "embedLoading": "Opening Bull Board…",
+    "embedError": "Could not open the queue board session",
     "migrating": {
       "title": "Bull-Board-Embed folgt als Nächstes",
       "description": "Diese Seite zeigt demnächst die echte Bull-Board-UI im Dashboard. Zählerkarten und JSON-Mapping wurden entfernt."

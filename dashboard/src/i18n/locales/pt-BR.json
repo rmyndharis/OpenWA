@@ -1005,6 +1005,8 @@
   "filasOpenWa": {
     "title": "Filas OpenWA",
     "subtitle": "Estado das filas nesta instância OpenWA",
+    "embedLoading": "Abrindo o Bull Board…",
+    "embedError": "Não foi possível abrir a sessão do painel de filas",
     "migrating": {
       "title": "Embed do Bull Board em seguida",
       "description": "Esta página vai exibir a UI real do Bull Board dentro do dashboard. Os cards de contadores e o mapeamento JSON foram removidos."
