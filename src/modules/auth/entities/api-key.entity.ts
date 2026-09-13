@@ -3,6 +3,7 @@ import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateCol
 export enum ApiKeyRole {
   ADMIN = 'admin',
   OPERATOR = 'operator',
+  COMPANION_OPERATOR = 'companion_operator',
   VIEWER = 'viewer',
 }
 

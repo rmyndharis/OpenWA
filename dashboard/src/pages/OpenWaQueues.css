@@ -1,0 +1,22 @@
+.openwa-queues-page {
+  padding: 1.5rem;
+}
+
+.openwa-queues-page--embed {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 4rem);
+  max-width: none;
+}
+
+.openwa-queues-page .page-header {
+  margin-bottom: 1.5rem;
+  flex-shrink: 0;
+}
+
+.openwa-queues-board-frame {
+  flex: 1;
+  width: 100%;
+  min-height: calc(100vh - 12rem);
+  border: 0;
+}

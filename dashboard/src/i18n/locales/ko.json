@@ -64,7 +64,8 @@
     "messageTester": "메시지 테스터",
     "infrastructure": "인프라",
     "plugins": "플러그인",
-    "logs": "로그"
+    "logs": "로그",
+    "filasOpenWa": "OpenWA 대기열"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "관리자",
       "operator": "운영자",
+      "companion_operator": "동반 운영자",
       "viewer": "뷰어"
     },
     "roleDescriptions": {
       "admin": "모든 리소스에 대한 전체 접근 권한",
       "operator": "세션 및 메시지 관리",
+      "companion_operator": "원격 OpenWA 대기열 모니터링(운영 쓰기 권한 없음)",
       "viewer": "읽기 전용 접근"
     },
     "columns": {
@@ -997,6 +1000,16 @@
       "update": "업데이트",
       "updateAvailable": "업데이트 사용 가능",
       "updated": "플러그인이 업데이트되었습니다"
+    }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA Queues",
+    "subtitle": "Queue state on this OpenWA instance",
+    "embedLoading": "Opening Bull Board…",
+    "embedError": "Could not open the queue board session",
+    "migrating": {
+      "title": "Bull Board embed coming next",
+      "description": "This page will show the real Bull Board UI inside the dashboard. Counter cards and JSON mapping were removed."
     }
   },
   "search": {

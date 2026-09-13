@@ -64,7 +64,8 @@
     "messageTester": "Mesaj Test Aracı",
     "infrastructure": "Altyapı",
     "plugins": "Eklentiler",
-    "logs": "Kayıtlar (Logs)"
+    "logs": "Kayıtlar (Logs)",
+    "filasOpenWa": "OpenWA Kuyrukları"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "Yönetici (Admin)",
       "operator": "Operatör",
+      "companion_operator": "Eşlik Operatörü",
       "viewer": "İzleyici"
     },
     "roleDescriptions": {
       "admin": "Tüm kaynaklara tam erişim",
       "operator": "Oturum ve mesaj yönetimi",
+      "companion_operator": "Uzak OpenWA kuyruk izleme (operasyonel yazma yok)",
       "viewer": "Salt okunur erişim"
     },
     "columns": {
@@ -997,6 +1000,16 @@
       "update": "Güncelle",
       "updateAvailable": "Güncelleme mevcut",
       "updated": "Eklenti güncellendi"
+    }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA Kuyrukları",
+    "subtitle": "Bu OpenWA örneğindeki kuyruk durumu",
+    "embedLoading": "Opening Bull Board…",
+    "embedError": "Could not open the queue board session",
+    "migrating": {
+      "title": "Bull Board gömme yakında",
+      "description": "Bu sayfa dashboard içinde gerçek Bull Board arayüzünü gösterecek. Sayaç kartları ve JSON eşlemesi kaldırıldı."
     }
   },
   "search": {

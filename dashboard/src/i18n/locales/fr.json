@@ -64,7 +64,8 @@
     "messageTester": "Testeur de messages",
     "infrastructure": "Infrastructure",
     "plugins": "Plugins",
-    "logs": "Journaux"
+    "logs": "Journaux",
+    "filasOpenWa": "Files OpenWA"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "Administrateur",
       "operator": "Opérateur",
+      "companion_operator": "Opérateur accompagnateur",
       "viewer": "Spectateur"
     },
     "roleDescriptions": {
       "admin": "Accès complet à toutes les ressources",
       "operator": "Gestion des sessions et des messages",
+      "companion_operator": "Surveillance des files OpenWA distantes (sans écriture opérationnelle)",
       "viewer": "Accès en lecture seule"
     },
     "columns": {
@@ -997,6 +1000,16 @@
       "update": "Mettre à jour",
       "updateAvailable": "Mise à jour disponible",
       "updated": "Plugin mis à jour"
+    }
+  },
+  "filasOpenWa": {
+    "title": "Files OpenWA",
+    "subtitle": "État des files sur cette instance OpenWA",
+    "embedLoading": "Opening Bull Board…",
+    "embedError": "Could not open the queue board session",
+    "migrating": {
+      "title": "Intégration Bull Board à venir",
+      "description": "Cette page affichera la vraie UI Bull Board dans le dashboard. Les cartes compteurs et le mapping JSON ont été retirés."
     }
   },
   "search": {

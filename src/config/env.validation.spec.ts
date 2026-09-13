@@ -482,4 +482,15 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ MEDIA_CONVERSION_TIMEOUT_MS: 'abc' })).toThrow(/positive integer/);
     expect(() => validateEnv({ MEDIA_CONVERSION_MAX_OUTPUT_BYTES: '52428800' })).not.toThrow();
   });
+
+  it('does not require REMOTE_OPENWA_* (Filas Opção A is same-instance)', () => {
+    expect(() =>
+      validateEnv({
+        REMOTE_OPENWA_BASE_URL: 'https://openwa.insightsmt.com.br',
+        REMOTE_OPENWA_ADMIN_API_KEY: 'orphan-key',
+      }),
+    ).not.toThrow();
+    expect(() => validateEnv({ REMOTE_OPENWA_BASE_URL: 'not-a-url' })).not.toThrow();
+    expect(() => validateEnv({ REMOTE_OPENWA_ADMIN_API_KEY: 'k' })).not.toThrow();
+  });
 });

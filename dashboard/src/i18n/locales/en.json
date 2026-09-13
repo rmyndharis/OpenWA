@@ -64,7 +64,8 @@
     "messageTester": "Message Tester",
     "infrastructure": "Infrastructure",
     "plugins": "Plugins",
-    "logs": "Logs"
+    "logs": "Logs",
+    "filasOpenWa": "OpenWA Queues"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "Admin",
       "operator": "Operator",
+      "companion_operator": "Companion Operator",
       "viewer": "Viewer"
     },
     "roleDescriptions": {
       "admin": "Full access to all resources",
       "operator": "Session & message management",
+      "companion_operator": "Remote OpenWA queue monitoring (no operational write access)",
       "viewer": "Read-only access"
     },
     "columns": {
@@ -996,6 +999,16 @@
       "update": "Update",
       "updateAvailable": "Update available",
       "updated": "Plugin updated"
+    }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA Queues",
+    "subtitle": "Queue state on this OpenWA instance",
+    "embedLoading": "Opening Bull Board…",
+    "embedError": "Could not open the queue board session",
+    "migrating": {
+      "title": "Bull Board embed coming next",
+      "description": "This page will show the real Bull Board UI inside the dashboard. Counter cards and JSON mapping were removed."
     }
   },
   "search": {

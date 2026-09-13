@@ -9,7 +9,7 @@ import { useRole } from './hooks/useRole';
 import { RoleProvider } from './components/RoleProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { API_BASE_URL } from './services/api';
-import { clearActorState, isUserRole, resolveStartupValidation } from './utils/authLifecycle';
+import { clearLocalSession, isUserRole, resolveStartupValidation } from './utils/authLifecycle';
 import './App.css';
 
 const Login = lazy(() => import('./pages/Login').then(m => ({ default: m.Login })));
@@ -22,6 +22,7 @@ const Logs = lazy(() => import('./pages/Logs').then(m => ({ default: m.Logs })))
 const ApiKeys = lazy(() => import('./pages/ApiKeys').then(m => ({ default: m.ApiKeys })));
 const MessageTester = lazy(() => import('./pages/MessageTester').then(m => ({ default: m.MessageTester })));
 const Infrastructure = lazy(() => import('./pages/Infrastructure').then(m => ({ default: m.Infrastructure })));
+const OpenWaQueues = lazy(() => import('./pages/OpenWaQueues').then(m => ({ default: m.OpenWaQueues })));
 const Plugins = lazy(() => import('./pages/Plugins'));
 
 const queryClient = new QueryClient({
@@ -60,11 +61,9 @@ function AppContent() {
     setApiKey('');
     setIsAuthenticated(false);
     setRole(null);
-    sessionStorage.removeItem('openwa_api_key');
-    // Wipe the React Query cache too: it is keyed by resource, not actor, so without a full
-    // clear a logout → login in the same tab with a different key/scope shows the previous
-    // actor's sessions/messages/apiKeys/audit rows.
-    clearActorState(queryClient);
+    // clearLocalSession DELETEs the Bull Board cookie while the API key is still available to
+    // request(), then drops the key — reverse order leaves openwa_bb_key stranded (401).
+    clearLocalSession(queryClient);
   }, [setRole]);
 
   // Re-validate and refresh the role on mount if already authenticated
@@ -118,6 +117,9 @@ function AppContent() {
               <Route path="logs" element={<Logs />} />
               <Route path="message-tester" element={<MessageTester />} />
               {role === 'admin' && <Route path="infrastructure" element={<Infrastructure />} />}
+              {(role === 'admin' || role === 'companion_operator') && (
+                <Route path="filas-openwa" element={<OpenWaQueues />} />
+              )}
               {role === 'admin' && <Route path="plugins" element={<Plugins />} />}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

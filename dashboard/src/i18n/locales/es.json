@@ -64,7 +64,8 @@
     "infrastructure": "Infraestructura",
     "plugins": "Plugins",
     "logs": "Registros",
-    "templates": "Plantillas"
+    "templates": "Plantillas",
+    "filasOpenWa": "Colas OpenWA"
   },
   "chats": {
     "media": {
@@ -497,11 +498,13 @@
     "roles": {
       "admin": "Administrador",
       "operator": "Operador",
+      "companion_operator": "Operador acompañante",
       "viewer": "Lector"
     },
     "roleDescriptions": {
       "admin": "Acceso completo a todos los recursos",
       "operator": "Gestión de sesiones y mensajes",
+      "companion_operator": "Supervisión de colas remotas OpenWA (sin escritura operativa)",
       "viewer": "Acceso de solo lectura"
     },
     "columns": {
@@ -997,6 +1000,16 @@
       "update": "Actualizar",
       "updateAvailable": "Actualización disponible",
       "updated": "Plugin actualizado"
+    }
+  },
+  "filasOpenWa": {
+    "title": "Colas OpenWA",
+    "subtitle": "Estado de las colas en esta instancia OpenWA",
+    "embedLoading": "Opening Bull Board…",
+    "embedError": "Could not open the queue board session",
+    "migrating": {
+      "title": "Embed de Bull Board a continuación",
+      "description": "Esta página mostrará la UI real de Bull Board dentro del dashboard. Se eliminaron las tarjetas de contadores y el mapeo JSON."
     }
   },
   "search": {

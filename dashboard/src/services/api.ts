@@ -2,7 +2,6 @@
 // Centralized API client with TypeScript types
 
 import { warnIfInsecureHttpUrl } from '../utils/urlSecurity';
-
 // Resolve the API base URL. By default this is the same-origin relative path '/api',
 // correct when the dashboard and API are served from the same origin (the default
 // single-container setup). For a split-origin deployment (dashboard hosted separately
@@ -176,7 +175,7 @@ export interface ApiKey {
   id: string;
   name: string;
   keyPrefix: string;
-  role: 'admin' | 'operator' | 'viewer';
+  role: 'admin' | 'operator' | 'companion_operator' | 'viewer';
   allowedIps?: string[];
   allowedSessions?: string[];
   isActive: boolean;
@@ -1405,4 +1404,13 @@ export interface MessageStats {
 export const statsApi = {
   getOverview: () => request<OverviewStats>('/stats/overview'),
   getMessages: (period: StatsPeriod) => request<MessageStats>(`/stats/messages?period=${period}`),
+};
+
+// =============================================================================
+// Queues Board Session API (Bull Board embed cookie mint/clear)
+// =============================================================================
+
+export const queuesBoardSessionApi = {
+  mint: () => request<void>('/admin/queues-board-session', { method: 'POST' }),
+  clear: () => request<void>('/admin/queues-board-session', { method: 'DELETE' }),
 };

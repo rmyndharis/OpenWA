@@ -64,7 +64,8 @@
     "messageTester": "訊息測試器",
     "infrastructure": "基礎架構",
     "plugins": "外掛",
-    "logs": "記錄"
+    "logs": "記錄",
+    "filasOpenWa": "OpenWA 隊列"
   },
   "chats": {
     "media": {
@@ -543,11 +544,13 @@
     "roles": {
       "admin": "管理員",
       "operator": "操作員",
+      "companion_operator": "伴隨操作員",
       "viewer": "檢視者"
     },
     "roleDescriptions": {
       "admin": "可完整存取所有資源",
       "operator": "工作階段及訊息管理",
+      "companion_operator": "遠端 OpenWA 隊列監控（無操作寫入權限）",
       "viewer": "唯讀存取"
     },
     "columns": {
@@ -997,6 +1000,16 @@
       "update": "更新",
       "updateAvailable": "有可用更新",
       "updated": "外掛已更新"
+    }
+  },
+  "filasOpenWa": {
+    "title": "OpenWA Queues",
+    "subtitle": "Queue state on this OpenWA instance",
+    "embedLoading": "Opening Bull Board…",
+    "embedError": "Could not open the queue board session",
+    "migrating": {
+      "title": "Bull Board embed coming next",
+      "description": "This page will show the real Bull Board UI inside the dashboard. Counter cards and JSON mapping were removed."
     }
   },
   "search": {

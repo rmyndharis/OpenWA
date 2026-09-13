@@ -510,10 +510,15 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   hasPermission(apiKey: ApiKey, requiredRole: ApiKeyRole): boolean {
     const roleHierarchy: Record<ApiKeyRole, number> = {
       [ApiKeyRole.VIEWER]: 1,
+      [ApiKeyRole.COMPANION_OPERATOR]: 1,
       [ApiKeyRole.OPERATOR]: 2,
       [ApiKeyRole.ADMIN]: 3,
     };
 
     return roleHierarchy[apiKey.role] >= roleHierarchy[requiredRole];
+  }
+
+  canAccessOpenWaQueues(apiKey: ApiKey): boolean {
+    return apiKey.role === ApiKeyRole.ADMIN || apiKey.role === ApiKeyRole.COMPANION_OPERATOR;
   }
 }

@@ -1,5 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { Request, Response, NextFunction, json, urlencoded } from 'express';
 import { randomBytes } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
@@ -102,6 +103,9 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
     }),
   );
 
+  // Parse Cookie headers so Bull Board auth can read the session mint (openwa_bb_key) without ?apiKey in the URL.
+  app.use(cookieParser());
+
   // Assign a request id to every inbound request (X-Request-ID), echo it on the response, and run
   // the whole downstream chain inside its scope so every log line + audit row carries it.
   app.use(requestContextMiddleware);
@@ -169,6 +173,7 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
         req.path === '/socket.io' ||
         req.path.startsWith('/mcp/') ||
         req.path === '/mcp' ||
+        req.path.startsWith('/admin/queues') ||
         req.path.startsWith('/assets/');
       const documentRequest =
         req.method === 'GET' &&

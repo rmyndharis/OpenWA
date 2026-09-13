@@ -18,14 +18,22 @@ const reqFromIp = (ip: string, headers: Record<string, unknown> = {}): Request =
 
 describe('BullBoardAuthMiddleware', () => {
   let mw: BullBoardAuthMiddleware;
-  let authService: { validateApiKey: jest.Mock; hasPermission: jest.Mock };
+  let authService: {
+    validateApiKey: jest.Mock;
+    hasPermission: jest.Mock;
+    canAccessOpenWaQueues: jest.Mock;
+  };
   let configService: { get: jest.Mock };
 
   const reqWith = (headers: Record<string, unknown> = {}, query: Record<string, unknown> = {}): Request =>
-    ({ headers, query, ip: '127.0.0.1', socket: { remoteAddress: '127.0.0.1' } }) as unknown as Request;
+    ({ headers, query, ip: '127.0.0.1', socket: { remoteAddress: '127.0.0.1' }, method: 'GET' }) as unknown as Request;
 
   beforeEach(() => {
-    authService = { validateApiKey: jest.fn(), hasPermission: jest.fn() };
+    authService = {
+      validateApiKey: jest.fn(),
+      hasPermission: jest.fn(),
+      canAccessOpenWaQueues: jest.fn(),
+    };
     configService = { get: jest.fn().mockReturnValue(undefined) }; // no trusted proxies by default
     mw = new BullBoardAuthMiddleware(authService as unknown as AuthService, configService as unknown as ConfigService);
   });
@@ -47,14 +55,44 @@ describe('BullBoardAuthMiddleware', () => {
   it('forbids a valid non-admin key', async () => {
     authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.OPERATOR });
     authService.hasPermission.mockReturnValue(false);
+    authService.canAccessOpenWaQueues.mockReturnValue(false);
     const next = jest.fn();
     await mw.use(reqWith({ 'x-api-key': 'op' }), res, next);
+    expect(next).toHaveBeenCalledWith(expect.any(ForbiddenException));
+  });
+
+  it('allows companion_operator GET (read-only) on the board JSON/UI', async () => {
+    authService.validateApiKey.mockResolvedValue({
+      role: ApiKeyRole.COMPANION_OPERATOR,
+      allowedSessions: [],
+    });
+    authService.hasPermission.mockReturnValue(false);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
+    const next = jest.fn();
+    const req = reqWith({ 'x-api-key': 'companion' });
+    (req as { method?: string }).method = 'GET';
+    await mw.use(req, res, next);
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it('forbids companion_operator from mutating the board (POST)', async () => {
+    authService.validateApiKey.mockResolvedValue({
+      role: ApiKeyRole.COMPANION_OPERATOR,
+      allowedSessions: [],
+    });
+    authService.hasPermission.mockReturnValue(false);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
+    const next = jest.fn();
+    const req = reqWith({ 'x-api-key': 'companion' });
+    (req as { method?: string }).method = 'POST';
+    await mw.use(req, res, next);
     expect(next).toHaveBeenCalledWith(expect.any(ForbiddenException));
   });
 
   it('allows a valid ADMIN key via X-API-Key', async () => {
     authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.ADMIN });
     authService.hasPermission.mockReturnValue(true);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
     const next = jest.fn();
     await mw.use(reqWith({ 'x-api-key': 'admin' }), res, next);
     expect(next).toHaveBeenCalledWith();
@@ -69,6 +107,7 @@ describe('BullBoardAuthMiddleware', () => {
       allowedSessions: ['session-a'],
     });
     authService.hasPermission.mockReturnValue(true);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
 
     const req = reqWith({ 'x-api-key': 'raw-key' });
     const next = jest.fn();
@@ -89,6 +128,7 @@ describe('BullBoardAuthMiddleware', () => {
       allowedSessions: [],
     });
     authService.hasPermission.mockReturnValue(true);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
 
     const next = jest.fn();
     await mw.use(reqWith({ 'x-api-key': 'raw-key' }), res, next);
@@ -104,6 +144,7 @@ describe('BullBoardAuthMiddleware', () => {
       allowedSessions: null,
     });
     authService.hasPermission.mockReturnValue(true);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
 
     const next = jest.fn();
     await mw.use(reqWith({ 'x-api-key': 'raw-key' }), res, next);
@@ -114,6 +155,7 @@ describe('BullBoardAuthMiddleware', () => {
   it('accepts a Bearer token', async () => {
     authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.ADMIN });
     authService.hasPermission.mockReturnValue(true);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
 
     await mw.use(reqWith({ authorization: 'Bearer abc' }), res, jest.fn());
     expect(authService.validateApiKey).toHaveBeenCalledWith('abc', '127.0.0.1');
@@ -123,6 +165,7 @@ describe('BullBoardAuthMiddleware', () => {
     configService.get.mockReturnValue(['127.0.0.1']); // the socket peer is a trusted proxy
     authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.ADMIN });
     authService.hasPermission.mockReturnValue(true);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
 
     await mw.use(reqWith({ 'x-api-key': 'admin', 'x-forwarded-for': '203.0.113.5' }), res, jest.fn());
 
@@ -133,6 +176,7 @@ describe('BullBoardAuthMiddleware', () => {
     configService.get.mockReturnValue([]); // no trusted proxies — XFF is attacker-controlled
     authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.ADMIN });
     authService.hasPermission.mockReturnValue(true);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
 
     await mw.use(reqWith({ 'x-api-key': 'admin', 'x-forwarded-for': '203.0.113.5' }), res, jest.fn());
 
@@ -145,24 +189,73 @@ describe('BullBoardAuthMiddleware', () => {
     expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedException));
     expect(authService.validateApiKey).not.toHaveBeenCalled();
   });
+
+  const reqFor = (
+    method: string,
+    headers: Record<string, unknown> = {},
+    originalUrl = '/api/admin/queues/',
+  ): Request =>
+    ({
+      headers,
+      query: {},
+      ip: '127.0.0.1',
+      socket: { remoteAddress: '127.0.0.1' },
+      method,
+      originalUrl,
+      url: originalUrl,
+    }) as unknown as Request;
+
+  const companionKey = {
+    role: ApiKeyRole.COMPANION_OPERATOR,
+    allowedSessions: [],
+  };
+
+  it('allows companion_operator GET authenticated via openwa_bb_key cookie', async () => {
+    authService.validateApiKey.mockResolvedValue(companionKey);
+    authService.hasPermission.mockReturnValue(false);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
+    const req = reqFor('GET', {}, '/api/admin/queues/');
+    req.cookies = { openwa_bb_key: 'companion-raw' };
+    const next = jest.fn();
+    await mw.use(req, res, next);
+    expect(next).toHaveBeenCalledWith();
+    expect(authService.validateApiKey).toHaveBeenCalledWith('companion-raw', expect.any(String));
+  });
+
+  it('does not accept cookie name outside openwa_bb_key', async () => {
+    const req = reqFor('GET', {}, '/api/admin/queues/');
+    req.cookies = { other: 'nope' };
+    const next = jest.fn();
+    await mw.use(req, res, next);
+    expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedException));
+  });
 });
 
 // Bull Board is raw Express middleware (outside the Nest guard pipeline) and previously had no pre-auth
 // throttle, so a flood of login attempts reached the validateApiKey DB lookup unbounded. The throttle
 // mirrors MCP's createIpThrottle: a per-IP sliding window checked BEFORE the credential check.
 describe('BullBoardAuthMiddleware pre-auth IP throttle (mirrors MCP createIpThrottle)', () => {
-  let authService: { validateApiKey: jest.Mock; hasPermission: jest.Mock };
+  let authService: {
+    validateApiKey: jest.Mock;
+    hasPermission: jest.Mock;
+    canAccessOpenWaQueues: jest.Mock;
+  };
   let configService: { get: jest.Mock };
   const res = {} as Response;
 
   beforeEach(() => {
-    authService = { validateApiKey: jest.fn(), hasPermission: jest.fn() };
+    authService = {
+      validateApiKey: jest.fn(),
+      hasPermission: jest.fn(),
+      canAccessOpenWaQueues: jest.fn(),
+    };
     configService = { get: jest.fn().mockReturnValue(undefined) };
   });
 
   const adminMw = (ipLimit: number): BullBoardAuthMiddleware => {
     authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.ADMIN });
     authService.hasPermission.mockReturnValue(true);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
     return new BullBoardAuthMiddleware(
       authService as unknown as AuthService,
       configService as unknown as ConfigService,
@@ -238,6 +331,7 @@ describe('BullBoardAuthMiddleware pre-auth IP throttle (mirrors MCP createIpThro
     );
     authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.ADMIN });
     authService.hasPermission.mockReturnValue(true);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
     const next = jest.fn();
     await defaultMw.use(reqFromIp('203.0.113.9', { 'x-api-key': 'admin' }), res, next);
     expect(next).toHaveBeenCalledWith(); // allowed
@@ -250,7 +344,11 @@ describe('BullBoardAuthMiddleware pre-auth IP throttle (mirrors MCP createIpThro
 // flood bound for both the credential check and the audit table.
 describe('BullBoardAuthMiddleware audit trail', () => {
   let mw: BullBoardAuthMiddleware;
-  let authService: { validateApiKey: jest.Mock; hasPermission: jest.Mock };
+  let authService: {
+    validateApiKey: jest.Mock;
+    hasPermission: jest.Mock;
+    canAccessOpenWaQueues: jest.Mock;
+  };
   let auditService: { logWarn: jest.Mock; logInfo: jest.Mock };
   const res = {} as Response;
 
@@ -272,7 +370,11 @@ describe('BullBoardAuthMiddleware audit trail', () => {
     }) as unknown as Request;
 
   beforeEach(() => {
-    authService = { validateApiKey: jest.fn(), hasPermission: jest.fn() };
+    authService = {
+      validateApiKey: jest.fn(),
+      hasPermission: jest.fn(),
+      canAccessOpenWaQueues: jest.fn(),
+    };
     auditService = { logWarn: jest.fn(), logInfo: jest.fn() };
     const configService = { get: jest.fn().mockReturnValue(undefined) };
     mw = new BullBoardAuthMiddleware(
@@ -313,13 +415,16 @@ describe('BullBoardAuthMiddleware audit trail', () => {
   it('audits a 403 (valid non-admin key)', async () => {
     authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.OPERATOR });
     authService.hasPermission.mockReturnValue(false);
+    authService.canAccessOpenWaQueues.mockReturnValue(false);
     const next = jest.fn();
     await mw.use(reqFor('GET', { 'x-api-key': 'op' }, '/api/admin/queues/'), res, next);
 
     expect(next).toHaveBeenCalledWith(expect.any(ForbiddenException));
     expect(auditService.logWarn).toHaveBeenCalledWith(
       AuditAction.API_KEY_AUTH_FAILED,
-      expect.objectContaining({ errorMessage: 'Admin role required to access the queue dashboard' }),
+      expect.objectContaining({
+        errorMessage: 'Admin or companion operator role required to access the queue dashboard',
+      }),
     );
   });
 
@@ -336,6 +441,7 @@ describe('BullBoardAuthMiddleware audit trail', () => {
   it('audits an authenticated non-GET request as a queue-board mutation with the actor key and method+path', async () => {
     authService.validateApiKey.mockResolvedValue(adminKey);
     authService.hasPermission.mockReturnValue(true);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
     const next = jest.fn();
     await mw.use(reqFor('POST', { 'x-api-key': 'admin' }), res, next);
 
@@ -355,6 +461,7 @@ describe('BullBoardAuthMiddleware audit trail', () => {
   it('does not audit GET or HEAD requests (read/poll traffic)', async () => {
     authService.validateApiKey.mockResolvedValue(adminKey);
     authService.hasPermission.mockReturnValue(true);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
 
     await mw.use(reqFor('GET', { 'x-api-key': 'admin' }, '/api/admin/queues/'), res, jest.fn());
     await mw.use(reqFor('HEAD', { 'x-api-key': 'admin' }, '/api/admin/queues/'), res, jest.fn());
@@ -372,6 +479,7 @@ describe('BullBoardAuthMiddleware audit trail', () => {
     );
     authService.validateApiKey.mockResolvedValue(adminKey);
     authService.hasPermission.mockReturnValue(true);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
 
     await tightMw.use(reqFor('GET', { 'x-api-key': 'admin' }, '/api/admin/queues/'), res, jest.fn()); // consumes the slot
     const next = jest.fn();
@@ -401,10 +509,15 @@ describe('BullBoardAuthMiddleware audit trail', () => {
  * it silently depends on.
  */
 describe('a queue-dashboard denial is attributable to the credential', () => {
-  const denialActor = async (apiKey: Record<string, unknown>, hasPermission: boolean) => {
+  const denialActor = async (
+    apiKey: Record<string, unknown>,
+    hasPermission: boolean,
+    canAccessOpenWaQueues = hasPermission,
+  ) => {
     const authService = {
       validateApiKey: jest.fn().mockResolvedValue(apiKey),
       hasPermission: jest.fn().mockReturnValue(hasPermission),
+      canAccessOpenWaQueues: jest.fn().mockReturnValue(canAccessOpenWaQueues),
     };
     const mw = new BullBoardAuthMiddleware(
       authService as unknown as AuthService,
@@ -429,12 +542,12 @@ describe('a queue-dashboard denial is attributable to the credential', () => {
   };
 
   it('stamps the key when the role is insufficient', async () => {
-    const actor = await denialActor({ id: 'key-1', name: 'Ops key', allowedSessions: [] }, false);
+    const actor = await denialActor({ id: 'key-1', name: 'Ops key', allowedSessions: [] }, false, false);
     expect(actor).toMatchObject({ apiKeyId: 'key-1', apiKeyName: 'Ops key' });
   });
 
   it('stamps the key when a session-scoped key is refused', async () => {
-    const actor = await denialActor({ id: 'key-2', name: 'Tenant A', allowedSessions: ['s1'] }, true);
+    const actor = await denialActor({ id: 'key-2', name: 'Tenant A', allowedSessions: ['s1'] }, true, true);
     expect(actor).toMatchObject({ apiKeyId: 'key-2', apiKeyName: 'Tenant A' });
   });
 

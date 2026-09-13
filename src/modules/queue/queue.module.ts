@@ -1,9 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
-import { BullBoardModule } from '@bull-board/nestjs';
-import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
-import { ExpressAdapter } from '@bull-board/express';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { WebhookProcessor } from './processors/webhook.processor';
 import { IngressProcessor } from './processors/ingress.processor';
@@ -13,9 +10,12 @@ import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-fai
 import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
 import { HooksModule } from '../../core/hooks/hooks.module';
 import { PluginsModule } from '../../core/plugins/plugins.module';
+import { QueuesBoardSessionController } from './queues-board-session.controller';
 
 // Re-export for backward compatibility
 export { QUEUE_NAMES } from './queue-names';
+// Bull Board is mounted manually in main.ts (see bull-board-mount.ts) — Nest 11 + Express 5
+// does not serve @bull-board/nestjs MiddlewareConsumer routes at /api/admin/queues.
 
 /**
  * Bounded retention for finished webhook-queue jobs. Failed webhook jobs carry their full payload in
@@ -65,19 +65,8 @@ export const WEBHOOK_QUEUE_JOB_OPTIONS = {
         removeOnFail: { age: 86400, count: 5000 },
       },
     }),
-    BullBoardModule.forRoot({
-      route: '/admin/queues',
-      adapter: ExpressAdapter,
-    }),
-    BullBoardModule.forFeature({
-      name: QUEUE_NAMES.WEBHOOK,
-      adapter: BullMQAdapter,
-    }),
-    BullBoardModule.forFeature({
-      name: QUEUE_NAMES.INGRESS,
-      adapter: BullMQAdapter,
-    }),
   ],
+  controllers: [QueuesBoardSessionController],
   providers: [WebhookProcessor, IngressProcessor],
   exports: [BullModule],
 })
