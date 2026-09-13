@@ -9,7 +9,7 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import { ApiKeyGuard } from '../auth/guards/api-key.guard';
 import { CurrentApiKey } from '../auth/decorators/auth.decorators';
 import { AuthService } from '../auth/auth.service';
