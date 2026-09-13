@@ -9,7 +9,7 @@ import { useRole } from './hooks/useRole';
 import { RoleProvider } from './components/RoleProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { API_BASE_URL } from './services/api';
-import { clearActorState, isUserRole, resolveStartupValidation } from './utils/authLifecycle';
+import { clearLocalSession, isUserRole, resolveStartupValidation } from './utils/authLifecycle';
 import './App.css';
 
 const Login = lazy(() => import('./pages/Login').then(m => ({ default: m.Login })));
@@ -61,11 +61,9 @@ function AppContent() {
     setApiKey('');
     setIsAuthenticated(false);
     setRole(null);
-    sessionStorage.removeItem('openwa_api_key');
-    // Wipe the React Query cache too: it is keyed by resource, not actor, so without a full
-    // clear a logout → login in the same tab with a different key/scope shows the previous
-    // actor's sessions/messages/apiKeys/audit rows.
-    clearActorState(queryClient);
+    // clearLocalSession DELETEs the Bull Board cookie while the API key is still available to
+    // request(), then drops the key — reverse order leaves openwa_bb_key stranded (401).
+    clearLocalSession(queryClient);
   }, [setRole]);
 
   // Re-validate and refresh the role on mount if already authenticated

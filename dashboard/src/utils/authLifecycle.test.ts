@@ -7,11 +7,12 @@ import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpe
 
 type AuthLifecycleModule = typeof import('./authLifecycle.ts');
 let clearActorState: AuthLifecycleModule['clearActorState'];
+let clearLocalSession: AuthLifecycleModule['clearLocalSession'];
 let isUserRole: AuthLifecycleModule['isUserRole'];
 let resolveStartupValidation: AuthLifecycleModule['resolveStartupValidation'];
 
 before(async () => {
-  ({ clearActorState, isUserRole, resolveStartupValidation } = await import('./authLifecycle.ts'));
+  ({ clearActorState, clearLocalSession, isUserRole, resolveStartupValidation } = await import('./authLifecycle.ts'));
 });
 
 test('logout cleanup wipes the React Query cache (no cross-actor residue)', () => {
@@ -70,6 +71,45 @@ test('logout cleanup still clears caches when Bull Board DELETE fails', async ()
   }
 });
 
+test('clearLocalSession DELETEs board session with X-API-Key before dropping the stored key', async () => {
+  const originalFetch = globalThis.fetch;
+  const deleteHeaders: HeadersInit[] = [];
+  try {
+    sessionStorage.setItem('openwa_api_key', 'logout-key');
+    globalThis.fetch = async (_input, init) => {
+      if ((init?.method ?? 'GET') === 'DELETE') {
+        deleteHeaders.push(init?.headers ?? {});
+      }
+      return new Response(null, { status: 204 });
+    };
+    clearLocalSession({ clear: () => {} });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(deleteHeaders.length, 1, 'expected one board DELETE');
+    const headers = new Headers(deleteHeaders[0]);
+    assert.equal(headers.get('X-API-Key'), 'logout-key');
+    assert.equal(sessionStorage.getItem('openwa_api_key'), null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    sessionStorage.clear();
+  }
+});
+
+test('clearLocalSession still drops the API key when Bull Board DELETE fails', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    sessionStorage.setItem('openwa_api_key', 'logout-key');
+    globalThis.fetch = async () => {
+      throw new Error('network down');
+    };
+    clearLocalSession({ clear: () => {} });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(sessionStorage.getItem('openwa_api_key'), null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    sessionStorage.clear();
+  }
+});
+
 test('startup validation: 401/403 (revoked/demoted/restricted key) → logout', () => {
   assert.deepEqual(resolveStartupValidation(401, null), { action: 'logout' });
   assert.deepEqual(resolveStartupValidation(401, { valid: true, role: 'admin' }), { action: 'logout' });
@@ -125,6 +165,7 @@ const ROLE_KEY = 'openwa_user_role';
 interface FetchCall {
   method: string;
   path: string;
+  apiKey: string | null;
 }
 
 const fetchCalls: FetchCall[] = [];
@@ -139,7 +180,8 @@ function installFetchStub(): void {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const method = init?.method ?? 'GET';
     const path = url.replace(/^https?:\/\/[^/]+/, '');
-    fetchCalls.push({ method, path });
+    const headers = new Headers(init?.headers);
+    fetchCalls.push({ method, path, apiKey: headers.get('X-API-Key') });
 
     let body: unknown = [];
     if (method === 'POST' && path === '/api/auth/validate') body = validateBody;
@@ -149,6 +191,9 @@ function installFetchStub(): void {
         messages: { sent: 0, received: 0, failed: 0, today: { sent: 0, received: 0 } },
       };
     else if (path.startsWith('/api/stats/messages')) body = { timeSeries: [], byType: {}, bySession: [], topChats: [] };
+    else if (method === 'DELETE' && path === '/api/admin/queues-board-session') {
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }
     return Promise.resolve(
       new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
@@ -252,4 +297,22 @@ test('a page reload with a saved key re-validates once at startup and refreshes 
   await new Promise(resolve => setTimeout(resolve, 50));
 
   assert.equal(validateCallCount(), 1);
+});
+
+test('App logout DELETEs Bull Board session with the API key still present (then drops the key)', async () => {
+  rtl.render(createElement(App));
+  await signIn('logout-order-key');
+
+  const { screen, waitFor, fireEvent } = rtl;
+  const logoutBtn = await screen.findByRole('button', { name: /logout/i });
+  fireEvent.click(logoutBtn);
+
+  await waitFor(() => assert.equal(sessionStorage.getItem(LOGIN_KEY), null));
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const boardDeletes = fetchCalls.filter(
+    c => c.method === 'DELETE' && c.path === '/api/admin/queues-board-session',
+  );
+  assert.equal(boardDeletes.length, 1, `expected one board DELETE, got ${JSON.stringify(fetchCalls)}`);
+  assert.equal(boardDeletes[0].apiKey, 'logout-order-key');
 });
