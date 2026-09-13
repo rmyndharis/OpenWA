@@ -35,19 +35,25 @@ export class QueuesBoardSessionController {
       (typeof req.headers['x-api-key'] === 'string' && req.headers['x-api-key']) ||
       (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : undefined);
     if (!raw) throw new UnauthorizedException('API key required');
-    const secure = process.env.NODE_ENV === 'production' || req.secure === true;
     res.cookie(QUEUES_BOARD_COOKIE_NAME, raw, {
       httpOnly: true,
-      sameSite: 'strict',
-      path: QUEUES_BOARD_COOKIE_PATH,
       maxAge: QUEUES_BOARD_COOKIE_MAX_AGE_SEC * 1000,
-      secure,
+      ...this.boardCookieOptions(req),
     });
   }
 
   @Delete()
   @HttpCode(204)
-  clear(@Res({ passthrough: true }) res: Response): void {
-    res.clearCookie(QUEUES_BOARD_COOKIE_NAME, { path: QUEUES_BOARD_COOKIE_PATH });
+  clear(@Req() req: Request, @Res({ passthrough: true }) res: Response): void {
+    res.clearCookie(QUEUES_BOARD_COOKIE_NAME, this.boardCookieOptions(req));
+  }
+
+  /** Shared path/secure/sameSite — clearCookie must match mint or the browser keeps the cookie. */
+  private boardCookieOptions(req: Request): { path: string; secure: boolean; sameSite: 'strict' } {
+    return {
+      path: QUEUES_BOARD_COOKIE_PATH,
+      secure: process.env.NODE_ENV === 'production' || req.secure === true,
+      sameSite: 'strict',
+    };
   }
 }

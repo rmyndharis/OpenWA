@@ -56,13 +56,33 @@ describe('QueuesBoardSessionController', () => {
     expect(res.cookie).not.toHaveBeenCalled();
   });
 
-  it('clears the board session cookie on DELETE', () => {
+  it('clears the board session cookie on DELETE with attrs matching mint (HTTPS)', () => {
     const auth = { canAccessOpenWaQueues: jest.fn() };
     const ctrl = build(auth);
+    const req = { secure: true } as unknown as Request;
     const res = { cookie: jest.fn(), clearCookie: jest.fn() } as unknown as Response;
 
-    ctrl.clear(res);
+    ctrl.clear(req, res);
 
-    expect(res.clearCookie).toHaveBeenCalledWith('openwa_bb_key', { path: '/api/admin/queues' });
+    expect(res.clearCookie).toHaveBeenCalledWith('openwa_bb_key', {
+      path: '/api/admin/queues',
+      secure: true,
+      sameSite: 'strict',
+    });
+  });
+
+  it('clears cookie with secure:false when not production and req.secure is false', () => {
+    const auth = { canAccessOpenWaQueues: jest.fn() };
+    const ctrl = build(auth);
+    const req = { secure: false } as unknown as Request;
+    const res = { cookie: jest.fn(), clearCookie: jest.fn() } as unknown as Response;
+
+    ctrl.clear(req, res);
+
+    expect(res.clearCookie).toHaveBeenCalledWith('openwa_bb_key', {
+      path: '/api/admin/queues',
+      secure: false,
+      sameSite: 'strict',
+    });
   });
 });
