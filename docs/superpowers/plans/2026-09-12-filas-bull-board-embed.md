@@ -52,7 +52,7 @@
 - Consumes: `AuthService.canAccessOpenWaQueues`, `@CurrentApiKey()` / existing ApiKey decorator, Express `Res` for `Set-Cookie`
 - Produces: `QUEUES_BOARD_COOKIE_NAME = 'openwa_bb_key'`, `QUEUES_BOARD_COOKIE_PATH = '/api/admin/queues'`, `QUEUES_BOARD_COOKIE_MAX_AGE_SEC = 3600`, `POST /api/admin/queues-board-session` → 204 + Set-Cookie, `DELETE` → 204 + clear
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```typescript
 // queues-board-session.controller.spec.ts
@@ -82,12 +82,12 @@ describe('QueuesBoardSessionController', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx jest src/modules/queue/queues-board-session.controller.spec.ts --no-coverage`  
 Expected: FAIL (module/class not found)
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```typescript
 // queues-board-session.constants.ts
@@ -145,12 +145,12 @@ clear(@Res({ passthrough: true }) res: Response): void {
 
 Register `QueuesBoardSessionController` in `QueueModule` controllers array.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx jest src/modules/queue/queues-board-session.controller.spec.ts --no-coverage`  
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/modules/queue/queues-board-session.constants.ts \
@@ -172,7 +172,7 @@ git commit -m "feat(queues): mint HttpOnly cookie for Bull Board iframe session"
 - Consumes: `QUEUES_BOARD_COOKIE_NAME` from constants
 - Produces: `extractKey` returns header OR cookie value (header wins if both present)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```typescript
 it('allows companion_operator GET authenticated via openwa_bb_key cookie', async () => {
@@ -197,12 +197,12 @@ it('does not accept cookie name outside openwa_bb_key', async () => {
 
 Ensure test harness parses/provides `req.cookies` (if middleware uses `cookie-parser`, mock `req.cookies` directly in unit tests).
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx jest src/common/security/bull-board-auth.middleware.spec.ts -t "openwa_bb_key" --no-coverage`  
 Expected: FAIL
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```typescript
 private extractKey(req: Request): string | undefined {
@@ -221,12 +221,12 @@ private extractKey(req: Request): string | undefined {
 
 Confirm `cookie-parser` is already applied in `configure-app.ts` / `main.ts` before the Bull Board mount. If not, add `app.use(cookieParser())` before `mountBullBoard`.
 
-- [ ] **Step 4: Run full middleware spec**
+- [x] **Step 4: Run full middleware spec**
 
 Run: `npx jest src/common/security/bull-board-auth.middleware.spec.ts --no-coverage`  
 Expected: PASS (including companion POST still forbidden)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/common/security/bull-board-auth.middleware.ts \
@@ -247,7 +247,7 @@ git commit -m "feat(security): accept Bull Board session cookie in auth middlewa
 - Consumes: existing `request()` / `fetch` helper with session `X-API-Key`
 - Produces: `queuesBoardSessionApi.mint(): Promise<void>`, `queuesBoardSessionApi.clear(): Promise<void>`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```typescript
 test('queuesBoardSessionApi.mint POSTs /admin/queues-board-session', async () => {
@@ -264,12 +264,12 @@ test('queuesBoardSessionApi.mint POSTs /admin/queues-board-session', async () =>
 
 Adapt to how `request()` builds URLs in this repo (likely `/api/admin/...`).
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd dashboard && node --test src/services/queuesBoardSession.test.ts`  
 Expected: FAIL (export missing)
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```typescript
 export const queuesBoardSessionApi = {
@@ -280,12 +280,12 @@ export const queuesBoardSessionApi = {
 
 Ensure `request()` treats 204 as success without JSON parse.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd dashboard && node --test src/services/queuesBoardSession.test.ts`  
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add dashboard/src/services/api.ts dashboard/src/services/queuesBoardSession.test.ts
@@ -306,7 +306,7 @@ git commit -m "feat(dashboard): API client for queues board session cookie"
 - Consumes: `queuesBoardSessionApi.mint`
 - Produces: iframe `title` accessible, `src="/api/admin/queues"` (same-origin path; do not prefix with absolute remote host)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```typescript
 test('mints board session then renders iframe to /api/admin/queues', async () => {
@@ -326,12 +326,12 @@ test('mints board session then renders iframe to /api/admin/queues', async () =>
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd dashboard && node --test src/pages/OpenWaQueues.test.ts`  
 Expected: FAIL (placeholder has no iframe)
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```tsx
 export function OpenWaQueues() {
@@ -376,12 +376,12 @@ CSS: page uses flex column; iframe `flex: 1; width: 100%; min-height: calc(100vh
 
 i18n (en): `"embedLoading": "Opening Bull Board…"`, `"embedError": "Could not open the queue board session"`. Mirror in all 13 locales (pt-BR required accurate; others may copy en if no translator).
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd dashboard && node --test src/pages/OpenWaQueues.test.ts`  
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add dashboard/src/pages/OpenWaQueues.tsx dashboard/src/pages/OpenWaQueues.css \
@@ -402,15 +402,15 @@ git commit -m "feat(dashboard): embed Bull Board iframe in Filas OpenWA"
 - Consumes: `queuesBoardSessionApi.clear`
 - Produces: logout best-effort clears board cookie (ignore network errors)
 
-- [ ] **Step 1: Write failing test** that logout invokes DELETE queues-board-session (spy fetch)
+- [x] **Step 1: Write failing test** that logout invokes DELETE queues-board-session (spy fetch)
 
-- [ ] **Step 2: Run to fail**
+- [x] **Step 2: Run to fail**
 
-- [ ] **Step 3: Wire `clear()` into existing logout/clear-session helper**
+- [x] **Step 3: Wire `clear()` into existing logout/clear-session helper**
 
-- [ ] **Step 4: Run authLifecycle + OpenWaQueues tests PASS**
+- [x] **Step 4: Run authLifecycle + OpenWaQueues tests PASS**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -m "fix(auth): clear Bull Board session cookie on logout"
@@ -424,24 +424,26 @@ git commit -m "fix(auth): clear Bull Board session cookie on logout"
 - Modify: `docs/superpowers/plans/2026-09-12-filas-bull-board-embed.md` checkboxes as done during execution
 - Optional changelog note under Unreleased if repo requires
 
-- [ ] **Step 1: Run focused backend suite**
+- [x] **Step 1: Run focused backend suite**
 
 Run: `npx jest src/common/security/bull-board-auth.middleware.spec.ts src/modules/queue/queues-board-session.controller.spec.ts --no-coverage`  
-Expected: PASS
+Expected: PASS  
+Result (2026-09-12): **PASS** — 2 suites, 35 tests.
 
-- [ ] **Step 2: Run focused dashboard suite**
+- [x] **Step 2: Run focused dashboard suite**
 
-Run: `cd dashboard && node --test src/pages/OpenWaQueues.test.ts src/services/queuesBoardSession.test.ts`  
-Expected: PASS
+Run: `cd dashboard && node --experimental-strip-types --test src/pages/OpenWaQueues.test.ts src/services/queuesBoardSession.test.ts src/utils/authLifecycle.test.ts`  
+Expected: PASS  
+Result (2026-09-12): **PASS** — 18 tests (includes authLifecycle logout cookie clear).
 
-- [ ] **Step 3: Manual smoke checklist**
+- [ ] **Step 3: Manual smoke checklist** *(pendente verificação humana no browser)*
 
 1. Login admin → Filas → iframe mostra Bull Board (lista de filas/jobs).
 2. Login companion_operator → Filas → board visível; retry/remove retorna 403.
 3. Abrir DevTools → Network: nenhum `?apiKey=`; cookie `openwa_bb_key` Path `/api/admin/queues`.
 4. Logout → cookie limpo; reabrir `/api/admin/queues` em aba → 401.
 
-- [ ] **Step 4: Commit verification notes if any code tweaks**
+- [x] **Step 4: Commit verification notes if any code tweaks**
 
 ```bash
 git commit -m "test(filas): verify Bull Board embed auth path"
