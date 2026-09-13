@@ -1405,3 +1405,12 @@ export const statsApi = {
   getOverview: () => request<OverviewStats>('/stats/overview'),
   getMessages: (period: StatsPeriod) => request<MessageStats>(`/stats/messages?period=${period}`),
 };
+
+// =============================================================================
+// Queues Board Session API (Bull Board embed cookie mint/clear)
+// =============================================================================
+
+export const queuesBoardSessionApi = {
+  mint: () => request<void>('/admin/queues-board-session', { method: 'POST' }),
+  clear: () => request<void>('/admin/queues-board-session', { method: 'DELETE' }),
+};
