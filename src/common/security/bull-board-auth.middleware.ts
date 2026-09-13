@@ -8,6 +8,7 @@ import { AuditAction } from '../../modules/audit/entities/audit-log.entity';
 import { KeyRateLimiter, readIpRateLimitConfig } from '../../modules/mcp/mcp-rate-limit';
 import { resolveClientIp } from '../utils/ip';
 import { setRequestActor } from '../services/request-context';
+import { QUEUES_BOARD_COOKIE_NAME } from '../../modules/queue/queues-board-session.constants';
 
 /**
  * Protects the Bull Board UI (/api/admin/queues).
@@ -145,6 +146,9 @@ export class BullBoardAuthMiddleware implements NestMiddleware {
 
     const authHeader = req.headers['authorization'];
     if (authHeader?.startsWith('Bearer ')) return authHeader.slice(7);
+
+    const fromCookie = req.cookies?.[QUEUES_BOARD_COOKIE_NAME];
+    if (typeof fromCookie === 'string' && fromCookie) return fromCookie;
 
     // No ?apiKey query fallback — an admin key in the URL leaks into logs/history.
     return undefined;

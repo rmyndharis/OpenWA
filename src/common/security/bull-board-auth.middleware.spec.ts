@@ -189,6 +189,46 @@ describe('BullBoardAuthMiddleware', () => {
     expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedException));
     expect(authService.validateApiKey).not.toHaveBeenCalled();
   });
+
+  const reqFor = (
+    method: string,
+    headers: Record<string, unknown> = {},
+    originalUrl = '/api/admin/queues/',
+  ): Request =>
+    ({
+      headers,
+      query: {},
+      ip: '127.0.0.1',
+      socket: { remoteAddress: '127.0.0.1' },
+      method,
+      originalUrl,
+      url: originalUrl,
+    }) as unknown as Request;
+
+  const companionKey = {
+    role: ApiKeyRole.COMPANION_OPERATOR,
+    allowedSessions: [],
+  };
+
+  it('allows companion_operator GET authenticated via openwa_bb_key cookie', async () => {
+    authService.validateApiKey.mockResolvedValue(companionKey);
+    authService.hasPermission.mockReturnValue(false);
+    authService.canAccessOpenWaQueues.mockReturnValue(true);
+    const req = reqFor('GET', {}, '/api/admin/queues/');
+    req.cookies = { openwa_bb_key: 'companion-raw' };
+    const next = jest.fn();
+    await mw.use(req, res, next);
+    expect(next).toHaveBeenCalledWith();
+    expect(authService.validateApiKey).toHaveBeenCalledWith('companion-raw', expect.any(String));
+  });
+
+  it('does not accept cookie name outside openwa_bb_key', async () => {
+    const req = reqFor('GET', {}, '/api/admin/queues/');
+    req.cookies = { other: 'nope' };
+    const next = jest.fn();
+    await mw.use(req, res, next);
+    expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedException));
+  });
 });
 
 // Bull Board is raw Express middleware (outside the Nest guard pipeline) and previously had no pre-auth
