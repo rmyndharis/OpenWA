@@ -10,6 +10,7 @@ import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-fai
 import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
 import { HooksModule } from '../../core/hooks/hooks.module';
 import { PluginsModule } from '../../core/plugins/plugins.module';
+import { QueuesBoardSessionController } from './queues-board-session.controller';
 
 // Re-export for backward compatibility
 export { QUEUE_NAMES } from './queue-names';
@@ -65,6 +66,7 @@ export const WEBHOOK_QUEUE_JOB_OPTIONS = {
       },
     }),
   ],
+  controllers: [QueuesBoardSessionController],
   providers: [WebhookProcessor, IngressProcessor],
   exports: [BullModule],
 })
