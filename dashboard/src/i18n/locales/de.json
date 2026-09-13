@@ -1005,18 +1005,10 @@
   "filasOpenWa": {
     "title": "OpenWA-Warteschlangen",
     "subtitle": "Warteschlangenstatus auf dieser OpenWA-Instanz",
-    "loadError": "Warteschlangen konnten nicht geladen werden",
-    "unconfigured": "Warteschlangen auf diesem Server deaktiviert",
-    "unconfiguredHint": "Setzen Sie QUEUE_ENABLED=true (und Redis), um lokale Warteschlangen zu überwachen",
-    "empty": {
-      "title": "Keine Warteschlangen zurückgegeben",
-      "description": "Derzeit ist keine Warteschlangentiefe verfügbar"
-    },
-    "pending": "Ausstehend",
-    "completed": "Abgeschlossen",
-    "failed": "Fehlgeschlagen",
-    "refresh": "Aktualisieren",
-    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
+    "migrating": {
+      "title": "Bull-Board-Embed folgt als Nächstes",
+      "description": "Diese Seite zeigt demnächst die echte Bull-Board-UI im Dashboard. Zählerkarten und JSON-Mapping wurden entfernt."
+    }
   },
   "search": {
     "placeholder": "Nachrichten durchsuchen…",

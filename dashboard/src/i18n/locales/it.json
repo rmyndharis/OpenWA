@@ -1005,18 +1005,10 @@
   "filasOpenWa": {
     "title": "Code OpenWA",
     "subtitle": "Stato delle code su questa istanza OpenWA",
-    "loadError": "Impossibile caricare le code",
-    "unconfigured": "Code disabilitate su questo server",
-    "unconfiguredHint": "Impostare QUEUE_ENABLED=true (e Redis) per monitorare le code locali",
-    "empty": {
-      "title": "Nessuna coda restituita",
-      "description": "Nessuna profondità di coda disponibile al momento"
-    },
-    "pending": "In sospeso",
-    "completed": "Completati",
-    "failed": "Non riusciti",
-    "refresh": "Aggiorna",
-    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
+    "migrating": {
+      "title": "Embed Bull Board in arrivo",
+      "description": "Questa pagina mostrerà la vera UI Bull Board nel dashboard. Le card contatori e il mapping JSON sono stati rimossi."
+    }
   },
   "search": {
     "placeholder": "Cerca messaggi…",

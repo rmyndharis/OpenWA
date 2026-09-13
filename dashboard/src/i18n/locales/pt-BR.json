@@ -1005,18 +1005,10 @@
   "filasOpenWa": {
     "title": "Filas OpenWA",
     "subtitle": "Estado das filas nesta instância OpenWA",
-    "loadError": "Não foi possível carregar as filas",
-    "unconfigured": "Filas desabilitadas neste servidor",
-    "unconfiguredHint": "Defina QUEUE_ENABLED=true (e Redis) para monitorar as filas locais",
-    "empty": {
-      "title": "Nenhuma fila retornada",
-      "description": "Nenhuma profundidade de fila disponível no momento"
-    },
-    "pending": "Pendentes",
-    "completed": "Concluídos",
-    "failed": "Falhas",
-    "refresh": "Atualizar",
-    "sourceBullBoard": "Fonte: Bull Board (/api/admin/queues)"
+    "migrating": {
+      "title": "Embed do Bull Board em seguida",
+      "description": "Esta página vai exibir a UI real do Bull Board dentro do dashboard. Os cards de contadores e o mapeamento JSON foram removidos."
+    }
   },
   "search": {
     "placeholder": "Pesquisar mensagens…",

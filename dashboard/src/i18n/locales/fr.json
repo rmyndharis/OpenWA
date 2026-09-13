@@ -1005,18 +1005,10 @@
   "filasOpenWa": {
     "title": "Files OpenWA",
     "subtitle": "État des files sur cette instance OpenWA",
-    "loadError": "Impossible de charger les files",
-    "unconfigured": "Files désactivées sur ce serveur",
-    "unconfiguredHint": "Définissez QUEUE_ENABLED=true (et Redis) pour surveiller les files locales",
-    "empty": {
-      "title": "Aucune file renvoyée",
-      "description": "Aucune profondeur de file disponible pour le moment"
-    },
-    "pending": "En attente",
-    "completed": "Terminés",
-    "failed": "Échecs",
-    "refresh": "Actualiser",
-    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
+    "migrating": {
+      "title": "Intégration Bull Board à venir",
+      "description": "Cette page affichera la vraie UI Bull Board dans le dashboard. Les cartes compteurs et le mapping JSON ont été retirés."
+    }
   },
   "search": {
     "placeholder": "Rechercher des messages…",

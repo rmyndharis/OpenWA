@@ -1005,18 +1005,10 @@
   "filasOpenWa": {
     "title": "OpenWA Kuyrukları",
     "subtitle": "Bu OpenWA örneğindeki kuyruk durumu",
-    "loadError": "Kuyruklar yüklenemedi",
-    "unconfigured": "Bu sunucuda kuyruklar devre dışı",
-    "unconfiguredHint": "Yerel kuyrukları izlemek için QUEUE_ENABLED=true (ve Redis) ayarlayın",
-    "empty": {
-      "title": "Kuyruk döndürülmedi",
-      "description": "Şu anda kuyruk derinliği yok"
-    },
-    "pending": "Bekleyen",
-    "completed": "Tamamlanan",
-    "failed": "Başarısız",
-    "refresh": "Yenile",
-    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
+    "migrating": {
+      "title": "Bull Board gömme yakında",
+      "description": "Bu sayfa dashboard içinde gerçek Bull Board arayüzünü gösterecek. Sayaç kartları ve JSON eşlemesi kaldırıldı."
+    }
   },
   "search": {
     "placeholder": "Mesajlarda ara…",

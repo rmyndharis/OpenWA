@@ -2,9 +2,6 @@
 // Centralized API client with TypeScript types
 
 import { warnIfInsecureHttpUrl } from '../utils/urlSecurity';
-import { mapBullBoardQueues, type BullBoardQueuesResponse, type OpenWaQueuesStatus } from './mapBullBoardQueues';
-
-export type { OpenWaQueuesStatus, BullBoardQueuesResponse };
 // Resolve the API base URL. By default this is the same-origin relative path '/api',
 // correct when the dashboard and API are served from the same origin (the default
 // single-container setup). For a split-origin deployment (dashboard hosted separately
@@ -1175,18 +1172,6 @@ export const infraApi = {
       method: 'POST',
       body: JSON.stringify({ tables, ...options }),
     }),
-};
-
-// =============================================================================
-// Admin — OpenWA Queues via Bull Board JSON API
-// =============================================================================
-
-export const openWaQueuesApi = {
-  /** Same-origin Bull Board JSON: `/api/admin/queues/api/queues` (X-API-Key from session). */
-  getStatus: async (): Promise<OpenWaQueuesStatus> => {
-    const raw = await request<BullBoardQueuesResponse>('/admin/queues/api/queues');
-    return mapBullBoardQueues(raw);
-  },
 };
 
 // =============================================================================

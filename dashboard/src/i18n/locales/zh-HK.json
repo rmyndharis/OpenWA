@@ -1003,20 +1003,12 @@
     }
   },
   "filasOpenWa": {
-    "title": "OpenWA 隊列",
-    "subtitle": "此 OpenWA 實例上的隊列狀態",
-    "loadError": "無法載入隊列",
-    "unconfigured": "此伺服器上已停用隊列",
-    "unconfiguredHint": "設定 QUEUE_ENABLED=true（以及 Redis）以監控本機隊列",
-    "empty": {
-      "title": "未傳回隊列",
-      "description": "目前沒有可用的隊列深度"
-    },
-    "pending": "待處理",
-    "completed": "已完成",
-    "failed": "失敗",
-    "refresh": "重新整理",
-    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
+    "title": "OpenWA Queues",
+    "subtitle": "Queue state on this OpenWA instance",
+    "migrating": {
+      "title": "Bull Board embed coming next",
+      "description": "This page will show the real Bull Board UI inside the dashboard. Counter cards and JSON mapping were removed."
+    }
   },
   "search": {
     "placeholder": "搜尋訊息…",

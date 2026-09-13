@@ -1004,18 +1004,10 @@
   "filasOpenWa": {
     "title": "OpenWA Queues",
     "subtitle": "Queue state on this OpenWA instance",
-    "loadError": "Could not load queues",
-    "unconfigured": "Queues are disabled on this server",
-    "unconfiguredHint": "Set QUEUE_ENABLED=true (and Redis) to monitor local queues",
-    "empty": {
-      "title": "No queues returned",
-      "description": "No queue depth is available right now"
-    },
-    "pending": "Pending",
-    "completed": "Completed",
-    "failed": "Failed",
-    "refresh": "Refresh",
-    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
+    "migrating": {
+      "title": "Bull Board embed coming next",
+      "description": "This page will show the real Bull Board UI inside the dashboard. Counter cards and JSON mapping were removed."
+    }
   },
   "search": {
     "placeholder": "Search messages…",

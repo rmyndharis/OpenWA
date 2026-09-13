@@ -1,53 +1,11 @@
-// Render smoke test for the OpenWaQueues page under the bare `node --test` runner. Mirrors
-// Infrastructure.test.ts / Sessions.test.ts: QueryClientProvider → RoleProvider → ToastProvider,
-// stub fetch for Bull Board `/admin/queues/api/queues`, companion_operator role via localStorage.
+// Render smoke test for the OpenWaQueues placeholder under the bare `node --test` runner.
+// Mirrors Infrastructure.test.ts harness: QueryClientProvider → RoleProvider → ToastProvider,
+// companion_operator role via localStorage. No Bull Board JSON fetch — counter UI removed.
 import '../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
-
-// ── Fixtures + fetch stub ────────────────────────────────────────────────────
-
-const BULL_BOARD_QUEUES = {
-  queues: [
-    {
-      name: 'webhook-queue',
-      counts: {
-        waiting: 1,
-        active: 0,
-        delayed: 0,
-        completed: 2,
-        failed: 0,
-        prioritized: 0,
-        'waiting-children': 0,
-      },
-    },
-  ],
-};
-
-function jsonResponse(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-function installFetchStub(): void {
-  globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    const method = init?.method ?? 'GET';
-    const path = url.replace(/^https?:\/\/[^/]+/, '');
-
-    if (method === 'GET' && path === '/api/admin/queues/api/queues') {
-      return Promise.resolve(jsonResponse(BULL_BOARD_QUEUES));
-    }
-
-    return Promise.resolve(jsonResponse({ message: `unstubbed ${method} ${path}` }, 404));
-  };
-}
-
-// ── Harness bootstrap ────────────────────────────────────────────────────────
 
 type RTL = typeof import('@testing-library/react');
 type OpenWaQueuesModule = typeof import('./OpenWaQueues.tsx');
@@ -64,7 +22,6 @@ let queryClient: QueryClient | undefined;
 before(async () => {
   ({ installJsdomGlobals } = await import('../test-helpers/jsdom.ts'));
   await installJsdomGlobals();
-  installFetchStub();
   window.localStorage.setItem('openwa_user_role', 'companion_operator');
   const { i18nReady } = await import('../i18n/index.ts');
   await i18nReady;
@@ -91,13 +48,11 @@ function renderOpenWaQueues() {
   );
 }
 
-// ── Smoke tests ──────────────────────────────────────────────────────────────
-
-test('renders Bull Board queue names for companion_operator', async () => {
+test('renders Filas migrating placeholder for companion_operator', async () => {
   const { screen } = rtl;
   renderOpenWaQueues();
 
-  await screen.findByText('webhook-queue');
-  screen.getByText('1');
-  screen.getByText('Pending');
+  await screen.findByRole('heading', { name: /OpenWA Queues|Filas OpenWA/i });
+  screen.getByRole('status');
+  screen.getByRole('heading', { name: /Bull Board|Embed/i });
 });

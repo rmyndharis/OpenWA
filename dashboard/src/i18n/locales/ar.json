@@ -1018,20 +1018,12 @@
     }
   },
   "filasOpenWa": {
-    "title": "صفوف OpenWA",
-    "subtitle": "حالة الصفوف على مثيل OpenWA هذا",
-    "loadError": "تعذر تحميل الصفوف",
-    "unconfigured": "الصفوف معطّلة على هذا الخادم",
-    "unconfiguredHint": "عيّن QUEUE_ENABLED=true (و Redis) لمراقبة الصفوف المحلية",
-    "empty": {
-      "title": "لم تُرجع أي صفوف",
-      "description": "لا يتوفر عمق صف في الوقت الحالي"
-    },
-    "pending": "قيد الانتظار",
-    "completed": "مكتمل",
-    "failed": "فشل",
-    "refresh": "تحديث",
-    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
+    "title": "OpenWA Queues",
+    "subtitle": "Queue state on this OpenWA instance",
+    "migrating": {
+      "title": "Bull Board embed coming next",
+      "description": "This page will show the real Bull Board UI inside the dashboard. Counter cards and JSON mapping were removed."
+    }
   },
   "search": {
     "placeholder": "ابحث في الرسائل…",

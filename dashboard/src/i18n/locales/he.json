@@ -1012,20 +1012,12 @@
     }
   },
   "filasOpenWa": {
-    "title": "תורים OpenWA",
-    "subtitle": "מצב התורים במופע OpenWA זה",
-    "loadError": "לא ניתן לטעון תורים",
-    "unconfigured": "תורים מושבתים בשרת זה",
-    "unconfiguredHint": "הגדר QUEUE_ENABLED=true (ו-Redis) כדי לנטר תורים מקומיים",
-    "empty": {
-      "title": "לא הוחזרו תורים",
-      "description": "אין עומק תור זמין כרגע"
-    },
-    "pending": "ממתינים",
-    "completed": "הושלמו",
-    "failed": "נכשלו",
-    "refresh": "רענון",
-    "sourceBullBoard": "Source: Bull Board (/api/admin/queues)"
+    "title": "OpenWA Queues",
+    "subtitle": "Queue state on this OpenWA instance",
+    "migrating": {
+      "title": "Bull Board embed coming next",
+      "description": "This page will show the real Bull Board UI inside the dashboard. Counter cards and JSON mapping were removed."
+    }
   },
   "search": {
     "placeholder": "חיפוש הודעות…",
