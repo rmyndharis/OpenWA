@@ -25,6 +25,26 @@ export function renderAck(spec: IngressResponseContract['ack'] | undefined, ctx:
   return result;
 }
 
+/**
+ * Media types a route's declared ack Content-Type may actually put on the wire. Express types a bare
+ * send() as text/html, which would make a reflected body (a GET challenge echo, an ack template
+ * interpolating {rawBody}) XSS material on this origin. A declared type is therefore honored only when
+ * a browser will not execute it, and anything else falls back to text/plain. `noSniff` (configure-app)
+ * stops a browser re-sniffing an honored type as HTML. Providers that validate the ack need
+ * application/json (Supabase Auth rejects a 200 or 202 that is not), and nothing needs more than that.
+ */
+const HONORED_ACK_MEDIA_TYPES = new Set(['application/json', 'text/plain']);
+
+/** The Content-Type to emit for an ack: the declared value when allowlisted, else text/plain. Total. */
+export function ackContentType(headers: Record<string, string> | undefined): string {
+  const declared = headers
+    ? Object.entries(headers).find(([name]) => name.toLowerCase() === 'content-type')?.[1]
+    : undefined;
+  if (!declared) return 'text/plain';
+  const mediaType = declared.split(';', 1)[0].trim().toLowerCase();
+  return HONORED_ACK_MEDIA_TYPES.has(mediaType) ? declared : 'text/plain';
+}
+
 function substitute(template: string, ctx: AckRenderCtx): string {
   // split/join avoids `$`-interpretation that String.replace applies to the replacement string.
   return template

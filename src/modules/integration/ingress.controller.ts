@@ -3,6 +3,7 @@ import { SkipThrottle } from '@nestjs/throttler';
 import { ApiTags, ApiOkResponse, ApiParam, ApiResponse } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { Public } from '../auth/decorators/auth.decorators';
+import { ackContentType } from './ingress-ack';
 import { IngressService } from './ingress.service';
 import { InstanceThrottlerGuard } from './instance-throttler.guard';
 
@@ -93,9 +94,10 @@ export class IngressController {
     });
     if (result.headers) res.set(result.headers);
     // Both reflections echo provider-controlled strings (hub.challenge, the ack template). Express
-    // types a bare send() as text/html, which turns a reflection into XSS material on this origin —
-    // force text/plain so the browser refuses to parse it.
-    res.type('text/plain');
+    // types a bare send() as text/html, which turns a reflection into XSS material on this origin, so
+    // only a non-executable declared type survives and everything else is forced to text/plain. This
+    // runs AFTER res.set on purpose: both write the same Content-Type slot and the last writer wins.
+    res.type(ackContentType(result.headers));
     res.status(result.status).send(result.body ?? '');
   }
 }
