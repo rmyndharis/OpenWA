@@ -567,6 +567,9 @@ describe('IngressService.handle — response contract', () => {
     });
     const res = await new IngressService(d).handle(baseReq);
     expect(res.status).toBe(503);
+    // The provider retries a 503 only when it carries Retry-After, so re-packing the rejection into
+    // {status, body} silently turned a retryable rejection into a lost delivery.
+    expect(res.headers).toEqual({ 'Retry-After': '5' });
     expect(d.events.recordOrSkip).not.toHaveBeenCalled();
     expect(d.enqueue).not.toHaveBeenCalled();
     expect(d.log).toHaveBeenCalledWith(

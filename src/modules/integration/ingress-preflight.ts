@@ -1,7 +1,16 @@
 import { EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
 import type { IngressRouteDescriptor } from './ingress.service';
 
-export type PreflightRejection = { status: number; body: string };
+export type PreflightRejection = { status: number; body: string; headers?: Record<string, string> };
+
+/**
+ * Retry-After on the session-alive 503. Presence is what buys the retry: the provider dispatchers that
+ * matter re-attempt a 503 only when the header is set and do not parse its value (supabase/auth checks
+ * `Get("retry-after") != ""`). A session that is merely still coming up already passes through to the
+ * normal 202 + enqueue path, so a rejection means no live engine or FAILED, and what bounds a provider
+ * hammering a dead session is InstanceThrottlerGuard's per-instance bucket, not this number.
+ */
+const PREFLIGHT_RETRY_AFTER_SECONDS = 5;
 
 /**
  * Evaluates a route's host-side preflight checks. Returns null to PASS (proceed to dedup + ack + enqueue),
@@ -26,7 +35,13 @@ export function evaluatePreflight(
       if (!sessionStatus) continue; // unwired (pure unit mode): skip rather than false-reject
       const status = sessionStatus(sessionScope);
       if (status === undefined || status === EngineStatus.FAILED) {
-        return { status: 503, body: 'session not ready' };
+        // Attached at the return site, not to every rejection: a future non-retryable check must not
+        // inherit a header that tells the provider to come back.
+        return {
+          status: 503,
+          body: 'session not ready',
+          headers: { 'Retry-After': String(PREFLIGHT_RETRY_AFTER_SECONDS) },
+        };
       }
     }
   }

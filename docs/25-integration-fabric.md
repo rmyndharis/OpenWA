@@ -101,7 +101,8 @@ Alongside this async pipeline, a route may additionally declare a `response` con
   declare a host-side `response` contract that shapes that synchronous reply without making the plugin
   inline. Its `preflight` checks (today: `session-alive`) run **after** signature verification and
   **before** the dedup persist — returning `503` only for a definitively-dead concrete-scoped WhatsApp
-  session (no live engine or `FAILED`); recoverable statuses and `READY` pass through to a normal
+  session (no live engine or `FAILED`), with a `Retry-After` so a provider that retries a 503 only when
+  that header is present comes back; recoverable statuses and `READY` pass through to a normal
   `202`+enqueue so the worker can still fail fast and the dedup row still holds the delivery. A declared
   `ack` (`status`/`body`/`headers`) replaces the default `202 accepted`. For a route declaring `response`,
   the ack is returned without awaiting enqueue so a queue-disabled deployment cannot block the provider's

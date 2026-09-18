@@ -155,7 +155,9 @@ export class IngressService {
         status: preflight.status,
         sessionScope: instance.sessionScope,
       });
-      return { status: preflight.status, body: preflight.body };
+      // Returned whole, so a rejection's headers reach the wire. Re-packing the two fields dropped the
+      // Retry-After that decides whether the provider retries at all.
+      return preflight;
     }
 
     // Standard Webhooks signs and requires webhook-id, so it is the stable, authenticated retry id.
