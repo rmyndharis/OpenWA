@@ -1,10 +1,10 @@
 import {
   decideReconnect,
   clampReconnectDelay,
-  RECONNECT_STABILITY_RESET_MS,
   RECONNECT_LOOP_ALERT_INTERVAL_ATTEMPTS,
   RECONNECT_DELAY_CAP_MS,
   type ReconnectAttemptState,
+  type ReconnectDecision,
 } from './reconnect-policy';
 
 const state = (over: Partial<ReconnectAttemptState> = {}): ReconnectAttemptState => ({
@@ -22,7 +22,7 @@ describe('decideReconnect', () => {
     it('schedules the first attempt at baseDelay', () => {
       const s = state();
 
-      const d = decideReconnect(s, 1_000, NO_JITTER);
+      const d = decideReconnect(s, NO_JITTER);
 
       expect(d).toMatchObject({ kind: 'schedule', delayMs: 5000, attempt: 1 });
     });
@@ -32,7 +32,7 @@ describe('decideReconnect', () => {
       const delays: number[] = [];
 
       for (let i = 0; i < 4; i++) {
-        const d = decideReconnect(s, 1_000, NO_JITTER);
+        const d = decideReconnect(s, NO_JITTER);
         if (d.kind === 'schedule') delays.push(d.delayMs);
       }
 
@@ -42,7 +42,7 @@ describe('decideReconnect', () => {
     it('adds the supplied jitter before clamping', () => {
       const s = state();
 
-      const d = decideReconnect(s, 1_000, 777);
+      const d = decideReconnect(s, 777);
 
       expect(d).toMatchObject({ delayMs: 5777 });
     });
@@ -50,7 +50,7 @@ describe('decideReconnect', () => {
     it('parks at the cap once the exponent outgrows it (unlimited budget never overflows setTimeout)', () => {
       const s = state({ attempts: 40 });
 
-      const d = decideReconnect(s, 1_000, NO_JITTER);
+      const d = decideReconnect(s, NO_JITTER);
 
       expect(d).toMatchObject({ delayMs: RECONNECT_DELAY_CAP_MS });
     });
@@ -58,18 +58,10 @@ describe('decideReconnect', () => {
     it('advances the caller-owned attempt counter', () => {
       const s = state();
 
-      decideReconnect(s, 1_000, NO_JITTER);
-      decideReconnect(s, 1_000, NO_JITTER);
+      decideReconnect(s, NO_JITTER);
+      decideReconnect(s, NO_JITTER);
 
       expect(s.attempts).toBe(2);
-    });
-
-    it('records when the attempt was scheduled', () => {
-      const s = state();
-
-      decideReconnect(s, 12_345, NO_JITTER);
-
-      expect(s.lastAttemptAt).toBe(12_345);
     });
   });
 
@@ -77,7 +69,7 @@ describe('decideReconnect', () => {
     it('reports exhausted once attempts reach the cap', () => {
       const s = state({ attempts: 3, maxAttempts: 3 });
 
-      const d = decideReconnect(s, 1_000, NO_JITTER);
+      const d = decideReconnect(s, NO_JITTER);
 
       expect(d).toEqual({
         kind: 'exhausted',
@@ -88,7 +80,7 @@ describe('decideReconnect', () => {
     it('distinguishes "auto-reconnect disabled" from "N attempts failed"', () => {
       const s = state({ attempts: 0, maxAttempts: 0 });
 
-      const d = decideReconnect(s, 1_000, NO_JITTER);
+      const d = decideReconnect(s, NO_JITTER);
 
       // maxAttempts:0 means disabled outright; "failed after 0 attempts" would be misleading.
       expect(d).toEqual({
@@ -101,7 +93,7 @@ describe('decideReconnect', () => {
     it('does not advance the counter once exhausted', () => {
       const s = state({ attempts: 3, maxAttempts: 3 });
 
-      decideReconnect(s, 1_000, NO_JITTER);
+      decideReconnect(s, NO_JITTER);
 
       expect(s.attempts).toBe(3);
     });
@@ -109,41 +101,49 @@ describe('decideReconnect', () => {
     it('never exhausts on the default unlimited budget', () => {
       const s = state({ attempts: 10_000 });
 
-      expect(decideReconnect(s, 1_000, NO_JITTER).kind).toBe('schedule');
+      expect(decideReconnect(s, NO_JITTER).kind).toBe('schedule');
     });
   });
 
-  describe('stability reset', () => {
-    it('resets the budget when the session stayed up past the stability window', () => {
-      const s = state({ attempts: 4, maxAttempts: 5, lastAttemptAt: 1_000 });
+  describe('over real elapsed time', () => {
+    beforeEach(() => jest.useFakeTimers({ now: 1_700_000_000_000 }));
+    afterEach(() => jest.useRealTimers());
 
-      const d = decideReconnect(s, 1_000 + RECONNECT_STABILITY_RESET_MS, NO_JITTER);
+    // Each decision lands once the previous delay has elapsed plus a ~2 s failed connect, as in production.
+    const drive = (s: ReconnectAttemptState, decisions: number): ReconnectDecision[] => {
+      const out: ReconnectDecision[] = [];
+      for (let k = 0; k < decisions; k++) {
+        const d = decideReconnect(s, NO_JITTER);
+        out.push(d);
+        if (d.kind === 'schedule') jest.advanceTimersByTime(d.delayMs + 2000);
+      }
+      return out;
+    };
 
-      // Budget restarts, so this is attempt 1 at baseDelay rather than a 5th attempt.
-      expect(d).toMatchObject({ kind: 'schedule', attempt: 1, delayMs: 5000, stabilityReset: true });
+    it.each([7, 20])('exhausts an explicit budget of %i on the next decision', max => {
+      const s = state({ maxAttempts: max });
+
+      const out = drive(s, max + 1);
+
+      const scheduled = out.slice(0, max).map(d => (d.kind === 'schedule' ? d.attempt : d.kind));
+      expect(scheduled).toEqual(Array.from({ length: max }, (_, k) => k + 1));
+      const last = out[max];
+      expect(last.kind === 'exhausted' && last.reason).toContain(`failed after ${max} attempts`);
     });
 
-    it('keeps accruing inside the stability window', () => {
-      const s = state({ attempts: 4, maxAttempts: 5, lastAttemptAt: 1_000 });
+    it('parks an unlimited budget at the 5-minute cap and never resets the streak', () => {
+      expect(RECONNECT_DELAY_CAP_MS).toBe(300_000);
 
-      const d = decideReconnect(s, 1_000 + RECONNECT_STABILITY_RESET_MS - 1, NO_JITTER);
-
-      expect(d).toMatchObject({ attempt: 5, stabilityReset: false });
-    });
-
-    it('rescues a session that would otherwise wedge FAILED after unrelated transient drops', () => {
-      const s = state({ attempts: 5, maxAttempts: 5, lastAttemptAt: 1_000 });
-
-      // Without the reset this is exhausted; with it the session gets a fresh budget.
-      const d = decideReconnect(s, 1_000 + RECONNECT_STABILITY_RESET_MS, NO_JITTER);
-
-      expect(d.kind).toBe('schedule');
-    });
-
-    it('does not reset on the very first attempt (no prior timestamp)', () => {
       const s = state();
 
-      expect(decideReconnect(s, 10 ** 12, NO_JITTER)).toMatchObject({ stabilityReset: false });
+      const out = drive(s, 30);
+
+      const delays = out.map(d => (d.kind === 'schedule' ? d.delayMs : -1));
+      // 5000 * 2^6 = 320 s is the first computed delay past the cap, so attempt 7 onward parks there.
+      expect(delays.slice(0, 6)).toEqual([5000, 10000, 20000, 40000, 80000, 160000]);
+      expect(delays.slice(6).every(ms => ms === RECONNECT_DELAY_CAP_MS)).toBe(true);
+      expect(out[29]).toMatchObject({ kind: 'schedule', attempt: 30 });
+      expect(s.attempts).toBe(30);
     });
   });
 
@@ -153,7 +153,7 @@ describe('decideReconnect', () => {
       const alerts: number[] = [];
 
       for (let i = 0; i < 12; i++) {
-        const d = decideReconnect(s, 1_000, NO_JITTER);
+        const d = decideReconnect(s, NO_JITTER);
         if (d.kind === 'schedule' && d.loopAlert) alerts.push(d.attempt);
       }
 
@@ -161,19 +161,20 @@ describe('decideReconnect', () => {
     });
 
     it('does not alert on the first attempt of an episode', () => {
-      expect(decideReconnect(state(), 1_000, NO_JITTER)).toMatchObject({ loopAlert: false });
+      expect(decideReconnect(state(), NO_JITTER)).toMatchObject({ loopAlert: false });
     });
 
-    it('re-arms from attempt 5 again after a stability reset (new episode, not a continuing cadence)', () => {
-      const s = state({ attempts: 4, lastAttemptAt: 1_000 });
+    it('re-arms from attempt 5 again once READY clears the streak', () => {
+      const s = state({ attempts: 4 });
 
-      // A stable stretch resets the streak, so the next attempt is #1 and must not alert.
-      const first = decideReconnect(s, 1_000 + RECONNECT_STABILITY_RESET_MS, NO_JITTER);
+      // What the lifecycle does on READY.
+      s.attempts = 0;
+      const first = decideReconnect(s, NO_JITTER);
       expect(first).toMatchObject({ attempt: 1, loopAlert: false });
 
       const alerts: number[] = [];
       for (let i = 0; i < 5; i++) {
-        const d = decideReconnect(s, 1_000 + RECONNECT_STABILITY_RESET_MS, NO_JITTER);
+        const d = decideReconnect(s, NO_JITTER);
         if (d.kind === 'schedule' && d.loopAlert) alerts.push(d.attempt);
       }
       expect(alerts).toEqual([5]);

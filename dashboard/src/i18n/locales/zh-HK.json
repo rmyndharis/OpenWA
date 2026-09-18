@@ -305,7 +305,7 @@
       "created": "建立時間",
       "lastActive": "上次活躍",
       "autoRejectCalls": "自動拒接來電",
-      "autoRejectCallsHint": "來電響鈴後即時拒接。call.received webhook 仍會先行觸發。下一通來電起生效，無需重新啟動。"
+      "autoRejectCallsHint": "來電響鈴後即時拒接。call.received webhook 仍會先行觸發。下一通來電起生效，無需重新啟動。僅限 Baileys 引擎：whatsapp-web.js 已無法偵測到正在響鈴的來電。"
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -393,7 +393,8 @@
     },
     "start": {
       "teardownPendingTitle": "工作階段啟動中",
-      "teardownPending": "此工作階段的憑證拆除仍在進行中。請稍候再試。"
+      "teardownPending": "此工作階段的憑證拆除仍在進行中。請稍候再試。",
+      "errorTitle": "啟動失敗"
     },
     "restriction": {
       "reachout_timelock": "新對話被封鎖",
@@ -518,7 +519,10 @@
       "title": "未儲存任何範本",
       "description": "建立可重用的範本，加快常用回覆和通知的速度。",
       "noSessionsTitle": "沒有可用的工作階段",
-      "noSessionsDesc": "請先建立 WhatsApp 工作階段，才能新增範本。"
+      "noSessionsDesc": "請先建立 WhatsApp 工作階段，才能新增範本。",
+      "loadErrorTitle": "無法載入範本",
+      "forbiddenTitle": "無權存取範本",
+      "forbiddenDesc": "範本需要具有操作員或管理員角色的 API 金鑰。"
     },
     "toasts": {
       "created": "範本建立成功",

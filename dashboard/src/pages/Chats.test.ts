@@ -19,7 +19,7 @@ import type { Session, Chat, ChatMessage } from '../services/api';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
 // socket.io-client resolves to a double under this runner (see vite-shim-hooks.mjs), which is what
 // lets a test deliver a server frame to the page's realtime handlers.
-import { lastSocket, resetSocketDouble } from '../test-helpers/socket-io-double.ts';
+import { holdConnect, lastSocket, resetSocketDouble } from '../test-helpers/socket-io-double.ts';
 
 // ── Fixtures + fetch stub ────────────────────────────────────────────────────
 
@@ -449,6 +449,36 @@ test('status compose modal posts a text status with the baileys recipient allow-
       'expected the status list to refetch after posting',
     );
   });
+});
+
+test('Refresh on a feed that never connected refetches the open thread once the socket is back', async () => {
+  const { screen, fireEvent, within, waitFor, act } = rtl;
+  resetFetchCalls();
+  holdConnect();
+  const { container } = renderChats();
+
+  await screen.findByText('Main (15551234567)');
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  const threadReads = (): number =>
+    fetchCalls.filter(c => c.method === 'GET' && c.path.startsWith(`/api/sessions/${SESSION.id}/messages?`)).length;
+  const readsBeforeRetry = threadReads();
+
+  // A rejected handshake delivers its connect and the server's close in one batch, so this socket
+  // never renders as connected, and the thread misses whatever arrives while the banner is up.
+  const rejected = lastSocket();
+  assert.ok(rejected, 'expected the page to have opened a socket');
+  act(() => {
+    rejected.receive('connect');
+    rejected.receive('disconnect', 'io server disconnect');
+  });
+  const banner = await screen.findByRole('alert');
+  fireEvent.click(within(banner).getByRole('button', { name: 'Refresh' }));
+  const redialed = lastSocket();
+  assert.ok(redialed && redialed !== rejected, 'expected Refresh to open a fresh socket');
+  act(() => redialed.receive('connect'));
+
+  await waitFor(() => assert.equal(threadReads(), readsBeforeRetry + 1));
 });
 
 test('a typed draft survives closing and reopening the room', async () => {

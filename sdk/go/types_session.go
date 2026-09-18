@@ -5,16 +5,19 @@ import (
 	"net/url"
 )
 
-// ListSessionsQuery paginates GET /sessions. Both fields optional.
+// ListSessionsQuery paginates GET /sessions. All fields optional.
 type ListSessionsQuery struct {
 	Limit  *int
 	Offset *int
+	// Name returns only the session with exactly this name (case-sensitive).
+	Name *string
 }
 
 func (q *ListSessionsQuery) values() url.Values {
 	v := url.Values{}
 	setInt(v, "limit", q.Limit)
 	setInt(v, "offset", q.Offset)
+	setStr(v, "name", q.Name)
 	return v
 }
 
@@ -64,11 +67,11 @@ type CustomLinkPreview struct {
 // UpsertLabelRequest is a label create-or-update body. The id travels in the path, because WhatsApp
 // keys the write on it.
 type UpsertLabelRequest struct {
-	// Name is left alone when nil.
+	// Name nil drops the current name: the write replaces the whole label.
 	Name *string `json:"name,omitempty"`
 	// Color is WhatsApp's colour INDEX (0-19), NOT a hex value — it does not round-trip with the
-	// HexColor labels are read back with, because neither engine exposes the mapping. Nil leaves the
-	// current colour alone.
+	// HexColor labels are read back with, because neither engine exposes the mapping. Nil drops
+	// the current colour.
 	Color *int `json:"color,omitempty"`
 }
 

@@ -113,7 +113,7 @@ describe('resolveReconnectConfig', () => {
         maxReconnectAttempts: 'not-a-number',
         reconnectBaseDelay: -1,
       }),
-      // non-numeric attempts → the default: unlimited retries (backoff parks at the 1h cap);
+      // non-numeric attempts → the default: unlimited retries (backoff parks at the 5-minute cap);
       // negative baseDelay → clamped up to the 1s minimum
     ).toEqual({ maxAttempts: Number.POSITIVE_INFINITY, baseDelay: 1000 });
   });

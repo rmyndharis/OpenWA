@@ -1,6 +1,7 @@
 import { DataSource, DataSourceOptions } from 'typeorm';
 import * as path from 'path';
 import { loadCliEnv } from './load-cli-env';
+import { postgresUtcExtra } from './postgres-utc';
 import { sqliteDataMainPathCollision } from '../config/env.validation';
 
 // Load env with the same precedence as the app (process.env > .env > data/.env.generated), so the
@@ -83,6 +84,9 @@ export function buildPostgresDataSourceOptions(env: NodeJS.ProcessEnv = process.
           }
         : false,
     extra: {
+      // Same UTC pin the runtime data connection carries (pg-boot-migrations.ts): a migration that
+      // rewrites a timestamp column must mean the same thing as the app that wrote it.
+      ...postgresUtcExtra(),
       max: parseInt(env.DATABASE_POOL_SIZE || '10', 10),
       // Pool resilience only. NO statement_timeout here: this connection runs migrations, and a
       // long CREATE INDEX / backfill must not be aborted mid-flight.

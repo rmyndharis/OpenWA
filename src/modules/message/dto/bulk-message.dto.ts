@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsString,
+  IsNotEmpty,
   IsIn,
   IsArray,
   IsObject,
@@ -109,6 +110,7 @@ class BulkMessageContentDto {
 class BulkMessageItemDto {
   @ApiProperty({ description: 'Recipient chat ID', example: '628123456789@c.us' })
   @IsString()
+  @IsNotEmpty()
   chatId!: string;
 
   @ApiProperty({ description: 'Message type', enum: ['text', 'image', 'video', 'audio', 'document'] })

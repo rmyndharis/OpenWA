@@ -170,6 +170,18 @@ connectedAt: Date | null;
 > [!NOTE]
 > Main DB entities (api_keys, audit_logs) use native SQLite `datetime` type since they always remain in SQLite.
 
+#### Timestamps on PostgreSQL are UTC
+
+Every timestamp column on the PostgreSQL data connection is `timestamp without time zone`, which stores no zone: the value means whatever the writer intended. OpenWA pins that meaning to **UTC**, on the connection rather than on the deployment (`src/database/postgres-utc.ts`):
+
+- a JS `Date` parameter is bound as UTC (`parseInputDatesAsUTC`), so an app-written column such as `sessions.connectedAt` holds UTC wall-clock time whatever zone the host runs in;
+- a naive timestamp is parsed back as UTC, through a parser registered for the scalar `timestamp` OID only (the `timestamp[]` OID keeps the driver's array parser; the schema has no such column);
+- every pooled connection issues `SET TIME ZONE 'UTC'` on connect, through the pool's own connect hook so that a socket failure or a refused statement fails the acquire instead of the process. That is what makes the server-side `DEFAULT now()` behind each `@CreateDateColumn`/`@UpdateDateColumn` write UTC too. Boot reads the effective `TimeZone` back, at two instants six months apart so a zone that merely reads +00 in winter is caught, and fails if it is not UTC; a pin that a pooler or a server-side default overrode cannot pass unnoticed.
+
+Three `@CreateDateColumn`/`@UpdateDateColumn` columns are filled by the app rather than by that default: `lid_mappings.updatedAt`, `chat_states.updatedAt` and `baileys_stored_messages.createdAt` reach the database through an `upsert` that passes the value, so the default behind them never fires and they follow the binding rule above instead of the session zone.
+
+Comparisons therefore mean the same thing on both dialects: a retention `LessThan(cutoff)`, a lease deadline written by another node, and a backup restored from any host all line up. SQLite is unaffected; it already stores ISO text in UTC.
+
 ## 5.2 Entity Relationship Diagram
 
 ```mermaid
@@ -294,16 +306,16 @@ CREATE TABLE sessions (
     config JSONB NOT NULL DEFAULT '{}',
     "proxyUrl" VARCHAR(255),
     "proxyType" VARCHAR(10),
-    "connectedAt" TIMESTAMP WITH TIME ZONE,
-    "lastActiveAt" TIMESTAMP WITH TIME ZONE,
+    "connectedAt" TIMESTAMP,
+    "lastActiveAt" TIMESTAMP,
     -- Session ownership / multi-node routing: which process runs the engine, since when, where it
     -- answers HTTP for peers, and how long its claim survives unrenewed. All NULL on a single node.
     "nodeId" VARCHAR(190),
-    "claimedAt" TIMESTAMP WITH TIME ZONE,
+    "claimedAt" TIMESTAMP,
     "nodeUrl" VARCHAR(2048),
-    "leaseExpiresAt" TIMESTAMP WITH TIME ZONE,
-    "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    "leaseExpiresAt" TIMESTAMP,
+    "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
+    "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 ```
 
@@ -365,7 +377,7 @@ clears it, and so does a gateway restart.
 | ---------------------- | --------- | ------------------------------------------------------------------------ |
 | `maxReconnectAttempts` | unlimited | Reconnect attempt cap, clamped to 0–20 (`0` disables reconnect entirely) |
 | `reconnectBaseDelay`   | `5000` ms | Base delay of the reconnect backoff, clamped to 1000–300000 ms           |
-| `autoRejectCalls`      | `false`   | Auto-reject an incoming call as soon as it rings                         |
+| `autoRejectCalls`      | `false`   | Auto-reject an incoming call as soon as it rings (Baileys only)          |
 
 Set them at creation with `POST /api/sessions`, or on an existing session with
 `PATCH /api/sessions/{sessionId}/config` — no restart, and no re-scan of the QR. The patch merges, so a key

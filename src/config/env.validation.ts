@@ -421,6 +421,10 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     // the webhook payload an integrator receives is not the one the operator configured.
     'WEBHOOK_SSRF_PROTECT',
     'WEBHOOK_CONTACT_DETAILS',
+    // `!== 'false'`: a typo keeps caller-supplied URL fetches on the session proxy, the safe value,
+    // but an operator whose proxy cannot reach arbitrary media hosts asked for the opposite and
+    // would see every send-by-URL on a proxied session fail instead.
+    'SESSION_PROXY_URL_FETCH',
     // Engine behaviour flags: a typo leaves full-history sync off, or leaves the account marked
     // online on connect (#871 — it suppresses notifications on the operator's own phone).
     'BAILEYS_SYNC_FULL_HISTORY',

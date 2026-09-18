@@ -1457,7 +1457,7 @@ curl "$BASE/api/infra/export-data" \
 
 #### POST /api/infra/import-data
 
-Replace all Data DB rows with a prior export (destructive, all-or-nothing). Every one of the 14 migration tables is emptied first, so a key you omit restores **empty** rather than untouched — send a body produced by `GET /api/infra/export-data`, not a hand-built subset. All 14 keys are shown below for that reason.
+Replace all Data DB rows with a prior export (destructive, all-or-nothing). Every one of the 16 migration tables is emptied first, so a key you omit restores **empty** rather than untouched — send a body produced by `GET /api/infra/export-data`, not a hand-built subset. All 16 keys are shown below for that reason.
 
 ```bash
 curl -X POST "$BASE/api/infra/import-data" \
@@ -1467,8 +1467,9 @@ curl -X POST "$BASE/api/infra/import-data" \
     "tables": {
       "sessions": [ { "id": "s1", "name": "main", "status": "ready", "phone": "15551234567", "pushName": "Me", "config": {}, "proxyUrl": null, "proxyType": null, "connectedAt": "2026-06-25T00:00:00.000Z", "lastActiveAt": "2026-06-25T00:00:00.000Z", "createdAt": "2026-06-25T00:00:00.000Z", "updatedAt": "2026-06-25T00:00:00.000Z" } ],
       "webhooks": [], "messages": [], "messageBatches": [], "templates": [], "baileysStoredMessages": [],
-      "lidMappings": [], "pluginInstances": [], "conversationMappings": [], "ingressEvents": [],
-      "webhookDeliveryFailures": [], "integrationDeliveryFailures": [], "statusUpdates": [], "automationRules": []
+      "lidMappings": [], "chatStates": [], "pluginInstances": [], "conversationMappings": [], "ingressEvents": [],
+      "webhookDeliveryFailures": [], "webhookOutboxEvents": [], "integrationDeliveryFailures": [], "statusUpdates": [],
+      "automationRules": []
     }
   }'
 ```

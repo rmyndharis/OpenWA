@@ -213,11 +213,11 @@ curl -H "X-API-Key: $API_KEY" \
 # Check WhatsApp engine logs
 docker compose logs openwa-api 2>&1 | grep -i "whatsapp\|puppeteer\|browser"
 
-# Check auth folder. Both engines key it on the session NAME, but the location differs:
-#   whatsapp-web.js → SESSION_DATA_PATH (default /app/data/sessions), dir `session-<name>`
-#   baileys         → BAILEYS_AUTH_DIR  (default /app/data/baileys),  dir `<name>` (no prefix)
-docker compose exec openwa-api ls -la /app/data/sessions/session-<name>/   # whatsapp-web.js
-docker compose exec openwa-api ls -la /app/data/baileys/<name>/            # baileys
+# Check auth folder. Both engines key it on the session UUID id, but the location differs:
+#   whatsapp-web.js → SESSION_DATA_PATH (default /app/data/sessions), dir `session-<id>`
+#   baileys         → BAILEYS_AUTH_DIR  (default /app/data/baileys),  dir `<id>` (no prefix)
+docker compose exec openwa-api ls -la /app/data/sessions/session-<id>/   # whatsapp-web.js
+docker compose exec openwa-api ls -la /app/data/baileys/<id>/            # baileys
 ```
 
 **Solutions:**
@@ -231,10 +231,10 @@ docker compose exec openwa-api ls -la /app/data/baileys/<name>/            # bai
 | WhatsApp blocked      | Set a per-session proxy (`proxyUrl`) |
 
 ```bash
-# Clear auth and restart (the profile dir carries the session NAME, not its UUID id).
+# Clear auth and restart (the profile dir carries the session's UUID id, not its name).
 # Remove the one that matches the session's engine — deleting the other path is a silent no-op.
-docker compose exec openwa-api rm -rf /app/data/sessions/session-<name>   # whatsapp-web.js
-docker compose exec openwa-api rm -rf /app/data/baileys/<name>            # baileys
+docker compose exec openwa-api rm -rf /app/data/sessions/session-<id>   # whatsapp-web.js
+docker compose exec openwa-api rm -rf /app/data/baileys/<id>            # baileys
 docker compose restart openwa-api
 ```
 
@@ -275,6 +275,14 @@ curl -X POST "$BASE/api/sessions" -H "X-API-Key: $API_KEY" -H "Content-Type: app
 
 > ℹ️ Proxy egress for the `whatsapp-web.js` engine is configured **per session** via the
 > `proxyUrl`/`proxyType` fields on `POST /api/sessions` — not via environment variables.
+
+> ℹ️ A `504` whose body starts with `Engine initialization timed out after ...` is a **different**
+> failure with a different fix: initialization never finished at all. That happens when WhatsApp Web,
+> the network or the session proxy is unreachable in a way that hangs the connection instead of
+> failing it, and when the browser stalls during startup (typically a container memory or resource
+> limit). Check egress to `web.whatsapp.com`, the session's `proxyUrl` and the container's memory
+> limit. The auth poll that produces the message above only starts once the page has loaded, so it
+> never fires for a connection that hangs before that.
 
 ### Issue: Session stuck at `authenticating`, never reaches `ready`
 
@@ -419,7 +427,7 @@ custom container that drops the `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` setup or th
 
 **Cause D — Debian 12 OS Chromium SIGTRAP in non-root Pods.**
 If `Code: null` happens on Kubernetes, and the host kernel logs or `dmesg` shows `Trace/breakpoint trap (core dumped)` with exit code 133, the underlying Debian 12 OS `chromium` package has crashed due to strict non-root or seccomp constraints (even with `--no-zygote` or `Unconfined` seccomp).
-_Fix:_ On amd64, do not use the `chromium` package from Debian's `apt` — it SIGTRAPs under strict non-root/seccomp. Instead, download Chrome for Testing via Puppeteer during the Docker build (`./node_modules/.bin/puppeteer browsers install 'chrome@146.0.7680.31'`) and point `PUPPETEER_EXECUTABLE_PATH` to it. (Chrome for Testing has no linux-arm64 build, so arm64 keeps Debian's `chromium`, which ships a native arm64 binary.) The official `Dockerfile` implements this mixed approach.
+_Fix:_ On amd64, do not use the `chromium` package from Debian's `apt` — it SIGTRAPs under strict non-root/seccomp. Instead, download Chrome for Testing via Puppeteer during the Docker build (`./node_modules/.bin/puppeteer browsers install 'chrome@153.0.8010.36'`) and point `PUPPETEER_EXECUTABLE_PATH` to it. (arm64 keeps Debian's `chromium`, which ships a native arm64 binary, by choice: Chrome for Testing publishes linux-arm64 builds only from 153, and the image has not moved arm64 to one.) The official `Dockerfile` implements this mixed approach.
 
 **Quick triage:** run `docker stats openwa-api`, click **Start**, and watch which resource spikes toward its
 limit the instant before the failure — that tells you A vs B. If neither moves and you see the crashpad
@@ -437,7 +445,7 @@ show:
 Protocol error (Runtime.callFunctionOn): Execution context was destroyed.
 ```
 
-**Cause:** The session's persistent browser profile (`<SESSION_DATA_PATH>/session-<name>`, created by
+**Cause:** The session's persistent browser profile (`<SESSION_DATA_PATH>/session-<id>`, created by
 whatsapp-web.js's `LocalAuth`) was built with a different Chromium/Chrome binary than the one the new
 image runs. A browser profile carries binary-bound state (page caches, GPU shader caches, IndexedDB /
 Local Storage version markers) that is not safely portable across Chromium major versions or binary
@@ -448,16 +456,25 @@ reads like a Puppeteer bug and gives no hint that the profile is the cause — t
 advisory when it detects this error, and the session's `lastError` (the message the dashboard shows on
 the session card) carries a short form of it, so the pointer survives without reading the container log.
 
+**Rolling back to an older browser** does not raise this error. An older Chrome silently deletes the
+IndexedDB of a profile a newer Chrome has opened, and that is where whatsapp-web.js keeps the WhatsApp
+login: every previously linked session starts at a QR code instead of reconnecting, the log names no
+cause (0.23.3 and 0.23.4 log only a generic `relink_required` warning), and upgrading again does not bring
+the pairing back. On amd64 this follows a rollback from 0.23.5 or later (Chrome for Testing 153) to 0.23.4
+or earlier (146); on arm64, a rollback to an image built with an older Debian chromium major. Restoring
+`sessions/` from a backup taken before the first start on the newer image keeps the pairing (see the
+upgrade runbook's rollback in docs/11); without one, scan a new QR.
+
 **Fix:** delete the affected session's profile dir and start the session again to scan a new QR. The
 profile cannot be salvaged — clearing only the cache subdirs (`Cache`, `GPUCache`, `Code Cache`, …) is
 **not** enough, the taint is deeper than the caches — so a one-time re-authentication is required.
 
-The profile dir is named after the session **name**, while the REST API addresses a session by its
-**id** (a UUID) — so the two placeholders below are different values:
+The profile dir is named after the session **id** (the UUID the REST API addresses it by), so
+`GET /api/sessions` gives you the value for both commands below:
 
 ```bash
-docker exec openwa-api rm -rf /app/data/sessions/session-<name>
-# then POST /sessions/<id>/force-kill and POST /sessions/<id>/start (the session's UUID id), and scan the new QR
+docker exec openwa-api rm -rf /app/data/sessions/session-<id>
+# then POST /sessions/<id>/force-kill and POST /sessions/<id>/start, and scan the new QR
 ```
 
 Re-creating the session (`DELETE /sessions/<id>`) also purges its profile dir; create it again and
@@ -575,7 +592,7 @@ The reconnect backoff is configured **per session**, not by environment variable
 
 `reconnectBaseDelay` is the exponential-backoff base in milliseconds (clamped to 1000–300000,
 default 5000). `maxReconnectAttempts` is clamped to 0–20 — `0` disables auto-reconnect entirely, and
-leaving it unset means unlimited retries with the delay parking at a 1-hour cap. Subscribe to the
+leaving it unset means unlimited retries with the delay parking at a 5-minute cap. Subscribe to the
 `session.reconnect_loop` webhook to be alerted on every 5th consecutive attempt.
 
 On a slow host, raise the first-boot init wait with `WWEBJS_AUTH_TIMEOUT_MS` (see _QR generation
@@ -1316,7 +1333,7 @@ available_events:
   - group.join_request # Someone asked to join a group this session administers
 
   # Calls
-  - call.received # Incoming call ringing (payload: callId, from, isVideo, isGroup, timestamp)
+  - call.received # Incoming call ringing (Baileys only; payload: callId, from, isVideo, isGroup, timestamp)
 ```
 
 **Q: Webhook payload format?**

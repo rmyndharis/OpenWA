@@ -20,8 +20,9 @@ export interface UseSessionFeedArgs {
   onSessionStatus: (event: { sessionId: string; status: string }) => void;
   onSessionRestriction?: (event: { sessionId: string }) => void;
   /**
-   * Fired once per RECONNECT, never on the first connect: every push that happened while the socket
-   * was down is gone, so the caller must re-read the list it holds in local state.
+   * Fired once per RECONNECT, never on the first connect unless the feed failed before it: every push
+   * that happened while the socket was down is gone, so the caller must re-read the list it holds in
+   * local state.
    */
   onReconnect?: () => void;
 }
@@ -105,8 +106,10 @@ export function useSessionFeed({
   // caller keeps its list in local state with no polling behind it, so a card would render its
   // pre-gap status until the operator reloaded the page. Tell the caller to re-read, on the RECONNECT
   // only and never on the first connect (nothing is cached yet, and the caller already fetched at
-  // mount). Same pure transition the Chats page uses, and idempotent: a re-run caused by a changed
-  // `onReconnect` identity sees the gap marker already cleared and does not fetch twice.
+  // mount), unless the feed failed first: the banner's retry then recovers a feed that may never have
+  // connected, and the mount read is as stale as any gap. Same pure transition the Chats page uses,
+  // and idempotent: a re-run caused by a changed `onReconnect` identity sees the gap marker already
+  // cleared and does not fetch twice.
   const hadConnected = useRef(false);
   const wasDisconnected = useRef(false);
   useEffect(() => {
@@ -114,11 +117,12 @@ export function useSessionFeed({
       isConnected,
       hadConnected: hadConnected.current,
       wasDisconnected: wasDisconnected.current,
+      connectionFailed,
     });
     hadConnected.current = decision.hadConnected;
     wasDisconnected.current = decision.wasDisconnected;
     if (decision.invalidate) onReconnect?.();
-  }, [isConnected, onReconnect]);
+  }, [isConnected, connectionFailed, onReconnect]);
 
   // In per-session mode, sessions loaded/created after the fallback still need their rooms.
   useEffect(() => {

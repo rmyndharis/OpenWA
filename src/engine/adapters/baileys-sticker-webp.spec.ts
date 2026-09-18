@@ -48,6 +48,7 @@ function makeMessaging(): { messaging: BaileysMessaging; sock: { sendMessage: je
   const sock = { sendMessage: jest.fn().mockResolvedValue({ key: { id: 'M1' }, messageTimestamp: 1 }) };
   const host = {
     ensureReady: jest.fn(),
+    sessionProxyUrl: () => undefined,
     getSocket: () => sock as unknown as WASocket,
     logger,
     toNeutralJid: (j: string) => j,

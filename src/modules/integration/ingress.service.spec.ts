@@ -67,6 +67,36 @@ describe('redactSensitiveHeaders (persisted ingress payloads)', () => {
     expect(recorded.payload.headers.authorization).toBe('[redacted]');
     expect(recorded.payload.headers['x-delivery']).toBe('d1');
   });
+
+  it("redacts a shared-secret route's declared credential header in the persisted and enqueued payload", async () => {
+    const d = deps({
+      manifestRoute: jest.fn().mockReturnValue({
+        route: 'chatwoot',
+        mode: 'async',
+        verify: 'core',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'shared-secret', header: 'X-Provider-Token' },
+        dedupHeader: 'x-delivery',
+      }),
+    });
+    const res = await new IngressService(d).handle({
+      pluginId: 'chatwoot',
+      instanceId: 'acct1',
+      route: 'chatwoot',
+      method: 'POST',
+      headers: { 'x-delivery': 'd1', 'x-provider-token': 's' },
+      query: {},
+      rawBody: '{}',
+    });
+    expect(res.status).toBe(202);
+    const recorded = (
+      d.events.recordOrSkip.mock.calls as unknown as [[{ payload: { headers: Record<string, string> } }]]
+    )[0][0];
+    expect(recorded.payload.headers['x-provider-token']).toBe('[redacted]');
+    expect(recorded.payload.headers['x-delivery']).toBe('d1');
+    const job = (d.enqueue.mock.calls as unknown as [[{ payload: { headers: Record<string, string> } }]])[0][0];
+    expect(job.payload.headers['x-provider-token']).toBe('[redacted]');
+  });
 });
 
 describe('IngressService.handle', () => {

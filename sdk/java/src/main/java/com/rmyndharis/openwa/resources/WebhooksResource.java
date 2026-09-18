@@ -7,6 +7,7 @@ import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.model.DeliveryFailureQuery;
 import com.rmyndharis.openwa.model.CreateWebhookRequest;
 import com.rmyndharis.openwa.model.UpdateWebhookRequest;
+import com.rmyndharis.openwa.model.WebhookDeliveryFailure;
 import com.rmyndharis.openwa.model.WebhookResponse;
 import com.rmyndharis.openwa.model.WebhookTestResult;
 import java.util.List;
@@ -31,11 +32,11 @@ public final class WebhooksResource {
      * Deliveries that were ATTEMPTED and failed — the diagnostic for a webhook that stopped arriving.
      * Requires an ADMIN-level key.
      *
-     * <p>A delivery a smart filter suppressed never reaches this log. The response has no published
-     * schema, so it is returned as a raw JSON tree.
+     * <p>A delivery a smart filter suppressed never reaches this log. Most recent first.
      */
-    public Object deliveryFailures(DeliveryFailureQuery query) {
-        return client.request(HttpMethod.GET, "/api/webhooks/delivery-failures", query, null, Object.class);
+    public List<WebhookDeliveryFailure> deliveryFailures(DeliveryFailureQuery query) {
+        return client.requestList(
+            HttpMethod.GET, "/api/webhooks/delivery-failures", query, null, WebhookDeliveryFailure.class);
     }
 
     /** List all webhooks for a session. */

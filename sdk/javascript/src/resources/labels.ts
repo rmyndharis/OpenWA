@@ -46,7 +46,8 @@ export class LabelsResource {
    *
    * `PUT`, not `POST`, because you choose the id: WhatsApp carries one write keyed on it, so whether
    * this creates or updates depends purely on whether that id already exists. Pick an unused id to
-   * create — reusing one rewrites that label rather than failing. Omitted fields are left alone.
+   * create — reusing one rewrites that label rather than failing. The write replaces the whole
+   * label, so an omitted field is not preserved.
    */
   upsert(sessionId: string, labelId: string, body: UpsertLabelRequest): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({

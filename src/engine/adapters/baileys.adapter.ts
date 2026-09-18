@@ -1,4 +1,3 @@
-import * as path from 'path';
 import { ChatLabelsUnsupportedError } from '../../common/errors/chat-labels-unsupported.error';
 import { isChannelJid } from '../identity/wa-id';
 import type * as BaileysLib from '@whiskeysockets/baileys';
@@ -51,6 +50,7 @@ import { EngineNotSupportedError } from '../../common/errors/engine-not-supporte
 import { NotFoundException } from '@nestjs/common';
 import { createLogger } from '../../common/services/logger.service';
 import { BaileysAdapterConfig } from '../types/baileys.types';
+import { baileysAuthDir } from '../auth-dir-paths';
 import { BaileysSessionStore } from './baileys-session-store';
 import { inboundMediaConcurrency } from './inbound-media-cap';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
@@ -112,7 +112,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   constructor(private readonly config: BaileysAdapterConfig) {
     // Isolate each session's auth state under its own subdirectory of the shared auth dir.
-    this.authPath = path.join(config.authDir, config.sessionId);
+    this.authPath = baileysAuthDir(config.authDir, config.sessionId);
     this.sessionStore = new BaileysSessionStore(config.lidMappingStore, config.sessionId, config.chatStateStore);
     // Constructed before messaging: the messaging delegate's own-send echo maps through
     // events.mapMessage (and the lifecycle delegate clears that same live-call cache on teardown).
@@ -133,6 +133,8 @@ export class BaileysAdapter implements IWhatsAppEngine {
       toNeutralJid: jid => this.sessionStore.toNeutralJid(jid),
       normalizedSelfJid: () => this.normalizedSelfJid(),
       loadLib: () => this.loadLib(),
+      getFetchDispatcher: () => this.lifecycle.fetchDispatcher(),
+      sessionProxyUrl: () => this.config.proxyUrl,
       toUnixSeconds,
       inboundLimiter: this.inboundLimiter,
       recordKeyLidMappings: key => this.sessionStore.recordKeyLidMappings(key),
@@ -628,7 +630,9 @@ export class BaileysAdapter implements IWhatsAppEngine {
     this.ensureReady();
     // Unset fields are passed through as undefined rather than stripped: the protobuf encoder skips
     // a field that is `!= null` false, exactly as it skips a missing one (WAProto/index.js,
-    // LabelEditAction.encode), so an omitted name really does leave the stored name alone. Colour 0
+    // LabelEditAction.encode). That does not make the write partial: the patch is an app-state SET
+    // on ['label_edit', id], which replaces the stored action whole, so an omitted name is not kept
+    // (Utils/chat-utils.js builds it with OP.SET and the receiver applies it without a merge). Colour 0
     // is a real WhatsApp colour and survives that check — which is why it must never be tested for
     // truthiness on the way here.
     await withQueryDeadline(

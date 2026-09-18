@@ -229,7 +229,7 @@ describe('SessionService logout() name-scoped teardown fence', () => {
 
       releaseLogout();
       await deleteCall;
-      expect(engineFactory.purgeSessionData).toHaveBeenCalledWith(SESSION_NAME);
+      expect(engineFactory.purgeSessionData).toHaveBeenCalledWith(SESSION_UUID, SESSION_NAME);
       expect(pendingOf().has(SESSION_NAME)).toBe(false);
     } finally {
       jest.useRealTimers();

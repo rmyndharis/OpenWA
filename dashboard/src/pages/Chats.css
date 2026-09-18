@@ -739,7 +739,7 @@
 }
 
 .chats-page .chats-reconnect-banner button {
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 
 /* =============================================================================

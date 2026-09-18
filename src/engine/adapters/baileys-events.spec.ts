@@ -92,6 +92,7 @@ function makeHost(overrides: Partial<BaileysEventsHost> = {}): BaileysEventsHost
     getSocketOrNull: () => null,
     logger: createLogger('BaileysEventsSpec'),
     loadLib: () => Promise.resolve(libStub),
+    getFetchDispatcher: () => undefined,
     toNeutralJid: (jid: string) => jid,
     normalizedSelfJid: () => '6280000000000@s.whatsapp.net',
     // connectedAt only gates handleMessagesUpsert's history-replay skip; mapMessage itself never

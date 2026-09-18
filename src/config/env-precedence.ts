@@ -31,6 +31,8 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'MEDIA_DOWNLOAD_MAX_BYTES',
   'MEDIA_DOWNLOAD_TIMEOUT_MS',
   'INBOUND_MEDIA_CONCURRENCY',
+  // Whether a caller-supplied URL is fetched through the named session's egress proxy.
+  'SESSION_PROXY_URL_FETCH',
   // Database selection + connection details (#488)
   'DATABASE_TYPE',
   'DATABASE_HOST',
@@ -200,6 +202,7 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'BAILEYS_LOG_LEVEL',
   'BAILEYS_MESSAGE_STORE_LIMIT',
   'BAILEYS_SESSION_STORE_MAX_ENTRIES',
+  'BAILEYS_CHAT_STATE_CACHE_MAX',
   'WWEBJS_ONBOARDING_CONTINUE_LABELS',
   'SHUTDOWN_DELAY_MS',
   'SIMULATE_TYPING_MAX_MS',

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, MaxLength, ValidateIf } from 'class-validator';
 
 const NAME_MAX_LENGTH = 100;
 const BODY_MAX_LENGTH = 4096;
@@ -49,14 +49,15 @@ export class CreateTemplateDto {
 
 export class UpdateTemplateDto {
   @ApiPropertyOptional({ description: 'Template name', maxLength: NAME_MAX_LENGTH })
-  @IsOptional()
+  // Not @IsOptional: that also skips null, which then reaches the NOT NULL column as a 500.
+  @ValidateIf((o: UpdateTemplateDto) => o.name !== undefined)
   @IsString()
   @IsNotEmpty()
   @MaxLength(NAME_MAX_LENGTH)
   name?: string;
 
   @ApiPropertyOptional({ description: 'Template body with {{variable}} placeholders', maxLength: BODY_MAX_LENGTH })
-  @IsOptional()
+  @ValidateIf((o: UpdateTemplateDto) => o.body !== undefined)
   @IsString()
   @IsNotEmpty()
   @MaxLength(BODY_MAX_LENGTH)

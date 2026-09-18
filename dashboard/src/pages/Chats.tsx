@@ -542,7 +542,8 @@ export function Chats() {
   // A transient WebSocket gap means message.received/ack/revoke events were missed, and the chat
   // cache uses staleTime: Infinity so it won't refetch on its own. On a reconnect (isConnected
   // false→true after a prior connect), invalidate the active session's messages so the thread the
-  // gap left stale refreshes. The transition logic is unit-tested in utils/reconnectState.
+  // gap left stale refreshes. A failed feed counts as a gap even if it never connected, so the
+  // banner's retry refreshes too. The transition logic is unit-tested in utils/reconnectState.
   const reconnectHadConnected = useRef(false);
   const reconnectWasDisconnected = useRef(false);
   useEffect(() => {
@@ -550,6 +551,7 @@ export function Chats() {
       isConnected,
       hadConnected: reconnectHadConnected.current,
       wasDisconnected: reconnectWasDisconnected.current,
+      connectionFailed,
     });
     reconnectHadConnected.current = decision.hadConnected;
     reconnectWasDisconnected.current = decision.wasDisconnected;
@@ -559,7 +561,7 @@ export function Chats() {
       // otherwise stay invisible until a focus refetch.
       queryClient.invalidateQueries({ queryKey: ['contact-statuses', selectedSessionId] });
     }
-  }, [isConnected, selectedSessionId, queryClient]);
+  }, [isConnected, connectionFailed, selectedSessionId, queryClient]);
 
   useEffect(() => {
     if (selectedSessionId && isConnected) {

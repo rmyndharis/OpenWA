@@ -87,7 +87,11 @@ export class OpenWANotImplementedError extends OpenWAApiError {}
  * request budget ran out. **Retryable**, unlike every other typed error here.
  *
  * Not every 503 is safe to repeat blindly: the non-idempotent sends (group create, channel create,
- * media send) are deliberately left unbounded by the gateway precisely so they never answer one.
+ * media send) are deliberately left unbounded by the gateway so a slow WhatsApp reply never answers
+ * one, and in a multi-node deployment a forwarded request answers 503 only when the owner node was
+ * never reached. A forward that fails after the request was sent answers 502 or 504 instead (a plain
+ * `OpenWAApiError`): the owner may already have carried it out, so do not repeat a non-idempotent
+ * send on those unchecked.
  */
 export class OpenWAServiceUnavailableError extends OpenWAApiError {}
 

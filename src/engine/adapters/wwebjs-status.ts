@@ -180,7 +180,7 @@ export class WwebjsStatus {
   ): Promise<StatusResult> {
     this.host.ensureReady();
     this.warnStatusRecipientsOnce(options);
-    const messageMedia = await toMessageMedia(media);
+    const messageMedia = await toMessageMedia(media, this.host.config.proxy?.url);
     // Non-idempotent: a replayed post would publish the status twice. See reportPageDeath.
     const msg = await reportPageDeath(this.host, 'postMediaStatus', () =>
       this.client().sendMessage('status@broadcast', messageMedia, {

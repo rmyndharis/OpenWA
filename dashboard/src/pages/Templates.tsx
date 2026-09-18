@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, FileText, Loader2, Plus, Search, Trash2 } from 'lucide-react';
+import { AlertCircle, Copy, FileText, Loader2, Plus, Search, Trash2 } from 'lucide-react';
 import { type MessageTemplate, type TemplatePayload } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
@@ -65,10 +65,11 @@ export function Templates() {
   const [previewValues, setPreviewValues] = useState<Record<string, string>>({});
   const [searchTerm, setSearchTerm] = useState('');
 
-  const { data: templates = [], isLoading: loadingTemplates } = useTemplatesQuery(
-    selectedSessionId,
-    !!selectedSessionId,
-  );
+  const {
+    data: templates = [],
+    isLoading: loadingTemplates,
+    error: templatesError,
+  } = useTemplatesQuery(selectedSessionId, !!selectedSessionId);
   const createMutation = useCreateTemplateMutation();
   const updateMutation = useUpdateTemplateMutation();
   const deleteMutation = useDeleteTemplateMutation();
@@ -235,6 +236,23 @@ export function Templates() {
             {loadingTemplates ? (
               <div className="templates-loading-inline">
                 <Loader2 className="animate-spin" size={24} />
+              </div>
+            ) : templatesError && templates.length === 0 ? (
+              // A failed read is not an empty library: a viewer key always gets 403 here (the route is
+              // OPERATOR-only), and a gateway error would otherwise read as "no templates saved".
+              <div className="templates-empty-list" role="alert">
+                <AlertCircle size={40} strokeWidth={1} />
+                {(templatesError as { status?: number }).status === 403 ? (
+                  <>
+                    <h3>{t('templates.empty.forbiddenTitle')}</h3>
+                    <p>{t('templates.empty.forbiddenDesc')}</p>
+                  </>
+                ) : (
+                  <>
+                    <h3>{t('templates.empty.loadErrorTitle')}</h3>
+                    <p>{templatesError.message}</p>
+                  </>
+                )}
               </div>
             ) : templates.length === 0 ? (
               <div className="templates-empty-list">

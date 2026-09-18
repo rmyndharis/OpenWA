@@ -55,3 +55,18 @@ test('every patcher is also wired into postinstall', () => {
   const missing = patchers.filter(p => !planned.includes(p));
   assert.deepEqual(missing, [], `not wired into postinstall: ${missing.join(', ')}`);
 });
+
+test('docs install the same Chrome for Testing build as the image', () => {
+  // The amd64 pin is bumped by hand, and the docs repeat the install command. A bump that misses
+  // them leaves a copy-paste recipe for an older, unpatched browser.
+  const pin = /browsers install 'chrome@([\d.]+)'/g;
+  const images = [...dockerfile.matchAll(pin)].map(m => m[1]);
+  assert.equal(images.length, 1, 'expected exactly one chrome@<version> install in the Dockerfile');
+  const docs = fs
+    .readdirSync(path.join(ROOT, 'docs'), { recursive: true })
+    .filter(f => f.endsWith('.md'))
+    .flatMap(f => [...fs.readFileSync(path.join(ROOT, 'docs', f), 'utf8').matchAll(pin)].map(m => `${f}: ${m[1]}`));
+  assert.ok(docs.length > 0, 'no doc shows the install command; drop this test if that is intended');
+  const stale = docs.filter(d => !d.endsWith(`: ${images[0]}`));
+  assert.deepEqual(stale, [], `docs pin a different Chrome than the Dockerfile (${images[0]})`);
+});

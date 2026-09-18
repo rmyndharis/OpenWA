@@ -23,6 +23,7 @@ export interface BaileysVersionResolverOptions {
 }
 
 export interface ResolveOptions {
+  /** Global-fetch dispatcher for the session proxy; undefined on an unproxied session (direct). */
   dispatcher?: unknown;
 }
 

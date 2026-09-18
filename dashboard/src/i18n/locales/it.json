@@ -11,7 +11,7 @@
     "cancel": "Annulla",
     "delete": "Elimina",
     "create": "Crea",
-    "save": "Save",
+    "save": "Salva",
     "close": "Chiudi",
     "showApiKey": "Mostra la chiave API",
     "hideApiKey": "Nascondi la chiave API",
@@ -305,7 +305,7 @@
       "created": "Creata",
       "lastActive": "Ultima Attività",
       "autoRejectCalls": "Rifiuta automaticamente le chiamate",
-      "autoRejectCallsHint": "Le chiamate in arrivo vengono rifiutate appena squillano. Il webhook call.received viene comunque inviato prima. Si applica alla prossima chiamata — nessun riavvio necessario."
+      "autoRejectCallsHint": "Le chiamate in arrivo vengono rifiutate appena squillano. Il webhook call.received viene comunque inviato prima. Si applica alla prossima chiamata — nessun riavvio necessario. Solo con il motore Baileys: whatsapp-web.js non rileva più le chiamate mentre squillano."
     },
     "proxy": {
       "title": "Configurazione proxy",
@@ -393,7 +393,8 @@
     },
     "start": {
       "teardownPendingTitle": "Avvio sessione",
-      "teardownPending": "Uno smontaggio delle credenziali per questa sessione è ancora in corso. Attendi un momento e riprova."
+      "teardownPending": "Uno smontaggio delle credenziali per questa sessione è ancora in corso. Attendi un momento e riprova.",
+      "errorTitle": "Avvio Fallito"
     },
     "restriction": {
       "reachout_timelock": "Nuove chat bloccate",
@@ -434,7 +435,7 @@
         "body": "Corpo del messaggio",
         "type": "Tipo di messaggio",
         "isGroup": "È una chat di gruppo",
-        "kind": "Chat kind",
+        "kind": "Tipo di chat",
         "fromMe": "Inviato da me",
         "hasMedia": "Contiene media",
         "mentions": "Menzioni"
@@ -518,7 +519,10 @@
       "title": "Nessun modello salvato",
       "description": "Crea un modello riutilizzabile per velocizzare le risposte e le notifiche più comuni..",
       "noSessionsTitle": "Nessuna sessione disponibile",
-      "noSessionsDesc": "Crea una sessione WhatsApp prima di aggiungere i modelli."
+      "noSessionsDesc": "Crea una sessione WhatsApp prima di aggiungere i modelli.",
+      "loadErrorTitle": "Impossibile caricare i modelli",
+      "forbiddenTitle": "Nessun accesso ai modelli",
+      "forbiddenDesc": "I modelli richiedono una chiave API con ruolo operatore o amministratore."
     },
     "toasts": {
       "created": "Modello creato con successo",
@@ -835,8 +839,8 @@
       "export": "Esporta dati",
       "import": "Importa dati",
       "exportFailed": "Impossibile esportare i dati",
-      "exportPartialTitle": "Backup is missing some media",
-      "exportPartial": "{{count}} attachment payload(s) exceeded the export media budget and were saved as placeholders. The messages restore; their media does not.",
+      "exportPartialTitle": "Nel backup mancano alcuni file multimediali",
+      "exportPartial": "{{count}} allegato/i ha/hanno superato il limite di spazio per l'esportazione dei file multimediali e sono stati salvati come segnaposto. I messaggi verranno ripristinati, ma non i relativi file multimediali.",
       "importFailed": "Impossibile importare i dati",
       "importOk": "Dati importati",
       "importConfirm": "L'importazione SOSTITUIRÀ tutti i dati attuali con il backup ({{rows}} righe). Questa operazione non può essere annullata. Continuare?",

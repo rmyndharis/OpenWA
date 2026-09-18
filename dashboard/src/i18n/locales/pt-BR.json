@@ -305,7 +305,7 @@
       "created": "Criado em",
       "lastActive": "Última atividade",
       "autoRejectCalls": "Rejeitar chamadas automaticamente",
-      "autoRejectCallsHint": "As chamadas recebidas são recusadas assim que tocam. O webhook call.received continua sendo enviado antes. Vale a partir da próxima chamada — sem reiniciar."
+      "autoRejectCallsHint": "As chamadas recebidas são recusadas assim que tocam. O webhook call.received continua sendo enviado antes. Vale a partir da próxima chamada — sem reiniciar. Somente no mecanismo Baileys: o whatsapp-web.js não detecta mais as chamadas enquanto tocam."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -393,7 +393,8 @@
     },
     "start": {
       "teardownPendingTitle": "Iniciando sessão",
-      "teardownPending": "A remoção de credenciais desta sessão ainda está em andamento. Aguarde um momento e tente novamente."
+      "teardownPending": "A remoção de credenciais desta sessão ainda está em andamento. Aguarde um momento e tente novamente.",
+      "errorTitle": "Erro ao iniciar"
     },
     "restriction": {
       "reachout_timelock": "Novas conversas bloqueadas",
@@ -707,7 +708,10 @@
       "title": "Nenhum modelo salvo",
       "description": "Crie um modelo reutilizável para agilizar respostas e notificações habituais.",
       "noSessionsTitle": "Nenhuma sessão disponível",
-      "noSessionsDesc": "Crie uma sessão do WhatsApp antes de adicionar modelos."
+      "noSessionsDesc": "Crie uma sessão do WhatsApp antes de adicionar modelos.",
+      "loadErrorTitle": "Não foi possível carregar os modelos",
+      "forbiddenTitle": "Sem acesso aos modelos",
+      "forbiddenDesc": "Os modelos exigem uma chave de API com a função de operador ou administrador."
     },
     "toasts": {
       "created": "Modelo criado com sucesso",

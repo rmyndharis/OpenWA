@@ -470,7 +470,7 @@ export class WwebjsGroups {
   async setGroupPicture(groupId: string, media: MediaInput): Promise<void> {
     const groupChat = await this.requireGroupChat(groupId);
     // GroupChat.setPicture, NOT Client.setProfilePicture — the latter targets the own account.
-    const ok = await groupChat.setPicture(await toMessageMedia(media));
+    const ok = await groupChat.setPicture(await toMessageMedia(media, this.host.config.proxy?.url));
     if (!ok) {
       throw new EngineRefusedError(`Failed to set the picture for group ${groupId} — admin rights required`);
     }

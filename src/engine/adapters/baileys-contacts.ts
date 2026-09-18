@@ -12,6 +12,8 @@ import { RecipientUnreachableError } from '../../common/errors/recipient-unreach
  * delegate never touches lifecycle state directly.
  */
 export interface BaileysContactsHost {
+  /** This session's egress proxy URL (snapshotted at session start), or undefined when direct. */
+  sessionProxyUrl(): string | undefined;
   ensureReady(): void;
   /** Post-ensureReady socket handle — call host.ensureReady() first. */
   getSocket(): WASocket;
@@ -180,7 +182,7 @@ export class BaileysContacts {
     }
     // updateProfilePicture takes a WAMediaUpload; resolveMediaBuffer covers Buffer | base64 | URL,
     // the same conversion the media sends use.
-    const { data } = await resolveMediaBuffer(media);
+    const { data } = await resolveMediaBuffer(media, this.host.sessionProxyUrl());
     await this.confirmed(this.sock().updateProfilePicture(selfJid, data), 'the profile picture change');
   }
 

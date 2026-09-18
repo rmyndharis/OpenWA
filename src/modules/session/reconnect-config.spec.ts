@@ -7,7 +7,7 @@ import { resolveReconnectConfig } from './session-engine-lifecycle.service';
 // false). These helpers coerce + clamp the config so the math is always finite and bounded.
 describe('resolveReconnectConfig', () => {
   it('defaults to a 5000ms base delay and UNLIMITED attempts for absent or empty config', () => {
-    // A long-lived session must keep retrying forever (the backoff parks at the 1h cap) instead of
+    // A long-lived session must keep retrying forever (the backoff parks at the 5-minute cap) instead of
     // dying permanently after ~2.5 minutes like the old 5-attempt default did.
     expect(resolveReconnectConfig(null)).toEqual({ baseDelay: 5000, maxAttempts: Number.POSITIVE_INFINITY });
     expect(resolveReconnectConfig({})).toEqual({ baseDelay: 5000, maxAttempts: Number.POSITIVE_INFINITY });
@@ -51,6 +51,6 @@ describe('clampReconnectDelay', () => {
   });
 
   it('caps the exponential so it never exceeds setTimeout range and fires immediately', () => {
-    expect(clampReconnectDelay(1e15, 5000)).toBe(3_600_000);
+    expect(clampReconnectDelay(1e15, 5000)).toBe(300_000);
   });
 });

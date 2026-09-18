@@ -37,6 +37,7 @@ import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+import * as loadRemoteMediaModule from '../../common/media/load-remote-media';
 import { fetch as undiciFetch } from 'undici';
 
 // Allowlisted hosts are PINNED to their DNS answer (ssrf-guard pins allowlisted hosts to their DNS answers), so the specs that exercise
@@ -510,7 +511,7 @@ describe('loadRemoteMedia — routes through the SSRF-pinned media fetch', () =>
   it('builds MessageMedia from the pinned fetch bytes, never via MessageMedia.fromUrl', async () => {
     (undiciFetch as jest.Mock).mockResolvedValue(fakeResponse([104, 105], { 'content-type': 'image/png' }));
 
-    const media = await loadRemoteMedia('https://8.8.8.8/x.png');
+    const media = await loadRemoteMedia('https://8.8.8.8/x.png', undefined);
 
     expect(fromUrlSpy).not.toHaveBeenCalled(); // the unpinned node-fetch path is gone
     expect(media.mimetype).toBe('image/png');
@@ -522,13 +523,13 @@ describe('loadRemoteMedia — routes through the SSRF-pinned media fetch', () =>
   });
 
   it('blocks an internal/loopback URL BEFORE any fetch (no outbound socket)', async () => {
-    await expect(loadRemoteMedia('http://127.0.0.1/x.png')).rejects.toBeInstanceOf(SsrfBlockedError);
+    await expect(loadRemoteMedia('http://127.0.0.1/x.png', undefined)).rejects.toBeInstanceOf(SsrfBlockedError);
     expect(undiciFetch).not.toHaveBeenCalled();
     expect(fromUrlSpy).not.toHaveBeenCalled();
   });
 
   it('blocks the cloud-metadata IP before fetching', async () => {
-    await expect(loadRemoteMedia('http://169.254.169.254/latest/meta-data/x.png')).rejects.toBeInstanceOf(
+    await expect(loadRemoteMedia('http://169.254.169.254/latest/meta-data/x.png', undefined)).rejects.toBeInstanceOf(
       SsrfBlockedError,
     );
     expect(undiciFetch).not.toHaveBeenCalled();
@@ -538,7 +539,7 @@ describe('loadRemoteMedia — routes through the SSRF-pinned media fetch', () =>
     process.env.SSRF_ALLOWED_HOSTS = 'minio';
     (undiciFetch as jest.Mock).mockResolvedValue(fakeResponse([1], { 'content-type': 'image/png' }));
 
-    const media = await loadRemoteMedia('http://minio:9000/bucket/x.png');
+    const media = await loadRemoteMedia('http://minio:9000/bucket/x.png', undefined);
 
     expect(media.mimetype).toBe('image/png');
     expect(fromUrlSpy).not.toHaveBeenCalled();
@@ -4162,6 +4163,30 @@ describe('outbound document mode (#989)', () => {
         expect.objectContaining({ mimetype: 'application/pdf', filename: 'report.pdf' }),
         expect.objectContaining({ sendMediaAsDocument: true }),
       );
+    });
+
+    // The browser's own requests ride Chromium's --proxy-server; this fetch is made by the gateway,
+    // so the adapter has to hand it the session proxy or it leaves from the gateway's address (#1626).
+    it('fetches a media URL through the session proxy on a proxied session', async () => {
+      const load = jest
+        .spyOn(loadRemoteMediaModule, 'loadRemoteMediaBuffer')
+        .mockResolvedValue({ data: Buffer.from([1]), mimetype: 'image/png' });
+      const adapter = new WhatsAppWebJsAdapter({
+        sessionId: 's',
+        sessionDataPath: './data/sessions',
+        puppeteer: {},
+        proxy: { url: 'socks5://proxy.invalid:1080', type: 'socks5' },
+      });
+      (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+      (adapter as unknown as { client: unknown }).client = { sendMessage: jest.fn().mockResolvedValue(sentMessage) };
+
+      await adapter.sendImageMessage('628@c.us', {
+        mimetype: 'image/png',
+        data: 'https://files.example.com/photo.jpg',
+      });
+
+      expect(load).toHaveBeenCalledWith('https://files.example.com/photo.jpg', 'socks5://proxy.invalid:1080');
+      load.mockRestore();
     });
 
     // The DTO fills this in when the client said nothing, so it is a placeholder rather than a claim

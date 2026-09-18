@@ -305,7 +305,7 @@
       "created": "Erstellt",
       "lastActive": "Zuletzt aktiv",
       "autoRejectCalls": "Anrufe automatisch ablehnen",
-      "autoRejectCallsHint": "Eingehende Anrufe werden abgelehnt, sobald sie klingeln. Der Webhook call.received wird trotzdem zuerst ausgelöst. Gilt ab dem nächsten Anruf — kein Neustart nötig."
+      "autoRejectCallsHint": "Eingehende Anrufe werden abgelehnt, sobald sie klingeln. Der Webhook call.received wird trotzdem zuerst ausgelöst. Gilt ab dem nächsten Anruf — kein Neustart nötig. Nur mit der Baileys-Engine: whatsapp-web.js erkennt klingelnde Anrufe nicht mehr."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -393,7 +393,8 @@
     },
     "start": {
       "teardownPendingTitle": "Sitzung wird gestartet",
-      "teardownPending": "Ein Anmeldedatenabbau für diese Sitzung läuft noch. Warten Sie einen Moment und versuchen Sie es erneut."
+      "teardownPending": "Ein Anmeldedatenabbau für diese Sitzung läuft noch. Warten Sie einen Moment und versuchen Sie es erneut.",
+      "errorTitle": "Start fehlgeschlagen"
     },
     "restriction": {
       "reachout_timelock": "Neue Chats blockiert",
@@ -518,7 +519,10 @@
       "title": "Keine Vorlagen gespeichert",
       "description": "Erstelle eine wiederverwendbare Vorlage, um häufige Antworten und Benachrichtigungen schneller zu versenden.",
       "noSessionsTitle": "Keine Sitzungen verfügbar",
-      "noSessionsDesc": "Erstelle eine WhatsApp-Sitzung, bevor du Vorlagen hinzufügst."
+      "noSessionsDesc": "Erstelle eine WhatsApp-Sitzung, bevor du Vorlagen hinzufügst.",
+      "loadErrorTitle": "Vorlagen konnten nicht geladen werden",
+      "forbiddenTitle": "Kein Zugriff auf Vorlagen",
+      "forbiddenDesc": "Vorlagen erfordern einen API-Schlüssel mit der Rolle Operator oder Admin."
     },
     "toasts": {
       "created": "Vorlage wurde erfolgreich erstellt",

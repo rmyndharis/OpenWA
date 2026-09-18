@@ -31,6 +31,8 @@ import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-dead
  * delegate never touches lifecycle state directly.
  */
 export interface BaileysMessagingHost {
+  /** This session's egress proxy URL (snapshotted at session start), or undefined when direct. */
+  sessionProxyUrl(): string | undefined;
   ensureReady(): void;
   /** Post-ensureReady socket handle — call host.ensureReady() first. */
   getSocket(): WASocket;
@@ -132,13 +134,21 @@ async function toWebpSticker(data: Buffer, mimetype: string): Promise<Buffer> {
   }
 }
 
-/** Resolve a MediaInput's data (Buffer | base64 string | http(s) URL) to bytes + mimetype. */
-export async function resolveMediaBuffer(media: MediaInput): Promise<{ data: Buffer; mimetype: string }> {
+/**
+ * Resolve a MediaInput's data (Buffer | base64 string | http(s) URL) to bytes + mimetype.
+ *
+ * `sessionProxyUrl` is this session's egress proxy, which the URL fetch leaves through (#1626). It
+ * is required, not optional, so a new call site cannot fetch direct on a proxied session by omission.
+ */
+export async function resolveMediaBuffer(
+  media: MediaInput,
+  sessionProxyUrl: string | undefined,
+): Promise<{ data: Buffer; mimetype: string }> {
   if (Buffer.isBuffer(media.data)) {
     return { data: media.data, mimetype: media.mimetype };
   }
   if (/^https?:\/\//i.test(media.data)) {
-    const fetched = await loadRemoteMediaBuffer(media.data);
+    const fetched = await loadRemoteMediaBuffer(media.data, sessionProxyUrl);
     // A generic placeholder mimetype (buildMediaInput's 'application/octet-stream' default when the
     // caller supplied none) carries no real signal — defer to the fetched response content-type,
     // which was sniffed from the actual bytes. This fixes URL-based sends where the caller has no
@@ -179,7 +189,7 @@ export class BaileysMessaging {
     // not only when a preview was asked for.
     const options = {
       ...(this.withEphemeral(jid) ?? {}),
-      getUrlInfo: (text: string) => generateSafeLinkPreview(text),
+      getUrlInfo: (text: string) => generateSafeLinkPreview(text, { sessionProxyUrl: this.host.sessionProxyUrl() }),
       // Merged rather than assigned: getUrlInfo above must survive, or the library's own vulnerable
       // preview generator becomes reachable again on quoted sends only.
       ...((await this.quoteOption(sendOptions?.quotedMessageId)) ?? {}),
@@ -314,7 +324,7 @@ export class BaileysMessaging {
 
   async sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.host.ensureReady();
-    const { data, mimetype } = await resolveMediaBuffer(media);
+    const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl());
     return this.sendContent(
       chatId,
       {
@@ -329,7 +339,7 @@ export class BaileysMessaging {
 
   async sendVideoMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.host.ensureReady();
-    const { data, mimetype } = await resolveMediaBuffer(media);
+    const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl());
     return this.sendContent(
       chatId,
       {
@@ -344,7 +354,7 @@ export class BaileysMessaging {
 
   async sendAudioMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.host.ensureReady();
-    const { data, mimetype } = await resolveMediaBuffer(media);
+    const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl());
     return this.sendContent(
       chatId,
       // Audio carries no caption, so a mention here tags the recipient through contextInfo without
@@ -358,7 +368,7 @@ export class BaileysMessaging {
 
   async sendDocumentMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.host.ensureReady();
-    const { data, mimetype } = await resolveMediaBuffer(media);
+    const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl());
     return this.sendContent(
       chatId,
       {
@@ -396,7 +406,7 @@ export class BaileysMessaging {
 
   async sendStickerMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.host.ensureReady();
-    const { data, mimetype } = await resolveMediaBuffer(media);
+    const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl());
     // A sticker has neither text nor caption, but stickerMessage carries a contextInfo like every
     // other content type, so a mention still tags the participant. The route accepts the field
     // (send-sticker shares SendMediaMessageDto) and docs/06 lists it among the media sends that
@@ -617,7 +627,10 @@ export class BaileysMessaging {
    */
   private previewSafeOptions(content: AnyMessageContent, options?: MiscMessageGenerationOptions) {
     if (!('text' in content)) return options;
-    return { ...(options ?? {}), getUrlInfo: (text: string) => generateSafeLinkPreview(text) };
+    return {
+      ...(options ?? {}),
+      getUrlInfo: (text: string) => generateSafeLinkPreview(text, { sessionProxyUrl: this.host.sessionProxyUrl() }),
+    };
   }
 
   private async sendContent(

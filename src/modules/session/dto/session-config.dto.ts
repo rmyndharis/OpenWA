@@ -18,7 +18,8 @@ import { ToStrictBoolean, ToStrictNumber } from '../../../common/utils/strict-bo
 export class UpdateSessionConfigDto {
   @ApiPropertyOptional({
     description:
-      'Auto-reject every incoming call as soon as it rings. The call.received event is still ' +
+      'Auto-reject every incoming call as soon as it rings. Baileys engine only: whatsapp-web.js no ' +
+      'longer detects a ringing call. The call.received event is still ' +
       'emitted first, so a webhook consumer sees the call regardless. Takes effect on the next ' +
       'incoming call — the session is not restarted.',
     example: true,
@@ -80,7 +81,7 @@ export class UpdateSessionConfigDto {
  * actually do, including for legacy rows whose stored values fall outside the accepted range.
  */
 export class SessionConfigResponseDto {
-  @ApiProperty({ description: 'Whether incoming calls are auto-rejected', example: false })
+  @ApiProperty({ description: 'Whether incoming calls are auto-rejected (Baileys engine only)', example: false })
   autoRejectCalls!: boolean;
 
   @ApiProperty({

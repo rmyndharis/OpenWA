@@ -94,6 +94,13 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
       const rows = await this.outbox.findStale(new Date(now.getTime() - opts.graceMs), opts.batchSize);
       stats.scanned = rows.length;
       for (const row of rows) {
+        if (this.delivery.isLocallyPending(row.idempotencyKey)) {
+          // Still owned by a dispatch on this node (parked in the limiter or mid retry loop), so it
+          // is slow rather than stranded. Replaying it would POST alongside the original and outside
+          // the dispatch concurrency bound, and would spend its budget while it is still running.
+          stats.skipped++;
+          continue;
+        }
         if (row.attempts >= opts.maxAttempts) {
           // Budget spent: stop replaying and leave the failure row as the recovery path.
           await this.outbox.close(row.webhookId, row.idempotencyKey, 'failed');
@@ -108,7 +115,12 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
           stats.skipped++;
           continue;
         }
-        await this.outbox.countAttempt(row.id, row.attempts);
+        if (!(await this.outbox.countAttempt(row.id, row.attempts))) {
+          // Settled since the batch was read, typically a local dispatch that finished while an
+          // earlier row in this pass was replaying. The copy in hand is stale; replaying it duplicates.
+          stats.skipped++;
+          continue;
+        }
         try {
           // The outcome is a RETURN VALUE, not an exception. Every delivery failure is handled in
           // place (dead-letter row, hook, log), so redeliver resolves either way and a catch here

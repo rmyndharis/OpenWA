@@ -45,6 +45,19 @@ const RELAYED_RESPONSE_HEADERS = [
   'x-ratelimit-reset-long',
 ] as const;
 
+/**
+ * Connection-stage failure codes: the owner never received the request, so nothing ran there and a
+ * retry cannot repeat an action. Any other failure may come after the owner started acting on it.
+ */
+const NOT_DISPATCHED_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
 /** Marks a request as already forwarded once. Whatever happens, it is never forwarded again. */
 export const FORWARDED_HEADER = 'x-openwa-forwarded';
 
@@ -198,11 +211,12 @@ export class SessionProxyInterceptor implements NestInterceptor {
     }
 
     const hasBody = !['GET', 'HEAD'].includes(request.method);
+    let target: string | undefined;
     try {
       // Inside the try: a NODE_URL that is not a usable absolute URL makes this throw, and that is
-      // an unreachable-owner condition (the 503 below names the node and the setting) — not a 500
+      // an unreachable-owner condition (the 503 below names the node and the setting), not a 500
       // on a request that had nothing wrong with it. Boot validation rejects such a value too.
-      const target = forwardTarget(request.originalUrl, ownerNodeUrl);
+      target = forwardTarget(request.originalUrl, ownerNodeUrl);
       const upstream = await fetch(target, {
         method: request.method,
         headers,
@@ -212,6 +226,9 @@ export class SessionProxyInterceptor implements NestInterceptor {
         signal: AbortSignal.timeout(timeoutMs),
         redirect: 'manual',
       });
+      // Read the whole body before touching the response, so a read that fails midway leaves no
+      // relayed status or headers behind on the error answer below.
+      const body = Buffer.from(await upstream.arrayBuffer());
 
       response.status(upstream.status);
       for (const name of RELAYED_RESPONSE_HEADERS) {
@@ -219,20 +236,45 @@ export class SessionProxyInterceptor implements NestInterceptor {
         if (value) response.setHeader(name, value);
       }
       response.setHeader('x-openwa-served-by', ownerNodeId);
-      const body = Buffer.from(await upstream.arrayBuffer());
       if (body.length > 0) response.send(body);
       else response.end();
     } catch (error) {
+      // Duck-typed rather than `instanceof`: fetch rejects with a DOMException on timeout, and its
+      // errors are not guaranteed to share this context's Error class.
+      const failure = (error ?? {}) as { name?: unknown; cause?: { code?: unknown } };
+      const code = failure.cause?.code;
+      // fetch reports every network failure as 'fetch failed'; the cause code (a TLS certificate
+      // error, a DNS failure) is what tells the operator what went wrong.
       this.logger.warn(`Forwarding to session owner '${ownerNodeId}' failed`, {
         ownerNodeUrl,
         error: error instanceof Error ? error.message : String(error),
+        cause: code,
       });
-      response.status(503).json({
-        statusCode: 503,
-        message:
-          `this session is hosted on node '${ownerNodeId}', which could not be reached from this node — ` +
-          'check the owner node and its NODE_URL',
-        error: 'Service Unavailable',
+      if (target === undefined || (typeof code === 'string' && NOT_DISPATCHED_CODES.has(code))) {
+        // Nothing reached the owner: 503 is the honest, retryable answer.
+        response.status(503).json({
+          statusCode: 503,
+          message:
+            `this session is hosted on node '${ownerNodeId}', which could not be reached from this node — ` +
+            'check the owner node and its NODE_URL',
+          error: 'Service Unavailable',
+        });
+        return;
+      }
+      // Anything else may have happened after the request was sent (an unlisted error such as a TLS
+      // handshake failure happens before it, but cannot be told apart), so the owner may have acted
+      // on it. Never 503 here: clients treat 503 as declined-before-acting and replay non-idempotent
+      // sends on it.
+      const timedOut = failure.name === 'TimeoutError' || failure.name === 'AbortError';
+      const status = timedOut ? 504 : 502;
+      response.status(status).json({
+        statusCode: status,
+        message: timedOut
+          ? `node '${ownerNodeId}', which hosts this session, did not answer within ${timeoutMs}ms; ` +
+            'the request may still have been carried out there'
+          : `forwarding to node '${ownerNodeId}', which hosts this session, failed, possibly after the request ` +
+            'was sent; it may have been carried out there, check the owner node and its NODE_URL',
+        error: timedOut ? 'Gateway Timeout' : 'Bad Gateway',
       });
     }
   }

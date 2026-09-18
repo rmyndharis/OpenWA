@@ -182,16 +182,30 @@ describe('SessionTakeoverService', () => {
     expect(order).toEqual(['mark', 'start']);
   });
 
+  it('a failed status correction does not cost the pass its adoptions', async () => {
+    // A failed correction leaves no write behind, so nothing it guards against can land on an engine
+    // this pass starts. Letting it abort the sweep would turn a database blip into a tick with no
+    // failover at all.
+    const { svc, start, markLapsedDisconnected } = build([lapsed({ name: 'a' })]);
+    markLapsedDisconnected.mockRejectedValue(new Error('SQLITE_BUSY: database is locked'));
+
+    await expect(svc.sweep()).resolves.toBeUndefined();
+
+    expect(start).toHaveBeenCalledWith('id-a');
+  });
+
   it('gives the reset a cutoff of two lease TTLs, so a healthy peer that lapsed once is left alone', async () => {
     const { svc, markLapsedDisconnected } = build([lapsed({ name: 'a' })]);
     const before = Date.now();
 
     await svc.sweep();
 
+    const after = Date.now();
     const [, goneBefore] = markLapsedDisconnected.mock.calls[0] as [Session[], Date];
     // 60s TTL x 2: anything whose lease expired inside the last two minutes is still presumed alive.
-    expect(before - goneBefore.getTime()).toBeGreaterThanOrEqual(120_000);
-    expect(before - goneBefore.getTime()).toBeLessThan(121_000);
+    // The service reads the clock somewhere inside sweep(), so its cutoff is bounded by the readings either side.
+    expect(goneBefore.getTime()).toBeGreaterThanOrEqual(before - 120_000);
+    expect(goneBefore.getTime()).toBeLessThanOrEqual(after - 120_000);
   });
 
   it('arms the timer when auto-start is on, and tears it down on destroy', () => {

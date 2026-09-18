@@ -58,9 +58,11 @@ export function isMissingTableError(err: unknown): boolean {
     const message = `${driver?.message ?? ''} ${err.message ?? ''}`;
     return /no such table/i.test(message);
   }
-  // better-sqlite3 validates SQL at prepare() time, and TypeORM's BetterSqlite3QueryRunner creates the
-  // statement OUTSIDE its try/catch — so a missing-table error surfaces as the RAW SqliteError, never
-  // wrapped in QueryFailedError. Recognize that exact shape (class name + message); a plain Error whose
+  // better-sqlite3 rejects a missing table at prepare() time. Since typeorm 1.1.1 BetterSqlite3QueryRunner
+  // prepares inside its try/catch, so that error arrives wrapped in QueryFailedError (message
+  // 'SqliteError: no such table: x') and the branch above matches it. Up to 1.1.0 the prepare sat outside
+  // the try/catch and the RAW SqliteError escaped unwrapped; that shape is still recognized, for an older
+  // TypeORM copy or a direct driver call. Match it exactly (class name + message): a plain Error whose
   // text happens to mention a missing table must still NOT classify.
   return isNamedError(err, 'SqliteError') && /no such table/i.test(err.message ?? '');
 }

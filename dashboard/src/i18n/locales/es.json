@@ -305,7 +305,7 @@
       "created": "Creado",
       "lastActive": "Última actividad",
       "autoRejectCalls": "Rechazar llamadas automáticamente",
-      "autoRejectCallsHint": "Las llamadas entrantes se rechazan en cuanto suenan. El webhook call.received se envía igualmente antes. Se aplica a la próxima llamada; no hace falta reiniciar."
+      "autoRejectCallsHint": "Las llamadas entrantes se rechazan en cuanto suenan. El webhook call.received se envía igualmente antes. Se aplica a la próxima llamada; no hace falta reiniciar. Solo con el motor Baileys: whatsapp-web.js ya no detecta las llamadas mientras suenan."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -393,7 +393,8 @@
     },
     "start": {
       "teardownPendingTitle": "Iniciando sesión",
-      "teardownPending": "El borrado de credenciales de esta sesión aún está en curso. Espere un momento e inténtelo de nuevo."
+      "teardownPending": "El borrado de credenciales de esta sesión aún está en curso. Espere un momento e inténtelo de nuevo.",
+      "errorTitle": "Error al iniciar"
     },
     "restriction": {
       "reachout_timelock": "Chats nuevos bloqueados",
@@ -707,7 +708,10 @@
       "title": "No hay plantillas guardadas",
       "description": "Crea una plantilla reutilizable para agilizar respuestas y notificaciones habituales.",
       "noSessionsTitle": "No hay sesiones disponibles",
-      "noSessionsDesc": "Crea una sesión de WhatsApp antes de añadir plantillas."
+      "noSessionsDesc": "Crea una sesión de WhatsApp antes de añadir plantillas.",
+      "loadErrorTitle": "No se pudieron cargar las plantillas",
+      "forbiddenTitle": "Sin acceso a las plantillas",
+      "forbiddenDesc": "Las plantillas requieren una clave API con el rol de operador o administrador."
     },
     "toasts": {
       "created": "Plantilla creada correctamente",

@@ -1,3 +1,4 @@
+import { LogLevel } from '../common/services/logger.service';
 import { validateEnv } from './env.validation';
 
 /** Regression locks for boot-time env validation (no silent coercion). */
@@ -326,11 +327,20 @@ describe('validateEnv', () => {
     // The reader (main.ts) trims and lowercases before matching, so these keep booting.
     expect(() => validateEnv({ LOG_LEVEL: 'DEBUG' })).not.toThrow();
     expect(() => validateEnv({ LOG_LEVEL: ' warn ' })).not.toThrow();
-    // The five real levels, and unset (meaning INFO), all pass.
-    for (const level of ['error', 'warn', 'info', 'debug', 'verbose']) {
+    // Unset means INFO and passes.
+    expect(() => validateEnv({})).not.toThrow();
+  });
+
+  it('accepts exactly the LogLevel values main.ts applies, no more and no fewer', () => {
+    // env.validation.ts keeps its own copy of the level list while main.ts matches against the enum.
+    // The rejection message prints that copy, so comparing it with the enum catches drift either way.
+    const levels: string[] = Object.values(LogLevel);
+    for (const level of levels) {
       expect(() => validateEnv({ LOG_LEVEL: level })).not.toThrow();
     }
-    expect(() => validateEnv({})).not.toThrow();
+    expect(() => validateEnv({ LOG_LEVEL: 'nope' })).toThrow(
+      `LOG_LEVEL must be one of ${levels.map(v => `"${v}"`).join(', ')} (got "nope")`,
+    );
   });
 
   it('rejects a sqlite data DB path that collides with the internal main database file', () => {

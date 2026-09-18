@@ -312,7 +312,7 @@
       "created": "נוצר בתאריך",
       "lastActive": "פעילות אחרונה",
       "autoRejectCalls": "דחיית שיחות אוטומטית",
-      "autoRejectCallsHint": "שיחות נכנסות נדחות ברגע שהן מצלצלות. ה-webhook call.received עדיין נשלח לפני כן. חל מהשיחה הבאה — ללא צורך בהפעלה מחדש."
+      "autoRejectCallsHint": "שיחות נכנסות נדחות ברגע שהן מצלצלות. ה-webhook call.received עדיין נשלח לפני כן. חל מהשיחה הבאה — ללא צורך בהפעלה מחדש. במנוע Baileys בלבד: whatsapp-web.js כבר לא מזהה שיחה בזמן שהיא מצלצלת."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -400,7 +400,8 @@
     },
     "start": {
       "teardownPendingTitle": "הפעלת סשן",
-      "teardownPending": "פירוק אישורים לסשן זה עדיין מתבצע. המתן רגע ונסה שוב."
+      "teardownPending": "פירוק אישורים לסשן זה עדיין מתבצע. המתן רגע ונסה שוב.",
+      "errorTitle": "ההפעלה נכשלה"
     },
     "restriction": {
       "reachout_timelock": "צ׳אטים חדשים חסומים",
@@ -527,7 +528,10 @@
       "title": "אין תבניות שמורות",
       "description": "צרו תבנית לשימוש חוזר כדי לזרז תשובות והתראות נפוצות.",
       "noSessionsTitle": "אין סשנים זמינים",
-      "noSessionsDesc": "צרו סשן WhatsApp לפני הוספת תבניות."
+      "noSessionsDesc": "צרו סשן WhatsApp לפני הוספת תבניות.",
+      "loadErrorTitle": "לא ניתן לטעון את התבניות",
+      "forbiddenTitle": "אין גישה לתבניות",
+      "forbiddenDesc": "תבניות דורשות מפתח API עם תפקיד מפעיל או מנהל."
     },
     "toasts": {
       "created": "התבנית נוצרה בהצלחה",

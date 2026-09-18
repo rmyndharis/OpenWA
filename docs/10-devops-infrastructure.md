@@ -88,12 +88,13 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --only=production
 
-# NOTE: Chrome for Testing has no linux-arm64 build, so this example targets linux/amd64.
-# For arm64, install Debian's `chromium` package and point PUPPETEER_EXECUTABLE_PATH to
-# /usr/bin/chromium — see the repo's Dockerfile for the mixed multi-arch build.
+# NOTE: this example targets linux/amd64. The repo's image keeps Debian's chromium on arm64 by
+# choice (Chrome for Testing publishes linux-arm64 builds only from 153 on). For arm64, install
+# Debian's `chromium` package and point PUPPETEER_EXECUTABLE_PATH to /usr/bin/chromium — see the
+# repo's Dockerfile for the mixed multi-arch build.
 # Download Chrome for Testing via Puppeteer and point ENV to it
 RUN mkdir -p /opt/puppeteer && \
-    PUPPETEER_CACHE_DIR=/opt/puppeteer ./node_modules/.bin/puppeteer browsers install 'chrome@146.0.7680.31' && \
+    PUPPETEER_CACHE_DIR=/opt/puppeteer ./node_modules/.bin/puppeteer browsers install 'chrome@153.0.8010.36' && \
     chrome_path=$(find /opt/puppeteer/chrome/linux*/chrome-linux64/chrome | head -n 1) && \
     test -n "$chrome_path" && \
     ln -s "$chrome_path" /usr/local/bin/puppeteer-chrome
@@ -269,14 +270,15 @@ volumes:
 > **Keep `replicas: 1`.** Session ownership gained claim/lease fencing (`nodeId` owner +
 > `leaseExpiresAt`), which bounds any two-engine overlap on one session to roughly one heartbeat
 > interval instead of eliminating it — and docs/13 still says DO NOT run its multi-replica examples
-> yet: process-local key eviction, WebSocket rate-limit buckets, the unfenced liveness watchdog,
-> bulk-batch state and MCP locality all remain per-process. Follow
-> [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md) for the full list and the design
+> yet: WebSocket key eviction on a peer node lags by up to a minute, and WebSocket rate-limit
+> buckets, the unfenced liveness watchdog, bulk-batch state and MCP locality all remain per-process.
+> Follow [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md) for the full list and the design
 > sketch. What multi-node eventually buys is engine capacity, not shared engine state: live engine
 > handles live in exactly one process's `EngineRegistry` (`src/engine/engine-registry.service.ts`),
-> and the hard requirements include a stable `NODE_ID` across restarts, NTP-synced clocks (lease
-> skew beyond the TTL wrongfully transfers a session), sticky sessions, `TRUSTED_PROXIES` for
-> forwarded calls, Redis and Postgres.
+> and the hard requirements include a stable `NODE_ID` across restarts, NTP-synced clocks (lease skew
+> beyond the TTL wrongfully transfers a session; the zone each node runs in no longer matters, since
+> the Postgres data connection is pinned to UTC), sticky sessions, `TRUSTED_PROXIES` for forwarded
+> calls, Redis and Postgres.
 
 ### Helm Chart (Kubernetes)
 

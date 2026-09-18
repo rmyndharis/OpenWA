@@ -1,7 +1,12 @@
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { Chat, Contact as BaileysContact, WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { EngineEventCallbacks, IncomingMessage } from '../interfaces/whatsapp-engine.interface';
-import { buildIncomingMessageFromBaileys, extractBaileysBody } from './baileys-message-mapper';
+import {
+  buildIncomingMessageFromBaileys,
+  extractBaileysBody,
+  extractBaileysCommerce,
+  isBaileysCatalogShare,
+} from './baileys-message-mapper';
 import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
 import { type createLogger } from '../../common/services/logger.service';
 
@@ -144,6 +149,7 @@ export class BaileysHistory {
       return null;
     }
     const body = extractBaileysBody(content);
+    const commerce = extractBaileysCommerce(content, contentType);
     return buildIncomingMessageFromBaileys(
       {
         id: msg.key.id,
@@ -156,6 +162,10 @@ export class BaileysHistory {
         timestamp: toUnixSeconds(msg.messageTimestamp),
         pushName: msg.pushName ?? undefined,
         selfJid: this.host.normalizedSelfJid(),
+        // Same commerce mapping as the live path, so a whole-catalog share is `unknown` on both.
+        order: commerce.order,
+        product: commerce.product,
+        isCatalogShare: isBaileysCatalogShare(content),
         // Populate the disappearing-messages timer using the same extraction the live path and the
         // session-store cache share (`msg.ephemeralDuration` primary, `contextInfo.expiration` fallback),
         // so the history sink can apply the STORE_EPHEMERAL_MESSAGES opt-out symmetrically with onMessage.

@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Session } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
 import { SessionService } from './session.service';
+import { SessionAuthDirMigration } from './session-auth-dir-migration.service';
 import { SessionEngineLifecycle } from './session-engine-lifecycle.service';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
@@ -35,6 +36,10 @@ import { PLUGIN_SESSION_PORT } from '../../core/plugins/plugin-host-ports';
     // Global on purpose: any controller may carry a session dimension. Inert unless NODE_URL is set.
     { provide: APP_INTERCEPTOR, useClass: SessionProxyInterceptor },
     SessionService,
+    // onModuleInit only, and every module's runs before the first onApplicationBootstrap, so the
+    // legacy name-keyed auth directories are moved onto their session ids before auto-start or the
+    // HTTP listener can open one.
+    SessionAuthDirMigration,
     SessionEngineLifecycle,
     SessionErrorStore,
     SessionRestrictionStore,

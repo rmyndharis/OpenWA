@@ -17,6 +17,8 @@ import { isSupportedProxyUrl, buildProxyLaunchConfig } from './wwebjs-proxy';
 import { BACKPORT_MISSING_MESSAGE, isBackportMissing } from './wwebjs-backport-check';
 import { unappliedPatches, unappliedPatchesMessage } from './engine-patch-status';
 import { type WhatsAppWebJsConfig } from './whatsapp-web-js.adapter';
+import { AUTH_FAILURE_REASON, STALE_PROFILE_ADVICE } from '../terminal-engine-failure';
+import { wwjsAuthDir } from '../auth-dir-paths';
 
 /**
  * Detect Puppeteer's "Execution context was destroyed" error. During `Client.inject()` this is most
@@ -259,7 +261,8 @@ export class WwebjsLifecycle {
 
       // One retry for a navigation-killed first inject (#1081): a WhatsApp Web reload landing
       // mid-inject rejects initialize() with nothing upstream ever retrying (see
-      // isNavigationShapedInitRejection), and the onError channel below is terminal end to end.
+      // isNavigationShapedInitRejection): on a start() the onError channel below is terminal, and a
+      // service-level reconnect still lands this shape in FAILED since it carries the stale-profile advice.
       // Structurally a single second try — skipped when the lifecycle's outer init race is nearly
       // spent (a retry the race SIGKILLs mid-launch would surface as a bare 504 with no reason), and
       // abandoned when attempt 1's browser cannot be destroyed (see resetForInitRetry).
@@ -314,7 +317,7 @@ export class WwebjsLifecycle {
           `"${reason}" during initialize. If this followed an OpenWA upgrade that changed the ` +
             `Chromium/Chrome binary (v0.8.12 amd64 switched Debian Chromium → Chrome for Testing), the ` +
             `session's browser profile is likely stale — delete the profile dir ` +
-            `"${path.join(path.resolve(this.host.config.sessionDataPath), `session-${this.host.config.sessionId}`)}" ` +
+            `"${wwjsAuthDir(this.host.config.sessionDataPath, this.host.config.sessionId)}" ` +
             `and start again to re-scan. If no upgrade happened, Puppeteer also raises this on a page ` +
             `navigation or renderer crash (check for memory pressure or a WhatsApp Web reload). ` +
             `See docs/12-troubleshooting-faq.md.`,
@@ -324,7 +327,7 @@ export class WwebjsLifecycle {
         // for a card, and naming the wrong remedy is worse than pointing at the FAQ, since deleting a
         // profile forces an irreversible re-pair.
         surfacedReason =
-          `${reason} WhatsApp Web's page context was destroyed during startup. If this followed an ` +
+          `${reason} ${STALE_PROFILE_ADVICE} If this followed an ` +
           `upgrade, the session's browser profile is likely stale — see docs/12-troubleshooting-faq.md.`;
       }
       this.host.getCallbacks().onError?.(surfacedReason);
@@ -615,7 +618,7 @@ export class WwebjsLifecycle {
       // Authentication failure is terminal: the stored credentials are invalid and
       // reconnecting will not help — the operator must re-scan the QR code. Route it
       // through onError (FAILED, no reconnect) rather than onDisconnected (reconnect).
-      this.host.getCallbacks().onError?.(message ? `Authentication failed: ${message}` : 'Authentication failed');
+      this.host.getCallbacks().onError?.(message ? `${AUTH_FAILURE_REASON}: ${message}` : AUTH_FAILURE_REASON);
     });
   }
 

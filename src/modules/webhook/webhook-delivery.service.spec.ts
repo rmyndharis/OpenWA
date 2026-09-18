@@ -349,6 +349,44 @@ describe('WebhookDeliveryService', () => {
         }),
       );
       expect(mockFetch).toHaveBeenCalledTimes(1);
+      // The shed delivery was rejected before its POST, so only the delivered one is retired: wh-b's
+      // row stays pending and the reconciler is what still gets that event to the receiver.
+      expect(outboxService.close).toHaveBeenCalledWith('wh-a', expect.stringMatching(/_wh-a$/), 'dispatched');
+      expect((outboxService.close.mock.calls as string[][]).map(c => c[0])).toEqual(['wh-a']);
+      // Both keys, the shed one included, are released: the reconciler only replays a pending row
+      // once no dispatch on this node still owns it, so a leaked key would strand wh-b for good.
+      for (const c of outboxService.open.mock.calls as Array<[{ idempotencyKey: string }]>) {
+        expect(service.isLocallyPending(c[0].idempotencyKey)).toBe(false);
+      }
+    });
+
+    it('reports a delivery as locally pending while it is parked or in flight, and releases it once settled', async () => {
+      const wA = createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', events: ['message.received'] });
+      const wB = createMockWebhook({ id: 'wh-b', url: 'https://b.example/hook', events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([wA, wB]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (hookManager.execute as jest.Mock).mockImplementation((_event: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+      // One slot: A holds it, B parks behind it.
+      (service as unknown as { dispatchLimiter: ConcurrencyLimiter }).dispatchLimiter = new ConcurrencyLimiter(1, 10);
+
+      let release: (value: unknown) => void = () => undefined;
+      mockFetch.mockImplementation(() => new Promise(resolve => (release = resolve)));
+
+      const pending = service.dispatch('sess-1', 'message.received', { from: 'x@c.us' });
+      for (let i = 0; i < 20 && mockFetch.mock.calls.length === 0; i++) await new Promise(r => setImmediate(r));
+
+      const keys = (outboxService.open.mock.calls as Array<[{ idempotencyKey: string }]>).map(c => c[0].idempotencyKey);
+      expect(keys).toHaveLength(2);
+      for (const key of keys) expect(service.isLocallyPending(key)).toBe(true);
+
+      release({ ok: true, status: 200 });
+      for (let i = 0; i < 20 && mockFetch.mock.calls.length < 2; i++) await new Promise(r => setImmediate(r));
+      release({ ok: true, status: 200 });
+      await pending;
+
+      for (const key of keys) expect(service.isLocallyPending(key)).toBe(false);
     });
 
     it('salts each sibling webhook with a distinct idempotency key so one receiver cannot dedupe out another', async () => {
@@ -837,6 +875,9 @@ describe('WebhookDeliveryService', () => {
       const recorded = shutdownInserts.map(c => c[0]);
       expect(recorded.map(r => r.webhookId)).toEqual(expect.arrayContaining(['wh-b', 'wh-c']));
       for (const r of recorded) expect(r.lastError).toBe('ConcurrencyLimiter closed');
+      // Their outbox rows are left pending: the POST never happened, so the next start's sweep is
+      // the only thing that can still deliver those two events.
+      expect(outboxService.close).not.toHaveBeenCalled();
       // The in-flight delivery was NOT falsely dead-lettered (the receiver may have it); it is
       // logged as abandoned so the loss is still operator-visible.
       expect(
@@ -849,6 +890,55 @@ describe('WebhookDeliveryService', () => {
       releaseActive({ ok: true, status: 200 });
       await dispatchP;
       loggerSpy.mockRestore();
+    });
+
+    it('waits for the failure record of a delivery refused during shutdown before returning', async () => {
+      const hooks = [
+        createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', events: ['message.received'] }),
+        createMockWebhook({ id: 'wh-b', url: 'https://b.example/hook', events: ['message.received'] }),
+      ];
+      (repository.find as jest.Mock).mockResolvedValue(hooks);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (hookManager.execute as jest.Mock).mockImplementation((_event: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+      (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | boolean | number => {
+        if (key === 'queue.enabled') return false;
+        if (key === 'webhook.shutdownDrainMs') return 2000;
+        return def as T;
+      });
+      (service as unknown as { dispatchLimiter: ConcurrencyLimiter }).dispatchLimiter = new ConcurrencyLimiter(1, 1000);
+
+      let releaseActive: (value: unknown) => void = () => undefined;
+      mockFetch.mockImplementation(() => new Promise(resolve => (releaseActive = resolve)));
+      // The failure record of the refused delivery stays open until the test releases it.
+      let releaseInsert: () => void = () => undefined;
+      (failureRepository.insert as jest.Mock).mockImplementation(
+        () => new Promise<void>(resolve => (releaseInsert = resolve)),
+      );
+
+      const dispatchP = service.dispatch('sess-1', 'message.received', { from: 'x@c.us' });
+      for (let i = 0; i < 20 && mockFetch.mock.calls.length === 0; i++) await new Promise(r => setImmediate(r));
+
+      let destroyed = false;
+      const destroyP = service.onModuleDestroy().then(() => (destroyed = true));
+      // The in-flight delivery finishes, so only the refused delivery's bookkeeping keeps the drain open.
+      releaseActive({ ok: true, status: 200 });
+      const recording = (): boolean => (failureRepository.insert as jest.Mock).mock.calls.length > 0;
+      for (let i = 0; i < 40 && !destroyed && !recording(); i++) await new Promise(r => setTimeout(r, 10));
+      await new Promise(r => setTimeout(r, 120));
+
+      // A write outside the tracked bookkeeping would let teardown finish first, closing the database
+      // under the failure record of a delivery the receiver never got.
+      expect(recording()).toBe(true);
+      expect(destroyed).toBe(false);
+
+      releaseInsert();
+      await destroyP;
+      await dispatchP;
+      expect(destroyed).toBe(true);
+      // The refused delivery keeps its pending outbox row, so the next start's sweep replays it.
+      expect(outboxService.close).not.toHaveBeenCalledWith('wh-b', expect.anything(), 'failed');
     });
 
     it('queued mode: parked enqueues drain to the queue on shutdown instead of dead-lettering', async () => {

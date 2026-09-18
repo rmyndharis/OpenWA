@@ -12,10 +12,19 @@
 #   (f) data/.env.generated supplies paths the environment does not
 #   (g) PLUGIN_STATE_DIR plugin state is archived and restored at the configured root
 #   (h) restore refuses a live target without --force, before touching anything
+#   (i) the data-store half of that guard refuses on its own
+#   (j) a probe that fails or prints no usable count leaves the target counted as live
+#   (k) an operator's sqlite3 rc file changes neither answer of the guard (skipped without sqlite3)
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
-# Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c)).
+# Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
 set -euo pipefail
+
+# backup.sh and restore.sh take these from the environment before anything else. An exported value
+# would aim a case at a real install, and restore replaces the state directories wholesale, so every
+# case starts from none of them and sets exactly the paths it uses.
+unset OPENWA_DATA_DIR BACKUP_DIR DATABASE_TYPE MAIN_DATABASE_NAME DATABASE_NAME SESSION_DATA_PATH \
+  BAILEYS_AUTH_DIR STORAGE_LOCAL_PATH PLUGINS_DIR PLUGIN_STATE_DIR
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP="$REPO_ROOT/scripts/backup.sh"
@@ -47,7 +56,7 @@ db_fingerprint() {
   if [ "$HAS_SQLITE3" -eq 1 ]; then
     sqlite3 "$1" "SELECT payload FROM sentinel;"
   else
-    cat "$1"
+    sed 's/^sentinel://' "$1"
   fi
 }
 
@@ -387,7 +396,80 @@ fi
 if [ "$(db_fingerprint "$H/live/main.sqlite")" != "hotel-archive-main" ]; then
   fail "(h) --force did not overwrite the live main DB after the refusal"
 fi
+if [ "$(db_fingerprint "$H/live/openwa.sqlite")" != "hotel-archive-data" ]; then
+  fail "(h) --force did not overwrite the live data DB after the refusal"
+fi
 pass "(h) live target refused before any state was touched; --force overwrites"
+
+echo ""
+echo "==> (i) the data-store half of the guard refuses on its own"
+# (h) makes both databases live, so its main-DB check alone satisfies every assertion there. Here the
+# data store is the only database present.
+I="$WORK/i"
+mkdir -p "$I/bin" "$I/live"
+make_fixture "$I/live/openwa.sqlite" "india-live-data"
+
+# guarded_restore <target dir>: restore ARCHIVE_H without --force over <dir>/main.sqlite and
+# <dir>/openwa.sqlite, with $I/bin first on PATH. Output lands in OUT, the exit code in RC.
+guarded_restore() {
+  set +e
+  OUT="$(cd "$WORK" && PATH="$I/bin:$PATH" MAIN_DATABASE_NAME="$1/main.sqlite" \
+    DATABASE_NAME="$1/openwa.sqlite" OPENWA_DATA_DIR="$1" "$RESTORE" "$ARCHIVE_H" 2>&1)"
+  RC=$?
+  set -e
+}
+
+# expect_refused <label>: a restore over $I/live must refuse, name its data store, and leave it intact.
+expect_refused() {
+  guarded_restore "$I/live"
+  if [ "$RC" -eq 0 ]; then
+    fail "($1) restore exited 0 over a live data store without --force"
+  fi
+  if ! printf '%s' "$OUT" | grep -qF "$I/live/openwa.sqlite"; then
+    fail "($1) refusal message does not name the live data store"
+  fi
+  if [ "$(db_fingerprint "$I/live/openwa.sqlite")" != "india-live-data" ]; then
+    fail "($1) the refused restore modified the live data store"
+  fi
+}
+
+expect_refused i
+pass "(i) a live data store is refused with the main DB target absent"
+
+echo ""
+echo "==> (j) a probe that fails or prints no usable count leaves the target counted as live"
+# A locked, corrupt or unreadable database makes sqlite3 exit non-zero, and output that is not a bare
+# count did not answer the question. Neither may be read as an empty database.
+for probe in 'exit 26' 'exit 0' 'printf "count(*)\n1\n"'; do
+  printf '#!/usr/bin/env bash\n%s\n' "$probe" >"$I/bin/sqlite3"
+  chmod +x "$I/bin/sqlite3"
+  expect_refused "j: $probe"
+done
+rm -f "$I/bin/sqlite3"
+pass "(j) a failed, empty or non-numeric probe refuses"
+
+echo ""
+if [ "$HAS_SQLITE3" -eq 1 ]; then
+  echo "==> (k) an operator's sqlite3 rc file changes neither answer of the guard"
+  # sqlite3 applies the user's rc file to a one-shot query too, and headers or csv mode turn the count
+  # into text. It finds that file through the passwd entry, not $HOME, so a test cannot plant one by
+  # moving HOME. The wrapper loads one with -init instead; an explicit -init later on the command line
+  # replaces it, exactly as it replaces ~/.sqliterc.
+  printf '.headers on\n.mode csv\n' >"$I/sqliterc"
+  printf '#!/usr/bin/env bash\nexec %q -init %q "$@"\n' "$(command -v sqlite3)" "$I/sqliterc" >"$I/bin/sqlite3"
+  chmod +x "$I/bin/sqlite3"
+  expect_refused k
+  # And a database with no tables yet is still safe to restore over without --force.
+  mkdir -p "$I/fresh"
+  : >"$I/fresh/openwa.sqlite"
+  guarded_restore "$I/fresh"
+  if [ "$RC" -ne 0 ]; then
+    fail "(k) the rc file made a database with no tables look live"
+  fi
+  pass "(k) with an rc file, a live target is still refused and an empty one still restores"
+else
+  echo "SKIP: (k) sqlite3 not found on this host, so there is no rc file to load"
+fi
 
 echo ""
 echo "All smoke tests passed!"

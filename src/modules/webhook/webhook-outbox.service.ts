@@ -148,12 +148,23 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
       }));
   }
 
-  /** Count one replay attempt against the row's budget. */
-  async countAttempt(id: string, attempts: number): Promise<void> {
+  /**
+   * Count one replay attempt against the row's budget.
+   *
+   * Returns false when the row is no longer pending: the sweep reads its batch once, so a delivery
+   * that settled after that read must not be replayed from the stale copy. A failed write returns
+   * true, keeping the replay best-effort like every other write here.
+   */
+  async countAttempt(id: string, attempts: number): Promise<boolean> {
     try {
-      await this.outbox.update({ id }, { attempts: attempts + 1, lastAttemptAt: new Date() });
+      const result = await this.outbox.update(
+        { id, state: 'pending' },
+        { attempts: attempts + 1, lastAttemptAt: new Date() },
+      );
+      return (result.affected ?? 0) > 0;
     } catch (error) {
       this.logger.warn(`Could not count a replay attempt: ${String(error)}`);
+      return true;
     }
   }
 }

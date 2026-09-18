@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { Readable } from 'stream';
 import { isPathWithin } from '../utils/path-safety';
 
 /** Max number of local files a single traversal enumerates. Bounds a count DoS on a huge media dir. */
@@ -67,9 +68,27 @@ export function getLocalFile(localPath: string, filePath: string): Promise<Buffe
     throw new Error(`Refusing to read outside storage root: ${filePath}`);
   }
   const fullPath = path.join(localPath, filePath);
-  // Async read so the export loop (the only caller) yields the event loop per file instead of
-  // blocking it with a synchronous read for every media file.
+  // Async read so a media read yields the event loop instead of blocking it for the whole file.
   return fs.promises.readFile(fullPath);
+}
+
+/**
+ * Open a local file for a streamed read. The handle is opened and stat'ed up front, so a missing or
+ * unreadable file rejects here, before the caller commits to it, and the size is the one the open
+ * handle sees. The stream closes the handle when it ends or is destroyed.
+ */
+export async function openLocalFile(localPath: string, filePath: string): Promise<{ stream: Readable; size: number }> {
+  if (!isPathWithin(localPath, filePath)) {
+    throw new Error(`Refusing to read outside storage root: ${filePath}`);
+  }
+  const handle = await fs.promises.open(path.join(localPath, filePath), 'r');
+  try {
+    const { size } = await handle.stat();
+    return { stream: handle.createReadStream(), size };
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
 }
 
 export async function putLocalFile(localPath: string, filePath: string, data: Buffer): Promise<void> {

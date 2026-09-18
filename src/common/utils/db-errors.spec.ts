@@ -23,9 +23,9 @@ describe('isMissingTableError', () => {
     expect(isUniqueViolation(qfe('UNIQUE constraint failed: templates.name', 'SQLITE_CONSTRAINT_UNIQUE'))).toBe(true);
   });
 
-  it('recognizes the RAW SqliteError better-sqlite3 throws at prepare() time (never wrapped by TypeORM)', () => {
-    // TypeORM's BetterSqlite3QueryRunner prepares the statement outside its try/catch, so a DELETE on a
-    // missing table escapes as the raw driver error — QueryFailedError never enters the picture.
+  it('recognizes the RAW SqliteError better-sqlite3 throws at prepare() time when nothing wraps it', () => {
+    // typeorm 1.1.1 wraps a prepare-time error in QueryFailedError; up to 1.1.0 the statement was prepared
+    // outside the runner's try/catch, so a DELETE on a missing table escaped as this raw driver error.
     const raw = Object.assign(new Error('no such table: plugin_instances'), { code: 'SQLITE_ERROR' });
     raw.name = 'SqliteError';
     expect(isMissingTableError(raw)).toBe(true);

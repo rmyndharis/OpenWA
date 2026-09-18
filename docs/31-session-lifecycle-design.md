@@ -54,14 +54,16 @@ is the single most repeated invariant in the module.
 ### INV-4 — Init timeout evicts and 504s; init rejection propagates as FAILED
 
 **Interleaving:** whatsapp-web.js calls `page.goto(..., {timeout: 0})` — a hung browser never
-rejects, so a plain `await` hangs the start forever.
+rejects, and neither does a navigation that never completes because WhatsApp Web is unreachable, so
+a plain `await` hangs the start forever. The engine's own `authTimeoutMs` poll does not cover that
+case: whatsapp-web.js only starts it in `inject()`, after the page has loaded.
 **Defense:** `Promise.race` deadline in `initializeEngine`; on timeout the engine is evicted +
 force-destroyed + status DISCONNECTED + 504 to the caller. A REAL rejection is NOT treated as a
 timeout: it propagates so `start()` records FAILED with the reason.
 **Pinned by:** `session.service.spec.ts` (start failure-path cases; the timeout/rejection
 split lives in `session.service.spec.ts`'s init-timeout describes).
 **Do not "simplify" the two paths into one** — the distinction is why a bad proxy config returns
-FAILED + reason while a wedged browser returns 504 + eviction.
+FAILED + reason while an init that never completes returns 504 + eviction.
 
 ### INV-5 — Delete racing a start re-purges auth directories after init resolves
 
@@ -77,9 +79,14 @@ stop/delete lands during start() — no resurrection to READY').
 **Interleaving:** node A holds session X's lease; node B adopts it after A's lease lapses; a
 stale in-flight write from A would clobber B's status.
 **Defense:** on lease loss, `stopOrphanEngines` destroys local engines; the session row is the
-owning node's alone (`session.service.ts` boot path).
+owning node's alone (`session.service.ts` boot path). The one exception is the takeover sweep's
+`markLapsedDisconnected`, which marks a row disconnected only under the predicate it read (same
+`nodeId`, same status, lease expired more than two TTLs ago, and for a `qr_ready` row still no
+phone), so a row B has claimed, or a pairing that completed meanwhile, matches nothing. A `qr_ready`
+row with a phone is never marked: the adoption sweep would take the resulting disconnected row over.
 **Pinned by:** `src/modules/takeover/session-takeover.service.spec.ts` +
-`session-ownership.service.spec.ts` + `session-ownership-status-fence.spec.ts`.
+`session-ownership.service.spec.ts` + `session-ownership-status-fence.spec.ts` + the real-database
+predicate spec for `markLapsedDisconnected` in `src/modules/session/session.service.spec.ts`.
 
 ### INV-7 — FAILED sessions are deliberately NOT adopted by takeover
 
@@ -98,11 +105,11 @@ the Chromium process still holds file handles → rm fails or races a browser re
 **Pinned by:** `logout-teardown-race.spec.ts` — the module's most complete race corpus. Read it
 before touching anything in the logout/forceKill path.
 
-### INV-9 — The reconnect loop bounds itself: backoff with jitter, clamp ≤ 1h and ≤ setTimeout's 32-bit range, alert every 5 consecutive attempts
+### INV-9 — The reconnect loop bounds itself: backoff with jitter, clamp ≤ 5 min and ≤ setTimeout's 32-bit range, alert every 5 consecutive attempts
 
-**Defense:** `reconnect-policy.ts` — a pure decision function (5-minute stability reset, loop
-alerts) consumed by the lifecycle; the clamps exist because a naive `delay * 2^attempt` reaches
-values `setTimeout` silently truncates.
+**Defense:** `reconnect-policy.ts` — a pure decision function (attempt budget, loop alerts)
+consumed by the lifecycle, which resets the budget only when the session reaches READY; the clamps
+exist because a naive `delay * 2^attempt` reaches values `setTimeout` silently truncates.
 **Pinned by:** `reconnect-policy.spec.ts`.
 
 ### INV-10 — Boot auto-start is sequential, staggered (2s per Chromium), and detached from bootstrap

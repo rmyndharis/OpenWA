@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { HttpException, PayloadTooLargeException } from '@nestjs/common';
+import { BadRequestException, HttpException, PayloadTooLargeException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { In, Not } from 'typeorm';
 import {
@@ -451,6 +451,50 @@ describe('BulkMessageService.processBatch', () => {
     expect(engine.sendTextMessage).toHaveBeenCalledTimes(1);
     const sendArgs = engine.sendTextMessage.mock.calls[0] as [string, string];
     expect(sendArgs[1]).toBe('hello world');
+  });
+
+  // A restart or reconnect registers a fresh adapter mid-batch; the retired one is not ready, so a
+  // batch holding it would fail every remaining item while the session is READY again.
+  it('sends each item through the engine registered at that moment, not the one the batch started with', async () => {
+    repo.findOne.mockResolvedValue(makeBatch(2));
+    const replacement = { sendTextMessage: jest.fn().mockResolvedValue({ id: 'wa2', timestamp: 222 }) };
+    engine.sendTextMessage.mockImplementationOnce(() => {
+      engines.set('s1', replacement as unknown as IWhatsAppEngine);
+      return Promise.resolve({ id: 'wa1', timestamp: 111 });
+    });
+
+    await runProcessBatch();
+
+    expect(engine.sendTextMessage).toHaveBeenCalledTimes(1);
+    expect(replacement.sendTextMessage).toHaveBeenCalledWith('c1@c.us', 'hi');
+  });
+
+  it('fails only the item whose engine is gone mid-batch, without feeding the send breaker', async () => {
+    repo.findOne.mockResolvedValue(makeBatch(2));
+    engine.sendTextMessage.mockImplementationOnce(() => {
+      engines.delete('s1');
+      return Promise.resolve({ id: 'wa1', timestamp: 111 });
+    });
+
+    await runProcessBatch();
+
+    const finalPartial = (repo.update.mock.calls as Array<[unknown, { results: BatchMessageResult[] }]>).at(-1)![1];
+    expect(finalPartial.results.map(r => r.status)).toEqual([BatchMessageStatus.SENT, BatchMessageStatus.FAILED]);
+    expect(finalPartial.results[1].error?.message).toMatch(/not connected/i);
+    expect(pacing.recordSendFailure).not.toHaveBeenCalled();
+  });
+
+  // The create-time check sees the raw input; a gate rewrite can still empty an item out.
+  it('fails an item the message:sending gate rewrote into content its type cannot send', async () => {
+    repo.findOne.mockResolvedValue(makeBatch(1));
+    hookManager.execute.mockResolvedValueOnce({ continue: true, data: { input: {} } });
+
+    await runProcessBatch();
+
+    expect(engine.sendTextMessage).not.toHaveBeenCalled();
+    const finalPartial = (repo.update.mock.calls as Array<[unknown, { results: BatchMessageResult[] }]>).at(-1)![1];
+    expect(finalPartial.results[0].status).toBe(BatchMessageStatus.FAILED);
+    expect(finalPartial.results[0].error?.message).toMatch(/content\.text/);
   });
 
   it('releases the in-flight marker when the engine is missing (no processingBatches leak)', async () => {
@@ -1086,7 +1130,7 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
       return pendingSave;
     });
     const dto = {
-      messages: [{ chatId: 'c0@c.us', type: 'text' as const, content: { text: { body: 'hi' } } }],
+      messages: [{ chatId: 'c0@c.us', type: 'text' as const, content: { text: 'hi' } }],
     } as unknown as SendBulkMessageDto;
 
     try {
@@ -1107,11 +1151,48 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
   it('releases the cap reservation when persistence fails', async () => {
     repo.save.mockRejectedValueOnce(new Error('database unavailable'));
     const dto = {
-      messages: [{ chatId: 'c0@c.us', type: 'text' as const, content: { text: { body: 'hi' } } }],
+      messages: [{ chatId: 'c0@c.us', type: 'text' as const, content: { text: 'hi' } }],
     } as unknown as SendBulkMessageDto;
 
     await expect(service.createBatch('s1', dto)).rejects.toThrow('database unavailable');
 
+    expect((service as unknown as { inFlightBatches: number }).inFlightBatches).toBe(0);
+  });
+
+  it.each([
+    ['a text item with no text', { chatId: 'c0@c.us', type: 'text', content: {} }, /content\.text/],
+    ['a text item with empty text', { chatId: 'c0@c.us', type: 'text', content: { text: '' } }, /content\.text/],
+    ['an image item with no media', { chatId: 'c0@c.us', type: 'image', content: {} }, /content\.image\.url/],
+    [
+      'a document item whose media sits under another type',
+      { chatId: 'c0@c.us', type: 'document', content: { image: { url: 'https://example.com/a.jpg' } } },
+      /content\.document\.url/,
+    ],
+  ])('rejects %s with a 400 before persisting the batch', async (_label, item, message) => {
+    const create = service.createBatch('s1', { messages: [item] } as unknown as SendBulkMessageDto);
+
+    await expect(create).rejects.toBeInstanceOf(BadRequestException);
+    await expect(create).rejects.toThrow(message);
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  // Two concurrent creates with one caller-supplied batchId both pass the existence read; the unique
+  // index rejects the second, which must read as the same 400 as the sequential duplicate.
+  it('answers a duplicate batchId that loses the insert race with the same 400', async () => {
+    repo.save.mockRejectedValueOnce(
+      Object.assign(new Error('UNIQUE constraint failed: message_batches.sessionId, message_batches.batchId'), {
+        code: 'SQLITE_CONSTRAINT_UNIQUE',
+      }),
+    );
+    const dto = {
+      batchId: 'campaign-42',
+      messages: [{ chatId: 'c0@c.us', type: 'text' as const, content: { text: 'hi' } }],
+    } as unknown as SendBulkMessageDto;
+
+    const create = service.createBatch('s1', dto);
+
+    await expect(create).rejects.toBeInstanceOf(BadRequestException);
+    await expect(create).rejects.toThrow("Batch ID 'campaign-42' already exists");
     expect((service as unknown as { inFlightBatches: number }).inFlightBatches).toBe(0);
   });
 
@@ -1127,7 +1208,7 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
     // so it neither collides with another tenant's namespace nor leaks that the id is in use elsewhere.
     await expect(
       service.createBatch('s2', {
-        messages: [{ chatId: 'c0@c.us', type: 'text', content: { text: { body: 'hi' } } }],
+        messages: [{ chatId: 'c0@c.us', type: 'text', content: { text: 'hi' } }],
         batchId: 'dup',
       } as unknown as SendBulkMessageDto),
     ).resolves.toBeDefined();

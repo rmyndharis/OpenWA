@@ -36,14 +36,14 @@ describe('loadRemoteMediaBuffer', () => {
 
   it('blocks an internal URL via the SSRF guard before any fetch', async () => {
     const fetchMock = undiciFetch as jest.Mock;
-    await expect(loadRemoteMediaBuffer('http://127.0.0.1/x.png')).rejects.toBeInstanceOf(SsrfBlockedError);
+    await expect(loadRemoteMediaBuffer('http://127.0.0.1/x.png', undefined)).rejects.toBeInstanceOf(SsrfBlockedError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('fetches a public URL and returns the bytes + content-type', async () => {
     const fetchMock = undiciFetch as jest.Mock;
     fetchMock.mockResolvedValue(fakeResponse([1, 2, 3], { 'content-type': 'image/png', 'content-length': '3' }));
-    const res = await loadRemoteMediaBuffer('http://8.8.8.8/x.png');
+    const res = await loadRemoteMediaBuffer('http://8.8.8.8/x.png', undefined);
     expect(res.mimetype).toBe('image/png');
     expect(Array.from(res.data)).toEqual([1, 2, 3]);
     // Never follow redirects (a 3xx could reach an internal host the guard never validated).
@@ -53,6 +53,6 @@ describe('loadRemoteMediaBuffer', () => {
   it('rejects a body that exceeds the byte cap', async () => {
     process.env.MEDIA_DOWNLOAD_MAX_BYTES = '2';
     (undiciFetch as jest.Mock).mockResolvedValue(fakeResponse([1, 2, 3], { 'content-type': 'image/png' }));
-    await expect(loadRemoteMediaBuffer('http://8.8.8.8/x.png')).rejects.toThrow(/exceeds/i);
+    await expect(loadRemoteMediaBuffer('http://8.8.8.8/x.png', undefined)).rejects.toThrow(/exceeds/i);
   });
 });

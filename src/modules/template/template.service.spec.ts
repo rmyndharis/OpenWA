@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { TemplateService } from './template.service';
 import { Template } from './entities/template.entity';
 import { Session } from '../session/entities/session.entity';
@@ -141,8 +141,10 @@ describe('TemplateService', () => {
       await expect(service.resolve('sess-1', { templateName: 'nope' })).rejects.toThrow(NotFoundException);
     });
 
-    it('should throw NotFoundException when neither id nor name is provided', async () => {
-      await expect(service.resolve('sess-1', {})).rejects.toThrow(NotFoundException);
+    // A malformed request, not a missing resource: a client reading 404 as "template deleted" would
+    // take the wrong branch.
+    it('should throw BadRequestException when neither id nor name is provided', async () => {
+      await expect(service.resolve('sess-1', {})).rejects.toThrow(BadRequestException);
     });
   });
 

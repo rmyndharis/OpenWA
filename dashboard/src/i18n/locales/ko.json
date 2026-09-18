@@ -305,7 +305,7 @@
       "created": "생성일",
       "lastActive": "마지막 활동",
       "autoRejectCalls": "통화 자동 거절",
-      "autoRejectCallsHint": "수신 통화가 울리는 즉시 거절됩니다. call.received 웹훅은 그전에 그대로 전송됩니다. 다음 통화부터 적용되며 재시작이 필요하지 않습니다."
+      "autoRejectCallsHint": "수신 통화가 울리는 즉시 거절됩니다. call.received 웹훅은 그전에 그대로 전송됩니다. 다음 통화부터 적용되며 재시작이 필요하지 않습니다. Baileys 엔진에서만 동작합니다. whatsapp-web.js에서는 더 이상 울리는 통화가 감지되지 않습니다."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -393,7 +393,8 @@
     },
     "start": {
       "teardownPendingTitle": "세션 시작 중",
-      "teardownPending": "이 세션의 자격 증명 해체가 아직 진행 중입니다. 잠시 기다린 후 다시 시도하세요."
+      "teardownPending": "이 세션의 자격 증명 해체가 아직 진행 중입니다. 잠시 기다린 후 다시 시도하세요.",
+      "errorTitle": "시작 실패"
     },
     "restriction": {
       "reachout_timelock": "새 대화 차단됨",
@@ -518,7 +519,10 @@
       "title": "저장된 템플릿이 없습니다",
       "description": "자주 쓰는 답장이나 알림을 빠르게 보내려면 재사용 가능한 템플릿을 만드세요.",
       "noSessionsTitle": "사용 가능한 세션이 없습니다",
-      "noSessionsDesc": "템플릿을 추가하기 전에 WhatsApp 세션을 만드세요."
+      "noSessionsDesc": "템플릿을 추가하기 전에 WhatsApp 세션을 만드세요.",
+      "loadErrorTitle": "템플릿을 불러올 수 없습니다",
+      "forbiddenTitle": "템플릿에 접근할 수 없습니다",
+      "forbiddenDesc": "템플릿을 사용하려면 운영자 또는 관리자 역할의 API 키가 필요합니다."
     },
     "toasts": {
       "created": "템플릿이 생성되었습니다",

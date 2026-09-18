@@ -37,6 +37,36 @@ describe('generateSafeLinkPreview', () => {
       expect((withSafeFetch.mock.calls[0] as unknown[])[0]).toBe('https://example.com/a');
     });
 
+    // A URL in a message is caller-supplied, so fetching it is session egress like a media URL: it
+    // has to leave through the session's proxy rather than from the gateway's own address (#1626).
+    it('hands the guard the session proxy for a proxied session', async () => {
+      respondWith('<title>Example</title>');
+
+      await generateSafeLinkPreview('https://example.com/a', { sessionProxyUrl: 'socks5://proxy.invalid:1080' });
+
+      expect((withSafeFetch.mock.calls[0] as unknown[])[3]).toEqual({ proxyUrl: 'socks5://proxy.invalid:1080' });
+    });
+
+    it('leaves an unproxied session fetching direct', async () => {
+      respondWith('<title>Example</title>');
+
+      await generateSafeLinkPreview('https://example.com/a');
+
+      expect((withSafeFetch.mock.calls[0] as unknown[])[3]).toEqual({ proxyUrl: undefined });
+    });
+
+    it('fetches direct when the operator switches the session-proxy URL fetch off', async () => {
+      process.env.SESSION_PROXY_URL_FETCH = 'false';
+      respondWith('<title>Example</title>');
+      try {
+        await generateSafeLinkPreview('https://example.com/a', { sessionProxyUrl: 'socks5://proxy.invalid:1080' });
+      } finally {
+        delete process.env.SESSION_PROXY_URL_FETCH;
+      }
+
+      expect((withSafeFetch.mock.calls[0] as unknown[])[3]).toEqual({ proxyUrl: undefined });
+    });
+
     // The guard rejects a blocked destination by throwing. That must surface as "no preview", never
     // as a failed send — and never as a leaked internal address in an error message.
     it('returns nothing when the guard refuses the destination', async () => {

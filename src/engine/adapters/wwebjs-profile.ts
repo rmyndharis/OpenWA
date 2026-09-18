@@ -73,7 +73,7 @@ export class WwebjsProfile {
 
   async setProfilePicture(media: MediaInput): Promise<void> {
     this.host.ensureReady();
-    const messageMedia = await toMessageMedia(media);
+    const messageMedia = await toMessageMedia(media, this.host.config.proxy?.url);
     // setProfilePicture resolves false (rather than throwing) when the upload is refused.
     const ok = await this.withPage('setProfilePicture', () => this.client().setProfilePicture(messageMedia));
     if (!ok) {

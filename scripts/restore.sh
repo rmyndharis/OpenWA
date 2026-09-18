@@ -201,12 +201,21 @@ snapshot_external_db() {
 # the target it is guarding; a missing file — or one with no tables yet, as a
 # fresh install leaves behind — is safe to restore over. Without the CLI there is no way to prove
 # the file empty, so any non-empty target counts as live rather than guessed safe.
+# sqlite3 applies the operator's rc file even to a one-shot query, and .headers on or another output
+# mode turns the count into text, so the probe loads no rc file. Anything but a bare count still
+# means the probe did not answer, which counts as live like a probe that failed outright.
 db_appears_live() {
   target="$1"
   [ -f "$target" ] || return 1
   if command -v sqlite3 >/dev/null 2>&1; then
-    tables="$(sqlite3 -readonly "$target" "SELECT count(*) FROM sqlite_master;" 2>/dev/null)" || return 0
-    [ "${tables:-0}" -gt 0 ]
+    tables="$(sqlite3 -batch -noheader -list -init /dev/null -readonly "$target" \
+      "SELECT count(*) FROM sqlite_master;" 2>/dev/null)" || return 0
+    case "$tables" in
+      '' | *[!0-9]*)
+        return 0
+        ;;
+    esac
+    [ "$tables" -gt 0 ]
   else
     [ -s "$target" ]
   fi

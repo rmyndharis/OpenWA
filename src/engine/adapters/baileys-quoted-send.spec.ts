@@ -37,6 +37,7 @@ function makeMessaging(stored: unknown = STORED): {
   const getStoredMessage = jest.fn().mockResolvedValue(stored);
   const host = {
     ensureReady: jest.fn(),
+    sessionProxyUrl: () => undefined,
     getSocket: () => sock as unknown as WASocket,
     logger,
     toNeutralJid: (j: string) => j,

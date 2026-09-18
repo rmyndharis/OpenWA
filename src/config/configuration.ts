@@ -461,8 +461,9 @@ export default () => ({
       return Number.isFinite(n) && n > 0 ? n : 20_000;
     })(),
     // Takeover sweep cadence (default 30s): how often a node looks for sessions whose holder's
-    // lease has lapsed — a crashed peer, or this node's own previous identity after a container
-    // recreate — and starts them here. Gated by the AUTO_START_SESSIONS feature flag.
+    // lease has lapsed (a crashed peer, or this node's own previous identity after a container
+    // recreate) and starts them here. Adopting follows the AUTO_START_SESSIONS feature flag; the
+    // sweep itself runs on every node and also marks a vanished node's leftover rows disconnected.
     takeoverSweepMs: (() => {
       const n = parseInt(process.env.SESSION_TAKEOVER_SWEEP_MS ?? '', 10);
       return Number.isFinite(n) && n > 0 ? n : 30_000;

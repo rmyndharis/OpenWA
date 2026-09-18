@@ -147,6 +147,29 @@ describe('StorageService put/getFile containment is backend-agnostic', () => {
   });
 });
 
+describe('StorageService.openFile (the export read path)', () => {
+  const readAll = async (stream: Readable): Promise<Buffer> => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks);
+  };
+
+  it('streams a local file with its size, and rejects a missing file before any stream exists', async () => {
+    const { service, baseDir, localPath } = makeLocalService();
+    fs.mkdirSync(path.join(localPath, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(localPath, 'sub/a.bin'), 'local-bytes');
+
+    const { stream, size } = await service.openFile('sub/a.bin');
+    expect(size).toBe(11);
+    expect((await readAll(stream)).toString()).toBe('local-bytes');
+    expect((await service.getFile('sub/a.bin')).toString()).toBe('local-bytes');
+    await expect(service.openFile('sub/missing.bin')).rejects.toThrow(/ENOENT/);
+    await expect(service.openFile('../../etc/passwd')).rejects.toThrow(/unsafe storage key/);
+
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+});
+
 describe('StorageService getFileCount (S3 size)', () => {
   it('sums the real Size of each S3 object instead of estimating', async () => {
     const { service, baseDir } = makeLocalService();
@@ -313,10 +336,9 @@ describe('StorageService.createExportStream enumerates the whole store', () => {
     const iterateFiles = jest.spyOn(service, 'iterateFiles').mockImplementation(async function* () {
       yield await Promise.resolve('media/a.bin');
     });
-    jest.spyOn(service, 'getFile').mockResolvedValue(Buffer.from('x'));
-
-    // The enumerator runs before the archive is constructed, so which one was used is settled even
-    // if archiving itself cannot run in this environment. That is the whole claim here.
+    // No read stub: the enumerator runs before the archive is constructed, and `archiver` is mocked
+    // at the top of this file, so the call rejects there and no file is ever opened. Which
+    // enumeration was used is settled by then, and that is the whole claim here.
     await service.createExportStream().catch(() => undefined);
 
     expect(iterateFiles).toHaveBeenCalled();

@@ -27,6 +27,7 @@ describe('engine status writes are fenced by ownership', () => {
       handleEngineReady: jest.fn(),
       handleEngineDisconnected: jest.fn().mockResolvedValue(undefined),
       cancelReconnect: jest.fn(),
+      parkReconnectInitFailure: () => false,
       evictAndForceDestroy: jest.fn(),
       trackPendingCredentialTeardown: jest.fn(),
       reportRestrictionLifted: jest.fn(),

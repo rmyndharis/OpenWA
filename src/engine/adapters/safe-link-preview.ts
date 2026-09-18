@@ -1,5 +1,6 @@
 import type { Response } from 'undici';
 import { withSafeFetch } from '../../common/security/ssrf-guard';
+import { urlFetchProxy } from '../../common/security/proxy-dispatcher';
 
 /**
  * The link-preview payload WhatsApp accepts, in Baileys' own field names.
@@ -32,11 +33,12 @@ export interface SafeUrlInfo {
  * so an operator who intentionally allows an internal host keeps that behaviour here too.
  *
  * Returns undefined rather than throwing on any failure: a preview is decoration, and a site that is
- * slow, unreachable, or refused must never turn into a failed message send.
+ * slow, unreachable, or refused must never turn into a failed message send. That includes an
+ * unusable session proxy: no preview is attached, and the fetch never falls back to a direct one.
  */
 export async function generateSafeLinkPreview(
   matchedText: string,
-  opts: { timeoutMs?: number; maxBytes?: number } = {},
+  opts: { timeoutMs?: number; maxBytes?: number; sessionProxyUrl?: string } = {},
 ): Promise<SafeUrlInfo | undefined> {
   const timeoutMs = opts.timeoutMs ?? 3000;
   const maxBytes = opts.maxBytes ?? 512 * 1024;
@@ -87,6 +89,9 @@ export async function generateSafeLinkPreview(
           ...(description ? { description: decodeEntities(description) } : {}),
         };
       },
+      // The fetched URL comes from the message text, so it is caller-supplied the same way a media
+      // URL is: on a proxied session it leaves through the session proxy (#1626).
+      { proxyUrl: urlFetchProxy(opts.sessionProxyUrl) },
     );
   } catch {
     // Blocked destination, DNS failure, timeout, malformed response — all the same to a caller who

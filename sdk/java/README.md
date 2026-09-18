@@ -103,7 +103,7 @@ try {
 | `OpenWAApiError`                | —    | Any other non-2xx (carries `.status()`)                 |
 | `OpenWATimeoutError`            | —    | Request exceeded the configured timeout                 |
 
-All extend `OpenWAError` (a `RuntimeException`).
+All extend `OpenWAError` (a `RuntimeException`). In a routed deployment only 503 proves the request was never carried out: a forward that fails after the request reached the owner node answers 502 or 504.
 
 ## Reliability & security
 

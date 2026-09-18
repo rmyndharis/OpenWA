@@ -21,7 +21,7 @@ class SessionsResource
     }
 
     /**
-     * @param array<string,mixed> $query Optional pagination: `limit`, `offset`.
+     * @param array<string,mixed> $query Optional pagination `limit`, `offset`, and `name` for an exact, case-sensitive session name.
      *
      * @return array<int,array<string,mixed>>
      */

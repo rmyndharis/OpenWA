@@ -57,7 +57,7 @@ export interface SessionEngineControlsHost {
   cancelReconnect(id: string): void;
   initializeEngine(id: string, session: Session): Promise<void>;
   isSessionRetired(id: string): Promise<boolean>;
-  purgeAuthDirsIfDeleted(id: string, name: string): Promise<void>;
+  purgeAuthDirsIfDeleted(id: string): Promise<void>;
   updateStatus(id: string, status: SessionStatus): Promise<void>;
   /** Ownership gate, same contract as SessionEngineWiringHost.ownsSession. */
   ownsSession(id: string): boolean;
@@ -124,6 +124,20 @@ export class SessionEngineControls {
     return this.sessionRestrictions.attachTo(this.sessionErrors.attachTo(session));
   }
 
+  /**
+   * requireSession for stop()/delete(), whose caller sets the stop mark before this read. A read
+   * that fails has retired nothing, so the mark must not outlive it: left on a running session, its
+   * next disconnect would never reconnect and start() would keep refusing it as already started.
+   */
+  private async requireSessionOrDropStopMark(id: string): Promise<Session> {
+    try {
+      return await this.requireSession(id);
+    } catch (error) {
+      this.stoppingSessions.delete(id);
+      throw error;
+    }
+  }
+
   async start(id: string): Promise<Session> {
     // Reserve the slot SYNCHRONOUSLY at entry — before even the requireSession await. Two
     // near-simultaneous start() calls must not both pass the check and orphan an engine (the has()
@@ -161,9 +175,9 @@ export class SessionEngineControls {
       // checks and BEFORE any lifecycle mutation (stop-mark clear, hook, reconnect-state, engine
       // creation, recovery-budget reset) or auth-dir access. A logout teardown that lost its deadline
       // race is still running and ends in an fs.rm of this session's on-disk profile — the same path
-      // initializeEngine is about to populate. The fence is keyed by session NAME (the auth-dir key)
-      // and FAIL CLOSED: a still-wedged teardown could still rm a fresh profile under this name, so
-      // refuse with a retryable 409 instead of proceeding. On a 409, no lifecycle state is touched
+      // initializeEngine is about to populate. The fence is keyed by session NAME (see
+      // awaitPendingTeardown) and FAIL CLOSED: a still-wedged teardown could still rm the fresh
+      // profile, so refuse with a retryable 409 instead of proceeding. On a 409, no lifecycle state is touched
       // (the stop mark, reconnect timer, engine, last status/error, and recovery budget are left as
       // they were) — start() simply did not happen. The one transient exception is the
       // initializingSessions reservation added synchronously at start() entry: its finally removes it
@@ -248,7 +262,7 @@ export class SessionEngineControls {
         }
         // A delete() that raced this start purged the on-disk auth dirs BEFORE this init re-created
         // them — purge again so the window leaves no credential residue behind (no-op for a stop()).
-        await this.host.purgeAuthDirsIfDeleted(id, session.name);
+        await this.host.purgeAuthDirsIfDeleted(id);
       }
       return this.requireSession(id);
     } finally {
@@ -257,7 +271,7 @@ export class SessionEngineControls {
   }
 
   async stop(id: string): Promise<Session> {
-    const session = await this.requireSession(id);
+    const session = await this.requireSessionOrDropStopMark(id);
 
     // Mark as tearing down BEFORE cleanup so an in-flight reconnect can't resurrect it.
     this.stoppingSessions.add(id);
@@ -361,9 +375,9 @@ export class SessionEngineControls {
     // Await THIS engine's in-flight INITIALIZING write before teardown / the final DISCONNECTED
     // write so a delayed pre-initialize status update can never settle after the retirement.
     await this.fences.awaitInitialStatus(id, engine);
-    // The credential fence is keyed by session NAME (the auth-dir key). Captured immutably here so a
-    // raw logout that outlives its deadline race is tracked under the right name even if the row is
-    // later deleted/recreated.
+    // The credential fence is keyed by session NAME (see awaitPendingTeardown). Captured immutably
+    // here so a raw logout that outlives its deadline race is tracked under the right name even if
+    // the row is later deleted/recreated.
     const unlinked = await this.fences.teardownEngineSafely(id, engine, e => e.logout(), 'logout', session.name);
     this.engines.deleteIfLive(id, engine);
     await this.host.updateStatus(id, SessionStatus.DISCONNECTED);
@@ -440,13 +454,13 @@ export class SessionEngineControls {
   }
 
   async delete(id: string): Promise<void> {
-    const session = await this.requireSession(id);
+    const session = await this.requireSessionOrDropStopMark(id);
 
     // FENCE #1 — fail-fast on an ALREADY-PENDING credential teardown for this session NAME, BEFORE
     // any lifecycle mutation. A logout teardown that lost its deadline race is still running and ends
-    // in an fs.rm of this session's on-disk auth dir (keyed by name). Releasing the name via the DB
-    // delete below while that rm is live would let a recreated session under the same name race the
-    // stale rm. The fence is keyed by session NAME and fails CLOSED (409). On a 409 NOTHING else runs:
+    // in an fs.rm of this session's on-disk auth dir. Running the purge below while that rm is live
+    // would leave the two removals racing over the same tree, and a stale rm must not outlive the
+    // row. The fence is keyed by session NAME and fails CLOSED (409). On a 409 NOTHING else runs:
     // no stop mark, no reconnect cancel, no engine teardown, no state cleanup — delete() simply did
     // not happen, and the entry stays reserved.
     await this.fences.awaitPendingTeardown(session.name);
@@ -538,12 +552,13 @@ export class SessionEngineControls {
 
       // Purge the persistent on-disk auth/store dirs — BOTH engine shapes (see EngineFactory), since
       // an engine switch may have left a live link for the other engine behind. They're keyed by
-      // session NAME and live independently of the (now torn-down, and on delete often never-loaded)
-      // engine instance, so the teardown above doesn't touch them. Without this, recreating a session
-      // under the same name reloads a stale store. Best-effort inside the factory — never fails an
-      // otherwise-successful delete. By this point both fences passed, so no old remover is live
-      // against this name (the transaction freed the name; the dirs are safe to purge).
-      await this.engineFactory.purgeSessionData(session.name);
+      // session ID and live independently of the (now torn-down, and on delete often never-loaded)
+      // engine instance, so the teardown above doesn't touch them. Without this, the deleted
+      // session's WhatsApp credentials stay on the volume. Best-effort inside the factory — never
+      // fails an otherwise-successful delete. By this point both fences passed, so no old remover is
+      // live against this session's directories. The name goes too: it is the key the directories
+      // carried before 0.23.5, and the boot migration keeps a legacy one it could not rename.
+      await this.engineFactory.purgeSessionData(session.id, session.name);
     } finally {
       // Always clear the teardown mark so a later recreate/start with this id isn't suppressed. This
       // stop mark was set after fence #1, so clearing it on a rejected 409 only undoes what THIS

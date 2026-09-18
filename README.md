@@ -129,7 +129,7 @@ For any deployment where ethical, legal, or regulatory compliance matters (healt
 | ------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Groups API          | ✅     | Create, manage, join (invite code), and configure groups                                                                                                                     |
 | Profile Management  | ✅     | Set own display name, about text, and profile picture                                                                                                                        |
-| Call Handling       | ✅     | `call.received` events, reject calls, per-session auto-reject                                                                                                                |
+| Call Handling       | ✅     | `call.received` events, reject calls, per-session auto-reject (Baileys only: whatsapp-web.js no longer detects a ringing call)                                               |
 | Channels/Newsletter | ✅     | WhatsApp Channels support                                                                                                                                                    |
 | Labels Management   | ✅     | Organize chats with labels                                                                                                                                                   |
 | Proxy Support       | ✅     | Per-session proxy configuration                                                                                                                                              |

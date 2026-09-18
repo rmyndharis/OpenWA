@@ -83,8 +83,11 @@ class OpenWAServiceUnavailableError(OpenWAApiError):
 
     The gateway answers this when the engine did not confirm the operation in time: WhatsApp never
     replied, the socket was down, or the request budget ran out. Retryable, unlike every other typed
-    error here. The non-idempotent sends are deliberately left unbounded by the gateway so they never
-    answer one.
+    error here. The non-idempotent sends are deliberately left unbounded by the gateway so a slow
+    WhatsApp reply never answers one, and in a multi-node deployment a forwarded request answers 503
+    only when the owner node was never reached. A forward that fails after the request was sent
+    answers 502 or 504 instead (a plain OpenWAApiError): the owner may already have carried it out, so
+    do not repeat a non-idempotent send on those unchecked.
     """
 
 

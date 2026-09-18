@@ -131,6 +131,16 @@ describe('Idempotency Utils', () => {
       expect(a).toBe(b);
     });
 
+    // Once the backoff reaches its cap, a later outage that loops to the same attempt count dispatches
+    // a byte-identical payload; the second alert is news and must not dedupe onto the first.
+    it('salts session.reconnect_loop keys per occurrence and keeps them retry-stable', () => {
+      const payload = { sessionId: 'A', attempts: 10, nextDelayMs: 300_000 };
+      const first = generateIdempotencyKey('session.reconnect_loop', payload, '2026-09-01T00:00:00.000Z');
+      const later = generateIdempotencyKey('session.reconnect_loop', payload, '2026-09-01T06:00:00.000Z');
+      expect(first).not.toBe(later);
+      expect(generateIdempotencyKey('session.reconnect_loop', { ...payload }, '2026-09-01T00:00:00.000Z')).toBe(first);
+    });
+
     it('does not salt message-event keys with the occurrence time (content-based dedup preserved)', () => {
       const a = generateIdempotencyKey(
         'message.ack',

@@ -25,9 +25,13 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
   const [open, setOpen] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped by every search and by clearing the input: a response whose id is no longer current belongs
+  // to a query the user has moved past, and a slower earlier one must not overwrite the latest results.
+  const requestId = useRef(0);
 
   const run = useCallback(
     async (query: string, offset: number, append: boolean) => {
+      const id = ++requestId.current;
       const params = buildSearchParams(
         query,
         scopeCurrent && currentSessionId ? { sessionId: currentSessionId } : undefined,
@@ -44,9 +48,11 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
       setError(null);
       try {
         const res = await searchApi.search(params);
+        if (id !== requestId.current) return;
         setHits(prev => (append ? [...prev, ...res.hits] : res.hits));
         setTotal(res.total);
       } catch (e: unknown) {
+        if (id !== requestId.current) return;
         const status = (e as { status?: number }).status;
         if (status === 501) setError(t('search.unavailable'));
         else if (status === 503) setError(t('search.error'));
@@ -54,7 +60,7 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
         setHits([]);
         setTotal(0);
       } finally {
-        setLoading(false);
+        if (id === requestId.current) setLoading(false);
       }
     },
     [scopeCurrent, currentSessionId, t],
@@ -64,9 +70,11 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
     if (!q.trim()) {
+      requestId.current += 1;
       setHits([]);
       setTotal(0);
       setError(null);
+      setLoading(false);
       return;
     }
     timer.current = setTimeout(() => {

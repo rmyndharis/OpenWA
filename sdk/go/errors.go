@@ -37,7 +37,11 @@ var (
 	// than a refusal: WhatsApp never replied, the socket was down, or the
 	// request budget ran out. Unlike every other sentinel here it is
 	// RETRYABLE. The non-idempotent sends are deliberately left unbounded by
-	// the gateway so they never answer one.
+	// the gateway so a slow WhatsApp reply never answers one, and in a
+	// multi-node deployment a forwarded request answers 503 only when the
+	// owner node was never reached. A forward that fails after the request
+	// was sent answers 502 or 504 instead: the owner may already have carried
+	// it out, so do not repeat a non-idempotent send on those unchecked.
 	ErrServiceUnavailable = errors.New("openwa: service unavailable")
 )
 

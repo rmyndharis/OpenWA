@@ -4,7 +4,7 @@ import type { ConfigService } from '@nestjs/config';
 // ConfigService stub for the media-shed knob: no override means the default cap applies.
 const asConfig = (): { get: jest.Mock } => ({ get: jest.fn((_key: string, defaultValue?: unknown) => defaultValue) });
 import { Socket } from 'socket.io';
-import { EventsGateway, isSessionSubscriptionAllowed } from './events.gateway';
+import { EventsGateway, QR_DENIED_ROOM, isSessionSubscriptionAllowed } from './events.gateway';
 import { AuthService } from '../auth/auth.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -47,6 +47,7 @@ interface MockSocket {
   emit: jest.Mock;
   disconnect: jest.Mock;
   join: jest.Mock;
+  leave: jest.Mock;
   rooms: Set<string>;
 }
 
@@ -61,8 +62,12 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     emit: jest.fn(),
     disconnect: jest.fn(),
     join: jest.fn(),
+    leave: jest.fn(),
     rooms: new Set<string>(),
   });
+  // Subscription rooms joined by the socket; the QR-denied role room is not a subscription.
+  const sessionRoomJoins = (s: MockSocket): string[] =>
+    s.join.mock.calls.map(([room]) => room as string).filter(room => room.startsWith('session:'));
   const asSocket = (s: MockSocket): Socket => s as unknown as Socket;
   const subscribeMsg = (sessionId: string, events: string[]): WSClientMessage =>
     ({ type: 'subscribe', sessionId, events, requestId: 'r1' }) as unknown as WSClientMessage;
@@ -172,7 +177,7 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
 
     expect(res.type).toBe('error');
     expect(res.code).toBe('INVALID_EVENTS');
-    expect(sock.join).not.toHaveBeenCalled();
+    expect(sessionRoomJoins(sock)).toEqual([]);
   });
 
   it('keeps the valid events when a subscription mixes a valid and an unknown event', async () => {
@@ -202,7 +207,7 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
 
     expect(res.type).toBe('error');
     expect(res.code).toBe('FORBIDDEN_SESSION');
-    expect(sock.join).not.toHaveBeenCalled();
+    expect(sessionRoomJoins(sock)).toEqual([]);
   });
 
   it('forbids a session-scoped key from subscribing to the * wildcard', async () => {
@@ -216,7 +221,7 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     )) as WSErrorResponse;
 
     expect(res.code).toBe('FORBIDDEN_SESSION');
-    expect(sock.join).not.toHaveBeenCalled();
+    expect(sessionRoomJoins(sock)).toEqual([]);
   });
 
   it('allows a session-scoped key to subscribe to a session in its allowlist', async () => {
@@ -246,7 +251,7 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     )) as WSErrorResponse;
 
     expect(res.code).toBe('FORBIDDEN_SESSION');
-    expect(sock.join).not.toHaveBeenCalled();
+    expect(sessionRoomJoins(sock)).toEqual([]);
   });
 
   // Client-IP resolution: an IP-restricted key (allowedIps set) must be ENFORCED at the WS surface,
@@ -327,48 +332,8 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
       expect(() => gateway.evictApiKey('k1')).not.toThrow();
     });
 
-    it('evicts a passive socket once its cached API key expires', async () => {
-      authService.validateApiKey.mockResolvedValue({
-        id: 'k1',
-        name: 'k',
-        allowedSessions: null,
-        expiresAt: new Date('2026-01-01T00:00:00Z'),
-      });
-      const sock = makeSocket({ apiKey: 'good' });
-      await gateway.handleConnection(asSocket(sock));
-
-      (gateway as unknown as { sweepExpiredApiKeys: (now: number) => void }).sweepExpiredApiKeys(
-        Date.parse('2026-01-01T00:00:01Z'),
-      );
-
-      expect(sock.disconnect).toHaveBeenCalledWith(true);
-      expect(sock.emit).toHaveBeenCalledWith(
-        'message',
-        expect.objectContaining({ code: 'UNAUTHORIZED', message: 'API key has expired' }),
-      );
-    });
-
-    it('keeps sockets with no expiry or a future expiry', async () => {
-      const noExpiry = makeSocket({ apiKey: 'a' });
-      const future = { ...makeSocket({ apiKey: 'b' }), id: 'sock-2' };
-      authService.validateApiKey
-        .mockResolvedValueOnce({ id: 'k1', name: 'a', allowedSessions: null, expiresAt: null })
-        .mockResolvedValueOnce({
-          id: 'k2',
-          name: 'b',
-          allowedSessions: null,
-          expiresAt: new Date('2026-01-02T00:00:00Z'),
-        });
-      await gateway.handleConnection(asSocket(noExpiry));
-      await gateway.handleConnection(asSocket(future));
-
-      (gateway as unknown as { sweepExpiredApiKeys: (now: number) => void }).sweepExpiredApiKeys(
-        Date.parse('2026-01-01T00:00:00Z'),
-      );
-
-      expect(noExpiry.disconnect).not.toHaveBeenCalled();
-      expect(future.disconnect).not.toHaveBeenCalled();
-    });
+    // The periodic sweep (expiry, revocation, deletion, narrowing) reads the api_keys table, so it is
+    // exercised against a real one in events.gateway.authz-sweep.spec.ts rather than a stub here.
   });
 });
 
@@ -378,11 +343,12 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
 const makeCapturingServer = () => {
   const rooms: string[] = [];
   const emit = jest.fn();
-  const op: { to: jest.Mock; emit: jest.Mock } = { to: jest.fn(), emit };
+  const op: { to: jest.Mock; except: jest.Mock; emit: jest.Mock } = { to: jest.fn(), except: jest.fn(), emit };
   op.to.mockImplementation((r: string) => {
     rooms.push(r);
     return op;
   });
+  op.except.mockImplementation(() => op);
   const server = { to: jest.fn((r: string) => (rooms.push(r), op)) };
   return { server, emit, rooms };
 };
@@ -493,6 +459,148 @@ describe('EventsGateway.emitToRooms fan-out', () => {
   });
 });
 
+// session.qr is a pairing credential: GET /sessions/:sessionId/qr requires OPERATOR, so the socket push
+// must not hand it to a VIEWER key under any subscribe form. The stub below stands in for the Socket.IO
+// adapter: it tracks each socket's rooms and resolves to()/except() like a real broadcast (union of the
+// target rooms, minus sockets in an excluded room, one copy per socket).
+describe('EventsGateway session.qr role gate', () => {
+  interface RoomSocket {
+    id: string;
+    handshake: { headers: Record<string, string>; auth: { apiKey: string }; address: string };
+    data: Record<string, unknown>;
+    rooms: Set<string>;
+    received: WSEventMessage[];
+    emit: jest.Mock;
+    disconnect: jest.Mock;
+    join: (room: string) => void;
+    leave: (room: string) => void;
+  }
+  type Broadcast = {
+    to: (room: string) => Broadcast;
+    except: (room: string) => Broadcast;
+    emit: (channel: string, msg: WSEventMessage) => boolean;
+  };
+
+  let keys: Record<string, { id: string; name: string; role: string; allowedSessions: string[] | null }>;
+  let gateway: EventsGateway;
+  let sockets: RoomSocket[];
+
+  const broadcast = (to: string[], except: string[]): Broadcast => ({
+    to: room => broadcast([...to, room], except),
+    except: room => broadcast(to, [...except, room]),
+    emit: (_channel, msg) => {
+      for (const s of sockets) {
+        if (to.some(r => s.rooms.has(r)) && !except.some(r => s.rooms.has(r))) s.received.push(msg);
+      }
+      return true;
+    },
+  });
+
+  const connect = async (apiKey: string): Promise<RoomSocket> => {
+    const rooms = new Set<string>();
+    const sock: RoomSocket = {
+      id: `sock-${sockets.length}`,
+      handshake: { headers: {}, auth: { apiKey }, address: '203.0.113.5' },
+      data: {},
+      rooms,
+      received: [],
+      emit: jest.fn(),
+      disconnect: jest.fn(),
+      join: room => void rooms.add(room),
+      leave: room => void rooms.delete(room),
+    };
+    sockets.push(sock);
+    await gateway.handleConnection(sock as unknown as Socket);
+    return sock;
+  };
+  const subscribe = (sock: RoomSocket, sessionId: string, events: string[]) =>
+    gateway.handleMessage(
+      sock as unknown as Socket,
+      {
+        type: 'subscribe',
+        sessionId,
+        events,
+        requestId: 'r1',
+      } as unknown as WSClientMessage,
+    );
+  const qrEvents = (sock: RoomSocket) => sock.received.filter(m => m.payload.event === 'session.qr');
+
+  beforeEach(() => {
+    sockets = [];
+    keys = {
+      viewer: { id: 'k-viewer', name: 'viewer', role: 'viewer', allowedSessions: null },
+      operator: { id: 'k-operator', name: 'operator', role: 'operator', allowedSessions: null },
+      admin: { id: 'k-admin', name: 'admin', role: 'admin', allowedSessions: null },
+    };
+    gateway = new EventsGateway(
+      { validateApiKey: jest.fn((raw: string) => Promise.resolve({ ...keys[raw] })) } as unknown as AuthService,
+      { logWarn: jest.fn().mockResolvedValue(null) } as unknown as AuditService,
+      asConfig() as unknown as ConfigService,
+    );
+    (gateway as unknown as { server: unknown }).server = { to: (room: string) => broadcast([room], []) };
+  });
+
+  it('never delivers the QR to a VIEWER socket, whatever it subscribed to, while OPERATOR and ADMIN get it', async () => {
+    const viewerByName = await connect('viewer');
+    const viewerSessionWildcard = await connect('viewer');
+    const viewerGlobalWildcard = await connect('viewer');
+    const viewerEventWildcard = await connect('viewer');
+    const operator = await connect('operator');
+    const admin = await connect('admin');
+    await subscribe(viewerByName, 'sess-1', ['session.qr']);
+    await subscribe(viewerSessionWildcard, 'sess-1', ['*']);
+    await subscribe(viewerGlobalWildcard, '*', ['*']);
+    await subscribe(viewerEventWildcard, '*', ['session.qr']);
+    await subscribe(operator, '*', ['*']);
+    await subscribe(admin, 'sess-1', ['session.qr']);
+
+    gateway.emitQRCode('sess-1', 'data:image/png;base64,QR');
+
+    for (const viewer of [viewerByName, viewerSessionWildcard, viewerGlobalWildcard, viewerEventWildcard]) {
+      expect(qrEvents(viewer)).toEqual([]);
+    }
+    expect(qrEvents(operator)).toHaveLength(1);
+    expect(qrEvents(operator)[0].payload.data).toEqual({ qrCode: 'data:image/png;base64,QR' });
+    expect(qrEvents(admin)).toHaveLength(1);
+  });
+
+  it('keeps delivering every other event to a VIEWER wildcard subscription', async () => {
+    const viewer = await connect('viewer');
+    await subscribe(viewer, '*', ['*']);
+
+    gateway.emitSessionStatus('sess-1', 'qr_ready');
+
+    expect(viewer.received.map(m => m.payload.event)).toEqual(['session.status']);
+  });
+
+  it('follows the role re-validated on subscribe: a narrowed key stops receiving the QR, a widened one starts', async () => {
+    const narrowed = await connect('operator');
+    const widened = await connect('viewer');
+    await subscribe(widened, 'sess-1', ['*']);
+    expect(widened.rooms.has(QR_DENIED_ROOM)).toBe(true);
+    keys.operator.role = 'viewer';
+    keys.viewer.role = 'operator';
+    await subscribe(narrowed, 'sess-1', ['*']);
+    await subscribe(widened, 'sess-1', ['*']);
+
+    gateway.emitQRCode('sess-1', 'data:image/png;base64,QR');
+
+    expect(qrEvents(narrowed)).toEqual([]);
+    expect(qrEvents(widened)).toHaveLength(1);
+  });
+
+  it('denies the QR to a key with an unrecognised role', async () => {
+    keys.viewer.role = 'unknown';
+    const sock = await connect('viewer');
+    await subscribe(sock, 'sess-1', ['session.qr']);
+
+    gateway.emitQRCode('sess-1', 'data:image/png;base64,QR');
+
+    expect(sock.rooms.has(QR_DENIED_ROOM)).toBe(true);
+    expect(qrEvents(sock)).toEqual([]);
+  });
+});
+
 describe('event catalog ⇔ emitter invariants (drift guard)', () => {
   // Derive the events the gateway ACTUALLY emits by invoking every public emit* room
   // method against a capturing server. Reflection-based so it cannot rot: a new emit*
@@ -504,8 +612,9 @@ describe('event catalog ⇔ emitter invariants (drift guard)', () => {
       asConfig() as unknown as ConfigService,
     );
     const captured: string[] = [];
-    const op: { to: () => unknown; emit: (ch: string, msg: WSEventMessage) => boolean } = {
+    const op: { to: () => unknown; except: () => unknown; emit: (ch: string, msg: WSEventMessage) => boolean } = {
       to: () => op,
+      except: () => op,
       emit: (_ch, msg) => (captured.push(msg.payload.event), true),
     };
     (gateway as unknown as { server: unknown }).server = { to: () => op };
@@ -559,6 +668,7 @@ describe('EventsGateway rate limiting', () => {
     emit: jest.fn(),
     disconnect: jest.fn(),
     join: jest.fn(),
+    leave: jest.fn(),
     rooms: new Set<string>(),
   });
   const asSocket = (s: MockSocket): Socket => s as unknown as Socket;

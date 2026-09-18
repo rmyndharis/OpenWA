@@ -41,9 +41,10 @@ export class SessionErrorStore {
    * onboarding-modal fallback, #982), and an INITIALIZING one carries the engine-internal reconnect
    * episode it is stuck in: that status is otherwise identical to a session that has never been
    * paired, and an engine that retries forever never reaches FAILED, so there is no later status at
-   * which the reason would surface. INITIALIZING is safe to include because the lifecycle clears this
-   * map immediately before every fresh engine start and again on ready, so an ordinary startup has
-   * nothing to show. Any other status clears it, so a recovered session never shows a stale reason
+   * which the reason would surface. It also carries a failed relaunch while a service-level reconnect
+   * backs off before its next attempt, since that retry writes no status. INITIALIZING is safe to
+   * include because the lifecycle clears this map immediately before every fresh engine start and
+   * again on ready, so an ordinary startup has nothing to show. Any other status clears it, so a recovered session never shows a stale reason
    * even while the entry is still held.
    */
   attachTo(session: Session): Session {

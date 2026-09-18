@@ -25,7 +25,7 @@ export interface ChatStateStore {
 const DEFAULT_STATE: ChatStateValue = { muteEndTime: null, archived: false, pinned: false };
 const SEP = '\u0000'; // a null byte never appears in a session name or JID, so the join cannot collide
 
-// ponytail: one global LRU across all sessions, default 5000, matching the other engine maps. A
+// One global LRU across all sessions, default 5000, matching the other engine maps. A
 // many-session deployment with large chat lists should raise BAILEYS_CHAT_STATE_CACHE_MAX; an evicted
 // row stays persisted and both paths read-through on a miss (the read warms lazily, the write merges
 // the patch onto the persisted row), so eviction costs a re-read, never data loss.

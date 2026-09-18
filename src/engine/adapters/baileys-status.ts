@@ -9,6 +9,8 @@ import { resolveMediaBuffer } from './baileys-messaging';
  * delegate never touches lifecycle state directly.
  */
 export interface BaileysStatusHost {
+  /** This session's egress proxy URL (snapshotted at session start), or undefined when direct. */
+  sessionProxyUrl(): string | undefined;
   ensureReady(): void;
   /** Post-ensureReady socket handle — call host.ensureReady() first. */
   getSocket(): WASocket;
@@ -48,7 +50,7 @@ export class BaileysStatus {
     options: StatusPostOptions,
   ): Promise<StatusResult> {
     this.host.ensureReady();
-    const { data, mimetype } = await resolveMediaBuffer(media);
+    const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl());
     // A voice status carries no caption: WhatsApp has nowhere to render one on a status voice note,
     // and `ptt` is what makes it a voice note rather than an audio file. Baileys reads that same flag
     // to decide a status may take a background colour, so the colour `postStatus` already forwards

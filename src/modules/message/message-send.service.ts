@@ -210,8 +210,9 @@ export class MessageSendService {
    * Resolve a stored template, render its body (with optional header/footer
    * flattened using newlines) using the supplied variables, and delegate to the
    * existing {@link sendText} path so plugin hooks, persistence, and status
-   * tracking are reused. Throws NotFoundException when the template cannot be
-   * resolved by id or name.
+   * tracking are reused. Throws NotFoundException when the identifier matches
+   * nothing, BadRequestException when neither templateId nor templateName is
+   * given.
    *
    * The FINAL rendered text is capped at template.renderMaxChars (default 64 KiB): caller-supplied
    * variables can inflate a small template unboundedly, so an over-cap render is rejected with a

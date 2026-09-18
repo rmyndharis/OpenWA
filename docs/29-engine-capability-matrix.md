@@ -880,6 +880,13 @@ adapter boundary — none silently stubs.
 
 ✅ means works end-to-end — but these rows carry behavioral differences worth knowing:
 
+- **`rejectCall` (wwjs) is ✅ because the adapter implements it, not because it can succeed.** On
+  current WhatsApp Web builds whatsapp-web.js 1.34.7 no longer fires its `call` event for a ringing
+  call: it hooks the internal map of WhatsApp Web's call collection, and real calls no longer pass
+  through it (measured live on OpenWA 0.14.4 on 2026-08-10, with Baileys firing `call.received` and
+  `call.rejected` on the same bench). A whatsapp-web.js session therefore emits no `call.*` event,
+  never learns a `callId` to reject, and ignores the `autoRejectCalls` session setting.
+  `createCallLink` is unaffected.
 - **`postTextStatus` / `postImageStatus` / `postVideoStatus` / `postVoiceStatus` (wwjs).**
   whatsapp-web.js has no status-recipient argument, so `StatusPostOptions.recipients` is **not
   honored** — the post broadcasts to the account's status-privacy audience (a one-time warning is
@@ -890,10 +897,10 @@ adapter boundary — none silently stubs.
   `sendAudioMessage`, `sendDocumentMessage` and `sendStickerMessage` are ✅ on wwjs for chats and
   groups, but a `<id>@newsletter` recipient throws `ChannelMediaNotSupportedError` (a
   `NotImplementedException` → HTTP 501) at `ensureNotChannelRecipient`
-  (`wwebjs-messaging.ts:354` for the media funnel, `:409` for stickers). whatsapp-web.js calls
+  (`wwebjs-messaging.ts:425` for the media funnel, `:492` for stickers). whatsapp-web.js calls
   `msg.avParams()`, removed in a recent WA Web build (upstream wwebjs#201823, unresolved).
-  Text→channel is unaffected, and Baileys has no such restriction — so these five rows are the one
-  place where an engine difference does **not** show up as a per-row ❌ in 29.4.
+  Text→channel is unaffected, and Baileys has no such restriction — so these five rows answer `501`
+  without a per-row ❌ in 29.4.
 - **`sendStickerMessage` — what each engine converts.** Both engines guarantee the payload really is
   WebP, but they reach it differently and they do not accept the same inputs. whatsapp-web.js passes
   `sendMediaAsSticker: true`, and `Util.formatToWebpSticker` converts `image/*` **and** `video/*`

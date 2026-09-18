@@ -1,9 +1,9 @@
-import * as path from 'path';
 import * as fs from 'fs';
 import { type Client } from 'whatsapp-web.js';
 import { type EngineEventCallbacks, EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { type createLogger } from '../../common/services/logger.service';
 import { type WhatsAppWebJsConfig } from './whatsapp-web-js.adapter';
+import { wwjsAuthDir } from '../auth-dir-paths';
 
 /**
  * Stuck-auth detection and recovery extracted from WhatsAppWebJsAdapter: what to do when a session
@@ -81,7 +81,7 @@ export class WwebjsStuckAuth {
 
   /** Remove this session's LocalAuth directory so the next start re-pairs from a clean slate. */
   async clearLocalAuth(): Promise<void> {
-    const dir = path.join(path.resolve(this.host.config.sessionDataPath), `session-${this.host.config.sessionId}`);
+    const dir = wwjsAuthDir(this.host.config.sessionDataPath, this.host.config.sessionId);
     await fs.promises
       // maxRetries mirrors LocalAuth's own default: on a WhatsApp-initiated unlink the library never
       // closes the browser, so Chromium is still rotating IndexedDB files while this walks the tree and

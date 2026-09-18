@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Template } from './entities/template.entity';
@@ -52,8 +52,8 @@ export class TemplateService {
   }
 
   /**
-   * Resolve a template for a session by id or by name. Throws NotFoundException
-   * when neither identifier matches. Used by the send-template message flow.
+   * Resolve a template for a session by id or by name. Throws NotFoundException when the identifier
+   * matches nothing, BadRequestException when neither is given. Used by the send-template message flow.
    */
   async resolve(sessionId: string, identifier: { templateId?: string; templateName?: string }): Promise<Template> {
     const { templateId, templateName } = identifier;
@@ -75,7 +75,7 @@ export class TemplateService {
       return template;
     }
 
-    throw new NotFoundException('Either templateId or templateName must be provided');
+    throw new BadRequestException('Either templateId or templateName must be provided');
   }
 
   async update(sessionId: string, id: string, dto: UpdateTemplateDto): Promise<Template> {

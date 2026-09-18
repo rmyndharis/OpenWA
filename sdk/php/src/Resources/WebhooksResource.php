@@ -39,7 +39,10 @@ class WebhooksResource
      *
      * @param array<string,mixed> $query Optional filter: `sessionId`, `limit`, `offset`.
      *
-     * @return mixed the response has no published schema, so it is returned unshaped
+     * @return array<int,array<string,mixed>> most recent first; each entry carries `id`, `webhookId`,
+     *                                        `sessionId`, `event`, `url`, `attempts`, `lastError` and
+     *                                        `createdAt`, plus nullable `idempotencyKey`, `deliveryId`
+     *                                        and `lastStatusCode`
      */
     public function deliveryFailures(array $query = [])
     {

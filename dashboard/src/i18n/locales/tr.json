@@ -285,7 +285,8 @@
     },
     "start": {
       "teardownPendingTitle": "Oturum Başlatılıyor",
-      "teardownPending": "Bu oturum için bir kimlik bilgisi sıfırlama işlemi devam ediyor. Lütfen biraz bekleyip tekrar deneyin."
+      "teardownPending": "Bu oturum için bir kimlik bilgisi sıfırlama işlemi devam ediyor. Lütfen biraz bekleyip tekrar deneyin.",
+      "errorTitle": "Başlatma Başarısız"
     },
     "qr": {
       "title": "QR Kodunu Tara",
@@ -309,7 +310,7 @@
       "created": "Oluşturuldu",
       "lastActive": "Son Görülme",
       "autoRejectCalls": "Aramaları otomatik reddet",
-      "autoRejectCallsHint": "Gelen aramalar çaldığı anda reddedilir. call.received webhook'u yine de ilk olarak tetiklenir. Bir sonraki arama için geçerlidir — yeniden başlatma gerekmez."
+      "autoRejectCallsHint": "Gelen aramalar çaldığı anda reddedilir. call.received webhook'u yine de ilk olarak tetiklenir. Bir sonraki arama için geçerlidir — yeniden başlatma gerekmez. Yalnızca Baileys motorunda: whatsapp-web.js artık çalan aramaları algılamıyor."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -518,7 +519,10 @@
       "title": "Kayıtlı şablon yok",
       "description": "Sık kullanılan yanıtları ve bildirimleri hızlandırmak için yeniden kullanılabilir bir şablon oluşturun.",
       "noSessionsTitle": "Kullanılabilir oturum yok",
-      "noSessionsDesc": "Şablon eklemeden önce bir WhatsApp oturumu oluşturun."
+      "noSessionsDesc": "Şablon eklemeden önce bir WhatsApp oturumu oluşturun.",
+      "loadErrorTitle": "Şablonlar yüklenemedi",
+      "forbiddenTitle": "Şablonlara erişim yok",
+      "forbiddenDesc": "Şablonlar, operatör veya yönetici rolüne sahip bir API anahtarı gerektirir."
     },
     "toasts": {
       "created": "Şablon başarıyla oluşturuldu",

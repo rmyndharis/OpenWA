@@ -285,7 +285,8 @@
     },
     "start": {
       "teardownPendingTitle": "Session Starting",
-      "teardownPending": "A credential teardown for this session is still settling. Wait a moment and try again."
+      "teardownPending": "A credential teardown for this session is still settling. Wait a moment and try again.",
+      "errorTitle": "Start Failed"
     },
     "qr": {
       "title": "Scan QR Code",
@@ -309,7 +310,7 @@
       "created": "Created",
       "lastActive": "Last Active",
       "autoRejectCalls": "Auto-reject calls",
-      "autoRejectCallsHint": "Incoming calls are declined as soon as they ring. The call.received webhook still fires first. Applies to the next call — no restart needed."
+      "autoRejectCallsHint": "Incoming calls are declined as soon as they ring. The call.received webhook still fires first. Applies to the next call — no restart needed. Baileys engine only: whatsapp-web.js no longer detects a ringing call."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -518,7 +519,10 @@
       "title": "No templates saved",
       "description": "Create a reusable template to speed up common replies and notifications.",
       "noSessionsTitle": "No sessions available",
-      "noSessionsDesc": "Create a WhatsApp session before adding templates."
+      "noSessionsDesc": "Create a WhatsApp session before adding templates.",
+      "loadErrorTitle": "Could not load templates",
+      "forbiddenTitle": "No access to templates",
+      "forbiddenDesc": "Templates require an API key with the operator or admin role."
     },
     "toasts": {
       "created": "Template created successfully",

@@ -511,6 +511,25 @@ docker compose up -d
 curl -H "X-API-Key: $API_KEY" http://localhost:2785/api/health
 ```
 
+> Restoring `sessions/` is required, not optional, when the rollback crosses a browser major upgrade (on
+> amd64, 0.23.5 moved Chrome for Testing from 146 to 153; arm64 runs the chromium Debian shipped when each
+> image was built), and the backup must predate the first start on the newer image; a daily backup taken
+> after the upgrade does not qualify. An older Chrome silently deletes the IndexedDB of a profile a newer
+> Chrome has opened, which is where whatsapp-web.js keeps the WhatsApp login. The symptom: every
+> previously linked whatsapp-web.js session starts at a QR code instead of reconnecting, the log names no
+> cause (0.23.3 and 0.23.4 log only a generic `relink_required` warning), and upgrading again does not
+> bring the pairing back. Changing only the image tag, or `helm rollback` (which keeps the volume), skips
+> the restore and hits this. A session first paired on the newer image is not in that backup and must be
+> paired again either way. Baileys sessions are unaffected.
+
+> Restoring `sessions/` **and** `baileys/` is likewise required when rolling back past 0.23.5, on either
+> engine and either architecture. 0.23.5 renames each session's auth directory from the session name to
+> its UUID id at first boot (`session-<id>` under `SESSION_DATA_PATH`, `<id>` under `BAILEYS_AUTH_DIR`);
+> an older image looks for the name-keyed directory, finds nothing, and starts every session at a QR
+> code. The rename keeps nothing behind to fall back to, so the backup must again predate the first
+> start on 0.23.5. Restoring both directories from that backup returns every session to its previous
+> pairing.
+
 ---
 
 ### Runbook: Database Backup
@@ -621,6 +640,13 @@ docker compose down
 docker compose up -d
 curl -s -X POST -H "X-API-Key: <an-existing-key>" http://localhost:2785/api/auth/validate
 ```
+
+> **PostgreSQL restores are read as UTC.** From 0.23.6 the data connection binds, parses and defaults
+> every timestamp in UTC, and refuses to boot when its session is not on UTC
+> ([05 - Database Design](./05-database-design.md#timestamps-on-postgresql-are-utc)). A `database.sql`
+> taken from a gateway that ran off UTC before 0.23.6 holds that host's local wall time in the columns
+> the app wrote, so those rows read as shifted by the offset once restored. The 0.23.6 upgrade notes in
+> `CHANGELOG.md` carry the conversion and name the columns it must not touch.
 
 > `main.sqlite` carries the hashed API keys and audit log; `.api-key`, when retained by the original
 > installation, carries the plaintext bootstrap admin key. After restore, verify that both expected files

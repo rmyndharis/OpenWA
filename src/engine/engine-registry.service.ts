@@ -22,6 +22,17 @@ export class EngineRegistry {
   private readonly engines = new Map<string, IWhatsAppEngine>();
 
   /**
+   * The egress proxy each live engine was created with, by session (DB) id.
+   *
+   * A session's proxy is fixed for the life of its engine: the WebSocket, the browser and the fetch
+   * dispatcher are all built from it at start, and `PATCH /proxy` deliberately does not restart the
+   * engine, so the stored row can already name a different one. Anything that fetches ON BEHALF of a
+   * running session (a caller-supplied media URL) has to leave through THIS value, not the row, or
+   * the destination would see an address the rest of the session never uses.
+   */
+  private readonly proxies = new Map<string, string | undefined>();
+
+  /**
    * Sessions whose engine is being constructed but is not in `engines` yet. Held so concurrency
    * accounting and the infra import pre-flight can see a session that is starting but not yet
    * registered, which would otherwise look idle and be orphaned or double-started.
@@ -38,8 +49,15 @@ export class EngineRegistry {
     return this.engines.get(id);
   }
 
-  set(id: string, engine: IWhatsAppEngine): void {
+  /**
+   * Register the live engine for a session together with the proxy it was started with. A new
+   * production call site must pass that proxy: `proxyUrl(id)` is what keeps a fetch made for a
+   * proxied session off the gateway's own address (#1626), and an omitted argument records "direct".
+   * It stays optional only because the specs that register a bare engine stub do not care.
+   */
+  set(id: string, engine: IWhatsAppEngine, proxyUrl?: string): void {
     this.engines.set(id, engine);
+    this.proxies.set(id, proxyUrl);
   }
 
   has(id: string): boolean {
@@ -47,11 +65,13 @@ export class EngineRegistry {
   }
 
   delete(id: string): boolean {
+    this.proxies.delete(id);
     return this.engines.delete(id);
   }
 
   clear(): void {
     this.engines.clear();
+    this.proxies.clear();
   }
 
   get size(): number {
@@ -94,7 +114,16 @@ export class EngineRegistry {
     if (!this.isLive(id, engine)) {
       return false;
     }
-    return this.engines.delete(id);
+    return this.delete(id);
+  }
+
+  /**
+   * The egress proxy the live engine for `id` was started with, or undefined when that session is
+   * direct OR has no live engine. A caller that must not fetch direct for a proxied session pairs
+   * this with the stored row; see `MediaConversionService.sessionProxy`.
+   */
+  proxyUrl(id: string): string | undefined {
+    return this.proxies.get(id);
   }
 
   // ── Consumer-facing accessor ──────────────────────────────────────────

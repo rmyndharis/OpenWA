@@ -43,3 +43,11 @@ describe('SendBulkMessageDto content length + variables validation', () => {
     expect((await validateBulk(textItem('hi', { variables: [1, 2, 3] }))).length).toBeGreaterThan(0);
   });
 });
+
+describe('SendBulkMessageDto recipient', () => {
+  it('rejects an empty chatId', async () => {
+    expect((await validateBulk(textItem('hi'))).length).toBe(0);
+    const errors = await validateBulk({ messages: [{ chatId: '', type: 'text', content: { text: 'hi' } }] });
+    expect(errors.length).toBeGreaterThan(0);
+  });
+});

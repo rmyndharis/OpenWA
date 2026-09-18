@@ -33,6 +33,7 @@ import {
   isMediaDownloadEnabled,
   withInboundDownloadTimeout,
 } from './inbound-media-cap';
+import type { Dispatcher } from 'undici';
 import type { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { type createLogger } from '../../common/services/logger.service';
 import { createSilentLogger } from './baileys-logger';
@@ -76,6 +77,18 @@ const PRESENCE_STATES: ReadonlySet<PresenceState> = new Set<PresenceState>([
   'paused',
 ]);
 
+/**
+ * Top-level Message keys that carry no user content. A live message made only of these is dropped;
+ * messageContextInfo rides along on real content too, so on its own it is not enough to drop.
+ */
+const PROTOCOL_NOISE_KEYS: ReadonlySet<string> = new Set([
+  'senderKeyDistributionMessage',
+  'fastRatchetKeySenderKeyDistributionMessage',
+  'messageContextInfo',
+  'messageHistoryNotice',
+  'messageHistoryBundle',
+]);
+
 export interface BaileysEventsHost {
   /** Live socket handle for media re-upload requests (inbound media download). */
   getSocket(): WASocket;
@@ -86,6 +99,8 @@ export interface BaileysEventsHost {
   normalizedSelfJid(): string;
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
   loadLib(): Promise<typeof BaileysLib>;
+  /** Session proxy dispatcher for the media download; undefined = direct. */
+  getFetchDispatcher(): Dispatcher | undefined;
   /** Unix-seconds timestamp of the last 'open' connection.update — the live-vs-history discriminator. */
   readonly connectedAt: number;
   /** The adapter's inbound media download gate (shared so the bound holds across all inbound paths). */
@@ -304,14 +319,26 @@ export class BaileysEvents {
       }
 
       // --- contentless protocol traffic: don't emit onMessage ---
-      // Baileys' getContentType only matches keys named `conversation` or containing `Message`, and
-      // excludes senderKeyDistributionMessage BY NAME, so a sender-key distribution (Signal traffic
-      // every group participant emits on first write or key rotation), a messageHistoryNotice or any
-      // other suffix-less proto resolves here as contentType `undefined`, never as its own key.
-      // These carry no user content yet reached consumers as bodyless `unknown` message.received
-      // events (#1568). mapHistoryMessage drops exactly this set via its `!contentType` guard, and
-      // emitOwnSendEcho has always skipped undefined the same way, so live inbound must agree.
-      if (!contentType || contentType === 'senderKeyDistributionMessage') {
+      // A sender-key distribution (Signal traffic every group participant emits on first write or key
+      // rotation) or a history-sync notice carries no user content, yet reached consumers as a bodyless
+      // `unknown` message.received (#1568). Drop only a message made entirely of those keys. Anything
+      // else without a resolvable content type (a call log, a type newer than the bundled proto, which
+      // decodes to a lone messageContextInfo) still flows on as `unknown`, as it always has.
+      //
+      // Known limit: a type newer than the bundled proto that arrives in the same stanza as its sender's
+      // key distribution is dropped too. Baileys merges the stanza's decrypted parts into one message
+      // and protobuf decoding discards unknown fields, so it reads { senderKeyDistributionMessage,
+      // messageContextInfo }: nothing records which part the context info came from or that a field was
+      // skipped, and a messageContextInfo field such as messageSecret is not proof of content either,
+      // since the sending client decides what it carries. It stops once the proto knows the type.
+      const keys = Object.keys(normalizedRoot ?? {});
+      if (keys.every(k => PROTOCOL_NOISE_KEYS.has(k)) && keys.some(k => k !== 'messageContextInfo')) {
+        this.host.logger.debug('Dropping contentless protocol message', {
+          action: 'baileys_drop_protocol_noise',
+          msgId: msg.key.id,
+          remoteJid,
+          keys,
+        });
         return;
       }
 
@@ -718,34 +745,51 @@ export class BaileysEvents {
 
   /**
    * Download inbound media via a stream, accumulating chunks but ABORTING (destroy + discard) once the
-   * running total exceeds `maxBytes`. Returns null on abort. Uses `downloadMediaMessage(..., 'stream')`
-   * (not the raw `downloadContentFromMessage`) so the library's expired-media re-upload retry is kept;
-   * for under-cap media the concatenated buffer is byte-identical to the 'buffer' mode it replaces.
+   * running total exceeds `maxBytes`. On that abort it resolves `{ overflowBytes }`, the bytes received
+   * when the cap tripped; past the wall-clock deadline it resolves null. Uses
+   * `downloadMediaMessage(..., 'stream')` (not the raw `downloadContentFromMessage`) so the library's
+   * expired-media re-upload retry is kept; for under-cap media the concatenated buffer is byte-identical
+   * to the 'buffer' mode it replaces.
    */
-  private async downloadInboundMediaCapped(msg: WAMessage, maxBytes: number): Promise<Buffer | null> {
+  private async downloadInboundMediaCapped(
+    msg: WAMessage,
+    maxBytes: number,
+  ): Promise<Buffer | { overflowBytes: number } | null> {
+    // A proxied session must not fetch media around its proxy (#859). Baileys reads the dispatcher
+    // from the nested `options`; a top-level one is ignored.
+    const dispatcher = this.host.getFetchDispatcher();
     // Hold the stream handle in the outer scope so the timeout can destroy it. A genuine
-    // download/read error still rejects (propagating to the caller's catch as before); only a
-    // wall-clock timeout or the byte-cap overflow resolves to null.
+    // download/read error still rejects (propagating to the caller's catch as before).
     let stream: (AsyncIterable<Buffer> & { destroy?: () => void }) | undefined;
-    const download = (async (): Promise<Buffer | null> => {
+    // The timeout can fire before the stream exists (an expired-media re-upload wait, a slow response):
+    // the abandoned download must then stop on its own instead of buffering outside the limiter.
+    let timedOut = false;
+    const download = (async (): Promise<Buffer | { overflowBytes: number }> => {
       const b = await this.host.loadLib();
       stream = (await b.downloadMediaMessage(
         msg,
         'stream',
-        {},
+        dispatcher ? { options: { dispatcher } as RequestInit } : {},
         {
           logger: createSilentLogger(),
           reuploadRequest: this.host.getSocket().updateMediaMessage,
         },
       )) as AsyncIterable<Buffer> & { destroy?: () => void };
+      if (timedOut) {
+        stream.destroy?.();
+        return Buffer.alloc(0);
+      }
 
       const chunks: Buffer[] = [];
       let total = 0;
       for await (const chunk of stream) {
+        if (timedOut) {
+          break;
+        }
         total += chunk.length;
         if (total > maxBytes) {
           stream.destroy?.();
-          return null;
+          return { overflowBytes: total };
         }
         chunks.push(chunk);
       }
@@ -754,8 +798,11 @@ export class BaileysEvents {
 
     // A slow/trickling sender never trips the byte cap, so without a deadline it pins a concurrency
     // slot (and, on Baileys, the whole inbound handler) indefinitely. On timeout, destroy the stream
-    // and treat it as no usable media (same null the cap-abort returns).
-    return withInboundDownloadTimeout(download, inboundMediaTimeoutMs(), () => stream?.destroy?.());
+    // and treat it as no usable media.
+    return withInboundDownloadTimeout(download, inboundMediaTimeoutMs(), () => {
+      timedOut = true;
+      stream?.destroy?.();
+    });
   }
 
   /**
@@ -822,8 +869,9 @@ export class BaileysEvents {
     const declared = coerceDeclaredSize(subMessage?.fileLength);
 
     if (declared > maxBytes) {
-      // Pre-download gate: an honest over-cap sender's media is never decrypted into heap at all
-      // (Baileys integrity-checks content against the declared size, so this is a robust bound).
+      // Pre-download gate: an honest over-cap sender's media is never decrypted into heap at all.
+      // Baileys does not check the decrypted bytes against the declared size, so a sender can
+      // understate it; the streaming abort below is the bound for that case.
       this.host.logger.warn('Inbound media declared size exceeds MEDIA_DOWNLOAD_MAX_BYTES; skipped download', {
         msgId: msg.key.id,
         sizeBytes: declared,
@@ -836,11 +884,22 @@ export class BaileysEvents {
       // can't materialise an over-cap blob. For under-cap media this yields the identical buffer.
       const buf = await this.downloadInboundMediaCapped(msg, maxBytes);
       if (buf === null) {
-        this.host.logger.warn(
-          'Inbound media download aborted (over MEDIA_DOWNLOAD_MAX_BYTES or past MEDIA_DOWNLOAD_TIMEOUT_MS); emitting omitted marker',
-          { msgId: msg.key.id },
-        );
-        return { mimetype, filename, omitted: true, sizeBytes: maxBytes };
+        // Nothing proves the real size, so report the declared one, as the failure branch below does.
+        this.host.logger.warn('Inbound media download passed MEDIA_DOWNLOAD_TIMEOUT_MS; emitting omitted marker', {
+          msgId: msg.key.id,
+          sizeBytes: declared,
+        });
+        return { mimetype, filename, omitted: true, sizeBytes: declared };
+      }
+      if (!Buffer.isBuffer(buf)) {
+        // The bytes received are a lower bound above the cap; the declared size passed the pre-gate, so
+        // it is smaller and says nothing here.
+        const sizeBytes = buf.overflowBytes;
+        this.host.logger.warn('Inbound media download exceeded MEDIA_DOWNLOAD_MAX_BYTES; emitting omitted marker', {
+          msgId: msg.key.id,
+          sizeBytes,
+        });
+        return { mimetype, filename, omitted: true, sizeBytes };
       }
       // capInboundMedia is the last line (lazy base64, never persist/webhook/broadcast an over-cap
       // blob); the real heap bound is the pre-gate + streaming abort + concurrency limiter.
@@ -853,7 +912,7 @@ export class BaileysEvents {
     } catch (err) {
       // A download failure yields the omitted marker, never a propagated throw: the media field stays
       // present, matching the skip/pre-gate/abort exits above. The declared size is the honest number
-      // here, since nothing was downloaded and the cap the abort reports would be a fabrication.
+      // here: the download never completed, so no measured size exists.
       this.host.logger.warn('Inbound media download failed; emitting the omitted marker', {
         error: err instanceof Error ? err.message : String(err),
         msgId: msg.key.id,

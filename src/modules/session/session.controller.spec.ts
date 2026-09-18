@@ -5,6 +5,7 @@ import type { Session } from './entities/session.entity';
 import type { SessionService } from './session.service';
 import type { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
+import type { ApiKey } from '../auth/entities/api-key.entity';
 import { BadGatewayException, BadRequestException, ConflictException } from '@nestjs/common';
 
 // POST /sessions declared a SessionResponseDto in its Swagger metadata but returned the raw
@@ -300,6 +301,43 @@ describe('SessionController — muteChat', () => {
     await controller.muteChat('sess-uuid-1', { chatId: '628123@c.us', muteUntil: null });
 
     expect(sessionService.muteChat).toHaveBeenCalledWith('sess-uuid-1', '628123@c.us', null);
+  });
+});
+
+describe('SessionController findAll name filter', () => {
+  const apiKey = { allowedSessions: ['sess-uuid-1'] } as unknown as ApiKey;
+  let sessionService: { findAll: jest.Mock; isActive: jest.Mock };
+  let controller: SessionController;
+
+  beforeEach(() => {
+    sessionService = { findAll: jest.fn().mockResolvedValue([]), isActive: jest.fn().mockReturnValue(false) };
+    controller = new SessionControllerClass(
+      sessionService as unknown as SessionService,
+      { logInfo: jest.fn() } as unknown as AuditService,
+    );
+  });
+
+  it('forwards the name alongside the key allowlist and the window', async () => {
+    await expect(controller.findAll(apiKey, '10', '5', 'my-bot')).resolves.toEqual([]);
+
+    expect(sessionService.findAll).toHaveBeenCalledWith(['sess-uuid-1'], { limit: 10, offset: 5, name: 'my-bot' });
+  });
+
+  it('leaves the query unfiltered when name is absent', async () => {
+    await controller.findAll(apiKey);
+
+    expect(sessionService.findAll).toHaveBeenCalledWith(['sess-uuid-1'], {
+      limit: undefined,
+      offset: undefined,
+      name: undefined,
+    });
+  });
+
+  // A repeated key arrives as an array and an empty value as ''. Dropping either would return every
+  // session to a caller that asked for one, so both are refused before the service is reached.
+  it.each([[['a', 'b']], ['']])('rejects name=%p with 400', async name => {
+    await expect(controller.findAll(apiKey, undefined, undefined, name)).rejects.toBeInstanceOf(BadRequestException);
+    expect(sessionService.findAll).not.toHaveBeenCalled();
   });
 });
 

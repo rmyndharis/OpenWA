@@ -165,8 +165,12 @@ export class IngressService {
     const deliveryId = req.headers[dedupHeader] ?? deriveDeliveryId(req);
     // Provider request headers persist with the event (redrive/debugging); credentials must not.
     // Signature headers are re-derivable, auth material is not — redact before the first write.
+    // A shared-secret route carries the instance secret itself in its declared header.
     const payload = {
-      headers: redactSensitiveHeaders(req.headers),
+      headers: redactSensitiveHeaders(
+        req.headers,
+        route.signature.scheme === 'shared-secret' ? route.signature.header : undefined,
+      ),
       query: req.query,
       body: req.rawBody,
       rawBody: req.rawBody,
@@ -283,10 +287,15 @@ const SENSITIVE_INGRESS_HEADERS = new Set([
   'x-webhook-signature',
 ]);
 
-export function redactSensitiveHeaders(headers: Record<string, string>): Record<string, string> {
+export function redactSensitiveHeaders(
+  headers: Record<string, string>,
+  credentialHeader?: string,
+): Record<string, string> {
+  const extra = credentialHeader?.toLowerCase();
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
-    out[name] = SENSITIVE_INGRESS_HEADERS.has(name.toLowerCase()) ? '[redacted]' : value;
+    const lower = name.toLowerCase();
+    out[name] = SENSITIVE_INGRESS_HEADERS.has(lower) || lower === extra ? '[redacted]' : value;
   }
   return out;
 }

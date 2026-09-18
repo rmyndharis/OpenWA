@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, UpdateQueryBuilder, DeleteQueryBuilder, type QueryDeepPartialEntity } from 'typeorm';
+import { In, Repository, UpdateQueryBuilder, DeleteQueryBuilder, type QueryDeepPartialEntity } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { ipMatches } from '../../common/utils/ip';
 import { hashApiKey } from './api-key-hash';
@@ -17,6 +17,7 @@ import { CreateApiKeyDto, UpdateApiKeyDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { readBootstrapKey, removeBootstrapKey, writeBootstrapKey } from './bootstrap-key-file';
 import { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
+import { apiKeyAuthorizationFingerprint, normalizeScopeList } from './api-key-authorization';
 import { EventsGateway, type ApiKeyEvictionReason } from '../events/events.gateway';
 
 /**
@@ -47,24 +48,6 @@ export function bannerKeyLine(displayKey: string, isNewKey: boolean): string {
   if (isNewKey) return displayKey;
   if (displayKey.startsWith('(')) return displayKey;
   return `${displayKey.slice(0, 8)}… (full key in data/.api-key or the dashboard)`;
-}
-
-/**
- * Collapse an `allowedSessions` list to the two shapes the enforcement sites actually distinguish.
- *
- * The column is `simple-array`: TypeORM joins on write and splits on read, so `['']` is stored as
- * `''` and read back as `[]`. Every site treats a zero-length list as "every session", so a write
- * that looked like a scoping landed as a widening. The DTO validator now refuses such an entry at
- * the boundary, and this is the second half: whatever reaches storage is either a non-empty list of
- * real ids, or NULL.
- *
- * NULL rather than `[]` on purpose. Both already exist in the table for the same intent, and the
- * published contract says an unscoped key omits the field, which only NULL produces.
- */
-function normalizeScopeList(list: string[] | null | undefined): string[] | null {
-  if (list == null) return null;
-  const cleaned = list.map(entry => entry.trim()).filter(entry => entry.length > 0);
-  return cleaned.length > 0 ? cleaned : null;
 }
 
 @Injectable()
@@ -276,21 +259,10 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       saved = await this.findOne(id);
     }
 
-    // Compare membership, not order: a pure reorder of allowedIps/allowedSessions is a no-op for the
-    // .includes()-based enforcement, so sort before stringify to avoid a spurious eviction on a reorder.
-    // Normalize before comparing: a legacy row stored as '' reads back as [], which means the same
-    // as NULL at every enforcement site, so treating them as different would evict live sockets for a
-    // write that changed nothing.
-    const ordered = (v: string[] | null) => {
-      const normalized = normalizeScopeList(v);
-      return normalized ? [...normalized].sort() : null;
-    };
-    const authzChanged =
-      saved.role !== before.role ||
-      saved.expiresAt?.getTime() !== before.expiresAt?.getTime() ||
-      JSON.stringify(ordered(saved.allowedIps)) !== JSON.stringify(ordered(before.allowedIps)) ||
-      JSON.stringify(ordered(saved.allowedSessions)) !== JSON.stringify(ordered(before.allowedSessions));
-    if (authzChanged) {
+    // One fingerprint definition, two callers: this immediate eviction and the gateway's periodic
+    // re-validation sweep. Sharing it keeps the two from disagreeing about what an authorization
+    // change is (membership over order, '' and NULL alike, usage statistics ignored).
+    if (apiKeyAuthorizationFingerprint(saved) !== apiKeyAuthorizationFingerprint(before)) {
       this.evictActiveSockets(id, 'authorization_changed');
     }
     return saved;
@@ -445,6 +417,17 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * The current rows for a set of key ids, in one statement. Feeds the WebSocket gateway's periodic
+   * re-validation of the keys behind its live sockets: an id whose row is gone simply comes back
+   * absent, which the gateway reads as deleted. Usage statistics are deliberately not recorded here,
+   * so a passive socket does not look like traffic.
+   */
+  async findAuthorizationStates(ids: string[]): Promise<ApiKey[]> {
+    if (ids.length === 0) return [];
+    return this.apiKeyRepository.findBy({ id: In(ids) });
   }
 
   async validateApiKey(rawKey: string, clientIp?: string, sessionId?: string): Promise<ApiKey> {
