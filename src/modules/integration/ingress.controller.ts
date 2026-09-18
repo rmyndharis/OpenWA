@@ -50,7 +50,7 @@ export class IngressController {
   })
   @ApiOkResponse({
     description:
-      'GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202.',
+      'GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery is answered with the same ack as the first delivery, so it is not distinguishable by status.',
   })
   @ApiResponse({
     status: 202,

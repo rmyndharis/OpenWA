@@ -163,7 +163,7 @@ export class IngressEnqueueService implements OnApplicationBootstrap {
       await this.loader.dispatchWebhookForInstance(data);
       return { outcome: 'dispatched' };
     } catch (err) {
-      // A duplicate delivery already 200s before this point, so a failure here is a real dispatch error.
+      // A duplicate delivery is already acked before this point, so a failure here is a real dispatch error.
       // Log and swallow so the provider still gets its 202 (at-least-once, like the webhook fallback).
       // enqueue() intentionally does NOT write a dead-letter row here — it is shared with RedriveService
       // (a failed replay must not spawn a second DLQ row). The 'failed' outcome + error is returned so the

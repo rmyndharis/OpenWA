@@ -6670,9 +6670,10 @@ is read raw, never DTO-bound, so the signed bytes reach the verifier unchanged).
 the provider's verification handshake and answers only when its `verifyToken` matches.
 
 **Response** — the primary success path is `202`: the delivery is persisted and queued for async
-plugin processing. `200` means the `GET` verification-challenge echo, or a duplicate delivery
-already persisted (idempotent re-delivery). A route may shape the synchronous status/body/headers
-the provider sees via its declarative `ack` config (doc 25); the plugin itself always runs async.
+plugin processing. `200` means the `GET` verification-challenge echo, or a route whose declared
+`ack` sets it. A route may shape the synchronous status/body/headers the provider sees via its
+declarative `ack` config (doc 25); the plugin itself always runs async. A re-delivery of an
+already-persisted event is answered with that same ack, byte for byte, and is not enqueued again.
 
 **Errors:** `401` signature verification failed (missing, stale, or wrong secret) · `403` `GET` verification challenge failed (`verifyToken` mismatch) · `404` unknown pluginId/instanceId, or no such claimed route · `413` body over the route's `maxBodyBytes` · `429` rate limit: the per-instance bucket (`INGRESS_INSTANCE_LIMIT`) or the per-client-IP bucket (`INGRESS_IP_LIMIT`), both per `INGRESS_INSTANCE_TTL`; the global per-IP tiers skip this route, so these two are its bounds, and `Retry-After-instance` / `Retry-After-ingress-ip` names the one that shed the request
 
