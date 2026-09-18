@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An ingress route's declared ack `content-type` reaches the provider instead of being overwritten with `text/plain`, so a provider that requires `application/json` on a 200 or 202 accepts the ack; a type a browser could execute is still forced to `text/plain` ([#1637](https://github.com/rmyndharis/OpenWA/issues/1637)). Thanks @wesamdev for the report.
 - The Baileys live path drops contentless protocol traffic (sender-key distributions, message-history notices) instead of delivering it as a bodyless `unknown` `message.received`, matching what the history path already does ([#1568](https://github.com/rmyndharis/OpenWA/issues/1568)). Thanks @berodcdev for the report.
 - The group invite-code read, over REST or the MCP `GroupGetInviteCode` tool, requires the OPERATOR role; the code is a transferable join capability, so a VIEWER key can no longer extract it.
 - A Baileys reconnect loop is observable: `lastError` on the session, a `session.reconnect_loop` webhook every fifth attempt, and reconnect metrics ([#1546](https://github.com/rmyndharis/OpenWA/issues/1546)). Thanks @OdaiAhmed99 for the report.
