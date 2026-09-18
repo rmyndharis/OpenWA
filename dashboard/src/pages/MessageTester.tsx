@@ -13,7 +13,10 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
 import { useSessionsQuery, useSessionGroupsQuery } from '../hooks/queries';
 import { parseBulkRecipients, BULK_MAX_RECIPIENTS, BULK_RECIPIENTS_FILE_MAX_BYTES } from '../utils/bulkRecipients';
+import { groupLabel } from '../utils/groupSelection';
+import { sendSequentially } from '../utils/sendSequentially';
 import { PageHeader } from '../components/PageHeader';
+import { GroupPicker } from '../components/GroupPicker';
 import './MessageTester.css';
 
 interface ApiResponse {
@@ -27,7 +30,14 @@ interface ApiResponse {
   // request was made (the recipient pre-check below short-circuits) — the panel then shows the
   // outcome without a code rather than inventing one.
   status?: number;
+  groups?: {
+    sent: number;
+    total: number;
+    failures: { id: string; name: string; error: string }[];
+  };
 }
+
+const GROUP_SEND_DELAY_MS = 3000;
 
 const messageTypes = [
   'text',
@@ -95,7 +105,8 @@ export function MessageTester() {
   const [session, setSession] = useState('');
   const [recipient, setRecipient] = useState('');
   const [recipientType, setRecipientType] = useState<'personal' | 'group'>('personal');
-  const [selectedGroup, setSelectedGroup] = useState('');
+  const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
+  const [groupSendProgress, setGroupSendProgress] = useState<{ current: number; total: number } | null>(null);
   const [messageType, setMessageType] = useState<(typeof messageTypes)[number]>('text');
   const [content, setContent] = useState('');
   const [mediaUrl, setMediaUrl] = useState('');
@@ -152,20 +163,9 @@ export function MessageTester() {
     }
   }, [sessions, session]);
 
-  // Clear the group selection when the session changes so a stale group id from the previous session
-  // can't be sent to; the effect below then re-seeds groups[0].id once the new session's groups load.
   useEffect(() => {
-    setSelectedGroup('');
-  }, [session]);
-
-  useEffect(() => {
-    if (groups.length > 0 && !selectedGroup) {
-      setSelectedGroup(groups[0].id);
-    }
-    if (recipientType !== 'group') {
-      setSelectedGroup('');
-    }
-  }, [groups, selectedGroup, recipientType]);
+    setSelectedGroups([]);
+  }, [session, recipientType]);
 
   const stopBatchPolling = () => {
     if (batchPollRef.current) {
@@ -297,10 +297,10 @@ export function MessageTester() {
     isLoading ||
     !session ||
     !formValid ||
-    (messageType !== 'bulk' && (recipientType === 'group' ? !selectedGroup : !recipient));
+    (messageType !== 'bulk' && (recipientType === 'group' ? selectedGroups.length === 0 : !recipient));
 
   const handleSend = async () => {
-    const targetId = recipientType === 'group' ? selectedGroup : recipient;
+    const targetId = recipientType === 'group' ? (selectedGroups[0] ?? '') : recipient;
     if (!session || (messageType !== 'bulk' && !targetId)) return;
     setIsLoading(true);
     setResponse(null);
@@ -309,46 +309,7 @@ export function MessageTester() {
     setBatchStatus(null);
     setBatchError(null);
 
-    try {
-      // For a personal recipient, let the engine resolve the number to its canonical chat id rather
-      // than hand-building an engine-specific JID here (#265) — also surfaces unregistered numbers.
-      // Bulk carries its own recipient list, so the shared selector's target is not resolved there.
-      let chatId = targetId;
-      if (messageType !== 'bulk' && recipientType !== 'group') {
-        const resolved = await contactApi.checkNumber(session, targetId.replace(/[^0-9]/g, ''));
-        if (!resolved.exists || !resolved.whatsappId) {
-          setResponse({
-            success: false,
-            timestamp: new Date().toISOString(),
-            error: t('messageTester.notOnWhatsApp'),
-          });
-          return;
-        }
-        chatId = resolved.whatsappId;
-      }
-
-      // Bulk is a batch, not a single send: 202 + batchId, then poll progress until terminal.
-      if (messageType === 'bulk') {
-        const batch = await messageApi.sendBulk(session, {
-          messages: bulkRecipientList.map(recipientChatId => ({
-            chatId: recipientChatId,
-            type: 'text' as const,
-            content: { text: content },
-          })),
-          ...(delayMs !== undefined ? { options: { delayBetweenMessages: delayMs } } : {}),
-        });
-        batchSessionRef.current = session;
-        setResponse({ success: true, timestamp: new Date().toISOString(), batchId: batch.batchId });
-        setBatchStatus({
-          batchId: batch.batchId,
-          status: 'pending',
-          progress: { total: batch.totalMessages, sent: 0, failed: 0, pending: batch.totalMessages, cancelled: 0 },
-          results: [],
-        });
-        startBatchPolling(session, batch.batchId);
-        return;
-      }
-
+    const sendToChat = async (chatId: string): Promise<MessageResponse> => {
       let result: MessageResponse;
       switch (messageType) {
         case 'text':
@@ -405,14 +366,7 @@ export function MessageTester() {
           let toChatId = forwardTo.trim();
           if (!toChatId.includes('@')) {
             const resolvedTo = await contactApi.checkNumber(session, toChatId.replace(/[^0-9]/g, ''));
-            if (!resolvedTo.exists || !resolvedTo.whatsappId) {
-              setResponse({
-                success: false,
-                timestamp: new Date().toISOString(),
-                error: t('messageTester.notOnWhatsApp'),
-              });
-              return;
-            }
+            if (!resolvedTo.exists || !resolvedTo.whatsappId) throw new Error(t('messageTester.notOnWhatsApp'));
             toChatId = resolvedTo.whatsappId;
           }
           result = await messageApi.forward(session, {
@@ -426,7 +380,79 @@ export function MessageTester() {
         default:
           throw new Error(`Unsupported message type: ${messageType}`);
       }
+      return result;
+    };
 
+    try {
+      // For a personal recipient, let the engine resolve the number to its canonical chat id rather
+      // than hand-building an engine-specific JID here (#265) — also surfaces unregistered numbers.
+      // Bulk carries its own recipient list, so the shared selector's target is not resolved there.
+      let chatId = targetId;
+      if (messageType !== 'bulk' && recipientType !== 'group') {
+        const resolved = await contactApi.checkNumber(session, targetId.replace(/[^0-9]/g, ''));
+        if (!resolved.exists || !resolved.whatsappId) {
+          setResponse({
+            success: false,
+            timestamp: new Date().toISOString(),
+            error: t('messageTester.notOnWhatsApp'),
+          });
+          return;
+        }
+        chatId = resolved.whatsappId;
+      }
+
+      // Bulk is a batch, not a single send: 202 + batchId, then poll progress until terminal.
+      if (messageType === 'bulk') {
+        const batch = await messageApi.sendBulk(session, {
+          messages: bulkRecipientList.map(recipientChatId => ({
+            chatId: recipientChatId,
+            type: 'text' as const,
+            content: { text: content },
+          })),
+          ...(delayMs !== undefined ? { options: { delayBetweenMessages: delayMs } } : {}),
+        });
+        batchSessionRef.current = session;
+        setResponse({ success: true, timestamp: new Date().toISOString(), batchId: batch.batchId });
+        setBatchStatus({
+          batchId: batch.batchId,
+          status: 'pending',
+          progress: { total: batch.totalMessages, sent: 0, failed: 0, pending: batch.totalMessages, cancelled: 0 },
+          results: [],
+        });
+        startBatchPolling(session, batch.batchId);
+        return;
+      }
+
+      if (recipientType === 'group' && messageType !== 'forward' && selectedGroups.length > 1) {
+        const groupNames = new Map(groups.map(group => [group.id, groupLabel(group)]));
+        const { sent, failures } = await sendSequentially(
+          selectedGroups,
+          async groupId => {
+            const groupResult = await sendToChat(groupId);
+            if (!groupResult.messageId) throw new Error(t('messageTester.sendFailed'));
+          },
+          {
+            delayMs: GROUP_SEND_DELAY_MS,
+            onProgress: (current, total) => setGroupSendProgress({ current, total }),
+          },
+        );
+        setResponse({
+          success: sent > 0,
+          timestamp: new Date().toISOString(),
+          groups: {
+            sent,
+            total: selectedGroups.length,
+            failures: failures.map(({ target, error }) => ({
+              id: target,
+              name: groupNames.get(target) ?? target,
+              error,
+            })),
+          },
+        });
+        return;
+      }
+
+      const result = await sendToChat(chatId);
       setResponse({
         success: !!result.messageId,
         messageId: result.messageId,
@@ -441,6 +467,7 @@ export function MessageTester() {
       });
     } finally {
       setIsLoading(false);
+      setGroupSendProgress(null);
     }
   };
 
@@ -514,32 +541,25 @@ export function MessageTester() {
               </div>
 
               <div className="form-group">
-                <label htmlFor="mt-13">
-                  {recipientType === 'group' ? t('messageTester.selectGroup') : t('messageTester.recipientPhone')}
-                </label>
                 {recipientType === 'group' ? (
                   <>
-                    <select
-                      id="mt-13"
-                      value={selectedGroup}
-                      onChange={e => setSelectedGroup(e.target.value)}
-                      disabled={loadingGroups || groups.length === 0}
-                    >
-                      {loadingGroups && <option value="">{t('messageTester.loadingGroups')}</option>}
-                      {!loadingGroups && groups.length === 0 && (
-                        <option value="">{t('messageTester.noGroupsFound')}</option>
-                      )}
-                      {groups.map(g => (
-                        <option key={g.id} value={g.id}>
-                          {g.name}
-                        </option>
-                      ))}
-                    </select>
+                    <span className="group-label" id="group-picker-label">
+                      {t('messageTester.selectGroup')}
+                    </span>
+                    <GroupPicker
+                      groups={groups}
+                      selectedIds={selectedGroups}
+                      onChange={setSelectedGroups}
+                      loading={loadingGroups}
+                      labelledBy="group-picker-label"
+                    />
                     <span className="hint">{t('messageTester.selectGroupHint')}</span>
                   </>
                 ) : (
                   <>
+                    <label htmlFor="mt-13">{t('messageTester.recipientPhone')}</label>
                     <input
+                      id="mt-13"
                       type="text"
                       value={recipient}
                       onChange={e => setRecipient(e.target.value)}
@@ -802,7 +822,8 @@ export function MessageTester() {
                   value={forwardFrom}
                   onChange={e => setForwardFrom(e.target.value)}
                   placeholder={
-                    (recipientType === 'group' ? selectedGroup : recipient) || t('messageTester.forwardFromPlaceholder')
+                    (recipientType === 'group' ? selectedGroups[0] : recipient) ||
+                    t('messageTester.forwardFromPlaceholder')
                   }
                 />
                 <span className="hint">{t('messageTester.forwardFromHint')}</span>
@@ -898,7 +919,13 @@ export function MessageTester() {
 
           <button className="send-btn" onClick={handleSend} disabled={isSendDisabled}>
             {isLoading ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}
-            {isLoading ? t('messageTester.sending') : canWrite ? t('messageTester.send') : t('messageTester.viewOnly')}
+            {isLoading
+              ? groupSendProgress
+                ? t('messageTester.sendingProgress', groupSendProgress)
+                : t('messageTester.sending')
+              : canWrite
+                ? t('messageTester.send')
+                : t('messageTester.viewOnly')}
           </button>
         </div>
 
@@ -949,6 +976,29 @@ export function MessageTester() {
                     <span className="detail-value" style={{ color: 'var(--error)' }}>
                       {response.error}
                     </span>
+                  </div>
+                )}
+                {response.groups && (
+                  <div className="detail-row">
+                    <span className="detail-label">{t('messageTester.response.groups')}</span>
+                    <span className="detail-value">
+                      {t('messageTester.groupsSentSummary', {
+                        sent: response.groups.sent,
+                        total: response.groups.total,
+                      })}
+                    </span>
+                  </div>
+                )}
+                {response.groups && response.groups.failures.length > 0 && (
+                  <div className="detail-row group-failures">
+                    <span className="detail-label">{t('messageTester.response.error')}</span>
+                    <ul className="detail-value">
+                      {response.groups.failures.map(failure => (
+                        <li key={failure.id}>
+                          <strong>{failure.name}</strong>: {failure.error}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 )}
               </div>

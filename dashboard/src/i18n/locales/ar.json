@@ -655,6 +655,10 @@
     "loadingGroups": "جارٍ تحميل المجموعات...",
     "noGroupsFound": "لم يتم العثور على مجموعات",
     "selectGroupHint": "اختر مجموعة من واتساب الخاص بك",
+    "selectAllGroups": "تحديد الكل",
+    "clearGroupSelection": "مسح",
+    "groupsSelectedCount": "المحدد: {{count}}",
+    "noGroupsMatch": "لا توجد مجموعات تطابق بحثك",
     "phoneHint": "استخدم الصيغة الدولية بدون مسافات",
     "messageType": "نوع الرسالة",
     "types": {
@@ -714,15 +718,18 @@
     "bulkDelayHint": "1000–60000 مللي ثانية (الافتراضي 3000)",
     "send": "إرسال الرسالة",
     "sending": "جارٍ الإرسال...",
+    "sendingProgress": "جارٍ الإرسال {{current}}/{{total}}...",
     "viewOnly": "للعرض فقط",
     "responseEmpty": "أرسل رسالة لرؤية استجابة API",
     "successLabel": "نجاح",
     "failedLabel": "فشل",
+    "groupsSentSummary": "تم إرسال {{sent}}/{{total}}",
     "response": {
       "timestamp": "الوقت",
       "messageId": "معرّف الرسالة",
       "batchId": "معرّف الدفعة",
-      "error": "خطأ"
+      "error": "خطأ",
+      "groups": "المجموعات"
     },
     "sendFailed": "فشل إرسال الرسالة",
     "notOnWhatsApp": "هذا الرقم غير مسجَّل على واتساب",

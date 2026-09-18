@@ -640,6 +640,10 @@
     "loadingGroups": "正在加载群组...",
     "noGroupsFound": "未找到群组",
     "selectGroupHint": "从你的 WhatsApp 中选择一个群组",
+    "selectAllGroups": "全选",
+    "clearGroupSelection": "清除",
+    "groupsSelectedCount": "已选择：{{count}}",
+    "noGroupsMatch": "没有与搜索匹配的群组",
     "phoneHint": "使用无空格的国际格式",
     "messageType": "消息类型",
     "types": {
@@ -699,15 +703,18 @@
     "bulkDelayHint": "1000–60000 毫秒（默认 3000）",
     "send": "发送消息",
     "sending": "正在发送...",
+    "sendingProgress": "正在发送 {{current}}/{{total}}...",
     "viewOnly": "仅查看",
     "responseEmpty": "发送消息后即可查看 API 响应",
     "successLabel": "成功",
     "failedLabel": "失败",
+    "groupsSentSummary": "已发送 {{sent}}/{{total}}",
     "response": {
       "timestamp": "时间戳",
       "messageId": "消息 ID",
       "batchId": "批次 ID",
-      "error": "错误"
+      "error": "错误",
+      "groups": "群组"
     },
     "sendFailed": "发送消息失败",
     "notOnWhatsApp": "该号码未在 WhatsApp 注册",

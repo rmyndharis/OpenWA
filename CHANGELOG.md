@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The dashboard Message Tester can send to several groups at once. In Group mode a searchable checkbox list with Select all and Clear replaces the single-group dropdown, and the message goes to each selected group in turn, 3 seconds apart. A group that fails does not stop the rest: the response panel lists it by name with its error, and the send counts as failed only when every group failed. Forward still takes one source chat, the first selected group.
+
 ### Changed
 
 - The PostgreSQL data connection is pinned to UTC: parameters bind as UTC, naive timestamps read back as UTC, every pooled connection sets its session `TimeZone`, and boot fails when the effective zone is not UTC year round.

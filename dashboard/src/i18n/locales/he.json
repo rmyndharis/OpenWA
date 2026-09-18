@@ -649,6 +649,10 @@
     "loadingGroups": "טוען קבוצות...",
     "noGroupsFound": "לא נמצאו קבוצות",
     "selectGroupHint": "יש לבחור קבוצה מתוך WhatsApp",
+    "selectAllGroups": "בחירת הכל",
+    "clearGroupSelection": "ניקוי",
+    "groupsSelectedCount": "נבחרו: {{count}}",
+    "noGroupsMatch": "אין קבוצות התואמות לחיפוש",
     "phoneHint": "יש להשתמש בפורמט בינלאומי ללא רווחים",
     "messageType": "סוג הודעה",
     "types": {
@@ -708,15 +712,18 @@
     "bulkDelayHint": "1000–60000 אלפיות שנייה (ברירת מחדל 3000)",
     "send": "שליחת הודעה",
     "sending": "שולח...",
+    "sendingProgress": "שולח {{current}}/{{total}}...",
     "viewOnly": "צפייה בלבד",
     "responseEmpty": "יש לשלוח הודעה כדי לראות את תגובת ה-API",
     "successLabel": "הצלחה",
     "failedLabel": "נכשל",
+    "groupsSentSummary": "נשלחו {{sent}}/{{total}}",
     "response": {
       "timestamp": "חותמת זמן",
       "messageId": "מזהה הודעה",
       "batchId": "מזהה אצווה",
-      "error": "שגיאה"
+      "error": "שגיאה",
+      "groups": "קבוצות"
     },
     "sendFailed": "שליחת ההודעה נכשלה",
     "notOnWhatsApp": "מספר זה אינו רשום בוואטסאפ",

@@ -640,6 +640,10 @@
     "loadingGroups": "正在載入群組...",
     "noGroupsFound": "找不到群組",
     "selectGroupHint": "從你的 WhatsApp 選擇一個群組",
+    "selectAllGroups": "全選",
+    "clearGroupSelection": "清除",
+    "groupsSelectedCount": "已選擇：{{count}}",
+    "noGroupsMatch": "沒有與搜尋相符的群組",
     "phoneHint": "使用不含空格的國際格式",
     "messageType": "訊息類型",
     "types": {
@@ -699,15 +703,18 @@
     "bulkDelayHint": "1000–60000 毫秒（預設 3000）",
     "send": "傳送訊息",
     "sending": "正在傳送...",
+    "sendingProgress": "正在傳送 {{current}}/{{total}}...",
     "viewOnly": "僅檢視",
     "responseEmpty": "傳送訊息後即可查看 API 回應",
     "successLabel": "成功",
     "failedLabel": "失敗",
+    "groupsSentSummary": "已傳送 {{sent}}/{{total}}",
     "response": {
       "timestamp": "時間戳記",
       "messageId": "訊息 ID",
       "batchId": "批次 ID",
-      "error": "錯誤"
+      "error": "錯誤",
+      "groups": "群組"
     },
     "sendFailed": "傳送訊息失敗",
     "notOnWhatsApp": "此號碼未在 WhatsApp 註冊",

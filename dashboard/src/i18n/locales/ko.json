@@ -640,6 +640,10 @@
     "loadingGroups": "그룹 불러오는 중...",
     "noGroupsFound": "그룹을 찾을 수 없습니다",
     "selectGroupHint": "내 WhatsApp에서 그룹을 선택하세요",
+    "selectAllGroups": "모두 선택",
+    "clearGroupSelection": "선택 해제",
+    "groupsSelectedCount": "선택됨: {{count}}",
+    "noGroupsMatch": "검색과 일치하는 그룹이 없습니다",
     "phoneHint": "공백 없이 국제 형식으로 입력하세요",
     "messageType": "메시지 유형",
     "types": {
@@ -699,15 +703,18 @@
     "bulkDelayHint": "1000–60000ms (기본값 3000)",
     "send": "메시지 보내기",
     "sending": "보내는 중...",
+    "sendingProgress": "보내는 중 {{current}}/{{total}}...",
     "viewOnly": "읽기 전용",
     "responseEmpty": "메시지를 보내면 API 응답이 여기에 표시됩니다",
     "successLabel": "성공",
     "failedLabel": "실패",
+    "groupsSentSummary": "{{sent}}/{{total}}개 전송됨",
     "response": {
       "timestamp": "타임스탬프",
       "messageId": "메시지 ID",
       "batchId": "배치 ID",
-      "error": "오류"
+      "error": "오류",
+      "groups": "그룹"
     },
     "sendFailed": "메시지를 보내지 못했습니다",
     "notOnWhatsApp": "이 번호는 WhatsApp에 등록되어 있지 않습니다",

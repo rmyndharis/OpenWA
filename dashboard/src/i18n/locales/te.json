@@ -640,6 +640,10 @@
     "loadingGroups": "గ్రూప్‌లను లోడ్ చేస్తోంది...",
     "noGroupsFound": "ఎలాంటి గ్రూప్‌లు కనుగొనబడలేదు",
     "selectGroupHint": "మీ వాట్సాప్ నుండి ఒక గ్రూప్‌ను ఎంచుకోండి",
+    "selectAllGroups": "అన్నీ ఎంచుకోండి",
+    "clearGroupSelection": "క్లియర్ చేయండి",
+    "groupsSelectedCount": "ఎంచుకున్నవి: {{count}}",
+    "noGroupsMatch": "మీ శోధనకు సరిపోయే గ్రూప్‌లు లేవు",
     "phoneHint": "ఖాళీలు (spaces) లేకుండా అంతర్జాతీయ ఆకృతిని ఉపయోగించండి",
     "messageType": "సందేశం రకం",
     "types": {
@@ -699,15 +703,18 @@
     "bulkDelayHint": "1000–60000 ms (డిఫాల్ట్ 3000)",
     "send": "సందేశం పంపు",
     "sending": "పంపుతోంది...",
+    "sendingProgress": "పంపుతోంది {{current}}/{{total}}...",
     "viewOnly": "చూడటానికి మాత్రమే",
     "responseEmpty": "API రెస్పాన్స్ చూడటానికి ఒక సందేశాన్ని పంపండి",
     "successLabel": "విజయం",
     "failedLabel": "విఫలమైంది",
+    "groupsSentSummary": "{{sent}}/{{total}} పంపబడ్డాయి",
     "response": {
       "timestamp": "సమయము",
       "messageId": "సందేశం ID",
       "batchId": "బ్యాచ్ ID",
-      "error": "లోపం"
+      "error": "లోపం",
+      "groups": "గ్రూప్‌లు"
     },
     "sendFailed": "సందేశాన్ని పంపడం విఫలమైంది",
     "notOnWhatsApp": "ఈ నంబర్ WhatsAppలో నమోదు కాలేదు",

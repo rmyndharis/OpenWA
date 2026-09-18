@@ -591,6 +591,10 @@
     "loadingGroups": "Carregando grupos...",
     "noGroupsFound": "Nenhum grupo encontrado",
     "selectGroupHint": "Selecione um grupo do seu WhatsApp",
+    "selectAllGroups": "Selecionar todos",
+    "clearGroupSelection": "Limpar",
+    "groupsSelectedCount": "Selecionados: {{count}}",
+    "noGroupsMatch": "Nenhum grupo corresponde à sua pesquisa",
     "phoneHint": "Use formato internacional sem espaços",
     "messageType": "Tipo de mensagem",
     "types": {
@@ -650,15 +654,18 @@
     "bulkDelayHint": "1000–60000 ms (padrão: 3000)",
     "send": "Enviar mensagem",
     "sending": "Enviando...",
+    "sendingProgress": "Enviando {{current}}/{{total}}...",
     "viewOnly": "Somente leitura",
     "responseEmpty": "Envie uma mensagem para ver a resposta da API",
     "successLabel": "Sucesso",
     "failedLabel": "Falhou",
+    "groupsSentSummary": "{{sent}}/{{total}} enviados",
     "response": {
       "timestamp": "Data/Hora",
       "messageId": "ID da mensagem",
       "batchId": "ID do lote",
-      "error": "Erro"
+      "error": "Erro",
+      "groups": "Grupos"
     },
     "sendFailed": "Erro ao enviar a mensagem",
     "notOnWhatsApp": "Este número não está registrado no WhatsApp",
