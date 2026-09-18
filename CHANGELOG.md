@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The dashboard Message Tester's Bulk mode can attach an image, video, audio file or document, using the media support `send-bulk` already has. A picked file travels inline and its kind is detected from its type, or a media URL can be given instead, which the gateway fetches for each recipient; the kind can be changed before sending, for example to send a photo as a document. The message text becomes the caption. A picked file that would push the request past the default 25 MB body limit once repeated for every recipient is refused before sending, pointing to the URL option instead.
+
 ### Changed
 
 - The PostgreSQL data connection is pinned to UTC: parameters bind as UTC, naive timestamps read back as UTC, every pooled connection sets its session `TimeZone`, and boot fails when the effective zone is not UTC year round.

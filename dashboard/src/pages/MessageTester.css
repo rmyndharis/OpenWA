@@ -292,6 +292,14 @@
   border-color: var(--primary);
 }
 
+.message-tester .toggle-group.bulk-media-kind button {
+  flex: 1 1 0;
+}
+
+.message-tester .form-group .hint.error {
+  color: var(--error-text);
+}
+
 /* Side-by-side pair (location latitude/longitude). */
 .message-tester .form-row {
   display: grid;
