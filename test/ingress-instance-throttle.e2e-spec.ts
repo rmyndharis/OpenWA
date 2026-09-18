@@ -138,6 +138,8 @@ describe('Ingress per-instance fairness throttle (e2e)', () => {
     // from the guard layer and the global exception filter formats the 429 body. Confirm both survive
     // the @Res() route (not just the status code).
     expect(blocked.headers['retry-after-instance']).toBeDefined();
+    // The suffixed name says WHICH bucket shed it; the plain one is the only spelling a client reads.
+    expect(blocked.headers['retry-after']).toBe(blocked.headers['retry-after-instance']);
     expect(blocked.body).toMatchObject({ statusCode: 429 });
 
     // A different (pluginId, instanceId) shares the provider's egress IP but gets an independent

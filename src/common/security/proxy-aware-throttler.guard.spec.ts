@@ -176,3 +176,56 @@ describe('ProxyAwareThrottlerGuard.shouldSkip', () => {
     expect(await skip()).toBe(false);
   });
 });
+
+/**
+ * The library writes only `Retry-After-<tier>`, a spelling no HTTP client reads, so a shed request
+ * advertised a retry hint nothing could act on. The plain header must go out with the same value.
+ */
+describe('ProxyAwareThrottlerGuard.throwThrottlingException', () => {
+  const invoke = async (
+    setHeaders: boolean | undefined,
+  ): Promise<{ headers: Record<string, string>; threw: boolean }> => {
+    const headers: Record<string, string> = {};
+    const guard = Object.create(ProxyAwareThrottlerGuard.prototype) as ProxyAwareThrottlerGuard;
+    Object.assign(guard, { commonOptions: { setHeaders }, errorMessage: 'ThrottlerException: Too Many Requests' });
+    (guard as unknown as { getRequestResponse(c: unknown): unknown }).getRequestResponse = () => ({
+      req: {},
+      res: { header: (name: string, value: string) => void (headers[name] = value) },
+    });
+    let threw = false;
+    try {
+      await (
+        guard as unknown as {
+          throwThrottlingException(c: unknown, d: unknown): Promise<void>;
+        }
+      ).throwThrottlingException(
+        {},
+        {
+          limit: 10,
+          ttl: 60,
+          key: 'k',
+          tracker: '1.2.3.4',
+          totalHits: 11,
+          timeToExpire: 42,
+          isBlocked: true,
+          timeToBlockExpire: 37,
+        },
+      );
+    } catch {
+      threw = true;
+    }
+    return { headers, threw };
+  };
+
+  it('emits a plain Retry-After carrying the blocked window, and still throws', async () => {
+    const { headers, threw } = await invoke(undefined);
+    expect(headers['Retry-After']).toBe('37');
+    expect(threw).toBe(true);
+  });
+
+  it('respects setHeaders: false, matching the flag the base guard gates its own header on', async () => {
+    const { headers, threw } = await invoke(false);
+    expect(headers['Retry-After']).toBeUndefined();
+    expect(threw).toBe(true);
+  });
+});

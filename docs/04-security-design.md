@@ -271,19 +271,19 @@ TTL values are in milliseconds. The `/api/metrics` and `/api/health*` routes are
 
 ### Response on limit
 
-Exceeding a window returns `429 Too Many Requests`. Because the windows are **named** throttlers (`short` / `medium` / `long`), `@nestjs/throttler` suffixes every rate-limit header with the throttler name — there are no unsuffixed `Retry-After` or `X-RateLimit-*` headers:
+Exceeding a window returns `429 Too Many Requests`. Because the windows are **named** throttlers (`short` / `medium` / `long`), `@nestjs/throttler` suffixes every rate-limit header with the throttler name, so there are no unsuffixed `X-RateLimit-*` headers. `Retry-After` is the exception: on a `429` the guard emits the plain spelling too, because no HTTP client reads a suffixed one.
 
 - On success, each response carries one header triple per window: `X-RateLimit-Limit-short` / `-Remaining-short` / `-Reset-short`, plus the `-medium` and `-long` equivalents.
-- On `429`, the exceeded window sets `Retry-After-short`, `Retry-After-medium`, or `Retry-After-long` (seconds until the block expires) — read whichever is present rather than a plain `Retry-After`.
+- On `429`, the exceeded window sets `Retry-After-short`, `Retry-After-medium`, or `Retry-After-long` (seconds until the block expires), and the guard mirrors that value into a plain `Retry-After`. Read the plain one; the suffixed name is what tells an operator which window shed the request.
 
 The ingress route (`ALL /api/ingress/:pluginId/:instanceId/*path`) is exempt from the global per-IP tiers (their 100/min medium window sits below the per-instance limit, so a provider fanning every tenant's webhooks through one egress IP was shed before the per-instance bound could fire). It carries its own two windows instead, both on `INGRESS_INSTANCE_TTL` (default 60000 ms):
 
 - `instance`, keyed on `(pluginId, instanceId)`, env `INGRESS_INSTANCE_LIMIT`, default 120. Sheds one noisy tenant without touching its neighbours.
 - `ingress-ip`, keyed on the client (proxy-aware, see `TRUSTED_PROXIES`), env `INGRESS_IP_LIMIT`, default 1200. The `instance` key is built from path segments the caller supplies, so varying them mints a fresh bucket; this window is the bound an unauthenticated caller cannot walk around. It is sized 10x the per-instance default so it never binds first for legitimate traffic.
 
-Responses therefore carry `X-RateLimit-*-instance` and `X-RateLimit-*-ingress-ip`, and on saturation the `Retry-After-*` of whichever window shed the request.
+Responses therefore carry `X-RateLimit-*-instance` and `X-RateLimit-*-ingress-ip`, and on saturation the `Retry-After-*` of whichever window shed the request, mirrored into a plain `Retry-After`.
 
-The API exposes the rate-limit headers via CORS (`exposedHeaders`) so browser clients can read them. The simplest backpressure signal remains the `429` status itself, with the suffixed `Retry-After-*` as the retry delay.
+The API exposes the rate-limit headers via CORS (`exposedHeaders`) so browser clients can read them, the plain `Retry-After` included. The simplest backpressure signal remains the `429` status itself, with `Retry-After` as the retry delay.
 
 ### WebSocket (`/events`) limits
 
