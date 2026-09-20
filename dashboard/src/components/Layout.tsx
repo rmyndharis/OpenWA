@@ -9,6 +9,7 @@ import {
   Key,
   FileText,
   ClipboardList,
+  BriefcaseBusiness,
   LogOut,
   Send,
   Server,
@@ -25,7 +26,9 @@ import {
 import { useTheme } from '../hooks/useTheme';
 import { type UserRole } from '../hooks/useRole';
 import { languageOptions, resolveSupportedLanguage, rtlLanguages, type SupportedLanguage } from '../i18n';
-import { healthApi } from '../services/api';
+import { healthApi, sessionApi, workflowHubApi } from '../services/api';
+import { ThemeLogo } from './ThemeLogo';
+import { isSidebarPathAllowed } from '../utils/roleNavigation';
 import './Layout.css';
 
 interface LayoutProps {
@@ -39,6 +42,13 @@ const allNavItems = [
   { to: '/chats', icon: MessageSquare, key: 'chats' as const, adminOnly: false },
   { to: '/webhooks', icon: Webhook, key: 'webhooks' as const, adminOnly: false },
   { to: '/templates', icon: ClipboardList, key: 'templates' as const, adminOnly: false },
+  {
+    to: '/recruitment-center',
+    icon: BriefcaseBusiness,
+    key: 'talentPool' as const,
+    adminOnly: false,
+    operatorOnly: true,
+  },
   { to: '/api-keys', icon: Key, key: 'apiKeys' as const, adminOnly: true },
   { to: '/message-tester', icon: Send, key: 'messageTester' as const, adminOnly: false },
   // Backend /infra/* is ADMIN-only; hide the nav item from non-admins (UX + defense-in-depth).
@@ -53,9 +63,9 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   const { t, i18n } = useTranslation();
   const { theme, setTheme, resolvedTheme } = useTheme();
   const ThemeIcon = themeIcons[theme];
-  const themeLabel = t(`theme.${theme}`);
+  const themeLabel = t('theme.' + theme);
 
-  const navItems = allNavItems.filter(item => !item.adminOnly || userRole === 'admin');
+  const navItems = allNavItems.filter(item => (!item.adminOnly || userRole === 'admin') && (!item.operatorOnly || userRole === 'admin' || userRole === 'operator'));
 
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
@@ -141,7 +151,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
             {isMobileOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
           <div className="mobile-brand">
-            <img src="/openwa_logo.webp" alt="OpenWA" className="sidebar-logo" />
+            <ThemeLogo className="sidebar-logo" />
             <span className="brand-name">{t('common.appName')}</span>
           </div>
           <div style={{ width: 40 }} />
@@ -151,10 +161,10 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
       {isMobile && isMobileOpen && <div className="sidebar-overlay" onClick={() => setIsMobileOpen(false)} />}
 
       <aside
-        className={`sidebar ${isCollapsed ? 'collapsed' : ''} ${isMobile ? 'mobile' : ''} ${isMobileOpen ? 'open' : ''}`}
+        className={`sidebar ${isCollapsed ? "collapsed" : ""} ${isMobile ? "mobile" : ""} ${isMobileOpen ? "open" : ""}`}
       >
         <div className="sidebar-header">
-          <img src="/openwa_logo.webp" alt="OpenWA" className="sidebar-logo" />
+          <ThemeLogo className="sidebar-logo" />
           {!isCollapsed && (
             <div className="sidebar-brand">
               <span className="brand-name">{t('common.appName')}</span>
@@ -186,12 +196,12 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
 
         <nav className="sidebar-nav">
           {navItems.map(({ to, icon: Icon, key }) => {
-            const label = t(`nav.${key}`);
+            const label = t('nav.' + key);
             return (
               <NavLink
                 key={to}
                 to={to}
-                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                className={({ isActive }) => 'nav-item ' + (isActive ? 'active' : '')}
                 end={to === '/'}
                 onClick={handleNavClick}
                 title={isCollapsed ? label : undefined}
@@ -221,7 +231,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
                 {languageOptions.map(option => (
                   <button
                     key={option.value}
-                    className={`language-menu-item ${option.value === currentLang ? 'active' : ''}`}
+                    className={'language-menu-item ' + (option.value === currentLang ? 'active' : '')}
                     onClick={() => changeLanguage(option.value)}
                     role="menuitemradio"
                     aria-checked={option.value === currentLang}
@@ -252,7 +262,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
         </div>
       </aside>
 
-      <main className={`main-content ${isCollapsed ? 'expanded' : ''} ${isMobile ? 'mobile' : ''}`}>
+      <main className={'main-content ' + (isCollapsed ? 'expanded' : '') + ' ' + (isMobile ? 'mobile' : '')}>
         <Outlet />
       </main>
     </div>

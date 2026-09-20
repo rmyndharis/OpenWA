@@ -1,0 +1,42 @@
+.theme-logo {
+  display: inline-grid;
+  overflow: hidden;
+  place-items: center;
+}
+
+.theme-logo-image {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.theme-logo-dark {
+  display: none;
+}
+
+[data-theme='dark'] .theme-logo-light {
+  display: none;
+}
+
+[data-theme='dark'] .theme-logo-dark {
+  display: block;
+}
+
+[data-theme='light'] .theme-logo-light {
+  display: block;
+}
+
+[data-theme='light'] .theme-logo-dark {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .theme-logo-light {
+    display: none;
+  }
+
+  :root:not([data-theme='light']) .theme-logo-dark {
+    display: block;
+  }
+}

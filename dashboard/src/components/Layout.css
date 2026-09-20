@@ -37,9 +37,9 @@
 }
 
 .sidebar-logo {
+  display: inline-grid;
   width: 28px;
   height: 28px;
-  object-fit: contain;
   flex-shrink: 0;
 }
 

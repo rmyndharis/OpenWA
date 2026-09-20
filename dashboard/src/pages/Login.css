@@ -34,9 +34,9 @@
 }
 
 .login-container .logo-icon {
+  display: inline-grid;
   width: 127px;
   height: 127px;
-  object-fit: contain;
 }
 
 .login-container .version-info {

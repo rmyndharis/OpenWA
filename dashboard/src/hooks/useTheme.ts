@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { syncThemeFavicon } from '../utils/themeAssets';
 
 export type Theme = 'light' | 'dark' | 'system';
 
@@ -26,6 +27,7 @@ export function useTheme() {
     } else {
       root.setAttribute('data-theme', newTheme);
     }
+    syncThemeFavicon(newTheme);
   }, []);
 
   useEffect(() => {
