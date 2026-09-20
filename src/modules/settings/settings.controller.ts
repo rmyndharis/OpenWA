@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { isSwaggerEnabled } from '../../config/bootstrap-security';
+import { resolvePublicUrl } from '../../config/bind-host';
 
 interface Settings {
   general: {
@@ -37,7 +38,7 @@ export class SettingsController {
       general: {
         // The real advertised base URL (BASE_URL — the same value the startup banner and ingress URLs
         // use), not a hardcoded localhost guess that ignores the operator's configured host.
-        apiBaseUrl: process.env.BASE_URL || `http://localhost:${port}`,
+        apiBaseUrl: resolvePublicUrl(process.env.NODE_ENV, process.env.BASE_URL, port),
         // The engine auto-reconnects on a transient disconnect by default (there is no global off
         // switch; reconnection is bounded per-session by RECONNECT_MAX_ATTEMPTS). Reporting a hardcoded
         // `false` for a non-existent `engine.autoReconnect` key was actively misleading.

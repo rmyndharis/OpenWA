@@ -15,6 +15,7 @@ import { runBootstrapOrExit } from './config/bootstrap-fatal';
 import { resolveStorageRoot } from './config/storage-root';
 import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
 import { applyGlobalValidation } from './config/app-validation';
+import { resolveBindHost, resolvePublicUrl } from './config/bind-host';
 import { configureApp } from './configure-app';
 import {
   isSwaggerEnabled,
@@ -195,14 +196,15 @@ async function bootstrap() {
   );
 
   const port = process.env.PORT || 2785;
-  await app.listen(port);
+  const bindHost = resolveBindHost(process.env.NODE_ENV, process.env.BIND_HOST);
+  await app.listen(port, bindHost);
 
   // Advertise the configured public URL, matching the AuthService banner (auth.service.ts). A bare
   // `localhost` literal here contradicted that banner and read as "the UI is pinned to localhost",
   // sending #731 chasing BASE_URL/BIND_HOST/API_PORT instead of the real cause.
-  const publicUrl = process.env.BASE_URL || `http://localhost:${port}`;
+  const publicUrl = resolvePublicUrl(process.env.NODE_ENV, process.env.BASE_URL, port);
 
-  console.log(`🚀 OpenWA is running on: ${publicUrl}`);
+  console.log(`🚀 OpenWA is running on: ${publicUrl} (bind: ${bindHost})`);
   if (swaggerEnabled) {
     console.log(`📚 Swagger docs: ${publicUrl}/api/docs`);
   }

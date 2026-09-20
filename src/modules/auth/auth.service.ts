@@ -18,6 +18,7 @@ import { createLogger } from '../../common/services/logger.service';
 import { readBootstrapKey, removeBootstrapKey, writeBootstrapKey } from './bootstrap-key-file';
 import { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
 import { EventsGateway, type ApiKeyEvictionReason } from '../events/events.gateway';
+import { resolvePublicUrl } from '../../config/bind-host';
 
 /**
  * Resolves the API key to seed on first boot (when no keys exist yet).
@@ -103,7 +104,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Always show the welcome banner on startup
-    const apiBaseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 2785}`;
+    const apiBaseUrl = resolvePublicUrl(process.env.NODE_ENV, process.env.BASE_URL, process.env.PORT || 2785);
     // The dashboard is served by NestJS at the same origin as the API now, so default to it.
     const dashboardUrl = process.env.DASHBOARD_URL || apiBaseUrl;
 

@@ -33,12 +33,16 @@ describe('SettingsController', () => {
 
   it('reports apiBaseUrl from BASE_URL when the operator configured one', () => {
     const prev = process.env.BASE_URL;
+    const previousNodeEnv = process.env.NODE_ENV;
     try {
+      process.env.NODE_ENV = 'production';
       process.env.BASE_URL = 'https://wa.example.com';
       expect(new SettingsController(configStub).get().general.apiBaseUrl).toBe('https://wa.example.com');
     } finally {
       if (prev === undefined) delete process.env.BASE_URL;
       else process.env.BASE_URL = prev;
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
     }
   });
 
