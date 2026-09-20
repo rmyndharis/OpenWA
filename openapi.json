@@ -34,6 +34,16 @@
                 "session_rebind_rejected",
                 "message_sent",
                 "message_failed",
+                "talent_settings_updated",
+                "talent_candidate_created",
+                "talent_candidate_updated",
+                "talent_registration_expired",
+                "talent_update_expired",
+                "talent_ticket_created",
+                "talent_ticket_closed",
+                "talent_chat_closed",
+                "workflow_outbox_retried",
+                "workflow_outbox_cancelled",
                 "send_pacing_blocked",
                 "send_breaker_tripped",
                 "webhook_created",
@@ -2247,6 +2257,1770 @@
         "summary": "Delete an autoreply rule",
         "tags": [
           "automation"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/runtime-status": {
+      "get": {
+        "operationId": "WorkflowHubController_runtimeStatus",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/department": {
+      "get": {
+        "operationId": "WorkflowHubController_department",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      },
+      "put": {
+        "operationId": "WorkflowHubController_updateDepartment",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWorkflowDepartmentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/department/human-service": {
+      "put": {
+        "operationId": "WorkflowHubController_updateHumanService",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateHumanServiceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances": {
+      "get": {
+        "operationId": "WorkflowHubController_instances",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      },
+      "post": {
+        "operationId": "WorkflowHubController_create",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkflowInstanceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/templates": {
+      "get": {
+        "operationId": "WorkflowHubController_templates",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/templates/{key}/create": {
+      "post": {
+        "operationId": "WorkflowHubController_createFromTemplate",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkflowFromTemplateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/import-legacy-talent-pool": {
+      "post": {
+        "operationId": "WorkflowHubController_importLegacy",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}": {
+      "put": {
+        "operationId": "WorkflowHubController_update",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWorkflowInstanceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/draft": {
+      "put": {
+        "operationId": "WorkflowHubController_draft",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveWorkflowDraftDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/publish": {
+      "post": {
+        "operationId": "WorkflowHubController_publish",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/pause": {
+      "post": {
+        "operationId": "WorkflowHubController_pause",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/resume": {
+      "post": {
+        "operationId": "WorkflowHubController_resume",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/archive": {
+      "post": {
+        "operationId": "WorkflowHubController_archive",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/duplicate": {
+      "post": {
+        "operationId": "WorkflowHubController_duplicate",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/slots": {
+      "get": {
+        "operationId": "WorkflowHubController_slots",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "availableOnly",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      },
+      "post": {
+        "operationId": "WorkflowHubController_createSlots",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAppointmentSlotsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/slots/{slotId}": {
+      "patch": {
+        "operationId": "WorkflowHubController_updateSlot",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slotId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAppointmentSlotDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      },
+      "delete": {
+        "operationId": "WorkflowHubController_deleteSlot",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slotId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/slots/{slotId}/reschedule": {
+      "post": {
+        "operationId": "WorkflowHubController_rescheduleSlot",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slotId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RescheduleAppointmentSlotDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/slots/{slotId}/block": {
+      "post": {
+        "operationId": "WorkflowHubController_blockSlot",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slotId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/slots/{slotId}/status": {
+      "put": {
+        "operationId": "WorkflowHubController_updateSlotStatus",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slotId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAppointmentSlotStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/appointments": {
+      "get": {
+        "operationId": "WorkflowHubController_appointments",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/records/{recordId}/appointment": {
+      "post": {
+        "operationId": "WorkflowHubController_scheduleRecordAppointment",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "recordId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RescheduleAppointmentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/appointments/{appointmentId}/status": {
+      "put": {
+        "operationId": "WorkflowHubController_updateAppointmentStatus",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "appointmentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAppointmentStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/instances/{id}/appointments/{appointmentId}/reschedule": {
+      "post": {
+        "operationId": "WorkflowHubController_rescheduleAppointment",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "appointmentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RescheduleAppointmentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/recruitment-applications": {
+      "get": {
+        "operationId": "WorkflowHubController_recruitmentApplications",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/recruitment-applications/{applicationId}": {
+      "patch": {
+        "operationId": "WorkflowHubController_updateRecruitmentApplication",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "applicationId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRecruitmentApplicationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/recruitment-applications/{applicationId}/events": {
+      "get": {
+        "operationId": "WorkflowHubController_recruitmentApplicationEvents",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "applicationId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/talent-pool": {
+      "get": {
+        "operationId": "WorkflowHubController_talentPool",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/talent-pool/{entryId}": {
+      "patch": {
+        "operationId": "WorkflowHubController_updateTalentPoolEntry",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entryId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTalentPoolEntryDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/talent-pool/{entryId}/events": {
+      "get": {
+        "operationId": "WorkflowHubController_talentPoolEvents",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entryId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/records": {
+      "get": {
+        "operationId": "WorkflowHubController_records",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/records/{recordId}": {
+      "patch": {
+        "operationId": "WorkflowHubController_updateRecord",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "recordId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWorkflowRecordDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      },
+      "delete": {
+        "operationId": "WorkflowHubController_deleteRecord",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "recordId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/records/{recordId}/contacts/{contactLinkId}": {
+      "patch": {
+        "operationId": "WorkflowHubController_updateRecordContact",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "recordId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "contactLinkId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWorkflowIdentityContactDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      },
+      "delete": {
+        "operationId": "WorkflowHubController_deleteRecordContact",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "recordId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "contactLinkId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/records/{recordId}/contacts/{contactLinkId}/primary": {
+      "post": {
+        "operationId": "WorkflowHubController_setPrimaryRecordContact",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "recordId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "contactLinkId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/records/{recordId}/proximity/recalculate": {
+      "post": {
+        "operationId": "WorkflowHubController_recalculateRecordProximity",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "recordId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/proximity/test": {
+      "post": {
+        "operationId": "WorkflowHubController_testProximity",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestWorkflowProximityDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/tickets": {
+      "get": {
+        "operationId": "WorkflowHubController_tickets",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "openOnly",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/tickets/{ticketId}/events": {
+      "get": {
+        "operationId": "WorkflowHubController_ticketEvents",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ticketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/tickets/{ticketId}/activity": {
+      "post": {
+        "operationId": "WorkflowHubController_touchTicket",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ticketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/tickets/{ticketId}/close": {
+      "post": {
+        "operationId": "WorkflowHubController_closeTicket",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ticketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/indicators": {
+      "get": {
+        "operationId": "WorkflowHubController_indicators",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/outbox-health": {
+      "get": {
+        "operationId": "WorkflowHubController_outboxHealth",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/outbox/{id}/retry": {
+      "post": {
+        "operationId": "WorkflowHubController_retryOutboxMessage",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/outbox/{id}": {
+      "delete": {
+        "operationId": "WorkflowHubController_discardOutboxMessage",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/deletion-requests": {
+      "get": {
+        "operationId": "WorkflowHubController_deletionRequests",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/deletion-requests/{id}/approve": {
+      "post": {
+        "operationId": "WorkflowHubController_approveDeletion",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/deletion-requests/{id}/reject": {
+      "post": {
+        "operationId": "WorkflowHubController_rejectDeletion",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "workflow-hub"
         ]
       }
     },
@@ -9877,6 +11651,13 @@
               "type": "string"
             }
           },
+          "allowedChats": {
+            "description": "Chat/contact ids this key may view in workflow records and tickets.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "expiresAt": {
             "type": "string",
             "description": "Expiration date (ISO 8601)",
@@ -9915,6 +11696,12 @@
             }
           },
           "allowedSessions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedChats": {
             "type": "array",
             "items": {
               "type": "string"
@@ -9988,6 +11775,12 @@
               "type": "string"
             }
           },
+          "allowedChats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "isActive": {
             "type": "boolean"
           },
@@ -10038,6 +11831,12 @@
             }
           },
           "allowedSessions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedChats": {
             "type": "array",
             "items": {
               "type": "string"
@@ -11356,6 +13155,74 @@
             "description": "Whether the rule is active"
           }
         }
+      },
+      "UpdateWorkflowDepartmentDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateHumanServiceDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateWorkflowInstanceDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateWorkflowFromTemplateDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateWorkflowInstanceDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "SaveWorkflowDraftDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateAppointmentSlotsDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateAppointmentSlotDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "RescheduleAppointmentSlotDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateAppointmentSlotStatusDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "RescheduleAppointmentDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateAppointmentStatusDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateRecruitmentApplicationDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateTalentPoolEntryDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateWorkflowRecordDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateWorkflowIdentityContactDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "TestWorkflowProximityDto": {
+        "type": "object",
+        "properties": {}
       },
       "MessageListItemDto": {
         "type": "object",
@@ -13990,6 +15857,126 @@
             "items": {
               "type": "object"
             }
+          },
+          "talentSettings": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "talentCandidates": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "talentFlows": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "talentTickets": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "talentTicketEvents": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "talentProcessedMessages": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowDepartments": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowInstances": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowVersions": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowRuns": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowRecords": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowRecordVersions": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowConsents": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowDeletionRequests": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowAppointmentSlots": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowAppointments": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowOutbox": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowTickets": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowTicketEvents": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "workflowPrivacyEvents": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
           }
         },
         "required": [
@@ -14008,7 +15995,27 @@
           "webhookOutboxEvents",
           "integrationDeliveryFailures",
           "statusUpdates",
-          "automationRules"
+          "automationRules",
+          "talentSettings",
+          "talentCandidates",
+          "talentFlows",
+          "talentTickets",
+          "talentTicketEvents",
+          "talentProcessedMessages",
+          "workflowDepartments",
+          "workflowInstances",
+          "workflowVersions",
+          "workflowRuns",
+          "workflowRecords",
+          "workflowRecordVersions",
+          "workflowConsents",
+          "workflowDeletionRequests",
+          "workflowAppointmentSlots",
+          "workflowAppointments",
+          "workflowOutbox",
+          "workflowTickets",
+          "workflowTicketEvents",
+          "workflowPrivacyEvents"
         ]
       },
       "TableCountsDto": {
@@ -14077,6 +16084,86 @@
           "automationRules": {
             "type": "number",
             "example": 2
+          },
+          "talentSettings": {
+            "type": "number",
+            "example": 1
+          },
+          "talentCandidates": {
+            "type": "number",
+            "example": 10
+          },
+          "talentFlows": {
+            "type": "number",
+            "example": 1
+          },
+          "talentTickets": {
+            "type": "number",
+            "example": 3
+          },
+          "talentTicketEvents": {
+            "type": "number",
+            "example": 12
+          },
+          "talentProcessedMessages": {
+            "type": "number",
+            "example": 100
+          },
+          "workflowDepartments": {
+            "type": "number",
+            "example": 1
+          },
+          "workflowInstances": {
+            "type": "number",
+            "example": 3
+          },
+          "workflowVersions": {
+            "type": "number",
+            "example": 4
+          },
+          "workflowRuns": {
+            "type": "number",
+            "example": 2
+          },
+          "workflowRecords": {
+            "type": "number",
+            "example": 25
+          },
+          "workflowRecordVersions": {
+            "type": "number",
+            "example": 30
+          },
+          "workflowConsents": {
+            "type": "number",
+            "example": 30
+          },
+          "workflowDeletionRequests": {
+            "type": "number",
+            "example": 0
+          },
+          "workflowAppointmentSlots": {
+            "type": "number",
+            "example": 10
+          },
+          "workflowAppointments": {
+            "type": "number",
+            "example": 4
+          },
+          "workflowOutbox": {
+            "type": "number",
+            "example": 0
+          },
+          "workflowTickets": {
+            "type": "number",
+            "example": 0
+          },
+          "workflowTicketEvents": {
+            "type": "number",
+            "example": 0
+          },
+          "workflowPrivacyEvents": {
+            "type": "number",
+            "example": 0
           }
         },
         "required": [
@@ -14095,7 +16182,27 @@
           "webhookOutboxEvents",
           "integrationDeliveryFailures",
           "statusUpdates",
-          "automationRules"
+          "automationRules",
+          "talentSettings",
+          "talentCandidates",
+          "talentFlows",
+          "talentTickets",
+          "talentTicketEvents",
+          "talentProcessedMessages",
+          "workflowDepartments",
+          "workflowInstances",
+          "workflowVersions",
+          "workflowRuns",
+          "workflowRecords",
+          "workflowRecordVersions",
+          "workflowConsents",
+          "workflowDeletionRequests",
+          "workflowAppointmentSlots",
+          "workflowAppointments",
+          "workflowOutbox",
+          "workflowTickets",
+          "workflowTicketEvents",
+          "workflowPrivacyEvents"
         ]
       },
       "OmittedInlineMediaDto": {
@@ -14220,6 +16327,66 @@
                 "type": "array"
               },
               "automationRules": {
+                "type": "array"
+              },
+              "talentSettings": {
+                "type": "array"
+              },
+              "talentCandidates": {
+                "type": "array"
+              },
+              "talentFlows": {
+                "type": "array"
+              },
+              "talentTickets": {
+                "type": "array"
+              },
+              "talentTicketEvents": {
+                "type": "array"
+              },
+              "talentProcessedMessages": {
+                "type": "array"
+              },
+              "workflowDepartments": {
+                "type": "array"
+              },
+              "workflowInstances": {
+                "type": "array"
+              },
+              "workflowVersions": {
+                "type": "array"
+              },
+              "workflowRuns": {
+                "type": "array"
+              },
+              "workflowRecords": {
+                "type": "array"
+              },
+              "workflowRecordVersions": {
+                "type": "array"
+              },
+              "workflowConsents": {
+                "type": "array"
+              },
+              "workflowDeletionRequests": {
+                "type": "array"
+              },
+              "workflowAppointmentSlots": {
+                "type": "array"
+              },
+              "workflowAppointments": {
+                "type": "array"
+              },
+              "workflowOutbox": {
+                "type": "array"
+              },
+              "workflowTickets": {
+                "type": "array"
+              },
+              "workflowTicketEvents": {
+                "type": "array"
+              },
+              "workflowPrivacyEvents": {
                 "type": "array"
               }
             }

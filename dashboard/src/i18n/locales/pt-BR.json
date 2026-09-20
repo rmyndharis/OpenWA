@@ -64,7 +64,8 @@
     "infrastructure": "Infraestrutura",
     "plugins": "Plugins",
     "logs": "Registros",
-    "templates": "Modelos"
+    "templates": "Modelos",
+    "talentPool": "Central de Recrutamento"
   },
   "chats": {
     "media": {
@@ -1011,3 +1012,4 @@
     "loading": "Pesquisando…"
   }
 }
+

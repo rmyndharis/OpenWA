@@ -1,0 +1,4466 @@
+.talent-page {
+  width: 100%;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.talent-page h2,
+.talent-page h3,
+.talent-page p {
+  margin-top: 0;
+}
+
+.talent-page .talent-actions,
+.talent-page .talent-summary,
+.talent-page .talent-tabs,
+.talent-page .talent-fields-title,
+.talent-page .talent-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.talent-page .talent-actions select,
+.talent-page input:not([type='checkbox']),
+.talent-page select,
+.talent-page textarea {
+  width: 100%;
+  min-height: var(--control-height);
+  padding: var(--control-padding-block) var(--control-padding-inline);
+  color: var(--text-primary);
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  font: inherit;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.talent-page textarea {
+  field-sizing: content;
+  min-height: 4.5rem;
+  resize: vertical;
+}
+
+.talent-page .talent-actions select:focus,
+.talent-page input:focus,
+.talent-page select:focus,
+.talent-page textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+  outline: none;
+}
+
+.talent-page .talent-actions select {
+  min-width: 210px;
+}
+
+.talent-page .talent-runtime-status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.talent-page .talent-runtime-status button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    transform 0.15s ease,
+    filter 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.talent-page .talent-runtime-status button:not(:disabled):hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.talent-page .talent-runtime-status button:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.talent-page .talent-runtime-status .is-active {
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: var(--success-soft-30);
+}
+
+.talent-page .talent-runtime-status .is-inactive {
+  color: var(--error-text);
+  background: var(--error-soft);
+  border-color: var(--error-soft-30);
+}
+
+.talent-page .talent-runtime-status .is-pending {
+  color: var(--text-muted);
+  background: var(--bg-card);
+}
+
+.talent-page .talent-summary {
+  margin: 0 0 1rem;
+  flex-wrap: wrap;
+}
+
+.talent-page .talent-summary > div {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 48px;
+  padding: 0.7rem 0.9rem;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+}
+
+.talent-page .talent-summary > div svg {
+  color: var(--text-muted);
+}
+.talent-page .talent-summary .enabled {
+  color: var(--success-text);
+  background: color-mix(in srgb, var(--success) 10%, var(--bg-card));
+}
+.talent-page .talent-summary .disabled {
+  color: var(--warning-text);
+  background: color-mix(in srgb, var(--warning) 10%, var(--bg-card));
+}
+
+.talent-page .talent-tabs {
+  gap: 0.25rem;
+  margin-bottom: 1.25rem;
+  padding: 0.35rem;
+  overflow-x: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.talent-page .talent-tabs button {
+  flex: 0 0 auto;
+  padding: 0.65rem 0.9rem;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.talent-page .talent-tabs button:hover {
+  color: var(--text-primary);
+  background: var(--bg-light);
+}
+
+.talent-page .talent-tabs button.active {
+  color: var(--primary-text);
+  background: var(--primary-soft);
+}
+
+.talent-page .talent-tabs .human-service-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: auto;
+  color: var(--error-text);
+  background: var(--error-soft);
+  border: 1px solid var(--error-soft-30);
+}
+
+.talent-page .talent-tabs .human-service-toggle[data-enabled='false'] {
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: var(--success-soft-30);
+}
+
+.talent-page .recruitment-workspace {
+  padding: 1rem;
+}
+
+.talent-page .recruitment-heading,
+.talent-page .recruitment-filters,
+.talent-page .recruitment-column > header,
+.talent-page .recruitment-card small,
+.talent-page .recruitment-history > div {
+  display: flex;
+  align-items: center;
+}
+
+.talent-page .recruitment-heading {
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.talent-page .recruitment-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.talent-page .recruitment-heading p,
+.talent-page .recruitment-heading > strong {
+  color: var(--text-secondary);
+}
+
+.talent-page .recruitment-filters {
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.talent-page .recruitment-filters .talent-search {
+  flex: 1;
+}
+
+.talent-page .recruitment-view-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-bottom: 1rem;
+}
+
+.talent-page .recruitment-view-tabs > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 48px;
+  padding: 0.7rem 0.85rem;
+  color: var(--text-secondary);
+  text-align: left;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.talent-page .recruitment-view-tabs > button:hover {
+  color: var(--text-primary);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.talent-page .recruitment-view-tabs > button.active {
+  color: var(--primary-text);
+  background: color-mix(in srgb, var(--primary) 9%, var(--bg-card));
+  border-color: var(--primary);
+}
+
+.talent-page .recruitment-view-tabs strong {
+  min-width: 1.8rem;
+  padding: 0.15rem 0.4rem;
+  color: var(--primary-text);
+  text-align: center;
+  background: var(--primary-soft);
+  border-radius: 999px;
+}
+
+.talent-page .recruitment-vacancy-section {
+  margin-bottom: 1rem;
+  padding: 0.85rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.talent-page .recruitment-vacancy-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.talent-page .recruitment-vacancy-heading > div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.talent-page .recruitment-vacancy-heading span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.talent-page .recruitment-vacancies {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0.65rem;
+}
+
+.talent-page .recruitment-vacancy-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 72px;
+  padding: 0.7rem;
+  color: var(--text-primary);
+  text-align: left;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease;
+}
+
+.talent-page .recruitment-vacancy-card:hover {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.talent-page .recruitment-vacancy-card.active {
+  background: color-mix(in srgb, var(--primary) 8%, var(--bg-card));
+  border-color: var(--primary);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.talent-page .recruitment-vacancy-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  color: var(--primary-text);
+  background: var(--primary-soft);
+  border-radius: 9px;
+  place-items: center;
+}
+
+.talent-page .recruitment-vacancy-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+.talent-page .recruitment-vacancy-copy strong,
+.talent-page .recruitment-vacancy-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.talent-page .recruitment-vacancy-copy small {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.talent-page .recruitment-vacancy-count {
+  min-width: 2rem;
+  padding: 0.2rem 0.45rem;
+  color: var(--primary-text);
+  text-align: center;
+  background: var(--primary-soft);
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.talent-page .talent-pool-option-selector {
+  max-width: 560px;
+  margin-top: 0.8rem;
+}
+
+.talent-page .talent-bank-workspace {
+  display: grid;
+  gap: 1rem;
+}
+
+.talent-page .talent-bank-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.65rem;
+}
+
+.talent-page .talent-bank-filters .talent-search {
+  grid-column: span 2;
+}
+
+.talent-page .talent-bank-filters select {
+  width: 100%;
+}
+
+.talent-page .talent-bank-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(390px, 1fr));
+  gap: 0.8rem;
+}
+
+.talent-page .talent-bank-card {
+  position: relative;
+  display: grid;
+  gap: 0.8rem;
+  overflow: hidden;
+  padding: 0.9rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.talent-page .talent-bank-card::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--success);
+  content: '';
+}
+
+.talent-page .talent-bank-card[data-status='CONTATADO']::before,
+.talent-page .talent-bank-card[data-status='AGUARDANDO_RESPOSTA']::before {
+  background: var(--warning);
+}
+
+.talent-page .talent-bank-card[data-status='INDISPONIVEL']::before {
+  background: var(--text-muted);
+}
+
+.talent-page .talent-bank-profile {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0;
+  color: var(--text-primary);
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+
+.talent-page .talent-bank-profile:hover strong {
+  color: var(--primary-text);
+}
+
+.talent-page .talent-bank-profile > span {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+}
+
+.talent-page .talent-bank-profile > span:first-child {
+  display: grid;
+  gap: 0.1rem;
+  color: var(--text-primary);
+}
+
+.talent-page .talent-bank-profile small,
+.talent-page .talent-bank-controls span {
+  color: var(--text-muted);
+}
+
+.talent-page .talent-bank-controls {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(180px, 1fr);
+  gap: 0.65rem;
+}
+
+.talent-page .talent-bank-note {
+  grid-column: 1 / -1;
+}
+
+.talent-page .talent-bank-card > footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.talent-page .talent-bank-history {
+  min-width: min(600px, 80vw);
+}
+
+.talent-page .recruitment-board {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(240px, 1fr));
+  gap: 0.75rem;
+  padding-bottom: 0.5rem;
+  overflow-x: auto;
+}
+
+.talent-page .recruitment-column {
+  position: relative;
+  overflow: hidden;
+  min-height: 360px;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.talent-page .recruitment-column::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: var(--info);
+  content: '';
+}
+.talent-page .recruitment-column[data-status='EM_AVALIACAO']::before,
+.talent-page .recruitment-column[data-status='EM_AVALIACAO_FASE_2']::before {
+  background: var(--warning);
+}
+
+.talent-page .recruitment-column > header {
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  font-weight: 700;
+}
+
+.talent-page .recruitment-column > header strong {
+  min-width: 1.75rem;
+  padding: 0.15rem 0.4rem;
+  text-align: center;
+  color: var(--primary-text);
+  background: var(--primary-soft);
+  border-radius: 999px;
+}
+
+.talent-page .recruitment-column-body {
+  display: grid;
+  align-content: start;
+  gap: 0.6rem;
+  padding: 0.65rem;
+}
+
+.talent-page .recruitment-column-body > p {
+  padding: 1rem 0.25rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.talent-page .recruitment-card {
+  position: relative;
+  display: grid;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.75rem;
+  color: var(--text-primary);
+  text-align: left;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+}
+.talent-page .recruitment-card::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--info);
+  border-radius: 10px 0 0 10px;
+  content: '';
+}
+.talent-page .recruitment-card[data-status='EM_AVALIACAO']::before {
+  background: var(--warning);
+}
+.talent-page .recruitment-card[data-status='EM_AVALIACAO_FASE_2']::before {
+  background: var(--warning);
+}
+
+.talent-page .recruitment-card:hover {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.talent-page .recruitment-card > span,
+.talent-page .recruitment-card small {
+  color: var(--text-secondary);
+}
+
+.talent-page .recruitment-card small {
+  gap: 0.3rem;
+}
+
+.talent-page .recruitment-card .recruitment-card-phase {
+  width: fit-content;
+  padding: 0.2rem 0.45rem;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.talent-page .privacy-retention-policy {
+  margin: 0.75rem 0 1rem;
+  padding: 0.85rem 1rem;
+  color: var(--text-secondary);
+  background: var(--info-soft);
+  border: 1px solid color-mix(in srgb, var(--info) 30%, transparent);
+  border-radius: var(--control-radius);
+}
+
+.talent-page .privacy-retention-policy p {
+  margin: 0.35rem 0 0;
+  line-height: 1.5;
+}
+
+.talent-page .recruitment-card em {
+  color: var(--warning-text);
+  font-size: 0.78rem;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.talent-page .recruitment-compact-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.talent-page .recruitment-compact-card {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) repeat(4, minmax(135px, 1fr));
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  padding: 0.85rem;
+  color: var(--text-primary);
+  text-align: left;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+}
+
+.talent-page .recruitment-compact-card:hover {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.talent-page .recruitment-compact-card > span {
+  display: grid;
+  min-width: 0;
+  gap: 0.15rem;
+}
+
+.talent-page .recruitment-compact-card small {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.talent-page .recruitment-compact-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.talent-page .recruitment-modal {
+  width: min(1100px, calc(100vw - 2rem));
+  max-width: 1100px;
+  max-height: 94vh;
+}
+
+.talent-page .recruitment-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  gap: 1rem;
+}
+
+.talent-page .recruitment-summary-grid,
+.talent-page .recruitment-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.talent-page .recruitment-summary-grid > div {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.75rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.talent-page .recruitment-details > .recruitment-summary-grid {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.talent-page .recruitment-summary-grid span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.talent-page .recruitment-actions,
+.talent-page .recruitment-form,
+.talent-page .recruitment-history {
+  padding: 1rem;
+  margin: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+.talent-page .recruitment-actions {
+  grid-column: 1;
+}
+.talent-page .recruitment-form {
+  grid-column: 1;
+}
+.talent-page .recruitment-history {
+  grid-column: 2;
+  grid-row: 2 / span 2;
+  min-height: 0;
+  max-height: 540px;
+  overflow-y: auto;
+}
+.talent-page .recruitment-actions h3,
+.talent-page .recruitment-form h3,
+.talent-page .recruitment-history h3 {
+  margin: 0 0 0.75rem;
+}
+
+.talent-page .recruitment-transition-groups {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.6rem;
+}
+.talent-page .recruitment-transition-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(0, 1.3fr);
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.talent-page .recruitment-transition-row > span {
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+.talent-page .recruitment-transition-row > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+.talent-page .recruitment-transition-row > div > small {
+  color: var(--text-muted);
+}
+.talent-page .recruitment-transition-row[data-group='advance'] {
+  background: var(--success-soft);
+  border-color: var(--success-soft-30);
+}
+.talent-page .recruitment-transition-row[data-group='hold'] {
+  background: var(--warning-soft);
+  border-color: var(--warning-soft-35);
+}
+.talent-page .recruitment-transition-row[data-group='close'] {
+  background: var(--error-soft);
+  border-color: var(--error-soft-30);
+}
+.talent-page .recruitment-transition-row[data-group='advance'] .recruitment-transition {
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: var(--success-soft-30);
+}
+.talent-page .recruitment-transition-row[data-group='hold'] .recruitment-transition {
+  color: var(--warning-text);
+  background: var(--warning-soft);
+  border-color: var(--warning-soft-35);
+}
+.talent-page .recruitment-transition-row[data-group='close'] .recruitment-transition {
+  color: var(--error-text);
+  background: var(--error-soft);
+  border-color: var(--error-soft-30);
+}
+
+.talent-page .recruitment-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+.talent-page .recruitment-form > h3 {
+  grid-column: 1 / -1;
+}
+.talent-page .recruitment-transition[data-status='APROVADO'],
+.talent-page .recruitment-transition[data-status='CONTRATADO'] {
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: var(--success-soft-30);
+}
+.talent-page .recruitment-transition[data-status='EM_AVALIACAO'],
+.talent-page .recruitment-transition[data-status='EM_AVALIACAO_FASE_2'],
+.talent-page .recruitment-transition[data-status='DOCUMENTACAO'] {
+  color: var(--warning-text);
+  background: var(--warning-soft);
+  border-color: var(--warning-soft-35);
+}
+.talent-page .recruitment-transition[data-status='REPROVADO'],
+.talent-page .recruitment-transition[data-status='NAO_COMPARECEU'],
+.talent-page .recruitment-transition[data-status='DESISTIU'] {
+  color: var(--error-text);
+  background: var(--error-soft);
+  border-color: var(--error-soft-30);
+}
+
+.talent-page .recruitment-note {
+  grid-column: 1 / -1;
+}
+
+.talent-page .recruitment-history > div {
+  position: relative;
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.75rem 0 0.75rem 1.15rem;
+  border-left: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+}
+.talent-page .recruitment-history > div::before {
+  position: absolute;
+  top: 1rem;
+  left: -5px;
+  width: 9px;
+  height: 9px;
+  background: var(--primary);
+  border: 2px solid var(--bg-card);
+  border-radius: 50%;
+  content: '';
+}
+
+.talent-page .recruitment-history span {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.talent-page .recruitment-history p {
+  margin: 0.2rem 0 0;
+  white-space: pre-wrap;
+}
+.talent-page .recruitment-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .talent-page .recruitment-heading,
+  .talent-page .recruitment-filters {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .talent-page .recruitment-summary-grid,
+  .talent-page .recruitment-form {
+    width: 100%;
+    grid-template-columns: 1fr;
+  }
+
+  .talent-page .talent-bank-filters,
+  .talent-page .talent-bank-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .talent-page .talent-bank-filters .talent-search {
+    grid-column: auto;
+  }
+
+  .talent-page .talent-bank-note {
+    grid-column: auto;
+  }
+
+  .talent-page .talent-bank-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .talent-page .talent-bank-card > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .talent-page .recruitment-details {
+    grid-template-columns: 1fr;
+  }
+
+  .talent-page .recruitment-details > .recruitment-summary-grid {
+    grid-column: 1;
+    grid-template-columns: 1fr;
+  }
+
+  .talent-page .recruitment-actions,
+  .talent-page .recruitment-form,
+  .talent-page .recruitment-history {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .talent-page .recruitment-transition-row {
+    grid-template-columns: 1fr;
+  }
+
+  .talent-page .recruitment-note {
+    grid-column: auto;
+  }
+
+  .talent-page .recruitment-vacancy-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .talent-page .recruitment-view-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .talent-page .recruitment-compact-card {
+    grid-template-columns: 1fr;
+  }
+}
+
+.talent-page .flow-workspace {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  align-items: start;
+  gap: 1.25rem;
+}
+
+.talent-page .flow-sidebar,
+.talent-page .flow-editor,
+.talent-page .talent-card {
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.talent-page .flow-sidebar {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow: hidden;
+}
+
+.talent-page .flow-sidebar-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.talent-page .flow-sidebar-header h2 {
+  margin: 0.15rem 0 0.2rem;
+  font-size: 1rem;
+}
+.talent-page .flow-sidebar-header small {
+  color: var(--text-muted);
+}
+
+.talent-page .section-eyebrow {
+  display: block;
+  color: var(--primary-text);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.talent-page .flow-new-button {
+  flex: 0 0 auto;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.8rem;
+}
+
+.talent-page .flow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: calc(100vh - 120px);
+  padding: 0.75rem;
+  overflow-y: auto;
+}
+
+.talent-page .flow-list-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.8rem;
+  color: var(--text-primary);
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.talent-page .flow-list-item:hover {
+  background: var(--bg-light);
+  border-color: var(--border);
+}
+
+.talent-page .flow-list-item.selected {
+  background: var(--primary-soft);
+  border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.talent-page .flow-list-item-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.talent-page .flow-list-item-topline strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.talent-page .flow-list-item.selected .flow-list-item-topline svg {
+  color: var(--primary-text);
+}
+
+.talent-page .flow-keywords {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.talent-page .flow-status,
+.talent-page .editing-badge,
+.talent-page .unsaved-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.035em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.talent-page .status-publicada {
+  color: var(--success-text);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+.talent-page .status-pausada {
+  color: var(--warning-text);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+.talent-page .status-rascunho {
+  color: var(--text-secondary);
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+}
+
+.talent-page .flow-empty-state {
+  padding: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.talent-page .flow-editor {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.talent-page .flow-editor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.talent-page .flow-title-line {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-top: 0.2rem;
+}
+.talent-page .flow-title-line h2 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+.talent-page .flow-editor-header p {
+  margin: 0.4rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.83rem;
+}
+
+.talent-page .unsaved-badge {
+  flex: 0 0 auto;
+  color: var(--warning-text);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
+.talent-page .flow-editor-help {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin: 1.25rem 1.5rem 0;
+  padding: 0.9rem 1rem;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--info) 8%, var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--info) 28%, var(--border));
+  border-radius: 10px;
+}
+.talent-page .workflow-diagram-shell {
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+.talent-page .workflow-diagram-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.talent-page .workflow-diagram-toolbar > div:first-child {
+  display: grid;
+  gap: 0.2rem;
+}
+.talent-page .workflow-diagram-toolbar > div:first-child span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.talent-page .workflow-diagram-toolbar > div:last-child {
+  display: flex;
+  gap: 0.5rem;
+}
+.talent-page .workflow-diagram-canvas {
+  height: 500px;
+  background: color-mix(in srgb, var(--bg-dark) 72%, var(--bg-card));
+}
+.talent-page .workflow-diagram-canvas .react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke: var(--text-muted);
+  --xy-edge-stroke-selected: var(--primary);
+  --xy-connectionline-stroke: var(--primary);
+  --xy-minimap-background-color: var(--bg-card);
+  --xy-controls-button-background-color: var(--bg-card);
+  --xy-controls-button-color: var(--text-primary);
+  --xy-controls-button-border-color: var(--border);
+}
+.talent-page .workflow-diagram-canvas .react-flow__node {
+  width: 210px;
+  color: var(--text-primary);
+}
+.talent-page .workflow-diagram-canvas .react-flow__node.selected .workflow-diagram-node {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 20%, transparent);
+}
+.talent-page .workflow-diagram-node {
+  display: grid;
+  gap: 0.42rem;
+  min-height: 82px;
+  padding: 0.75rem;
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  box-shadow: var(--shadow-md);
+}
+.talent-page .workflow-diagram-node.kind-start,
+.talent-page .workflow-diagram-node.kind-review {
+  background: color-mix(in srgb, var(--primary) 12%, var(--bg-card));
+}
+.talent-page .workflow-diagram-node.kind-message {
+  background: color-mix(in srgb, var(--info) 10%, var(--bg-card));
+}
+.talent-page .workflow-node-kind {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--primary-text);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.talent-page .workflow-diagram-node > strong,
+.talent-page .workflow-diagram-node > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.talent-page .workflow-diagram-node > small {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+.talent-page .workflow-diagram-node > .workflow-node-path {
+  color: var(--primary-text);
+  font-weight: 700;
+}
+.talent-page .workflow-diagram-canvas .react-flow__handle {
+  width: 11px;
+  height: 11px;
+  background: var(--primary);
+  border: 2px solid var(--bg-card);
+}
+.talent-page .workflow-diagram-canvas .react-flow__edge-text {
+  fill: var(--text-primary);
+  font-size: 11px;
+}
+.talent-page .workflow-diagram-canvas .react-flow__edge-textbg {
+  fill: var(--bg-card);
+}
+.talent-page .workflow-diagram-notice {
+  padding: 0.55rem 1rem;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--primary) 7%, var(--bg-card));
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+}
+.talent-page .workflow-diagram-inspector {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.5fr) minmax(280px, 1fr) auto;
+  align-items: end;
+  gap: 0.8rem;
+  padding: 1rem;
+  border-top: 1px solid var(--border);
+}
+.talent-page .workflow-diagram-inspector label {
+  display: grid;
+  gap: 0.35rem;
+}
+.talent-page .workflow-diagram-path-info {
+  display: grid;
+  align-self: center;
+  gap: 0.2rem;
+}
+.talent-page .workflow-diagram-path-info span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.talent-page .workflow-diagram-inspector textarea {
+  resize: vertical;
+}
+.talent-page .workflow-diagram-inspector .icon-danger {
+  min-height: 42px;
+}
+.talent-page .workflow-diagram-inspector.question-inspector {
+  grid-template-columns: minmax(180px, 0.55fr) minmax(280px, 1fr) auto;
+}
+.talent-page .workflow-question-required {
+  display: flex !important;
+  align-items: center;
+  min-height: 42px;
+  white-space: nowrap;
+}
+.talent-page .flow-editor-help > svg {
+  flex: 0 0 auto;
+  color: var(--info);
+}
+.talent-page .flow-editor-help > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.talent-page .flow-editor-help strong {
+  color: var(--text-primary);
+}
+.talent-page .flow-editor-help span {
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.talent-page .talent-fields-title {
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem 0.85rem;
+}
+
+.talent-page .flow-conversation-settings {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) repeat(2, minmax(220px, 1fr)) auto;
+  align-items: end;
+  gap: 0.8rem;
+  margin: 1rem 1.5rem 0;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--primary) 7%, var(--bg-light));
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border));
+  border-radius: 12px;
+}
+
+.talent-page .flow-conversation-settings > div,
+.talent-page .flow-conversation-settings label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.talent-page .flow-conversation-settings label > span {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.talent-page .flow-conversation-settings .flow-notification-recipients {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.75rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border));
+}
+
+.talent-page .flow-notification-heading,
+.talent-page .flow-notification-row,
+.talent-page .flow-phone-fields,
+.talent-page .flow-notification-events {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.talent-page .flow-notification-heading {
+  justify-content: space-between;
+}
+.talent-page .flow-notification-heading > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.talent-page .flow-notification-recipients small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+.talent-page .flow-add-recipient {
+  white-space: nowrap;
+}
+.talent-page .flow-notification-list {
+  display: grid;
+  gap: 0.6rem;
+}
+.talent-page .flow-notification-row {
+  display: grid;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg-card) 86%, var(--primary) 4%);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+.talent-page .flow-notification-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 52px;
+  padding: 0.75rem 0.9rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.talent-page .flow-notification-card-header::-webkit-details-marker {
+  display: none;
+}
+.talent-page .flow-notification-card-header svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  transition: transform 160ms ease;
+}
+.talent-page .flow-notification-row[open] .flow-notification-card-header {
+  border-bottom: 1px solid var(--border);
+}
+.talent-page .flow-notification-row[open] .flow-notification-card-header svg {
+  transform: rotate(180deg);
+}
+.talent-page .flow-notification-card-content {
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.8rem;
+}
+.talent-page .flow-notification-manager {
+  display: flex;
+  align-items: end;
+  gap: 0.75rem;
+}
+.talent-page .flow-manager-name {
+  flex: 1 1 260px;
+}
+.talent-page .flow-manager-enabled {
+  display: inline-flex !important;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 0.45rem !important;
+  min-height: 40px;
+  padding: 0 0.75rem;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.talent-page .flow-manager-enabled input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--primary);
+}
+.talent-page .flow-notification-row:focus-within,
+.talent-page .flow-notification-row:hover {
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+  box-shadow: 0 5px 18px color-mix(in srgb, var(--primary) 9%, transparent);
+}
+.talent-page .flow-phone-fields {
+  align-items: flex-end;
+}
+.talent-page .flow-phone-fields label {
+  width: 72px;
+}
+.talent-page .flow-phone-fields .flow-phone-number {
+  width: 145px;
+}
+.talent-page .flow-phone-fields input {
+  width: 100%;
+}
+.talent-page .flow-notification-events {
+  align-self: center;
+  flex-wrap: wrap;
+}
+.talent-page .flow-notification-scope {
+  display: grid;
+  gap: 0.4rem;
+}
+.talent-page .flow-notification-scope > strong {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+.talent-page button.flow-event-chip:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+.talent-page .flow-event-chip {
+  display: inline-flex;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 0.35rem;
+  width: auto;
+  padding: 0.42rem 0.58rem;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 700;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    transform 150ms ease;
+}
+.talent-page .flow-event-chip:hover {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
+  transform: translateY(-1px);
+}
+.talent-page .flow-event-chip.is-selected {
+  color: var(--primary-text);
+  background: color-mix(in srgb, var(--primary) 15%, var(--bg-card));
+  border-color: color-mix(in srgb, var(--primary) 58%, var(--border));
+}
+.talent-page .flow-event-chip input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--primary);
+}
+.talent-page .flow-notification-empty {
+  margin: 0;
+  padding: 0.75rem;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-card) 88%, transparent);
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  font-size: 0.78rem;
+}
+.talent-page .flow-conversation-settings > .btn-secondary {
+  grid-column: 1 / -1;
+  justify-self: end;
+}
+
+.talent-page .talent-fields-title > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.talent-page .talent-fields-title h2,
+.talent-page .talent-fields-title h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+.talent-page .talent-fields-title small {
+  color: var(--text-muted);
+}
+
+.talent-page .question-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0 1.5rem 1.25rem;
+}
+
+.talent-page .question-card {
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.talent-page .question-card.expanded {
+  border-color: color-mix(in srgb, var(--primary) 58%, var(--border));
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.talent-page .message-question-card {
+  border-left: 3px solid var(--primary);
+}
+
+.talent-page .message-card-header {
+  cursor: grab;
+}
+
+.talent-page .message-number {
+  color: var(--primary);
+}
+
+.talent-page .message-card-body {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.45fr) minmax(280px, 1fr);
+  gap: 0.8rem;
+}
+
+.talent-page .message-card-body label {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.talent-page .message-card-body label > span {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.talent-page .message-card-body textarea {
+  resize: vertical;
+}
+
+.talent-page .draggable-card-header {
+  cursor: grab;
+  user-select: none;
+}
+
+.talent-page .draggable-card-header:active {
+  cursor: grabbing;
+}
+
+.workflow-card-dragging .talent-page,
+.workflow-card-dragging .talent-page * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+.talent-page .question-card.dragging-source {
+  opacity: 0.35;
+}
+
+.talent-page .workflow-drag-preview {
+  position: fixed;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  min-height: 72px;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--primary);
+  border-radius: 12px;
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-floating);
+  pointer-events: none;
+  transform: rotate(0.35deg);
+  opacity: 0.96;
+}
+
+.talent-page .workflow-drag-preview > span:last-child {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.talent-page .workflow-drag-preview small {
+  color: var(--text-muted);
+}
+
+.talent-page .flow-create-actions {
+  flex: 0 0 auto;
+}
+
+.talent-page .flow-create-actions-bottom {
+  justify-content: flex-start;
+  padding: 0 1.5rem 1.25rem;
+}
+
+.talent-page .question-card.drag-over {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+  transform: translateY(2px);
+}
+
+.talent-page .question-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 72px;
+  padding: 0.8rem 1rem;
+  background: var(--bg-light);
+  border-bottom: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+}
+
+.talent-page .question-card.expanded .question-card-header {
+  background: color-mix(in srgb, var(--primary) 7%, var(--bg-card));
+  border-bottom-color: var(--border);
+}
+
+.talent-page .question-card-header:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.talent-page .question-card-header > div:first-child,
+.talent-page .question-card-header > div:first-child > div {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+.talent-page .question-card-header > div:first-child > div {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+}
+.talent-page .question-card-header strong {
+  max-width: 520px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.talent-page .question-card-header small,
+.talent-page .question-main-grid small,
+.talent-page .option-editor small,
+.talent-page .visibility-editor small,
+.talent-page .flow-save-state small {
+  color: var(--text-muted);
+}
+
+.talent-page .question-path-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--primary-text);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.talent-page .question-number {
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  height: 34px;
+  color: var(--text-on-primary);
+  background: var(--primary);
+  border-radius: 9px;
+  font-weight: 800;
+}
+.talent-page .editing-badge {
+  color: var(--primary-text);
+  background: var(--primary-soft);
+}
+
+.talent-page .drag-handle {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: grab;
+}
+
+.talent-page .drag-handle:hover {
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border-color: var(--border);
+}
+
+.talent-page .drag-handle:active {
+  cursor: grabbing;
+}
+.talent-page .compact {
+  min-width: 34px;
+  padding: 0.35rem 0.55rem !important;
+}
+
+.talent-page .question-card-body {
+  padding: 1.1rem;
+}
+.talent-page .question-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
+}
+.talent-page .question-main-grid label,
+.talent-page .script-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.talent-page .question-main-grid label > span,
+.talent-page .script-field > span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.talent-page .question-prompt {
+  grid-column: 1 / -1;
+}
+.talent-page .question-options-marker-help {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 0.65rem;
+}
+.talent-page .question-options-marker-help button {
+  width: auto;
+  flex: 0 0 auto;
+}
+.talent-page .question-options-marker-help code {
+  color: var(--primary-text);
+}
+
+.talent-page .option-editor,
+.talent-page .visibility-editor,
+.talent-page .question-advanced {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.talent-page .option-editor-title,
+.talent-page .visibility-editor {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.talent-page .option-editor-title > div,
+.talent-page .visibility-editor > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.talent-page .option-presets {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.8rem 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.talent-page .option-presets button,
+.talent-page .empty-options {
+  padding: 0.35rem 0.6rem;
+  color: var(--primary-text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.talent-page .option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.talent-page .option-row {
+  display: grid;
+  grid-template-columns: 32px minmax(160px, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+.talent-page .option-row > span {
+  display: grid;
+  place-items: center;
+  height: 32px;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-weight: 700;
+}
+
+.talent-page .visibility-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(140px, 1fr));
+  gap: 0.5rem;
+  width: min(100%, 650px);
+}
+.talent-page .question-advanced summary {
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.talent-page .technical-id-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 1rem;
+}
+
+.talent-page .technical-id-field > span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.talent-page .technical-id-field input[readonly] {
+  color: var(--text-muted);
+  background: var(--bg-card);
+}
+.talent-page .question-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.talent-page .question-flags label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.talent-page .question-flags input {
+  accent-color: var(--primary);
+}
+
+.talent-page .empty-questions,
+.talent-page .flow-editor-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 220px;
+  padding: 2rem;
+  color: var(--text-muted);
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+}
+.talent-page .flow-editor-empty {
+  margin: 1.5rem;
+}
+.talent-page .flow-editor-empty h2,
+.talent-page .flow-editor-empty p {
+  margin: 0;
+}
+
+.talent-page .flow-save-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  border-top: 1px solid var(--border);
+  box-shadow: var(--shadow-up);
+  backdrop-filter: blur(12px);
+}
+.talent-page .flow-save-state {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.talent-page .talent-card {
+  padding: 1.25rem;
+  overflow: auto;
+}
+.talent-page .talent-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 38%) minmax(0, 1fr);
+  gap: 1rem;
+}
+.talent-page .talent-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.talent-page .talent-search input {
+  flex: 1;
+}
+.talent-page .candidate-workspace {
+  overflow: visible;
+}
+.talent-page .candidate-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.talent-page .candidate-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.3rem;
+}
+.talent-page .candidate-heading p {
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+.talent-page .candidate-heading > strong {
+  flex: 0 0 auto;
+  padding: 0.45rem 0.65rem;
+  color: var(--primary-text);
+  background: var(--primary-soft);
+  border-radius: 999px;
+  font-size: 0.78rem;
+}
+.talent-page .candidate-filters {
+  position: relative;
+  z-index: 15;
+  display: grid;
+  grid-template-columns: minmax(250px, 1.8fr) repeat(3, minmax(145px, 0.7fr));
+  gap: 0.65rem;
+  margin-bottom: 1rem;
+  padding: 0.85rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.talent-page .candidate-column-settings {
+  display: grid;
+  gap: 0.55rem;
+}
+.talent-page .candidate-column-setting {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: grab;
+  transition:
+    border-color 0.16s ease,
+    background-color 0.16s ease,
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+.talent-page .candidate-column-setting:active {
+  cursor: grabbing;
+}
+.talent-page .candidate-column-setting.is-dragging {
+  opacity: 0.45;
+}
+.talent-page .candidate-column-setting.is-drop-target {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, var(--bg-light));
+  transform: translateY(2px);
+}
+.talent-page .candidate-column-drag-handle {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+.talent-page .candidate-column-setting > label {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+.talent-page .candidate-column-setting input {
+  width: auto;
+}
+.talent-page .candidate-column-setting label span {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 0.15rem;
+  justify-items: start;
+  text-align: left;
+}
+.talent-page .candidate-column-setting label small {
+  color: var(--text-muted);
+}
+.talent-page .candidate-column-order-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.4rem;
+}
+.talent-page .answer-boolean {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+.talent-page .answer-boolean.yes {
+  color: var(--success-text);
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+.talent-page .answer-boolean.no {
+  color: var(--error-text);
+  background: var(--error-soft);
+}
+.talent-page .appointment-answer {
+  color: var(--primary-text);
+  font-weight: 650;
+}
+.talent-page .candidate-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.talent-page .table-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+.talent-page .table-sort-button:hover,
+.talent-page .table-sort-button:focus-visible,
+.talent-page .table-sort-button.active {
+  color: var(--primary-text);
+  outline: none;
+}
+.talent-page .candidate-table thead {
+  background: var(--bg-light);
+}
+.talent-page .candidate-table tbody tr {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.talent-page .candidate-table tbody tr:hover,
+.talent-page .candidate-table tbody tr:focus {
+  background: var(--primary-soft);
+  outline: none;
+}
+.talent-page .candidate-table th,
+.talent-page .candidate-table td {
+  min-width: 135px;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.talent-page .candidate-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  color: var(--text-secondary);
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.talent-page .candidate-status[data-status='CONFIRMADO'],
+.talent-page .candidate-status[data-status='CONCLUIDO'],
+.talent-page .candidate-status[data-status='CONTRATADO'] {
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: var(--success-soft-30);
+}
+.talent-page .candidate-status[data-status='ENTREVISTA_MARCADA'],
+.talent-page .candidate-status[data-status='APROVADO'],
+.talent-page .candidate-status[data-status='DOCUMENTACAO'] {
+  color: var(--info);
+  background: var(--info-soft);
+  border-color: color-mix(in srgb, var(--info) 30%, transparent);
+}
+.talent-page .candidate-status[data-status='EM_AVALIACAO'],
+.talent-page .candidate-status[data-status='EM_AVALIACAO_FASE_2'],
+.talent-page .candidate-status[data-status='PENDENTE'],
+.talent-page .candidate-status[data-status='INCOMPLETO'] {
+  color: var(--warning-text);
+  background: var(--warning-soft);
+  border-color: var(--warning-soft-35);
+}
+.talent-page .candidate-status[data-status='REPROVADO'],
+.talent-page .candidate-status[data-status='NAO_COMPARECEU'],
+.talent-page .candidate-status[data-status='ENTREVISTA_CANCELADA'],
+.talent-page .candidate-status[data-status='CANCELADO'],
+.talent-page .candidate-status[data-status='DESISTIU'],
+.talent-page .candidate-status[data-status='PENDENTE_EXCLUSAO'] {
+  color: var(--error-text);
+  background: var(--error-soft);
+  border-color: var(--error-soft-30);
+}
+.talent-page .candidate-status[data-status='NAO_INICIADO'] {
+  color: var(--text-muted);
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+.talent-page .candidate-empty {
+  padding: 2.5rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+.talent-page .candidate-modal {
+  width: min(1320px, calc(100vw - 2rem));
+  max-width: 1320px;
+  max-height: 94vh;
+}
+.talent-page .candidate-modal .modal-header,
+.talent-page .recruitment-modal .modal-header {
+  padding: 1.15rem 1.35rem;
+  background: linear-gradient(135deg, var(--bg-card), color-mix(in srgb, var(--primary) 7%, var(--bg-light)));
+}
+.talent-page .candidate-modal .modal-body,
+.talent-page .recruitment-modal .modal-body {
+  padding: 1.15rem;
+  background: color-mix(in srgb, var(--bg-light) 45%, var(--bg-card));
+}
+.talent-page .candidate-modal-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
+  gap: 1.1rem;
+}
+.talent-page .candidate-modal-content > .candidate-profile-summary,
+.talent-page .candidate-modal-content > .candidate-appointment-manager,
+.talent-page .candidate-modal-content > .candidate-answers-section,
+.talent-page .candidate-modal-content > .operator-permission-note {
+  grid-column: 1 / -1;
+}
+.talent-page .candidate-profile-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0;
+}
+
+.talent-page .candidate-linked-contacts {
+  display: grid;
+  gap: 0.8rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-muted);
+}
+
+.talent-page .candidate-linked-contacts-heading h3,
+.talent-page .candidate-linked-contacts-heading p {
+  margin: 0;
+}
+
+.talent-page .candidate-linked-contacts-heading p {
+  margin-top: 0.25rem;
+  color: var(--text-muted);
+}
+
+.talent-page .candidate-linked-contact-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.talent-page .candidate-linked-contact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-panel);
+}
+
+.talent-page .candidate-linked-contact > div:first-child,
+.talent-page .candidate-linked-contact label {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.talent-page .candidate-linked-contact small,
+.talent-page .candidate-linked-contact label span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.talent-page .candidate-profile-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.talent-page .candidate-profile-summary span,
+.talent-page .config-help {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 400;
+  line-height: 1.45;
+}
+.talent-page .candidate-process-section {
+  min-width: 0;
+  padding: 1.1rem;
+  margin: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+.talent-page .candidate-appointment-manager {
+  padding: 1.1rem;
+  background: linear-gradient(135deg, var(--bg-light), color-mix(in srgb, var(--primary) 6%, var(--bg-card)));
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border));
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+.talent-page .candidate-appointment-heading,
+.talent-page .candidate-appointment-action {
+  display: flex;
+  gap: 1rem;
+  align-items: end;
+  justify-content: space-between;
+}
+.talent-page .candidate-appointment-heading h3 {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  margin: 0;
+}
+.talent-page .candidate-appointment-heading p {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.talent-page .candidate-current-appointment {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0.9rem 0;
+}
+.talent-page .candidate-current-appointment > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.75rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.talent-page .candidate-current-appointment span,
+.talent-page .candidate-appointment-action label > span,
+.talent-page .candidate-appointment-empty {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+.talent-page .candidate-current-appointment strong {
+  overflow-wrap: anywhere;
+}
+.talent-page .candidate-appointment-action {
+  margin-top: 0.9rem;
+}
+.talent-page .candidate-appointment-action label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.talent-page .candidate-appointment-action select {
+  width: 100%;
+}
+.talent-page .candidate-appointment-action .btn-primary {
+  flex: 0 0 auto;
+}
+.talent-page .candidate-appointment-empty {
+  display: block;
+  margin-top: 0.65rem;
+}
+@media (max-width: 1100px) {
+  .talent-page .candidate-profile-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 900px) {
+  .talent-page .candidate-modal-content {
+    grid-template-columns: 1fr;
+  }
+  .talent-page .candidate-modal-content > * {
+    grid-column: 1;
+  }
+  .talent-page .candidate-current-appointment {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .talent-page .candidate-appointment-action {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .talent-page .candidate-answers-section .candidate-data-list {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 560px) {
+  .talent-page .candidate-current-appointment,
+  .talent-page .candidate-profile-summary,
+  .talent-page .candidate-process-summary {
+    grid-template-columns: 1fr;
+  }
+}
+.talent-page .candidate-process-section > h3 {
+  margin: 0;
+}
+.talent-page .candidate-process-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0.75rem 0 1rem;
+}
+.talent-page .candidate-interview-details h4,
+.talent-page .candidate-process-history h4 {
+  margin: 1rem 0 0.35rem;
+}
+.talent-page .candidate-process-empty {
+  padding: 0.85rem;
+  margin: 0.75rem 0 0;
+  color: var(--text-muted);
+  background: var(--bg-light);
+  border-radius: 8px;
+}
+.talent-page .candidate-process-history {
+  margin-top: 1rem;
+}
+.talent-page .candidate-answers-section {
+  min-width: 0;
+  padding: 1.1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+.talent-page .candidate-answers-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  margin: 0 0 0.85rem;
+}
+.talent-page .candidate-answers-heading h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+}
+.talent-page .candidate-answers-heading p {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.talent-page .candidate-answers-section .candidate-data-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0;
+}
+.talent-page .candidate-answers-section .candidate-data-list > div {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 0.25rem;
+  padding: 0.75rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.talent-page .candidate-answers-section .candidate-data-list > div[data-answer-key^='endereco_'],
+.talent-page .candidate-answers-section .candidate-data-list > div[data-answer-key='cep'],
+.talent-page .candidate-answers-section .candidate-data-list > div[data-answer-key='logradouro'],
+.talent-page .candidate-answers-section .candidate-data-list > div[data-answer-key='numero'],
+.talent-page .candidate-answers-section .candidate-data-list > div[data-answer-key='complemento'],
+.talent-page .candidate-answers-section .candidate-data-list > div[data-answer-key='bairro'],
+.talent-page .candidate-answers-section .candidate-data-list > div[data-answer-key='cidade'],
+.talent-page .candidate-answers-section .candidate-data-list > div[data-answer-key='uf'] {
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  background: color-mix(in srgb, var(--primary) 4%, var(--bg-light));
+}
+.talent-page .candidate-answers-section input,
+.talent-page .candidate-answers-section select,
+.talent-page .candidate-answers-section textarea {
+  width: 100%;
+}
+.talent-page .candidate-answers-section select[multiple] {
+  min-height: 7rem;
+}
+.talent-page .candidate-readonly-answer {
+  min-height: 2.5rem;
+  padding: 0.65rem;
+  color: var(--text-muted);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.talent-page .candidate-required,
+.talent-page .candidate-legacy-answer dt > span {
+  display: inline-flex;
+  margin-left: 0.45rem;
+  padding: 0.1rem 0.35rem;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-radius: 999px;
+  font-size: 0.64rem;
+  font-weight: 600;
+}
+.talent-page .candidate-legacy-answer {
+  opacity: 0.82;
+}
+.talent-page .candidate-modal-actions,
+.talent-page .candidate-modal-actions > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  width: 100%;
+}
+.talent-page .candidate-modal-actions > div {
+  width: auto;
+}
+.talent-page .candidate-data-list > div {
+  display: grid;
+  grid-template-columns: minmax(140px, 35%) minmax(0, 1fr);
+  gap: 1rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--border);
+}
+.talent-page .candidate-data-list dt {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.talent-page .candidate-data-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.talent-page .operator-permission-note {
+  padding: 0.75rem;
+  color: var(--text-muted);
+  background: var(--bg-light);
+  border-radius: 8px;
+  font-size: 0.8rem;
+}
+.talent-page .slot-capacity-field {
+  display: flex;
+  flex: 0 0 180px;
+  flex-direction: column;
+  gap: 0.3rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.talent-page .agenda-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  overflow: visible;
+}
+.talent-page .agenda-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+}
+.talent-page .agenda-heading p,
+.talent-page .agenda-section-title span {
+  margin-top: 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+.talent-page .agenda-builder {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 0.75rem;
+  align-items: end;
+  padding: 1rem;
+  background: linear-gradient(135deg, var(--bg-light), color-mix(in srgb, var(--primary) 5%, var(--bg-card)));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.talent-page .agenda-location-manager {
+  padding: 0.9rem 1rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.talent-page .agenda-location-manager summary {
+  color: var(--text-primary);
+  font-weight: 700;
+  cursor: pointer;
+}
+.talent-page .agenda-location-manager > h3 {
+  margin: 1rem 0 0;
+  font-size: 0.9rem;
+}
+.talent-page .agenda-location-list {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+.talent-page .agenda-location-list-item {
+  display: grid;
+  gap: 0.55rem;
+}
+.talent-page .agenda-location-summary {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+.talent-page .agenda-location-summary:hover {
+  border-color: color-mix(in srgb, var(--primary) 48%, var(--border));
+  background: color-mix(in srgb, var(--primary) 5%, var(--bg-card));
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.talent-page .agenda-location-summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.talent-page .agenda-location-summary.is-editing {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 6%, var(--bg-card));
+}
+.talent-page .agenda-location-summary > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.talent-page .agenda-location-summary > span > small {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.talent-page .agenda-location-summary-action {
+  display: inline-flex !important;
+  flex: 0 0 auto;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.4rem !important;
+  color: var(--primary);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.talent-page .agenda-location-add {
+  margin-top: 0.9rem;
+}
+.talent-page .agenda-location-editor-card {
+  padding: 1rem;
+  background: color-mix(in srgb, var(--bg-card) 96%, var(--primary) 4%);
+  border: 1px solid color-mix(in srgb, var(--primary) 60%, var(--border));
+  border-radius: 11px;
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--bg-dark) 16%, transparent);
+}
+.talent-page .agenda-location-editor-heading,
+.talent-page .agenda-location-contact-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.talent-page .agenda-location-editor-heading > div,
+.talent-page .agenda-location-contact-heading > div {
+  display: grid;
+  gap: 0.2rem;
+}
+.talent-page .agenda-location-editor-heading small,
+.talent-page .agenda-location-contact-heading small {
+  color: var(--text-muted);
+}
+.talent-page .agenda-location-fields {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr)) auto auto;
+  align-items: end;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+.talent-page .agenda-location-fields label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+.talent-page .agenda-location-contact {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(180px, 1.4fr) 70px 80px minmax(140px, 1fr) auto;
+  align-items: end;
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0.75rem;
+  background: color-mix(in srgb, var(--bg-card) 90%, var(--primary) 3%);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.talent-page .agenda-location-contact-heading,
+.talent-page .agenda-location-contact-empty,
+.talent-page .agenda-location-editor-actions {
+  grid-column: 1 / -1;
+}
+.talent-page .agenda-location-contact-empty {
+  padding: 0.8rem;
+  color: var(--text-muted);
+  text-align: center;
+  background: var(--bg-light);
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+}
+.talent-page .agenda-location-contact-remove {
+  align-self: end;
+  width: var(--control-height);
+  height: var(--control-height);
+}
+.talent-page .agenda-location-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+}
+.talent-page .agenda-location-contact legend {
+  padding: 0 0.35rem;
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+.talent-page .agenda-location-contact > small {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+.talent-page .agenda-builder > label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+.talent-page .agenda-builder .slot-capacity-field {
+  flex: initial;
+}
+.talent-page .agenda-builder .btn-primary {
+  min-height: var(--control-height);
+  white-space: nowrap;
+}
+
+.talent-page .agenda-builder input:not([type='checkbox']),
+.talent-page .agenda-builder select,
+.talent-page .agenda-location-fields input:not([type='checkbox']) {
+  height: var(--control-height);
+}
+
+.talent-page .workflow-date-time-picker {
+  width: 100%;
+  min-width: 0;
+}
+
+.talent-page .workflow-date-time-picker .rs-picker-input-group {
+  width: 100%;
+  height: var(--control-height);
+  min-height: var(--control-height);
+  border-radius: var(--control-radius);
+  background: var(--surface-input);
+  border-color: var(--border);
+  font: inherit;
+}
+
+.talent-page .workflow-date-time-picker .rs-input {
+  height: calc(var(--control-height) - 2px);
+  padding-inline: var(--control-padding-inline);
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+}
+
+.talent-page .agenda-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.talent-page .agenda-stats > div {
+  display: flex;
+  min-height: 82px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.9rem 1rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+.talent-page .agenda-stats span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.talent-page .agenda-stats strong {
+  color: var(--text-primary);
+  font-size: 1.45rem;
+}
+.talent-page .agenda-table-card {
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.talent-page .agenda-section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  background: var(--bg-light);
+  border-bottom: 1px solid var(--border);
+}
+.talent-page .agenda-section-title h3 {
+  margin: 0;
+}
+.talent-page .agenda-section-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+.talent-page .agenda-section-actions select {
+  width: auto;
+  min-width: 180px;
+}
+.talent-page .agenda-table-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.talent-page .agenda-table-sort svg {
+  color: var(--text-muted);
+  opacity: 0.45;
+}
+.talent-page .agenda-table-sort:hover,
+.talent-page .agenda-table-sort.active {
+  color: var(--primary-text);
+}
+.talent-page .agenda-table-sort.active svg {
+  color: var(--primary-text);
+  opacity: 1;
+}
+.talent-page .agenda-table-sort:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
+  border-radius: 3px;
+}
+.talent-page .agenda-table-scroll {
+  overflow-x: auto;
+}
+
+.talent-page .agenda-empty {
+  margin: 0;
+  padding: 1rem;
+  color: var(--text-secondary);
+  text-align: center;
+}
+.talent-page .agenda-table-card table {
+  margin: 0;
+}
+.talent-page .agenda-table-card tbody tr:last-child td {
+  border-bottom: 0;
+}
+.talent-page .agenda-status {
+  display: inline-flex;
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+.talent-page .agenda-status.disponivel,
+.talent-page .agenda-status.confirmado,
+.talent-page .agenda-status.concluido {
+  color: var(--success-text);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+.talent-page .agenda-status.bloqueado,
+.talent-page .agenda-status.cancelado {
+  color: var(--text-muted);
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+}
+.talent-page .talent-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: 0.75rem;
+}
+.talent-page .talent-list button {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.8rem;
+  color: var(--text-primary);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.talent-page .talent-list button.selected {
+  background: var(--primary-soft);
+  border-radius: 8px;
+}
+.talent-page .talent-list span,
+.talent-page .talent-list small,
+.talent-page .talent-detail p {
+  color: var(--text-muted);
+}
+.talent-page .talent-detail dl div {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 1rem;
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--border);
+}
+.talent-page .talent-detail dt {
+  color: var(--text-secondary);
+}
+.talent-page .talent-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.talent-page table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.talent-page th,
+.talent-page td {
+  padding: 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.talent-page .talent-row-actions {
+  flex-wrap: wrap;
+}
+.talent-page .talent-ticket-history {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.talent-page .human-ticket-notifications {
+  display: grid;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: var(--surface-muted);
+}
+
+.talent-page .human-ticket-notifications-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.talent-page .human-ticket-notifications-header h2 {
+  margin: 0.2rem 0 0;
+  font-size: 1rem;
+}
+
+.talent-page .human-ticket-notification-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.talent-page .human-ticket-notification {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  color: var(--text-primary);
+  text-align: left;
+  background: var(--surface-panel);
+  cursor: pointer;
+}
+
+.talent-page .human-ticket-notification:hover,
+.talent-page .human-ticket-notification:focus-visible {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.talent-page .human-ticket-notification.is-unread {
+  border-left: 4px solid var(--primary);
+}
+
+.talent-page .human-ticket-notification span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.talent-page .human-ticket-notification small,
+.talent-page .human-ticket-notifications-empty {
+  color: var(--text-muted);
+}
+.talent-page .talent-ticket-history > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.talent-page .talent-ticket-history span {
+  color: var(--text-muted);
+}
+.talent-page .ticket-contact {
+  display: flex;
+  min-width: 190px;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.talent-page .ticket-contact strong {
+  color: var(--text-primary);
+  font-size: 0.88rem;
+}
+.talent-page .ticket-contact span {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+.talent-page .talent-settings {
+  display: grid;
+  gap: 1.25rem;
+  padding: 1.25rem;
+  background: color-mix(in srgb, var(--bg-card) 94%, var(--primary) 6%);
+}
+.talent-page .settings-intro {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.15rem 1.25rem;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 14%, var(--bg-card)), var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  border-radius: 14px;
+}
+.talent-page .settings-intro h2 {
+  margin: 0.18rem 0 0.3rem;
+  font-size: 1.1rem;
+}
+.talent-page .settings-intro p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+.talent-page .settings-intro-icon,
+.talent-page .settings-panel-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--primary-text);
+  background: color-mix(in srgb, var(--primary) 16%, var(--bg-light));
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+  border-radius: 11px;
+}
+.talent-page .settings-intro-icon {
+  width: 48px;
+  height: 48px;
+}
+.talent-page .settings-panel-icon {
+  width: 38px;
+  height: 38px;
+  transition:
+    color 170ms ease,
+    background-color 170ms ease,
+    transform 170ms ease;
+}
+.talent-page .settings-layout {
+  display: grid;
+  /* grid-template-columns: repeat(2, minmax(0, 1fr)); */
+  gap: 1rem;
+}
+.talent-page .settings-panel {
+  min-width: 0;
+  padding: 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  box-shadow: var(--shadow-md);
+}
+.talent-page .settings-panel-wide {
+  grid-column: 1 / -1;
+}
+.talent-page .settings-panel-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 60px;
+  padding: 0.65rem 0.7rem;
+  margin-bottom: 1rem;
+  margin-inline: -0.7rem;
+  overflow: hidden;
+  box-sizing: border-box;
+  cursor: pointer;
+  border-radius: 10px;
+  transition:
+    color 170ms ease,
+    background-color 170ms ease,
+    box-shadow 170ms ease;
+}
+.talent-page .settings-panel-header::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--primary);
+  border-radius: 999px;
+  content: '';
+  opacity: 0;
+  transform: scaleY(0.45);
+  transition:
+    opacity 170ms ease,
+    transform 170ms ease;
+}
+.talent-page .settings-panel-header:hover {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--primary) 12%, var(--bg-card)), var(--surface-hover-soft));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.talent-page .settings-panel-header:hover::before {
+  opacity: 1;
+  transform: scaleY(1);
+}
+.talent-page .settings-panel-header:hover .settings-panel-icon {
+  color: var(--primary-text);
+  background: color-mix(in srgb, var(--primary) 20%, var(--bg-card));
+  transform: translateY(-1px) scale(1.04);
+}
+.talent-page .settings-panel-header:focus-visible,
+.talent-page .diagram-section-toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+.talent-page .settings-panel.is-collapsed .settings-panel-header {
+  margin-bottom: 0;
+  border-bottom-color: transparent;
+}
+.talent-page .settings-panel-content {
+  min-width: 0;
+}
+.talent-page .settings-panel-toggle {
+  flex: 0 0 auto;
+  transition:
+    color 170ms ease,
+    transform 170ms ease;
+}
+.talent-page .settings-panel-header:hover .settings-panel-toggle {
+  color: var(--primary-text);
+  transform: translateX(2px);
+}
+.talent-page .settings-panel-header > div:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+}
+.talent-page .settings-panel-header h2 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+.talent-page .settings-panel-header p {
+  margin: 0.2rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.talent-page .settings-scope-badge {
+  max-width: 220px;
+  padding: 0.28rem 0.55rem;
+  overflow: hidden;
+  color: var(--primary-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.talent-page .candidate-column-save-status {
+  display: grid;
+  justify-items: end;
+  gap: 0.35rem;
+  margin-left: auto;
+  text-align: right;
+}
+.talent-page .candidate-column-save-status small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+.talent-page .candidate-column-save-status small.saving {
+  color: var(--warning-text);
+}
+.talent-page .candidate-column-save-status small.saved {
+  color: var(--success-text);
+}
+.talent-page .candidate-column-save-status small.error {
+  color: var(--error-text);
+}
+.talent-page .settings-fields {
+  display: grid;
+  gap: 0.9rem;
+}
+.talent-page .settings-fields-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.talent-page .settings-fields-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.talent-page .settings-fields label,
+.talent-page .settings-single-field,
+.talent-page .talent-timeouts label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.talent-page .settings-field-full {
+  grid-column: 1 / -1;
+}
+.talent-page .settings-input-unit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+.talent-page .settings-input-unit input {
+  width: 100%;
+}
+.talent-page .settings-panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 1rem;
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.talent-page .record-menu-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(260px, 0.75fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.talent-page .record-menu-actions {
+  display: grid;
+  gap: 0.65rem;
+}
+.talent-page .record-menu-action {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.8rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  opacity: 0.72;
+}
+.talent-page .record-menu-action.enabled {
+  border-color: color-mix(in srgb, var(--primary) 38%, var(--border));
+  opacity: 1;
+}
+.talent-page .record-menu-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.talent-page .record-menu-toggle input {
+  width: auto;
+}
+.talent-page .record-menu-action-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.3rem;
+}
+.talent-page .record-menu-action-copy small {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+.talent-page .record-menu-action-copy input {
+  width: 100%;
+}
+.talent-page .record-menu-order {
+  display: flex;
+  gap: 0.35rem;
+}
+.talent-page .record-menu-order .btn-icon {
+  width: 32px;
+  height: 32px;
+}
+.talent-page .record-menu-preview {
+  align-self: start;
+  display: grid;
+  gap: 0.45rem;
+  padding: 1rem;
+  color: var(--chat-preview-text);
+  background: var(--chat-preview-bg);
+  border: 1px solid var(--chat-preview-border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-floating);
+}
+.talent-page .record-menu-preview > span {
+  color: var(--chat-preview-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.talent-page .record-menu-preview > strong {
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--chat-preview-border);
+}
+.talent-page .record-menu-preview em {
+  color: var(--chat-preview-danger);
+  font-size: 0.75rem;
+}
+.talent-page .message-key-guide {
+  padding: 0.85rem 1rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.talent-page .message-template-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+.talent-page .message-template-card {
+  display: grid;
+  align-content: start;
+  gap: 0.65rem;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--bg-light) 68%, var(--bg-card));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.talent-page .message-template-card > span {
+  display: grid;
+  gap: 0.2rem;
+}
+.talent-page .message-template-card textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+.talent-page .message-template-variables {
+  color: var(--primary-text);
+  font-family: monospace;
+  line-height: 1.45;
+}
+.talent-page .message-key-guide summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.talent-page .message-key-guide dl {
+  margin-bottom: 0;
+}
+.talent-page .message-key-guide dl > div {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 0.45rem 0;
+  border-top: 1px solid var(--border);
+}
+.talent-page .message-key-guide dt {
+  color: var(--primary-text);
+  font-family: monospace;
+}
+.talent-page .message-key-guide dd {
+  margin: 0;
+  color: var(--text-secondary);
+}
+.talent-page .talent-toggle {
+  font-weight: 600;
+}
+.talent-page .talent-timeouts,
+.talent-page .talent-messages {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.9rem;
+}
+.talent-page .talent-timeouts span {
+  display: grid;
+}
+.talent-page .talent-timeouts input {
+  width: 100%;
+}
+
+.talent-page .reschedule-form {
+  display: grid;
+  gap: 16px;
+}
+
+.talent-page .reschedule-form p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.talent-page .reschedule-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.talent-page .recruitment-create-slot-trigger {
+  justify-self: start;
+}
+
+.talent-page .recruitment-inline-slot-builder {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.talent-page .recruitment-inline-slot-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.talent-page .recruitment-inline-slot-heading h3,
+.talent-page .recruitment-inline-slot-heading p {
+  margin: 0;
+}
+
+.talent-page .recruitment-inline-slot-heading p {
+  margin-top: 4px;
+  font-size: 0.84rem;
+}
+
+.talent-page .recruitment-inline-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.talent-page .recruitment-inline-slot-save {
+  justify-self: end;
+}
+
+@media (max-width: 720px) {
+  .talent-page .recruitment-inline-slot-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .talent-page .recruitment-inline-slot-save {
+    width: 100%;
+  }
+}
+
+.talent-page .reschedule-summary {
+  display: grid;
+  grid-template-columns: minmax(110px, auto) 1fr;
+  gap: 8px 14px;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.talent-page .reschedule-summary span {
+  color: var(--text-secondary);
+}
+
+.talent-page .icon-danger {
+  padding: 0.35rem 0.55rem;
+  color: var(--error-text);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.talent-page .icon-danger:hover {
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+}
+
+.talent-page .diagram-page {
+  display: grid;
+  gap: 1rem;
+}
+
+.talent-page .diagram-page-header,
+.talent-page .diagram-section,
+.talent-page .diagram-save-bar,
+.talent-page .diagram-empty {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.talent-page .diagram-page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.25rem;
+}
+
+.talent-page .diagram-page-header h2,
+.talent-page .diagram-section-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0.2rem 0 0;
+}
+
+.talent-page .diagram-page-header p,
+.talent-page .diagram-section-header p {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+}
+
+.talent-page .diagram-flow-selector {
+  display: grid;
+  flex: 0 1 340px;
+  gap: 0.4rem;
+  min-width: min(100%, 260px);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.talent-page .diagram-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  padding: 0 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.talent-page .diagram-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.talent-page .diagram-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+}
+
+.talent-page .diagram-legend-dot.system {
+  background: var(--primary);
+}
+
+.talent-page .diagram-legend-dot.question {
+  background: var(--info);
+}
+
+.talent-page .diagram-legend-dot.event {
+  background: var(--warning);
+}
+
+.talent-page .diagram-section {
+  display: grid;
+  gap: 1rem;
+  padding: 1.1rem;
+}
+.talent-page .diagram-section.is-collapsed {
+  gap: 0;
+}
+.talent-page .diagram-message-row[hidden] {
+  display: none;
+}
+
+.talent-page .diagram-section-graph {
+  padding-bottom: 1.25rem;
+}
+
+.talent-page .diagram-section-header,
+.talent-page .diagram-section-header > div {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.talent-page .diagram-section-header {
+  justify-content: space-between;
+}
+.talent-page .diagram-section-toggle {
+  cursor: pointer;
+}
+.talent-page .diagram-section.is-collapsed .diagram-section-header {
+  margin-bottom: 0;
+}
+.talent-page .diagram-section-chevron {
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-muted);
+}
+
+.talent-page .diagram-step-number {
+  display: grid;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: var(--text-on-primary);
+  background: var(--primary);
+  border-radius: 10px;
+  font-weight: 800;
+}
+
+.talent-page .diagram-step-number.event-step {
+  color: var(--text-on-warning);
+  background: var(--warning);
+}
+
+.talent-page .diagram-message-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.talent-page .diagram-message-card,
+.talent-page .diagram-menu-preview {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+  min-width: 0;
+  height: 100%;
+  padding: 1rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.talent-page .diagram-message-card.system-message {
+  border-left: 3px solid var(--primary);
+}
+
+.talent-page .diagram-message-card.event-message {
+  border-left: 3px solid var(--warning);
+}
+
+.talent-page .diagram-message-card small,
+.talent-page .diagram-menu-preview small {
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.talent-page .diagram-message-card textarea {
+  min-height: 112px;
+  resize: vertical;
+}
+
+.talent-page .diagram-message-card textarea:disabled {
+  color: var(--text-primary);
+  cursor: default;
+  opacity: 0.92;
+}
+.talent-page .diagram-variable-legend {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+.talent-page .diagram-variable-legend span {
+  display: block;
+}
+.talent-page .diagram-variable-legend code {
+  color: var(--primary-text);
+  font-weight: 700;
+}
+
+.talent-page .diagram-message-card code {
+  overflow-wrap: anywhere;
+  color: var(--primary-text);
+  font-size: 0.72rem;
+}
+
+.talent-page .diagram-message-kind {
+  width: fit-content;
+  padding: 0.22rem 0.5rem;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-card) 75%, transparent);
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.talent-page .diagram-stage-arrow {
+  color: var(--primary-text);
+  font-size: 1.7rem;
+  font-weight: 800;
+}
+
+.talent-page .diagram-menu-preview {
+  gap: 0.42rem;
+  white-space: pre-wrap;
+}
+
+.talent-page .diagram-menu-preview > strong {
+  margin-top: 0.35rem;
+}
+
+.talent-page .diagram-menu-preview label {
+  display: grid;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.talent-page .diagram-menu-preview textarea {
+  min-height: 78px;
+  resize: vertical;
+}
+
+.talent-page .diagram-menu-preview textarea:disabled {
+  color: var(--text-primary);
+  cursor: default;
+  opacity: 0.92;
+}
+
+.talent-page .diagram-menu-preview > small {
+  margin-top: auto;
+  padding-top: 0.75rem;
+}
+
+.talent-page .diagram-menu-actions {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.25rem;
+}
+
+.talent-page .diagram-menu-actions > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  opacity: 0.68;
+}
+
+.talent-page .diagram-menu-actions > div.enabled {
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+  opacity: 1;
+}
+
+.talent-page .diagram-menu-toggle,
+.talent-page .diagram-menu-order {
+  display: flex !important;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.talent-page .diagram-menu-order .btn-icon {
+  min-width: 30px;
+  min-height: 30px;
+}
+
+.talent-page .diagram-event-groups {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.talent-page .diagram-event-group {
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg-card) 84%, var(--bg-page));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition:
+    border-color 170ms ease,
+    box-shadow 170ms ease;
+}
+
+.talent-page .diagram-event-group.is-expanded {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warning) 72%, transparent);
+}
+
+.talent-page .diagram-event-group-header {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.9rem 1rem;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background-color 170ms ease;
+}
+
+.talent-page .diagram-event-group-header:hover {
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface-hover-soft));
+}
+
+.talent-page .diagram-event-group-header:focus-visible {
+  outline: 2px solid var(--warning);
+  outline-offset: -3px;
+}
+
+.talent-page .diagram-event-group-icon {
+  display: grid;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: var(--warning-text);
+  background: color-mix(in srgb, var(--warning) 16%, var(--bg-card));
+  border-radius: 9px;
+}
+
+.talent-page .diagram-event-group-copy {
+  display: grid;
+  flex: 1;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.talent-page .diagram-event-group-copy small {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+}
+
+.talent-page .diagram-event-group-count {
+  flex: 0 0 auto;
+  padding: 0.25rem 0.55rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.talent-page .diagram-event-group-chevron {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--text-muted);
+}
+
+.talent-page .diagram-event-group .diagram-event-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+  padding: 1rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.talent-page .diagram-event-group .diagram-event-grid[hidden] {
+  display: none;
+}
+
+.talent-page .diagram-save-bar {
+  position: sticky;
+  z-index: 12;
+  bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  box-shadow: var(--shadow-floating);
+  backdrop-filter: blur(12px);
+}
+
+.talent-page .diagram-save-bar > div:first-child {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.talent-page .diagram-save-bar span {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.talent-page .diagram-empty {
+  min-height: 320px;
+}
+
+@media (max-width: 1100px) {
+  .talent-page .flow-workspace {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+  .talent-page .visibility-editor,
+  .talent-page .option-editor-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .talent-page .visibility-controls {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+  .talent-page .agenda-builder {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .talent-page .agenda-location-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .talent-page .agenda-location-contact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .talent-page .diagram-event-group .diagram-event-grid {
+    grid-template-columns: 1fr;
+  }
+  .talent-page .flow-notification-row {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  .talent-page .flow-notification-events {
+    flex-basis: 100%;
+  }
+}
+
+@media (max-width: 820px) {
+  .talent-page .diagram-event-group-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .talent-page .diagram-event-group-copy {
+    flex-basis: calc(100% - 86px);
+  }
+  .talent-page .diagram-event-group-count {
+    margin-left: 42px;
+  }
+  .talent-page .flow-conversation-settings {
+    grid-template-columns: 1fr;
+  }
+  .talent-page .flow-conversation-settings .flow-notification-recipients {
+    grid-column: auto;
+  }
+  .talent-page .flow-notification-heading,
+  .talent-page .flow-notification-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .talent-page .flow-add-recipient,
+  .talent-page .flow-conversation-settings > .btn-secondary {
+    justify-content: center;
+    width: 100%;
+  }
+  .talent-page .flow-phone-fields {
+    display: grid;
+    grid-template-columns: 70px 75px minmax(0, 1fr);
+  }
+  .talent-page .flow-phone-fields label,
+  .talent-page .flow-phone-fields .flow-phone-number {
+    width: auto;
+  }
+  .talent-page .agenda-location-contact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .talent-page {
+    padding: 1rem;
+  }
+  .talent-page .flow-workspace,
+  .talent-page .talent-grid {
+    grid-template-columns: 1fr;
+  }
+  .talent-page .flow-sidebar {
+    position: static;
+    max-height: none;
+  }
+  .talent-page .flow-list {
+    max-height: 300px;
+  }
+  .talent-page .question-main-grid {
+    grid-template-columns: 1fr;
+  }
+  .talent-page .workflow-diagram-toolbar,
+  .talent-page .workflow-diagram-inspector {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+  .talent-page .workflow-diagram-toolbar > div:last-child {
+    flex-wrap: wrap;
+  }
+  .talent-page .candidate-filters,
+  .talent-page .candidate-profile-summary {
+    grid-template-columns: 1fr;
+  }
+  .talent-page .agenda-builder,
+  .talent-page .agenda-location-fields,
+  .talent-page .agenda-stats {
+    grid-template-columns: 1fr;
+  }
+  .talent-page .settings-layout,
+  .talent-page .settings-fields-two,
+  .talent-page .settings-fields-three,
+  .talent-page .record-menu-editor,
+  .talent-page .message-template-grid {
+    grid-template-columns: 1fr;
+  }
+  .talent-page .settings-panel-wide,
+  .talent-page .settings-field-full {
+    grid-column: auto;
+  }
+  .talent-page .settings-panel-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .talent-page .settings-panel-toggle {
+    align-self: flex-end;
+  }
+  .talent-page .settings-scope-badge {
+    align-self: flex-start;
+  }
+  .talent-page .agenda-section-title {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .talent-page .agenda-section-actions,
+  .talent-page .agenda-section-actions select,
+  .talent-page .agenda-section-actions button {
+    width: 100%;
+  }
+  .talent-page .message-card-body {
+    grid-template-columns: 1fr;
+  }
+  .talent-page .question-prompt {
+    grid-column: auto;
+  }
+  .talent-page .question-card-header,
+  .talent-page .flow-editor-header,
+  .talent-page .flow-save-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .talent-page .flow-save-bar .talent-row-actions,
+  .talent-page .flow-save-bar button {
+    width: 100%;
+    justify-content: center;
+  }
+  .talent-page .diagram-page-header,
+  .talent-page .diagram-save-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .talent-page .diagram-flow-selector {
+    flex-basis: auto;
+    width: 100%;
+  }
+  .talent-page .diagram-message-row {
+    grid-template-columns: 1fr;
+  }
+  .talent-page .diagram-stage-arrow {
+    justify-self: center;
+    transform: rotate(90deg);
+  }
+  .talent-page .diagram-save-bar .talent-row-actions,
+  .talent-page .diagram-save-bar button {
+    justify-content: center;
+    width: 100%;
+  }
+}
+
+.talent-page .candidate-proximity-section {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-input);
+}
+.talent-page .candidate-proximity-header,
+.talent-page .candidate-proximity-results article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.talent-page .candidate-proximity-header h3,
+.talent-page .candidate-proximity-header p {
+  margin: 0;
+}
+.talent-page .candidate-proximity-header p,
+.talent-page .candidate-proximity-results small {
+  color: var(--text-secondary);
+}
+.talent-page .candidate-proximity-results {
+  display: grid;
+  gap: 0.55rem;
+}
+.talent-page .candidate-proximity-results article {
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-card);
+}
+.talent-page .candidate-proximity-results article.is-recommended {
+  border-color: var(--success);
+  background: var(--success-soft);
+}
+.talent-page .candidate-proximity-results article > div {
+  display: grid;
+  flex: 1;
+  gap: 0.2rem;
+}
+.talent-page .candidate-proximity-position {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  color: var(--text-on-success);
+  background: var(--success);
+  font-weight: 800;
+}
+.talent-page .candidate-proximity-results .candidate-proximity-metrics {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+.talent-page .proximity-test-workspace {
+  display: grid;
+  gap: 1rem;
+}
+.talent-page .proximity-test-description {
+  margin: 0;
+  color: var(--text-secondary);
+}
+.talent-page .proximity-test-heading,
+.talent-page .proximity-test-report > header,
+.talent-page .proximity-test-address,
+.talent-page .proximity-test-actions {
+  display: flex;
+  align-items: center;
+}
+.talent-page .proximity-test-heading {
+  gap: 0.85rem;
+}
+.talent-page .proximity-test-heading h2,
+.talent-page .proximity-test-heading p,
+.talent-page .proximity-test-report h3,
+.talent-page .proximity-test-error-detail p {
+  margin: 0;
+}
+.talent-page .proximity-test-heading p {
+  color: var(--text-secondary);
+}
+.talent-page .proximity-test-heading-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  color: var(--primary-text);
+  background: var(--primary-soft);
+  border-radius: 12px;
+}
+.talent-page .proximity-test-form {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.7fr) minmax(260px, 2fr) minmax(100px, 0.6fr) minmax(130px, 0.8fr);
+  gap: 0.8rem;
+  padding: 1rem;
+  background: var(--surface-input);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.talent-page .proximity-test-form label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.talent-page .proximity-test-form input {
+  width: 100%;
+}
+.talent-page .proximity-test-city {
+  grid-column: span 2;
+}
+.talent-page .proximity-test-actions {
+  align-self: end;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  grid-column: span 2;
+}
+.talent-page .proximity-test-address {
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.talent-page .proximity-test-address svg {
+  flex: 0 0 auto;
+  color: var(--primary);
+}
+.talent-page .proximity-test-address div {
+  display: grid;
+  gap: 0.15rem;
+}
+.talent-page .proximity-test-address small,
+.talent-page .proximity-test-diagnostics span,
+.talent-page .proximity-test-error-detail small {
+  color: var(--text-secondary);
+}
+.talent-page .proximity-test-report {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-card);
+}
+.talent-page .proximity-test-report.is-success {
+  border-color: var(--success);
+}
+.talent-page .proximity-test-report.is-error {
+  border-color: var(--danger);
+}
+.talent-page .proximity-test-report > header {
+  justify-content: space-between;
+  gap: 1rem;
+}
+.talent-page .proximity-test-duration {
+  padding: 0.35rem 0.6rem;
+  color: var(--text-secondary);
+  background: var(--bg-light);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.talent-page .proximity-test-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+.talent-page .proximity-test-diagnostics > div {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.75rem;
+  background: var(--surface-input);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.talent-page .proximity-test-error-detail {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.85rem;
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-radius: 9px;
+}
+@media (max-width: 680px) {
+  .talent-page .candidate-proximity-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .talent-page .proximity-test-form,
+  .talent-page .proximity-test-diagnostics {
+    grid-template-columns: 1fr;
+  }
+  .talent-page .proximity-test-city,
+  .talent-page .proximity-test-actions {
+    grid-column: auto;
+  }
+  .talent-page .proximity-test-actions,
+  .talent-page .proximity-test-actions button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .talent-page .talent-summary > div {
+    flex: 1 1 100%;
+  }
+  .talent-page .flow-new-button span,
+  .talent-page .editing-badge {
+    display: none;
+  }
+  .talent-page .question-card-header > .talent-row-actions {
+    gap: 0.25rem;
+  }
+  .talent-page .option-row {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+  .talent-page .option-row .icon-danger {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .talent-page .candidate-data-list > div,
+  .talent-page .message-key-guide dl > div {
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
+  }
+  .talent-page .record-menu-action {
+    grid-template-columns: 1fr auto;
+  }
+  .talent-page .record-menu-toggle {
+    grid-column: 1 / -1;
+  }
+}
+.talent-page .workflow-diagram-diagnostics {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.talent-page .workflow-diagram-diagnostics summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.talent-page .workflow-diagram-diagnostics ul {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding-left: 20px;
+}
+
+.talent-page .workflow-diagram-diagnostics button {
+  text-align: left;
+  white-space: normal;
+}
+
+.talent-page .workflow-simulator {
+  margin: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-panel) 88%, var(--success) 12%);
+  overflow: hidden;
+}
+
+.talent-page .workflow-simulator > header,
+.talent-page .outbox-health-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.talent-page .workflow-simulator header div {
+  display: grid;
+  gap: 0.25rem;
+}
+.talent-page .workflow-simulator header span {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+.talent-page .workflow-simulator-chat {
+  display: grid;
+  gap: 0.6rem;
+  max-height: 360px;
+  padding: 1rem;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+}
+.talent-page .workflow-simulator-bubble {
+  max-width: min(78%, 680px);
+  padding: 0.7rem 0.9rem;
+  border-radius: 12px;
+  white-space: pre-wrap;
+}
+.talent-page .workflow-simulator-bubble.bot {
+  justify-self: start;
+  background: var(--surface-input);
+}
+.talent-page .workflow-simulator-bubble.user {
+  justify-self: end;
+  background: color-mix(in srgb, var(--success) 35%, var(--surface-input));
+}
+.talent-page .workflow-simulator-bubble.system {
+  justify-self: center;
+  color: var(--text-secondary);
+  border: 1px dashed var(--border);
+  font-size: 0.85rem;
+}
+.talent-page .workflow-simulator-error,
+.talent-page .outbox-warning {
+  padding: 0.75rem;
+  border-radius: 10px;
+  color: var(--warning-text);
+  background: var(--warning-soft);
+}
+.talent-page .workflow-simulator form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.7rem;
+  padding: 1rem;
+  border-top: 1px solid var(--border);
+}
+.talent-page .tab-alert-count {
+  min-width: 20px;
+  padding: 1px 6px;
+  margin-left: 5px;
+  border-radius: 999px;
+  background: var(--error);
+  color: var(--text-on-danger);
+  font-size: 0.72rem;
+}
+.talent-page .outbox-health-header {
+  padding: 0 0 1rem;
+}
+.talent-page .outbox-health-header div {
+  display: grid;
+  gap: 0.3rem;
+}
+.talent-page .outbox-summary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+.talent-page .outbox-summary > div {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-input);
+}
+.talent-page .outbox-summary span {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+.talent-page .outbox-summary strong {
+  font-size: 1.4rem;
+}
+.talent-page .outbox-health h3 {
+  margin-top: 1.2rem;
+}
+.talent-page .outbox-status {
+  display: inline-flex;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.talent-page .outbox-status.falha {
+  color: var(--error-text);
+  background: var(--error-soft);
+}
+.talent-page .outbox-privacy-note {
+  display: block;
+  margin-top: 1rem;
+  color: var(--text-secondary);
+}
+.talent-page .diagram-history-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 820px) {
+  .talent-page .outbox-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .talent-page .workflow-simulator > header,
+  .talent-page .outbox-health-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .talent-page .workflow-simulator form {
+    grid-template-columns: 1fr;
+  }
+}

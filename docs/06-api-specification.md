@@ -2672,9 +2672,9 @@ Remove the group's picture. The account must be a group admin.
 
 #### GET /api/sessions/:sessionId/groups/:groupId/invite-code
 
-Get the group invite code and full invite link. The code is a transferable join capability rather than plain read data, so it sits at OPERATOR, like the QR endpoint.
+Get the group invite code and full invite link.
 
-**Auth:** API key (OPERATOR)
+**Auth:** API key
 
 **Path parameters**
 
@@ -2694,7 +2694,7 @@ Get the group invite code and full invite link. The code is a transferable join 
 }
 ```
 
-**Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable)
+**Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable)
 
 #### POST /api/sessions/:sessionId/groups
 
@@ -6792,7 +6792,195 @@ socket.on('message', msg => {
 });
 ```
 
-## 6.6 Webhook Events & Delivery Semantics
+## 6.6 Central de Recrutamento
+
+All routes in this section are scoped by `:sessionId`. Read and operational routes require an `operator` key; flow configuration, publication, privacy decisions, and outbox administration require an `admin` key. The general `400`, `401`, `403`, and `404` responses described in §6.2 apply.
+
+#### GET /api/sessions/:sessionId/workflow-hub/runtime-status
+
+Returns whether the built-in Central de Recrutamento plugin is installed and active for the selected session, together with the configured retention period for pseudonymous technical workflow records.
+
+#### GET /api/sessions/:sessionId/workflow-hub/department
+
+Returns the sector, timezone, schedule, and initial-menu configuration.
+
+#### PUT /api/sessions/:sessionId/workflow-hub/department
+
+Updates the sector configuration. Requires `admin`.
+
+#### PUT /api/sessions/:sessionId/workflow-hub/department/human-service
+
+Allows an `operator` or `admin` to enable or block new human-service requests for the department. Existing open tickets remain available until an operator closes them manually.
+
+#### GET /api/sessions/:sessionId/workflow-hub/instances
+
+Lists flows and their draft, published, and retired definition versions.
+
+#### POST /api/sessions/:sessionId/workflow-hub/instances
+
+Creates a configurable flow. Requires `admin`.
+
+#### GET /api/sessions/:sessionId/workflow-hub/templates
+
+Lists the built-in starting templates for new flows.
+
+#### POST /api/sessions/:sessionId/workflow-hub/templates/:key/create
+
+Creates a flow from template `:key`. Requires `admin`.
+
+#### POST /api/sessions/:sessionId/workflow-hub/import-legacy-talent-pool
+
+Imports supported legacy talent-pool configuration into the generic flow model. Requires `admin` and is idempotent.
+
+#### PUT /api/sessions/:sessionId/workflow-hub/instances/:id
+
+Updates flow identity, keywords, timeouts, messages, and registered-user menu. Requires `admin`.
+
+#### PUT /api/sessions/:sessionId/workflow-hub/instances/:id/draft
+
+Creates or updates the editable draft definition, including fields and execution graph. Requires `admin`.
+
+#### POST /api/sessions/:sessionId/workflow-hub/instances/:id/publish
+
+Validates and publishes the current draft. Requires `admin`; published versions remain immutable.
+
+#### POST /api/sessions/:sessionId/workflow-hub/instances/:id/pause
+
+Pauses a flow and releases temporary appointment holds. Requires `admin`.
+
+#### POST /api/sessions/:sessionId/workflow-hub/instances/:id/resume
+
+Reactivates a paused flow using its current published version. It does not publish pending draft changes. Requires `admin`.
+
+#### POST /api/sessions/:sessionId/workflow-hub/instances/:id/archive
+
+Archives a flow and releases temporary appointment holds. Requires `admin`.
+
+#### POST /api/sessions/:sessionId/workflow-hub/instances/:id/duplicate
+
+Creates an editable copy of a flow without copying its keywords. Requires `admin`.
+
+#### GET /api/sessions/:sessionId/workflow-hub/instances/:id/slots
+
+Lists visible schedule slots. Query `availableOnly=true` restricts the result to selectable slots.
+
+#### POST /api/sessions/:sessionId/workflow-hub/instances/:id/slots
+
+Creates one or more future schedule slots with location and capacity. Slots are independent meetings, so a flow may have multiple slots at the same date and time, including at the same location.
+
+#### PATCH /api/sessions/:sessionId/workflow-hub/instances/:id/slots/:slotId
+
+Updates the instruction, responsible person, or capacity of a visible slot. Capacity can only be maintained or increased; use the reschedule operation to change the date of a meeting with confirmed people.
+
+#### DELETE /api/sessions/:sessionId/workflow-hub/instances/:id/slots/:slotId
+
+Removes an empty slot and clears any stale saved reference. A slot with confirmed people must be rescheduled first.
+
+#### POST /api/sessions/:sessionId/workflow-hub/instances/:id/slots/:slotId/reschedule
+
+Atomically replaces a slot, moves all confirmed appointments, updates saved answers, and queues one notice per affected contact.
+
+#### POST /api/sessions/:sessionId/workflow-hub/instances/:id/slots/:slotId/block
+
+Blocks an unoccupied slot so it is no longer offered.
+
+#### PUT /api/sessions/:sessionId/workflow-hub/instances/:id/slots/:slotId/status
+
+Changes an eligible slot between available and blocked states.
+
+#### GET /api/sessions/:sessionId/workflow-hub/instances/:id/appointments
+
+Lists appointments visible to the API key's chat scope.
+
+#### POST /api/sessions/:sessionId/workflow-hub/instances/:id/records/:recordId/appointment
+
+Marks an available future interview slot for one candidate from the administrative profile. The operation reserves capacity transactionally, updates the saved appointment answer when the flow has one, starts the selection-process history, and queues candidate and operator notifications.
+
+#### PUT /api/sessions/:sessionId/workflow-hub/instances/:id/appointments/:appointmentId/status
+
+Updates one appointment status. Cancellation releases capacity, clears its saved answer, and queues the configured notice.
+
+#### POST /api/sessions/:sessionId/workflow-hub/instances/:id/appointments/:appointmentId/reschedule
+
+Moves one confirmed person to an existing available slot, resets its reminder, updates its record, and queues a reschedule notice.
+
+#### GET /api/sessions/:sessionId/workflow-hub/recruitment-applications
+
+Lists the post-interview selection processes visible to the operator's chat scope.
+
+#### PATCH /api/sessions/:sessionId/workflow-hub/recruitment-applications/:applicationId
+
+Updates an application's stage, owner, rating, notes, or next action. Appointment synchronization does not overwrite a stage that an operator has already advanced manually.
+
+#### GET /api/sessions/:sessionId/workflow-hub/recruitment-applications/:applicationId/events
+
+Returns the persisted process history, including appointment imports, cancellations, and reschedules.
+
+#### GET /api/sessions/:sessionId/workflow-hub/records
+
+Lists records visible to the API key's chat scope. Query `search` matches contact and saved answers.
+
+#### PATCH /api/sessions/:sessionId/workflow-hub/records/:recordId
+
+Updates editable candidate answers within the API key's chat scope and triggers a new background proximity calculation when the structured address changes.
+
+#### POST /api/sessions/:sessionId/workflow-hub/records/:recordId/proximity/recalculate
+
+Queues a new driving-time comparison between the candidate's structured address and the georeferenced interview locations saved for the department. The result remains persisted on the candidate record; transient Nominatim or OSRM failures use bounded retries.
+
+#### POST /api/sessions/:sessionId/workflow-hub/proximity/test
+
+Tests a structured address against the department's georeferenced interview locations without changing a candidate record. Requires `admin`.
+
+#### DELETE /api/sessions/:sessionId/workflow-hub/records/:recordId
+
+Deletes a record and related personal data, then queues the configured administrative-deletion notice. Requires `admin`.
+
+#### GET /api/sessions/:sessionId/workflow-hub/tickets
+
+Lists human-service tickets visible to the API key. Query `openOnly=true` excludes closed tickets.
+
+#### GET /api/sessions/:sessionId/workflow-hub/tickets/:ticketId/events
+
+Returns the auditable event history for an allowed human-service ticket.
+
+#### POST /api/sessions/:sessionId/workflow-hub/tickets/:ticketId/activity
+
+Records operator activity and restarts the human-service inactivity deadline.
+
+#### POST /api/sessions/:sessionId/workflow-hub/tickets/:ticketId/close
+
+Closes a human-service ticket while preserving its history.
+
+#### GET /api/sessions/:sessionId/workflow-hub/indicators
+
+Returns dashboard counts for flows, records, active runs, schedule, and human service.
+
+#### GET /api/sessions/:sessionId/workflow-hub/outbox-health
+
+Returns aggregate delivery health plus redacted pending and failed entries. Requires `admin`.
+
+#### POST /api/sessions/:sessionId/workflow-hub/outbox/:id/retry
+
+Requeues one current failed notification for a controlled retry. Obsolete messages are cancelled instead. Requires `admin`.
+
+#### DELETE /api/sessions/:sessionId/workflow-hub/outbox/:id
+
+Cancels one unsent notification without deleting its audit trail. Requires `admin`.
+
+#### GET /api/sessions/:sessionId/workflow-hub/deletion-requests
+
+Lists privacy deletion requests. Requires `admin`.
+
+#### POST /api/sessions/:sessionId/workflow-hub/deletion-requests/:id/approve
+
+Approves a pending privacy request, deletes the defined personal data, and queues one confirmation. Requires `admin`.
+
+#### POST /api/sessions/:sessionId/workflow-hub/deletion-requests/:id/reject
+
+Rejects a pending privacy request and restores the valid registered-user state. Requires `admin`.
+
+## 6.7 Webhook Events & Delivery Semantics
 
 Every registered webhook receives an HTTP `POST` with a JSON body of this shape:
 

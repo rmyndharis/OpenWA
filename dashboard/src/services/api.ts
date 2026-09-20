@@ -179,6 +179,7 @@ export interface ApiKey {
   role: 'admin' | 'operator' | 'viewer';
   allowedIps?: string[];
   allowedSessions?: string[];
+  allowedChats?: string[];
   isActive: boolean;
   expiresAt?: string;
   lastUsedAt?: string;
@@ -737,7 +738,11 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     return undefined as T;
   }
 
-  return response.json();
+  // DELETE endpoints and a few integrations legitimately answer 200 with an empty body.
+  // Reading those with Response.json() throws even though the operation succeeded.
+  const body = await response.text();
+  if (!body.trim()) return undefined as T;
+  return JSON.parse(body) as T;
 }
 
 /** Like {@link request} but returns the raw response text — e.g. a plugin's HTML config-UI bundle. */
@@ -973,6 +978,7 @@ export const apiKeyApi = {
     role: string;
     allowedIps?: string[];
     allowedSessions?: string[];
+    allowedChats?: string[];
     expiresAt?: string;
   }) =>
     request<CreatedApiKey>('/auth/api-keys', {
@@ -986,6 +992,7 @@ export const apiKeyApi = {
       role?: string;
       allowedIps?: string[];
       allowedSessions?: string[];
+      allowedChats?: string[];
       expiresAt?: string;
     },
   ) =>
@@ -1405,4 +1412,679 @@ export interface MessageStats {
 export const statsApi = {
   getOverview: () => request<OverviewStats>('/stats/overview'),
   getMessages: (period: StatsPeriod) => request<MessageStats>(`/stats/messages?period=${period}`),
+};
+
+export type TalentFieldType = 'text' | 'email' | 'number' | 'date' | 'select' | 'multiselect' | 'pdf';
+export interface TalentField {
+  id: string;
+  label: string;
+  prompt: string;
+  type: TalentFieldType;
+  required: boolean;
+  enabled: boolean;
+  order: number;
+  options?: string[];
+  min?: number;
+  max?: number;
+}
+export interface TalentPoolSettings {
+  id: string;
+  sessionId: string;
+  enabled: boolean;
+  fields: TalentField[];
+  registrationTimeoutMinutes: number;
+  updateTimeoutMinutes: number;
+  menuTimeoutMinutes: number;
+  humanInactivityMinutes: number;
+  humanGraceMinutes: number;
+  queueName: string;
+  messages: Record<string, string>;
+}
+export type TalentPoolSettingsUpdate = Omit<TalentPoolSettings, 'id' | 'sessionId'>;
+export interface TalentCandidate {
+  id: string;
+  sessionId: string;
+  contactId: string;
+  phone: string | null;
+  status: string;
+  data: Record<string, unknown>;
+  validUntil: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface TalentTicket {
+  id: string;
+  sessionId: string;
+  candidateId: string;
+  contactId: string;
+  chatId: string;
+  status: string;
+  queueName: string;
+  lastRelevantAt: string;
+  nextActionAt: string;
+  warnedAt: string | null;
+  closedAt: string | null;
+  closeReason: string | null;
+}
+export interface TalentTicketEvent {
+  id: string;
+  ticketId: string;
+  type: string;
+  actorId: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+export const talentPoolApi = {
+  settings: (sessionId: string) => request<TalentPoolSettings>('/sessions/' + sessionId + '/talent-pool/settings'),
+  updateSettings: (sessionId: string, body: Partial<TalentPoolSettingsUpdate>) =>
+    request<TalentPoolSettings>('/sessions/' + sessionId + '/talent-pool/settings', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  candidates: (sessionId: string, search = '') =>
+    request<TalentCandidate[]>(
+      '/sessions/' + sessionId + '/talent-pool/candidates?search=' + encodeURIComponent(search),
+    ),
+  tickets: (sessionId: string, openOnly = false) =>
+    request<TalentTicket[]>('/sessions/' + sessionId + '/talent-pool/tickets?openOnly=' + String(openOnly)),
+  ticketEvents: (sessionId: string, ticketId: string) =>
+    request<TalentTicketEvent[]>('/sessions/' + sessionId + '/talent-pool/tickets/' + ticketId + '/events'),
+  touchTicket: (sessionId: string, ticketId: string) =>
+    request<TalentTicket>('/sessions/' + sessionId + '/talent-pool/tickets/' + ticketId + '/activity', {
+      method: 'POST',
+    }),
+  closeTicket: (sessionId: string, ticketId: string) =>
+    request<TalentTicket>('/sessions/' + sessionId + '/talent-pool/tickets/' + ticketId + '/close', { method: 'POST' }),
+};
+
+export type WorkflowFieldType =
+  | 'text'
+  | 'textarea'
+  | 'email'
+  | 'phone'
+  | 'number'
+  | 'currency'
+  | 'date'
+  | 'cpf'
+  | 'cnpj'
+  | 'cep'
+  | 'select'
+  | 'multiselect'
+  | 'consent'
+  | 'pdf'
+  | 'appointment';
+export interface WorkflowField {
+  id: string;
+  answerKey?: string;
+  label: string;
+  prompt: string;
+  type: WorkflowFieldType;
+  required: boolean;
+  order: number;
+  options?: string[];
+  talentPoolOption?: string;
+  min?: number;
+  max?: number;
+  confidential?: boolean;
+  customerVisible?: boolean;
+  customerEditable?: boolean;
+  validationScript?: string;
+  visibleWhen?: { fieldId: string; operator: 'equals' | 'notEquals' | 'contains' | 'filled'; value?: unknown };
+}
+export type WorkflowGraphNodeType = 'start' | 'message' | 'question' | 'review';
+export interface WorkflowGraphNode {
+  id: string;
+  type: WorkflowGraphNodeType;
+  position: { x: number; y: number };
+  data: { label?: string; text?: string; fieldId?: string };
+}
+export interface WorkflowGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  condition?: { operator: 'equals' | 'notEquals' | 'contains' | 'filled'; value?: unknown };
+}
+export interface WorkflowGraphDefinition {
+  version: 1;
+  startNodeId: string;
+  nodes: WorkflowGraphNode[];
+  edges: WorkflowGraphEdge[];
+}
+export interface WorkflowVersionDefinition {
+  graph?: WorkflowGraphDefinition;
+  [key: string]: unknown;
+}
+export interface WorkflowVersion {
+  id: string;
+  versionNumber: number;
+  status: string;
+  fields: WorkflowField[];
+  definition: WorkflowVersionDefinition;
+}
+export type WorkflowRecordMenuAction =
+  | 'CONSULTAR_DADOS'
+  | 'ATUALIZAR_DADOS'
+  | 'VISUALIZAR_AGENDAMENTO'
+  | 'REMARCAR_AGENDAMENTO'
+  | 'CANCELAR_AGENDAMENTO'
+  | 'ATENDIMENTO_HUMANO'
+  | 'ENCERRAR_ATENDIMENTO'
+  | 'SOLICITAR_EXCLUSAO';
+export interface WorkflowRecordMenuItem {
+  action: WorkflowRecordMenuAction;
+  label: string;
+  enabled: boolean;
+}
+export interface WorkflowRecordMenuConfig {
+  title: string;
+  actions: WorkflowRecordMenuItem[];
+}
+export interface WorkflowInstance {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  status: string;
+  keywords: string[];
+  flowTimeoutMinutes: number;
+  humanInactivityMinutes: number;
+  humanGraceMinutes: number;
+  validityMonths: number;
+  invalidAttemptLimit: number;
+  pdfMaxBytes: number;
+  proactiveReminderDays: number | null;
+  appointmentNotificationNumbers: string[];
+  appointmentNotifications: Array<{
+    id: string;
+    name: string;
+    ddi: string;
+    ddd: string;
+    number: string;
+    events: Array<'CONFIRMADA' | 'CANCELADA' | 'REAGENDADA' | 'CONCLUIDA'>;
+    locationIds: string[];
+    interviewPhases: WorkflowInterviewPhase[];
+    enabled: boolean;
+  }>;
+  messages: Record<string, string>;
+  recordMenu: WorkflowRecordMenuConfig;
+  currentVersionId: string | null;
+  versions: WorkflowVersion[];
+}
+export type WorkflowInterviewPhase = 'FASE_1_ENTREVISTA_SIMPLES' | 'FASE_2_ENTREVISTA_FOCADA' | 'FASE_3_CONTRATACAO';
+export interface WorkflowSlot {
+  id: string;
+  startsAt: string;
+  label: string | null;
+  locationId?: string | null;
+  location: string | null;
+  address?: string | null;
+  instruction?: string | null;
+  responsible?: string | null;
+  mapsUrl?: string | null;
+  /** Optional while the dashboard may still receive slots created by a pre-migration server. */
+  interviewPhase?: WorkflowInterviewPhase;
+  status: string;
+  capacity: number;
+  bookedCount: number;
+}
+export interface WorkflowRecord {
+  id: string;
+  instanceId: string;
+  instanceName: string;
+  contactId: string;
+  phone: string | null;
+  linkedContacts?: Array<{
+    id: string;
+    contactId: string;
+    phone: string | null;
+    verifiedAt: string;
+    isPrimary: boolean;
+  }>;
+  status: string;
+  data: Record<string, unknown>;
+  currentVersion: number;
+  definitionVersionId: string | null;
+  proximityStatus?: 'PENDENTE' | 'PROCESSANDO' | 'CONCLUIDO' | 'FALHA' | 'SEM_DADOS' | null;
+  proximityData?: {
+    originAddress: string;
+    originLatitude?: number;
+    originLongitude?: number;
+    destinationHash: string;
+    results: Array<{
+      posicao: number;
+      locationId: string;
+      nome: string;
+      endereco: string;
+      distanciaKm: number | null;
+      tempoMinutos: number | null;
+      routeAvailable: boolean;
+    }>;
+    errorCode?: string;
+    calculatedAt?: string;
+  } | null;
+  proximityAttempts?: number;
+  proximityRevision?: number;
+  proximityNextAttemptAt?: string | null;
+  validUntil: string;
+  updatedAt: string;
+}
+export interface WorkflowProximityTestResult {
+  success: boolean;
+  errorCode?: 'ADDRESS_NOT_FOUND' | 'GEOCODING_UNAVAILABLE' | 'ROUTING_UNAVAILABLE' | 'NO_GEOREFERENCED_LOCATIONS';
+  message?: string;
+  origin?: { address: string; latitude: number; longitude: number };
+  normalizedAddress?: {
+    postalCode: string;
+    street: string;
+    number: string;
+    neighborhood: string;
+    city: string;
+    state: string;
+  };
+  results?: NonNullable<WorkflowRecord['proximityData']>['results'];
+  destinationCount: number;
+  elapsedMs: number;
+}
+export interface WorkflowTicket {
+  id: string;
+  contactId: string;
+  chatId: string;
+  status: string;
+  lastRelevantAt: string;
+  deadlineAt: string;
+  closedAt: string | null;
+  closeReason: string | null;
+  instance?: { name: string };
+}
+export interface WorkflowTicketEvent {
+  id: string;
+  type: string;
+  actorId: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+export interface WorkflowAppointment {
+  id: string;
+  contactId: string;
+  status: string;
+  createdAt: string;
+  reminderSentAt: string | null;
+  slot?: WorkflowSlot;
+}
+export type WorkflowRecruitmentStatus =
+  | 'ENTREVISTA_MARCADA'
+  | 'EM_AVALIACAO'
+  | 'APROVADO'
+  | 'EM_AVALIACAO_FASE_2'
+  | 'DOCUMENTACAO'
+  | 'CONTRATADO'
+  | 'REPROVADO'
+  | 'NAO_COMPARECEU'
+  | 'DESISTIU'
+  | 'ENTREVISTA_CANCELADA';
+export interface WorkflowRecruitmentApplication {
+  id: string;
+  instanceId: string;
+  contactId: string;
+  recordId: string | null;
+  appointmentId: string | null;
+  status: WorkflowRecruitmentStatus;
+  owner: string | null;
+  rating: number | null;
+  nextActionAt: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  instance: { id: string; name: string };
+  record: WorkflowRecord | null;
+  appointment: WorkflowAppointment | null;
+}
+export interface WorkflowRecruitmentEvent {
+  id: string;
+  type: string;
+  fromStatus: WorkflowRecruitmentStatus | null;
+  toStatus: WorkflowRecruitmentStatus | null;
+  actorId: string | null;
+  note: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+export type WorkflowTalentPoolStatus = 'DISPONIVEL' | 'CONTATADO' | 'AGUARDANDO_RESPOSTA' | 'INDISPONIVEL' | 'CONVERTIDO_EM_CANDIDATO';
+export interface WorkflowTalentPoolEntry {
+  id: string;
+  instanceId: string;
+  recordId: string;
+  contactId: string;
+  status: WorkflowTalentPoolStatus;
+  owner: string | null;
+  convertedAt: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  instance: { id: string; name: string };
+  record: Omit<WorkflowRecord, 'instanceName'> & { instanceName?: string };
+}
+export interface WorkflowTalentPoolEvent {
+  id: string;
+  entryId: string;
+  type: string;
+  fromStatus: WorkflowTalentPoolStatus | null;
+  toStatus: WorkflowTalentPoolStatus | null;
+  actorId: string | null;
+  note: string | null;
+  createdAt: string;
+}
+export interface WorkflowDeletionRequest {
+  id: string;
+  recordId: string;
+  status: string;
+  reason: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+}
+export interface WorkflowIndicators {
+  flows: number;
+  published: number;
+  records: number;
+  activeRuns: number;
+  availableSlots: number;
+  appointments: number;
+}
+export interface WorkflowHubRuntimeStatus {
+  pluginId: string;
+  installed: boolean;
+  status: 'installed' | 'enabled' | 'disabled' | 'error' | 'not_installed';
+  activeForSession: boolean;
+  technicalRetentionDays: number;
+}
+export interface WorkflowTemplate {
+  key: string;
+  name: string;
+  description: string;
+  fields: WorkflowField[];
+}
+export interface WorkflowDepartment {
+  id: string;
+  name: string;
+  timezone: string;
+  enabled: boolean;
+  humanServiceEnabled: boolean;
+  menuTimeoutMinutes: number;
+  messages: Record<string, string>;
+  candidateTableColumns: Array<{ id: string; visible: boolean }>;
+  schedule: {
+    timezone: string;
+    weekdays: Record<string, Array<{ start: string; end: string }>>;
+    exceptions: Array<{ date: string; closed: boolean; periods?: Array<{ start: string; end: string }> }>;
+    locations?: Array<{
+      id: string;
+      internalName?: string;
+      name: string;
+      address?: string;
+      mapsUrl?: string;
+      latitude?: number;
+      longitude?: number;
+      notificationContacts?: Array<{
+        id: string;
+        role: string;
+        name: string;
+        ddi: string;
+        ddd: string;
+        number: string;
+        enabled: boolean;
+      }>;
+    }>;
+  };
+}
+export interface WorkflowOutboxHealth {
+  counts: Record<'PENDENTE' | 'PROCESSANDO' | 'RETENTANDO' | 'ENVIADA' | 'FALHA' | 'CANCELADA', number>;
+  pendingDue: number;
+  failures: Array<{
+    id: string;
+    status: 'RETENTANDO' | 'FALHA';
+    attempts: number;
+    maxAttempts: number;
+    nextAttemptAt: string;
+    updatedAt: string;
+    reason: 'SEM_CONEXAO' | 'TIMEOUT' | 'DESTINO_INVALIDO' | 'FALHA_ENVIO';
+    exhausted: boolean;
+  }>;
+  unsent: Array<{
+    id: string;
+    status: 'PENDENTE' | 'RETENTANDO' | 'FALHA';
+    attempts: number;
+    maxAttempts: number;
+    nextAttemptAt: string;
+    updatedAt: string;
+    reason: 'SEM_CONEXAO' | 'TIMEOUT' | 'DESTINO_INVALIDO' | 'FALHA_ENVIO' | null;
+    exhausted: boolean;
+  }>;
+}
+export const workflowHubApi = {
+  runtimeStatus: (sessionId: string) =>
+    request<WorkflowHubRuntimeStatus>(`/sessions/${sessionId}/workflow-hub/runtime-status`),
+  department: (sessionId: string) => request<WorkflowDepartment>(`/sessions/${sessionId}/workflow-hub/department`),
+  updateDepartment: (sessionId: string, body: Partial<WorkflowDepartment>) =>
+    request<WorkflowDepartment>(`/sessions/${sessionId}/workflow-hub/department`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  templates: (sessionId: string) => request<WorkflowTemplate[]>(`/sessions/${sessionId}/workflow-hub/templates`),
+  instances: (sessionId: string) => request<WorkflowInstance[]>(`/sessions/${sessionId}/workflow-hub/instances`),
+  indicators: (sessionId: string) => request<WorkflowIndicators>(`/sessions/${sessionId}/workflow-hub/indicators`),
+  outboxHealth: (sessionId: string) =>
+    request<WorkflowOutboxHealth>(`/sessions/${sessionId}/workflow-hub/outbox-health`),
+  retryOutboxMessage: (sessionId: string, id: string) =>
+    request<{ id: string; status: string }>(`/sessions/${sessionId}/workflow-hub/outbox/${id}/retry`, {
+      method: 'POST',
+    }),
+  discardOutboxMessage: (sessionId: string, id: string) =>
+    request<{ id: string; status: string }>(`/sessions/${sessionId}/workflow-hub/outbox/${id}`, {
+      method: 'DELETE',
+    }),
+  create: (
+    sessionId: string,
+    body: { name: string; description?: string; keywords?: string[]; fields?: WorkflowField[] },
+  ) =>
+    request<WorkflowInstance>(`/sessions/${sessionId}/workflow-hub/instances`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  importLegacy: (sessionId: string) =>
+    request<WorkflowInstance>(`/sessions/${sessionId}/workflow-hub/import-legacy-talent-pool`, { method: 'POST' }),
+  createFromTemplate: (sessionId: string, key: string, name?: string) =>
+    request<WorkflowInstance>(`/sessions/${sessionId}/workflow-hub/templates/${key}/create`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  saveDraft: (sessionId: string, id: string, fields: WorkflowField[], definition?: WorkflowVersionDefinition) =>
+    request<WorkflowVersion>(`/sessions/${sessionId}/workflow-hub/instances/${id}/draft`, {
+      method: 'PUT',
+      body: JSON.stringify({ fields, definition }),
+    }),
+  publish: (sessionId: string, id: string) =>
+    request<WorkflowInstance>(`/sessions/${sessionId}/workflow-hub/instances/${id}/publish`, { method: 'POST' }),
+  pause: (sessionId: string, id: string) =>
+    request<WorkflowInstance>(`/sessions/${sessionId}/workflow-hub/instances/${id}/pause`, { method: 'POST' }),
+  resume: (sessionId: string, id: string) =>
+    request<WorkflowInstance>(`/sessions/${sessionId}/workflow-hub/instances/${id}/resume`, { method: 'POST' }),
+  duplicate: (sessionId: string, id: string) =>
+    request<WorkflowInstance>(`/sessions/${sessionId}/workflow-hub/instances/${id}/duplicate`, { method: 'POST' }),
+  slots: (sessionId: string, id: string) =>
+    request<WorkflowSlot[]>(`/sessions/${sessionId}/workflow-hub/instances/${id}/slots`),
+  createSlots: (
+    sessionId: string,
+    id: string,
+    slots: Array<{
+      startsAt: string;
+      label?: string;
+      locationId?: string;
+      location?: string;
+      address?: string;
+      instruction?: string;
+      responsible?: string;
+      mapsUrl?: string;
+      interviewPhase?: WorkflowInterviewPhase;
+      capacity?: number;
+    }>,
+  ) =>
+    request<WorkflowSlot[]>(`/sessions/${sessionId}/workflow-hub/instances/${id}/slots`, {
+      method: 'POST',
+      body: JSON.stringify({ slots }),
+    }),
+  updateSlot: (
+    sessionId: string,
+    id: string,
+    slotId: string,
+    body: {
+      instruction?: string;
+      responsible?: string;
+      interviewPhase?: WorkflowInterviewPhase;
+      capacity?: number;
+    },
+  ) =>
+    request<WorkflowSlot>(`/sessions/${sessionId}/workflow-hub/instances/${id}/slots/${slotId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteSlot: (sessionId: string, id: string, slotId: string) =>
+    request<{ deleted: true }>(`/sessions/${sessionId}/workflow-hub/instances/${id}/slots/${slotId}`, {
+      method: 'DELETE',
+    }),
+  rescheduleSlot: (
+    sessionId: string,
+    id: string,
+    slotId: string,
+    body: {
+      startsAt: string;
+      locationId?: string;
+      location?: string;
+      address?: string;
+      instruction?: string;
+      responsible?: string;
+      mapsUrl?: string;
+      interviewPhase?: WorkflowInterviewPhase;
+      capacity?: number;
+    },
+  ) =>
+    request<{ slot: WorkflowSlot; movedAppointments: number; notified: number }>(
+      `/sessions/${sessionId}/workflow-hub/instances/${id}/slots/${slotId}/reschedule`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+  update: (sessionId: string, id: string, body: Partial<WorkflowInstance>) =>
+    request<WorkflowInstance>(`/sessions/${sessionId}/workflow-hub/instances/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  records: (sessionId: string, search = '') =>
+    request<WorkflowRecord[]>(`/sessions/${sessionId}/workflow-hub/records?search=${encodeURIComponent(search)}`),
+  updateRecord: (sessionId: string, recordId: string, data: Record<string, unknown>, expectedVersion: number) =>
+    request<WorkflowRecord>(`/sessions/${sessionId}/workflow-hub/records/${recordId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ data, expectedVersion }),
+    }),
+  setHumanServiceEnabled: (sessionId: string, enabled: boolean) =>
+    request<{ department: WorkflowDepartment }>(`/sessions/${sessionId}/workflow-hub/department/human-service`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
+  updateRecordContact: (sessionId: string, recordId: string, contactLinkId: string, phone: string) =>
+    request<NonNullable<WorkflowRecord['linkedContacts']>[number]>(
+      `/sessions/${sessionId}/workflow-hub/records/${recordId}/contacts/${contactLinkId}`,
+      { method: 'PATCH', body: JSON.stringify({ phone }) },
+    ),
+  setPrimaryRecordContact: (sessionId: string, recordId: string, contactLinkId: string) =>
+    request<WorkflowRecord>(
+      `/sessions/${sessionId}/workflow-hub/records/${recordId}/contacts/${contactLinkId}/primary`,
+      { method: 'POST' },
+    ),
+  deleteRecordContact: (sessionId: string, recordId: string, contactLinkId: string) =>
+    request<void>(`/sessions/${sessionId}/workflow-hub/records/${recordId}/contacts/${contactLinkId}`, {
+      method: 'DELETE',
+    }),
+  deleteRecord: (sessionId: string, recordId: string) =>
+    request<void>(`/sessions/${sessionId}/workflow-hub/records/${recordId}`, { method: 'DELETE' }),
+  recalculateRecordProximity: (sessionId: string, recordId: string) =>
+    request<WorkflowRecord>(`/sessions/${sessionId}/workflow-hub/records/${recordId}/proximity/recalculate`, {
+      method: 'POST',
+    }),
+  testProximity: (sessionId: string, address: string) =>
+    request<WorkflowProximityTestResult>(`/sessions/${sessionId}/workflow-hub/proximity/test`, {
+      method: 'POST',
+      body: JSON.stringify({ address }),
+    }),
+  tickets: (sessionId: string, openOnly = false) =>
+    request<WorkflowTicket[]>(`/sessions/${sessionId}/workflow-hub/tickets?openOnly=${String(openOnly)}`),
+  ticketEvents: (sessionId: string, ticketId: string) =>
+    request<WorkflowTicketEvent[]>(`/sessions/${sessionId}/workflow-hub/tickets/${ticketId}/events`),
+  touchTicket: (sessionId: string, ticketId: string) =>
+    request<WorkflowTicket>(`/sessions/${sessionId}/workflow-hub/tickets/${ticketId}/activity`, { method: 'POST' }),
+  closeTicket: (sessionId: string, ticketId: string) =>
+    request<WorkflowTicket>(`/sessions/${sessionId}/workflow-hub/tickets/${ticketId}/close`, { method: 'POST' }),
+  appointments: (sessionId: string, id: string) =>
+    request<WorkflowAppointment[]>(`/sessions/${sessionId}/workflow-hub/instances/${id}/appointments`),
+  scheduleRecordAppointment: (sessionId: string, id: string, recordId: string, targetSlotId: string) =>
+    request<WorkflowAppointment>(
+      `/sessions/${sessionId}/workflow-hub/instances/${id}/records/${recordId}/appointment`,
+      { method: 'POST', body: JSON.stringify({ targetSlotId }) },
+    ),
+  recruitmentApplications: (sessionId: string) =>
+    request<WorkflowRecruitmentApplication[]>(`/sessions/${sessionId}/workflow-hub/recruitment-applications`),
+  updateRecruitmentApplication: (
+    sessionId: string,
+    applicationId: string,
+    body: {
+      status?: WorkflowRecruitmentStatus;
+      owner?: string | null;
+      rating?: number | null;
+      nextActionAt?: string | null;
+      note?: string;
+    },
+  ) =>
+    request<WorkflowRecruitmentApplication>(
+      `/sessions/${sessionId}/workflow-hub/recruitment-applications/${applicationId}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+    ),
+  recruitmentEvents: (sessionId: string, applicationId: string) =>
+    request<WorkflowRecruitmentEvent[]>(
+      `/sessions/${sessionId}/workflow-hub/recruitment-applications/${applicationId}/events`,
+    ),
+  talentPoolEntries: (sessionId: string) =>
+    request<WorkflowTalentPoolEntry[]>(`/sessions/${sessionId}/workflow-hub/talent-pool`),
+  updateTalentPoolEntry: (
+    sessionId: string,
+    entryId: string,
+    body: { status?: WorkflowTalentPoolStatus; owner?: string | null; note?: string },
+  ) =>
+    request<WorkflowTalentPoolEntry>(`/sessions/${sessionId}/workflow-hub/talent-pool/${entryId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  talentPoolEvents: (sessionId: string, entryId: string) =>
+    request<WorkflowTalentPoolEvent[]>(`/sessions/${sessionId}/workflow-hub/talent-pool/${entryId}/events`),
+  setSlotStatus: (sessionId: string, id: string, slotId: string, status: string) =>
+    request<WorkflowSlot>(`/sessions/${sessionId}/workflow-hub/instances/${id}/slots/${slotId}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ status }),
+    }),
+  setAppointmentStatus: (sessionId: string, id: string, appointmentId: string, status: string) =>
+    request<WorkflowAppointment>(
+      `/sessions/${sessionId}/workflow-hub/instances/${id}/appointments/${appointmentId}/status`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ status }),
+      },
+    ),
+  rescheduleAppointment: (sessionId: string, id: string, appointmentId: string, targetSlotId: string) =>
+    request<WorkflowAppointment>(
+      `/sessions/${sessionId}/workflow-hub/instances/${id}/appointments/${appointmentId}/reschedule`,
+      { method: 'POST', body: JSON.stringify({ targetSlotId }) },
+    ),
+  deletionRequests: (sessionId: string) =>
+    request<WorkflowDeletionRequest[]>(`/sessions/${sessionId}/workflow-hub/deletion-requests`),
+  decideDeletion: (sessionId: string, id: string, approve: boolean) =>
+    request<WorkflowDeletionRequest>(
+      `/sessions/${sessionId}/workflow-hub/deletion-requests/${id}/${approve ? 'approve' : 'reject'}`,
+      { method: 'POST' },
+    ),
 };
