@@ -291,6 +291,10 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     return this.pluginStorage.getPluginEntry(pluginId);
   }
 
+  getAllRegistryEntries(): PluginRegistryEntry[] {
+    return this.pluginStorage.getAllEntries();
+  }
+
   loadPlugin(pluginPath: string): PluginInstance {
     return this.scanner.loadPlugin(pluginPath);
   }

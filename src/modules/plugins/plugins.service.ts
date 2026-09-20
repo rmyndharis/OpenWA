@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PluginLoaderService, PluginStatus, resolvePluginEntryPath } from '../../core/plugins';
 import { pluginUpdateBackupDirName, pluginUpdateStagingDirName } from '../../core/plugins';
-import type { PluginConfigSchema } from '../../core/plugins';
+import type { PluginConfigSchema, PluginRegistryEntry } from '../../core/plugins';
 import { PluginDto } from './dto/plugin.dto';
 import { redactSecretConfig, restoreSecretConfig } from './redact-config';
 import { parsePluginPackage } from './plugin-installer';
@@ -53,10 +53,27 @@ export class PluginsService {
     return next;
   }
 
+  private unavailablePlugin(entry: PluginRegistryEntry): PluginDto {
+    return {
+      id: entry.id,
+      name: entry.name,
+      version: entry.version,
+      type: entry.type,
+      status: PluginStatus.ERROR,
+      config: {},
+      builtIn: entry.builtIn,
+      provides: [],
+      ingressCapable: false,
+      sessionScoped: true,
+      activeSessions: entry.activeSessions ?? ['*'],
+      error: `Plugin package is unavailable. Reinstall ${entry.id} to restore it.`,
+    };
+  }
+
   findAll(): PluginDto[] {
     const plugins = this.pluginLoader.getAllPlugins();
-
-    return plugins.map(plugin => ({
+    const loadedIds = new Set(plugins.map(plugin => plugin.manifest.id));
+    const loaded = plugins.map(plugin => ({
       id: plugin.manifest.id,
       name: plugin.manifest.name,
       version: plugin.manifest.version,
@@ -78,12 +95,20 @@ export class PluginsService {
       enabledAt: plugin.enabledAt?.toISOString(),
       error: plugin.error,
     }));
+    const unavailable = this.pluginLoader
+      .getAllRegistryEntries()
+      .filter(entry => !loadedIds.has(entry.id))
+      .map(entry => this.unavailablePlugin(entry));
+
+    return [...loaded, ...unavailable];
   }
 
   findOne(id: string): PluginDto {
     const plugin = this.pluginLoader.getPlugin(id);
 
     if (!plugin) {
+      const registryEntry = this.pluginLoader.getRegistryEntry(id);
+      if (registryEntry) return this.unavailablePlugin(registryEntry);
       throw new NotFoundException(`Plugin ${id} not found`);
     }
 

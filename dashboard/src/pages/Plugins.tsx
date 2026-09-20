@@ -841,9 +841,10 @@ export default function Plugins() {
         </div>
       )}
 
-      <div className="plugins-layout">
-        <aside className="plugins-rail">
-          <div className="rail-stats">
+      {visiblePlugins.length > 0 && (
+        <div className="plugins-layout">
+          <aside className="plugins-rail">
+            <div className="rail-stats">
             <div className="rail-stat">
               <span className="rail-stat-num">{enabledCount}</span>
               <span className="rail-stat-label">{t('plugins.rail.enabled', 'enabled')}</span>
@@ -992,10 +993,11 @@ export default function Plugins() {
               );
             })}
           </div>
-        </main>
-      </div>
+          </main>
+        </div>
+      )}
 
-      {visiblePlugins.length === 0 && !loading && (
+      {visiblePlugins.length === 0 && !loading && !error && (
         <div className="empty-state">
           <Puzzle size={64} />
           <h3>{t('plugins.empty.title')}</h3>

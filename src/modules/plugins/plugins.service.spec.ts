@@ -606,6 +606,7 @@ describe('PluginsService i18n passthrough', () => {
     };
     const loader = {
       getAllPlugins: () => [plugin],
+      getAllRegistryEntries: () => [],
       getPlugin: () => plugin,
       isBuiltIn: () => false,
     } as unknown as PluginLoaderService;
@@ -636,6 +637,57 @@ describe('isIngressCapable', () => {
   it('is false without the webhook:ingress permission', () => {
     expect(isIngressCapable({ ingress: [{ route: 'events' }], permissions: [] })).toBe(false);
     expect(isIngressCapable({ ingress: [{ route: 'events' }] })).toBe(false);
+  });
+});
+
+describe('PluginsService — listing registry entries whose package is unavailable', () => {
+  it('keeps an installed registry entry visible with a recovery error', () => {
+    const loader = {
+      getAllPlugins: () => [],
+      getPlugin: () => undefined,
+      getRegistryEntry: (id: string) =>
+        id === 'missing-plugin'
+          ? {
+              id: 'missing-plugin',
+              name: 'Missing Plugin',
+              version: '1.2.3',
+              type: PluginType.EXTENSION,
+              status: PluginStatus.INSTALLED,
+              config: { token: 'must-not-leak' },
+              builtIn: false,
+              installedAt: new Date(),
+              updatedAt: new Date(),
+              activeSessions: ['session-a'],
+            }
+          : undefined,
+      getAllRegistryEntries: () => [
+        {
+          id: 'missing-plugin',
+          name: 'Missing Plugin',
+          version: '1.2.3',
+          type: PluginType.EXTENSION,
+          status: PluginStatus.INSTALLED,
+          config: { token: 'must-not-leak' },
+          builtIn: false,
+          installedAt: new Date(),
+          updatedAt: new Date(),
+          activeSessions: ['session-a'],
+        },
+      ],
+    } as unknown as PluginLoaderService;
+    const service = new PluginsService(loader, { get: () => undefined } as unknown as ConfigService);
+
+    const plugins = service.findAll();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0]).toMatchObject({
+      id: 'missing-plugin',
+      status: PluginStatus.ERROR,
+      config: {},
+      activeSessions: ['session-a'],
+    });
+    expect(plugins[0].error).toContain('Reinstall missing-plugin');
+    expect(service.findOne('missing-plugin')).toEqual(plugins[0]);
+    expect(() => service.findOne('unknown-plugin')).toThrow(NotFoundException);
   });
 });
 
