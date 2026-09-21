@@ -87,7 +87,8 @@ export class LabelController {
       'carries one `label_edit` write keyed on that id, so whether this creates or updates depends ' +
       'purely on whether the id already exists, and there is no server-assigned id to return.\n\n' +
       '**Choose an unused id to create.** Reusing one silently rewrites that label rather than ' +
-      'failing, because the protocol has no create-only form. Fields left out are left alone.\n\n' +
+      'failing, because the protocol has no create-only form. The write replaces the whole label, so ' +
+      'send every field it should keep: an omitted name or colour is not preserved.\n\n' +
       'whatsapp-web.js can read and assign labels but cannot edit one, and answers `501`.',
   })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })

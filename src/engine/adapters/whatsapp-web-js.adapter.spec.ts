@@ -30,13 +30,13 @@ import { ChannelMediaNotSupportedError } from '../../common/errors/channel-media
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { EditedMessage, EngineStatus, GroupEvent, IncomingCallEvent } from '../interfaces/whatsapp-engine.interface';
-import { CallNotFoundError } from '../../common/errors/call-not-found.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+import * as loadRemoteMediaModule from '../../common/media/load-remote-media';
 import { fetch as undiciFetch } from 'undici';
 
 // Allowlisted hosts are PINNED to their DNS answer (ssrf-guard pins allowlisted hosts to their DNS answers), so the specs that exercise
@@ -510,7 +510,7 @@ describe('loadRemoteMedia — routes through the SSRF-pinned media fetch', () =>
   it('builds MessageMedia from the pinned fetch bytes, never via MessageMedia.fromUrl', async () => {
     (undiciFetch as jest.Mock).mockResolvedValue(fakeResponse([104, 105], { 'content-type': 'image/png' }));
 
-    const media = await loadRemoteMedia('https://8.8.8.8/x.png');
+    const media = await loadRemoteMedia('https://8.8.8.8/x.png', undefined);
 
     expect(fromUrlSpy).not.toHaveBeenCalled(); // the unpinned node-fetch path is gone
     expect(media.mimetype).toBe('image/png');
@@ -522,13 +522,13 @@ describe('loadRemoteMedia — routes through the SSRF-pinned media fetch', () =>
   });
 
   it('blocks an internal/loopback URL BEFORE any fetch (no outbound socket)', async () => {
-    await expect(loadRemoteMedia('http://127.0.0.1/x.png')).rejects.toBeInstanceOf(SsrfBlockedError);
+    await expect(loadRemoteMedia('http://127.0.0.1/x.png', undefined)).rejects.toBeInstanceOf(SsrfBlockedError);
     expect(undiciFetch).not.toHaveBeenCalled();
     expect(fromUrlSpy).not.toHaveBeenCalled();
   });
 
   it('blocks the cloud-metadata IP before fetching', async () => {
-    await expect(loadRemoteMedia('http://169.254.169.254/latest/meta-data/x.png')).rejects.toBeInstanceOf(
+    await expect(loadRemoteMedia('http://169.254.169.254/latest/meta-data/x.png', undefined)).rejects.toBeInstanceOf(
       SsrfBlockedError,
     );
     expect(undiciFetch).not.toHaveBeenCalled();
@@ -538,7 +538,7 @@ describe('loadRemoteMedia — routes through the SSRF-pinned media fetch', () =>
     process.env.SSRF_ALLOWED_HOSTS = 'minio';
     (undiciFetch as jest.Mock).mockResolvedValue(fakeResponse([1], { 'content-type': 'image/png' }));
 
-    const media = await loadRemoteMedia('http://minio:9000/bucket/x.png');
+    const media = await loadRemoteMedia('http://minio:9000/bucket/x.png', undefined);
 
     expect(media.mimetype).toBe('image/png');
     expect(fromUrlSpy).not.toHaveBeenCalled();
@@ -710,6 +710,84 @@ describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live p
     expect(out[0].chatId).toBe('120363000@g.us');
     expect(out[0].kind).toBe('group');
     expect(out[0].isGroup).toBe(true);
+  });
+
+  it("resolves the sender name via getContact() when the raw payload carries no notifyName (group participant not in the account's own contacts)", async () => {
+    // A participant identified only by @lid, with no push name on the stored message object — the
+    // shape that made the chat view render a group message with no sender label at all, even though
+    // the live `message` event handler resolves a name for the identical message via getContact().
+    const groupMsg = {
+      id: { _serialized: 'M6' },
+      from: '120363000@g.us',
+      to: 'me',
+      author: '999@lid',
+      body: 'hi all',
+      type: 'chat',
+      timestamp: 500,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: false,
+      getContact: jest.fn().mockResolvedValue({ pushname: 'Alice' }),
+    };
+    const chat = { fetchMessages: jest.fn().mockResolvedValue([groupMsg]) };
+    const client = { getChatById: jest.fn().mockResolvedValue(chat) };
+
+    const out = await readyAdapter(client).getChatHistory('120363000@g.us', 50, false);
+
+    expect(groupMsg.getContact).toHaveBeenCalled();
+    expect(out[0].contact).toEqual({ pushName: 'Alice' });
+  });
+
+  it('tolerates a getContact() failure on a historical message instead of failing the whole history fetch', async () => {
+    const groupMsg = {
+      id: { _serialized: 'M7' },
+      from: '120363000@g.us',
+      to: 'me',
+      author: '999@lid',
+      body: 'hi all',
+      type: 'chat',
+      timestamp: 600,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: false,
+      getContact: jest.fn().mockRejectedValue(new Error('boom')),
+    };
+    const chat = { fetchMessages: jest.fn().mockResolvedValue([groupMsg]) };
+    const client = { getChatById: jest.fn().mockResolvedValue(chat) };
+
+    const out = await readyAdapter(client).getChatHistory('120363000@g.us', 50, false);
+
+    expect(groupMsg.getContact).toHaveBeenCalled();
+    expect(out[0].contact).toBeUndefined();
+    expect(out[0].body).toBe('hi all');
+  });
+
+  it('looks each history sender up once, not once per message', async () => {
+    const msg = (id: string, author: string, getContact: jest.Mock) => ({
+      id: { _serialized: id },
+      from: '120363000@g.us',
+      to: 'me',
+      author,
+      body: 'hi',
+      type: 'chat',
+      timestamp: 700,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: false,
+      getContact,
+    });
+    const alice1 = msg('M8', '111@lid', jest.fn().mockResolvedValue({ pushname: 'Alice' }));
+    const alice2 = msg('M9', '111@lid', jest.fn().mockResolvedValue({ pushname: 'Alice' }));
+    const bob = msg('M10', '222@lid', jest.fn().mockResolvedValue({ pushname: 'Bob' }));
+    const chat = { fetchMessages: jest.fn().mockResolvedValue([alice1, alice2, bob]) };
+    const client = { getChatById: jest.fn().mockResolvedValue(chat) };
+
+    const out = await readyAdapter(client).getChatHistory('120363000@g.us', 50, false);
+
+    expect(alice1.getContact).toHaveBeenCalledTimes(1);
+    expect(alice2.getContact).not.toHaveBeenCalled();
+    expect(bob.getContact).toHaveBeenCalledTimes(1);
+    expect(out.map(m => m.contact)).toEqual([{ pushName: 'Alice' }, { pushName: 'Alice' }, { pushName: 'Bob' }]);
   });
 
   it('skips the media download when the declared size exceeds a caller-tightened mediaMaxBytes', async () => {
@@ -2351,6 +2429,63 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     rmSpy.mockRestore();
   });
 
+  // #1655: a session can be perfectly healthy for messages and unable to see a single incoming call,
+  // because whatsapp-web.js patches the call collection only when the page's module for it exposes
+  // an `.on` method, and the rest of its evaluate completes either way. The page read that settles
+  // it is one line, so ready says it instead of staying quiet.
+  it('warns at ready when the page carries no call hook', async () => {
+    const adapter = newAdapter();
+    const logger = (adapter as unknown as { logger: { warn: jest.Mock } }).logger;
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    // The probe stringifies the collection's Map.set; an untouched one reports native code.
+    const lifecycle = (
+      adapter as unknown as {
+        lifecycle: { client: unknown; status: EngineStatus; markReadyFromClientInfo: () => void };
+      }
+    ).lifecycle;
+    // The promotion early-returns from a terminal status, and a fresh adapter starts DISCONNECTED.
+    lifecycle.status = EngineStatus.AUTHENTICATING;
+    lifecycle.client = {
+      info: { wid: { user: '628123' }, pushname: 'Tester' },
+      pupPage: { evaluate: jest.fn().mockResolvedValue(false) },
+    };
+
+    lifecycle.markReadyFromClientInfo();
+    await new Promise(resolve => setImmediate(resolve));
+
+    const missing = warnSpy.mock.calls.find(
+      ([, meta]) => (meta as { action?: string })?.action === 'call_hook_missing',
+    );
+    expect(missing).toBeDefined();
+    expect(missing?.[1]).toMatchObject({ sessionId: 'sess-1' });
+    warnSpy.mockRestore();
+  });
+
+  it('stays quiet at ready when the call hook is installed', async () => {
+    const adapter = newAdapter();
+    const logger = (adapter as unknown as { logger: { warn: jest.Mock } }).logger;
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const lifecycle = (
+      adapter as unknown as {
+        lifecycle: { client: unknown; status: EngineStatus; markReadyFromClientInfo: () => void };
+      }
+    ).lifecycle;
+    // The promotion early-returns from a terminal status, and a fresh adapter starts DISCONNECTED.
+    lifecycle.status = EngineStatus.AUTHENTICATING;
+    lifecycle.client = {
+      info: { wid: { user: '628123' }, pushname: 'Tester' },
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    };
+
+    lifecycle.markReadyFromClientInfo();
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(
+      warnSpy.mock.calls.find(([, meta]) => (meta as { action?: string })?.action === 'call_hook_missing'),
+    ).toBeUndefined();
+    warnSpy.mockRestore();
+  });
+
   // #981: clearing the auth dir destroys the ONLY copy of the session's WhatsApp credentials, and the
   // loss is permanent — every later start finds an empty profile and can only show a QR. Until now the
   // adapter logged only the FAILURE to delete, so a successful wipe left no trace at all and triage
@@ -3722,59 +3857,51 @@ describe('WhatsAppWebJsAdapter call event + rejectCall', () => {
     expect(onCall).toHaveBeenCalledTimes(2);
   });
 
-  it('a deduplicated repeat does not evict the live call', async () => {
-    const { adapter, client } = wireCallHandler();
-    const call = liveCall();
-
-    client.emit('call', call);
-    client.emit('call', call);
-
-    await expect(adapter.rejectCall('CALL1')).resolves.toBeUndefined();
-    expect(call.reject).toHaveBeenCalledTimes(1);
-  });
-
   // Discriminating on the REFRESH specifically: the second signal lands 90s in, so the entry is
   // only expired at 150s if its expiry was never extended. LIVE_CALL_TTL_MS is 120s.
-  it('a repeat extends the rejectable window from the latest signal, not the first', async () => {
+  it('a repeat keeps the call cached from the latest signal, so it is not announced again', () => {
     jest.useFakeTimers();
     try {
-      const { adapter, client } = wireCallHandler();
-      const call = liveCall();
+      const { onCall, client } = wireCallHandler();
 
-      client.emit('call', call);
+      client.emit('call', liveCall());
       jest.advanceTimersByTime(90_000);
-      client.emit('call', call);
+      client.emit('call', liveCall());
       jest.advanceTimersByTime(60_000); // 150s after the first signal, 60s after the second
+      client.emit('call', liveCall());
 
-      await expect(adapter.rejectCall('CALL1')).resolves.toBeUndefined();
+      expect(onCall).toHaveBeenCalledTimes(1);
     } finally {
       jest.useRealTimers();
     }
   });
 
-  it('a call still expires when no repeat arrives', async () => {
+  it('announces the same call id again once its entry expired with no repeat', () => {
     jest.useFakeTimers();
     try {
-      const { adapter, client } = wireCallHandler();
+      const { onCall, client } = wireCallHandler();
 
       client.emit('call', liveCall());
       jest.advanceTimersByTime(150_000);
+      client.emit('call', liveCall());
 
-      await expect(adapter.rejectCall('CALL1')).rejects.toBeInstanceOf(CallNotFoundError);
+      expect(onCall).toHaveBeenCalledTimes(2);
     } finally {
       jest.useRealTimers();
     }
   });
 
   it.each([{ id: '' }, { id: undefined }, { from: '' }, { from: undefined }, null])(
-    'drops a malformed call (%o) — nothing emitted, nothing cached',
-    async malformed => {
-      const { adapter, onCall, client } = wireCallHandler();
+    'drops a malformed call (%o): nothing emitted, nothing cached',
+    malformed => {
+      const { onCall, client } = wireCallHandler();
 
       client.emit('call', malformed === null ? null : liveCall(malformed as Record<string, unknown>));
-
       expect(onCall).not.toHaveBeenCalled();
-      await expect(adapter.rejectCall('CALL1')).rejects.toBeInstanceOf(CallNotFoundError);
+
+      // Nothing cached: a well-formed call with the same id is still announced.
+      client.emit('call', liveCall());
+      expect(onCall).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -3787,44 +3914,29 @@ describe('WhatsAppWebJsAdapter call event + rejectCall', () => {
     expect(onCall).not.toHaveBeenCalled();
   });
 
-  it('rejectCall rejects the cached live call and evicts it (second reject -> not found)', async () => {
+  // A whatsapp-web.js rejection resolved while the caller's phone kept ringing, so the adapter refuses,
+  // even for a ringing call, instead of reporting a rejection that did not stop the call.
+  it('rejectCall answers EngineNotSupportedError and never calls Call.reject()', async () => {
     const { adapter, client } = wireCallHandler();
     const call = liveCall();
     client.emit('call', call);
 
-    await adapter.rejectCall('CALL1');
+    const err: unknown = await adapter.rejectCall('CALL1').catch((e: unknown) => e);
 
-    expect(call.reject).toHaveBeenCalledTimes(1);
-    await expect(adapter.rejectCall('CALL1')).rejects.toBeInstanceOf(CallNotFoundError);
-  });
-
-  it('rejectCall on an unknown id throws CallNotFoundError (HTTP 404)', async () => {
-    const { adapter } = wireCallHandler();
-
-    await expect(adapter.rejectCall('NOPE')).rejects.toBeInstanceOf(CallNotFoundError);
-  });
-
-  it('rejectCall on an expired entry throws CallNotFoundError without touching the call', async () => {
-    const { adapter, client } = wireCallHandler();
-    const call = liveCall();
-    client.emit('call', call);
-    // Age the cached entry past the TTL (calls ring ~a minute; the handle dies with the call).
-    const cache = (adapter as unknown as { liveCalls: Map<string, { expiresAt: number }> }).liveCalls;
-    cache.get('CALL1')!.expiresAt = Date.now() - 1;
-
-    await expect(adapter.rejectCall('CALL1')).rejects.toBeInstanceOf(CallNotFoundError);
+    expect(err).toBeInstanceOf(EngineNotSupportedError);
+    expect((err as EngineNotSupportedError).getStatus()).toBe(501);
     expect(call.reject).not.toHaveBeenCalled();
   });
 
-  it('teardown clears the live-call cache (reject after disconnect -> not found)', async () => {
+  it('teardown clears the ringing call cache', async () => {
     const { adapter, client } = wireCallHandler();
-    const call = liveCall();
-    client.emit('call', call);
+    client.emit('call', liveCall());
+    const cache = (adapter as unknown as { liveCalls: Map<string, number> }).liveCalls;
+    expect(cache.has('CALL1')).toBe(true);
 
     await adapter.disconnect();
 
-    await expect(adapter.rejectCall('CALL1')).rejects.toBeInstanceOf(CallNotFoundError);
-    expect(call.reject).not.toHaveBeenCalled();
+    expect(cache.size).toBe(0);
   });
 
   it('logs and drops a malformed call instead of throwing into the client emitter', () => {
@@ -4162,6 +4274,30 @@ describe('outbound document mode (#989)', () => {
         expect.objectContaining({ mimetype: 'application/pdf', filename: 'report.pdf' }),
         expect.objectContaining({ sendMediaAsDocument: true }),
       );
+    });
+
+    // The browser's own requests ride Chromium's --proxy-server; this fetch is made by the gateway,
+    // so the adapter has to hand it the session proxy or it leaves from the gateway's address (#1626).
+    it('fetches a media URL through the session proxy on a proxied session', async () => {
+      const load = jest
+        .spyOn(loadRemoteMediaModule, 'loadRemoteMediaBuffer')
+        .mockResolvedValue({ data: Buffer.from([1]), mimetype: 'image/png' });
+      const adapter = new WhatsAppWebJsAdapter({
+        sessionId: 's',
+        sessionDataPath: './data/sessions',
+        puppeteer: {},
+        proxy: { url: 'socks5://proxy.invalid:1080', type: 'socks5' },
+      });
+      (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+      (adapter as unknown as { client: unknown }).client = { sendMessage: jest.fn().mockResolvedValue(sentMessage) };
+
+      await adapter.sendImageMessage('628@c.us', {
+        mimetype: 'image/png',
+        data: 'https://files.example.com/photo.jpg',
+      });
+
+      expect(load).toHaveBeenCalledWith('https://files.example.com/photo.jpg', 'socks5://proxy.invalid:1080');
+      load.mockRestore();
     });
 
     // The DTO fills this in when the client said nothing, so it is a placeholder rather than a claim
@@ -6771,21 +6907,27 @@ describe('probeOnboardingModal (in-page onboarding modal detection)', () => {
     parentElement: FakeEl | null;
     offsetParent: unknown;
     getBoundingClientRect: () => { width: number; height: number };
+    getAttribute: (name: string) => string | null;
     click: jest.Mock;
   };
 
   const el = (
     textContent: string,
-    opts: { button?: boolean; roleButton?: boolean; hidden?: boolean } = {},
-  ): FakeEl => ({
-    tagName: opts.button ? 'BUTTON' : 'DIV',
-    role: opts.roleButton ? 'button' : null,
-    textContent,
-    parentElement: null,
-    offsetParent: opts.hidden ? null : {},
-    getBoundingClientRect: () => (opts.hidden ? { width: 0, height: 0 } : { width: 200, height: 40 }),
-    click: jest.fn(),
-  });
+    opts: { button?: boolean; roleButton?: boolean; hidden?: boolean; dialog?: boolean; ariaModal?: boolean } = {},
+  ): FakeEl => {
+    const role = opts.roleButton ? 'button' : opts.dialog ? 'dialog' : null;
+    return {
+      tagName: opts.button ? 'BUTTON' : 'DIV',
+      role,
+      textContent,
+      parentElement: null,
+      offsetParent: opts.hidden ? null : {},
+      getBoundingClientRect: () => (opts.hidden ? { width: 0, height: 0 } : { width: 200, height: 40 }),
+      getAttribute: (name: string) =>
+        name === 'role' ? role : name === 'aria-modal' && opts.ariaModal ? 'true' : null,
+      click: jest.fn(),
+    };
+  };
 
   /** Wire children to a parent and return the parent, so ancestor walks have something to walk. */
   const nest = (parent: FakeEl, ...children: FakeEl[]): FakeEl => {
@@ -6911,7 +7053,7 @@ describe('probeOnboardingModal (in-page onboarding modal detection)', () => {
 
   it('clicks a localised confirm button when the operator supplied its label', () => {
     const button = el('Continuar', { button: true });
-    nest(el('Novedades de WhatsApp Web'), button);
+    nest(el('Novedades de WhatsApp Web', { dialog: true }), button);
     install([button]);
 
     const result = probeOnboardingModal({
@@ -6921,6 +7063,33 @@ describe('probeOnboardingModal (in-page onboarding modal detection)', () => {
 
     expect(result).toEqual({ modalPresent: true, dismissed: true });
     expect(button.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts an aria-modal container as the dialog around an operator label', () => {
+    const button = el('Continuar', { button: true });
+    nest(el('Novidades do WhatsApp Web', { ariaModal: true }), nest(el('footer'), button));
+    install([button]);
+
+    expect(probeOnboardingModal({ labels: ['Continue', 'Continuar'], headingOptionalFor: ['Continuar'] })).toEqual({
+      modalPresent: true,
+      dismissed: true,
+    });
+    expect(button.click).toHaveBeenCalledTimes(1);
+  });
+
+  // The operator label skips the heading check, so the dialog is its only anchor: the same word on a
+  // button anywhere else on the page must not be clicked, since every click counts toward the limit
+  // that moves a ready session to action_required.
+  it('does not click an operator label that sits outside any dialog', () => {
+    const button = el('Continuar', { button: true });
+    nest(el('Novedades de WhatsApp Web'), button);
+    install([button]);
+
+    expect(probeOnboardingModal({ labels: ['Continue', 'Continuar'], headingOptionalFor: ['Continuar'] })).toEqual({
+      modalPresent: false,
+      dismissed: false,
+    });
+    expect(button.click).not.toHaveBeenCalled();
   });
 
   // The loosening is scoped to the operator's own labels: the default label keeps its heading guard, so

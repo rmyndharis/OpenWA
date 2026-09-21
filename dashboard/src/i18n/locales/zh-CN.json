@@ -7,6 +7,7 @@
   },
   "common": {
     "appName": "OpenWA",
+    "updateAvailable": "v{{version}} 已发布",
     "loading": "正在加载...",
     "cancel": "取消",
     "delete": "删除",
@@ -113,6 +114,7 @@
     "groupSubtitle": "群组",
     "privateContactSubtitle": "私人联系人",
     "deleteConfirm": "为所有人删除此消息？",
+    "promptButtons": "消息选项",
     "messageDeleted": "🚫 此消息已被删除",
     "messageMasked": "🔒 WhatsApp 已对关联设备隐藏此消息 — 请在主手机上查看",
     "kind": {
@@ -162,6 +164,7 @@
       "send": "发送消息失败",
       "react": "回应消息失败",
       "delete": "删除消息失败",
+      "clickButton": "点击按钮失败",
       "fileTooLarge": "文件过大（最大 18 MB）"
     },
     "loadMessagesError": "无法加载消息。请检查服务器日志。",
@@ -305,7 +308,7 @@
       "created": "创建时间",
       "lastActive": "上次活跃",
       "autoRejectCalls": "自动拒接来电",
-      "autoRejectCallsHint": "来电响铃后立即拒接。call.received webhook 仍会先行触发。下一通来电起生效，无需重启。"
+      "autoRejectCallsHint": "来电响铃后立即拒接。call.received webhook 仍会先行触发。下一通来电起生效，无需重启。仅限 Baileys 引擎：whatsapp-web.js 无法拒接来电。"
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -379,7 +382,8 @@
       "phoneLabel": "电话号码",
       "phonePlaceholder": "例如：919876543210",
       "phoneHint": "仅填数字（不含 +、空格或连字符），使用国际格式（国家/地区代码 + 号码）。",
-      "invalidPhone": "请输入有效的电话号码：6–15 位数字，国家/地区代码在前，不含任何符号。",
+      "relinkWarning": "在 whatsapp-web.js 引擎上，为已经有关联会话的号码请求配对码，可能会导致 WhatsApp 解除该设备的关联。如果该会话必须保持运行，请改用二维码标签页。",
+      "invalidPhone": "请输入有效的电话号码：6-15 位数字，国家/地区代码在前，不含任何符号。",
       "generateButton": "生成配对码",
       "generating": "正在生成配对码...",
       "codeLabel": "您的配对码",
@@ -393,7 +397,8 @@
     },
     "start": {
       "teardownPendingTitle": "会话启动中",
-      "teardownPending": "此会话的凭据拆除仍在处理中。请稍候再试。"
+      "teardownPending": "此会话的凭据拆除仍在处理中。请稍候再试。",
+      "errorTitle": "启动失败"
     },
     "restriction": {
       "reachout_timelock": "新会话被阻止",
@@ -431,6 +436,7 @@
       "fields": {
         "sender": "发送者",
         "recipient": "接收者",
+        "chatId": "聊天 ID",
         "body": "消息正文",
         "type": "消息类型",
         "isGroup": "是群聊",
@@ -518,7 +524,10 @@
       "title": "暂无已保存的模板",
       "description": "创建可复用的模板，加快处理常见回复和通知。",
       "noSessionsTitle": "暂无可用会话",
-      "noSessionsDesc": "添加模板前请先创建 WhatsApp 会话。"
+      "noSessionsDesc": "添加模板前请先创建 WhatsApp 会话。",
+      "loadErrorTitle": "无法加载模板",
+      "forbiddenTitle": "无权访问模板",
+      "forbiddenDesc": "模板需要具有操作员或管理员角色的 API 密钥。"
     },
     "toasts": {
       "created": "模板创建成功",
@@ -636,6 +645,12 @@
     "loadingGroups": "正在加载群组...",
     "noGroupsFound": "未找到群组",
     "selectGroupHint": "从你的 WhatsApp 中选择一个群组",
+    "selectAllGroups": "全选",
+    "selectMatchingGroups": "选择匹配项",
+    "clearGroupSelection": "清除",
+    "groupsSelectedCount": "已选择：{{count}}/{{max}}",
+    "noGroupsMatch": "没有与搜索匹配的群组",
+    "forwardUsesFirstGroup": "转发只使用第一个选中的群组，作为转发来源聊天。",
     "phoneHint": "使用无空格的国际格式",
     "messageType": "消息类型",
     "types": {
@@ -693,17 +708,29 @@
     "bulkRecipientsCount": "接收者：{{count}}",
     "bulkDelay": "消息间隔延迟（毫秒）",
     "bulkDelayHint": "1000–60000 毫秒（默认 3000）",
+    "bulkMediaKind": "发送为",
+    "bulkMediaHint": "添加附件后，消息将作为附件的说明文字。所选文件会随请求一起发送，因此向大量接收者发送大文件时，请改用公开的媒体 URL。",
+    "bulkMediaTooLarge": "此文件太大，无法直接发送给 {{count}} 位接收者：在这个人数下，每个文件最大只能为 {{size}}。请改用公开的媒体 URL，或减少接收者数量。",
+    "bulkMediaUrlInvalid": "请输入以 http:// 或 https:// 开头的完整地址，例如 https://example.com/file.pdf。",
+    "bulkCaptionTooLong": "添加附件后，消息将作为附件的说明文字发送，说明文字最多 {{max}} 个字符（当前 {{count}} 个）。",
+    "bulkAudioNoCaption": "音频发送时不带说明文字，因此这段文字不会被发送。请清空消息或选择其他类型。",
     "send": "发送消息",
     "sending": "正在发送...",
+    "sendingProgress": "正在发送 {{current}}/{{total}}...",
     "viewOnly": "仅查看",
     "responseEmpty": "发送消息后即可查看 API 响应",
     "successLabel": "成功",
     "failedLabel": "失败",
+    "groupsSentSummary": "已发送 {{sent}}/{{total}}",
+    "groupSendCancelled": "{{count}} 个，已取消",
+    "groupSendStopped": "{{count}} 个，在 HTTP {{status}} 后停止",
     "response": {
       "timestamp": "时间戳",
       "messageId": "消息 ID",
       "batchId": "批次 ID",
-      "error": "错误"
+      "error": "错误",
+      "groups": "群组",
+      "notSent": "未发送"
     },
     "sendFailed": "发送消息失败",
     "notOnWhatsApp": "该号码未在 WhatsApp 注册",

@@ -41,6 +41,7 @@ describe('evaluatePreflight', () => {
     ).toEqual({
       status: 503,
       body: 'session not ready',
+      headers: { 'Retry-After': '5' },
     });
   });
 
@@ -48,6 +49,7 @@ describe('evaluatePreflight', () => {
     expect(evaluatePreflight(route({ preflight: [{ type: 'session-alive' }] }), 'sess-1', () => undefined)).toEqual({
       status: 503,
       body: 'session not ready',
+      headers: { 'Retry-After': '5' },
     });
   });
 

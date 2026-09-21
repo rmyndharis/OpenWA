@@ -400,8 +400,11 @@ package to pull from.
 | `GithubIcon`                 | `components/GithubIcon.tsx`      | Inline brand SVG                                                                                                      |
 
 Chat-specific pieces live one level down in `components/chats/`: `MessageBody` (WhatsApp text
-formatting + link detection) and `MediaLightbox` (the media viewer, built on
-`yet-another-react-lightbox`).
+formatting + link detection), `ChatThread` (bubble list, including inbound Baileys prompt buttons
+that call `POST /sessions/:id/messages/click-button`), and `MediaLightbox` (the media viewer, built
+on `yet-another-react-lightbox`). Prompt choices arrive on live `message.received` as top-level
+`buttons` and are also stored in message `metadata.buttons` so a reload can re-render them.
+Clicking still requires the prompt to be in the engine store; an evicted prompt 404s.
 
 The message thread is paged. `useChatMessages` is a `useInfiniteQuery` whose cursor is the number
 of DB rows fetched so far, not the length of the rendered list — the thread also carries engine

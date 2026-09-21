@@ -6,10 +6,14 @@ import { IngressService } from './ingress.service';
 // key order, and a trailing newline. The controller must forward the RAW bytes, not a re-serialized body.
 const RAW = '{\n  "event": "message_created",\n  "id": 42\n}\n';
 
+// Models Express's header precedence: set() and type() write the same Content-Type slot, so the LAST
+// writer wins. Recording them in separate fields hid the override, which let one test assert a declared
+// application/json and another the forced text/plain with neither noticing they contradicted.
 function fakeRes() {
-  const captured: { status?: number; body?: string; headers?: Record<string, string>; contentType?: string } = {};
+  const headers: Record<string, string> = {};
+  const captured: { status?: number; body?: string; headers: Record<string, string> } = { headers };
   const type = jest.fn((contentType: string) => {
-    captured.contentType = contentType;
+    headers['content-type'] = contentType;
     return res;
   });
   const res = {
@@ -22,8 +26,8 @@ function fakeRes() {
       captured.body = body;
       return res;
     }),
-    set: jest.fn((headers: Record<string, string>) => {
-      captured.headers = headers;
+    set: jest.fn((incoming: Record<string, string>) => {
+      for (const [name, value] of Object.entries(incoming)) headers[name.toLowerCase()] = value;
       return res;
     }),
   } as unknown as Response;
@@ -46,7 +50,47 @@ describe('reflection content type', () => {
 
     await controller.receive('chatwoot', 'acct1', {}, req, res);
 
-    expect(captured.contentType).toBe('text/plain');
+    expect(captured.headers['content-type']).toBe('text/plain');
+  });
+
+  it('forces text/plain over a declared type a browser would execute', async () => {
+    const handle = jest.fn().mockResolvedValue({
+      status: 200,
+      body: '<script>alert(1)</script>',
+      headers: { 'content-type': 'text/html' },
+    });
+    const controller = new IngressController({ handle } as unknown as IngressService);
+    const { res, captured } = fakeRes();
+    const req = {
+      method: 'POST',
+      params: { path: ['send-sms'] },
+      headers: { 'x-delivery': 'd1' },
+      rawBody: Buffer.from('{}', 'utf8'),
+    } as unknown as Request & { rawBody?: Buffer };
+
+    await controller.receive('p', 'i1', {}, req, res);
+
+    expect(captured.headers['content-type']).toBe('text/plain');
+  });
+
+  it('emits a declared application/json, which a provider may require on a 200', async () => {
+    const handle = jest.fn().mockResolvedValue({
+      status: 200,
+      body: '{"ok":true}',
+      headers: { 'content-type': 'application/json' },
+    });
+    const controller = new IngressController({ handle } as unknown as IngressService);
+    const { res, captured } = fakeRes();
+    const req = {
+      method: 'POST',
+      params: { path: ['send-sms'] },
+      headers: { 'x-delivery': 'd1' },
+      rawBody: Buffer.from('{}', 'utf8'),
+    } as unknown as Request & { rawBody?: Buffer };
+
+    await controller.receive('p', 'i1', {}, req, res);
+
+    expect(captured.headers['content-type']).toBe('application/json');
   });
 });
 
@@ -113,5 +157,57 @@ describe('IngressController', () => {
     expect(captured.status).toBe(200);
     expect(captured.body).toBe('{"ok":true}');
     expect(captured.headers).toEqual({ 'content-type': 'application/json' });
+  });
+
+  it('never writes a reserved header a route declared', async () => {
+    // res.type rewrites content-type whatever happens, so asserting that header alone cannot tell
+    // whether the filter runs at all. These are the ones nothing downstream would put back.
+    const handle = jest.fn().mockResolvedValue({
+      status: 200,
+      body: 'ok',
+      headers: { 'Set-Cookie': 'a=b', 'Transfer-Encoding': 'chunked', 'X-Provider-Ack': 'kept' },
+    });
+    const controller = new IngressController({ handle } as unknown as IngressService);
+    const { res, captured } = fakeRes();
+    const req = {
+      method: 'POST',
+      params: { path: ['send-sms'] },
+      headers: {},
+      rawBody: Buffer.from('{}'),
+    } as unknown as Request & { rawBody?: Buffer };
+
+    await controller.receive('p', 'i1', {}, req, res);
+
+    expect(captured.headers['set-cookie']).toBeUndefined();
+    expect(captured.headers['transfer-encoding']).toBeUndefined();
+    expect(captured.headers['x-provider-ack']).toBe('kept');
+  });
+});
+
+describe('query values reach the pipeline as strings', () => {
+  const callWithQuery = async (query: Record<string, unknown>) => {
+    const handle = jest.fn().mockResolvedValue({ status: 200, body: '' });
+    const controller = new IngressController({ handle } as unknown as IngressService);
+    const { res } = fakeRes();
+    const req = {
+      method: 'GET',
+      params: { path: ['meta'] },
+      headers: {},
+    } as unknown as Request & { rawBody?: Buffer };
+    await controller.receive('meta', 'i1', query as Record<string, string>, req, res);
+    return (handle.mock.calls[0] as [{ query: Record<string, string> }])[0].query;
+  };
+
+  it('keeps the first value of a repeated parameter', async () => {
+    // Express answers `?hub.challenge=a&hub.challenge=b` with an array, and the challenge path feeds
+    // the value into a constant-time compare that accepts only strings, so this used to answer 500.
+    const query = await callWithQuery({ 'hub.challenge': ['a', 'b'], 'hub.verify_token': 'tok' });
+    expect(query).toEqual({ 'hub.challenge': 'a', 'hub.verify_token': 'tok' });
+    for (const value of Object.values(query)) expect(typeof value).toBe('string');
+  });
+
+  it('answers an empty string for a repeated parameter with no values, and for a non-string one', async () => {
+    const query = await callWithQuery({ empty: [], odd: { nested: 'x' } });
+    expect(query).toEqual({ empty: '', odd: '' });
   });
 });

@@ -13,7 +13,24 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
 import { useSessionsQuery, useSessionGroupsQuery } from '../hooks/queries';
 import { parseBulkRecipients, BULK_MAX_RECIPIENTS, BULK_RECIPIENTS_FILE_MAX_BYTES } from '../utils/bulkRecipients';
+import {
+  BULK_CAPTION_MAX_LENGTH,
+  BULK_INLINE_MEDIA_MAX_BYTES,
+  BULK_MEDIA_KINDS,
+  buildBulkMessages,
+  captionLength,
+  formatFileSize,
+  inlineMediaBudgetBytes,
+  isHttpMediaUrl,
+  mediaKindFromMime,
+  mediaKindFromUrl,
+  toBulkAttachment,
+  type BulkMediaKind,
+} from '../utils/bulkMedia';
 import { PageHeader } from '../components/PageHeader';
+import { GroupPicker } from '../components/GroupPicker';
+import { groupLabel, isGatewayRefusal, planGroupSend } from '../utils/groupSelection';
+import { sendSequentially } from '../utils/sendSequentially';
 import './MessageTester.css';
 
 interface ApiResponse {
@@ -27,7 +44,17 @@ interface ApiResponse {
   // request was made (the recipient pre-check below short-circuits) — the panel then shows the
   // outcome without a code rather than inventing one.
   status?: number;
+  groups?: {
+    sent: number;
+    total: number;
+    failures: { id: string; name: string; error: string }[];
+    notSent: number;
+    stoppedBy?: 'abort' | 'refusal';
+    refusedWith?: number;
+  };
 }
+
+const GROUP_SEND_DELAY_MS = 3000;
 
 const messageTypes = [
   'text',
@@ -95,7 +122,10 @@ export function MessageTester() {
   const [session, setSession] = useState('');
   const [recipient, setRecipient] = useState('');
   const [recipientType, setRecipientType] = useState<'personal' | 'group'>('personal');
-  const [selectedGroup, setSelectedGroup] = useState('');
+  const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
+  const [groupSendProgress, setGroupSendProgress] = useState<{ current: number; total: number } | null>(null);
+  const [groupSendCancelling, setGroupSendCancelling] = useState(false);
+  const groupSendAbort = useRef<AbortController | null>(null);
   const [messageType, setMessageType] = useState<(typeof messageTypes)[number]>('text');
   const [content, setContent] = useState('');
   const [mediaUrl, setMediaUrl] = useState('');
@@ -133,6 +163,8 @@ export function MessageTester() {
   const [forwardMessageId, setForwardMessageId] = useState('');
   const [bulkRecipients, setBulkRecipients] = useState('');
   const [bulkDelay, setBulkDelay] = useState('');
+  const [bulkMediaKind, setBulkMediaKind] = useState<BulkMediaKind>('document');
+  const [bulkMediaKindChosen, setBulkMediaKindChosen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [response, setResponse] = useState<ApiResponse | null>(null);
   // Live bulk-batch progress, polled every ~2s while the batch runs (see startBatchPolling).
@@ -152,20 +184,11 @@ export function MessageTester() {
     }
   }, [sessions, session]);
 
-  // Clear the group selection when the session changes so a stale group id from the previous session
-  // can't be sent to; the effect below then re-seeds groups[0].id once the new session's groups load.
   useEffect(() => {
-    setSelectedGroup('');
-  }, [session]);
+    setSelectedGroups([]);
+  }, [session, recipientType]);
 
-  useEffect(() => {
-    if (groups.length > 0 && !selectedGroup) {
-      setSelectedGroup(groups[0].id);
-    }
-    if (recipientType !== 'group') {
-      setSelectedGroup('');
-    }
-  }, [groups, selectedGroup, recipientType]);
+  useEffect(() => () => groupSendAbort.current?.abort(), []);
 
   const stopBatchPolling = () => {
     if (batchPollRef.current) {
@@ -253,9 +276,14 @@ export function MessageTester() {
       // readAsDataURL yields "data:<mime>;base64,<payload>"; the engine expects raw base64, so strip the prefix.
       const base64 = dataUrl.split(',')[1] ?? '';
       if (!base64) return;
-      setMediaFile({ base64, mimetype: file.type || fallbackMime[messageType], filename: file.name });
+      const mimetype = file.type || fallbackMime[messageType];
+      setMediaFile({ base64, mimetype, filename: file.name });
       setMediaUrl('');
       if (messageType === 'document') setContent(file.name);
+      if (messageType === 'bulk') {
+        setBulkMediaKind(mediaKindFromMime(mimetype));
+        setBulkMediaKindChosen(false);
+      }
     };
     reader.onerror = () => {
       if (mediaReadSeq.current !== myRead) return;
@@ -270,6 +298,18 @@ export function MessageTester() {
   const lat = parseFloat(latitude);
   const lng = parseFloat(longitude);
   const delayMs = bulkDelay.trim() === '' ? undefined : parseInt(bulkDelay, 10);
+  const bulkAttachment = messageType === 'bulk' ? toBulkAttachment(bulkMediaKind, mediaFile, mediaUrl) : null;
+  const bulkMediaTooLarge =
+    messageType === 'bulk' &&
+    !!mediaFile &&
+    mediaFile.base64.length * bulkRecipientList.length > BULK_INLINE_MEDIA_MAX_BYTES;
+  const bulkMediaUrlInvalid =
+    messageType === 'bulk' && !mediaFile && mediaUrl.trim() !== '' && !isHttpMediaUrl(mediaUrl);
+  // Audio goes out without a caption (the bulk service does not forward one), so text next to an audio
+  // attachment would be dropped while the batch reports success. Refuse it instead of sending half.
+  const bulkAudioWithText = bulkAttachment?.kind === 'audio' && content.trim().length > 0;
+  const bulkCaptionTooLong =
+    bulkAttachment !== null && bulkAttachment.kind !== 'audio' && captionLength(content) > BULK_CAPTION_MAX_LENGTH;
 
   // Per-type required-field validation for the newer types; text/media keep their original behavior
   // (the backend stays the authoritative validator either way).
@@ -286,7 +326,11 @@ export function MessageTester() {
     formValid = forwardTo.trim().length > 0 && forwardMessageId.trim().length > 0;
   } else if (messageType === 'bulk') {
     formValid =
-      content.trim().length > 0 &&
+      (content.trim().length > 0 || bulkAttachment !== null) &&
+      !bulkMediaTooLarge &&
+      !bulkMediaUrlInvalid &&
+      !bulkAudioWithText &&
+      !bulkCaptionTooLong &&
       bulkRecipientList.length > 0 &&
       bulkRecipientList.length <= BULK_MAX_RECIPIENTS &&
       (delayMs === undefined || (!Number.isNaN(delayMs) && delayMs >= 1000 && delayMs <= 60000));
@@ -297,10 +341,58 @@ export function MessageTester() {
     isLoading ||
     !session ||
     !formValid ||
-    (messageType !== 'bulk' && (recipientType === 'group' ? !selectedGroup : !recipient));
+    (messageType !== 'bulk' && (recipientType === 'group' ? selectedGroups.length === 0 : !recipient));
+
+  const isGroupSending = groupSendProgress !== null;
+
+  const sendToGroups = async (chatIds: string[], sendTo: (chatId: string) => Promise<MessageResponse>) => {
+    const controller = new AbortController();
+    groupSendAbort.current = controller;
+    const labels = new Map(groups.map(group => [group.id, groupLabel(group)]));
+    try {
+      const outcome = await sendSequentially(
+        chatIds,
+        async chatId => {
+          const result = await sendTo(chatId);
+          if (!result.messageId) throw new Error(t('messageTester.sendFailed'));
+        },
+        {
+          delayMs: GROUP_SEND_DELAY_MS,
+          signal: controller.signal,
+          stopOn: isGatewayRefusal,
+          onProgress: (current, total) => setGroupSendProgress({ current, total }),
+        },
+      );
+      setResponse({
+        success: outcome.sent === chatIds.length,
+        timestamp: new Date().toISOString(),
+        groups: {
+          sent: outcome.sent,
+          total: chatIds.length,
+          failures: outcome.failures.map(({ target, error }) => ({
+            id: target,
+            name: labels.get(target) ?? target,
+            error,
+          })),
+          notSent: outcome.notAttempted.length,
+          stoppedBy: outcome.stoppedBy,
+          refusedWith: outcome.stoppedBy === 'refusal' ? outcome.failures.at(-1)?.status : undefined,
+        },
+      });
+    } finally {
+      groupSendAbort.current = null;
+      setGroupSendProgress(null);
+      setGroupSendCancelling(false);
+    }
+  };
+
+  const cancelGroupSend = () => {
+    setGroupSendCancelling(true);
+    groupSendAbort.current?.abort();
+  };
 
   const handleSend = async () => {
-    const targetId = recipientType === 'group' ? selectedGroup : recipient;
+    const targetId = recipientType === 'group' ? (selectedGroups[0] ?? '') : recipient;
     if (!session || (messageType !== 'bulk' && !targetId)) return;
     setIsLoading(true);
     setResponse(null);
@@ -330,11 +422,7 @@ export function MessageTester() {
       // Bulk is a batch, not a single send: 202 + batchId, then poll progress until terminal.
       if (messageType === 'bulk') {
         const batch = await messageApi.sendBulk(session, {
-          messages: bulkRecipientList.map(recipientChatId => ({
-            chatId: recipientChatId,
-            type: 'text' as const,
-            content: { text: content },
-          })),
+          messages: buildBulkMessages(bulkRecipientList, content, bulkAttachment),
           ...(delayMs !== undefined ? { options: { delayBetweenMessages: delayMs } } : {}),
         });
         batchSessionRef.current = session;
@@ -349,83 +437,78 @@ export function MessageTester() {
         return;
       }
 
-      let result: MessageResponse;
-      switch (messageType) {
-        case 'text':
-          result = await messageApi.sendText(session, chatId, content);
-          break;
-        case 'image':
-        case 'video':
-        case 'audio':
-        case 'document': {
-          // sendMedia unifies URL and base64 (local file) sends; base64 wins when a file is picked. The
-          // backend accepts url XOR base64 and requires a mimetype for base64 (always provided here).
-          const payload: SendMediaPayload = mediaFile
-            ? { base64: mediaFile.base64, mimetype: mediaFile.mimetype }
-            : { url: mediaUrl };
-          if ((messageType === 'image' || messageType === 'video') && content) payload.caption = content;
-          if (messageType === 'document' && content) payload.filename = content;
-          result = await messageApi.sendMedia(session, chatId, messageType, payload);
-          break;
-        }
-        case 'sticker': {
-          const payload: SendMediaPayload = mediaFile
-            ? { base64: mediaFile.base64, mimetype: mediaFile.mimetype }
-            : { url: mediaUrl };
-          result = await messageApi.sendSticker(session, chatId, payload);
-          break;
-        }
-        case 'location':
-          result = await messageApi.sendLocation(session, {
-            chatId,
-            latitude: lat,
-            longitude: lng,
-            ...(locationDescription.trim() ? { description: locationDescription.trim() } : {}),
-            ...(locationAddress.trim() ? { address: locationAddress.trim() } : {}),
-          });
-          break;
-        case 'contact':
-          result = await messageApi.sendContact(session, {
-            chatId,
-            contactName: contactName.trim(),
-            contactNumber: contactNumber.trim(),
-          });
-          break;
-        case 'poll':
-          result = await messageApi.sendPoll(session, {
-            chatId,
-            name: pollQuestion.trim(),
-            options: pollOptionsFilled,
-            ...(allowMultipleAnswers ? { allowMultipleAnswers: true } : {}),
-          });
-          break;
-        case 'forward': {
-          // toChatId passes through as-is when it is a full chat ID; a bare number is resolved
-          // through the same check-number flow as the main recipient.
-          let toChatId = forwardTo.trim();
-          if (!toChatId.includes('@')) {
-            const resolvedTo = await contactApi.checkNumber(session, toChatId.replace(/[^0-9]/g, ''));
-            if (!resolvedTo.exists || !resolvedTo.whatsappId) {
-              setResponse({
-                success: false,
-                timestamp: new Date().toISOString(),
-                error: t('messageTester.notOnWhatsApp'),
-              });
-              return;
-            }
-            toChatId = resolvedTo.whatsappId;
+      const sendTo = async (target: string): Promise<MessageResponse> => {
+        switch (messageType) {
+          case 'text':
+            return messageApi.sendText(session, target, content);
+          case 'image':
+          case 'video':
+          case 'audio':
+          case 'document': {
+            // sendMedia unifies URL and base64 (local file) sends; base64 wins when a file is picked. The
+            // backend accepts url XOR base64 and requires a mimetype for base64 (always provided here).
+            const payload: SendMediaPayload = mediaFile
+              ? { base64: mediaFile.base64, mimetype: mediaFile.mimetype }
+              : { url: mediaUrl };
+            if ((messageType === 'image' || messageType === 'video') && content) payload.caption = content;
+            if (messageType === 'document' && content) payload.filename = content;
+            return messageApi.sendMedia(session, target, messageType, payload);
           }
-          result = await messageApi.forward(session, {
-            // An empty fromChatId defaults to the current (already resolved) recipient.
-            fromChatId: forwardFrom.trim() || chatId,
-            toChatId,
-            messageId: forwardMessageId.trim(),
-          });
-          break;
+          case 'sticker': {
+            const payload: SendMediaPayload = mediaFile
+              ? { base64: mediaFile.base64, mimetype: mediaFile.mimetype }
+              : { url: mediaUrl };
+            return messageApi.sendSticker(session, target, payload);
+          }
+          case 'location':
+            return messageApi.sendLocation(session, {
+              chatId: target,
+              latitude: lat,
+              longitude: lng,
+              ...(locationDescription.trim() ? { description: locationDescription.trim() } : {}),
+              ...(locationAddress.trim() ? { address: locationAddress.trim() } : {}),
+            });
+          case 'contact':
+            return messageApi.sendContact(session, {
+              chatId: target,
+              contactName: contactName.trim(),
+              contactNumber: contactNumber.trim(),
+            });
+          case 'poll':
+            return messageApi.sendPoll(session, {
+              chatId: target,
+              name: pollQuestion.trim(),
+              options: pollOptionsFilled,
+              ...(allowMultipleAnswers ? { allowMultipleAnswers: true } : {}),
+            });
+          case 'forward': {
+            // toChatId passes through as-is when it is a full chat ID; a bare number is resolved
+            // through the same check-number flow as the main recipient.
+            let toChatId = forwardTo.trim();
+            if (!toChatId.includes('@')) {
+              const resolvedTo = await contactApi.checkNumber(session, toChatId.replace(/[^0-9]/g, ''));
+              if (!resolvedTo.exists || !resolvedTo.whatsappId) throw new Error(t('messageTester.notOnWhatsApp'));
+              toChatId = resolvedTo.whatsappId;
+            }
+            return messageApi.forward(session, {
+              // An empty fromChatId defaults to the current (already resolved) recipient.
+              fromChatId: forwardFrom.trim() || target,
+              toChatId,
+              messageId: forwardMessageId.trim(),
+            });
+          }
+          default:
+            throw new Error(`Unsupported message type: ${messageType}`);
         }
-        default:
-          throw new Error(`Unsupported message type: ${messageType}`);
+      };
+
+      const plan = recipientType === 'group' ? planGroupSend(selectedGroups, messageType) : null;
+      if (plan?.mode === 'sequential') {
+        await sendToGroups(plan.chatIds, sendTo);
+        return;
       }
+
+      const result = await sendTo(chatId);
 
       setResponse({
         success: !!result.messageId,
@@ -453,6 +536,78 @@ export function MessageTester() {
         )
       : 0;
 
+  const optionalInBulk = messageType === 'bulk' ? ` (${t('common.optional')})` : '';
+  const mediaSourceFields = (
+    <>
+      <div className="form-group">
+        <label htmlFor="mt-3">
+          {t('messageTester.mediaUrl')}
+          {optionalInBulk}
+        </label>
+        <input
+          id="mt-3"
+          type="text"
+          value={mediaUrl}
+          onChange={e => {
+            setMediaUrl(e.target.value);
+            // Typing a URL supersedes the file: drop the picked file AND any read still
+            // in flight (its late onload would otherwise re-clear this URL).
+            mediaReadSeq.current += 1;
+            if (mediaFile) setMediaFile(null);
+            if (messageType === 'bulk') {
+              if (!e.target.value.trim()) setBulkMediaKindChosen(false);
+              else if (!bulkMediaKindChosen) setBulkMediaKind(mediaKindFromUrl(e.target.value));
+            }
+          }}
+          placeholder="https://example.com/file.jpg"
+          disabled={!!mediaFile}
+        />
+        {messageType === 'bulk' && (
+          <span className="hint error" role="status">
+            {bulkMediaUrlInvalid ? t('messageTester.bulkMediaUrlInvalid') : ''}
+          </span>
+        )}
+      </div>
+      <div className="form-group">
+        <label>
+          {t('messageTester.uploadFile')}
+          {optionalInBulk}
+        </label>
+        {mediaFile ? (
+          <div className="file-selected">
+            <span className="file-name" title={mediaFile.filename}>
+              {mediaFile.filename}
+            </span>
+            <button type="button" className="remove-file-btn" onClick={clearMediaFile}>
+              <X size={14} /> {t('messageTester.removeFile')}
+            </button>
+          </div>
+        ) : (
+          <button type="button" className="browse-btn" onClick={() => fileInputRef.current?.click()}>
+            <Upload size={14} /> {t('messageTester.browse')}
+          </button>
+        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          style={{ display: 'none' }}
+          accept={mediaAccept[messageType]}
+          onChange={handleFileChange}
+        />
+        {messageType === 'bulk' && (
+          <span className={bulkMediaTooLarge ? 'hint error' : 'hint'} role="status">
+            {bulkMediaTooLarge
+              ? t('messageTester.bulkMediaTooLarge', {
+                  count: bulkRecipientList.length,
+                  size: formatFileSize(inlineMediaBudgetBytes(bulkRecipientList.length)),
+                })
+              : t('messageTester.bulkMediaHint')}
+          </span>
+        )}
+      </div>
+    </>
+  );
+
   if (loadingSessions) {
     return (
       <div
@@ -474,7 +629,7 @@ export function MessageTester() {
 
           <div className="form-group">
             <label htmlFor="mt-1">{t('messageTester.session')}</label>
-            <select id="mt-1" value={session} onChange={e => setSession(e.target.value)}>
+            <select id="mt-1" value={session} onChange={e => setSession(e.target.value)} disabled={isGroupSending}>
               {sessions.length === 0 && <option value="">{t('messageTester.noReadySessions')}</option>}
               {sessions.map(s => (
                 <option key={s.id} value={s.id}>
@@ -499,6 +654,7 @@ export function MessageTester() {
                     aria-pressed={recipientType === 'personal'}
                     className={recipientType === 'personal' ? 'active' : ''}
                     onClick={() => setRecipientType('personal')}
+                    disabled={isGroupSending}
                   >
                     {t('messageTester.personal')}
                   </button>
@@ -507,6 +663,7 @@ export function MessageTester() {
                     aria-pressed={recipientType === 'group'}
                     className={recipientType === 'group' ? 'active' : ''}
                     onClick={() => setRecipientType('group')}
+                    disabled={isGroupSending}
                   >
                     {t('messageTester.group')}
                   </button>
@@ -514,32 +671,31 @@ export function MessageTester() {
               </div>
 
               <div className="form-group">
-                <label htmlFor="mt-13">
-                  {recipientType === 'group' ? t('messageTester.selectGroup') : t('messageTester.recipientPhone')}
-                </label>
                 {recipientType === 'group' ? (
                   <>
-                    <select
-                      id="mt-13"
-                      value={selectedGroup}
-                      onChange={e => setSelectedGroup(e.target.value)}
-                      disabled={loadingGroups || groups.length === 0}
-                    >
-                      {loadingGroups && <option value="">{t('messageTester.loadingGroups')}</option>}
-                      {!loadingGroups && groups.length === 0 && (
-                        <option value="">{t('messageTester.noGroupsFound')}</option>
-                      )}
-                      {groups.map(g => (
-                        <option key={g.id} value={g.id}>
-                          {g.name}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="hint">{t('messageTester.selectGroupHint')}</span>
+                    <span className="group-label" id="group-picker-label">
+                      {t('messageTester.selectGroup')}
+                    </span>
+                    <GroupPicker
+                      groups={groups}
+                      selectedIds={selectedGroups}
+                      onChange={setSelectedGroups}
+                      loading={loadingGroups}
+                      limit={BULK_MAX_RECIPIENTS}
+                      labelledBy="group-picker-label"
+                      disabled={isGroupSending}
+                    />
+                    <span className="hint">
+                      {messageType === 'forward'
+                        ? t('messageTester.forwardUsesFirstGroup')
+                        : t('messageTester.selectGroupHint')}
+                    </span>
                   </>
                 ) : (
                   <>
+                    <label htmlFor="mt-13">{t('messageTester.recipientPhone')}</label>
                     <input
+                      id="mt-13"
                       type="text"
                       value={recipient}
                       onChange={e => setRecipient(e.target.value)}
@@ -552,354 +708,376 @@ export function MessageTester() {
             </>
           )}
 
-          <div className="form-group">
-            <span className="group-label" id="message-type-label">
-              {t('messageTester.messageType')}
-            </span>
-            <div className="toggle-group toggle-group-wrap" role="group" aria-labelledby="message-type-label">
-              {messageTypes.map(type => (
-                <button
-                  key={type}
-                  type="button"
-                  aria-pressed={messageType === type}
-                  className={messageType === type ? 'active' : ''}
-                  onClick={() => {
-                    // A picked file's mimetype is bound to the category active at pick time, so dropping the
-                    // category would route stale bytes to the wrong send-${type} endpoint — clear it.
-                    if (type !== messageType) clearMediaFile();
-                    setMessageType(type);
-                  }}
-                >
-                  {t(`messageTester.types.${type}`)}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {messageType === 'text' && (
+          {/* A multi-group run sends what was on screen when it started, so the fields are locked until it
+              ends or is cancelled; Cancel sits outside, so it stays usable. */}
+          <fieldset className="composer-fields" disabled={isGroupSending}>
             <div className="form-group">
-              <label htmlFor="mt-2">{t('messageTester.messageContent')}</label>
-              <textarea
-                id="mt-2"
-                value={content}
-                onChange={e => setContent(e.target.value)}
-                placeholder={t('messageTester.messagePlaceholder')}
-                rows={5}
-              />
-            </div>
-          )}
-
-          {isMediaMessageType && (
-            <>
-              <div className="form-group">
-                <label htmlFor="mt-3">{t('messageTester.mediaUrl')}</label>
-                <input
-                  id="mt-3"
-                  type="text"
-                  value={mediaUrl}
-                  onChange={e => {
-                    setMediaUrl(e.target.value);
-                    // Typing a URL supersedes the file: drop the picked file AND any read still
-                    // in flight (its late onload would otherwise re-clear this URL).
-                    mediaReadSeq.current += 1;
-                    if (mediaFile) setMediaFile(null);
-                  }}
-                  placeholder="https://example.com/file.jpg"
-                  disabled={!!mediaFile}
-                />
-              </div>
-              <div className="form-group">
-                <label>{t('messageTester.uploadFile')}</label>
-                {mediaFile ? (
-                  <div className="file-selected">
-                    <span className="file-name" title={mediaFile.filename}>
-                      {mediaFile.filename}
-                    </span>
-                    <button type="button" className="remove-file-btn" onClick={clearMediaFile}>
-                      <X size={14} /> {t('messageTester.removeFile')}
-                    </button>
-                  </div>
-                ) : (
-                  <button type="button" className="browse-btn" onClick={() => fileInputRef.current?.click()}>
-                    <Upload size={14} /> {t('messageTester.browse')}
+              <span className="group-label" id="message-type-label">
+                {t('messageTester.messageType')}
+              </span>
+              <div className="toggle-group toggle-group-wrap" role="group" aria-labelledby="message-type-label">
+                {messageTypes.map(type => (
+                  <button
+                    key={type}
+                    type="button"
+                    aria-pressed={messageType === type}
+                    className={messageType === type ? 'active' : ''}
+                    onClick={() => {
+                      // A picked file's mimetype is bound to the category active at pick time, so dropping the
+                      // category would route stale bytes to the wrong send-${type} endpoint — clear it.
+                      if (type !== messageType) {
+                        clearMediaFile();
+                        if (type === 'bulk' || messageType === 'bulk') {
+                          setMediaUrl('');
+                          setBulkMediaKindChosen(false);
+                        }
+                      }
+                      setMessageType(type);
+                    }}
+                  >
+                    {t(`messageTester.types.${type}`)}
                   </button>
-                )}
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  style={{ display: 'none' }}
-                  accept={mediaAccept[messageType]}
-                  onChange={handleFileChange}
-                />
-              </div>
-              {messageType !== 'audio' && messageType !== 'sticker' && (
-                <div className="form-group">
-                  <label htmlFor="mt-14">
-                    {messageType === 'document' ? t('messageTester.filename') : t('messageTester.caption')} (
-                    {t('common.optional')})
-                  </label>
-                  <input
-                    id="mt-14"
-                    type="text"
-                    value={content}
-                    onChange={e => setContent(e.target.value)}
-                    placeholder={
-                      messageType === 'document'
-                        ? t('messageTester.filenamePlaceholder')
-                        : t('messageTester.captionPlaceholder')
-                    }
-                  />
-                </div>
-              )}
-            </>
-          )}
-
-          {messageType === 'location' && (
-            <>
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="mt-4">{t('messageTester.locationLatitude')}</label>
-                  <input
-                    id="mt-4"
-                    type="number"
-                    step="any"
-                    min={-90}
-                    max={90}
-                    value={latitude}
-                    onChange={e => setLatitude(e.target.value)}
-                    placeholder="-6.2088"
-                  />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="mt-5">{t('messageTester.locationLongitude')}</label>
-                  <input
-                    id="mt-5"
-                    type="number"
-                    step="any"
-                    min={-180}
-                    max={180}
-                    value={longitude}
-                    onChange={e => setLongitude(e.target.value)}
-                    placeholder="106.8456"
-                  />
-                </div>
-              </div>
-              <div className="form-group">
-                <label htmlFor="mt-15">
-                  {t('messageTester.locationDescription')} ({t('common.optional')})
-                </label>
-                <input
-                  id="mt-15"
-                  type="text"
-                  value={locationDescription}
-                  onChange={e => setLocationDescription(e.target.value)}
-                />
-              </div>
-              <div className="form-group">
-                <label htmlFor="mt-16">
-                  {t('messageTester.locationAddress')} ({t('common.optional')})
-                </label>
-                <input
-                  id="mt-16"
-                  type="text"
-                  value={locationAddress}
-                  onChange={e => setLocationAddress(e.target.value)}
-                />
-              </div>
-            </>
-          )}
-
-          {messageType === 'contact' && (
-            <>
-              <div className="form-group">
-                <label htmlFor="mt-6">{t('messageTester.contactName')}</label>
-                <input
-                  id="mt-6"
-                  type="text"
-                  value={contactName}
-                  onChange={e => setContactName(e.target.value)}
-                  placeholder={t('messageTester.contactNamePlaceholder')}
-                />
-              </div>
-              <div className="form-group">
-                <label htmlFor="mt-7">{t('messageTester.contactNumber')}</label>
-                <input
-                  id="mt-7"
-                  type="text"
-                  value={contactNumber}
-                  onChange={e => setContactNumber(e.target.value)}
-                  placeholder="+62812345678"
-                />
-              </div>
-            </>
-          )}
-
-          {messageType === 'poll' && (
-            <>
-              <div className="form-group">
-                <label htmlFor="mt-8">{t('messageTester.pollQuestion')}</label>
-                <input
-                  id="mt-8"
-                  type="text"
-                  value={pollQuestion}
-                  onChange={e => setPollQuestion(e.target.value)}
-                  placeholder={t('messageTester.pollQuestionPlaceholder')}
-                />
-              </div>
-              <div className="form-group">
-                <label>{t('messageTester.pollOptions')}</label>
-                {pollOptions.map((option, index) => (
-                  <div className="poll-option-row" key={index}>
-                    <input
-                      type="text"
-                      value={option}
-                      onChange={e => setPollOptions(prev => prev.map((o, i) => (i === index ? e.target.value : o)))}
-                      placeholder={t('messageTester.pollOptionPlaceholder', { index: index + 1 })}
-                    />
-                    <button
-                      type="button"
-                      className="remove-option-btn"
-                      onClick={() => setPollOptions(prev => prev.filter((_, i) => i !== index))}
-                      disabled={pollOptions.length <= 2}
-                      aria-label={t('messageTester.removeOption')}
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
                 ))}
-                <button
-                  type="button"
-                  className="add-option-btn"
-                  onClick={() => setPollOptions(prev => [...prev, ''])}
-                  disabled={pollOptions.length >= 12}
-                >
-                  <Plus size={14} /> {t('messageTester.addOption')}
-                </button>
-                <span className="hint">{t('messageTester.pollOptionsHint')}</span>
               </div>
-              <div className="form-group">
-                <label className="checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={allowMultipleAnswers}
-                    onChange={e => setAllowMultipleAnswers(e.target.checked)}
-                  />
-                  {t('messageTester.allowMultipleAnswers')}
-                </label>
-              </div>
-            </>
-          )}
+            </div>
 
-          {messageType === 'forward' && (
-            <>
+            {messageType === 'text' && (
               <div className="form-group">
-                <label htmlFor="mt-17">
-                  {t('messageTester.forwardFromChatId')} ({t('common.optional')})
-                </label>
-                <input
-                  id="mt-17"
-                  type="text"
-                  value={forwardFrom}
-                  onChange={e => setForwardFrom(e.target.value)}
-                  placeholder={
-                    (recipientType === 'group' ? selectedGroup : recipient) || t('messageTester.forwardFromPlaceholder')
-                  }
-                />
-                <span className="hint">{t('messageTester.forwardFromHint')}</span>
-              </div>
-              <div className="form-group">
-                <label htmlFor="mt-9">{t('messageTester.forwardToChatId')}</label>
-                <input
-                  id="mt-9"
-                  type="text"
-                  value={forwardTo}
-                  onChange={e => setForwardTo(e.target.value)}
-                  placeholder={t('messageTester.forwardToPlaceholder')}
-                />
-              </div>
-              <div className="form-group">
-                <label htmlFor="mt-10">{t('messageTester.forwardMessageId')}</label>
-                <input
-                  id="mt-10"
-                  type="text"
-                  value={forwardMessageId}
-                  onChange={e => setForwardMessageId(e.target.value)}
-                />
-                <span className="hint">{t('messageTester.forwardMessageIdHint')}</span>
-              </div>
-            </>
-          )}
-
-          {messageType === 'bulk' && (
-            <>
-              <div className="form-group">
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    marginBottom: '0.5rem',
-                  }}
-                >
-                  <label htmlFor="mt-11" style={{ marginBottom: 0 }}>
-                    {t('messageTester.bulkRecipients')}
-                  </label>
-                  <button type="button" className="browse-btn" onClick={() => bulkFileInputRef.current?.click()}>
-                    <Upload size={14} /> {t('messageTester.bulkRecipientsUpload')}
-                  </button>
-                  <input
-                    ref={bulkFileInputRef}
-                    type="file"
-                    accept=".txt,.csv"
-                    style={{ display: 'none' }}
-                    onChange={handleBulkFileChange}
-                  />
-                </div>
+                <label htmlFor="mt-2">{t('messageTester.messageContent')}</label>
                 <textarea
-                  id="mt-11"
-                  value={bulkRecipients}
-                  onChange={e => setBulkRecipients(e.target.value)}
-                  placeholder={t('messageTester.bulkRecipientsPlaceholder')}
-                  rows={4}
-                />
-                <span className="hint">
-                  {t('messageTester.bulkRecipientsHint')} ·{' '}
-                  {t('messageTester.bulkRecipientsCount', { count: bulkRecipientList.length })}
-                </span>
-              </div>
-              <div className="form-group">
-                <label htmlFor="mt-12">{t('messageTester.messageContent')}</label>
-                <textarea
-                  id="mt-12"
+                  id="mt-2"
                   value={content}
                   onChange={e => setContent(e.target.value)}
                   placeholder={t('messageTester.messagePlaceholder')}
-                  rows={4}
+                  rows={5}
                 />
               </div>
-              <div className="form-group">
-                <label htmlFor="mt-18">
-                  {t('messageTester.bulkDelay')} ({t('common.optional')})
-                </label>
-                <input
-                  id="mt-18"
-                  type="number"
-                  min={1000}
-                  max={60000}
-                  step={500}
-                  value={bulkDelay}
-                  onChange={e => setBulkDelay(e.target.value)}
-                  placeholder="3000"
-                />
-                <span className="hint">{t('messageTester.bulkDelayHint')}</span>
-              </div>
-            </>
-          )}
+            )}
+
+            {isMediaMessageType && (
+              <>
+                {mediaSourceFields}
+                {messageType !== 'audio' && messageType !== 'sticker' && (
+                  <div className="form-group">
+                    <label htmlFor="mt-14">
+                      {messageType === 'document' ? t('messageTester.filename') : t('messageTester.caption')} (
+                      {t('common.optional')})
+                    </label>
+                    <input
+                      id="mt-14"
+                      type="text"
+                      value={content}
+                      onChange={e => setContent(e.target.value)}
+                      placeholder={
+                        messageType === 'document'
+                          ? t('messageTester.filenamePlaceholder')
+                          : t('messageTester.captionPlaceholder')
+                      }
+                    />
+                  </div>
+                )}
+              </>
+            )}
+
+            {messageType === 'location' && (
+              <>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="mt-4">{t('messageTester.locationLatitude')}</label>
+                    <input
+                      id="mt-4"
+                      type="number"
+                      step="any"
+                      min={-90}
+                      max={90}
+                      value={latitude}
+                      onChange={e => setLatitude(e.target.value)}
+                      placeholder="-6.2088"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="mt-5">{t('messageTester.locationLongitude')}</label>
+                    <input
+                      id="mt-5"
+                      type="number"
+                      step="any"
+                      min={-180}
+                      max={180}
+                      value={longitude}
+                      onChange={e => setLongitude(e.target.value)}
+                      placeholder="106.8456"
+                    />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="mt-15">
+                    {t('messageTester.locationDescription')} ({t('common.optional')})
+                  </label>
+                  <input
+                    id="mt-15"
+                    type="text"
+                    value={locationDescription}
+                    onChange={e => setLocationDescription(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="mt-16">
+                    {t('messageTester.locationAddress')} ({t('common.optional')})
+                  </label>
+                  <input
+                    id="mt-16"
+                    type="text"
+                    value={locationAddress}
+                    onChange={e => setLocationAddress(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+
+            {messageType === 'contact' && (
+              <>
+                <div className="form-group">
+                  <label htmlFor="mt-6">{t('messageTester.contactName')}</label>
+                  <input
+                    id="mt-6"
+                    type="text"
+                    value={contactName}
+                    onChange={e => setContactName(e.target.value)}
+                    placeholder={t('messageTester.contactNamePlaceholder')}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="mt-7">{t('messageTester.contactNumber')}</label>
+                  <input
+                    id="mt-7"
+                    type="text"
+                    value={contactNumber}
+                    onChange={e => setContactNumber(e.target.value)}
+                    placeholder="+62812345678"
+                  />
+                </div>
+              </>
+            )}
+
+            {messageType === 'poll' && (
+              <>
+                <div className="form-group">
+                  <label htmlFor="mt-8">{t('messageTester.pollQuestion')}</label>
+                  <input
+                    id="mt-8"
+                    type="text"
+                    value={pollQuestion}
+                    onChange={e => setPollQuestion(e.target.value)}
+                    placeholder={t('messageTester.pollQuestionPlaceholder')}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>{t('messageTester.pollOptions')}</label>
+                  {pollOptions.map((option, index) => (
+                    <div className="poll-option-row" key={index}>
+                      <input
+                        type="text"
+                        value={option}
+                        onChange={e => setPollOptions(prev => prev.map((o, i) => (i === index ? e.target.value : o)))}
+                        placeholder={t('messageTester.pollOptionPlaceholder', { index: index + 1 })}
+                      />
+                      <button
+                        type="button"
+                        className="remove-option-btn"
+                        onClick={() => setPollOptions(prev => prev.filter((_, i) => i !== index))}
+                        disabled={pollOptions.length <= 2}
+                        aria-label={t('messageTester.removeOption')}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    className="add-option-btn"
+                    onClick={() => setPollOptions(prev => [...prev, ''])}
+                    disabled={pollOptions.length >= 12}
+                  >
+                    <Plus size={14} /> {t('messageTester.addOption')}
+                  </button>
+                  <span className="hint">{t('messageTester.pollOptionsHint')}</span>
+                </div>
+                <div className="form-group">
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={allowMultipleAnswers}
+                      onChange={e => setAllowMultipleAnswers(e.target.checked)}
+                    />
+                    {t('messageTester.allowMultipleAnswers')}
+                  </label>
+                </div>
+              </>
+            )}
+
+            {messageType === 'forward' && (
+              <>
+                <div className="form-group">
+                  <label htmlFor="mt-17">
+                    {t('messageTester.forwardFromChatId')} ({t('common.optional')})
+                  </label>
+                  <input
+                    id="mt-17"
+                    type="text"
+                    value={forwardFrom}
+                    onChange={e => setForwardFrom(e.target.value)}
+                    placeholder={
+                      (recipientType === 'group' ? selectedGroups[0] : recipient) ||
+                      t('messageTester.forwardFromPlaceholder')
+                    }
+                  />
+                  <span className="hint">{t('messageTester.forwardFromHint')}</span>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="mt-9">{t('messageTester.forwardToChatId')}</label>
+                  <input
+                    id="mt-9"
+                    type="text"
+                    value={forwardTo}
+                    onChange={e => setForwardTo(e.target.value)}
+                    placeholder={t('messageTester.forwardToPlaceholder')}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="mt-10">{t('messageTester.forwardMessageId')}</label>
+                  <input
+                    id="mt-10"
+                    type="text"
+                    value={forwardMessageId}
+                    onChange={e => setForwardMessageId(e.target.value)}
+                  />
+                  <span className="hint">{t('messageTester.forwardMessageIdHint')}</span>
+                </div>
+              </>
+            )}
+
+            {messageType === 'bulk' && (
+              <>
+                <div className="form-group">
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '0.5rem',
+                    }}
+                  >
+                    <label htmlFor="mt-11" style={{ marginBottom: 0 }}>
+                      {t('messageTester.bulkRecipients')}
+                    </label>
+                    <button type="button" className="browse-btn" onClick={() => bulkFileInputRef.current?.click()}>
+                      <Upload size={14} /> {t('messageTester.bulkRecipientsUpload')}
+                    </button>
+                    <input
+                      ref={bulkFileInputRef}
+                      type="file"
+                      accept=".txt,.csv"
+                      style={{ display: 'none' }}
+                      onChange={handleBulkFileChange}
+                    />
+                  </div>
+                  <textarea
+                    id="mt-11"
+                    value={bulkRecipients}
+                    onChange={e => setBulkRecipients(e.target.value)}
+                    placeholder={t('messageTester.bulkRecipientsPlaceholder')}
+                    rows={4}
+                  />
+                  <span className="hint">
+                    {t('messageTester.bulkRecipientsHint')} ·{' '}
+                    {t('messageTester.bulkRecipientsCount', { count: bulkRecipientList.length })}
+                  </span>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="mt-12">{t('messageTester.messageContent')}</label>
+                  <textarea
+                    id="mt-12"
+                    value={content}
+                    onChange={e => setContent(e.target.value)}
+                    placeholder={t('messageTester.messagePlaceholder')}
+                    rows={4}
+                  />
+                  <span className="hint error" role="status">
+                    {bulkAudioWithText
+                      ? t('messageTester.bulkAudioNoCaption')
+                      : bulkCaptionTooLong
+                        ? t('messageTester.bulkCaptionTooLong', {
+                            max: BULK_CAPTION_MAX_LENGTH,
+                            count: captionLength(content),
+                          })
+                        : ''}
+                  </span>
+                </div>
+                {mediaSourceFields}
+                {bulkAttachment && (
+                  <div className="form-group">
+                    <span className="group-label" id="bulk-media-kind-label">
+                      {t('messageTester.bulkMediaKind')}
+                    </span>
+                    <div
+                      className="toggle-group toggle-group-wrap bulk-media-kind"
+                      role="group"
+                      aria-labelledby="bulk-media-kind-label"
+                    >
+                      {BULK_MEDIA_KINDS.map(kind => (
+                        <button
+                          key={kind}
+                          type="button"
+                          aria-pressed={bulkMediaKind === kind}
+                          className={bulkMediaKind === kind ? 'active' : ''}
+                          onClick={() => {
+                            setBulkMediaKind(kind);
+                            setBulkMediaKindChosen(true);
+                          }}
+                        >
+                          {t(`messageTester.types.${kind}`)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="form-group">
+                  <label htmlFor="mt-18">
+                    {t('messageTester.bulkDelay')} ({t('common.optional')})
+                  </label>
+                  <input
+                    id="mt-18"
+                    type="number"
+                    min={1000}
+                    max={60000}
+                    step={500}
+                    value={bulkDelay}
+                    onChange={e => setBulkDelay(e.target.value)}
+                    placeholder="3000"
+                  />
+                  <span className="hint">{t('messageTester.bulkDelayHint')}</span>
+                </div>
+              </>
+            )}
+          </fieldset>
 
           <button className="send-btn" onClick={handleSend} disabled={isSendDisabled}>
             {isLoading ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}
             {isLoading ? t('messageTester.sending') : canWrite ? t('messageTester.send') : t('messageTester.viewOnly')}
           </button>
+          <div className="group-send-status">
+            <span role="status">{groupSendProgress ? t('messageTester.sendingProgress', groupSendProgress) : ''}</span>
+            {isGroupSending && (
+              <button
+                type="button"
+                className="batch-cancel-btn"
+                onClick={cancelGroupSend}
+                disabled={groupSendCancelling}
+              >
+                {groupSendCancelling ? t('messageTester.batch.cancelling') : t('common.cancel')}
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="response-panel">
@@ -948,6 +1126,42 @@ export function MessageTester() {
                     <span className="detail-label">{t('messageTester.response.error')}</span>
                     <span className="detail-value" style={{ color: 'var(--error)' }}>
                       {response.error}
+                    </span>
+                  </div>
+                )}
+                {response.groups && (
+                  <div className="detail-row">
+                    <span className="detail-label">{t('messageTester.response.groups')}</span>
+                    <span className="detail-value">
+                      {t('messageTester.groupsSentSummary', {
+                        sent: response.groups.sent,
+                        total: response.groups.total,
+                      })}
+                    </span>
+                  </div>
+                )}
+                {response.groups && response.groups.failures.length > 0 && (
+                  <div className="detail-row group-failures">
+                    <span className="detail-label">{t('messageTester.response.error')}</span>
+                    <ul className="detail-value">
+                      {response.groups.failures.map(failure => (
+                        <li key={failure.id}>
+                          <strong>{failure.name}</strong>: {failure.error}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {response.groups && response.groups.notSent > 0 && (
+                  <div className="detail-row">
+                    <span className="detail-label">{t('messageTester.response.notSent')}</span>
+                    <span className="detail-value">
+                      {response.groups.stoppedBy === 'refusal'
+                        ? t('messageTester.groupSendStopped', {
+                            count: response.groups.notSent,
+                            status: response.groups.refusedWith,
+                          })
+                        : t('messageTester.groupSendCancelled', { count: response.groups.notSent })}
                     </span>
                   </div>
                 )}

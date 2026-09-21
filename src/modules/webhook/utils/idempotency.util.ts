@@ -88,6 +88,12 @@ export function generateIdempotencyKey(event: string, data: Record<string, unkno
       // always sends 'logged out'), which would otherwise collapse every disconnect onto one key.
       return `disc_${toStr(data.sessionId)}_${hashData({ reason: data.reason })}${occurrence}`;
 
+    case 'session.reconnect_loop':
+      // Salted per occurrence: once the backoff hits its cap, a later outage that loops to the same
+      // attempt count produces a byte-identical payload, and that second alert must not collapse
+      // onto the first at the receiver or in the outbox and failure tables.
+      return `loop_${toStr(data.sessionId)}_${toStr(data.attempts)}${occurrence}`;
+
     case 'session.restriction':
       // Keyed on what changed (`kind` is null when a restriction is lifted) and salted per
       // occurrence: an account that is restricted, freed and restricted again for the same cause

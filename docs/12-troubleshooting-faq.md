@@ -213,11 +213,11 @@ curl -H "X-API-Key: $API_KEY" \
 # Check WhatsApp engine logs
 docker compose logs openwa-api 2>&1 | grep -i "whatsapp\|puppeteer\|browser"
 
-# Check auth folder. Both engines key it on the session NAME, but the location differs:
-#   whatsapp-web.js → SESSION_DATA_PATH (default /app/data/sessions), dir `session-<name>`
-#   baileys         → BAILEYS_AUTH_DIR  (default /app/data/baileys),  dir `<name>` (no prefix)
-docker compose exec openwa-api ls -la /app/data/sessions/session-<name>/   # whatsapp-web.js
-docker compose exec openwa-api ls -la /app/data/baileys/<name>/            # baileys
+# Check auth folder. Both engines key it on the session UUID id, but the location differs:
+#   whatsapp-web.js → SESSION_DATA_PATH (default /app/data/sessions), dir `session-<id>`
+#   baileys         → BAILEYS_AUTH_DIR  (default /app/data/baileys),  dir `<id>` (no prefix)
+docker compose exec openwa-api ls -la /app/data/sessions/session-<id>/   # whatsapp-web.js
+docker compose exec openwa-api ls -la /app/data/baileys/<id>/            # baileys
 ```
 
 **Solutions:**
@@ -231,10 +231,10 @@ docker compose exec openwa-api ls -la /app/data/baileys/<name>/            # bai
 | WhatsApp blocked      | Set a per-session proxy (`proxyUrl`) |
 
 ```bash
-# Clear auth and restart (the profile dir carries the session NAME, not its UUID id).
+# Clear auth and restart (the profile dir carries the session's UUID id, not its name).
 # Remove the one that matches the session's engine — deleting the other path is a silent no-op.
-docker compose exec openwa-api rm -rf /app/data/sessions/session-<name>   # whatsapp-web.js
-docker compose exec openwa-api rm -rf /app/data/baileys/<name>            # baileys
+docker compose exec openwa-api rm -rf /app/data/sessions/session-<id>   # whatsapp-web.js
+docker compose exec openwa-api rm -rf /app/data/baileys/<id>            # baileys
 docker compose restart openwa-api
 ```
 
@@ -249,6 +249,41 @@ Proxy egress (if WhatsApp is blocked on your network) is configured **per sessio
 `proxyUrl`/`proxyType` fields on `POST /api/sessions` — it is **not** an environment variable, and an
 unreachable proxy silently blocks the WhatsApp WebSocket (see the _No QR code appears, or `/start`
 returns `504`_ entry below).
+
+### Issue: Linking asks for a passkey and never completes (both engines)
+
+**Symptoms:**
+
+- The phone shows "Create a passkey to log in" or "Continue on your other device" during linking, by QR or by pairing code
+- The session stays `qr_ready` on both engines; on Baileys the log shows `408` or `428` close loops, and a pairing code never appears
+- On whatsapp-web.js the page shows a "Quick security check with Passkey" modal that never succeeds
+
+**Cause:** WhatsApp added a passkey (WebAuthn) step to its companion linking handshake for some
+accounts. That step is enforced server-side inside the linking frames, which live in the engine
+libraries; neither whatsapp-web.js 1.34.7 nor Baileys 7.0.0-rc14 implements it, and OpenWA passes the
+QR string and the pairing-code request straight through to those libraries. There is no OpenWA-side
+fix, and nothing on the client side changes the outcome: switching engine, using a pairing code instead
+of a QR, or presenting a different client identity (`BAILEYS_BROWSER_NAME` or otherwise) all end at the
+same gate. Re-registering the number as a different account type has also been tried by the community
+and did not hold; the block returned on its own within days. Tracked in
+[#560](https://github.com/rmyndharis/OpenWA/issues/560) and upstream in
+[WhiskeySockets/Baileys#2672](https://github.com/WhiskeySockets/Baileys/issues/2672); the only durable
+change will come from the engine libraries implementing the step.
+
+### Issue: Phone-number pairing fails with "Couldn't link device" (Baileys)
+
+**Symptoms:**
+
+- `POST /api/sessions/:sessionId/pairing-code` returns a code, but the phone answers "Couldn't link device" after it is entered
+- The engine log then shows a `401` close with `Session disconnected: logged out`, the auth directory is cleared, and the session comes back at `qr_ready` with no phone
+- Linking the same account by QR works
+
+**Cause:** the pairing request carries the linked-device identity, and some accounts reject a
+non-standard one. The default device name is `OpenWA`; set `BAILEYS_BROWSER_NAME=Ubuntu` (or another
+standard OS name), restart OpenWA itself (the name is read at boot, so stopping and starting the session
+is not enough), and request a fresh code. The name applies to new pairings only;
+a session that is already linked keeps the name it was paired with until it is re-linked. See the
+phone-number pairing example in `docs/examples/session-phone-number-pairing.md`.
 
 ### Issue: No QR code appears, or `POST /api/sessions/:sessionId/start` returns `504`
 
@@ -275,6 +310,14 @@ curl -X POST "$BASE/api/sessions" -H "X-API-Key: $API_KEY" -H "Content-Type: app
 
 > ℹ️ Proxy egress for the `whatsapp-web.js` engine is configured **per session** via the
 > `proxyUrl`/`proxyType` fields on `POST /api/sessions` — not via environment variables.
+
+> ℹ️ A `504` whose body starts with `Engine initialization timed out after ...` is a **different**
+> failure with a different fix: initialization never finished at all. That happens when WhatsApp Web,
+> the network or the session proxy is unreachable in a way that hangs the connection instead of
+> failing it, and when the browser stalls during startup (typically a container memory or resource
+> limit). Check egress to `web.whatsapp.com`, the session's `proxyUrl` and the container's memory
+> limit. The auth poll that produces the message above only starts once the page has loaded, so it
+> never fires for a connection that hangs before that.
 
 ### Issue: Session stuck at `authenticating`, never reaches `ready`
 
@@ -419,7 +462,7 @@ custom container that drops the `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` setup or th
 
 **Cause D — Debian 12 OS Chromium SIGTRAP in non-root Pods.**
 If `Code: null` happens on Kubernetes, and the host kernel logs or `dmesg` shows `Trace/breakpoint trap (core dumped)` with exit code 133, the underlying Debian 12 OS `chromium` package has crashed due to strict non-root or seccomp constraints (even with `--no-zygote` or `Unconfined` seccomp).
-_Fix:_ On amd64, do not use the `chromium` package from Debian's `apt` — it SIGTRAPs under strict non-root/seccomp. Instead, download Chrome for Testing via Puppeteer during the Docker build (`./node_modules/.bin/puppeteer browsers install 'chrome@146.0.7680.31'`) and point `PUPPETEER_EXECUTABLE_PATH` to it. (Chrome for Testing has no linux-arm64 build, so arm64 keeps Debian's `chromium`, which ships a native arm64 binary.) The official `Dockerfile` implements this mixed approach.
+_Fix:_ On amd64, do not use the `chromium` package from Debian's `apt` — it SIGTRAPs under strict non-root/seccomp. Instead, download Chrome for Testing via Puppeteer during the Docker build (`./node_modules/.bin/puppeteer browsers install 'chrome@153.0.8010.36'`) and point `PUPPETEER_EXECUTABLE_PATH` to it. (arm64 keeps Debian's `chromium`, which ships a native arm64 binary, by choice: Chrome for Testing publishes linux-arm64 builds only from 153, and the image has not moved arm64 to one.) The official `Dockerfile` implements this mixed approach.
 
 **Quick triage:** run `docker stats openwa-api`, click **Start**, and watch which resource spikes toward its
 limit the instant before the failure — that tells you A vs B. If neither moves and you see the crashpad
@@ -437,7 +480,7 @@ show:
 Protocol error (Runtime.callFunctionOn): Execution context was destroyed.
 ```
 
-**Cause:** The session's persistent browser profile (`<SESSION_DATA_PATH>/session-<name>`, created by
+**Cause:** The session's persistent browser profile (`<SESSION_DATA_PATH>/session-<id>`, created by
 whatsapp-web.js's `LocalAuth`) was built with a different Chromium/Chrome binary than the one the new
 image runs. A browser profile carries binary-bound state (page caches, GPU shader caches, IndexedDB /
 Local Storage version markers) that is not safely portable across Chromium major versions or binary
@@ -448,16 +491,25 @@ reads like a Puppeteer bug and gives no hint that the profile is the cause — t
 advisory when it detects this error, and the session's `lastError` (the message the dashboard shows on
 the session card) carries a short form of it, so the pointer survives without reading the container log.
 
+**Rolling back to an older browser** does not raise this error. An older Chrome silently deletes the
+IndexedDB of a profile a newer Chrome has opened, and that is where whatsapp-web.js keeps the WhatsApp
+login: every previously linked session starts at a QR code instead of reconnecting, the log names no
+cause (0.23.3 and 0.23.4 log only a generic `relink_required` warning), and upgrading again does not bring
+the pairing back. On amd64 this follows a rollback from 0.23.5 or later (Chrome for Testing 153) to 0.23.4
+or earlier (146); on arm64, a rollback to an image built with an older Debian chromium major. Restoring
+`sessions/` from a backup taken before the first start on the newer image keeps the pairing (see the
+upgrade runbook's rollback in docs/11); without one, scan a new QR.
+
 **Fix:** delete the affected session's profile dir and start the session again to scan a new QR. The
 profile cannot be salvaged — clearing only the cache subdirs (`Cache`, `GPUCache`, `Code Cache`, …) is
 **not** enough, the taint is deeper than the caches — so a one-time re-authentication is required.
 
-The profile dir is named after the session **name**, while the REST API addresses a session by its
-**id** (a UUID) — so the two placeholders below are different values:
+The profile dir is named after the session **id** (the UUID the REST API addresses it by), so
+`GET /api/sessions` gives you the value for both commands below:
 
 ```bash
-docker exec openwa-api rm -rf /app/data/sessions/session-<name>
-# then POST /sessions/<id>/force-kill and POST /sessions/<id>/start (the session's UUID id), and scan the new QR
+docker exec openwa-api rm -rf /app/data/sessions/session-<id>
+# then POST /sessions/<id>/force-kill and POST /sessions/<id>/start, and scan the new QR
 ```
 
 Re-creating the session (`DELETE /sessions/<id>`) also purges its profile dir; create it again and
@@ -502,20 +554,20 @@ acknowledged before the companion device is allowed to stay linked. The adapter 
 and only gives up after five clicks that fail to land — at that point a human must click through it
 once, so the session stops instead of being silently unlinked by WhatsApp about five minutes later.
 
-> **If the modal is not in English:** the detector matches the English button label (`Continue`) and
-> heading ("What's new"). The language WhatsApp Web renders in follows the browser locale, which OpenWA
-> does not set, so it is whatever the browser the container launches defaults to
-> (`PUPPETEER_EXECUTABLE_PATH` — Chrome for Testing on amd64, Debian's `chromium` on arm64). You can
-> pin it yourself by appending `--lang=en-US` to `PUPPETEER_ARGS` — that variable **replaces** the
-> default list rather than adding to it, so repeat the existing flags too (dropping `--no-sandbox` in
-> a container stops Chromium launching at all). If your deployment does get a
-> localised modal, it is **not** auto-dismissed and the session never reaches `action_required` —
-> instead it links normally, then drops to `disconnected` with reason `LOGOUT` a few minutes later and
-> the device disappears from the phone's Linked devices list. That miss is no longer silent: when the
-> watcher finds a visible dialog it cannot match, it logs a warning (`action:
-onboarding_dialog_unrecognized`) carrying the dialog's heading and button labels — the label to add
-> via `WWEBJS_ONBOARDING_CONTINUE_LABELS`, and the heading worth reporting — minutes before the unlink
-> would happen. Because that path wipes the stored
+> **If the modal is not in English:** by default the detector matches only the English button label
+> (`Continue`) under the English heading ("What's new"). OpenWA appends `--lang=en-US` to the browser
+> flags unless `PUPPETEER_ARGS` already carries a `--lang`, but that sets the browser's language, and
+> WhatsApp Web may still render in the account's own language. For another language, add the modal's
+> confirm-button label to `WWEBJS_ONBOARDING_CONTINUE_LABELS` (for example `Continuar`) and restart
+> OpenWA itself: the value is read at boot, so stopping and starting the session is not enough. A
+> configured label is clicked
+> without the English heading check, but only on a button inside a visible dialog. If your deployment gets a
+> localised modal without a matching label, it is **not** auto-dismissed and the session never reaches
+> `action_required`; instead it links normally, then drops to `disconnected` with reason `LOGOUT` a few
+> minutes later and the device disappears from the phone's Linked devices list. That miss is not
+> silent: when the watcher finds a visible dialog it cannot match, it logs a warning
+> (`action: onboarding_dialog_unrecognized`) carrying the dialog's heading and button labels, including
+> the label to add, minutes before the unlink would happen. Because that path wipes the stored
 > credentials, the automatic reconnect comes back with a fresh QR on its own, so the session is
 > usually already sitting at `qr_ready` rather than needing a manual start. Acknowledge the modal once
 > in a browser signed in as that account, then scan the QR. It does not recur — the modal is shown
@@ -575,7 +627,10 @@ The reconnect backoff is configured **per session**, not by environment variable
 
 `reconnectBaseDelay` is the exponential-backoff base in milliseconds (clamped to 1000–300000,
 default 5000). `maxReconnectAttempts` is clamped to 0–20 — `0` disables auto-reconnect entirely, and
-leaving it unset means unlimited retries with the delay parking at a 1-hour cap. Subscribe to the
+leaving it unset means unlimited retries with the delay parking at a 5-minute cap. Both keys bound
+the gateway's own reconnect. On Baileys that is only the reconnect after a logged-out close: every
+other drop is retried inside the engine, with a fixed 1s to 60s backoff and no attempt cap, so a
+session behind an unreachable network keeps retrying there whatever these keys say. Subscribe to the
 `session.reconnect_loop` webhook to be alerted on every 5th consecutive attempt.
 
 On a slow host, raise the first-boot init wait with `WWEBJS_AUTH_TIMEOUT_MS` (see _QR generation
@@ -1316,7 +1371,7 @@ available_events:
   - group.join_request # Someone asked to join a group this session administers
 
   # Calls
-  - call.received # Incoming call ringing (payload: callId, from, isVideo, isGroup, timestamp)
+  - call.received # Incoming call ringing (not reliable on whatsapp-web.js; payload: callId, from, isVideo, isGroup, timestamp)
 ```
 
 **Q: Webhook payload format?**

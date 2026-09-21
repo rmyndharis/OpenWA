@@ -4,6 +4,7 @@ import {
   mapEngineHistoryMessage,
   mergeChatMessages,
   mergeReactionSnapshot,
+  liveMessageMetadata,
   type EngineHistoryMessage,
 } from './chatMessages.ts';
 import type { ChatMessage } from '../services/api';
@@ -70,6 +71,19 @@ test('mapEngineHistoryMessage: a media message that DID carry media keeps it (no
 
 test('mapEngineHistoryMessage: a text message gets no media metadata', () => {
   assert.equal(mapEngineHistoryMessage(hist({ type: 'text' })).metadata, undefined);
+});
+
+test('liveMessageMetadata: carries inbound prompt buttons from the live WS payload', () => {
+  const buttons = [
+    { id: 'yes', text: 'Sim' },
+    { id: 'no', text: 'Não' },
+  ];
+  assert.deepEqual(liveMessageMetadata({ buttons }), { buttons });
+});
+
+test('liveMessageMetadata: prefers an existing metadata bag over top-level fields', () => {
+  const metadata = { quotedMessage: { id: 'q', body: 'hi' } };
+  assert.deepEqual(liveMessageMetadata({ buttons: [{ id: 'yes', text: 'Sim' }], metadata }), metadata);
 });
 
 test('mergeChatMessages: an engine-only message (no DB row) is included — the backfill case', () => {
@@ -190,6 +204,14 @@ test('mergeOrAppend: an echo with undefined leaves keeps the existing quote/call
   const echo = msg({ id: 'm-1', metadata: { media: undefined } });
   const after = mergeOrAppend(before, echo);
   assert.deepEqual(after[0].metadata, { quotedMessage: { id: 'q-1', body: 'quoted' } });
+});
+
+test('mergeOrAppend: DB-persisted prompt buttons survive a button-less echo', () => {
+  const buttons = [{ id: 'yes', text: 'Sim' }];
+  const before = [msg({ id: 'm-1', metadata: { buttons } })];
+  const echo = msg({ id: 'm-1', metadata: { media: undefined } });
+  const after = mergeOrAppend(before, echo);
+  assert.deepEqual(after[0].metadata?.buttons, buttons);
 });
 
 test('mergeOrAppend dedupes a live WS message against its DB copy (id != id but same waMessageId)', () => {

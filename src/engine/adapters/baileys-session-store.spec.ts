@@ -46,6 +46,111 @@ describe('BaileysSessionStore', () => {
     expect(store.listContacts()).toHaveLength(1);
   });
 
+  it('does not let a later history-sync row wipe a saved name with undefined', () => {
+    // Baileys history contacts always include `name: displayName || name || username || undefined`.
+    // Spreading that onto an address-book upsert that already had a name used to clear it.
+    store.upsertContacts([{ id: '628111@s.whatsapp.net', name: 'Alice', notify: 'Al' }]);
+    store.upsertContacts([{ id: '628111@s.whatsapp.net', name: undefined, notify: 'Al' }]);
+    expect(store.findContact('628111@s.whatsapp.net')).toMatchObject({ name: 'Alice', pushName: 'Al' });
+  });
+
+  it('prefers the named twin when one person occupies both a lid and a phone entry', () => {
+    // History sync and app state can key the same person twice. Only one entry carries the saved
+    // name, and answering with the other reported a saved contact as unknown.
+    store.upsertContacts([{ id: '111@lid', notify: 'Al' }]);
+    store.upsertContacts([{ id: '628111@s.whatsapp.net', lid: '111@lid', name: 'Alice' }]);
+
+    expect(store.findContact('111@lid')).toMatchObject({ name: 'Alice', isMyContact: true });
+    expect(store.findContact('628111@c.us')).toMatchObject({ name: 'Alice', isMyContact: true });
+  });
+
+  it('answers a lid lookup with the phone number when both twins carry a saved name', () => {
+    // The preference above is keyed on `name` alone, so when BOTH entries are named the queried
+    // dialect wins. For a lid query that is the lid-keyed entry, whose `number` is empty unless it
+    // is derived from the resolved id: a saved contact answered with no phone number at all.
+    store.upsertContacts([{ id: '111@lid', name: 'Alice' }]);
+    store.upsertContacts([{ id: '628111@s.whatsapp.net', lid: '111@lid', name: 'Alice' }]);
+
+    expect(store.findContact('111@lid')).toMatchObject({ id: '628111@c.us', name: 'Alice', number: '628111' });
+  });
+
+  it('lists a person once when both of their entries carry a saved name', () => {
+    // Both project to the same neutral id once the lid resolves, so listing both puts two rows
+    // sharing one id into GET /contacts.
+    store.upsertContacts([{ id: '111@lid', name: 'Alice' }]);
+    store.upsertContacts([{ id: '628111@s.whatsapp.net', lid: '111@lid', name: 'Alice' }]);
+
+    expect(store.listContacts()).toEqual([
+      expect.objectContaining({ id: '628111@c.us', name: 'Alice', number: '628111' }),
+    ]);
+  });
+
+  it('answers for a saved lid-only contact whose lid has no mapping', () => {
+    // Projecting a contact resolves its lid through the store's OWN contacts map, and a read there
+    // moves the entry to the most-recent end. Listing over the live map therefore handed this entry
+    // back forever. A regression HANGS this file rather than failing it: the loop is synchronous, so
+    // no test timeout can interrupt it. A stuck run on this spec means the snapshot went away.
+    store.upsertContacts([{ id: '111@lid', name: 'Alice' }]);
+
+    expect(store.listContacts()).toEqual([
+      expect.objectContaining({ id: '111@lid', name: 'Alice', number: '', isMyContact: true }),
+    ]);
+  });
+
+  it('folds two twins by content, not by which one was touched last', () => {
+    // The store is LRU-ordered, so iteration order tracks traffic: an inbound message touches the
+    // lid twin on every message. Letting order decide meant the list answered with whichever twin
+    // had been quiet, dropping a pushname the other had just learned and flipping back later.
+    store.upsertContacts([{ id: '111@lid', name: 'Alice', notify: 'Ali', imgUrl: 'http://p/a.jpg' }]);
+    store.upsertContacts([{ id: '628111@s.whatsapp.net', lid: '111@lid', name: 'Alice' }]);
+
+    const first = store.listContacts();
+    expect(first).toEqual([
+      {
+        id: '628111@c.us',
+        name: 'Alice',
+        pushName: 'Ali', // filled from the lid twin, which is the only side that has one
+        number: '628111', // and the number from the phone twin, which is the only side with that
+        isMyContact: true,
+        isBlocked: false,
+        profilePicUrl: 'http://p/a.jpg',
+      },
+    ]);
+
+    // Touch the lid twin the way an inbound message does, moving it to the recent end, and read again.
+    expect(store.findContact('111@lid')).toBeTruthy();
+    expect(store.listContacts()).toEqual(first);
+  });
+
+  it('accepts a contact keyed only by lid (id omitted) and finds it by phone', () => {
+    store.upsertContacts([{ lid: '111@lid', phoneNumber: '628111@s.whatsapp.net', name: 'Ada' }]);
+    expect(store.findContact('111@lid')?.name).toBe('Ada');
+    expect(store.findContact('628111@c.us')?.name).toBe('Ada');
+    expect(store.listContacts()[0]).toMatchObject({ id: '628111@c.us', name: 'Ada', number: '628111' });
+  });
+
+  it('drops groups/newsletters/status from the contact map (they are not address-book entries)', () => {
+    store.upsertContacts([
+      { id: '120363-9@g.us', name: 'Team' },
+      { id: '123@newsletter', name: 'Channel' },
+      { id: 'status@broadcast' },
+      { id: '628111@s.whatsapp.net', name: 'Alice' },
+    ]);
+    expect(store.listContacts()).toHaveLength(1);
+    expect(store.findContact('120363-9@g.us')).toBeNull();
+    expect(store.findContact('628111@c.us')?.name).toBe('Alice');
+  });
+
+  it('does not promote a chat partner into the address book', () => {
+    store.upsertChats([
+      { id: '628111@s.whatsapp.net', name: 'Alice' },
+      { id: '120363-9@g.us', name: 'Team' },
+    ]);
+    expect(store.findContact('628111@c.us')).toBeNull();
+    expect(store.listContacts()).toHaveLength(0);
+    expect(store.listChats()).toHaveLength(2);
+  });
+
   /**
    * Baileys documents `name` as the one YOU saved and `notify` as the pushname the contact set
    * themselves, so a contact carrying only `notify` is not in the addressbook. Reporting true for
@@ -60,6 +165,7 @@ describe('BaileysSessionStore', () => {
     expect(store.findContact('628222@s.whatsapp.net')?.isMyContact).toBe(false);
     // The pushname still surfaces either way; it is the addressbook claim that changed.
     expect(store.findContact('628222@s.whatsapp.net')?.pushName).toBe('Bob');
+    expect(store.listContacts()).toEqual([expect.objectContaining({ id: '628111@c.us', name: 'Alice' })]);
   });
 
   describe('archived, pinned and muted state', () => {
@@ -543,25 +649,54 @@ describe('BaileysSessionStore', () => {
       return new BaileysSessionStore(lidStore);
     };
 
-    it('evicts the oldest contact once over the cap; the miss reads as "unknown"', () => {
+    it('evicts the oldest unsaved contact once over the cap; the miss reads as "unknown"', () => {
       const s = storeWithCap('2');
-      s.upsertContacts([{ id: '628111@s.whatsapp.net', name: 'A' }]);
-      s.upsertContacts([{ id: '628222@s.whatsapp.net', name: 'B' }]);
-      s.upsertContacts([{ id: '628333@s.whatsapp.net', name: 'C' }]);
-      expect(s.listContacts()).toHaveLength(2);
-      expect(s.findContact('628111@s.whatsapp.net')).toBeNull(); // evicted — same as never seen
-      expect(s.findContact('628222@s.whatsapp.net')?.name).toBe('B');
-      expect(s.findContact('628333@s.whatsapp.net')?.name).toBe('C');
+      s.upsertContacts([{ id: '628111@s.whatsapp.net', notify: 'A' }]);
+      s.upsertContacts([{ id: '628222@s.whatsapp.net', notify: 'B' }]);
+      s.upsertContacts([{ id: '628333@s.whatsapp.net', notify: 'C' }]);
+      expect(s.findContact('628111@s.whatsapp.net')).toBeNull(); // evicted, same as never seen
+      expect(s.findContact('628222@s.whatsapp.net')?.pushName).toBe('B');
+      expect(s.findContact('628333@s.whatsapp.net')?.pushName).toBe('C');
     });
 
     it('treats a read as usage: a refreshed entry survives while a stale one is evicted (LRU)', () => {
       const s = storeWithCap('2');
-      s.upsertContacts([{ id: '628111@s.whatsapp.net', name: 'A' }]);
-      s.upsertContacts([{ id: '628222@s.whatsapp.net', name: 'B' }]);
-      expect(s.findContact('628111@s.whatsapp.net')?.name).toBe('A'); // refresh A
-      s.upsertContacts([{ id: '628333@s.whatsapp.net', name: 'C' }]); // evicts B, not A
-      expect(s.findContact('628111@s.whatsapp.net')?.name).toBe('A');
+      s.upsertContacts([{ id: '628111@s.whatsapp.net', notify: 'A' }]);
+      s.upsertContacts([{ id: '628222@s.whatsapp.net', notify: 'B' }]);
+      expect(s.findContact('628111@s.whatsapp.net')?.pushName).toBe('A'); // refresh A
+      s.upsertContacts([{ id: '628333@s.whatsapp.net', notify: 'C' }]); // evicts B, not A
+      expect(s.findContact('628111@s.whatsapp.net')?.pushName).toBe('A');
       expect(s.findContact('628222@s.whatsapp.net')).toBeNull();
+    });
+
+    it('still caches peers once the saved contacts alone fill the cap', () => {
+      // The cap governs the peer population. Measuring the whole map instead made a full address
+      // book evict each new peer in the very call that inserted it, so `GET /contacts/:id` stopped
+      // resolving anyone who is not saved, and chat titles fell back to the raw number.
+      const s = storeWithCap('2');
+      s.upsertContacts([{ id: '628111@s.whatsapp.net', name: 'Alice' }]);
+      s.upsertContacts([{ id: '628222@s.whatsapp.net', name: 'Bob' }]);
+
+      s.upsertContacts([{ id: '629001@s.whatsapp.net', notify: 'peer one' }]);
+      s.upsertContacts([{ id: '629002@s.whatsapp.net', notify: 'peer two' }]);
+
+      expect(s.findContact('629001@s.whatsapp.net')?.pushName).toBe('peer one');
+      expect(s.findContact('629002@s.whatsapp.net')?.pushName).toBe('peer two');
+      expect(s.findContact('628111@s.whatsapp.net')?.name).toBe('Alice');
+      expect(s.findContact('628222@s.whatsapp.net')?.name).toBe('Bob');
+    });
+
+    it('keeps the saved address book when unsaved peers overflow the cap', () => {
+      // The two populations share one map: a handful of contacts the account saved, and every peer
+      // seen once in a group or a broadcast. Only the second grows without limit, and it used to
+      // evict the first, emptying GET /contacts on a busy session.
+      const s = storeWithCap('3');
+      s.upsertContacts([{ id: '628111@s.whatsapp.net', name: 'Alice' }]);
+      for (let i = 0; i < 50; i++) {
+        s.upsertContacts([{ id: `62${9000 + i}@s.whatsapp.net`, notify: `peer ${i}` }]);
+      }
+      expect(s.findContact('628111@s.whatsapp.net')?.name).toBe('Alice');
+      expect(s.listContacts()).toEqual([expect.objectContaining({ name: 'Alice' })]);
     });
 
     it('bounds chats: listChats stays at the cap and drops the oldest conversation', () => {
@@ -633,23 +768,27 @@ describe('BaileysSessionStore', () => {
     it('treats 0 as unbounded (legacy behaviour)', () => {
       const s = storeWithCap('0');
       for (let i = 0; i < 100; i++) {
-        s.upsertContacts([{ id: `62${1000 + i}@s.whatsapp.net` }]);
+        s.upsertContacts([{ id: `62${1000 + i}@s.whatsapp.net`, name: 'x' }]);
       }
       expect(s.listContacts()).toHaveLength(100);
     });
 
     it('falls back to the 5000 default for a garbage override', () => {
       const s = storeWithCap('not-a-number');
-      s.upsertContacts(Array.from({ length: 5001 }, (_, i) => ({ id: `62${100000 + i}@s.whatsapp.net` })));
-      expect(s.listContacts()).toHaveLength(5000);
+      // Unsaved peers: the cap governs exactly this population (a saved contact is pinned).
+      s.upsertContacts(Array.from({ length: 5001 }, (_, i) => ({ id: `62${100000 + i}@s.whatsapp.net`, notify: 'x' })));
       expect(s.findContact('62100000@s.whatsapp.net')).toBeNull(); // the oldest went first
+      // Only the oldest: one entry over a 5000 cap evicts exactly one, which is what pins the default.
+      expect(s.findContact('62100001@s.whatsapp.net')).not.toBeNull();
       expect(s.findContact('62105000@s.whatsapp.net')).not.toBeNull();
     });
 
     it('treats a blank override as unset, not as 0 (unbounded)', () => {
       const s = storeWithCap('');
-      s.upsertContacts(Array.from({ length: 5001 }, (_, i) => ({ id: `62${100000 + i}@s.whatsapp.net` })));
-      expect(s.listContacts()).toHaveLength(5000);
+      s.upsertContacts(Array.from({ length: 5001 }, (_, i) => ({ id: `62${100000 + i}@s.whatsapp.net`, notify: 'x' })));
+      expect(s.findContact('62100000@s.whatsapp.net')).toBeNull();
+      expect(s.findContact('62100001@s.whatsapp.net')).not.toBeNull();
+      expect(s.findContact('62105000@s.whatsapp.net')).not.toBeNull();
     });
   });
 });

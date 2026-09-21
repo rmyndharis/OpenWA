@@ -59,7 +59,7 @@ export async function readLeanContacts(): Promise<LeanContact[]> {
       isMyContact: m.isMyContact,
       isBlocked: m.isBlocked,
     });
-    // ponytail: yield every 256 contacts so the getState() liveness probe can interleave (#1501);
+    // Yield every 256 contacts so the getState() liveness probe can interleave (#1501);
     // raise the stride if the read ever gets too chatty on a very large address book.
     if ((i & 0xff) === 0xff) await new Promise(resolve => setTimeout(resolve));
   }

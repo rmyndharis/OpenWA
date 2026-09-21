@@ -8,7 +8,7 @@ import { ToStrictNumber } from '../../../common/utils/strict-boolean';
  */
 export class UpsertLabelDto {
   @ApiPropertyOptional({
-    description: 'Label name. Omit to leave the current name untouched.',
+    description: 'Label name. The write replaces the whole label, so an omitted name is not preserved.',
     example: 'VIP customer',
     minLength: 1,
     maxLength: 100,
@@ -24,7 +24,7 @@ export class UpsertLabelDto {
   @ApiPropertyOptional({
     description:
       "WhatsApp's colour INDEX (0-19), not a hex value — the read path's `hexColor` cannot be " +
-      'translated back, because neither engine exposes the mapping. Omit to leave the colour alone.',
+      'translated back, because neither engine exposes the mapping. An omitted colour is not preserved.',
     example: 3,
     minimum: 0,
     maximum: 19,

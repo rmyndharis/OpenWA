@@ -208,9 +208,10 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
     credentials: corsPolicy.credentials,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization', 'X-Request-ID'],
-    // The throttlers are named (short/medium/long, plus instance on ingress), so @nestjs/throttler
-    // suffixes every rate-limit header with the throttler name — the unsuffixed variants are never
-    // sent. Expose the suffixed names so browser clients can actually read them.
+    // The throttlers are named (short/medium/long, plus instance and ingress-ip on ingress), so
+    // @nestjs/throttler suffixes every rate-limit header with the throttler name. Expose the suffixed
+    // names so browser clients can actually read them, plus the plain `Retry-After` the guard adds
+    // on top of them, which is not CORS-safelisted either.
     exposedHeaders: [
       'X-RateLimit-Limit-short',
       'X-RateLimit-Remaining-short',
@@ -227,6 +228,7 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
       'X-RateLimit-Limit-ingress-ip',
       'X-RateLimit-Remaining-ingress-ip',
       'X-RateLimit-Reset-ingress-ip',
+      'Retry-After',
       'Retry-After-short',
       'Retry-After-medium',
       'Retry-After-long',

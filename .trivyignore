@@ -35,47 +35,28 @@ CVE-2026-69152
 # it cannot regress below it — the same invariant the brace-expansion note describes, which is what
 # keeps an ID-level ignore honest. Drop this entry once npm ships a bundle with ip-address >= 10.3.1.
 CVE-2026-69192
-# CVE-2026-76033 / -76036 / -76037 / -76038 / -76039 / -76040 / -76041 / -76043 / -76044 / -76045 /
-# -76047: Chromium, arm64 image ONLY. Eleven ids, 33 findings.
+
+# Chromium: no entry, and the two architectures are not scanned alike.
 #
-# Each lands on `chromium`, `chromium-common` and `chromium-sandbox`, which is why eleven ids produce
-# thirty-three findings. They are arm64-only by construction: Chrome for Testing publishes no
-# linux-arm64 build, so amd64 uses CfT while arm64 installs Debian's chromium (Dockerfile, TARGETARCH
-# branch). Only the arm64 image carries the Debian package, and the amd64 scan is clean.
+# arm64 installs Debian's `chromium` and `chromium-sandbox` (Dockerfile, TARGETARCH branch) by choice;
+# Chrome for Testing publishes linux-arm64 builds only from 153 on, and the image has not moved arm64 to
+# one. Those are dpkg packages, so the scan sees them and a fixable HIGH/CRITICAL fails it.
+# `ignore-unfixed` still hides every chromium CVE Debian has not fixed yet, so a passing arm64 scan
+# does not mean the browser has no open advisories. Measured on 2026-09-15 against
+# ghcr.io/rmyndharis/openwa:main (arm64, the release flags minus `ignore-unfixed`): `chromium`,
+# `chromium-common` and `chromium-sandbox` each carry 2 CRITICAL and 15 HIGH advisories in state
+# "affected", i.e. Debian has published no fix. That exposure is accepted for the release: the
+# alternative is moving arm64 off the Debian package to Chrome for Testing, which publishes
+# linux-arm64 builds from 153 on. Re-measure with
+# `trivy image --severity CRITICAL,HIGH --platform linux/arm64 ghcr.io/rmyndharis/openwa:<tag>`
+# when deciding whether the number still fits. The eleven chromium CVEs this file used to accept
+# (between CVE-2026-76033 and CVE-2026-76047) were fixed in 151.0.7922.169, and bookworm-security has
+# shipped newer chromium builds since.
 #
-# THE FIX EXISTS UPSTREAM BUT NOT IN DEBIAN YET. The image has 151.0.7922.137-1~deb12u1 and Trivy
-# names 151.0.7922.169-1~deb12u1 as fixed. Checked against the security mirror's own package index at
-# the time of writing: bookworm-security still serves .137 for both arm64 and amd64. The release build
-# is not stale; it fetched from bookworm-security with no cached apt layer (`no-cache-filters:
-# production`) and installed the newest version that exists. Rebuilding today changes nothing.
-#
-# Exposure, stated honestly rather than talked down. Unlike the earlier chromium batch, where two of
-# the four were sandbox escapes that `--no-sandbox` made irrelevant, NONE of these are neutralised by
-# how the container runs:
-#  - Eight are arbitrary or remote code execution in the renderer: v8 type confusion (-76038, -76047),
-#    v8 miscalculation (-76043), Dawn (-76036), WebGL use-after-free (-76045), a use-after-free
-#    (-76040), a race condition (-76044) and link following (-76037).
-#  - One is a site isolation bypass (-76033) and two are information disclosure (-76039, -76041).
-# Chromium renders content the sender controls (message bodies, link previews, images), so a crafted
-# message is a plausible path to code execution as the `openwa` user inside the arm64 container. The
-# container is the confinement boundary (cap_drop ALL, no-new-privileges, read_only rootfs), and that
-# is all that stands behind it. This is accepted deliberately so the release can ship while Debian has
-# no fixed build, NOT because it is harmless.
-#
-# Drop all eleven the moment bookworm ships chromium >= 151.0.7922.169 (watch
-# https://security-tracker.debian.org/tracker/source-package/chromium) and re-run the release scan
-# with them removed before assuming they are gone.
-CVE-2026-76033
-CVE-2026-76036
-CVE-2026-76037
-CVE-2026-76038
-CVE-2026-76039
-CVE-2026-76040
-CVE-2026-76041
-CVE-2026-76043
-CVE-2026-76044
-CVE-2026-76045
-CVE-2026-76047
+# amd64 downloads a Chrome for Testing binary into /opt/puppeteer. No dpkg package owns it and no
+# lockfile names it, so neither the OS nor the library scanner can see it: a clean amd64 scan says
+# nothing about the browser. Its version is the pin in the Dockerfile, and no scan will flag that pin
+# as outdated.
 
 # CVE-2026-73566 — node-tar denial of service via a crafted long-path archive entry, fixed
 # upstream in 7.5.21.

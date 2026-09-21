@@ -266,8 +266,8 @@ describe('Message send endpoints (e2e)', () => {
     expect(engine.sendTextMessage).not.toHaveBeenCalled();
   });
 
-  it('send-template without either identifier is a 404 naming the requirement', async () => {
-    const res = await post('send-template', { chatId: '628123@c.us' }).expect(404);
+  it('send-template without either identifier is a 400 naming the requirement', async () => {
+    const res = await post('send-template', { chatId: '628123@c.us' }).expect(400);
 
     expect((res.body as { message: string }).message).toBe('Either templateId or templateName must be provided');
     expect(engine.sendTextMessage).not.toHaveBeenCalled();

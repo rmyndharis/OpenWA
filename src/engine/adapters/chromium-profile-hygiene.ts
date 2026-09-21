@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import type { LoggerService } from '../../common/services/logger.service';
+import { wwjsAuthDir } from '../auth-dir-paths';
 
 /**
  * Chromium/profile hygiene run before a whatsapp-web.js browser launches.
@@ -92,7 +93,7 @@ export async function removeStaleSingletonFiles(
   sessionDataPath: string,
   logger: HygieneLogger,
 ): Promise<void> {
-  const profileDir = path.join(path.resolve(sessionDataPath), `session-${sessionId}`);
+  const profileDir = wwjsAuthDir(sessionDataPath, sessionId);
   for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
     try {
       await fs.promises.rm(path.join(profileDir, name), { force: true });

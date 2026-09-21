@@ -7,6 +7,7 @@
   },
   "common": {
     "appName": "OpenWA",
+    "updateAvailable": "v{{version}} available",
     "loading": "Loading...",
     "cancel": "Cancel",
     "delete": "Delete",
@@ -114,6 +115,7 @@
     "groupSubtitle": "Group",
     "privateContactSubtitle": "Private contact",
     "deleteConfirm": "Delete this message for everyone?",
+    "promptButtons": "Message choices",
     "messageDeleted": "🚫 This message was deleted",
     "messageMasked": "🔒 Masked by WhatsApp for linked devices — check your primary phone",
     "kind": {
@@ -163,6 +165,7 @@
       "send": "Failed to send message",
       "react": "Failed to react to message",
       "delete": "Failed to delete message",
+      "clickButton": "Failed to click button",
       "fileTooLarge": "File is too large (max 18 MB)"
     },
     "loadMessagesError": "Couldn't load messages. Check the server logs.",
@@ -286,7 +289,8 @@
     },
     "start": {
       "teardownPendingTitle": "Session Starting",
-      "teardownPending": "A credential teardown for this session is still settling. Wait a moment and try again."
+      "teardownPending": "A credential teardown for this session is still settling. Wait a moment and try again.",
+      "errorTitle": "Start Failed"
     },
     "qr": {
       "title": "Scan QR Code",
@@ -310,7 +314,7 @@
       "created": "Created",
       "lastActive": "Last Active",
       "autoRejectCalls": "Auto-reject calls",
-      "autoRejectCallsHint": "Incoming calls are declined as soon as they ring. The call.received webhook still fires first. Applies to the next call — no restart needed."
+      "autoRejectCallsHint": "Incoming calls are declined as soon as they ring. The call.received webhook still fires first. Applies to the next call, no restart needed. Baileys engine only: whatsapp-web.js cannot reject calls."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -384,6 +388,7 @@
       "phoneLabel": "Phone Number",
       "phonePlaceholder": "e.g., 919876543210",
       "phoneHint": "Digits only (no +, spaces, or dashes) in international format (country code + number).",
+      "relinkWarning": "On the whatsapp-web.js engine, requesting a code for a number that already has a linked session can make WhatsApp unlink that device. Use the QR tab if that session must stay up.",
       "invalidPhone": "Enter a valid phone number: 6–15 digits, country code first, no symbols.",
       "generateButton": "Generate Pairing Code",
       "generating": "Generating pairing code...",
@@ -432,6 +437,7 @@
       "fields": {
         "sender": "Sender",
         "recipient": "Recipient",
+        "chatId": "Chat ID",
         "body": "Message body",
         "type": "Message type",
         "isGroup": "Is group chat",
@@ -519,7 +525,10 @@
       "title": "No templates saved",
       "description": "Create a reusable template to speed up common replies and notifications.",
       "noSessionsTitle": "No sessions available",
-      "noSessionsDesc": "Create a WhatsApp session before adding templates."
+      "noSessionsDesc": "Create a WhatsApp session before adding templates.",
+      "loadErrorTitle": "Could not load templates",
+      "forbiddenTitle": "No access to templates",
+      "forbiddenDesc": "Templates require an API key with the operator or admin role."
     },
     "toasts": {
       "created": "Template created successfully",
@@ -637,6 +646,12 @@
     "loadingGroups": "Loading groups...",
     "noGroupsFound": "No groups found",
     "selectGroupHint": "Select a group from your WhatsApp",
+    "selectAllGroups": "Select all",
+    "selectMatchingGroups": "Select matches",
+    "clearGroupSelection": "Clear",
+    "groupsSelectedCount": "Selected: {{count}}/{{max}}",
+    "noGroupsMatch": "No groups match your search",
+    "forwardUsesFirstGroup": "Forward uses only the first selected group, as the chat to forward from.",
     "phoneHint": "Use international format without spaces",
     "messageType": "Message Type",
     "types": {
@@ -694,17 +709,29 @@
     "bulkRecipientsCount": "Recipients: {{count}}",
     "bulkDelay": "Delay Between Messages (ms)",
     "bulkDelayHint": "1000–60000 ms (default 3000)",
+    "bulkMediaKind": "Send as",
+    "bulkMediaHint": "With an attachment, the message becomes its caption. A picked file travels inside the request, so large files for many recipients need a public media URL instead.",
+    "bulkMediaTooLarge": "This file is too large to send inline to {{count}} recipients: at that count each file can be at most {{size}}. Use a public media URL instead, or send to fewer recipients.",
+    "bulkMediaUrlInvalid": "Use a full http:// or https:// address, like https://example.com/file.pdf.",
+    "bulkCaptionTooLong": "With an attachment the message goes out as its caption, which is limited to {{max}} characters ({{count}} now).",
+    "bulkAudioNoCaption": "Audio goes out without a caption, so this text would not be sent. Clear the message or pick another kind.",
     "send": "Send Message",
     "sending": "Sending...",
+    "sendingProgress": "Sending {{current}}/{{total}}...",
     "viewOnly": "View Only",
     "responseEmpty": "Send a message to see the API response",
     "successLabel": "Success",
     "failedLabel": "Failed",
+    "groupsSentSummary": "{{sent}}/{{total}} sent",
+    "groupSendCancelled": "{{count}}, cancelled",
+    "groupSendStopped": "{{count}}, stopped after HTTP {{status}}",
     "response": {
       "timestamp": "Timestamp",
       "messageId": "Message ID",
       "batchId": "Batch ID",
-      "error": "Error"
+      "error": "Error",
+      "groups": "Groups",
+      "notSent": "Not sent"
     },
     "sendFailed": "Failed to send message",
     "notOnWhatsApp": "This number is not registered on WhatsApp",

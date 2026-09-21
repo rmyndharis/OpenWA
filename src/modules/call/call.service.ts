@@ -18,8 +18,8 @@ export class CallService {
 
   /**
    * Reject a currently-ringing incoming call. An unknown or no-longer-ringing callId surfaces
-   * as 404 via the adapter's CallNotFoundError; EngineNotSupportedError would map to 501 (both
-   * engines support rejectCall today, so no special-casing here).
+   * as 404 via the Baileys adapter's CallNotFoundError; the whatsapp-web.js adapter throws
+   * EngineNotSupportedError, which maps to 501, so no special-casing here.
    */
   rejectCall(sessionId: string, callId: string): Promise<void> {
     return this.getEngine(sessionId).rejectCall(callId);

@@ -58,8 +58,8 @@ public record ChatHistoryMessage(
     public record Product(String productId, String title, String description, String businessOwnerJid) {}
 
     /**
-     * Sender contact info. History carries {@code pushName} only; the richer fields arrive on
-     * {@code message.received} when {@code WEBHOOK_CONTACT_DETAILS} is enabled.
+     * Sender contact info. History carries {@code name} and {@code pushName}; the richer fields
+     * are added when {@code WEBHOOK_CONTACT_DETAILS} is enabled, as on {@code message.received}.
      */
     public record Contact(
         String id,

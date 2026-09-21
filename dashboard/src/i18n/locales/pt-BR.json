@@ -7,6 +7,7 @@
   },
   "common": {
     "appName": "OpenWA",
+    "updateAvailable": "v{{version}} disponível",
     "loading": "Carregando...",
     "cancel": "Cancelar",
     "delete": "Excluir",
@@ -114,6 +115,7 @@
     "groupSubtitle": "Grupo",
     "privateContactSubtitle": "Contato privado",
     "deleteConfirm": "Excluir esta mensagem para todos?",
+    "promptButtons": "Opções da mensagem",
     "messageDeleted": "🚫 Esta mensagem foi excluída",
     "messageMasked": "🔒 Ocultada pelo WhatsApp em dispositivos vinculados — verifique no seu telefone principal",
     "kind": {
@@ -163,6 +165,7 @@
       "send": "Erro ao enviar a mensagem",
       "react": "Erro ao reagir à mensagem",
       "delete": "Erro ao excluir a mensagem",
+      "clickButton": "Erro ao clicar no botão",
       "fileTooLarge": "O arquivo é muito grande (máx. 18 MB)"
     },
     "loadMessagesError": "Não foi possível carregar as mensagens. Verifique os registros do servidor.",
@@ -306,7 +309,7 @@
       "created": "Criado em",
       "lastActive": "Última atividade",
       "autoRejectCalls": "Rejeitar chamadas automaticamente",
-      "autoRejectCallsHint": "As chamadas recebidas são recusadas assim que tocam. O webhook call.received continua sendo enviado antes. Vale a partir da próxima chamada — sem reiniciar."
+      "autoRejectCallsHint": "As chamadas recebidas são recusadas assim que tocam. O webhook call.received continua sendo enviado antes. Vale a partir da próxima chamada, sem reiniciar. Somente no mecanismo Baileys: o whatsapp-web.js não consegue recusar chamadas."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -380,6 +383,7 @@
       "phoneLabel": "Número de telefone",
       "phonePlaceholder": "ex.: 919876543210",
       "phoneHint": "Apenas dígitos (sem +, espaços ou hífens) no formato internacional (código do país + número).",
+      "relinkWarning": "No motor whatsapp-web.js, solicitar um código para um número que já tem uma sessão vinculada pode fazer o WhatsApp desvincular esse dispositivo. Use a aba de QR code se essa sessão precisar continuar ativa.",
       "invalidPhone": "Informe um número de telefone válido: 6–15 dígitos, com o código do país primeiro e sem símbolos.",
       "generateButton": "Gerar código de conexão",
       "generating": "Gerando código de conexão...",
@@ -394,7 +398,8 @@
     },
     "start": {
       "teardownPendingTitle": "Iniciando sessão",
-      "teardownPending": "A remoção de credenciais desta sessão ainda está em andamento. Aguarde um momento e tente novamente."
+      "teardownPending": "A remoção de credenciais desta sessão ainda está em andamento. Aguarde um momento e tente novamente.",
+      "errorTitle": "Erro ao iniciar"
     },
     "restriction": {
       "reachout_timelock": "Novas conversas bloqueadas",
@@ -432,6 +437,7 @@
       "fields": {
         "sender": "Remetente",
         "recipient": "Destinatário",
+        "chatId": "ID do chat",
         "body": "Corpo da mensagem",
         "type": "Tipo de mensagem",
         "isGroup": "É chat de grupo",
@@ -591,6 +597,12 @@
     "loadingGroups": "Carregando grupos...",
     "noGroupsFound": "Nenhum grupo encontrado",
     "selectGroupHint": "Selecione um grupo do seu WhatsApp",
+    "selectAllGroups": "Selecionar todos",
+    "selectMatchingGroups": "Selecionar resultados",
+    "clearGroupSelection": "Limpar",
+    "groupsSelectedCount": "Selecionados: {{count}}/{{max}}",
+    "noGroupsMatch": "Nenhum grupo corresponde à sua pesquisa",
+    "forwardUsesFirstGroup": "Encaminhar usa só o primeiro grupo selecionado, como conversa de origem.",
     "phoneHint": "Use formato internacional sem espaços",
     "messageType": "Tipo de mensagem",
     "types": {
@@ -648,17 +660,29 @@
     "bulkRecipientsCount": "Destinatários: {{count}}",
     "bulkDelay": "Intervalo entre mensagens (ms)",
     "bulkDelayHint": "1000–60000 ms (padrão: 3000)",
+    "bulkMediaKind": "Enviar como",
+    "bulkMediaHint": "Com um anexo, a mensagem vira a legenda dele. Um arquivo selecionado vai dentro da própria requisição, então arquivos grandes para muitos destinatários precisam de uma URL de mídia pública.",
+    "bulkMediaTooLarge": "Este arquivo é grande demais para enviar diretamente a {{count}} destinatários: com essa quantidade, cada arquivo pode ter no máximo {{size}}. Use uma URL de mídia pública ou envie para menos destinatários.",
+    "bulkMediaUrlInvalid": "Use um endereço completo com http:// ou https://, por exemplo https://example.com/file.pdf.",
+    "bulkCaptionTooLong": "Com um anexo, a mensagem é enviada como a legenda dele, que tem limite de {{max}} caracteres (agora {{count}}).",
+    "bulkAudioNoCaption": "O áudio é enviado sem legenda, então este texto não seria enviado. Limpe a mensagem ou escolha outro tipo.",
     "send": "Enviar mensagem",
     "sending": "Enviando...",
+    "sendingProgress": "Enviando {{current}}/{{total}}...",
     "viewOnly": "Somente leitura",
     "responseEmpty": "Envie uma mensagem para ver a resposta da API",
     "successLabel": "Sucesso",
     "failedLabel": "Falhou",
+    "groupsSentSummary": "{{sent}}/{{total}} enviados",
+    "groupSendCancelled": "{{count}}, cancelados",
+    "groupSendStopped": "{{count}}, interrompido após HTTP {{status}}",
     "response": {
       "timestamp": "Data/Hora",
       "messageId": "ID da mensagem",
       "batchId": "ID do lote",
-      "error": "Erro"
+      "error": "Erro",
+      "groups": "Grupos",
+      "notSent": "Não enviados"
     },
     "sendFailed": "Erro ao enviar a mensagem",
     "notOnWhatsApp": "Este número não está registrado no WhatsApp",
@@ -708,7 +732,10 @@
       "title": "Nenhum modelo salvo",
       "description": "Crie um modelo reutilizável para agilizar respostas e notificações habituais.",
       "noSessionsTitle": "Nenhuma sessão disponível",
-      "noSessionsDesc": "Crie uma sessão do WhatsApp antes de adicionar modelos."
+      "noSessionsDesc": "Crie uma sessão do WhatsApp antes de adicionar modelos.",
+      "loadErrorTitle": "Não foi possível carregar os modelos",
+      "forbiddenTitle": "Sem acesso aos modelos",
+      "forbiddenDesc": "Os modelos exigem uma chave de API com a função de operador ou administrador."
     },
     "toasts": {
       "created": "Modelo criado com sucesso",

@@ -167,6 +167,26 @@ describe('MessagesResource — exact paths', () => {
     expect(t.lastCall!.url).toContain('/messages/delete');
   });
 
+  it('clickButton posts to /messages/click-button', async () => {
+    const t = new MockTransport().on('POST', /\/messages\/click-button$/, {
+      body: { messageId: 'm2', timestamp: 9 },
+    });
+    const res = await client(t).messages.clickButton('s', {
+      chatId: 'a@c.us',
+      messageId: 'prompt1',
+      buttonId: 'yes',
+      text: 'Sim',
+    });
+    expect(t.lastCall!.url).toBe('http://x/api/sessions/s/messages/click-button');
+    expect(t.lastCall!.body).toEqual({
+      chatId: 'a@c.us',
+      messageId: 'prompt1',
+      buttonId: 'yes',
+      text: 'Sim',
+    });
+    expect(res.messageId).toBe('m2');
+  });
+
   it('editMessage posts to /messages/edit and returns the MessageResponse shape', async () => {
     const t = new MockTransport().on('POST', /\/messages\/edit$/, { body: { messageId: 'm1', timestamp: 4 } });
     const res = await client(t).messages.editMessage('s', { chatId: 'a@c.us', messageId: 'm1', body: 'edited' });

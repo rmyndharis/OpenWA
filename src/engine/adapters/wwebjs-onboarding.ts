@@ -10,13 +10,15 @@ export const ONBOARDING_DEFAULT_CONTINUE_LABEL = 'Continue';
  * Extra confirm-button labels for a deployment whose WhatsApp Web does not render this modal in
  * English, comma-separated (`WWEBJS_ONBOARDING_CONTINUE_LABELS=Continuar,Weiter`).
  *
- * Needed because the match is on visible text and WhatsApp controls those strings — we are not going
- * to carry its translation table. Read per probe, not cached, so an operator can correct a running
- * deployment through the infra config without a restart.
+ * Needed because the match is on visible text and WhatsApp controls those strings; we are not going
+ * to carry its translation table. The value comes from the environment loaded at boot, so a label
+ * added later takes effect only after OpenWA itself restarts; stopping and starting a session is not
+ * enough.
  *
  * Supplying labels also drops the heading requirement for THOSE labels: the English heading regex
  * would reject a localised modal anyway, so requiring both would make the setting useless. That is a
- * deliberate, operator-opted-in loosening — see {@link probeOnboardingModal}.
+ * deliberate, operator-opted-in loosening, bounded by requiring the button to sit inside a visible
+ * dialog; see {@link probeOnboardingModal}.
  */
 export function resolveOnboardingContinueLabels(): string[] {
   const extra = (process.env.WWEBJS_ONBOARDING_CONTINUE_LABELS ?? '')
@@ -43,12 +45,15 @@ export function resolveOnboardingContinueLabels(): string[] {
  * against `<body>` would just be the loose text test again.
  *
  * LANGUAGE. The default label and the heading are English, and the modal is rendered in whatever
- * language WhatsApp Web decides. Two things address that, both defaulting to today's behaviour:
- * the launch args pin `--lang` so the page has a deterministic locale, and an operator can add
- * their own labels (see {@link resolveOnboardingContinueLabels}). An operator-supplied label matches
- * WITHOUT the heading check — the English heading would reject a localised modal regardless, so
- * requiring both would make the setting inert. The default `Continue` keeps the heading requirement,
- * so the out-of-the-box false-positive surface is unchanged.
+ * language WhatsApp Web decides. The launch args pin `--lang=en-US`, which settles the browser's
+ * locale but not necessarily WhatsApp Web's: a deployment on a Portuguese account still reported the
+ * modal in Portuguese (#1679). Another language is covered by an operator-supplied label (see
+ * {@link resolveOnboardingContinueLabels}), which matches WITHOUT the heading check: the English
+ * heading would reject a localised modal regardless, so requiring both would make the setting inert.
+ * It does require a `[role="dialog"]` or `[aria-modal="true"]` ancestor, so the word is only clicked
+ * where a modal can be.
+ * The default `Continue` keeps the heading requirement, so the out-of-the-box false-positive surface
+ * is unchanged.
  */
 export function probeOnboardingModal(options?: { labels?: string[]; headingOptionalFor?: string[] }): {
   modalPresent: boolean;
@@ -66,8 +71,20 @@ export function probeOnboardingModal(options?: { labels?: string[]; headingOptio
   const candidates = Array.from(document.querySelectorAll('button, [role="button"]'))
     .map(el => ({ el, label: (el.textContent || '').trim() }))
     .filter(c => isVisible(c.el) && labels.includes(c.label));
+  // An operator label carries no heading check, so it has to sit inside a dialog at least: matched
+  // page-wide, the same word on any other button would be clicked, and every click counts toward the
+  // limit that takes a ready session to action_required. Same bounded walk and dialog markers as
+  // collectDialogDiagnostics, which is where operators read the label from.
+  const insideDialog = (el: Element): boolean => {
+    let scope: Element | null = el.parentElement;
+    for (let depth = 0; depth < 12 && scope; depth++, scope = scope.parentElement) {
+      if (scope.getAttribute('role') === 'dialog' || scope.getAttribute('aria-modal') === 'true') return true;
+    }
+    return false;
+  };
   for (const { el, label } of candidates.reverse()) {
     if (headingOptional.has(label)) {
+      if (!insideDialog(el)) continue;
       (el as HTMLElement).click();
       return { modalPresent: true, dismissed: true };
     }
@@ -315,9 +332,10 @@ export class WwebjsOnboardingWatcher {
             this.onboardingDialogSignatures.add(signature);
             this.host.logger.warn(
               'A visible dialog on WhatsApp Web matches neither the onboarding-modal heading nor a ' +
-                'confirm-button label. If this is the onboarding screen in an unrecognised title or ' +
-                'language, WhatsApp will unlink this companion within minutes: add its confirm-label ' +
-                'via WWEBJS_ONBOARDING_CONTINUE_LABELS, and report the heading so detection can cover it.',
+                'confirm-button label. If this is the onboarding screen in another language, add its ' +
+                'confirm-button label to WWEBJS_ONBOARDING_CONTINUE_LABELS and restart OpenWA; on a ' +
+                'newly linked account WhatsApp unlinks the companion within minutes while it stays open. ' +
+                'An English onboarding screen that is not recognised is worth reporting.',
               {
                 sessionId: this.host.config.sessionId,
                 dialogs,

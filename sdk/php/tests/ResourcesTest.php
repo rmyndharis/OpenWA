@@ -40,6 +40,15 @@ class ResourcesTest extends TestCase
         $this->assertSame('DELETE', $backend->lastCall()['method']);
     }
 
+    public function testSessionListSendsName(): void
+    {
+        $backend = new MockBackend();
+        $backend->on(200, []);
+        $client = $backend->makeClient();
+        $client->sessions->list(['name' => 'my-bot']);
+        $this->assertStringContainsString('name=my-bot', $backend->lastCall()['url']);
+    }
+
     public function testQrPairingStats(): void
     {
         $backend = new MockBackend();

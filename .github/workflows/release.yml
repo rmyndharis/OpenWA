@@ -180,6 +180,9 @@ jobs:
           POSTGRES_USER: openwa
           POSTGRES_PASSWORD: openwa
           POSTGRES_DB: openwa
+          # Same as ci.yml: initdb takes the server's default TimeZone from this, so the data
+          # connection's session pin has something to override.
+          TZ: Asia/Jakarta
         ports:
           - 5432:5432
         options: >-
@@ -216,19 +219,22 @@ jobs:
 
       # Runtime-proves BuiltInFtsProvider on Postgres (websearch_to_tsquery + ts_headline against the
       # STORED body_ts tsvector), the boot-migration advisory lock (two concurrent migrators on one
-      # database), that a paged message list has a total order, and that the data entities can build
+      # database), that a paged message list has a total order, that the data entities can build
       # their own schema (raw SQL the ORM passes through verbatim, such as a partial index predicate,
-      # only case-folds on a real server). All four self-skip unless DATABASE_TYPE=postgres, so they
-      # are a no-op in the default test job and only execute here against the postgres:16 service.
-      - name: Postgres specs (FTS provider + boot-migration lock + list ordering + entity synchronize)
+      # only case-folds on a real server), and that the UTC pin holds across a backup round trip, a
+      # retention window and a local-midnight count. All five self-skip unless DATABASE_TYPE=postgres,
+      # so they are a no-op in the default test job and only execute here against the postgres:16
+      # service. TZ is deliberately not UTC, for the reason ci.yml states.
+      - name: Postgres specs (FTS provider + boot-migration lock + list ordering + entity synchronize + UTC pin)
         # --runInBand: same reason the CI job passes it — both specs issue DDL against the one
         # shared service database, and jest's default file-parallelism races their catalog writes
         # (the first v0.19.0 tag failed this step on `relation "messages" already exists` over a
         # tree CI had passed minutes earlier). The lock spec's own two-migrator race is in-file
         # (Promise.all) and unaffected by runInBand. The synchronize spec additionally CREATEs and
         # DROPs a scratch database of its own, which is only safe serialized.
-        run: npx jest --runInBand src/database/migrations/__tests__/1782400000000-AddMessagesFts.pg.spec.ts src/database/migrations/__tests__/pg-boot-migrations.pg.spec.ts src/modules/message/message-list-ordering.pg.spec.ts src/database/migrations/__tests__/pg-entity-synchronize.pg.spec.ts
+        run: npx jest --runInBand src/database/migrations/__tests__/1782400000000-AddMessagesFts.pg.spec.ts src/database/migrations/__tests__/pg-boot-migrations.pg.spec.ts src/modules/message/message-list-ordering.pg.spec.ts src/database/migrations/__tests__/pg-entity-synchronize.pg.spec.ts src/database/postgres-utc.pg.spec.ts
         env:
+          TZ: Asia/Jakarta
           DATABASE_TYPE: postgres
           DATABASE_HOST: localhost
           DATABASE_PORT: '5432'
@@ -492,14 +498,16 @@ jobs:
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Never serve the production stage's `apt-get update && apt-get install` from cache. That
+          # Never serve the production stage's `apt-get update && apt-get upgrade && apt-get install` from cache. That
           # layer's cache key is its own command text, which does not change when Debian publishes a
           # security update — so a cached hit silently installs whatever the apt index held when the
           # layer was first built, and the release image ships known-vulnerable packages. It is not a
           # theoretical risk: the first two v0.12.3 attempts installed chromium 150.0.7871.181 from a
           # cached layer while bookworm-security already carried 151.0.7922.71 on BOTH architectures,
-          # and image-scan failed with 228 then 240 findings. The builder stage keeps its cache, so
-          # only the OS-package layer is rebuilt.
+          # and image-scan failed with 228 then 240 findings. The filter names a whole stage, so every
+          # layer of `production` is rebuilt, not only the OS-package one: the PGDG client, the
+          # production `npm ci`, the browser download and the COPY --from=builder steps too. Only the
+          # builder stage keeps its cache.
           no-cache-filters: production
 
   # ──── Boot Smoke (amd64 + arm64) ──────────────────────────────────
@@ -591,7 +599,10 @@ jobs:
   # cannot give: audit sees the npm tree, but the Debian packages baked into node:22-slim — and, on
   # arm64 only, the `chromium`/`chromium-sandbox` packages the amd64 image never installs (amd64 uses
   # a downloaded Chrome-for-Testing binary, not a .deb) — are visible only by scanning the built
-  # artifact. Both architectures are scanned because their OS package sets diverge. Runs at release
+  # artifact. Both architectures are scanned because their OS package sets diverge. The amd64
+  # browser is outside that coverage: no dpkg package owns the Chrome for Testing binary and no
+  # lockfile names it, so neither scanner sees it and a clean amd64 scan says nothing about the
+  # browser (.trivyignore records the same, next to the arm64 chromium note). Runs at release
   # time, not on every PR, so it never hits the fork-PR permission limits a push/PR scan would.
   # `ignore-unfixed` keeps a release from being blocked by a CVE with no fix yet; a fixable
   # HIGH/CRITICAL fails the job and — via promote's `needs` below — stops the release tags.
@@ -799,7 +810,12 @@ jobs:
   verify-published:
     name: Verify published tags (anonymous)
     runs-on: ubuntu-latest
-    needs: [docker, promote]
+    # After cleanup-staging, not beside it: GHCR's package-versions API is eventually consistent, so
+    # that job can read a version whose release tags are not listed yet and delete the version the
+    # release just published. This check is the net for exactly that, so it has to run last. It is a
+    # best-effort job, so gate on promote rather than on its result.
+    needs: [docker, promote, cleanup-staging]
+    if: always() && needs.promote.result == 'success'
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4

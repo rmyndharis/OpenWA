@@ -193,6 +193,34 @@ export class InfraCurrentEngineResponseDto {
   engineType!: string;
 }
 
+// ---------- GET /infra/update-check ----------
+
+export class InfraUpdateCheckResponseDto {
+  @ApiProperty({ description: 'Version of the running code.', example: '0.23.5' })
+  current!: string;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      'Latest published release, or null when the check is off or GitHub has not been reached yet. A ' +
+      'later failed check keeps the last known release.',
+    example: '0.23.6',
+  })
+  latest!: string | null;
+
+  @ApiProperty({ description: 'Whether `latest` is newer than `current`.', example: true })
+  updateAvailable!: boolean;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: 'Release notes page for `latest`.',
+    example: 'https://github.com/rmyndharis/OpenWA/releases/tag/v0.23.6',
+  })
+  releaseUrl!: string | null;
+}
+
 // ---------- GET /infra/config ----------
 
 export class InfraConfigDatabaseDto {

@@ -25,6 +25,8 @@ import { toParticipantWid } from '../identity/wa-id';
  * delegate never touches lifecycle state directly.
  */
 export interface BaileysGroupsHost {
+  /** This session's egress proxy URL (snapshotted at session start), or undefined when direct. */
+  sessionProxyUrl(): string | undefined;
   ensureReady(): void;
   /** Post-ensureReady socket handle — call host.ensureReady() first. */
   getSocket(): WASocket;
@@ -423,7 +425,7 @@ export class BaileysGroups {
   async setGroupPicture(groupId: string, media: MediaInput): Promise<void> {
     this.host.ensureReady();
     // Same socket call as the own-account picture, addressed at the group JID.
-    const { data } = await resolveMediaBuffer(media);
+    const { data } = await resolveMediaBuffer(media, this.host.sessionProxyUrl());
     await mapServerRefusal('Setting the group picture', () =>
       this.confirmed(this.sock().updateProfilePicture(groupId, data), 'the group picture change'),
     );

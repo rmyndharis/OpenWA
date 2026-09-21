@@ -168,7 +168,7 @@ class ChatPresence(TypedDict, total=False):
 class UpsertLabelRequest(TypedDict, total=False):
     """A label create-or-update body. The id travels in the path -- WhatsApp keys the write on it."""
 
-    # Leave out to keep the current name.
+    # Not preserved when left out: the write replaces the whole label.
     name: str
     # WhatsApp's colour INDEX (0-19), NOT a hex value -- it does not round-trip with the hexColor
     # labels are read back with, because neither engine exposes the mapping.
@@ -560,8 +560,8 @@ class MessageProduct(TypedDict):
 
 
 class MessageContact(TypedDict, total=False):
-    """Sender contact block. History carries ``pushName`` only; the richer fields arrive on
-    ``message.received`` when ``WEBHOOK_CONTACT_DETAILS`` is enabled."""
+    """Sender contact block. History carries ``name`` and ``pushName``; the richer fields are
+    added when ``WEBHOOK_CONTACT_DETAILS`` is enabled, as on ``message.received``."""
 
     id: Jid
     number: str
@@ -933,6 +933,26 @@ class WebhookTestResult(TypedDict, total=False):
     error: str
 
 
+class WebhookDeliveryFailure(TypedDict):
+    """A webhook delivery abandoned after every retry, as listed by the delivery-failure log."""
+
+    id: str
+    webhookId: str
+    sessionId: str
+    event: str
+    url: str
+    # The idempotency key the receiver would have deduped on.
+    idempotencyKey: NotRequired[str | None]
+    deliveryId: NotRequired[str | None]
+    # Total attempts made before giving up.
+    attempts: int
+    # Last HTTP status when the failure was a non-2xx response; None for a network or timeout error.
+    lastStatusCode: NotRequired[int | None]
+    lastError: str
+    # ISO timestamp of when the delivery was finally abandoned.
+    createdAt: str
+
+
 # ── Chat ──────────────────────────────────────────────────────────
 
 
@@ -1082,6 +1102,15 @@ class VotePollRequest(TypedDict):
     chatId: str
     pollMessageId: str
     options: list[str]
+
+
+class ClickButtonRequest(TypedDict):
+    """Click a choice on a WhatsApp Business prompt. Baileys only."""
+
+    chatId: str
+    messageId: str
+    buttonId: str
+    text: NotRequired[str]
 
 
 class StarMessageRequest(TypedDict):

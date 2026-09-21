@@ -67,14 +67,14 @@ export function labelTools(labels: LabelService): AnyToolDescriptor[] {
       inputSchema: z.object({
         sessionId,
         labelId,
-        name: z.string().min(1).max(100).optional().describe('Label text; left unchanged when omitted'),
+        name: z.string().min(1).max(100).optional().describe('Label text; not preserved when omitted'),
         color: z
           .number()
           .int()
           .min(0)
           .max(19)
           .optional()
-          .describe('WhatsApp colour index 0-19; left unchanged when omitted'),
+          .describe('WhatsApp colour index 0-19; not preserved when omitted'),
       }),
       handler: input =>
         labels

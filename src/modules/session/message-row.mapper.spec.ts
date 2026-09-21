@@ -26,6 +26,19 @@ describe('buildMessageMetadata', () => {
     expect(buildMessageMetadata(msg({ call }))).toEqual({ call });
   });
 
+  it('stores prompt buttons', () => {
+    const buttons = [
+      { id: 'yes', text: 'Sim' },
+      { id: 'no', text: 'Não' },
+    ];
+
+    expect(buildMessageMetadata(msg({ buttons }))).toEqual({ buttons });
+  });
+
+  it('ignores an empty buttons array', () => {
+    expect(buildMessageMetadata(msg({ buttons: [] }))).toBeUndefined();
+  });
+
   it('stores every present field together', () => {
     const built = buildMessageMetadata(
       msg({
@@ -33,10 +46,11 @@ describe('buildMessageMetadata', () => {
         media: { mimetype: 'image/png' },
         quotedMessage: { id: 'q' },
         call: { video: false, missed: false },
+        buttons: [{ id: 'ok', text: 'OK' }],
       } as Partial<IncomingMessage>),
     );
 
-    expect(Object.keys(built!).sort()).toEqual(['call', 'media', 'quotedMessage']);
+    expect(Object.keys(built!).sort()).toEqual(['buttons', 'call', 'media', 'quotedMessage']);
   });
 
   describe('omitted-media synthesis', () => {

@@ -3,6 +3,7 @@ import { SkipThrottle } from '@nestjs/throttler';
 import { ApiTags, ApiOkResponse, ApiParam, ApiResponse } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { Public } from '../auth/decorators/auth.decorators';
+import { ackContentType, safeAckHeaders } from './ingress-ack';
 import { IngressService } from './ingress.service';
 import { InstanceThrottlerGuard } from './instance-throttler.guard';
 
@@ -49,7 +50,7 @@ export class IngressController {
   })
   @ApiOkResponse({
     description:
-      'GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202.',
+      'GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery is answered with the same ack as the first delivery, so it is not distinguishable by status.',
   })
   @ApiResponse({
     status: 202,
@@ -62,7 +63,12 @@ export class IngressController {
   @ApiResponse({
     status: 429,
     description:
-      'Rate limit exceeded: the per-instance bucket (INGRESS_INSTANCE_LIMIT) or the per-client-IP bucket (INGRESS_IP_LIMIT). The `Retry-After-instance` / `Retry-After-ingress-ip` header names which one shed the request.',
+      'Rate limit exceeded: the per-instance bucket (INGRESS_INSTANCE_LIMIT) or the per-client-IP bucket (INGRESS_IP_LIMIT). The `Retry-After-instance` / `Retry-After-ingress-ip` header names which one shed the request, and a plain `Retry-After` carries the same delay for a client that reads only the standard name.',
+  })
+  @ApiResponse({
+    status: 503,
+    description:
+      "A route whose response contract declares a `session-alive` preflight, when the bound session's engine is not connected. The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay.",
   })
   async receive(
     @Param('pluginId') pluginId: string,
@@ -81,6 +87,19 @@ export class IngressController {
     const headers: Record<string, string> = Object.fromEntries(
       Object.entries(req.headers).map(([k, v]) => [k.toLowerCase(), Array.isArray(v) ? v.join(',') : String(v ?? '')]),
     );
+    // Express answers a repeated query parameter with an array, so the Record<string, string> the
+    // service is typed against is a promise the framework does not keep. The challenge path feeds
+    // these straight into a constant-time compare, which throws on anything that is not a string, so
+    // `?token=a&token=b` answered 500. Flattened here, the way the headers above already are: the
+    // first value wins, as URLSearchParams.get and most providers' own clients read it. The app runs
+    // Express's default 'simple' query parser, which never nests (`?a[b]=c` is the key `a[b]`), so
+    // the last arm is only there to keep the mapping total if that setting ever changes.
+    const flatQuery: Record<string, string> = Object.fromEntries(
+      Object.entries(query as Record<string, unknown>).map(([k, v]) => [
+        k,
+        Array.isArray(v) ? String(v[0] ?? '') : typeof v === 'string' ? v : '',
+      ]),
+    );
     const rawBody = req.rawBody?.toString('utf8') ?? '';
     const result = await this.ingress.handle({
       pluginId,
@@ -88,14 +107,16 @@ export class IngressController {
       route,
       method: req.method,
       headers,
-      query,
+      query: flatQuery,
       rawBody,
     });
-    if (result.headers) res.set(result.headers);
+    if (result.headers) res.set(safeAckHeaders(result.headers));
     // Both reflections echo provider-controlled strings (hub.challenge, the ack template). Express
-    // types a bare send() as text/html, which turns a reflection into XSS material on this origin —
-    // force text/plain so the browser refuses to parse it.
-    res.type('text/plain');
+    // types a bare send() as text/html, which turns a reflection into XSS material on this origin, so
+    // only a non-executable declared type survives and everything else is forced to text/plain. It
+    // reads the UNFILTERED headers on purpose: safeAckHeaders fences content-type precisely because
+    // this is the one place allowed to decide it.
+    res.type(ackContentType(result.headers));
     res.status(result.status).send(result.body ?? '');
   }
 }

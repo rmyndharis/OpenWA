@@ -35,10 +35,18 @@
 > ones are left alone, and a cleanly stopped session releases its claim so it is never
 > "lapsed". Adopting a session fails its stuck in-flight batches (no auto-resume — the dead
 > node's already-sent messages are unknowable). Adopting is gated by the same
-> `AUTO_START_SESSIONS` flag as boot auto-start; the sweep itself is not, because it also has a job
-> that starts nothing: a row a vanished node left in a running status is marked disconnected once its
-> lease has been silent for two TTLs. Nothing else revisits such a row, since the boot reset skips a
-> foreign claim that is still live.
+> `AUTO_START_SESSIONS` flag as boot auto-start; the sweep itself is not, and runs on every node,
+> because it also has a job that starts nothing: a row a vanished node left `ready`, `initializing`,
+> `authenticating` or `action_required` is marked disconnected once its lease expired more than two
+> TTLs ago, which is three TTLs after the holder's last renewal plus up to one sweep interval. A
+> `qr_ready` row is marked too while it has no phone, since the sweep never adopts a row without one;
+> a `qr_ready` row with a phone keeps its status, so the correction never makes it adoptable.
+> Nothing else revisits such a row, since the boot reset skips a foreign claim that is still live.
+>
+> Known limitation: a holder that is alive but cannot reach the database for more than three lease
+> TTLs minus one heartbeat (160s at defaults) is marked disconnected by a peer too, and does not write its status back when it reconnects. Its
+> renewal still finds its own claim, so it detects no loss, and a steadily connected engine emits no
+> new status. The row reads `disconnected` until that engine's status next changes.
 >
 > **Request routing now exists, opt-in via `NODE_URL`.** When every node sets its own
 > reachable URL (e.g. `NODE_URL=http://10.0.0.5:2785`), a session-scoped request landing on
@@ -52,11 +60,30 @@
 > which is exactly how a takeover begins. Without `NODE_URL` the whole path is inert and
 > single-node deployments pay nothing.
 >
+> **A failed forward says whether the owner could have acted.** When the owner cannot be
+> reached at all (connection refused, unresolvable or unusable `NODE_URL`), the answer is
+> `503` and the request was not carried out, so it is safe to retry. A timeout answers `504`
+> (no reply within `SESSION_PROXY_TIMEOUT_MS`), and any other failure answers `502` (the
+> connection broke, possibly after the request was sent; a TLS certificate the forwarding
+> node does not trust also lands here, with the cause code in its warning log): the owner
+> may already have carried it out, so a non-idempotent call such as a message send must not
+> be repeated blindly on either.
+>
 > **The lease compares timestamps written by different nodes, so their clocks must agree.** Each
 > node writes `leaseExpiresAt` from its own clock and reads every other node's the same way, so a
 > node whose clock runs more than one lease TTL (default 60s) ahead sees healthy peers as lapsed and
 > will take their sessions over. Run NTP (or any time sync) on every node — the default on ordinary
 > server images — and treat a skew larger than `SESSION_LEASE_TTL_MS` as a misconfiguration.
+> The status correction reads the same timestamps: a node whose clock runs more than three TTLs minus
+> one heartbeat ahead (160s at defaults) marks a healthy peer's sessions disconnected, even with
+> `AUTO_START_SESSIONS` off, and nothing writes them back. The zone each node runs in is no longer
+> part of this: on PostgreSQL the data connection binds, parses and defaults every timestamp in UTC
+> ([05 - Database Design](./05-database-design.md#timestamps-on-postgresql-are-utc)), so two nodes in
+> different zones, or one zone that observes daylight saving, still
+> read each other's leases as the instants they were written at. Only the clocks have to agree.
+> One exception, during an upgrade: a node still on 0.23.5 or earlier writes the lease in its own
+> local wall time, so while versions are mixed the old cross-zone error above is back for as long as
+> the older node keeps renewing. Running every node in `TZ=UTC` (the image default) removes it.
 >
 > **A forwarded request is throttled on both nodes.** The receiving node counts it before
 > forwarding, and the owner counts it again on arrival; with `REDIS_ENABLED=true` both counts land
@@ -72,14 +99,25 @@
 > the same flag the throttler and cache already use). The gateway broadcasts to rooms; a Redis
 > pub/sub adapter attached to Socket.IO relays those broadcasts to every replica, so a client
 > connected to node A receives an event raised on node B. Scope honestly: this distributes event
-> **fan-out only**. Mid-connection key eviction (`socketsByKeyId`) is still process-local — a key
-> revoked on node A tears down only A's sockets — as are the per-key WS rate-limit buckets (counted
-> per replica) and the engine registry. Without `REDIS_ENABLED` the adapter is inert and delivery
-> is single-node, exactly as before.
+> **fan-out only**. The per-key WS rate-limit buckets (counted per replica) and the engine registry
+> are still process-local. Without `REDIS_ENABLED` the adapter is inert and delivery is single-node,
+> exactly as before.
 >
-> **What does not exist yet, and is why one replica is still the answer.** The cross-replica gaps
-> just named (key eviction, WS rate-limit state) remain process-local. Not every lifecycle path is
-> fenced: the liveness watchdog and reconnect timers still act on whatever is in the local
+> **Mid-connection key eviction converges on a timer, not a broadcast.** The node that processes a
+> revoke, delete, or narrowing tears down that key's sockets synchronously, in the same request.
+> Nothing is published to peers; instead every node re-validates the keys behind its own live
+> sockets against the database once a minute (`EventsGateway.sweepApiKeyAuthorization`, one batched
+> read of the key ids currently holding sockets) and evicts on a row that is gone, inactive, expired,
+> or whose role, `allowedIps`, `allowedSessions` or expiry no longer matches the snapshot the socket
+> authenticated with. So a peer node's sockets close within a minute of the change. Before, a revoke,
+> delete or expiry there waited for the client's next subscribe, and a narrowing was never caught at
+> all: it leaves the key valid, so only the new subscribe is rejected while every room joined earlier
+> stays joined. That minute is the current worst case for a socket streaming events its key has just
+> lost; a key's REST calls are rejected immediately everywhere, since REST reads the row per request.
+>
+> **What does not exist yet, and is why one replica is still the answer.** The cross-replica gap just
+> named (WS rate-limit state) remains process-local. Not every lifecycle path is fenced: the
+> liveness watchdog and reconnect timers still act on whatever is in the local
 > registry. `BulkMessageService` keeps its live batch state in process, so a takeover cannot resume
 > a batch — only fail it. MCP/agent tool invocations execute on the node that received them rather
 > than being forwarded.

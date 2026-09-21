@@ -25,11 +25,17 @@ export function mapEngineHistoryMessage(h: EngineHistoryMessage): ChatMessage {
     status: 'read',
     timestamp: h.timestamp,
     createdAt: new Date((h.timestamp ?? 0) * 1000).toISOString(),
-    metadata: h.media
-      ? { media: h.media }
-      : HISTORY_MEDIA_TYPES.has(h.type)
-        ? { media: { mimetype: '', omitted: true } }
-        : undefined,
+    metadata: (() => {
+      const metadata: ChatMessageView['metadata'] = {};
+      if (h.media) {
+        metadata.media = h.media;
+      } else if (HISTORY_MEDIA_TYPES.has(h.type)) {
+        metadata.media = { mimetype: '', omitted: true };
+      }
+      if (h.quotedMessage) metadata.quotedMessage = h.quotedMessage;
+      if (h.call) metadata.call = h.call;
+      return Object.keys(metadata).length > 0 ? metadata : undefined;
+    })(),
   };
 }
 
@@ -129,7 +135,29 @@ export interface ChatMessageView extends ChatMessage {
     quotedMessage?: { id: string; body: string };
     reactions?: Record<string, string>;
     call?: { video: boolean; missed: boolean };
+    buttons?: Array<{ id: string; text: string }>;
   };
+}
+
+/**
+ * Metadata for a live `message.received` / `message.sent` WS payload. Prompt `buttons` arrive
+ * top-level on that event (the history route never populates them) and are folded here so the
+ * thread renders from `metadata.buttons`, matching persisted DB rows.
+ */
+export function liveMessageMetadata(msg: {
+  media?: MessageMedia;
+  quotedMessage?: { id: string; body: string };
+  call?: { video: boolean; missed: boolean };
+  buttons?: Array<{ id: string; text: string }>;
+  metadata?: ChatMessageView['metadata'];
+}): ChatMessageView['metadata'] {
+  if (msg.metadata) return msg.metadata;
+  const metadata: NonNullable<ChatMessageView['metadata']> = {};
+  if (msg.media) metadata.media = msg.media;
+  if (msg.quotedMessage) metadata.quotedMessage = msg.quotedMessage;
+  if (msg.call) metadata.call = msg.call;
+  if (msg.buttons?.length) metadata.buttons = msg.buttons;
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
 // Delivery ticks only ADVANCE, never regress. Live websocket events (incl. a replayed message.sent on
@@ -197,6 +225,8 @@ function mergeMessageMetadata(
   if (reactions) merged.reactions = reactions;
   const call = incoming.call ?? existing.call;
   if (call) merged.call = call;
+  const buttons = incoming.buttons ?? existing.buttons;
+  if (buttons?.length) merged.buttons = buttons;
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 

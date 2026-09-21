@@ -13,6 +13,8 @@ export default jest.fn();
 export const useMultiFileAuthState = jest.fn();
 export const fetchLatestBaileysVersion = jest.fn();
 export const getContentType = jest.fn();
+export const normalizeMessageContent = jest.fn((c: unknown) => c);
+export const generateWAMessageFromContent = jest.fn();
 export const DisconnectReason = { loggedOut: 401 };
 
 /**

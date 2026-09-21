@@ -96,17 +96,20 @@ class MessagesTest extends TestCase
         $backend = new MockBackend();
         $backend->on(201, ['messageId' => 'm', 'timestamp' => 1]);
         $backend->on(201, ['messageId' => 'm', 'timestamp' => 1]);
+        $backend->on(201, ['messageId' => 'm', 'timestamp' => 1]);
         $backend->on(200, ['success' => true]);
         $backend->on(200, ['success' => true]);
         $client = $backend->makeClient();
         $client->messages->reply('s', ['chatId' => 'a@c.us', 'quotedMessageId' => 'q', 'text' => 'r']);
         $this->assertStringContainsString('/messages/reply', $backend->calls()[0]['url']);
+        $client->messages->clickButton('s', ['chatId' => 'a@c.us', 'messageId' => 'p', 'buttonId' => 'yes', 'text' => 'Sim']);
+        $this->assertStringContainsString('/messages/click-button', $backend->calls()[1]['url']);
         $client->messages->forward('s', ['fromChatId' => 'a@c.us', 'toChatId' => 'b@c.us', 'messageId' => 'm']);
-        $this->assertStringContainsString('/messages/forward', $backend->calls()[1]['url']);
+        $this->assertStringContainsString('/messages/forward', $backend->calls()[2]['url']);
         $client->messages->react('s', ['chatId' => 'a@c.us', 'messageId' => 'm', 'emoji' => '👍']);
-        $this->assertStringContainsString('/messages/react', $backend->calls()[2]['url']);
+        $this->assertStringContainsString('/messages/react', $backend->calls()[3]['url']);
         $client->messages->delete('s', ['chatId' => 'a@c.us', 'messageId' => 'm']);
-        $this->assertStringContainsString('/messages/delete', $backend->calls()[3]['url']);
+        $this->assertStringContainsString('/messages/delete', $backend->calls()[4]['url']);
     }
 
     /**

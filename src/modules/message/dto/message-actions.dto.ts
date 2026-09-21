@@ -18,6 +18,7 @@ import {
   MENTIONS_DESCRIPTION,
   MENTIONS_MAX,
   MENTION_WID_MAX_LENGTH,
+  BUTTON_ID_MAX_LENGTH,
   MESSAGE_TEXT_MAX_LENGTH,
   QUOTED_MESSAGE_ID_DESCRIPTION,
   QUOTED_MESSAGE_ID_EXAMPLE,
@@ -285,6 +286,40 @@ export class VotePollDto {
   @ArrayMaxSize(POLL_VOTE_MAX_OPTIONS)
   @IsString({ each: true })
   options!: string[];
+}
+
+export class ClickButtonDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  chatId!: string;
+
+  @ApiProperty({ description: 'WhatsApp id of the business prompt message that offered the buttons.' })
+  @IsString()
+  @IsNotEmpty()
+  messageId!: string;
+
+  @ApiProperty({
+    description:
+      'Stable id of the choice to tap (inbound `buttons[].id`). URL/call CTA buttons cannot be clicked this way.',
+    maxLength: BUTTON_ID_MAX_LENGTH,
+  })
+  @IsString()
+  @IsNotEmpty()
+  // Bounded by what a choice id can actually be, not by the text cap: the engine never offers a
+  // choice whose id is longer, so anything past this could only ever answer "unknown button".
+  @MaxLength(BUTTON_ID_MAX_LENGTH)
+  buttonId!: string;
+
+  @ApiPropertyOptional({
+    description: 'Visible label of the choice. When omitted, resolved from the stored prompt; falls back to buttonId.',
+    maxLength: MESSAGE_TEXT_MAX_LENGTH,
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(MESSAGE_TEXT_MAX_LENGTH)
+  text?: string;
 }
 
 export class StarMessageDto {

@@ -5,6 +5,7 @@ import {
   InfraCurrentEngineResponseDto,
   InfraHealthResponseDto,
   InfraStatusResponseDto,
+  InfraUpdateCheckResponseDto,
 } from './dto/infra-response.dto';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -22,6 +23,7 @@ import { StorageService } from '../../common/storage/storage.service';
 import { createLogger } from '../../common/services/logger.service';
 import { readGeneratedEnv } from './generated-env';
 import { isEnvPinned } from '../../config/env-precedence';
+import { checkForUpdate, type UpdateCheck } from './update-check';
 
 interface InfraStatus {
   // `builtIn` reflects whether OpenWA's own bundled container is actually running and backing this
@@ -254,6 +256,19 @@ export class InfraStatusController {
   @ApiResponse({ status: 200, description: 'Current engine info', type: InfraCurrentEngineResponseDto })
   getCurrentEngine(): { engineType: string } {
     return { engineType: this.engineFactory.getCurrentEngine() };
+  }
+
+  @Get('update-check')
+  @RequireRole(ApiKeyRole.ADMIN)
+  @ApiOperation({
+    summary: 'Compare the running version with the latest OpenWA release',
+    description:
+      'Reads the latest published GitHub release through the SSRF-guarded fetch and caches it. ' +
+      'Set UPDATE_CHECK_ENABLED=false to turn the outbound request off.',
+  })
+  @ApiResponse({ status: 200, description: 'Update check result', type: InfraUpdateCheckResponseDto })
+  getUpdateCheck(): Promise<UpdateCheck> {
+    return checkForUpdate();
   }
 
   @Get('health')

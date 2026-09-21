@@ -35,6 +35,8 @@ interface ChatThreadProps {
   onReply: (message: ChatMessageView) => void;
   onReact: (message: ChatMessageView, emoji: string) => void;
   onDelete: (message: ChatMessageView) => void;
+  /** Tap a choice on an inbound business button/list prompt (Baileys click-button). */
+  onClickButton: (message: ChatMessageView, button: { id: string; text: string }) => Promise<void>;
 }
 
 // The messages area of the active chat room: the bubble list (media, quotes, reactions, hover
@@ -57,6 +59,7 @@ function ChatThread({
   onReply,
   onReact,
   onDelete,
+  onClickButton,
 }: ChatThreadProps) {
   const { t } = useTranslation();
 
@@ -70,6 +73,18 @@ function ChatThread({
   // overwrite the first, after which whichever settled first cleared the other's state — re-enabling
   // a button whose fetch was still open, and landing a failure marker on the wrong bubble.
   const [mediaFetch, setMediaFetch] = useState<Record<string, 'loading' | 'failed'>>({});
+  // In-flight / completed taps on inbound prompt buttons. Keyed by waMessageId so a second click on
+  // another choice of the same prompt is blocked while one request is open, and after success the
+  // row reads as answered (WhatsApp treats a prompt as single-choice once answered).
+  //
+  // Client-side and per-visit only: this is reset when the active chat changes, and a reload starts
+  // it empty, so an answered prompt becomes clickable again. Nothing below this component refuses a
+  // second answer, and WhatsApp accepts it as another reply to the same prompt, so the flag is a
+  // courtesy against a double click rather than a guarantee; making it durable means persisting the
+  // answered state with the message, not widening this state.
+  const [buttonClick, setButtonClick] = useState<
+    Record<string, { loadingId?: string; done?: boolean; selectedId?: string }>
+  >({});
   const downloadMedia = useCallback(
     async (message: ChatMessageView) => {
       const messageId = message.waMessageId;
@@ -99,6 +114,34 @@ function ChatThread({
       }
     },
     [sessionId, activeChat.id],
+  );
+
+  const handleClickButton = useCallback(
+    async (message: ChatMessageView, button: { id: string; text: string }) => {
+      const key = message.waMessageId || message.id;
+      if (!key) return;
+      let blocked = false;
+      setButtonClick(prev => {
+        if (prev[key]?.loadingId || prev[key]?.done) {
+          blocked = true;
+          return prev;
+        }
+        return { ...prev, [key]: { loadingId: button.id } };
+      });
+      if (blocked) return;
+      try {
+        await onClickButton(message, button);
+        setButtonClick(prev => ({ ...prev, [key]: { done: true, selectedId: button.id } }));
+      } catch {
+        // Parent already toasts; clear the in-flight state so the user can retry.
+        setButtonClick(prev => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+      }
+    },
+    [onClickButton],
   );
 
   // Scroll-to-bottom button visibility. The main scroll-position memory is owned by
@@ -136,9 +179,12 @@ function ChatThread({
   }, [messagesContainerRef]);
 
   // Reset the jump button whenever the active chat changes: the new chat's content is restored by
-  // useChatScrollPosition and our listener will resync on its first scroll tick.
+  // useChatScrollPosition and our listener will resync on its first scroll tick. The prompt-answer
+  // map goes with it: its ids belong to the chat being left, and holding them would disable a
+  // button in the chat being entered if the two ever shared a message id.
   useEffect(() => {
     setShowJumpToBottom(false);
+    setButtonClick({});
   }, [activeChat?.id]);
 
   // Helper formats
@@ -366,6 +412,29 @@ function ChatThread({
                     (!mediaInfo || msg.body !== mediaInfo.filename) &&
                     msg.type !== 'location' &&
                     msg.type !== 'call' && <MessageBody text={msg.body} className="message-text" />
+                  )}
+
+                  {/* Inbound business prompt choices; a tap calls POST .../messages/click-button. */}
+                  {!isMe && !isRevoked && !isMasked && (msg.metadata?.buttons?.length ?? 0) > 0 && (
+                    <div className="message-prompt-buttons" role="group" aria-label={t('chats.promptButtons')}>
+                      {msg.metadata!.buttons!.map((btn, idx) => {
+                        const clickKey = msg.waMessageId || msg.id;
+                        const state = buttonClick[clickKey];
+                        const loading = state?.loadingId === btn.id;
+                        const disabled = Boolean(state?.loadingId || state?.done);
+                        return (
+                          <button
+                            key={`${idx}:${btn.id}`}
+                            type="button"
+                            className={`message-prompt-button${state?.selectedId === btn.id ? ' selected' : ''}${state?.done ? ' answered' : ''}`}
+                            disabled={disabled}
+                            onClick={() => void handleClickButton(msg, btn)}
+                          >
+                            {loading ? <Loader2 size={14} className="animate-spin" /> : btn.text}
+                          </button>
+                        );
+                      })}
+                    </div>
                   )}
 
                   <div className="message-meta">

@@ -15,6 +15,8 @@ import {
 import {
   buildIncomingMessageFromBaileys,
   extractBaileysBody,
+  extractBaileysButtonReply,
+  extractBaileysButtons,
   extractBaileysCommerce,
   extractBaileysContext,
   extractBaileysLocation,
@@ -33,10 +35,12 @@ import {
   isMediaDownloadEnabled,
   withInboundDownloadTimeout,
 } from './inbound-media-cap';
+import type { Dispatcher } from 'undici';
 import type { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { type createLogger } from '../../common/services/logger.service';
 import { createSilentLogger } from './baileys-logger';
 import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
+import { parseWaId, userPart } from '../identity/wa-id';
 
 /**
  * Inbound event handling extracted from BaileysAdapter: the socket event handlers
@@ -76,6 +80,18 @@ const PRESENCE_STATES: ReadonlySet<PresenceState> = new Set<PresenceState>([
   'paused',
 ]);
 
+/**
+ * Top-level Message keys that carry no user content. A live message made only of these is dropped;
+ * messageContextInfo rides along on real content too, so on its own it is not enough to drop.
+ */
+const PROTOCOL_NOISE_KEYS: ReadonlySet<string> = new Set([
+  'senderKeyDistributionMessage',
+  'fastRatchetKeySenderKeyDistributionMessage',
+  'messageContextInfo',
+  'messageHistoryNotice',
+  'messageHistoryBundle',
+]);
+
 export interface BaileysEventsHost {
   /** Live socket handle for media re-upload requests (inbound media download). */
   getSocket(): WASocket;
@@ -86,8 +102,8 @@ export interface BaileysEventsHost {
   normalizedSelfJid(): string;
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
   loadLib(): Promise<typeof BaileysLib>;
-  /** Unix-seconds timestamp of the last 'open' connection.update — the live-vs-history discriminator. */
-  readonly connectedAt: number;
+  /** Session proxy dispatcher for the media download; undefined = direct. */
+  getFetchDispatcher(): Dispatcher | undefined;
   /** The adapter's inbound media download gate (shared so the bound holds across all inbound paths). */
   readonly inboundLimiter: ConcurrencyLimiter;
   /** Learn any lid->pn pair a message key carries (also writes through to the persistent table). */
@@ -98,6 +114,13 @@ export interface BaileysEventsHost {
   recordMessageEdit(chatId: string, messageId: string, text: string): void;
   /** Persist an inbound message to the store; undefined when no store is configured. */
   putStoredMessage(msg: WAMessage): Promise<void> | undefined;
+  /**
+   * True exactly once for the id of a message this session sent through the API, whose library echo
+   * is arriving; false for anything the session did not send (see OwnSendRegistry).
+   */
+  consumeOwnSend(id: string | null | undefined): boolean;
+  /** A message this session already delivered or sent, from the persistent store; undefined without a store. */
+  getStoredMessage(messageId: string): Promise<WAMessage | null> | undefined;
   /** The currently-registered onMessage callback, if any (assigned at initialize()). */
   getOnMessage(): EngineEventCallbacks['onMessage'];
   /** The currently-registered onMessageCreate callback, if any (assigned at initialize()). */
@@ -140,37 +163,50 @@ export class BaileysEvents {
       if (!msg.message || !msg.key?.remoteJid) {
         continue; // protocol/empty messages carry no neutral content
       }
-      if (event.type !== 'notify') {
-        // Baileys echoes back OUR OWN just-sent messages through this same 'append' path too, and
-        // sendContent() already emits onMessageCreate for those via emitOwnSendEcho() — always
-        // exclude fromMe here (unconditionally, regardless of timestamp) so that echo doesn't fire
-        // onMessageCreate a second time.
-        if (msg.key.fromMe === true) {
-          continue;
-        }
-        // For everyone else: gate on the message's own timestamp vs. this connection's open time,
-        // not the upsert batch's `type` tag. `type: 'append'` usually means real history-sync
-        // backfill, but Baileys can also tag a genuinely new CUSTOMER message 'append' when it
-        // arrives in the same window as a reconnect's state-sync handshake — a strict
-        // `type !== 'notify'` filter silently drops that message (observed as "the first message
-        // after a reconnect gets ignored"). A message sent AFTER this connection opened is live
-        // regardless of which tag the batch carries; true backfill always predates it.
-        if (toUnixSeconds(msg.messageTimestamp) < this.host.connectedAt) {
-          continue;
-        }
+      // Baileys echoes every message this session sends through the API back through this same
+      // path, tagged 'append', and sendContent() already emits onMessageCreate for those via
+      // emitOwnSendEcho(). WhatsApp replays what the account typed on its phone while the gateway
+      // was down through the same tag (`node.attrs.offline ? 'append' : 'notify'` in Baileys'
+      // messages-recv), and those the session has never seen. Nothing on the batch tells the two
+      // apart except the id, which the adapter recorded when it sent: skip only what we sent, so
+      // the echo cannot fire onMessageCreate twice and the phone's outage-window sends still land
+      // as outgoing messages. Real history never reaches this handler; it arrives on
+      // messaging-history.set and is captured dispatch-free. A re-delivered inbound message is
+      // harmless, since the insert oracle dedupes on the WhatsApp message id and does not dispatch
+      // a stored message again. That oracle does NOT gate dispatch on the own-send path, which is
+      // why the echo has to be caught here, and why a fromMe message the store already holds is
+      // dropped in processInboundMessage before it can be reported a second time.
+      //
+      // Only ids this session SENT are consumed here. Claiming every inbound fromMe id instead, to
+      // close the window where two deliveries of one id arrive before the store write commits, costs
+      // more than it buys: a first delivery that reports nothing (a partial decrypt arrives as
+      // protocol noise and is dropped below) would claim the id, and the decryption-retry delivery
+      // that carries the real body would then be swallowed as a repeat and the message lost. A
+      // repeat inside that narrow window is a duplicate, which the webhook idempotency key and the
+      // insert oracle both absorb; a loss is not recoverable, because Baileys acks the node before
+      // it emits the upsert.
+      if (msg.key.fromMe === true && this.host.consumeOwnSend(msg.key.id)) {
+        this.host.logger.debug('Skipping the echo of a message this session sent', {
+          msgId: msg.key.id ?? 'unknown',
+          type: event.type,
+        });
+        continue;
       }
       // Throttle through the limiter so a burst of media messages can't run unbounded parallel
       // downloads (each a full decrypted buffer in heap). Ordering stays correct — the message store
       // keeps the newest by timestamp. The queue is unbounded, so a burst parks rather than shedding
-      // and the message keeps its media either way; on any rejection we still re-process WITHOUT
-      // media, so the body and metadata are emitted rather than lost.
+      // and the message keeps its media either way. The catch below is the teardown path: the
+      // limiter rejects only when it has been closed, since processInboundMessage handles its own
+      // failures (a media download that fails emits the omitted marker rather than throwing).
       void this.host.inboundLimiter
         .run(() => this.processInboundMessage(msg))
         .catch((error: unknown) => {
-          // Two different failures land here and they are not the same event. The limiter closing is
-          // an orderly teardown; anything else is a real download failure, and reporting it as
-          // "saturated" sent operators to look at concurrency settings for a problem that was never
-          // there. Say which one happened.
+          // Only one failure can actually land here today: the limiter closing, an orderly teardown.
+          // Its queue is unbounded so it never sheds, and processInboundMessage swallows its own
+          // errors, so nothing else rejects. The other arm is defence in depth against a rejection
+          // shape that does not exist yet, and it names the error rather than calling it
+          // "saturated", which used to send operators to look at concurrency settings for a problem
+          // that was never there. The retry below cannot reject either, for the same reason.
           const closed = error instanceof Error && error.message.startsWith('ConcurrencyLimiter closed');
           this.host.logger.warn(
             closed
@@ -304,19 +340,50 @@ export class BaileysEvents {
       }
 
       // --- contentless protocol traffic: don't emit onMessage ---
-      // Baileys' getContentType only matches keys named `conversation` or containing `Message`, and
-      // excludes senderKeyDistributionMessage BY NAME, so a sender-key distribution (Signal traffic
-      // every group participant emits on first write or key rotation), a messageHistoryNotice or any
-      // other suffix-less proto resolves here as contentType `undefined`, never as its own key.
-      // These carry no user content yet reached consumers as bodyless `unknown` message.received
-      // events (#1568). mapHistoryMessage drops exactly this set via its `!contentType` guard, and
-      // emitOwnSendEcho has always skipped undefined the same way, so live inbound must agree.
-      if (!contentType || contentType === 'senderKeyDistributionMessage') {
+      // A sender-key distribution (Signal traffic every group participant emits on first write or key
+      // rotation) or a history-sync notice carries no user content, yet reached consumers as a bodyless
+      // `unknown` message.received (#1568). Drop only a message made entirely of those keys. Anything
+      // else without a resolvable content type (a call log, a type newer than the bundled proto, which
+      // decodes to a lone messageContextInfo) still flows on as `unknown`, as it always has.
+      //
+      // Known limit: a type newer than the bundled proto that arrives in the same stanza as its sender's
+      // key distribution is dropped too. Baileys merges the stanza's decrypted parts into one message
+      // and protobuf decoding discards unknown fields, so it reads { senderKeyDistributionMessage,
+      // messageContextInfo }: nothing records which part the context info came from or that a field was
+      // skipped, and a messageContextInfo field such as messageSecret is not proof of content either,
+      // since the sending client decides what it carries. It stops once the proto knows the type.
+      const keys = Object.keys(normalizedRoot ?? {});
+      if (keys.every(k => PROTOCOL_NOISE_KEYS.has(k)) && keys.some(k => k !== 'messageContextInfo')) {
+        this.host.logger.debug('Dropping contentless protocol message', {
+          action: 'baileys_drop_protocol_noise',
+          msgId: msg.key.id,
+          remoteJid,
+          keys,
+        });
         return;
       }
 
       // --- Normal message: enrich + emit ---
-      const incoming = await this.mapMessage(msg, contentType, { skipMediaDownload: opts?.skipMedia });
+      // A fromMe message the store already holds was delivered or sent before: WhatsApp re-delivers
+      // a node whose ack was lost on a drop, and the own-send path downstream dispatches message.sent
+      // whatever its insert did, so the second copy has to stop here. The store is written by both
+      // the inbound path below and the send path, and it survives a restart, which the registry
+      // consulted in handleMessagesUpsert does not. The read fails open (see readStoredMessage).
+      const ownMessageId = msg.key.fromMe === true ? (msg.key.id ?? null) : null;
+      if (ownMessageId !== null && (await this.readStoredMessage(ownMessageId))) {
+        this.host.logger.debug('Skipping a re-delivered message this session already recorded', {
+          msgId: ownMessageId,
+        });
+        return;
+      }
+      // The account's own status post reaches the projector and is dropped there: a story is not a
+      // conversation, so no `message.sent` is emitted for it. Downloading its media first is work
+      // nothing consumes, and a story is a full-size photo or video. Everything else about the path
+      // is kept, so the message is still recorded and still guards against a repeat delivery.
+      const ownStatusPost = msg.key.fromMe === true && remoteJid === 'status@broadcast';
+      const incoming = await this.mapMessage(msg, contentType, {
+        skipMediaDownload: opts?.skipMedia || ownStatusPost,
+      });
       if (msg.key.fromMe === true) {
         this.host.getOnMessageCreate()?.(incoming);
       } else {
@@ -333,6 +400,29 @@ export class BaileysEvents {
         `Unhandled error processing inbound message (id=${msg.key?.id ?? 'unknown'}); dropping`,
         err instanceof Error ? err.message : String(err),
       );
+    }
+  }
+
+  /**
+   * The stored copy of a message id, or null when the store cannot answer.
+   *
+   * Deliberately fail-open: a locked database or a row whose JSON no longer parses must not be read
+   * as "this was never sent". The caller's only other outcome is the catch above, which drops the
+   * message outright, and Baileys acks the node before it emits the upsert, so WhatsApp does not
+   * send it again. A repeat is absorbed where it matters: the webhook carries the same idempotency
+   * key and the insert oracle holds the row to one. A WebSocket subscriber does see the frame twice,
+   * which is the price paid here deliberately, because a message nobody ever hears about cannot be
+   * recovered at all. The persist side of the same store is already written this way.
+   */
+  private async readStoredMessage(messageId: string): Promise<WAMessage | null> {
+    try {
+      return (await this.host.getStoredMessage(messageId)) ?? null;
+    } catch (err) {
+      this.host.logger.warn('Could not read the message store while checking for a repeat delivery', {
+        msgId: messageId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
     }
   }
 
@@ -377,6 +467,57 @@ export class BaileysEvents {
       payload.actorId = this.host.toNeutralJid(actor);
     }
     this.host.getOnGroupEvent()?.(payload);
+  }
+
+  /**
+   * Baileys `groups.upsert`: this session was added to or joined a group. Baileys turns the w:gp2
+   * `create` notification into this event and a content-less GROUP_CREATE stub, never into
+   * `group-participants.update`. It drops the notification's type and reason, so a new group, an add
+   * to an existing group and an invite-link join all arrive alike. Each entry is reported as a join of
+   * this session's own id through the participants path, which owns the id guard, the authorPn
+   * preference and the receipt timestamp. The entry lists the whole group, so members added with the
+   * session are not reported.
+   */
+  handleGroupsUpsert(
+    groups: Array<{ id?: string; author?: string; authorPn?: string; owner?: string; ownerPn?: string }>,
+  ): void {
+    const selfJid = this.host.normalizedSelfJid();
+    if (!selfJid) {
+      return; // no own id to report as the joining participant
+    }
+    const phone = userPart(selfJid);
+    const lid = this.host.getSocketOrNull()?.user?.lid;
+    const lidUser = lid ? userPart(lid) : undefined;
+    const isSelf = (jid: string | undefined): boolean => {
+      if (!jid) return false;
+      const { kind, userPart: user } = parseWaId(jid);
+      if (kind === 'user') return user === phone;
+      if (kind !== 'lid') return false;
+      if (lidUser !== undefined) return user === lidUser;
+      // Creds carrying no `user.lid` leave nothing to compare a lid-addressed actor against, and
+      // every such comparison would answer false: a group this session created would then be
+      // reported as a join of itself. Fall back to the session's own lid to phone mapping, which the
+      // store learns from the same traffic.
+      return userPart(this.host.toNeutralJid(jid)) === phone;
+    };
+    for (const group of Array.isArray(groups) ? groups : []) {
+      // Live, whatsapp-web.js emits no group.join when the session created the group, so that entry is
+      // skipped. The acting participant alone does not identify it: an invite-link join may name the
+      // joining session there, so the session must also be the group's owner.
+      if (
+        !group ||
+        ((isSelf(group.authorPn) || isSelf(group.author)) && (isSelf(group.ownerPn) || isSelf(group.owner)))
+      ) {
+        continue;
+      }
+      this.handleGroupParticipantsUpdate({
+        id: group.id,
+        author: group.author,
+        authorPn: group.authorPn,
+        action: 'add',
+        participants: [selfJid],
+      });
+    }
   }
 
   /**
@@ -718,34 +859,51 @@ export class BaileysEvents {
 
   /**
    * Download inbound media via a stream, accumulating chunks but ABORTING (destroy + discard) once the
-   * running total exceeds `maxBytes`. Returns null on abort. Uses `downloadMediaMessage(..., 'stream')`
-   * (not the raw `downloadContentFromMessage`) so the library's expired-media re-upload retry is kept;
-   * for under-cap media the concatenated buffer is byte-identical to the 'buffer' mode it replaces.
+   * running total exceeds `maxBytes`. On that abort it resolves `{ overflowBytes }`, the bytes received
+   * when the cap tripped; past the wall-clock deadline it resolves null. Uses
+   * `downloadMediaMessage(..., 'stream')` (not the raw `downloadContentFromMessage`) so the library's
+   * expired-media re-upload retry is kept; for under-cap media the concatenated buffer is byte-identical
+   * to the 'buffer' mode it replaces.
    */
-  private async downloadInboundMediaCapped(msg: WAMessage, maxBytes: number): Promise<Buffer | null> {
+  private async downloadInboundMediaCapped(
+    msg: WAMessage,
+    maxBytes: number,
+  ): Promise<Buffer | { overflowBytes: number } | null> {
+    // A proxied session must not fetch media around its proxy (#859). Baileys reads the dispatcher
+    // from the nested `options`; a top-level one is ignored.
+    const dispatcher = this.host.getFetchDispatcher();
     // Hold the stream handle in the outer scope so the timeout can destroy it. A genuine
-    // download/read error still rejects (propagating to the caller's catch as before); only a
-    // wall-clock timeout or the byte-cap overflow resolves to null.
+    // download/read error still rejects (propagating to the caller's catch as before).
     let stream: (AsyncIterable<Buffer> & { destroy?: () => void }) | undefined;
-    const download = (async (): Promise<Buffer | null> => {
+    // The timeout can fire before the stream exists (an expired-media re-upload wait, a slow response):
+    // the abandoned download must then stop on its own instead of buffering outside the limiter.
+    let timedOut = false;
+    const download = (async (): Promise<Buffer | { overflowBytes: number }> => {
       const b = await this.host.loadLib();
       stream = (await b.downloadMediaMessage(
         msg,
         'stream',
-        {},
+        dispatcher ? { options: { dispatcher } as RequestInit } : {},
         {
           logger: createSilentLogger(),
           reuploadRequest: this.host.getSocket().updateMediaMessage,
         },
       )) as AsyncIterable<Buffer> & { destroy?: () => void };
+      if (timedOut) {
+        stream.destroy?.();
+        return Buffer.alloc(0);
+      }
 
       const chunks: Buffer[] = [];
       let total = 0;
       for await (const chunk of stream) {
+        if (timedOut) {
+          break;
+        }
         total += chunk.length;
         if (total > maxBytes) {
           stream.destroy?.();
-          return null;
+          return { overflowBytes: total };
         }
         chunks.push(chunk);
       }
@@ -754,8 +912,11 @@ export class BaileysEvents {
 
     // A slow/trickling sender never trips the byte cap, so without a deadline it pins a concurrency
     // slot (and, on Baileys, the whole inbound handler) indefinitely. On timeout, destroy the stream
-    // and treat it as no usable media (same null the cap-abort returns).
-    return withInboundDownloadTimeout(download, inboundMediaTimeoutMs(), () => stream?.destroy?.());
+    // and treat it as no usable media.
+    return withInboundDownloadTimeout(download, inboundMediaTimeoutMs(), () => {
+      timedOut = true;
+      stream?.destroy?.();
+    });
   }
 
   /**
@@ -822,8 +983,9 @@ export class BaileysEvents {
     const declared = coerceDeclaredSize(subMessage?.fileLength);
 
     if (declared > maxBytes) {
-      // Pre-download gate: an honest over-cap sender's media is never decrypted into heap at all
-      // (Baileys integrity-checks content against the declared size, so this is a robust bound).
+      // Pre-download gate: an honest over-cap sender's media is never decrypted into heap at all.
+      // Baileys does not check the decrypted bytes against the declared size, so a sender can
+      // understate it; the streaming abort below is the bound for that case.
       this.host.logger.warn('Inbound media declared size exceeds MEDIA_DOWNLOAD_MAX_BYTES; skipped download', {
         msgId: msg.key.id,
         sizeBytes: declared,
@@ -836,11 +998,22 @@ export class BaileysEvents {
       // can't materialise an over-cap blob. For under-cap media this yields the identical buffer.
       const buf = await this.downloadInboundMediaCapped(msg, maxBytes);
       if (buf === null) {
-        this.host.logger.warn(
-          'Inbound media download aborted (over MEDIA_DOWNLOAD_MAX_BYTES or past MEDIA_DOWNLOAD_TIMEOUT_MS); emitting omitted marker',
-          { msgId: msg.key.id },
-        );
-        return { mimetype, filename, omitted: true, sizeBytes: maxBytes };
+        // Nothing proves the real size, so report the declared one, as the failure branch below does.
+        this.host.logger.warn('Inbound media download passed MEDIA_DOWNLOAD_TIMEOUT_MS; emitting omitted marker', {
+          msgId: msg.key.id,
+          sizeBytes: declared,
+        });
+        return { mimetype, filename, omitted: true, sizeBytes: declared };
+      }
+      if (!Buffer.isBuffer(buf)) {
+        // The bytes received are a lower bound above the cap; the declared size passed the pre-gate, so
+        // it is smaller and says nothing here.
+        const sizeBytes = buf.overflowBytes;
+        this.host.logger.warn('Inbound media download exceeded MEDIA_DOWNLOAD_MAX_BYTES; emitting omitted marker', {
+          msgId: msg.key.id,
+          sizeBytes,
+        });
+        return { mimetype, filename, omitted: true, sizeBytes };
       }
       // capInboundMedia is the last line (lazy base64, never persist/webhook/broadcast an over-cap
       // blob); the real heap bound is the pre-gate + streaming abort + concurrency limiter.
@@ -853,7 +1026,7 @@ export class BaileysEvents {
     } catch (err) {
       // A download failure yields the omitted marker, never a propagated throw: the media field stays
       // present, matching the skip/pre-gate/abort exits above. The declared size is the honest number
-      // here, since nothing was downloaded and the cap the abort reports would be a fabrication.
+      // here: the download never completed, so no measured size exists.
       this.host.logger.warn('Inbound media download failed; emitting the omitted marker', {
         error: err instanceof Error ? err.message : String(err),
         msgId: msg.key.id,
@@ -885,6 +1058,10 @@ export class BaileysEvents {
     // Commerce ids (order token, product id): the generic path sees an empty body and drops them,
     // and they are the only handle a caller has on the order or the product.
     const commerce = extractBaileysCommerce(normalized, contentType);
+    // Button / list / native-flow reply ids: body carries the visible label; this is the stable id.
+    const button = extractBaileysButtonReply(normalized, contentType);
+    // Prompt choices (Sim/Não, list rows, …) offered by a business interactive message.
+    const buttons = extractBaileysButtons(normalized, contentType);
 
     return buildIncomingMessageFromBaileys(
       {
@@ -903,6 +1080,8 @@ export class BaileysEvents {
         quotedMessage: context.quotedMessage,
         order: commerce.order,
         product: commerce.product,
+        button,
+        buttons,
         isCatalogShare: isBaileysCatalogShare(normalized),
         ephemeralDuration: context.ephemeralDuration,
         mentionedJids: context.mentionedJids,

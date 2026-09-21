@@ -22,7 +22,6 @@ export function WorkflowDateTimePicker({ id, value, onChange, ariaLabel }: Workf
       id={id}
       aria-label={ariaLabel}
       className="workflow-date-time-picker"
-      popupClassName="workflow-date-time-picker-popup"
       value={fromLocalDateTimeValue(value)}
       onChange={date => onChange(toLocalDateTimeValue(date))}
       format="dd/MM/yyyy HH:mm"

@@ -145,7 +145,12 @@ describe('Session request forwarding (e2e)', () => {
 
   it('an unreachable live owner answers 503 naming the owner, not a hang', async () => {
     const session = await seedOwnedElsewhere();
-    await sessions.update(session.id, { nodeUrl: 'http://127.0.0.1:1' });
+    // A port that was just released: the connection is refused, so nothing reached the owner.
+    const probe = http.createServer();
+    await new Promise<void>(resolve => probe.listen(0, '127.0.0.1', resolve));
+    const { port } = probe.address() as AddressInfo;
+    await new Promise<void>(resolve => probe.close(() => resolve()));
+    await sessions.update(session.id, { nodeUrl: `http://127.0.0.1:${port}` });
 
     const res = await request(app.getHttpServer())
       .get(`/api/sessions/${session.id}`)

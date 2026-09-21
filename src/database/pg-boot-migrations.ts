@@ -1,5 +1,6 @@
 import { Client, ClientConfig } from 'pg';
 import { DataSource, DataSourceOptions } from 'typeorm';
+import { assertDataConnectionUtc, postgresUtcExtra } from './postgres-utc';
 
 // The postgres data connection runs its boot migrations while holding a session-scoped Postgres
 // advisory lock, so replicas that boot at the same time serialize instead of racing DDL against
@@ -36,6 +37,9 @@ type PostgresOptions = Extract<DataSourceOptions, { type: 'postgres' }>;
  * @nestjs/typeorm's default path: construct only, let the wrapper initialize as before. The
  * wrapper also skips its own initialize() for the postgres branch because the DataSource comes
  * back already initialized, and keeps applying retryAttempts/retryDelay to this whole factory.
+ *
+ * It is also where the postgres data connection's UTC pin is applied and then verified, for the same
+ * reason: this is the only place that connection is constructed at runtime.
  */
 export async function createBootDataSource(
   options: DataSourceOptions | undefined,
@@ -51,10 +55,19 @@ export async function createBootDataSource(
   }
 
   // This connection's migrations run HERE, under the lock — neutralize migrationsRun so the
-  // DataSource itself never starts them unsynchronized inside initialize().
-  const dataSource = createDataSource({ ...options, migrationsRun: false });
+  // DataSource itself never starts them unsynchronized inside initialize(). The UTC pin is merged in
+  // at the same point, because this is the one place the runtime postgres data connection is built
+  // (the migration CLI's own data source carries it directly).
+  const dataSource = createDataSource({
+    ...options,
+    migrationsRun: false,
+    extra: { ...(options.extra as Record<string, unknown> | undefined), ...postgresUtcExtra() },
+  });
   try {
     await dataSource.initialize();
+    // Before any migration writes a row: a connection whose UTC pin did not take stores timestamps in
+    // one zone and reads them in another, which nothing downstream can detect (see postgres-utc.ts).
+    await assertDataConnectionUtc(dataSource);
     const lockClient = createLockClient(lockClientConfig(options));
     try {
       await lockClient.connect();
@@ -95,6 +108,8 @@ function lockClientConfig(options: PostgresOptions): ClientConfig {
     ssl: options.ssl as ClientConfig['ssl'],
     // Bound a stuck connect like the pool does (app.module's extra carries the same setting).
     connectionTimeoutMillis: extra.connectionTimeoutMillis ?? 10000,
+    // No UTC pin here on purpose: this client only ever calls pg_advisory_lock/unlock, so it neither
+    // binds nor reads a timestamp and its session zone cannot reach a column.
     // This client's only statements are pg_advisory_lock/unlock, and statement_timeout applies to
     // ANY command — including the wait inside pg_advisory_lock — so it must be OFF here. A config
     // `statement_timeout: 0` would NOT do it: pg drops falsy values from the startup packet, so

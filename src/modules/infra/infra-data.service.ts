@@ -11,6 +11,7 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { Session as SessionEntity, SessionStatus } from '../session/entities/session.entity';
 import { In } from 'typeorm';
+import { DateUtils } from 'typeorm/util/DateUtils';
 import type { MigrationTables, TableCounts } from './migration-tables.types';
 import { EXPORT_TABLES, EXPORT_TABLE_EXCLUSIONS } from './export-tables';
 import { TABLE_IMPORTERS } from './table-importers';
@@ -105,6 +106,37 @@ export async function restoreSessionOwnership(
       [row.nodeId, row.claimedAt, carryLease(row.leaseExpiresAt, readAt, now), row.nodeUrl, row.id],
     );
   }
+}
+
+/**
+ * The `datetime` columns of each imported table on a SQLite data connection, keyed by backup table key
+ * and read from the entity metadata: CreateDateColumn/UpdateDateColumn and any other column TypeORM
+ * binds through its SQLite datetime path. DateTransformer columns are `text` there and are not listed,
+ * because the app itself writes those in ISO form.
+ */
+export function sqliteDatetimeColumns(dataSource: DataSource): Map<keyof MigrationTables, string[]> {
+  const byTable = new Map(
+    dataSource.entityMetadatas.map(metadata => [
+      metadata.tableName,
+      metadata.columns
+        .filter(column => dataSource.driver.normalizeType(column) === 'datetime')
+        .map(column => column.databaseName),
+    ]),
+  );
+  return new Map(EXPORT_TABLES.map(entry => [entry.key, byTable.get(entry.table) ?? []]));
+}
+
+/**
+ * Rewrite one archived `datetime` value into the text TypeORM writes on SQLite (`YYYY-MM-DD HH:MM:SS.SSS`,
+ * UTC). A PostgreSQL export serializes these columns as ISO `...T...Z`, and SQLite compares them as
+ * text: `'T'` sorts after `' '`, so a restored row never matches `LessThan(date)` on its own calendar
+ * day. Only ISO text with an explicit zone is converted. A value already in SQLite form carries no
+ * zone, and parsing it would read it as host-local time and shift it, so it is left as it is.
+ */
+export function toSqliteDatetime(value: unknown): unknown {
+  if (typeof value !== 'string' || !/T.*(Z|[+-]\d{2}:?\d{2})$/i.test(value)) return value;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : DateUtils.mixedDateToUtcDatetimeString(date);
 }
 
 /**
@@ -640,10 +672,23 @@ export class InfraDataService {
         // carry each table's INSERT text, param mapping, and per-row skip guard; a missing or empty
         // table keeps its 0 count and contributes no warnings.
         const counts = Object.fromEntries(TABLE_IMPORTERS.map(importer => [importer.key, 0] as const)) as TableCounts;
+        // SQLite only: archived datetime values are normalized to the form TypeORM writes there, so a
+        // PostgreSQL-made backup compares and sorts like rows the app wrote itself.
+        const datetimeColumns = isPostgres ? undefined : sqliteDatetimeColumns(this.dataDataSource);
         for (const importer of TABLE_IMPORTERS) {
           const rows = data.tables[importer.key];
           if (!rows?.length) continue;
-          for (const untypedRow of rows) {
+          const dateColumns = datetimeColumns?.get(importer.key) ?? [];
+          for (const archivedRow of rows) {
+            const source = archivedRow as unknown as Record<string, unknown>;
+            const untypedRow = {
+              ...source,
+              ...Object.fromEntries(
+                dateColumns
+                  .filter(column => column in source)
+                  .map(column => [column, toSqliteDatetime(source[column])]),
+              ),
+            };
             // `rows` was read from `data.tables[importer.key]`, so it holds exactly the row type this
             // descriptor's id/map/skip declare. That correlation is what the erased importer type
             // cannot carry, and this loop is the one place it is known — so the cast lives here rather

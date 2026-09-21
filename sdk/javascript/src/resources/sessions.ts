@@ -26,6 +26,8 @@ import type {
 export interface ListSessionsQuery {
   limit?: number;
   offset?: number;
+  /** Return only the session with exactly this name (case-sensitive). */
+  name?: string;
 }
 
 export class SessionsResource {

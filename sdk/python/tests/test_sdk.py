@@ -94,6 +94,11 @@ class TestClientCore:
         client.sessions.list()
         assert backend.last_call.url == "http://localhost:2785/api/sessions"
 
+    def test_sessions_list_sends_name(self):
+        backend = MockBackend().on("GET", "/api/sessions", body=[])
+        make_client(backend).sessions.list({"name": "my-bot"})
+        assert "name=my-bot" in backend.last_call.url
+
     def test_query_params_skip_none(self):
         backend = MockBackend().on("GET", "/messages", body=[])
         make_client(backend).messages.list("s1", {"chatId": "a@c.us", "limit": 10})

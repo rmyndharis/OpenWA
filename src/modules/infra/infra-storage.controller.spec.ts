@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { Readable } from 'stream';
+import { Readable, Writable } from 'stream';
 
 // StorageService (imported transitively by the infra controllers) pulls in `archiver`
 // v8, which is ESM-only and cannot be parsed by ts-jest. The controller logic
@@ -22,6 +22,7 @@ jest.mock('fs', () => {
     existsSync: jest.fn().mockReturnValue(false),
     readFileSync: jest.fn().mockReturnValue(''),
     createReadStream: jest.fn(() => jest.requireActual<typeof import('stream')>('stream').Readable.from([])),
+    createWriteStream: jest.fn(actual.createWriteStream),
   };
 });
 
@@ -222,6 +223,32 @@ describe('InfraStorageController storage stream failures surface as request erro
     } finally {
       cwdSpy.mockRestore();
       (fs.existsSync as jest.Mock).mockReturnValue(false);
+    }
+  });
+
+  it('exportStorage destroys the export stream when the archive file cannot be written', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-export-sink-'));
+    const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(cwd);
+    const sink = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(new Error('disk full'));
+      },
+    });
+    (fs.createWriteStream as jest.Mock).mockReturnValueOnce(sink);
+    try {
+      // The export fills the archive while it is being written; a failed sink must stop it, or it
+      // keeps a file open waiting for a reader that is gone.
+      const source = new Readable({
+        read() {
+          this.push(Buffer.alloc(1024));
+        },
+      });
+      const storage = { createExportStream: jest.fn().mockResolvedValue(source) };
+      await expect(new InfraStorageController(storage as never).exportStorage()).rejects.toThrow(/disk full/);
+      expect(source.destroyed).toBe(true);
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(cwd, { recursive: true, force: true });
     }
   });
 

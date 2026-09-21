@@ -35,6 +35,12 @@ describe('SessionsResource — exact paths', () => {
     expect(t.lastCall!.method).toBe('DELETE');
   });
 
+  it('list serialises the name filter into the query string', async () => {
+    const t = new MockTransport().on('GET', /\/sessions$/, { body: [] });
+    await client(t).sessions.list({ name: 'my-bot', limit: 5 });
+    expect(t.lastCall!.url).toBe('http://x/api/sessions?name=my-bot&limit=5');
+  });
+
   it('getQrCode / requestPairingCode / stats', async () => {
     const t = new MockTransport()
       .on('GET', /\/qr$/, { body: { qrCode: 'data:image/png;base64,xxx', status: 'qr_ready' } })

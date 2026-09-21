@@ -25,7 +25,7 @@ class FakeSocket {
     this.listeners.set(event, set);
     // The real client fires 'connect' asynchronously after the handshake; do it on registration so
     // a page that gates its subscribe on connection reaches the same state.
-    if (event === 'connect') queueMicrotask(() => listener());
+    if (event === 'connect' && autoConnect) queueMicrotask(() => listener());
     return this;
   }
 
@@ -51,6 +51,7 @@ class FakeSocket {
 }
 
 let last: FakeSocket | null = null;
+let autoConnect = true;
 
 export function io(): FakeSocket {
   last = new FakeSocket();
@@ -62,8 +63,17 @@ export function lastSocket(): FakeSocket | null {
   return last;
 }
 
+/**
+ * Stop sockets from firing 'connect' on registration, so a test can deliver it with
+ * `receive('connect')` in the same batch as the frames a real server sends alongside it.
+ */
+export function holdConnect(): void {
+  autoConnect = false;
+}
+
 export function resetSocketDouble(): void {
   last = null;
+  autoConnect = true;
 }
 
 // A VALUE export, not `export type`: useWebSocket imports `Socket` from a value position, and only

@@ -157,7 +157,10 @@ describe('buildIncomingMessageBase', () => {
 
   it('yields nothing when the id that makes the message actionable is missing', () => {
     expect(buildIncomingMessageBase({ ...base, type: 'order', token: 'tok' }).order).toBeUndefined();
-    expect(buildIncomingMessageBase({ ...base, type: 'product', title: 'Sample' }).product).toBeUndefined();
+    // whatsapp-web.js exposes no catalog field, so an id-less product (a whole-catalog share included) keeps its type.
+    const product = buildIncomingMessageBase({ ...base, type: 'product', title: 'Sample' });
+    expect(product.type).toBe('product');
+    expect(product.product).toBeUndefined();
   });
 
   it('does not fabricate a product from a title on a non-commerce message', () => {

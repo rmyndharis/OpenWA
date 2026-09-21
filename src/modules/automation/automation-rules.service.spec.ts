@@ -42,7 +42,12 @@ describe('AutomationRulesService', () => {
       sends.push({ sessionId, chatId: dto.chatId, text: dto.text });
       return Promise.resolve({});
     };
-    service = new AutomationRulesService(ds.getRepository(AutomationRule), moduleRefStub, undefined);
+    service = new AutomationRulesService(
+      ds.getRepository(AutomationRule),
+      ds.getRepository(Session),
+      moduleRefStub,
+      undefined,
+    );
   });
 
   afterEach(async () => {
@@ -65,9 +70,15 @@ describe('AutomationRulesService', () => {
     // Every inbound message is evaluated against every rule of its session, so an unbounded count
     // turns each message into unbounded work — the same reason the webhook fan-out is capped.
     const cappedService = (max: number): AutomationRulesService =>
-      new AutomationRulesService(ds.getRepository(AutomationRule), moduleRefStub, undefined, {
-        get: (_key: string, def?: number) => max ?? def,
-      } as unknown as ConfigService);
+      new AutomationRulesService(
+        ds.getRepository(AutomationRule),
+        ds.getRepository(Session),
+        moduleRefStub,
+        undefined,
+        {
+          get: (_key: string, def?: number) => max ?? def,
+        } as unknown as ConfigService,
+      );
 
     it('refuses a NEW rule at or over the cap; existing ones are grandfathered', async () => {
       const svc = cappedService(2);
@@ -204,9 +215,18 @@ describe('AutomationRulesService', () => {
       expect(sends).toHaveLength(0);
     });
 
+    it('refuses a rule for a session that does not exist with 404, not a driver error', async () => {
+      // The sessionId FK would otherwise surface as a 500 from the save, with an unknown-exception
+      // stack in the logs, for what is simply a wrong id in the path.
+      await expect(service.create('no-such-session', { name: 'x', replyText: 'ack' })).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
     it('a failing rule lookup resolves without throwing (receive path stays safe)', async () => {
       const broken = new AutomationRulesService(
         { find: () => Promise.reject(new Error('db gone')) } as never,
+        ds.getRepository(Session),
         moduleRefStub,
         undefined,
       );
@@ -215,7 +235,12 @@ describe('AutomationRulesService', () => {
     });
 
     it('tolerates a missing ModuleRef (unit wiring) without throwing', async () => {
-      const bare = new AutomationRulesService(ds.getRepository(AutomationRule), undefined, undefined);
+      const bare = new AutomationRulesService(
+        ds.getRepository(AutomationRule),
+        ds.getRepository(Session),
+        undefined,
+        undefined,
+      );
       await service.create('sessA', { name: 'all', replyText: 'ack' });
 
       await expect(bare.evaluateInbound('sessA', inbound())).resolves.toBeUndefined();

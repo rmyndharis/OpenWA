@@ -68,11 +68,12 @@ FROM docker.io/node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc
 # changes nothing about which dependencies land in the image.
 ENV NODE_ENV=production
 
-# Chrome for Testing has no linux-arm64 build, and Puppeteer's chromium snapshot
-# is x86_64-only on Linux too. So: amd64 uses Chrome for Testing (downloaded below)
-# to avoid the Debian chromium package's K8s SIGTRAP under strict non-root/seccomp;
-# arm64 installs Debian's chromium instead (it ships a native arm64 build). Both
-# resolve to the same /usr/local/bin/puppeteer-chrome symlink below.
+# amd64 uses Chrome for Testing (downloaded below) to avoid the Debian chromium
+# package's K8s SIGTRAP under strict non-root/seccomp. arm64 installs Debian's
+# chromium instead, by choice: it ships a native arm64 build, Chrome for Testing
+# publishes linux-arm64 builds only from 153 on, and Puppeteer's chromium snapshot
+# is x86_64-only on Linux. Both resolve to the same /usr/local/bin/puppeteer-chrome
+# symlink below.
 #
 # chromium-sandbox is listed EXPLICITLY (not left to Recommends) so --no-install-recommends still
 # trims every other Recommends but keeps the setuid sandbox binary available. Our default forces
@@ -90,7 +91,12 @@ ARG TARGETARCH
 # cost with --no-install-recommends: ~210 MB, and no new fixable CRITICAL/HIGH findings under the
 # release image scan. It is the Debian package rather than a bundled static build precisely so that
 # codec CVEs arrive through the same security stream as everything else here.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+#
+# `apt-get upgrade` runs first because the base is pinned by digest: the Debian packages it ships
+# (libpcre2, libc, openssl and the rest) keep that snapshot's versions, and `apt-get install` upgrades
+# only the packages it names. A bookworm-security fix published after the snapshot reaches them here,
+# and the release workflow rebuilds this layer without cache so the fix is actually picked up.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     $([ "$TARGETARCH" = arm64 ] && echo "chromium chromium-sandbox") \
     fonts-liberation \
     libappindicator3-1 \
@@ -178,7 +184,7 @@ COPY package*.json ./
 # scripts/postinstall.js rides along so a bare local `npm ci` keeps working, but the
 # --ignore-scripts install below skips the hook here: the explicit fatal run right
 # after is the sole (and stricter) applier for the image.
-COPY scripts/postinstall.js scripts/patch-wwebjs-201832.js scripts/wwebjs-201832.patch scripts/patch-wwebjs-newsletter-preview.js scripts/patch-wwebjs-status.js scripts/patch-wwebjs-ready-sync.js scripts/patch-wwebjs-participant-arity.js scripts/patch-wwebjs-block.js scripts/patch-wwebjs-group-description.js scripts/patch-baileys-appstate.js scripts/patch-baileys-newsletter-create.js ./scripts/
+COPY scripts/postinstall.js scripts/patch-wwebjs-201832.js scripts/wwebjs-201832.patch scripts/patch-wwebjs-newsletter-preview.js scripts/patch-wwebjs-status.js scripts/patch-wwebjs-ready-sync.js scripts/patch-wwebjs-participant-arity.js scripts/patch-wwebjs-block.js scripts/patch-wwebjs-group-description.js scripts/patch-wwebjs-media-id.js scripts/patch-baileys-appstate.js scripts/patch-baileys-newsletter-create.js ./scripts/
 
 # Install production dependencies only, then apply the backports. The status patcher runs after
 # the two patchers it depends on: its transforms were written against the tree they leave behind.
@@ -202,6 +208,7 @@ RUN npm ci --omit=dev --ignore-scripts \
     && node scripts/patch-wwebjs-participant-arity.js \
     && node scripts/patch-wwebjs-block.js \
     && node scripts/patch-wwebjs-group-description.js \
+    && node scripts/patch-wwebjs-media-id.js \
     && node scripts/patch-baileys-appstate.js \
     && node scripts/patch-baileys-newsletter-create.js \
     && npm cache clean --force
@@ -217,13 +224,25 @@ RUN npm ci --omit=dev --ignore-scripts \
 RUN npm install -g npm@12.0.2 && npm cache clean --force
 
 # amd64: download Chrome for Testing via Puppeteer and symlink it.
-# arm64: use Debian's chromium installed above (CfT has no linux-arm64 build).
+# arm64: use Debian's chromium installed above (a choice; see the note at that install).
 # test -n guards against a future path mismatch failing loudly instead of shipping a broken image.
+#
+# The CfT version is pinned so a rebuild installs the same browser. Nothing bumps it for us:
+# dependabot does not read this line, and the image scans cannot see the binary (no dpkg package owns
+# /opt/puppeteer), so a stale browser never fails a scan. To bump it, take the Stable version from
+# https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json, confirm it has
+# a linux64 chrome download in known-good-versions-with-downloads.json, and update the docs that
+# repeat this command (scripts/dockerfile-patchers.spec.js fails until they match). It may be newer
+# than the revision puppeteer-core pins; the arm64 image already runs whatever chromium Debian ships.
+# On an amd64 build, check that a session paired under the old browser still reconnects and that a
+# new whatsapp-web.js session reaches its QR code. A new major cannot be rolled back without
+# restoring sessions/ (an older Chrome deletes the IndexedDB a newer one opened), so give the bump a
+# CHANGELOG upgrade note.
 RUN if [ "$TARGETARCH" = arm64 ]; then \
         ln -s /usr/bin/chromium /usr/local/bin/puppeteer-chrome; \
     else \
         mkdir -p /opt/puppeteer && \
-        PUPPETEER_CACHE_DIR=/opt/puppeteer ./node_modules/.bin/puppeteer browsers install 'chrome@146.0.7680.31' && \
+        PUPPETEER_CACHE_DIR=/opt/puppeteer ./node_modules/.bin/puppeteer browsers install 'chrome@153.0.8010.36' && \
         chown -R openwa:openwa /opt/puppeteer && \
         chrome_path=$(find /opt/puppeteer/chrome/linux*/chrome-linux64/chrome | head -n 1) && \
         test -n "$chrome_path" && \

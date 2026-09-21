@@ -7,6 +7,7 @@
   },
   "common": {
     "appName": "OpenWA",
+    "updateAvailable": "الإصدار v{{version}} متاح",
     "loading": "جارٍ التحميل...",
     "cancel": "إلغاء",
     "delete": "حذف",
@@ -116,6 +117,7 @@
     "groupSubtitle": "مجموعة",
     "privateContactSubtitle": "جهة اتصال خاصة",
     "deleteConfirm": "حذف هذه الرسالة للجميع؟",
+    "promptButtons": "خيارات الرسالة",
     "messageDeleted": "🚫 تم حذف هذه الرسالة",
     "messageMasked": "🔒 أخفته واتساب على الأجهزة المرتبطة — تحقق منه على هاتفك الأساسي",
     "kind": {
@@ -173,6 +175,7 @@
       "send": "فشل إرسال الرسالة",
       "react": "فشل التفاعل مع الرسالة",
       "delete": "فشل حذف الرسالة",
+      "clickButton": "فشل النقر على الزر",
       "fileTooLarge": "الملف كبير جدًا (الحد الأقصى 18 ميغابايت)"
     },
     "loadMessagesError": "تعذّر تحميل الرسائل. تحقّق من سجلّات الخادم.",
@@ -316,7 +319,7 @@
       "created": "تاريخ الإنشاء",
       "lastActive": "آخر نشاط",
       "autoRejectCalls": "الرفض التلقائي للمكالمات",
-      "autoRejectCallsHint": "يتم رفض المكالمات الواردة فور رنينها. ولا يزال الويب هوك call.received يُرسل قبل ذلك. يسري على المكالمة التالية — دون الحاجة إلى إعادة التشغيل."
+      "autoRejectCallsHint": "يتم رفض المكالمات الواردة فور رنينها. ولا يزال الويب هوك call.received يُرسل قبل ذلك. يسري على المكالمة التالية, دون الحاجة إلى إعادة التشغيل. مع محرك Baileys فقط: لا يستطيع whatsapp-web.js رفض المكالمات."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -390,6 +393,7 @@
       "phoneLabel": "رقم الهاتف",
       "phonePlaceholder": "مثال: 919876543210",
       "phoneHint": "أرقام فقط (بدون + أو مسافات أو شرطات) بالصيغة الدولية (رمز الدولة + الرقم).",
+      "relinkWarning": "على محرك whatsapp-web.js، قد يؤدي طلب رمز لرقم له جلسة مرتبطة بالفعل إلى قيام واتساب بإلغاء ربط ذلك الجهاز. استخدم تبويب رمز QR إذا كان يجب أن تبقى تلك الجلسة تعمل.",
       "invalidPhone": "أدخل رقم هاتف صالحاً: من 6 إلى 15 رقماً، يبدأ برمز الدولة، بدون رموز.",
       "generateButton": "إنشاء رمز الربط",
       "generating": "جارٍ إنشاء رمز الربط...",
@@ -404,7 +408,8 @@
     },
     "start": {
       "teardownPendingTitle": "بدء الجلسة",
-      "teardownPending": "لا يزال تفكيك بيانات الاعتماد لهذه الجلسة قيد التسوية. انتظر لحظة وحاول مرة أخرى."
+      "teardownPending": "لا يزال تفكيك بيانات الاعتماد لهذه الجلسة قيد التسوية. انتظر لحظة وحاول مرة أخرى.",
+      "errorTitle": "فشل البدء"
     },
     "restriction": {
       "reachout_timelock": "المحادثات الجديدة محظورة",
@@ -446,6 +451,7 @@
       "fields": {
         "sender": "المُرسِل",
         "recipient": "المُستلِم",
+        "chatId": "معرّف المحادثة",
         "body": "نص الرسالة",
         "type": "نوع الرسالة",
         "isGroup": "محادثة جماعية",
@@ -533,7 +539,10 @@
       "title": "لا توجد قوالب محفوظة",
       "description": "أنشئ قالبًا قابلًا لإعادة الاستخدام لتسريع الردود والإشعارات الشائعة.",
       "noSessionsTitle": "لا توجد جلسات متاحة",
-      "noSessionsDesc": "أنشئ جلسة WhatsApp قبل إضافة القوالب."
+      "noSessionsDesc": "أنشئ جلسة WhatsApp قبل إضافة القوالب.",
+      "loadErrorTitle": "تعذر تحميل القوالب",
+      "forbiddenTitle": "لا يوجد وصول إلى القوالب",
+      "forbiddenDesc": "تتطلب القوالب مفتاح API بدور المشغل أو المسؤول."
     },
     "toasts": {
       "created": "تم إنشاء القالب بنجاح",
@@ -651,6 +660,12 @@
     "loadingGroups": "جارٍ تحميل المجموعات...",
     "noGroupsFound": "لم يتم العثور على مجموعات",
     "selectGroupHint": "اختر مجموعة من واتساب الخاص بك",
+    "selectAllGroups": "تحديد الكل",
+    "selectMatchingGroups": "تحديد النتائج",
+    "clearGroupSelection": "مسح",
+    "groupsSelectedCount": "المحدد: {{count}}/{{max}}",
+    "noGroupsMatch": "لا توجد مجموعات تطابق بحثك",
+    "forwardUsesFirstGroup": "تستخدم إعادة التوجيه أول مجموعة محددة فقط، كمحادثة يُعاد التوجيه منها.",
     "phoneHint": "استخدم الصيغة الدولية بدون مسافات",
     "messageType": "نوع الرسالة",
     "types": {
@@ -708,17 +723,29 @@
     "bulkRecipientsCount": "المستلمون: {{count}}",
     "bulkDelay": "التأخير بين الرسائل (مللي ثانية)",
     "bulkDelayHint": "1000–60000 مللي ثانية (الافتراضي 3000)",
+    "bulkMediaKind": "إرسال كـ",
+    "bulkMediaHint": "عند إرفاق ملف تصبح الرسالة تعليقًا عليه. يُرسل الملف المختار داخل الطلب نفسه، لذا تحتاج الملفات الكبيرة لعدد كبير من المستلمين إلى رابط وسائط عام بدلًا منه.",
+    "bulkMediaTooLarge": "هذا الملف كبير جدًا لإرساله مضمَّنًا إلى {{count}} مستلمين: بهذا العدد يمكن أن يصل حجم الملف إلى {{size}} كحد أقصى. استخدم رابط وسائط عامًا بدلًا منه، أو أرسل إلى عدد أقل من المستلمين.",
+    "bulkMediaUrlInvalid": "استخدم عنوانًا كاملًا يبدأ بـ http:// أو https://، مثل https://example.com/file.pdf.",
+    "bulkCaptionTooLong": "عند إرفاق ملف تُرسل الرسالة كتعليق عليه، والحد الأقصى للتعليق {{max}} حرفًا (الآن {{count}}).",
+    "bulkAudioNoCaption": "يُرسَل الصوت بدون تعليق، لذا لن يُرسَل هذا النص. امسح الرسالة أو اختر نوعًا آخر.",
     "send": "إرسال الرسالة",
     "sending": "جارٍ الإرسال...",
+    "sendingProgress": "جارٍ الإرسال {{current}}/{{total}}...",
     "viewOnly": "للعرض فقط",
     "responseEmpty": "أرسل رسالة لرؤية استجابة API",
     "successLabel": "نجاح",
     "failedLabel": "فشل",
+    "groupsSentSummary": "تم إرسال {{sent}}/{{total}}",
+    "groupSendCancelled": "{{count}}، أُلغيت",
+    "groupSendStopped": "{{count}}، توقف بعد HTTP {{status}}",
     "response": {
       "timestamp": "الوقت",
       "messageId": "معرّف الرسالة",
       "batchId": "معرّف الدفعة",
-      "error": "خطأ"
+      "error": "خطأ",
+      "groups": "المجموعات",
+      "notSent": "لم تُرسل"
     },
     "sendFailed": "فشل إرسال الرسالة",
     "notOnWhatsApp": "هذا الرقم غير مسجَّل على واتساب",

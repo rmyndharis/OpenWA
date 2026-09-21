@@ -739,7 +739,7 @@
 }
 
 .chats-page .chats-reconnect-banner button {
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 
 /* =============================================================================
@@ -1228,6 +1228,82 @@
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 250px;
+}
+
+/* Inbound business prompt buttons (Baileys click-button) */
+.chats-page .message-prompt-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+  width: 100%;
+}
+
+.chats-page .message-prompt-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-white);
+  color: var(--primary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.chats-page .message-prompt-button:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: var(--primary);
+}
+
+.chats-page .message-prompt-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.chats-page .message-prompt-button.selected {
+  opacity: 1;
+  border-color: var(--primary);
+  background: rgba(0, 128, 105, 0.08);
+  font-weight: 600;
+}
+
+.chats-page .message-prompt-button.answered:not(.selected) {
+  opacity: 0.4;
+}
+
+[data-theme='dark'] .chats-page .message-prompt-button {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme='dark'] .chats-page .message-prompt-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme='dark'] .chats-page .message-prompt-button.selected {
+  background: rgba(0, 168, 132, 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .chats-page .message-prompt-button {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  :root:not([data-theme='light']) .chats-page .message-prompt-button:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  :root:not([data-theme='light']) .chats-page .message-prompt-button.selected {
+    background: rgba(0, 168, 132, 0.18);
+  }
 }
 
 /* Replying Preview Banner above Input Footer */

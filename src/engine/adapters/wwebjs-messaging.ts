@@ -6,6 +6,7 @@ import {
   ContactCard,
   DeliveryStatus,
   MediaInput,
+  MessageContact,
   MessageReaction,
   MessageResult,
   PollInput,
@@ -18,7 +19,7 @@ import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import { chatKind, userPart } from '../identity/wa-id';
 import { chatHistoryMediaBudgetBytes, coerceDeclaredSize, ingestMediaBudgetBytes } from './inbound-media-cap';
-import { buildIncomingMessageBase } from './message-mapper';
+import { buildIncomingMessageBase, mapContactFields } from './message-mapper';
 import { buildVCard } from './vcard';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
@@ -81,12 +82,14 @@ export function isHttpUrl(value: string): boolean {
  * bound memory use and hang time. `unsafeMime` is left at its default (false) to preserve the
  * existing MIME-detection behavior.
  */
-export async function loadRemoteMedia(url: string): Promise<MessageMedia> {
+export async function loadRemoteMedia(url: string, sessionProxyUrl: string | undefined): Promise<MessageMedia> {
   // Fetch through the SSRF-pinned path: it validates the host, pins the connection to the vetted IP
   // (so a DNS rebind can't redirect it to an internal target between check and connect), caps bytes,
   // and refuses redirects. We then build the MessageMedia from the returned bytes — NOT via
   // MessageMedia.fromUrl, whose bundled node-fetch performs its own unpinned DNS re-resolution.
-  const { data, mimetype } = await loadRemoteMediaBuffer(url);
+  // `sessionProxyUrl` routes the fetch through this session's egress proxy (#1626); the browser's
+  // own requests already ride Chromium's --proxy-server, this one is made by the gateway itself.
+  const { data, mimetype } = await loadRemoteMediaBuffer(url, sessionProxyUrl);
   const filename = new URL(url).pathname.split('/').pop() || undefined;
   return new MessageMedia(mimetype || 'application/octet-stream', data.toString('base64'), filename);
 }
@@ -121,9 +124,13 @@ export function isQuoteUnresolvedError(err: unknown): boolean {
  * that one decision it is the better source. The declared filename still wins either way — that is
  * a label, and nothing branches on it.
  */
-export async function toMessageMedia(media: MediaInput, opts?: { trustDeclaredType?: boolean }): Promise<MessageMedia> {
+export async function toMessageMedia(
+  media: MediaInput,
+  sessionProxyUrl: string | undefined,
+  opts?: { trustDeclaredType?: boolean },
+): Promise<MessageMedia> {
   if (typeof media.data === 'string' && isHttpUrl(media.data)) {
-    const fetched = await loadRemoteMedia(media.data);
+    const fetched = await loadRemoteMedia(media.data, sessionProxyUrl);
     // `loadRemoteMedia` derives both fields from the response (content-type, URL basename) because
     // that is all it has. The caller usually knows better, so let an explicit `mimetype`/`filename`
     // win — matching `resolveMediaBuffer` on the Baileys adapter, which already prefers the caller's.
@@ -419,7 +426,7 @@ export class WwebjsMessaging {
     this.host.ensureNotChannelRecipient(chatId);
 
     // Build the media once (a remote URL is fetched here); sendResolved may retry the send itself.
-    const messageMedia = await toMessageMedia(media);
+    const messageMedia = await toMessageMedia(media, this.host.config.proxy?.url);
     // A nameless document reaches WA Web as `new File([blob], undefined)` and is labelled literally
     // "undefined". Only documents render a filename, so default just this path — as Baileys does.
     if (extraOptions?.sendMediaAsDocument && !messageMedia.filename) {
@@ -486,7 +493,7 @@ export class WwebjsMessaging {
     this.host.ensureNotChannelRecipient(chatId);
     // Keep the fetched content-type for a remote URL: here the mimetype selects the conversion, and
     // whatsapp-web.js returns the media unconverted once it reads as webp (Util.formatImageToWebpSticker).
-    const messageMedia = await toMessageMedia(media, { trustDeclaredType: false });
+    const messageMedia = await toMessageMedia(media, this.host.config.proxy?.url, { trustDeclaredType: false });
 
     const msg = await this.sendResolved(
       chatId,
@@ -701,6 +708,10 @@ export class WwebjsMessaging {
       : mediaMaxBytes === undefined
         ? chatHistoryMediaBudgetBytes()
         : ingestMediaBudgetBytes(mediaMaxBytes);
+    // Sender contacts resolved so far, keyed like Message.getContact() (`author || from`). Each lookup
+    // is a page round trip and a history page repeats the same few senders, so resolve each once; a
+    // failed lookup is remembered as undefined rather than retried for every later message.
+    const senderContacts = new Map<string, MessageContact | undefined>();
     for (const msg of messages) {
       if (signal?.aborted) {
         break;
@@ -715,6 +726,29 @@ export class WwebjsMessaging {
       out.isGroup = chatId.endsWith('@g.us');
       out.isStatusBroadcast = chatId === 'status@broadcast';
       out.kind = chatKind(chatId);
+      // buildIncomingMessageBase only fills `contact` from the raw payload's synchronous
+      // notifyName, which is frequently absent on a history-fetched message object (unlike a
+      // freshly delivered one). Without this, a group participant not in the account's own
+      // contacts (author-only, no saved name) shows no sender label at all in the chat view,
+      // even though the live `message` event handler resolves one via getContact() for the
+      // exact same message. Mirror that here so history and live rendering agree.
+      const senderId = msg.author || msg.from;
+      if (!senderContacts.has(senderId)) {
+        let resolved: MessageContact | undefined;
+        try {
+          const contact = await msg.getContact();
+          if (contact) resolved = mapContactFields(contact, process.env.WEBHOOK_CONTACT_DETAILS === 'true');
+        } catch (error) {
+          this.host.logger.warn(
+            `Failed to resolve contact for history message ${msg.id._serialized}: ${String(error)}`,
+          );
+        }
+        senderContacts.set(senderId, resolved);
+      }
+      const merged = { ...out.contact, ...senderContacts.get(senderId) };
+      if (Object.keys(merged).length > 0) {
+        out.contact = merged;
+      }
       const call = extractWwebjsCall(msg);
       if (call) out.call = call;
       // Mirror the live handler's location + quoted-message enrichment so history renders identically —

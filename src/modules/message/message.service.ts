@@ -5,7 +5,7 @@ import { EngineRegistry } from '../../engine/engine-registry.service';
 import { MessageProjector } from '../session/message-projector.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
-import { ReplyMessageDto } from './dto/message-actions.dto';
+import { ReplyMessageDto, ClickButtonDto } from './dto/message-actions.dto';
 import { Message, MessageDirection } from './entities/message.entity';
 import { HookManager, applySendingGate } from '../../core/hooks';
 import { SendPacingService } from './send-pacing.service';
@@ -237,6 +237,10 @@ export class MessageService implements PluginMessagePort {
   // less than what flowed through, and a non-REST caller (the agent tool) could not pass it at all.
   reply(sessionId: string, dto: ReplyMessageDto): Promise<MessageResponseDto> {
     return this.sender.reply(sessionId, dto);
+  }
+
+  clickButton(sessionId: string, dto: ClickButtonDto): Promise<MessageResponseDto> {
+    return this.sender.clickButton(sessionId, dto);
   }
 
   forward(

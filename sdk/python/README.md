@@ -69,7 +69,9 @@ A non-2xx response raises a typed `OpenWAApiError` subclass — `OpenWAAuthError
 `OpenWAForbiddenError` (403), `OpenWANotFoundError` (404), `OpenWAConflictError` (409),
 `OpenWARateLimitError` (429), `OpenWANotImplementedError` (501),
 `OpenWAServiceUnavailableError` (503 — the only retryable one) — each carrying `.status`
-and the parsed `.body`. A timeout raises `OpenWATimeoutError`.
+and the parsed `.body`. A timeout raises `OpenWATimeoutError`. In a routed deployment only
+503 proves the request was never carried out: a forward that fails after the request reached
+the owner node answers 502 or 504.
 
 ```python
 from openwa import OpenWANotFoundError

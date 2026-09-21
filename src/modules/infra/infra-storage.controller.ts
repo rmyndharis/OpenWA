@@ -156,7 +156,12 @@ export class InfraStorageController implements OnApplicationBootstrap {
 
     await new Promise<void>((resolve, reject) => {
       writeStream.on('finish', resolve);
-      writeStream.on('error', reject);
+      // The archive is filled while it is written: destroying the source stops the export from
+      // opening further files once the sink has failed.
+      writeStream.on('error', (err: Error) => {
+        stream.destroy();
+        reject(err);
+      });
       // pipe() does NOT forward source errors: an archiver/gzip failure surfaces as an 'error' event on
       // the source stream, which without a listener crashes the process. Fail the request instead and
       // tear down the sink so its fd isn't held open waiting for a 'finish' that never comes.

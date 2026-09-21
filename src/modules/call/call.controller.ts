@@ -39,6 +39,7 @@ export class CallController {
   @ApiResponse({ status: 200, description: 'Call rejected', type: CallAckResponseDto })
   @ApiResponse({ status: 400, description: 'Session is not started' })
   @ApiResponse({ status: 404, description: 'Call not found or no longer ringing' })
+  @ApiResponse({ status: 501, description: 'The active engine cannot reject a call (whatsapp-web.js)' })
   @ApiResponse({
     status: 503,
     description:

@@ -97,6 +97,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   >();
   /** Late bookkeeping (dead-letter rows) written by tasks the limiter already released — awaited on shutdown. */
   private readonly pendingBookkeeping = new Set<Promise<void>>();
+  /**
+   * Outbox rows this node still owns, by idempotency key and counted (the same key can be dispatched
+   * twice), from the moment the row is opened until its dispatch settles: parked in the limiter,
+   * holding a slot, or inside a direct retry loop. The reconciler skips these so a slow delivery is
+   * not replayed alongside itself.
+   */
+  private readonly locallyPending = new Map<string, number>();
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -616,6 +623,28 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       deliveryId,
       payload: ctx.baseData,
     });
+    this.locallyPending.set(idempotencyKey, (this.locallyPending.get(idempotencyKey) ?? 0) + 1);
+    try {
+      await this.runLimited(webhook, deliveryId, idempotencyKey, ctx);
+    } finally {
+      const left = (this.locallyPending.get(idempotencyKey) ?? 1) - 1;
+      if (left > 0) this.locallyPending.set(idempotencyKey, left);
+      else this.locallyPending.delete(idempotencyKey);
+    }
+  }
+
+  /** True while a dispatch on this node still owns the outbox row for this key. */
+  isLocallyPending(idempotencyKey: string): boolean {
+    return this.locallyPending.has(idempotencyKey);
+  }
+
+  private async runLimited(
+    webhook: Webhook,
+    deliveryId: string,
+    idempotencyKey: string,
+    ctx: DispatchEventContext,
+  ): Promise<void> {
+    const { sessionId, event } = ctx;
     await this.dispatchLimiter
       .run(async () => {
         this.inFlightDeliveries.set(deliveryId, {
@@ -636,6 +665,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       })
       .catch(async error => {
         if (error instanceof Error && error.message === 'ConcurrencyLimiter queue full') {
+          // Shed before the task ran, so nothing was POSTed. The failure row reports the shed, but
+          // the outbox row stays 'pending' on purpose: retiring it would drop the only copy of an
+          // event the receiver provably never got. The sweep replays it once the backlog clears.
           await this.recordUndelivered(
             webhook,
             deliveryId,
@@ -649,7 +681,8 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         if (error instanceof Error && error.message === 'ConcurrencyLimiter closed') {
           // Rejected by the shutdown drain before dispatching — record it like any other
           // undelivered delivery, and track the write so onModuleDestroy can await it (the
-          // limiter slot bookkeeping no longer covers this task).
+          // limiter slot bookkeeping no longer covers this task). Its outbox row stays 'pending':
+          // the POST never happened, so the next start's sweep is what finally delivers the event.
           const record = this.recordUndelivered(
             webhook,
             deliveryId,

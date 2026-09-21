@@ -66,8 +66,11 @@ export class SessionResponseDto {
     type: String,
     description:
       'Human-readable reason carried while the status is FAILED (a terminal engine failure), ' +
-      'ACTION_REQUIRED (the engine is running but something needs a human), or INITIALIZING while the ' +
-      'engine is retrying a dropped connection on its own. Cleared on any other status.',
+      'ACTION_REQUIRED (the engine is running but something needs a human), or INITIALIZING from the ' +
+      'fifth consecutive reconnect attempt of a session whose engine retries a dropped connection on its own, ' +
+      'until the session is ready or a QR arrives. A QR window that runs out unscanned is not an attempt. ' +
+      'INITIALIZING also carries it while a reconnect waits to retry after the engine failed to relaunch. ' +
+      'Held in memory by the process running the session. Cleared on any other status.',
     example: 'Failed to launch the browser process: spawn /usr/bin/chromium ENOENT',
     nullable: true,
   })

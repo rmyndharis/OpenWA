@@ -49,14 +49,17 @@ export interface ParsedPackage {
  * over-size archives). The caller writes the returned entries; this function decides what is safe.
  */
 export function parsePluginPackage(buffer: Buffer, limits: PackageLimits = DEFAULT_PACKAGE_LIMITS): ParsedPackage {
-  let zip: AdmZip;
+  // The constructor reads only the end-of-central-directory record; the central directory itself is
+  // parsed lazily by getEntries(), so an archive whose trailer parses and whose directory does not
+  // escaped this guard as a plain Error and reached the caller as a 500. Both answer the same
+  // question, "is this a readable archive", so both are caught here.
+  let files: AdmZip.IZipEntry[];
   try {
-    zip = new AdmZip(buffer);
+    files = new AdmZip(buffer).getEntries().filter(e => !e.isDirectory);
   } catch {
     throw new BadRequestException('Uploaded file is not a valid .zip archive');
   }
 
-  const files = zip.getEntries().filter(e => !e.isDirectory);
   if (files.length === 0) throw new BadRequestException('The archive is empty');
   if (files.length > limits.maxEntries) throw new BadRequestException('The archive has too many files');
 

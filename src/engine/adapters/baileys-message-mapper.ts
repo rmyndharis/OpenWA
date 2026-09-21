@@ -45,10 +45,16 @@ export function mapBaileysMessageType(
     case 'interactiveMessage':
     case 'buttonsMessage':
     case 'templateMessage':
+    case 'listMessage':
     case 'interactiveResponseMessage':
-      // WhatsApp Business interactive shapes (OTP/verification codes, button/template prompts). They
-      // carry display text that {@link extractBaileysBody} flattens into `body`, so they surface as
-      // `text` instead of being dropped as `unknown` with an empty body (#562).
+    case 'buttonsResponseMessage':
+    case 'templateButtonReplyMessage':
+    case 'listResponseMessage':
+      // WhatsApp Business interactive shapes (OTP/verification codes, button/template prompts) and
+      // the replies when a user taps one. They carry display text that {@link extractBaileysBody}
+      // flattens into `body`, so they surface as `text` instead of being dropped as `unknown` with
+      // an empty body (#562). Prompt messages also populate {@link IncomingMessage.buttons}; replies
+      // populate {@link IncomingMessage.button}.
       return 'text';
     case 'orderMessage':
       return 'order';
@@ -88,6 +94,8 @@ export interface BaileysBodyContent {
     hydratedFourRowTemplate?: { hydratedContentText?: string | null } | null;
   } | null;
   interactiveResponseMessage?: { body?: { text?: string | null } | null } | null;
+  /** A business list prompt's description (or title when description is absent). */
+  listMessage?: { description?: string | null; title?: string | null } | null;
   /** A poll's question; the wire bumps the content key across versions, all carry `name`. */
   pollCreationMessage?: { name?: string | null } | null;
   pollCreationMessageV2?: { name?: string | null } | null;
@@ -97,6 +105,8 @@ export interface BaileysBodyContent {
   /** The user tapping a business message button: which visible label they pressed. */
   buttonsResponseMessage?: { selectedDisplayText?: string | null } | null;
   templateButtonReplyMessage?: { selectedDisplayText?: string | null } | null;
+  /** The user picking a row from a business list message. */
+  listResponseMessage?: { title?: string | null } | null;
   /** A single shared contact card. */
   contactMessage?: { vcard?: string | null } | null;
   /** Several contact cards shared together; each carries its own vCard. */
@@ -117,11 +127,11 @@ export interface BaileysBodyContent {
  * response) whose text was previously dropped — the OTP/verification text businesses send via these
  * shapes (#562), then the text-shaped non-conversation content whose display text whatsapp-web.js
  * already exposes as `body` and Baileys used to drop silently: a poll's question, a shared event's
- * name, which button label the user tapped, and a shared contact card's vCard(s). Multiple vCards
- * from a `contactsArrayMessage` are newline-joined; RFC 6350 allows concatenated vCards in one
- * stream, so this is a single valid multi-card body, not string mangling. Returns `''` when the
- * message carries no extractable text. Pass the NORMALIZED content (ephemeral/viewOnce/
- * documentWithCaption wrappers already unwrapped), as the adapter does.
+ * name, which button label the user tapped, a list row's title, and a shared contact card's
+ * vCard(s). Multiple vCards from a `contactsArrayMessage` are newline-joined; RFC 6350 allows
+ * concatenated vCards in one stream, so this is a single valid multi-card body, not string mangling.
+ * Returns `''` when the message carries no extractable text. Pass the NORMALIZED content
+ * (ephemeral/viewOnce/documentWithCaption wrappers already unwrapped), as the adapter does.
  */
 export function extractBaileysBody(content: BaileysBodyContent): string {
   return (
@@ -135,12 +145,15 @@ export function extractBaileysBody(content: BaileysBodyContent): string {
     content.templateMessage?.hydratedTemplate?.hydratedContentText ??
     content.templateMessage?.hydratedFourRowTemplate?.hydratedContentText ??
     content.interactiveResponseMessage?.body?.text ??
+    content.listMessage?.description ??
+    content.listMessage?.title ??
     content.pollCreationMessage?.name ??
     content.pollCreationMessageV2?.name ??
     content.pollCreationMessageV3?.name ??
     content.eventMessage?.name ??
     content.buttonsResponseMessage?.selectedDisplayText ??
     content.templateButtonReplyMessage?.selectedDisplayText ??
+    content.listResponseMessage?.title ??
     content.contactMessage?.vcard ??
     extractContactsArrayVcards(content.contactsArrayMessage) ??
     content.orderMessage?.message ??
@@ -226,6 +239,451 @@ export function extractBaileysCommerce(
 }
 
 /**
+ * The inbound message-content subset the button-reply extractor reads. Declared structurally, as
+ * {@link BaileysBodyContent} is.
+ */
+export interface BaileysButtonReplyContent {
+  buttonsResponseMessage?: {
+    selectedButtonId?: string | null;
+    selectedDisplayText?: string | null;
+  } | null;
+  templateButtonReplyMessage?: {
+    selectedId?: string | null;
+    selectedDisplayText?: string | null;
+  } | null;
+  listResponseMessage?: {
+    title?: string | null;
+    singleSelectReply?: { selectedRowId?: string | null } | null;
+  } | null;
+  interactiveResponseMessage?: {
+    body?: { text?: string | null } | null;
+    nativeFlowResponseMessage?: {
+      name?: string | null;
+      paramsJson?: string | null;
+    } | null;
+  } | null;
+}
+
+/**
+ * Extract the stable id (and visible label) when the sender tapped a business button, template
+ * quick-reply, list row, or native-flow control. Returns `undefined` when the content is not a
+ * reply shape, or when WhatsApp omitted the id a caller would act on. Pass the NORMALIZED content,
+ * as the adapter does: a reply in a disappearing chat nests under `ephemeralMessage`.
+ */
+export function extractBaileysButtonReply(
+  content: BaileysButtonReplyContent,
+  contentType: string | undefined,
+): IncomingMessage['button'] {
+  if (contentType === 'buttonsResponseMessage') {
+    const id = content.buttonsResponseMessage?.selectedButtonId;
+    if (!id) {
+      return undefined;
+    }
+    return {
+      id,
+      text: content.buttonsResponseMessage?.selectedDisplayText ?? undefined,
+    };
+  }
+
+  if (contentType === 'templateButtonReplyMessage') {
+    const id = content.templateButtonReplyMessage?.selectedId;
+    if (!id) {
+      return undefined;
+    }
+    return {
+      id,
+      text: content.templateButtonReplyMessage?.selectedDisplayText ?? undefined,
+    };
+  }
+
+  if (contentType === 'listResponseMessage') {
+    const id = content.listResponseMessage?.singleSelectReply?.selectedRowId;
+    if (!id) {
+      return undefined;
+    }
+    return {
+      id,
+      text: content.listResponseMessage?.title ?? undefined,
+    };
+  }
+
+  if (contentType === 'interactiveResponseMessage') {
+    const flow = content.interactiveResponseMessage?.nativeFlowResponseMessage;
+    // Replies must carry a stable id: a display-text-only params payload is not actionable.
+    const fromParams = parseNativeFlowButtonParams(flow?.paramsJson, { requireId: true });
+    if (fromParams) {
+      return fromParams;
+    }
+    // Some clients echo only the body text without a native-flow params payload; without an id the
+    // reply is not actionable, so leave `button` unset and keep the text in `body`.
+    return undefined;
+  }
+
+  return undefined;
+}
+
+/**
+ * One hydrated template button as WhatsApp sends it. `index` is the proto field
+ * (`proto.IHydratedTemplateButton.index`); URL/call CTAs are parsed so they can be dropped, not
+ * published as clickable ids.
+ */
+interface BaileysHydratedTemplateButton {
+  index?: number | null;
+  quickReplyButton?: { id?: string | null; displayText?: string | null } | null;
+  urlButton?: { url?: string | null; displayText?: string | null } | null;
+  callButton?: { phoneNumber?: string | null; displayText?: string | null } | null;
+}
+
+/**
+ * The inbound message-content subset the prompt-buttons extractor reads. Declared structurally, as
+ * {@link BaileysBodyContent} is.
+ */
+export interface BaileysButtonsPromptContent {
+  buttonsMessage?: {
+    buttons?: Array<{
+      buttonId?: string | null;
+      buttonText?: { displayText?: string | null } | null;
+      /**
+       * Present on a NATIVE_FLOW button. Only `name` is read, to decide whether the button can be
+       * answered at all; the params of a classic button's reply come from `buttonId`/`buttonText`
+       * beside it, not from this block.
+       */
+      nativeFlowInfo?: { name?: string | null } | null;
+    } | null> | null;
+  } | null;
+  interactiveMessage?: {
+    nativeFlowMessage?: {
+      buttons?: Array<{
+        name?: string | null;
+        buttonParamsJson?: string | null;
+      } | null> | null;
+    } | null;
+  } | null;
+  templateMessage?: {
+    hydratedTemplate?: {
+      hydratedButtons?: Array<BaileysHydratedTemplateButton | null> | null;
+    } | null;
+    hydratedFourRowTemplate?: {
+      hydratedButtons?: Array<BaileysHydratedTemplateButton | null> | null;
+    } | null;
+  } | null;
+  listMessage?: {
+    sections?: Array<{
+      rows?: Array<{
+        rowId?: string | null;
+        title?: string | null;
+      } | null> | null;
+    } | null> | null;
+  } | null;
+}
+
+/**
+ * WhatsApp's own ceilings are 3 reply buttons or 10 list rows. A slightly higher shared cap
+ * covers every prompt arm (including native-flow) without letting a malformed `listMessage` with
+ * thousands of rows reach persisted `metadata`, webhooks, WS clients, or `GET /messages`.
+ */
+export const BUTTONS_MAX_ENTRIES = 20;
+/** Length cap applied to both `id` and `text` so a single choice cannot bloat a row. */
+export const BUTTON_TEXT_MAX_LENGTH = 256;
+
+/** Native-flow button `name`s that can be answered with a structured reply. CTA names are dropped. */
+const CLICKABLE_NATIVE_FLOW_NAMES = new Set(['quick_reply', 'button_click']);
+
+/**
+ * One clickable choice, carrying the proto index a template reply must echo. Not published on
+ * {@link IncomingMessage.buttons}: callers send `id` (and optional `text`) and the click path
+ * looks the index up.
+ */
+export interface BaileysClickableChoice {
+  id: string;
+  text: string;
+  /**
+   * `proto.IHydratedTemplateButton.index` when the prompt declares one, otherwise the choice's
+   * position. Undefined only for a hydrated template that numbers some of its buttons and not this
+   * one: the reply then omits `selectedIndex` rather than inventing a number that belongs to a
+   * different button. Every other prompt shape numbers by position, so it is always set there.
+   */
+  index?: number;
+}
+
+/**
+ * Extract the choices offered by an inbound business prompt (buttons / native-flow quick replies /
+ * template hydrated quick-replies / list rows). URL/call CTAs and other native-flow names are
+ * omitted: they are not clickable, and publishing them in the same array `ClickButtonDto.buttonId`
+ * points at would make every webhook consumer treat a URL as a button id. Returns `undefined` when
+ * the content is not a prompt shape or carries no usable choices. Pass the NORMALIZED content, as
+ * the adapter does.
+ */
+export function extractBaileysButtons(
+  content: BaileysButtonsPromptContent,
+  contentType: string | undefined,
+): IncomingMessage['buttons'] {
+  const choices = extractBaileysClickableButtons(content, contentType);
+  return choices?.map(({ id, text }) => ({ id, text }));
+}
+
+const BUTTON_PROMPT_CONTENT_TYPES = new Set(['buttonsMessage', 'templateMessage', 'listMessage', 'interactiveMessage']);
+
+export type BaileysButtonClickError = 'not_a_prompt' | 'unknown_button';
+
+/**
+ * The Baileys `sendMessage` content a button-click send relays, plus the resolved visible label.
+ * Declared structurally so it stays unit-testable without importing WAProto.
+ */
+export interface BaileysButtonClickPayload {
+  id: string;
+  text: string;
+  /**
+   * Index into template hydrated buttons when the prompt is a template; otherwise the choice's
+   * position. Absent for a choice a numbered template left unnumbered, see {@link BaileysClickableChoice}.
+   */
+  index?: number;
+  /** `AnyMessageContent` fragment: `{buttonReply,type}` or `{listReply}`. */
+  content: Record<string, unknown>;
+}
+
+/**
+ * Resolve a click against a stored business prompt: validate the content type and button id, fill
+ * in the display text when the caller omitted it, and build the `sendMessage` content WhatsApp
+ * expects for that prompt shape. CTA url/call entries are not clickable, only quick-reply style
+ * choices and list rows. When several choices share an id, a caller-supplied `text` disambiguates
+ * (a list reusing `rowId` across sections).
+ */
+export function resolveBaileysButtonClick(
+  content: BaileysButtonsPromptContent,
+  contentType: string | undefined,
+  buttonId: string,
+  text?: string,
+): { ok: true; payload: BaileysButtonClickPayload } | { ok: false; error: BaileysButtonClickError } {
+  if (!contentType || !BUTTON_PROMPT_CONTENT_TYPES.has(contentType)) {
+    return { ok: false, error: 'not_a_prompt' };
+  }
+
+  const choices = extractBaileysClickableButtons(content, contentType);
+  if (!choices || choices.length === 0) {
+    return { ok: false, error: 'not_a_prompt' };
+  }
+
+  const trimmedId = buttonId.trim();
+  const trimmedText = text?.trim();
+  // Prefer an (id, text) match so a list that reuses a rowId across sections answers with the
+  // row whose title the caller sent, not the first duplicate. Fall back to the first id match
+  // when text is omitted.
+  let matchIndex = trimmedText
+    ? choices.findIndex(choice => choice.id === trimmedId && choice.text === trimmedText)
+    : -1;
+  if (matchIndex < 0) {
+    matchIndex = choices.findIndex(choice => choice.id === trimmedId);
+  }
+  if (matchIndex < 0) {
+    return { ok: false, error: 'unknown_button' };
+  }
+
+  const match = choices[matchIndex];
+  const resolvedText = (trimmedText || match.text || trimmedId).trim();
+  const selectedIndex = match.index;
+  const payload: BaileysButtonClickPayload = {
+    id: trimmedId,
+    text: resolvedText,
+    index: selectedIndex,
+    content: toBaileysButtonClickContent(contentType, trimmedId, resolvedText, selectedIndex),
+  };
+  return { ok: true, payload };
+}
+
+/**
+ * Choices that can be answered with a structured reply. URL/call CTAs and other native-flow names
+ * are excluded: the WhatsApp client opens CTAs locally and there is no reply shape to fake.
+ * {@link extractBaileysButtons} is a projection of this list, so the published `buttons[]` and the
+ * click allowlist cannot disagree.
+ */
+export function extractBaileysClickableButtons(
+  content: BaileysButtonsPromptContent,
+  contentType: string | undefined,
+): BaileysClickableChoice[] | undefined {
+  if (contentType === 'buttonsMessage') {
+    return collectChoices(
+      (content.buttonsMessage?.buttons ?? []).map((button, position) => {
+        const text = button?.buttonText?.displayText?.trim();
+        if (!text) return undefined;
+        // A button in this envelope can still be a native-flow CTA (open a URL, dial a number), and
+        // those cannot be answered with a reply. Keyed off the presence of nativeFlowInfo rather
+        // than the type enum, which reaches us as a number or as its string name depending on how
+        // the message was decoded, and which a CTA may omit entirely.
+        const flow = button?.nativeFlowInfo;
+        if (flow && !CLICKABLE_NATIVE_FLOW_NAMES.has(flow.name ?? '')) {
+          return undefined;
+        }
+        const id = button?.buttonId?.trim() || text;
+        return { id, text, index: position };
+      }),
+    );
+  }
+
+  if (contentType === 'interactiveMessage') {
+    return collectChoices(
+      (content.interactiveMessage?.nativeFlowMessage?.buttons ?? []).map((button, position) => {
+        const name = button?.name ?? 'quick_reply';
+        if (!CLICKABLE_NATIVE_FLOW_NAMES.has(name)) {
+          return undefined;
+        }
+        const parsed = parseNativeFlowButtonParams(button?.buttonParamsJson);
+        if (!parsed) return undefined;
+        const label = (parsed.text ?? parsed.id).trim();
+        if (!label) return undefined;
+        return { id: parsed.id.trim() || label, text: label, index: position };
+      }),
+    );
+  }
+
+  if (contentType === 'templateMessage') {
+    const hydrated =
+      content.templateMessage?.hydratedTemplate?.hydratedButtons ??
+      content.templateMessage?.hydratedFourRowTemplate?.hydratedButtons ??
+      [];
+    // One index namespace per prompt. `selectedIndex` goes back to the business bot verbatim, and a
+    // hydrated template numbers its buttons itself, so the array position is only a stand-in for a
+    // template that carries no numbering at all. Falling back per entry mixed the two inside one
+    // prompt, where a position can collide with another button's declared index and answer the bot
+    // with a number belonging to a different choice.
+    //
+    // An entry the template left unnumbered is still offered, with no index of its own: the field
+    // has explicit presence on the wire, so the reply carries the id and the label and simply omits
+    // `selectedIndex`. Dropping the choice instead would hide a button the user can see and tap in
+    // WhatsApp, and refuse it through the click route, which is a worse answer than one honest
+    // reply that names itself by id. The unnumbered case includes a template whose only numbered
+    // button is a url or call CTA, which is never offered here in the first place.
+    const numbered = hydrated.some(entry => typeof entry?.index === 'number');
+    return collectChoices(
+      hydrated.map((entry, position) => {
+        const quick = entry?.quickReplyButton;
+        if (!quick?.displayText?.trim()) return undefined;
+        const label = quick.displayText.trim();
+        const protoIndex = numbered ? entry?.index : position;
+        return {
+          id: quick.id?.trim() || label,
+          text: label,
+          index: typeof protoIndex === 'number' ? protoIndex : undefined,
+        };
+      }),
+    );
+  }
+
+  if (contentType === 'listMessage') {
+    const rows = (content.listMessage?.sections ?? []).flatMap(section => section?.rows ?? []);
+    return collectChoices(
+      rows.map((row, position) => {
+        const text = row?.title?.trim();
+        if (!text) return undefined;
+        return { id: row?.rowId?.trim() || text, text, index: position };
+      }),
+    );
+  }
+
+  return undefined;
+}
+
+function collectChoices(entries: Array<BaileysClickableChoice | undefined>): BaileysClickableChoice[] | undefined {
+  const choices: BaileysClickableChoice[] = [];
+  for (const entry of entries) {
+    if (!entry) continue;
+    // The id goes back to the business bot verbatim on a click, so it is never rewritten: an id past
+    // the cap is dropped (WhatsApp caps row ids far below it), while a long label is only trimmed.
+    const id = entry.id;
+    const text = entry.text.slice(0, BUTTON_TEXT_MAX_LENGTH);
+    if (!id || id.length > BUTTON_TEXT_MAX_LENGTH || !text) continue;
+    choices.push({ id, text, index: entry.index });
+    if (choices.length >= BUTTONS_MAX_ENTRIES) break;
+  }
+  return choices.length > 0 ? choices : undefined;
+}
+
+/**
+ * Map a resolved click onto Baileys' `sendMessage` helpers (`buttonReply` / `listReply`). Native-flow
+ * `interactiveMessage` has no helper; it uses the template `buttonReply` shape, which is unverified
+ * against a live business native-flow prompt and must not be advertised as `interactiveResponseMessage`.
+ */
+export function toBaileysButtonClickContent(
+  contentType: string,
+  buttonId: string,
+  text: string,
+  index: number | undefined,
+): Record<string, unknown> {
+  switch (contentType) {
+    case 'buttonsMessage':
+      return {
+        buttonReply: { displayText: text, id: buttonId, index },
+        type: 'plain',
+      };
+    case 'listMessage':
+      return {
+        listReply: {
+          title: text,
+          listType: 1, // SINGLE_SELECT
+          singleSelectReply: { selectedRowId: buttonId },
+        },
+      };
+    case 'templateMessage':
+      return {
+        buttonReply: { displayText: text, id: buttonId, index },
+        type: 'template',
+      };
+    case 'interactiveMessage':
+    default:
+      // Unverified: Baileys has InteractiveResponseMessage.nativeFlowResponseMessage, but we have
+      // not confirmed the server accepts it (or this template stand-in) when *sending* a reply to a
+      // native-flow prompt. Keep the template helper so the send still inherits ephemeral/store/echo.
+      return {
+        buttonReply: { displayText: text, id: buttonId, index },
+        type: 'template',
+      };
+  }
+}
+
+/**
+ * Reads `id` / `button_id` (and optional display text) out of a native-flow `paramsJson` /
+ * `buttonParamsJson` string. Returns `undefined` when the JSON is absent, malformed, or carries
+ * neither an id nor a visible label. Pass `requireId: true` for reply parsing so a display-text-only
+ * payload does not become a synthetic id.
+ */
+function parseNativeFlowButtonParams(
+  paramsJson: string | null | undefined,
+  opts?: { requireId?: boolean },
+): IncomingMessage['button'] {
+  if (!paramsJson) {
+    return undefined;
+  }
+  try {
+    const params = JSON.parse(paramsJson) as Record<string, unknown>;
+    const text = pickNonEmptyString(params, ['display_text', 'displayText', 'title']);
+    const id = pickNonEmptyString(params, ['id', 'button_id', 'buttonId']);
+    if (id) {
+      return { id, text: text ?? undefined };
+    }
+    if (opts?.requireId) {
+      return undefined;
+    }
+    // Prompt buttons sometimes carry only the visible label in paramsJson.
+    if (text) {
+      return { id: text, text };
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function pickNonEmptyString(obj: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+/**
  * A catalog share arrives as a `productMessage` too, carrying the `catalog` arm instead of
  * `product` (there is no `catalogMessage` content type). It names a whole catalog and carries no
  * product id, so it must not surface as a `product` with no product — see
@@ -305,6 +763,12 @@ export interface BaileysContextContent {
   documentMessage?: BaileysContextCarrier | null;
   stickerMessage?: BaileysContextCarrier | null;
   locationMessage?: BaileysContextCarrier | null;
+  // Interactive replies carry `contextInfo` on their own sub-message (the original prompt they
+  // answer), so the quote/mentions/timer extractors must look there too.
+  buttonsResponseMessage?: BaileysContextCarrier | null;
+  templateButtonReplyMessage?: BaileysContextCarrier | null;
+  listResponseMessage?: BaileysContextCarrier | null;
+  interactiveResponseMessage?: BaileysContextCarrier | null;
 }
 
 /** Everything the context region of an inbound message yields — not just the quote. */
@@ -336,7 +800,11 @@ export function extractBaileysContext(content: BaileysContextContent): BaileysMe
     content.audioMessage ??
     content.documentMessage ??
     content.stickerMessage ??
-    content.locationMessage;
+    content.locationMessage ??
+    content.buttonsResponseMessage ??
+    content.templateButtonReplyMessage ??
+    content.listResponseMessage ??
+    content.interactiveResponseMessage;
   // A text status's styling rides on the extended-text content (proto backgroundArgb/font) —
   // surface it so the store/viewer can render the story the way it was posted.
   const extText = content.extendedTextMessage;
@@ -414,6 +882,10 @@ export interface BaileysIncomingFields {
   /** Pre-extracted commerce ids. Populated by the adapter for `orderMessage` / `productMessage`. */
   order?: IncomingMessage['order'];
   product?: IncomingMessage['product'];
+  /** Pre-extracted button/list reply. Populated by the adapter when the user tapped a control. */
+  button?: IncomingMessage['button'];
+  /** Pre-extracted prompt choices. Populated by the adapter for business button/list prompts. */
+  buttons?: IncomingMessage['buttons'];
   /** A `productMessage` that shares the whole catalog rather than one product — see `isBaileysCatalogShare`. */
   isCatalogShare?: boolean;
   /** Ephemeral/disappearing-messages timer from `contextInfo.expiration` on the Baileys message. */
@@ -450,7 +922,9 @@ export function buildIncomingMessageFromBaileys(
     from: fields.fromMe ? self : chatId,
     to: fields.fromMe ? chatId : self,
     chatId,
-    body: fields.body,
+    // Native-flow replies sometimes put the visible label only in paramsJson (surfaced on `button`),
+    // not in `interactiveResponseMessage.body`, so prefer an explicit body, else the button label.
+    body: fields.body || fields.button?.text || '',
     type: mapBaileysMessageType(fields.contentType, fields.isPtt, fields.isCatalogShare),
     timestamp: fields.timestamp,
     fromMe: fields.fromMe,
@@ -508,6 +982,14 @@ export function buildIncomingMessageFromBaileys(
     incoming.product = businessOwnerJid
       ? { ...fields.product, businessOwnerJid: normalizeJid(businessOwnerJid) }
       : fields.product;
+  }
+
+  if (fields.button) {
+    incoming.button = fields.button;
+  }
+
+  if (fields.buttons) {
+    incoming.buttons = fields.buttons;
   }
 
   // Ephemeral/disappearing-messages timer, when the chat has one set.

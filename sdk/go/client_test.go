@@ -111,6 +111,18 @@ func TestJIDPathIsReadable(t *testing.T) {
 	}
 }
 
+func TestListSessionsQueryName(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `[]`}
+	c := newTestClient(t, rt)
+
+	if _, err := c.Sessions.List(context.Background(), &ListSessionsQuery{Name: Ptr("my-bot")}); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got := rt.lastReq.URL.RawQuery; got != "name=my-bot" {
+		t.Fatalf("query = %q, want %q", got, "name=my-bot")
+	}
+}
+
 func TestQueryEncoding(t *testing.T) {
 	rt := &recordTransport{status: 200, body: `{"messages":[],"total":0}`}
 	c := newTestClient(t, rt)

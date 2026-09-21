@@ -911,7 +911,7 @@ export interface EngineEventCallbacks {
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
   onGroupEvent?: (event: GroupEvent) => void; // kind selects group.join / group.leave / group.update / group.join_request
-  onCall?: (event: IncomingCallEvent) => void; // incoming call ringing; rejectCall() while it rings
+  onCall?: (event: IncomingCallEvent) => void; // incoming call ringing; Baileys can rejectCall() while it rings
   onHistoryMessages?: (messages: IncomingMessage[]) => void; // bulk initial sync; persist, don't dispatch
   onDisconnected?: (reason: string) => void; // recoverable -> reconnect
   onStateChanged?: (state: EngineStatus) => void;
@@ -955,9 +955,11 @@ The factory resolves the engine through the **plugin loader**, not a hard-coded 
 configured engine (`engine.type`, default `'whatsapp-web.js'`) is read once in the constructor; the
 built-in `whatsapp-web.js` and `baileys` plugins are registered and the configured one is enabled in
 `onModuleInit()`. `create()` takes an **options object** (engine-neutral per-call config —
-`sessionId` / `dbSessionId` / `proxyUrl` / `proxyType`), not a `type` argument. The two ids are
-distinct: `sessionId` is the session **name** (the on-disk auth-directory key), `dbSessionId` is the
-session **UUID** (`Session.id`), needed by FK-bound stores such as `baileys_stored_messages`. There is
+`sessionId` / `dbSessionId` / `proxyUrl` / `proxyType`), not a `type` argument. The two ids carry the
+same value: `sessionId` is the session **UUID** (`Session.id`), which is the on-disk auth-directory key
+since 0.23.5, and `dbSessionId` is that UUID under the name FK-bound stores such as
+`baileys_stored_messages` read. An out-of-tree engine plugin that keys its own storage by `sessionId`
+has to re-key it on upgrade: `SessionAuthDirMigration` renames the two built-in shapes only. There is
 no `EngineType` union, no `switch`, and no `Unknown engine type` throw: if the plugin is unavailable it
 logs a warning and falls back to the legacy direct adapter — but that fallback can only build
 `whatsapp-web.js`. For any other configured engine (e.g. `ENGINE_TYPE=baileys` with its plugin
@@ -974,7 +976,7 @@ import { WhatsAppWebJsAdapter } from './adapters/whatsapp-web-js.adapter';
 import { PluginLoaderService, PluginType, IEnginePlugin } from '../core/plugins';
 
 export interface EngineCreateOptions {
-  /** Session NAME — the on-disk auth-directory key. */
+  /** Session UUID (Session.id): the on-disk auth-directory key, same value as dbSessionId. */
   sessionId: string;
   /** Session UUID (Session.id) — the DB-row key for FK-bound stores (e.g. baileys_stored_messages). */
   dbSessionId: string;

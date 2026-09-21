@@ -73,8 +73,8 @@ export class SessionEngineLeafEvents {
       const mediaMaxBytes =
         this.configService?.get<number>('status.mediaMaxBytes', DEFAULT_MEDIA_MAX_BYTES) ?? DEFAULT_MEDIA_MAX_BYTES;
       const messages = await engine.getChatHistory('status@broadcast', STATUS_SEED_LIMIT, true, mediaMaxBytes);
-      // getChatHistory maps a message's contact from the sync cache only, so status posters (usually
-      // @lid ids) come back nameless. Resolve each unique poster once via getContactById — the same
+      // getChatHistory resolves each poster's contact, but a lookup that failed or found no name leaves
+      // the status nameless (usually an @lid poster). Resolve each once via getContactById — the same
       // lookup the contacts API uses, which maps the @lid to the real contact — so a seeded status
       // carries the poster's name like a live one does. Cached per JID: one lookup per contact, not
       // one per status.
@@ -202,6 +202,7 @@ export class SessionEngineLeafEvents {
         sessionId: id,
         callId,
         error: err instanceof Error ? err.message : String(err),
+        action: 'call_auto_reject_failed',
       });
     }
   }

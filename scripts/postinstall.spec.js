@@ -32,6 +32,7 @@ const EXPECTED_PATCHER_ORDER = [
   'patch-wwebjs-participant-arity.js',
   'patch-wwebjs-block.js',
   'patch-wwebjs-group-description.js',
+  'patch-wwebjs-media-id.js',
   'patch-baileys-appstate.js',
   'patch-baileys-newsletter-create.js',
 ];

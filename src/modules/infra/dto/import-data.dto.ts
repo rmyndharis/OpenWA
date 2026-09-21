@@ -19,7 +19,7 @@ const TABLE_PROPERTIES: Record<string, { type: 'array' }> = Object.fromEntries(
  * route in the product a body carrying no `tables` reached the handler and failed as a 500 from
  * inside the restore, and a misspelled key was accepted in silence.
  *
- * `tables` is validated as an object and not descended into: without @ValidateNested the fourteen
+ * `tables` is validated as an object and not descended into: without @ValidateNested the per-table
  * row arrays are leaf values, so whitelist cannot strip them. That is load-bearing, not incidental —
  * every key omitted here is restored EMPTY, so a whitelist that reached inside would silently blank
  * the database it was asked to restore.
@@ -42,8 +42,7 @@ const TABLE_PROPERTIES: Record<string, { type: 'array' }> = Object.fromEntries(
 export class ImportDataDto {
   @ApiProperty({
     type: 'object',
-    description:
-      'Every one of the 14 migration tables is emptied before the restore runs, so a key omitted here is restored EMPTY rather than left untouched. Post the whole GET /api/infra/export-data payload, not a hand-built subset.',
+    description: `Every one of the ${TABLE_IMPORTERS.length} migration tables is emptied before the restore runs, so a key omitted here is restored EMPTY rather than left untouched. Post the whole GET /api/infra/export-data payload, not a hand-built subset.`,
     properties: TABLE_PROPERTIES,
   })
   @IsObject()

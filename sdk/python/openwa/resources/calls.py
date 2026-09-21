@@ -21,7 +21,8 @@ class CallsResource:
     def reject_call(self, session_id: str, call_id: str) -> SuccessResult:
         """Reject a ringing incoming call (the id comes from the ``call.received`` event).
 
-        Requires an OPERATOR-level key. 404 when the call is not found or no longer ringing.
+        Baileys only; whatsapp-web.js answers 501. Requires an OPERATOR-level key. 404 when the call
+        is not found or no longer ringing.
         """
         return self._http.request(
             "POST", f"/api/sessions/{quote_segment(session_id)}/calls/{quote_segment(call_id)}/reject"

@@ -7,6 +7,7 @@
   },
   "common": {
     "appName": "OpenWA",
+    "updateAvailable": "v{{version}} mevcut",
     "loading": "Yükleniyor...",
     "cancel": "İptal",
     "delete": "Sil",
@@ -113,6 +114,7 @@
     "groupSubtitle": "Grup",
     "privateContactSubtitle": "Özel kişi",
     "deleteConfirm": "Bu mesaj herkesten silinsin mi?",
+    "promptButtons": "Mesaj seçenekleri",
     "messageDeleted": "🚫 Bu mesaj silindi",
     "messageMasked": "🔒 Bağlı cihazlar için WhatsApp tarafından gizlendi — ana telefonunuzu kontrol edin",
     "kind": {
@@ -162,6 +164,7 @@
       "send": "Mesaj gönderilemedi",
       "react": "Mesaja tepki verilemedi",
       "delete": "Mesaj silinemedi",
+      "clickButton": "Düğmeye tıklanamadı",
       "fileTooLarge": "Dosya çok büyük (maks 18 MB)"
     },
     "loadMessagesError": "Mesajlar yüklenemedi. Sunucu kayıtlarını kontrol edin.",
@@ -285,7 +288,8 @@
     },
     "start": {
       "teardownPendingTitle": "Oturum Başlatılıyor",
-      "teardownPending": "Bu oturum için bir kimlik bilgisi sıfırlama işlemi devam ediyor. Lütfen biraz bekleyip tekrar deneyin."
+      "teardownPending": "Bu oturum için bir kimlik bilgisi sıfırlama işlemi devam ediyor. Lütfen biraz bekleyip tekrar deneyin.",
+      "errorTitle": "Başlatma Başarısız"
     },
     "qr": {
       "title": "QR Kodunu Tara",
@@ -309,7 +313,7 @@
       "created": "Oluşturuldu",
       "lastActive": "Son Görülme",
       "autoRejectCalls": "Aramaları otomatik reddet",
-      "autoRejectCallsHint": "Gelen aramalar çaldığı anda reddedilir. call.received webhook'u yine de ilk olarak tetiklenir. Bir sonraki arama için geçerlidir — yeniden başlatma gerekmez."
+      "autoRejectCallsHint": "Gelen aramalar çaldığı anda reddedilir. call.received webhook'u yine de ilk olarak tetiklenir. Bir sonraki arama için geçerlidir, yeniden başlatma gerekmez. Yalnızca Baileys motorunda: whatsapp-web.js aramaları reddedemez."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -383,6 +387,7 @@
       "phoneLabel": "Telefon Numarası",
       "phonePlaceholder": "ör. 905XXXXXXXXX",
       "phoneHint": "Uluslararası formatta (+, boşluk veya tire olmadan) yalnızca rakamlar (ülke kodu + numara).",
+      "relinkWarning": "whatsapp-web.js motorunda, halihazırda bağlı bir oturumu olan bir numara için kod istemek WhatsApp'ın o cihazın bağlantısını kesmesine yol açabilir. O oturumun açık kalması gerekiyorsa QR sekmesini kullanın.",
       "invalidPhone": "Geçerli bir telefon numarası girin: 6–15 basamak, başta ülke kodu, sembolsüz.",
       "generateButton": "Eşleme Kodu Oluştur",
       "generating": "Eşleme kodu oluşturuluyor...",
@@ -431,6 +436,7 @@
       "fields": {
         "sender": "Gönderen",
         "recipient": "Alıcı",
+        "chatId": "Sohbet kimliği",
         "body": "Mesaj içeriği",
         "type": "Mesaj türü",
         "isGroup": "Grup sohbeti mi",
@@ -518,7 +524,10 @@
       "title": "Kayıtlı şablon yok",
       "description": "Sık kullanılan yanıtları ve bildirimleri hızlandırmak için yeniden kullanılabilir bir şablon oluşturun.",
       "noSessionsTitle": "Kullanılabilir oturum yok",
-      "noSessionsDesc": "Şablon eklemeden önce bir WhatsApp oturumu oluşturun."
+      "noSessionsDesc": "Şablon eklemeden önce bir WhatsApp oturumu oluşturun.",
+      "loadErrorTitle": "Şablonlar yüklenemedi",
+      "forbiddenTitle": "Şablonlara erişim yok",
+      "forbiddenDesc": "Şablonlar, operatör veya yönetici rolüne sahip bir API anahtarı gerektirir."
     },
     "toasts": {
       "created": "Şablon başarıyla oluşturuldu",
@@ -636,6 +645,12 @@
     "loadingGroups": "Gruplar yükleniyor...",
     "noGroupsFound": "Grup bulunamadı",
     "selectGroupHint": "WhatsApp'ınızdan bir grup seçin",
+    "selectAllGroups": "Tümünü seç",
+    "selectMatchingGroups": "Eşleşenleri seç",
+    "clearGroupSelection": "Temizle",
+    "groupsSelectedCount": "Seçilen: {{count}}/{{max}}",
+    "noGroupsMatch": "Aramanızla eşleşen grup yok",
+    "forwardUsesFirstGroup": "İletme yalnızca seçilen ilk grubu, iletilecek mesajın bulunduğu sohbet olarak kullanır.",
     "phoneHint": "Boşluk bırakmadan uluslararası formatı kullanın",
     "messageType": "Mesaj Türü",
     "types": {
@@ -693,17 +708,29 @@
     "bulkRecipientsCount": "Alıcılar: {{count}}",
     "bulkDelay": "Mesajlar Arası Gecikme (ms)",
     "bulkDelayHint": "1000–60000 ms (varsayılan 3000)",
+    "bulkMediaKind": "Gönderme biçimi",
+    "bulkMediaHint": "Dosya eklendiğinde mesaj, dosyanın açıklaması olur. Seçilen dosya isteğin içinde gönderilir; bu yüzden çok sayıda alıcıya büyük dosya göndermek için herkese açık bir medya URL'si kullanın.",
+    "bulkMediaTooLarge": "Bu dosya {{count}} alıcıya doğrudan gönderilemeyecek kadar büyük: bu alıcı sayısında dosya en fazla {{size}} olabilir. Bunun yerine herkese açık bir medya URL'si kullanın veya daha az alıcıya gönderin.",
+    "bulkMediaUrlInvalid": "http:// veya https:// ile başlayan tam bir adres girin, örneğin https://example.com/file.pdf.",
+    "bulkCaptionTooLong": "Dosya eklendiğinde mesaj, dosyanın açıklaması olarak gönderilir ve açıklama en fazla {{max}} karakter olabilir (şu an {{count}}).",
+    "bulkAudioNoCaption": "Ses açıklama olmadan gönderilir, bu yüzden bu metin gönderilmez. Mesajı temizleyin veya başka bir tür seçin.",
     "send": "Mesajı Gönder",
     "sending": "Gönderiliyor...",
+    "sendingProgress": "Gönderiliyor {{current}}/{{total}}...",
     "viewOnly": "Yalnızca Görüntüle",
     "responseEmpty": "API yanıtını görmek için bir mesaj gönderin",
     "successLabel": "Başarılı",
     "failedLabel": "Başarısız",
+    "groupsSentSummary": "{{sent}}/{{total}} gönderildi",
+    "groupSendCancelled": "{{count}}, iptal edildi",
+    "groupSendStopped": "{{count}}, HTTP {{status}} sonrası durduruldu",
     "response": {
       "timestamp": "Zaman Damgası",
       "messageId": "Mesaj ID'si",
       "batchId": "Toplu İşlem ID'si (Batch ID)",
-      "error": "Hata"
+      "error": "Hata",
+      "groups": "Gruplar",
+      "notSent": "Gönderilmedi"
     },
     "sendFailed": "Mesaj gönderilemedi",
     "notOnWhatsApp": "Bu numara WhatsApp'ta kayıtlı değil",

@@ -7,11 +7,12 @@
   },
   "common": {
     "appName": "OpenWA",
+    "updateAvailable": "v{{version}} disponibile",
     "loading": "Caricamento...",
     "cancel": "Annulla",
     "delete": "Elimina",
     "create": "Crea",
-    "save": "Save",
+    "save": "Salva",
     "close": "Chiudi",
     "showApiKey": "Mostra la chiave API",
     "hideApiKey": "Nascondi la chiave API",
@@ -113,6 +114,7 @@
     "groupSubtitle": "Gruppo",
     "privateContactSubtitle": "Contatto privato",
     "deleteConfirm": "Eliminare questo messaggio per tutti?",
+    "promptButtons": "Opzioni del messaggio",
     "messageDeleted": "🚫 Questo messaggio è stato eliminato",
     "messageMasked": "🔒 Nascosto da WhatsApp sui dispositivi collegati — controlla sul telefono principale",
     "kind": {
@@ -162,6 +164,7 @@
       "send": "Impossibile inviare il messaggio",
       "react": "Impossibile reagire al messaggio",
       "delete": "Impossibile eliminare il messaggio",
+      "clickButton": "Impossibile cliccare il pulsante",
       "fileTooLarge": "Il file è troppo grande (max 18 MB)"
     },
     "loadMessagesError": "Impossibile caricare i messaggi. Controlla i log del server.",
@@ -305,7 +308,7 @@
       "created": "Creata",
       "lastActive": "Ultima Attività",
       "autoRejectCalls": "Rifiuta automaticamente le chiamate",
-      "autoRejectCallsHint": "Le chiamate in arrivo vengono rifiutate appena squillano. Il webhook call.received viene comunque inviato prima. Si applica alla prossima chiamata — nessun riavvio necessario."
+      "autoRejectCallsHint": "Le chiamate in arrivo vengono rifiutate appena squillano. Il webhook call.received viene comunque inviato prima. Si applica alla prossima chiamata, nessun riavvio necessario. Solo con il motore Baileys: whatsapp-web.js non può rifiutare le chiamate."
     },
     "proxy": {
       "title": "Configurazione proxy",
@@ -379,6 +382,7 @@
       "phoneLabel": "Numero di Telefono",
       "phonePlaceholder": "es., 919876543210",
       "phoneHint": "Solo cifre (senza +, spazi o trattini) in formato internazionale (prefisso del paese + numero).",
+      "relinkWarning": "Sul motore whatsapp-web.js, richiedere un codice per un numero che ha già una sessione collegata può far sì che WhatsApp scolleghi quel dispositivo. Usa la scheda QR se quella sessione deve restare attiva.",
       "invalidPhone": "Inserisci un numero di telefono valido: 6–15 cifre, prefisso del paese per primo, senza simboli.",
       "generateButton": "Genera codice di abbinamento",
       "generating": "Generazione del codice di abbinamento in corso...",
@@ -393,7 +397,8 @@
     },
     "start": {
       "teardownPendingTitle": "Avvio sessione",
-      "teardownPending": "Uno smontaggio delle credenziali per questa sessione è ancora in corso. Attendi un momento e riprova."
+      "teardownPending": "Uno smontaggio delle credenziali per questa sessione è ancora in corso. Attendi un momento e riprova.",
+      "errorTitle": "Avvio Fallito"
     },
     "restriction": {
       "reachout_timelock": "Nuove chat bloccate",
@@ -431,10 +436,11 @@
       "fields": {
         "sender": "Mittente",
         "recipient": "Destinatario",
+        "chatId": "ID chat",
         "body": "Corpo del messaggio",
         "type": "Tipo di messaggio",
         "isGroup": "È una chat di gruppo",
-        "kind": "Chat kind",
+        "kind": "Tipo di chat",
         "fromMe": "Inviato da me",
         "hasMedia": "Contiene media",
         "mentions": "Menzioni"
@@ -518,7 +524,10 @@
       "title": "Nessun modello salvato",
       "description": "Crea un modello riutilizzabile per velocizzare le risposte e le notifiche più comuni..",
       "noSessionsTitle": "Nessuna sessione disponibile",
-      "noSessionsDesc": "Crea una sessione WhatsApp prima di aggiungere i modelli."
+      "noSessionsDesc": "Crea una sessione WhatsApp prima di aggiungere i modelli.",
+      "loadErrorTitle": "Impossibile caricare i modelli",
+      "forbiddenTitle": "Nessun accesso ai modelli",
+      "forbiddenDesc": "I modelli richiedono una chiave API con ruolo operatore o amministratore."
     },
     "toasts": {
       "created": "Modello creato con successo",
@@ -636,6 +645,12 @@
     "loadingGroups": "Caricamento gruppi...",
     "noGroupsFound": "Nessun gruppo trovato",
     "selectGroupHint": "Seleziona un gruppo dal tuo WhatsApp",
+    "selectAllGroups": "Seleziona tutti",
+    "selectMatchingGroups": "Seleziona risultati",
+    "clearGroupSelection": "Deseleziona",
+    "groupsSelectedCount": "Selezionati: {{count}}/{{max}}",
+    "noGroupsMatch": "Nessun gruppo corrisponde alla tua ricerca",
+    "forwardUsesFirstGroup": "L'inoltro usa solo il primo gruppo selezionato, come chat di origine.",
     "phoneHint": "Usa il formato internazionale senza spazi",
     "messageType": "Tipo di Messaggio",
     "types": {
@@ -693,17 +708,29 @@
     "bulkRecipientsCount": "Destinatari: {{count}}",
     "bulkDelay": "Ritardo tra i messaggi (ms)",
     "bulkDelayHint": "1000–60000 ms (predefinito: 3000)",
+    "bulkMediaKind": "Invia come",
+    "bulkMediaHint": "Con un allegato, il messaggio diventa la sua didascalia. Un file selezionato viaggia dentro la richiesta, quindi i file grandi per molti destinatari richiedono invece un URL multimediale pubblico.",
+    "bulkMediaTooLarge": "Questo file è troppo grande per inviarlo direttamente a {{count}} destinatari: con questo numero ogni file può essere al massimo di {{size}}. Usa invece un URL multimediale pubblico o invia a meno destinatari.",
+    "bulkMediaUrlInvalid": "Usa un indirizzo completo con http:// o https://, per esempio https://example.com/file.pdf.",
+    "bulkCaptionTooLong": "Con un allegato il messaggio viene inviato come sua didascalia, limitata a {{max}} caratteri (ora {{count}}).",
+    "bulkAudioNoCaption": "L'audio viene inviato senza didascalia, quindi questo testo non verrebbe inviato. Svuota il messaggio o scegli un altro tipo.",
     "send": "Invia Messaggio",
     "sending": "Invio in corso...",
+    "sendingProgress": "Invio in corso {{current}}/{{total}}...",
     "viewOnly": "Sola Visualizzazione",
     "responseEmpty": "Invia un messaggio per vedere la risposta delle API",
     "successLabel": "Successo",
     "failedLabel": "Fallito",
+    "groupsSentSummary": "{{sent}}/{{total}} inviati",
+    "groupSendCancelled": "{{count}}, annullati",
+    "groupSendStopped": "{{count}}, interrotto dopo HTTP {{status}}",
     "response": {
       "timestamp": "Timestamp",
       "messageId": "ID Messaggio",
       "batchId": "ID batch",
-      "error": "Errore"
+      "error": "Errore",
+      "groups": "Gruppi",
+      "notSent": "Non inviati"
     },
     "sendFailed": "Impossibile inviare il messaggio",
     "notOnWhatsApp": "Questo numero non è registrato su WhatsApp",
@@ -835,8 +862,8 @@
       "export": "Esporta dati",
       "import": "Importa dati",
       "exportFailed": "Impossibile esportare i dati",
-      "exportPartialTitle": "Backup is missing some media",
-      "exportPartial": "{{count}} attachment payload(s) exceeded the export media budget and were saved as placeholders. The messages restore; their media does not.",
+      "exportPartialTitle": "Nel backup mancano alcuni file multimediali",
+      "exportPartial": "{{count}} allegato/i ha/hanno superato il limite di spazio per l'esportazione dei file multimediali e sono stati salvati come segnaposto. I messaggi verranno ripristinati, ma non i relativi file multimediali.",
       "importFailed": "Impossibile importare i dati",
       "importOk": "Dati importati",
       "importConfirm": "L'importazione SOSTITUIRÀ tutti i dati attuali con il backup ({{rows}} righe). Questa operazione non può essere annullata. Continuare?",

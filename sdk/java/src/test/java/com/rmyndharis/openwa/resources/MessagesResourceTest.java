@@ -19,6 +19,7 @@ import com.rmyndharis.openwa.model.MessageHistoryQuery;
 import com.rmyndharis.openwa.model.PinMessageRequest;
 import com.rmyndharis.openwa.model.ReactMessageRequest;
 import com.rmyndharis.openwa.model.ReplyMessageRequest;
+import com.rmyndharis.openwa.model.ClickButtonRequest;
 import com.rmyndharis.openwa.model.SendBulkRequest;
 import com.rmyndharis.openwa.model.SendContactRequest;
 import com.rmyndharis.openwa.model.SendLocationRequest;
@@ -266,6 +267,22 @@ class MessagesResourceTest {
             "s", ReplyMessageRequest.builder().chatId("628@c.us").quotedMessageId("quoted-123").text("re").build());
         assertEquals("http://h/api/sessions/s/messages/reply", tx.lastRequest().url());
         assertTrue(tx.lastRequest().body().contains("quoted-123"));
+    }
+
+    @Test
+    void clickButtonHitsClickButtonPath() {
+        tx.respond(200, MSG);
+        client.messages.clickButton(
+            "s",
+            ClickButtonRequest.builder()
+                .chatId("628@c.us")
+                .messageId("prompt-1")
+                .buttonId("yes")
+                .text("Sim")
+                .build());
+        assertEquals("http://h/api/sessions/s/messages/click-button", tx.lastRequest().url());
+        assertTrue(tx.lastRequest().body().contains("prompt-1"));
+        assertTrue(tx.lastRequest().body().contains("yes"));
     }
 
     @Test

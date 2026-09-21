@@ -22,8 +22,8 @@ class CallsResource
 
     /**
      * Reject a ringing incoming call (the callId from the call.received event).
-     * 404 when the call is not found or no longer ringing. Requires an
-     * OPERATOR-level key.
+     * Baileys only; whatsapp-web.js answers 501. 404 when the call is not found
+     * or no longer ringing. Requires an OPERATOR-level key.
      *
      * @return array<string,mixed>
      */

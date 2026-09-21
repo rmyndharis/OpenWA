@@ -44,6 +44,9 @@ services:
     # must match the image/entrypoint. Same convention as the production docker-compose.yml.
     environment:
       - NODE_ENV=${NODE_ENV:-development}
+      # Explicit for the same reason as the production compose file: the data is UTC either way, this
+      # only sets the zone the logs and the "today" stats window read in.
+      - TZ=${TZ:-UTC}
       - PORT=2785
       - HOME=/tmp
       # Chromium reads its home from the passwd entry (no /home/openwa), so it needs writable, existing
@@ -137,6 +140,7 @@ services:
       - MEDIA_DOWNLOAD_MAX_BYTES=${MEDIA_DOWNLOAD_MAX_BYTES:-}
       - MEDIA_DOWNLOAD_TIMEOUT_MS=${MEDIA_DOWNLOAD_TIMEOUT_MS:-}
       - INBOUND_MEDIA_CONCURRENCY=${INBOUND_MEDIA_CONCURRENCY:-}
+      - SESSION_PROXY_URL_FETCH=${SESSION_PROXY_URL_FETCH:-}
       - MEDIA_CONVERSION_ENABLED=${MEDIA_CONVERSION_ENABLED:-}
       - FFMPEG_PATH=${FFMPEG_PATH:-}
       - MEDIA_CONVERSION_TIMEOUT_MS=${MEDIA_CONVERSION_TIMEOUT_MS:-}
@@ -236,6 +240,7 @@ services:
       - BAILEYS_LOG_LEVEL=${BAILEYS_LOG_LEVEL:-}
       - BAILEYS_MESSAGE_STORE_LIMIT=${BAILEYS_MESSAGE_STORE_LIMIT:-}
       - BAILEYS_SESSION_STORE_MAX_ENTRIES=${BAILEYS_SESSION_STORE_MAX_ENTRIES:-}
+      - BAILEYS_CHAT_STATE_CACHE_MAX=${BAILEYS_CHAT_STATE_CACHE_MAX:-}
       - WWEBJS_ONBOARDING_CONTINUE_LABELS=${WWEBJS_ONBOARDING_CONTINUE_LABELS:-}
       # Default matches the image's ENV (Dockerfile); a blank forward would shadow it and make
       # puppeteer fall back to a bundled Chromium the image does not ship. compose-parity.spec.ts
@@ -265,6 +270,8 @@ services:
       - PLUGIN_CATALOG_URL=${PLUGIN_CATALOG_URL:-}
       - PLUGIN_CAP_TIMEOUT_MS=${PLUGIN_CAP_TIMEOUT_MS:-}
       - PLUGIN_STORAGE_MAX_BYTES=${PLUGIN_STORAGE_MAX_BYTES:-}
+      # The dashboard's update notice asks GitHub for the latest release; false turns that request off.
+      - UPDATE_CHECK_ENABLED=${UPDATE_CHECK_ENABLED:-}
       # Misc application tuning.
       - AUDIT_RETENTION_DAYS=${AUDIT_RETENTION_DAYS:-}
       - BULK_MAX_CONCURRENT_BATCHES=${BULK_MAX_CONCURRENT_BATCHES:-}

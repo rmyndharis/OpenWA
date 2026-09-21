@@ -101,7 +101,8 @@ Alongside this async pipeline, a route may additionally declare a `response` con
   declare a host-side `response` contract that shapes that synchronous reply without making the plugin
   inline. Its `preflight` checks (today: `session-alive`) run **after** signature verification and
   **before** the dedup persist — returning `503` only for a definitively-dead concrete-scoped WhatsApp
-  session (no live engine or `FAILED`); recoverable statuses and `READY` pass through to a normal
+  session (no live engine or `FAILED`), with a `Retry-After` so a provider that retries a 503 only when
+  that header is present comes back; recoverable statuses and `READY` pass through to a normal
   `202`+enqueue so the worker can still fail fast and the dedup row still holds the delivery. A declared
   `ack` (`status`/`body`/`headers`) replaces the default `202 accepted`. For a route declaring `response`,
   the ack is returned without awaiting enqueue so a queue-disabled deployment cannot block the provider's
@@ -158,14 +159,20 @@ Four tables live on the data connection, each created by a hand-authored dual-di
 - **Authentication inversion.** A provider webhook cannot carry an OpenWA API key, so ingress is public to
   the API-key guard but validates a **per-instance HMAC (or shared secret)** over the **raw** request
   bytes with a constant-time comparison. The raw body is preserved by a verify callback on the body parser
-  because a re-serialized payload is not byte-identical to what the provider signed. The global rate-limit
-  guard still applies, and the payload is intentionally not bound to a DTO so strict validation cannot
-  reject unknown provider fields.
+  because a re-serialized payload is not byte-identical to what the provider signed. The route is exempt from
+  the global per-IP throttle and bounded by its own guard instead, on two keys, `(pluginId, instanceId)` and
+  the client IP: a provider delivering every tenant's webhooks from one egress address would otherwise be
+  shed at the global tier before the per-instance bound ever fired. The payload is intentionally not bound
+  to a DTO so strict validation cannot reject unknown provider fields.
 - **Replay and duplication.** A signed-timestamp tolerance rejects stale deliveries, and
   `(pluginId, instanceId, providerDeliveryId)` deduplication plus a queue job id keyed on the delivery id
   provides best-effort de-duplication when the provider supplies a stable delivery id. Standard Webhooks defaults
   to its signed `webhook-id`; other handlers must remain idempotent because arbitrary provider headers
-  are not authenticated by every scheme. Freshness is enforced whenever a route declares
+  are not authenticated by every scheme. A route whose provider mints a fresh delivery id on every retry
+  attempt can declare `dedupOn: "body"` to key retries on the raw body instead: byte-identical bodies
+  then collapse within `INGRESS_DEDUP_RETENTION_DAYS`, the persisted delivery id and the `{id}` ack
+  token become that content hash, and a provider whose retries legitimately differ in the signed body
+  should keep the default, since `body` would dedup nothing for it. Freshness is enforced whenever a route declares
   `signature.timestampHeader`: the declared `toleranceSec` wins, and otherwise the host default
   (`INGRESS_TIMESTAMP_TOLERANCE_SEC`, default 300) applies — a declared timestamp is never accepted
   without a freshness check. Freshness alone is not replay protection, though: an **unsigned**
@@ -262,7 +269,16 @@ Within major 1 the surface grows additively. A route's optional `response` contr
 `headers`, rendered host-side with `{rawBody}`/`{timestamp}`/`{id}` templates from the verified request),
 and an advisory `deadlineMs` — lets an adapter shape the synchronous HTTP response the provider sees; the
 plugin still always runs async, and a route with no `response` is byte-identical to today's default
-fast-ack. The `mode: 'sync-reply'` value is **deprecated** in favor of `response`: it was inert dead code
+fast-ack. `ack.body` and every `ack.headers` value must be strings, and a manifest that declares otherwise
+is refused at install and at boot, which leaves that plugin in error until the manifest is fixed. A
+declared header is dropped rather than written when it is one of these thirteen names: `content-type`
+(decided by the allowlist in §25.8); `content-length`, `transfer-encoding`, `content-encoding` and
+`trailer`, since the host frames the response itself and never compresses it; `set-cookie`,
+`access-control-allow-origin` and `access-control-allow-credentials`; and `content-security-policy`,
+`x-content-type-options`, `x-frame-options`, `strict-transport-security` and `referrer-policy`, the
+response protections the host sets for every request. Every other declared header goes out verbatim.
+
+The `mode: 'sync-reply'` value is **deprecated** in favor of `response`: it was inert dead code
 that was never wired to the HTTP response (the pipeline is always async + fast-ack), and it is kept in the
 `mode` union only to preserve SDK v1 additive-only compatibility — do not remove it within major 1, and do
 not rely on it at runtime.

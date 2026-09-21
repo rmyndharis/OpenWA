@@ -7,6 +7,7 @@
   },
   "common": {
     "appName": "OpenWA",
+    "updateAvailable": "v{{version}} 已發佈",
     "loading": "正在載入...",
     "cancel": "取消",
     "delete": "刪除",
@@ -113,6 +114,7 @@
     "groupSubtitle": "群組",
     "privateContactSubtitle": "私人聯絡人",
     "deleteConfirm": "為所有人刪除此訊息？",
+    "promptButtons": "訊息選項",
     "messageDeleted": "🚫 此訊息已被刪除",
     "messageMasked": "🔒 WhatsApp 已對已連結裝置隱藏此訊息 — 請在主手機上查看",
     "kind": {
@@ -162,6 +164,7 @@
       "send": "傳送訊息失敗",
       "react": "回應訊息失敗",
       "delete": "刪除訊息失敗",
+      "clickButton": "點擊按鈕失敗",
       "fileTooLarge": "檔案過大（最大 18 MB）"
     },
     "loadMessagesError": "無法載入訊息。請檢查伺服器日誌。",
@@ -305,7 +308,7 @@
       "created": "建立時間",
       "lastActive": "上次活躍",
       "autoRejectCalls": "自動拒接來電",
-      "autoRejectCallsHint": "來電響鈴後即時拒接。call.received webhook 仍會先行觸發。下一通來電起生效，無需重新啟動。"
+      "autoRejectCallsHint": "來電響鈴後即時拒接。call.received webhook 仍會先行觸發。下一通來電起生效，無需重新啟動。僅限 Baileys 引擎：whatsapp-web.js 無法拒接來電。"
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -379,6 +382,7 @@
       "phoneLabel": "電話號碼",
       "phonePlaceholder": "例如：919876543210",
       "phoneHint": "只可輸入數字（不可有 +、空格或連字號），須為國際格式（國家代碼 + 號碼）。",
+      "relinkWarning": "在 whatsapp-web.js 引擎上，為已經有連結工作階段的號碼申請配對碼，可能會令 WhatsApp 解除該裝置的連結。如果該工作階段必須維持運作，請改用 QR 碼分頁。",
       "invalidPhone": "請輸入有效的電話號碼：6 至 15 位數字，國家代碼在前，不可有符號。",
       "generateButton": "產生配對碼",
       "generating": "正在產生配對碼...",
@@ -393,7 +397,8 @@
     },
     "start": {
       "teardownPendingTitle": "工作階段啟動中",
-      "teardownPending": "此工作階段的憑證拆除仍在進行中。請稍候再試。"
+      "teardownPending": "此工作階段的憑證拆除仍在進行中。請稍候再試。",
+      "errorTitle": "啟動失敗"
     },
     "restriction": {
       "reachout_timelock": "新對話被封鎖",
@@ -431,6 +436,7 @@
       "fields": {
         "sender": "傳送者",
         "recipient": "接收者",
+        "chatId": "聊天 ID",
         "body": "訊息內容",
         "type": "訊息類型",
         "isGroup": "是群組聊天",
@@ -518,7 +524,10 @@
       "title": "未儲存任何範本",
       "description": "建立可重用的範本，加快常用回覆和通知的速度。",
       "noSessionsTitle": "沒有可用的工作階段",
-      "noSessionsDesc": "請先建立 WhatsApp 工作階段，才能新增範本。"
+      "noSessionsDesc": "請先建立 WhatsApp 工作階段，才能新增範本。",
+      "loadErrorTitle": "無法載入範本",
+      "forbiddenTitle": "無權存取範本",
+      "forbiddenDesc": "範本需要具有操作員或管理員角色的 API 金鑰。"
     },
     "toasts": {
       "created": "範本建立成功",
@@ -636,6 +645,12 @@
     "loadingGroups": "正在載入群組...",
     "noGroupsFound": "找不到群組",
     "selectGroupHint": "從你的 WhatsApp 選擇一個群組",
+    "selectAllGroups": "全選",
+    "selectMatchingGroups": "選擇相符項目",
+    "clearGroupSelection": "清除",
+    "groupsSelectedCount": "已選擇：{{count}}/{{max}}",
+    "noGroupsMatch": "沒有與搜尋相符的群組",
+    "forwardUsesFirstGroup": "轉寄只會使用第一個選取的群組，作為轉寄來源對話。",
     "phoneHint": "使用不含空格的國際格式",
     "messageType": "訊息類型",
     "types": {
@@ -693,17 +708,29 @@
     "bulkRecipientsCount": "收件人：{{count}}",
     "bulkDelay": "訊息之間的延遲（毫秒）",
     "bulkDelayHint": "1000–60000 毫秒（預設 3000）",
+    "bulkMediaKind": "傳送為",
+    "bulkMediaHint": "加入附件後，訊息會成為附件的說明文字。所選檔案會隨請求一併傳送，因此向大量收件人傳送大型檔案時，請改用公開的媒體 URL。",
+    "bulkMediaTooLarge": "此檔案太大，無法直接傳送給 {{count}} 位收件人：以這個人數計，每個檔案最大只能為 {{size}}。請改用公開的媒體 URL，或減少收件人數目。",
+    "bulkMediaUrlInvalid": "請輸入以 http:// 或 https:// 開頭的完整地址，例如 https://example.com/file.pdf。",
+    "bulkCaptionTooLong": "加入附件後，訊息會作為附件的說明文字傳送，說明文字最多 {{max}} 個字元（目前 {{count}} 個）。",
+    "bulkAudioNoCaption": "音訊傳送時不附說明文字，因此這段文字不會被傳送。請清除訊息或選擇其他類型。",
     "send": "傳送訊息",
     "sending": "正在傳送...",
+    "sendingProgress": "正在傳送 {{current}}/{{total}}...",
     "viewOnly": "僅檢視",
     "responseEmpty": "傳送訊息後即可查看 API 回應",
     "successLabel": "成功",
     "failedLabel": "失敗",
+    "groupsSentSummary": "已傳送 {{sent}}/{{total}}",
+    "groupSendCancelled": "{{count}} 個，已取消",
+    "groupSendStopped": "{{count}} 個，在 HTTP {{status}} 後停止",
     "response": {
       "timestamp": "時間戳記",
       "messageId": "訊息 ID",
       "batchId": "批次 ID",
-      "error": "錯誤"
+      "error": "錯誤",
+      "groups": "群組",
+      "notSent": "未傳送"
     },
     "sendFailed": "傳送訊息失敗",
     "notOnWhatsApp": "此號碼未在 WhatsApp 註冊",

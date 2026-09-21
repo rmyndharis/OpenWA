@@ -46,6 +46,50 @@ describe('EngineRegistry', () => {
       expect(registry.entries()).toEqual([]);
     });
 
+    /**
+     * The proxy travels with the engine because it is fixed for that engine's life: `PATCH /proxy`
+     * edits the row without restarting, so a fetch made for a running session has to use what the
+     * engine was started with rather than what the row now says (#1626).
+     */
+    describe('the egress proxy of the live engine', () => {
+      it('remembers the proxy the engine was registered with', () => {
+        registry.set('s1', engineStub('a'), 'socks5://proxy.invalid:1080');
+
+        expect(registry.proxyUrl('s1')).toBe('socks5://proxy.invalid:1080');
+      });
+
+      it('reports no proxy for a direct session and for one that was never started', () => {
+        registry.set('s1', engineStub('a'));
+
+        expect(registry.proxyUrl('s1')).toBeUndefined();
+        expect(registry.proxyUrl('never-started')).toBeUndefined();
+      });
+
+      it('takes the new proxy when a reconnect replaces the engine', () => {
+        registry.set('s1', engineStub('first'), 'http://old.invalid:8080');
+        registry.set('s1', engineStub('second'), 'socks5://new.invalid:1080');
+
+        expect(registry.proxyUrl('s1')).toBe('socks5://new.invalid:1080');
+      });
+
+      it('forgets it on delete, deleteIfLive and clear, so a stopped session keeps no egress', () => {
+        const live = engineStub('live');
+        registry.set('s1', engineStub('a'), 'http://a.invalid:8080');
+        registry.delete('s1');
+        expect(registry.proxyUrl('s1')).toBeUndefined();
+
+        registry.set('s2', live, 'http://b.invalid:8080');
+        registry.deleteIfLive('s2', engineStub('superseded'));
+        expect(registry.proxyUrl('s2')).toBe('http://b.invalid:8080'); // not the live engine: kept
+        registry.deleteIfLive('s2', live);
+        expect(registry.proxyUrl('s2')).toBeUndefined();
+
+        registry.set('s3', engineStub('c'), 'http://c.invalid:8080');
+        registry.clear();
+        expect(registry.proxyUrl('s3')).toBeUndefined();
+      });
+    });
+
     it('entries() snapshots the map so callers can tear down while it mutates', () => {
       const a = engineStub('a');
       registry.set('s1', a);

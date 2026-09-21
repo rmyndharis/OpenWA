@@ -84,6 +84,10 @@ export function Sessions() {
   const [killConfirmId, setKillConfirmId] = useState<string | null>(null);
   const [unlinkConfirmId, setUnlinkConfirmId] = useState<string | null>(null);
   const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
+  // Sessions whose Start or Reconnect click is still being handled. A start can wait seconds before its
+  // engine exists, and a second click in that window is refused as "already starting" while the first
+  // one proceeds.
+  const [startingIds, setStartingIds] = useState<ReadonlySet<string>>(new Set());
   // Session config is not on the list payload — the API never returns the config column, so it is
   // fetched per session when the detail modal opens rather than N times to render the list.
   const [sessionConfig, setSessionConfig] = useState<SessionConfig | null>(null);
@@ -99,7 +103,15 @@ export function Sessions() {
   // proxy, and the credentials with it, that the operator never got to see.
   const [proxyLoadFailed, setProxyLoadFailed] = useState(false);
 
+  // Set while the last list read failed. Cleared as a read starts, so a connect that already triggered
+  // a reload (onReconnect) is not followed by a second read from the recovery effect below.
+  const listReadFailed = useRef(false);
+  // Spends the one retry the recovery effect below is allowed per connect. Given back by a read that
+  // actually succeeded, so a later independent failure on the same connection is retried too.
+  const retriedThisConnect = useRef(false);
+
   const fetchSessions = useCallback(async (): Promise<Session[]> => {
+    listReadFailed.current = false;
     try {
       // Background refetches — a websocket push, a mutation reloading the list — would otherwise
       // replace the whole page with a spinner for the length of a round-trip, so a restriction
@@ -107,6 +119,10 @@ export function Sessions() {
       if (!initialLoadDone.current) setLoading(true);
       const data = await sessionApi.list();
       setSessions(data);
+      // The list is current again, so an error left by an earlier failed read (or a create, whose toast
+      // already reported it) no longer describes the page, and the recovery retry is available again.
+      setError(null);
+      retriedThisConnect.current = false;
       // Keep the shared React Query cache (read by the Dashboard via useSessionsQuery /
       // useSessionStatsQuery) in sync after this page's mutations reload local state — otherwise the
       // Dashboard shows stale session counts/status. This runs on every reload (mount / WS-failed /
@@ -117,6 +133,7 @@ export function Sessions() {
       void invalidateSessionQueries(queryClient, queryKeys.sessions);
       return data;
     } catch (err) {
+      listReadFailed.current = true;
       setError(err instanceof Error ? err.message : t('sessions.create.errorDefault'));
       return [];
     } finally {
@@ -148,6 +165,7 @@ export function Sessions() {
     handleCloseQRModal,
     applyQrPush,
     dismissQrForSession,
+    clearQrCodeForSession,
   } = useSessionPairing({ sessions, sessionsRef, reloadSessions: fetchSessions });
 
   const {
@@ -197,7 +215,7 @@ export function Sessions() {
     void fetchSessions();
   }, [fetchSessions]);
 
-  const { connectionFailed, reconnect } = useSessionFeed({
+  const { isConnected, connectionFailed, reconnect } = useSessionFeed({
     sessions,
     sessionsRef,
     onQRCode: applyQrPush,
@@ -233,19 +251,33 @@ export function Sessions() {
           // that means two different things — an engine still registered through its automatic
           // reconnect backoff, or a session stopped with no engine at all — and only the server can
           // say which, so the offered actions must not be guessed from the status here.
-          void fetchSessions();
+          // The same answer decides whether an open QR modal for it can be closed outright.
+          // Either way the code on screen was minted by a connection that is now gone, so blank it
+          // first: scanning it cannot work, and the modal shows its loading state until the session
+          // is back at `qr_ready` with a fresh one.
+          clearQrCodeForSession(event.sessionId);
+          void fetchSessions().then(rows => {
+            if (rows.find(s => s.id === event.sessionId)?.engineLoaded === false) {
+              // Only if nothing arrived while the answer was in flight: a reconnect that completed
+              // in that window has already pushed a fresh code into the modal blanked above, and
+              // that code is scannable.
+              dismissQrForSession(event.sessionId, true);
+            }
+          });
           toast.warning(t('sessions.toasts.disconnectedTitle'), t('sessions.toasts.disconnectedDesc'));
         } else if (event.status === 'action_required') {
           // Refresh so the card picks up the lastError reason (what the operator must do) from the API.
           void fetchSessions();
           toast.warning(t('sessions.toasts.actionRequiredTitle'), t('sessions.toasts.actionRequiredDesc'));
         } else if (event.status === 'failed') {
-          // Refresh so the card picks up the lastError reason from the API.
+          // Refresh so the card picks up the lastError reason from the API. Every FAILED write evicts the
+          // engine, so an open QR modal for this session can never show a code: close it, uncovering the card.
           void fetchSessions();
+          dismissQrForSession(event.sessionId);
           toast.error(t('sessions.toasts.failedTitle'), t('sessions.toasts.failedDesc'));
         }
       },
-      [toast, t, fetchSessions, queryClient],
+      [toast, t, fetchSessions, queryClient, dismissQrForSession, clearQrCodeForSession],
     ),
   });
 
@@ -253,6 +285,25 @@ export function Sessions() {
     fetchSessions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A connected feed means the gateway answers again, but the feed only reports a RECONNECT: a first
+  // connect that lands after socket.io's own retries (the gateway was restarting at mount) fires no
+  // onReconnect, and no status push re-reads the list, so the failed mount read would stay on screen
+  // with no cards. `error` is a dependency so a read that fails after the connect is retried too, but
+  // only once per connect: failures whose messages differ (a 502, then a 504) would otherwise each
+  // change `error` and re-read the list with no backoff for as long as the upstream stays down. The
+  // allowance (declared with `listReadFailed` above) is given back by a successful read, so the loop
+  // stays closed while a later failure on the same connection is still retried.
+  useEffect(() => {
+    if (!isConnected) {
+      retriedThisConnect.current = false;
+      return;
+    }
+    if (listReadFailed.current && !retriedThisConnect.current) {
+      retriedThisConnect.current = true;
+      void fetchSessions();
+    }
+  }, [isConnected, error, fetchSessions]);
 
   const handleDelete = async (id: string) => {
     const session = sessions.find(s => s.id === id);
@@ -276,13 +327,11 @@ export function Sessions() {
     }
   };
 
+  // Start and Reconnect only render for a card with no engine behind it, so they always call the
+  // gateway. A leftover `initializing` or `qr_ready` status (a node that died mid-pairing) is no reason
+  // to open the QR modal instead: GET /qr answers 400 until something starts the session.
   const handleStart = async (id: string) => {
-    const session = sessions.find(s => s.id === id);
-    if (session && ['initializing', 'qr_ready'].includes(session.status)) {
-      handleShowQR(id);
-      return;
-    }
-
+    setStartingIds(current => new Set(current).add(id));
     try {
       // Use the authoritative response instead of fabricating a status. The old code wrote a local
       // `status: 'connecting'` — a value the gateway never emits — while keeping every other field
@@ -290,14 +339,25 @@ export function Sessions() {
       // Start for a session that just acquired an engine.
       const started = await sessionApi.start(id);
       setSessions(current => replaceSession(current, started));
-      await fetchSessions();
-      handleShowQR(id);
+      // A 200 does not promise the engine is still there when the list is read back: a concurrent stop
+      // retires the start, and an engine can fail right after answering. Skip the modal when the re-read
+      // shows the session without one. A failed re-read gives no answer, so the start's success decides.
+      const row = (await fetchSessions()).find(s => s.id === id);
+      // A session that came back already linked has nothing to scan. Decided from the re-read rather
+      // than left to handleShowQR's own guard, which reads the sessions state this render still
+      // holds: that state predates both the start response and the re-read, so it would let the
+      // modal open over a connected session and then poll for a QR that can never arrive.
+      if (row?.status === 'ready') return;
+      if (!row || isSessionStarted(row)) handleShowQR(id);
     } catch (err) {
       console.error('Failed to start:', err);
       // A credential teardown for this name is still settling — the backend fails closed with 409 +
       // SESSION_NAME_TEARDOWN_PENDING. It is retryable, so warn with the server message and do NOT
-      // open a QR modal (there is no engine to scan yet). Any other start error keeps the existing
-      // authoritative reload + QR fallback behavior.
+      // open a QR modal (there is no engine to scan yet). Any other start error re-reads the list. An
+      // engine that is still coming up (a reverse proxy timing out a slow start) gets the QR modal. A
+      // start that left no engine gets the gateway's answer instead: the modal's poll waits for a qr_ready
+      // that cannot arrive, so it would spin until closed, over the card's error row or, for a refusal that
+      // records nothing (the concurrency cap), with the reason only in the console.
       const code = (err as { code?: string } | null | undefined)?.code;
       if (code === 'SESSION_NAME_TEARDOWN_PENDING') {
         const msg = err instanceof Error && err.message ? err.message : t('sessions.start.teardownPending');
@@ -307,7 +367,22 @@ export function Sessions() {
       }
       const fresh = await fetchSessions();
       const current = fresh.find(s => s.id === id);
-      if (current?.status !== 'ready') handleShowQR(id);
+      if (current && isSessionStarted(current)) {
+        if (current.status !== 'ready') handleShowQR(id);
+        return;
+      }
+      // The answer to this request, not the row's lastError: that is shown on the card, and it can be the
+      // terse cause behind a diagnostic 504 or a reason left from an earlier attempt.
+      toast.error(
+        t('sessions.start.errorTitle'),
+        err instanceof Error && err.message ? err.message : t('common.unknownError'),
+      );
+    } finally {
+      setStartingIds(current => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -526,7 +601,7 @@ export function Sessions() {
         <div className="error-banner" role="alert">
           <AlertCircle size={20} />
           <span className="error-banner-text">{t('sessions.feedDisconnected')}</span>
-          <button className="btn-secondary" style={{ marginLeft: 'auto' }} onClick={reconnect}>
+          <button className="btn-secondary" style={{ marginInlineStart: 'auto' }} onClick={reconnect}>
             {t('common.refresh')}
           </button>
         </div>
@@ -708,6 +783,11 @@ export function Sessions() {
               // Pairing Code Content
               <div className="pairing-container" role="tabpanel">
                 {pairingError && <div className="pairing-error">{pairingError}</div>}
+                {/* The guards behind this button check the session's state, never the number: a code
+                    requested for a number linked elsewhere has been seen to unlink that device on the
+                    whatsapp-web.js engine. Shown on both engines, since the page cannot tell which one
+                    a session runs without another round-trip, and the copy names the engine. */}
+                <div className="pairing-warning">{t('sessions.pairing.relinkWarning')}</div>
 
                 {!pairingCode ? (
                   <div className="pairing-form">
@@ -1063,13 +1143,17 @@ export function Sessions() {
                 <div className="qr-placeholder">
                   <QrCode size={80} className="qr-icon" />
                   <p>{session.status === 'qr_ready' ? t('sessions.qr.scanToConnect') : t('sessions.qr.preparing')}</p>
-                  <button
-                    className="btn-sm"
-                    onClick={() => handleShowQR(session.id)}
-                    disabled={session.status !== 'qr_ready'}
-                  >
-                    {session.status === 'qr_ready' ? t('sessions.qr.showQr') : t('sessions.qr.loading')}
-                  </button>
+                  {/* The QR is operator-only over REST and the socket, so a read-only key would open a
+                      modal that never gets a code. */}
+                  {canWrite && (
+                    <button
+                      className="btn-sm"
+                      onClick={() => handleShowQR(session.id)}
+                      disabled={session.status !== 'qr_ready'}
+                    >
+                      {session.status === 'qr_ready' ? t('sessions.qr.showQr') : t('sessions.qr.loading')}
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="session-info">
@@ -1122,12 +1206,20 @@ export function Sessions() {
                     {t('sessions.actions.stop')}
                   </button>
                 ) : canWrite && (session.status === 'created' || session.status === 'disconnected') ? (
-                  <button className="btn-action" onClick={() => handleStart(session.id)}>
+                  <button
+                    className="btn-action"
+                    onClick={() => handleStart(session.id)}
+                    disabled={startingIds.has(session.id)}
+                  >
                     <Play size={16} />
                     {t('sessions.actions.start')}
                   </button>
                 ) : canWrite ? (
-                  <button className="btn-action" onClick={() => handleStart(session.id)}>
+                  <button
+                    className="btn-action"
+                    onClick={() => handleStart(session.id)}
+                    disabled={startingIds.has(session.id)}
+                  >
                     <RefreshCw size={16} />
                     {t('sessions.actions.reconnect')}
                   </button>

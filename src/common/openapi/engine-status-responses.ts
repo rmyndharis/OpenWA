@@ -15,12 +15,12 @@
  * already installed, a session already running.
  */
 export const ENGINE_NOT_READY_409 =
-  'The session is not connected — an engine exists for it but is not `ready`: disconnected, ' +
+  'The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, ' +
   'reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and ' +
   'retry. A session that was never started answers `400` instead, and the session lifecycle routes ' +
   'answer `409` for a conflicting state rather than this. One window answers this while the session ' +
   'still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects ' +
-  'into it — for those few seconds the answer is a `409` naming the reload; retry shortly.';
+  'into it, and for those few seconds the answer is a `409` naming the reload; retry shortly.';
 
 /**
  * `EngineNotReadyError` (409) on `POST /sessions/:sessionId/pairing-code`, where the generic wording
@@ -42,6 +42,22 @@ export const PAIRING_NOT_READY_409 =
   '`qr_ready`: on the Baileys engine a socket that has begun closing stops accepting a pairing ' +
   'request before the status catches up, which on a silently dropped connection takes until the ' +
   "WebSocket's close timeout (30 s); retry, and the status follows shortly.";
+
+/**
+ * `EngineTransportError` (503) on `POST /sessions/:sessionId/pairing-code`, where the whatsapp-web.js
+ * engine bounds each attempt and retries the navigation shapes: WhatsApp Web reloads its QR page every
+ * few seconds while unpaired, so a request can land mid-navigation. Only an exhausted budget is
+ * reported here, and an attempt can exhaust it on a bare timeout with no navigation behind it, so the
+ * description says what the gateway knows rather than naming a cause. A refusal WhatsApp itself sends
+ * is not navigation-shaped and propagates on the first attempt instead.
+ */
+export const PAIRING_TRANSPORT_503 =
+  'The pairing code could not be generated: the gateway stopped waiting after its attempt budget, ' +
+  'usually because WhatsApp Web kept reloading its QR page. The condition is transient and the ' +
+  "request is worth retrying; the last attempt's reason is carried in the message. An attempt that " +
+  'timed out may still have reached WhatsApp, and a retry starts the linking flow again, with the ' +
+  'same risk of unlinking an already-linked device that this route carries generally. The Baileys ' +
+  'engine does not answer this, having no page to reload.';
 
 /**
  * The catalog and status services pass a `NotFoundException` factory to `EngineRegistry.require()`
@@ -69,9 +85,9 @@ export const ENGINE_REFUSED_403 =
   'WhatsApp refused the operation. The request was well formed — the refusal happened WhatsApp-side, ' +
   'most often because the account lacks the admin rights the operation requires.';
 
-/** `MessageNotFoundError` (404) — outside the adapter's lookup window, or revoked. */
+/** `MessageNotFoundError` (404): outside the adapter's lookup window, or revoked. */
 export const MESSAGE_NOT_FOUND_404 =
-  "No such message — the id is outside the engine's lookup window (roughly the last hundred messages " +
+  "No such message: the id is outside the engine's lookup window (roughly the last hundred messages " +
   'of the chat, or absent from the Baileys store) or the message was revoked.';
 
 /** `ChannelNotFoundError` (404), on routes addressed by channel id. */

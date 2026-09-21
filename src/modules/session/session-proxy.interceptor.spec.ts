@@ -43,6 +43,15 @@ describe('SessionProxyInterceptor', () => {
     ...over,
   });
 
+  /** A port nothing listens on: connecting to it is refused before any request is sent. */
+  const closedPort = async (): Promise<number> => {
+    const probe = http.createServer();
+    await new Promise<void>(resolve => probe.listen(0, '127.0.0.1', resolve));
+    const { port } = probe.address() as AddressInfo;
+    await new Promise<void>(resolve => probe.close(() => resolve()));
+    return port;
+  };
+
   const makeResponse = () => {
     const res = {
       status: jest.fn(),
@@ -305,7 +314,7 @@ describe('SessionProxyInterceptor', () => {
 
     it('an unreachable owner answers 503 with the owner named, never a hang or a crash', async () => {
       const { interceptor, context, next, handle, res } = build({
-        row: row({ nodeUrl: 'http://127.0.0.1:1' }),
+        row: row({ nodeUrl: `http://127.0.0.1:${await closedPort()}` }),
         timeoutMs: 2000,
       });
 
@@ -316,6 +325,79 @@ describe('SessionProxyInterceptor', () => {
       expect(errorBody.statusCode).toBe(503);
       expect(errorBody.message).toContain('peer-node');
       expect(handle).not.toHaveBeenCalled();
+    });
+
+    // Once the request has been sent the owner may have acted on it, and clients replay a POST on
+    // 503 as declined-before-acting. A send that timed out or broke mid-flight must not look like
+    // that, or a retry sends the WhatsApp message twice.
+    const withOwner = async (handler: http.RequestListener, run: (url: string) => Promise<void>): Promise<void> => {
+      const owner = http.createServer(handler);
+      await new Promise<void>(resolve => owner.listen(0, '127.0.0.1', resolve));
+      try {
+        await run(`http://127.0.0.1:${(owner.address() as AddressInfo).port}`);
+      } finally {
+        owner.closeAllConnections();
+        await new Promise<void>(resolve => owner.close(() => resolve()));
+      }
+    };
+    const sendRequest = () => request({ method: 'POST', originalUrl: `/api/sessions/${SID}/messages/send-text` });
+
+    it('answers 504, not 503, when the owner received the send but did not answer in time', async () => {
+      await withOwner(
+        () => undefined,
+        async url => {
+          const { interceptor, context, next, res } = build({
+            row: row({ nodeUrl: url }),
+            req: sendRequest(),
+            timeoutMs: 200,
+          });
+          await interceptor.intercept(context, next);
+
+          expect(res.status).toHaveBeenCalledTimes(1);
+          expect(res.status).toHaveBeenCalledWith(504);
+          expect((res.json.mock.calls[0] as [{ error: string }])[0].error).toBe('Gateway Timeout');
+        },
+      );
+    });
+
+    it('answers 502, not 503, when the connection breaks after the send was dispatched', async () => {
+      await withOwner(
+        req => req.socket.destroy(),
+        async url => {
+          const { interceptor, context, next, res } = build({ row: row({ nodeUrl: url }), req: sendRequest() });
+          const warn = jest.spyOn((interceptor as unknown as { logger: { warn: () => void } }).logger, 'warn');
+          await interceptor.intercept(context, next);
+
+          expect(res.status).toHaveBeenCalledTimes(1);
+          expect(res.status).toHaveBeenCalledWith(502);
+          // A 502 can also come from a failure before anything was sent (an untrusted TLS
+          // certificate), so the answer must not claim a send and must point at NODE_URL.
+          const { message } = (res.json.mock.calls[0] as [{ message: string }])[0];
+          expect(message).toContain('possibly after the request was sent');
+          expect(message).toContain('NODE_URL');
+          // fetch only says 'fetch failed'; the cause code is what names the real failure.
+          const [, logged] = warn.mock.calls[0] as unknown as [string, { cause: unknown }];
+          expect(logged.cause).toMatch(/^[A-Z_]+$/);
+        },
+      );
+    });
+
+    it('answers 502 without relaying the owner status or headers when the body read fails', async () => {
+      await withOwner(
+        (req, res) => {
+          res.writeHead(201, { 'content-type': 'application/json', 'content-length': '100' });
+          res.write('{"id":');
+          setTimeout(() => req.socket.destroy(), 20);
+        },
+        async url => {
+          const { interceptor, context, next, res } = build({ row: row({ nodeUrl: url }), req: sendRequest() });
+          await interceptor.intercept(context, next);
+
+          expect(res.status).toHaveBeenCalledTimes(1);
+          expect(res.status).toHaveBeenCalledWith(502);
+          expect(res.setHeader).not.toHaveBeenCalled();
+        },
+      );
     });
   });
 });

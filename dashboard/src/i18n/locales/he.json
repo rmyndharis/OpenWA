@@ -7,6 +7,7 @@
   },
   "common": {
     "appName": "OpenWA",
+    "updateAvailable": "גרסה v{{version}} זמינה",
     "loading": "טוען...",
     "cancel": "ביטול",
     "delete": "מחיקה",
@@ -115,6 +116,7 @@
     "groupSubtitle": "קבוצה",
     "privateContactSubtitle": "איש קשר פרטי",
     "deleteConfirm": "למחוק הודעה זו עבור כולם?",
+    "promptButtons": "אפשרויות ההודעה",
     "messageDeleted": "🚫 הודעה זו נמחקה",
     "messageMasked": "🔒 הוסתר על ידי וואטסאפ במכשירים המקושרים — בדוק בטלפון הראשי שלך",
     "kind": {
@@ -169,6 +171,7 @@
       "send": "שליחת ההודעה נכשלה",
       "react": "התגובה להודעה נכשלה",
       "delete": "מחיקת ההודעה נכשלה",
+      "clickButton": "לחיצה על הכפתור נכשלה",
       "fileTooLarge": "הקובץ גדול מדי (מקסימום 18 MB)"
     },
     "loadMessagesError": "לא ניתן לטעון את ההודעות. בדקו את יומני השרת.",
@@ -312,7 +315,7 @@
       "created": "נוצר בתאריך",
       "lastActive": "פעילות אחרונה",
       "autoRejectCalls": "דחיית שיחות אוטומטית",
-      "autoRejectCallsHint": "שיחות נכנסות נדחות ברגע שהן מצלצלות. ה-webhook call.received עדיין נשלח לפני כן. חל מהשיחה הבאה — ללא צורך בהפעלה מחדש."
+      "autoRejectCallsHint": "שיחות נכנסות נדחות ברגע שהן מצלצלות. ה-webhook call.received עדיין נשלח לפני כן. חל מהשיחה הבאה, ללא צורך בהפעלה מחדש. במנוע Baileys בלבד: whatsapp-web.js לא יכול לדחות שיחות."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -386,6 +389,7 @@
       "phoneLabel": "מספר טלפון",
       "phonePlaceholder": "לדוגמה: 919876543210",
       "phoneHint": "ספרות בלבד (ללא +, רווחים או מקפים) בפורמט בין-לאומי (קידומת מדינה + מספר).",
+      "relinkWarning": "במנוע whatsapp-web.js, בקשת קוד עבור מספר שכבר יש לו סשן מקושר עלולה לגרום לוואטסאפ לנתק את המכשיר הזה. השתמשו בלשונית ה-QR אם הסשן הזה חייב להישאר פעיל.",
       "invalidPhone": "יש להזין מספר טלפון תקין: 6–15 ספרות, קידומת המדינה תחילה, ללא סימנים.",
       "generateButton": "יצירת קוד קישור",
       "generating": "יוצר קוד קישור...",
@@ -400,7 +404,8 @@
     },
     "start": {
       "teardownPendingTitle": "הפעלת סשן",
-      "teardownPending": "פירוק אישורים לסשן זה עדיין מתבצע. המתן רגע ונסה שוב."
+      "teardownPending": "פירוק אישורים לסשן זה עדיין מתבצע. המתן רגע ונסה שוב.",
+      "errorTitle": "ההפעלה נכשלה"
     },
     "restriction": {
       "reachout_timelock": "צ׳אטים חדשים חסומים",
@@ -440,6 +445,7 @@
       "fields": {
         "sender": "שולח",
         "recipient": "נמען",
+        "chatId": "מזהה שיחה",
         "body": "גוף ההודעה",
         "type": "סוג הודעה",
         "isGroup": "צ'אט קבוצתי",
@@ -527,7 +533,10 @@
       "title": "אין תבניות שמורות",
       "description": "צרו תבנית לשימוש חוזר כדי לזרז תשובות והתראות נפוצות.",
       "noSessionsTitle": "אין סשנים זמינים",
-      "noSessionsDesc": "צרו סשן WhatsApp לפני הוספת תבניות."
+      "noSessionsDesc": "צרו סשן WhatsApp לפני הוספת תבניות.",
+      "loadErrorTitle": "לא ניתן לטעון את התבניות",
+      "forbiddenTitle": "אין גישה לתבניות",
+      "forbiddenDesc": "תבניות דורשות מפתח API עם תפקיד מפעיל או מנהל."
     },
     "toasts": {
       "created": "התבנית נוצרה בהצלחה",
@@ -645,6 +654,12 @@
     "loadingGroups": "טוען קבוצות...",
     "noGroupsFound": "לא נמצאו קבוצות",
     "selectGroupHint": "יש לבחור קבוצה מתוך WhatsApp",
+    "selectAllGroups": "בחירת הכל",
+    "selectMatchingGroups": "בחירת התוצאות",
+    "clearGroupSelection": "ניקוי",
+    "groupsSelectedCount": "נבחרו: {{count}}/{{max}}",
+    "noGroupsMatch": "אין קבוצות התואמות לחיפוש",
+    "forwardUsesFirstGroup": "העברה משתמשת רק בקבוצה הראשונה שנבחרה, כצ'אט שממנו מעבירים.",
     "phoneHint": "יש להשתמש בפורמט בינלאומי ללא רווחים",
     "messageType": "סוג הודעה",
     "types": {
@@ -702,17 +717,29 @@
     "bulkRecipientsCount": "נמענים: {{count}}",
     "bulkDelay": "השהיה בין הודעות (אלפיות שנייה)",
     "bulkDelayHint": "1000–60000 אלפיות שנייה (ברירת מחדל 3000)",
+    "bulkMediaKind": "שליחה בתור",
+    "bulkMediaHint": "כשמצורף קובץ, ההודעה הופכת לכיתוב שלו. קובץ שנבחר נשלח בתוך הבקשה עצמה, ולכן קבצים גדולים לנמענים רבים דורשים כתובת URL ציבורית למדיה במקום זאת.",
+    "bulkMediaTooLarge": "הקובץ גדול מדי לשליחה ישירה אל {{count}} נמענים: בכמות כזו כל קובץ יכול להיות בגודל של {{size}} לכל היותר. יש להשתמש בכתובת URL ציבורית למדיה במקום זאת, או לשלוח לפחות נמענים.",
+    "bulkMediaUrlInvalid": "יש להזין כתובת מלאה שמתחילה ב-http:// או ב-https://, למשל https://example.com/file.pdf.",
+    "bulkCaptionTooLong": "כשמצורף קובץ, ההודעה נשלחת ככיתוב שלו, שמוגבל ל-{{max}} תווים (כרגע {{count}}).",
+    "bulkAudioNoCaption": "שמע נשלח ללא כיתוב, ולכן הטקסט הזה לא יישלח. נקה את ההודעה או בחר סוג אחר.",
     "send": "שליחת הודעה",
     "sending": "שולח...",
+    "sendingProgress": "שולח {{current}}/{{total}}...",
     "viewOnly": "צפייה בלבד",
     "responseEmpty": "יש לשלוח הודעה כדי לראות את תגובת ה-API",
     "successLabel": "הצלחה",
     "failedLabel": "נכשל",
+    "groupsSentSummary": "נשלחו {{sent}}/{{total}}",
+    "groupSendCancelled": "{{count}}, בוטלו",
+    "groupSendStopped": "{{count}}, נעצר אחרי HTTP {{status}}",
     "response": {
       "timestamp": "חותמת זמן",
       "messageId": "מזהה הודעה",
       "batchId": "מזהה אצווה",
-      "error": "שגיאה"
+      "error": "שגיאה",
+      "groups": "קבוצות",
+      "notSent": "לא נשלחו"
     },
     "sendFailed": "שליחת ההודעה נכשלה",
     "notOnWhatsApp": "מספר זה אינו רשום בוואטסאפ",

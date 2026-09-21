@@ -132,13 +132,13 @@ describe('ContactService', () => {
      * rather than be refused. It is neutralized on the way there: whatsapp-web.js knows no `@hosted`
      * domain, so forwarding the suffix verbatim would fail inside the page instead of blocking anyone.
      */
-    it('accepts a Meta-hosted id and hands the engine the neutral dialect', () => {
-      const blockContact = jest.fn();
-      const unblockContact = jest.fn();
+    it('accepts a Meta-hosted id and hands the engine the neutral dialect', async () => {
+      const blockContact = jest.fn().mockResolvedValue(undefined);
+      const unblockContact = jest.fn().mockResolvedValue(undefined);
       const svc = makeService({ blockContact, unblockContact });
 
-      svc.blockContact('s1', '628123456789@hosted');
-      svc.unblockContact('s1', '12345678901234567890@hosted.lid');
+      await svc.blockContact('s1', '628123456789@hosted');
+      await svc.unblockContact('s1', '12345678901234567890@hosted.lid');
 
       expect(blockContact).toHaveBeenCalledWith('628123456789@c.us');
       expect(unblockContact).toHaveBeenCalledWith('12345678901234567890@lid');
@@ -150,11 +150,11 @@ describe('ContactService', () => {
      * which starts with `jidNormalizedUser` and turns `@c.us` straight back into `@s.whatsapp.net`.
      * whatsapp-web.js, which has no such dialect, gets the form it actually understands.
      */
-    it('hands the engine the neutral dialect for a raw-protocol id', () => {
-      const blockContact = jest.fn();
+    it('hands the engine the neutral dialect for a raw-protocol id', async () => {
+      const blockContact = jest.fn().mockResolvedValue(undefined);
       const svc = makeService({ blockContact });
 
-      svc.blockContact('s1', '628123456789@s.whatsapp.net');
+      await svc.blockContact('s1', '628123456789@s.whatsapp.net');
 
       expect(blockContact).toHaveBeenCalledWith('628123456789@c.us');
     });

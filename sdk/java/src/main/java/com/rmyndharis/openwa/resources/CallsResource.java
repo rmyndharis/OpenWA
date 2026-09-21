@@ -17,8 +17,9 @@ public final class CallsResource {
     }
 
     /**
-     * Reject a ringing incoming call. The {@code callId} comes from a {@code call.received}
-     * webhook event; 404 when the call is not found or no longer ringing.
+     * Reject a ringing incoming call. Baileys only; whatsapp-web.js answers {@code 501}. The
+     * {@code callId} comes from a {@code call.received} webhook event; 404 when the call is not
+     * found or no longer ringing.
      */
     public SuccessResult rejectCall(String sessionId, String callId) {
         return client.request(

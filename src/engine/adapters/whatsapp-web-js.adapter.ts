@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { MessageMedia, type Call, type Client, type Message } from 'whatsapp-web.js';
+import { MessageMedia, type Client, type Message } from 'whatsapp-web.js';
 import {
   CallLinkType,
   IWhatsAppEngine,
@@ -191,11 +191,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private set disconnectReported(value: boolean) {
     this.lifecycle.disconnectReported = value;
   }
-  /** Live incoming calls by call id — the map is owned by the calls delegate (call events +
-   *  rejectCall); lifecycle teardown clears it so a late rejectCall() reports not-found on a dead
-   *  client. The adapter keeps this alias for the unmodified spec, which reads `adapter.liveCalls`
-   *  through a cast. */
-  private get liveCalls(): Map<string, { call: Call; expiresAt: number }> {
+  /** Ringing call ids and their expiry, owned by the calls delegate, which uses them to announce each
+   *  call once; lifecycle teardown clears them. The adapter keeps this alias for the spec, which reads
+   *  `adapter.liveCalls` through a cast. */
+  private get liveCalls(): Map<string, number> {
     return this.calls.liveCalls;
   }
 
@@ -536,8 +535,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.profile.createCallLink(type, startTime);
   }
 
-  /** See ./wwebjs-calls — the entry is evicted on ANY attempt; an unknown or expired id maps to
-   *  CallNotFoundError (HTTP 404). */
+  /** Always EngineNotSupportedError (HTTP 501): a rejection did not stop a live call ringing. See
+   *  ./wwebjs-calls. */
   async rejectCall(callId: string): Promise<void> {
     return this.calls.rejectCall(callId);
   }
@@ -729,6 +728,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   votePoll(chatId: string, pollMessageId: string, options: string[]): Promise<void> {
     return this.messaging.votePoll(chatId, pollMessageId, options);
+  }
+
+  // whatsapp-web.js has no interactive button-reply send path; the parameters are not named so the
+  // method reads as the 501 it is, and TypeScript accepts the narrower signature for the interface.
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async clickButton(): Promise<MessageResult> {
+    throw new EngineNotSupportedError('clickButton');
   }
 
   unpinMessage(chatId: string, messageId: string): Promise<void> {

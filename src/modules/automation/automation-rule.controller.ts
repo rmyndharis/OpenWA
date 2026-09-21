@@ -16,6 +16,7 @@ export class AutomationRuleController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({ status: 201, description: 'Rule created.', type: AutomationRuleResponseDto })
   @ApiResponse({ status: 400, description: 'Invalid rule (bad conditions, over-limit text).' })
+  @ApiResponse({ status: 404, description: 'No session with this id.' })
   async create(
     @Param('sessionId') sessionId: string,
     @Body() dto: CreateAutomationRuleDto,

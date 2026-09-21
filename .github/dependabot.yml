@@ -63,18 +63,16 @@ updates:
       # with the base-image Node bump.
       - dependency-name: "@types/node"
         versions: [">=23.0.0"]
-      # The NestJS 12 line cannot be adopted yet. @bull-board/nestjs (9.6.1) and @nestjs/throttler
-      # (6.5.0) both cap @nestjs/common and @nestjs/core at ^11.0.0, and neither publishes a
-      # prerelease that accepts 12, so the bump fails npm's peer resolution with ERESOLVE before a
-      # single CI job compiles anything. Two in-repo blockers sit behind that wall: @nestjs/common@12
-      # is ESM-only and neither jest lane can load it under the current transform config (271
-      # @nestjs/common and 35 @nestjs/testing import sites), and @nestjs/swagger 12 spells
-      # nullability per document version, which moves the committed openapi.json snapshot and
-      # cascades into check:contract-shapes across five SDK clients.
+      # The NestJS 12 line cannot be adopted yet. The peers no longer block it (@bull-board/nestjs
+      # 9.10.1 and @nestjs/throttler 6.7.0 both admit ^12.0.0), but two in-repo blockers remain:
+      # @nestjs/common@12 is ESM-only and neither jest lane can load it under the current transform
+      # config (271 @nestjs/common and 35 @nestjs/testing import sites), and @nestjs/swagger 12
+      # spells nullability per document version, which moves the committed openapi.json snapshot
+      # and cascades into check:contract-shapes across five SDK clients.
       #
       # Pinned on the version rather than update-types so the 11.x line keeps flowing. Lift when
-      # both peers admit ^12.0.0; the upgrade itself belongs on a dedicated branch, since the
-      # README framework rows and the jest ESM config have to move in the same commit.
+      # both in-repo blockers are resolved; the upgrade itself belongs on a dedicated branch, since
+      # the README framework rows and the jest ESM config have to move in the same commit.
       - dependency-name: "@nestjs/*"
         versions: [">=12.0.0"]
       # tar-stream 3.2.1 is a types-only release: index.js, extract.js, pack.js, headers.js and
@@ -160,3 +158,10 @@ updates:
     labels:
       - dependencies
       - docker
+    ignore:
+      # A Node major moves by hand, together with the CI Node version, the @types/node ignore above
+      # and the amd64/arm64 build and browser-launch smoke (#783 proposed 26 before its LTS date,
+      # #1684 proposed 25, which never became one). Digest refreshes of node:22-slim and the other
+      # images still come through.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]

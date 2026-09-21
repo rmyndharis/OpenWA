@@ -225,6 +225,7 @@ function makeBaileysGroups(): { groups: BaileysGroups; sock: BaileysSockStub } {
   };
   const host: BaileysGroupsHost = {
     ensureReady: jest.fn(),
+    sessionProxyUrl: () => undefined,
     getSocket: () => sock as unknown as WASocket,
     logger,
     toNeutralJid: jid => jid.replace('@s.whatsapp.net', '@c.us'),

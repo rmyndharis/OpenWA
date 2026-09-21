@@ -55,6 +55,30 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
   private readonly phoneToLids = new Map<string, Set<string>>();
   /** Repository fallbacks in flight, one per lid, so a hot miss path can't stack duplicate queries. */
   private readonly pendingLookups = new Set<string>();
+  /**
+   * Lids the table answered for and had no row for. {@link pendingLookups} collapses only the lookups
+   * that overlap a query already in flight, so without this every DISPATCH that names an unmapped lid
+   * issued a fresh query for it, and the callers are on hot paths: a webhook filter resolves both the
+   * event's actor and each of its own rule values, on every dispatch.
+   *
+   * Cleared for a lid the moment this process learns a mapping for it ({@link index}), and wholesale
+   * when the table is reloaded. An absence is never RECORDED for a lid this process already holds or
+   * is still writing ({@link unsettledWrites}), which is what keeps a query that raced a write from
+   * shadowing the row it could not see yet.
+   *
+   * What it does NOT notice is a row ANOTHER process writes: that mapping stays unseen here until
+   * this process learns it or reloads, exactly as a phone already cached in {@link lidToPhone} does.
+   * Bounded by the same cap as the forward map, oldest-recorded first (the forward map is ordered by
+   * recency of USE, this one by when the absence was recorded).
+   */
+  private readonly absentFromTable = new Set<string>();
+  /**
+   * Lids whose row this process has indexed but not yet committed. `remember()` updates the in-memory
+   * maps synchronously and writes the table afterwards, so between the two a table read answers "no
+   * row" about a mapping that is about to exist. The forward map cannot stand in for this: the LRU
+   * can evict the entry inside that same window, leaving it indistinguishable from never-learned.
+   */
+  private readonly unsettledWrites = new Set<string>();
   // 0 = unbounded (legacy behaviour). Every other long-lived map in the engine surface is bounded, so
   // the default is finite; the env override exists for operators who explicitly want the old behaviour.
   private readonly maxCachedLids: number;
@@ -89,6 +113,8 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
       });
       this.lidToPhone.clear();
       this.phoneToLids.clear();
+      // A reload re-reads the table, so every recorded absence is a fresh question again.
+      this.absentFromTable.clear();
       for (const row of rows) {
         this.index(row.lid, row.phone);
       }
@@ -127,32 +153,46 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
       return; // unseen-or-changed only; a no-op write would just churn updatedAt
     }
     this.index(lid, phone);
+    this.unsettledWrites.add(lid);
     try {
       await this.repo.upsert({ lid, phone, sessionId: sessionId ?? null, updatedAt: new Date() }, ['lid']);
     } catch (err) {
       this.logger.warn(
         `Failed to persist lid->phone mapping for ${lid}: ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      this.unsettledWrites.delete(lid);
     }
   }
 
   /**
    * Repository fallback for a cache miss. Rows past the preload cap (or evicted by the LRU) are
    * still persisted, so a miss is warmed from the table: THIS lookup still returns undefined —
-   * the sync read contract can't await, and callers fall back to engine re-resolution — but the
-   * next one hits. A table miss is NOT cached (a false negative would shadow a later remember);
+   * the sync read contract can't await, and callers fall back to engine re-resolution, but the
+   * next one hits. A table miss IS remembered, so an unmapped lid stops re-querying on every
+   * lookup ({@link absentFromTable}), but only when nothing learned that lid in the meantime;
    * a read error is swallowed (the table may not exist yet), the same posture as reload().
    */
   private warmFromTable(lid: string): void {
-    if (!lid || this.pendingLookups.has(lid)) return;
+    if (!lid || this.pendingLookups.has(lid) || this.absentFromTable.has(lid)) return;
     this.pendingLookups.add(lid);
+    // Captured BEFORE the query: a write for this lid that has not reached the table yet means the
+    // answer is already stale, whatever it says. The forward-map check below cannot see that case,
+    // because `remember()` indexes synchronously and the LRU can evict the entry again before the
+    // query answers, at which point the map looks exactly like "never learned".
+    const writeInFlight = this.unsettledWrites.has(lid);
     void this.repo
       .findOne({ where: { lid } })
       .then(row => {
         // Last-write-wins: a remember() that landed while the lookup was in flight is newer.
         if (row && !this.lidToPhone.has(row.lid)) {
           this.index(row.lid, row.phone);
+          return;
         }
+        // Same rule for the negative: an absence recorded over a mapping this process already holds,
+        // or is still writing, would block the warm-back once the LRU evicts the forward entry, and
+        // the row would then be unreachable until something taught the same lid again.
+        if (!row && !this.lidToPhone.has(lid) && !writeInFlight) this.noteAbsent(lid);
       })
       .catch(() => undefined)
       .finally(() => this.pendingLookups.delete(lid));
@@ -172,7 +212,25 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
       set.add(lid);
       this.phoneToLids.set(phone, set);
     }
+    this.absentFromTable.delete(lid);
     this.evictIfOverCap();
+  }
+
+  /**
+   * Record that the table holds no row for this lid, bounded oldest-recorded first.
+   *
+   * Skipped entirely when the cap is disabled: that mode is the legacy unbounded cache, and an
+   * absence set is the one map here that grows on ids a caller supplies rather than on mappings the
+   * account really has, so leaving it unbounded would be a leak an operator never opted into.
+   */
+  private noteAbsent(lid: string): void {
+    if (!this.maxCachedLids) return;
+    this.absentFromTable.add(lid);
+    while (this.absentFromTable.size > this.maxCachedLids) {
+      const oldest = this.absentFromTable.values().next().value;
+      if (oldest === undefined) break;
+      this.absentFromTable.delete(oldest);
+    }
   }
 
   /** Evict the least-recently-used forward entry (and its reverse index) while over the cap. */

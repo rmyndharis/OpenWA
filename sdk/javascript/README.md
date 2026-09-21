@@ -45,7 +45,9 @@ Non-2xx responses throw a typed `OpenWAApiError` subclass
 `OpenWAServiceUnavailableError` — 503, the only retryable one),
 each carrying `.status` and the parsed `.body`. Timeouts throw
 `OpenWATimeoutError`. The SDK does **not** retry — wrap calls with your own
-backoff if needed.
+backoff if needed. In a routed deployment only 503 proves the request was
+never carried out: a forward that fails after the request reached the owner
+node answers 502 or 504.
 
 ## Releasing
 

@@ -229,6 +229,168 @@ describe('LidMappingStoreService — deterministic preload + repository fallback
     expect(store.getCached('lid-a')).toBe('620001');
   });
 
+  it('stops re-querying the table for a lid it has no row for', async () => {
+    // The callers are hot: a webhook filter resolves the event's actor AND each of its own rule
+    // values on every dispatch. pendingLookups collapses the lookups that overlap a query still in
+    // flight, which within one dispatch is all of them, so an unmapped lid used to cost one query
+    // per dispatch rather than one per webhook.
+    const repo = makeFakeRepo(); // empty table: every lookup misses
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+
+    expect(store.getCached('lid-absent')).toBeUndefined();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(repo.findOne).toHaveBeenCalledTimes(1);
+
+    for (let i = 0; i < 5; i++) {
+      expect(store.getCached('lid-absent')).toBeUndefined();
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    expect(repo.findOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('a recorded absence never shadows a mapping learned afterwards, even once it is evicted', async () => {
+    // The forward map answers a learned mapping directly, so the absence only matters after the
+    // entry is evicted: a stale one would block the warm-back and make the row unresolvable for
+    // the life of the process, although it is still in the table.
+    process.env.LID_MAPPING_CACHE_MAX = '1';
+    const repo = makeFakeRepo();
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+    await store.onModuleInit();
+
+    expect(store.getCached('lid-late')).toBeUndefined(); // records the absence
+    await new Promise(resolve => setImmediate(resolve));
+
+    await store.remember('lid-late', '620009');
+    await store.remember('lid-other', '620010'); // evicts lid-late (cap 1); its row stays persisted
+
+    expect(store.getCached('lid-late')).toBeUndefined(); // the miss itself stays a miss
+    await new Promise(resolve => setImmediate(resolve));
+    expect(store.getCached('lid-late')).toBe('620009'); // warmed back rather than blocked
+  });
+
+  it('records no absence for a lid learned while its table read was in flight', async () => {
+    // The read and the write race on every busy session: a filter looks the lid up, and the next
+    // message from that person teaches it. The read was issued first, so it answers "no row" about a
+    // row that now exists. Recording that as an absence poisons the lid: the forward entry hides it
+    // until the LRU evicts, and from then on the warm-back is blocked and the persisted row is
+    // unreachable until something teaches the same lid again.
+    process.env.LID_MAPPING_CACHE_MAX = '1';
+    const repo = makeFakeRepo();
+    let answer: (row: LidMapping | null) => void = () => undefined;
+    repo.findOne.mockImplementationOnce(() => new Promise(resolve => (answer = resolve)));
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+
+    expect(store.getCached('lid-raced')).toBeUndefined(); // the query is now in flight
+    await store.remember('lid-raced', '620001'); // learned and persisted inside that window
+    answer(null); // the query had already run, so it answers about the table as it was
+    await new Promise(resolve => setImmediate(resolve));
+
+    await store.remember('lid-other', '620002'); // cap 1: evicts lid-raced, the row stays persisted
+    expect(store.getCached('lid-raced')).toBeUndefined(); // the read itself is still a miss
+    await new Promise(resolve => setImmediate(resolve));
+    expect(store.getCached('lid-raced')).toBe('620001'); // warmed back rather than blocked
+  });
+
+  it('records no absence for a lid whose own write has not reached the table yet', async () => {
+    // remember() indexes synchronously and writes afterwards, and its callers fire it without
+    // awaiting (one per mapping in a history batch). A lookup issued inside that window reads a
+    // table that does not carry the row yet, and the LRU can evict the forward entry in the same
+    // window, so "did this process learn it" answers no. An absence recorded there shadows a row
+    // that then commits.
+    process.env.LID_MAPPING_CACHE_MAX = '1';
+    const repo = makeFakeRepo();
+    let commit: () => void = () => undefined;
+    repo.upsert.mockImplementationOnce(
+      (values: Partial<LidMapping>) =>
+        new Promise(resolve => {
+          commit = () => {
+            repo.rows.push(values as LidMapping);
+            resolve({});
+          };
+        }),
+    );
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+
+    const writing = store.remember('lid-writing', '620001'); // indexed; its upsert is held open
+    await store.remember('lid-other', '620002'); // cap 1: evicts lid-writing from the forward map
+
+    expect(store.getCached('lid-writing')).toBeUndefined(); // issues the query, which finds no row
+    await new Promise(resolve => setImmediate(resolve));
+
+    commit(); // the write lands: the row is in the table from here on
+    await writing;
+
+    expect(store.getCached('lid-writing')).toBeUndefined(); // the read itself is still a miss
+    await new Promise(resolve => setImmediate(resolve));
+    expect(store.getCached('lid-writing')).toBe('620001'); // warmed back rather than blocked
+  });
+
+  it('records no absence at all when the cap is disabled', async () => {
+    // LID_MAPPING_CACHE_MAX=0 is documented as the legacy unbounded cache. An absence set that grows
+    // on every lookup would be a new unbounded map the operator never asked for, and unlike the
+    // forward map it grows on caller-supplied ids rather than on mappings the account really has.
+    process.env.LID_MAPPING_CACHE_MAX = '0';
+    const repo = makeFakeRepo();
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+
+    for (let i = 0; i < 3; i++) {
+      expect(store.getCached('lid-absent')).toBeUndefined();
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    expect(repo.findOne).toHaveBeenCalledTimes(3); // re-queried, as the legacy behaviour did
+  });
+
+  it('bounds the recorded absences by the same cap as the forward map', async () => {
+    process.env.LID_MAPPING_CACHE_MAX = '2';
+    const repo = makeFakeRepo();
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+
+    for (const lid of ['a', 'b', 'c']) {
+      expect(store.getCached(lid)).toBeUndefined();
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    expect(repo.findOne).toHaveBeenCalledTimes(3);
+
+    // 'a' is the oldest absence and was dropped when 'c' was recorded, so it asks again; 'c' does not.
+    expect(store.getCached('a')).toBeUndefined();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(repo.findOne).toHaveBeenCalledTimes(4);
+    expect(store.getCached('c')).toBeUndefined();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(repo.findOne).toHaveBeenCalledTimes(4);
+  });
+
+  it('forgets every recorded absence when the table is reloaded', async () => {
+    // An import or a restore rewrites the table underneath the process, so every answer it recorded
+    // about that table is a stale one. Re-indexing the reloaded rows is not enough on its own: the
+    // preload takes only the newest `cap` rows, so an imported mapping past that cap is never
+    // indexed, and its recorded absence would go on blocking the warm-back that would find it.
+    process.env.LID_MAPPING_CACHE_MAX = '1';
+    const repo = makeFakeRepo();
+    // The real query is `order: { updatedAt: 'DESC' }, take: cap`; the shared fake ignores both.
+    repo.find.mockImplementation((options: { take?: number }) =>
+      Promise.resolve(
+        [...repo.rows]
+          .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+          .slice(0, options?.take ?? repo.rows.length)
+          .map(r => ({ ...r })),
+      ),
+    );
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+
+    expect(store.getCached('lid-imported')).toBeUndefined();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(repo.findOne).toHaveBeenCalledTimes(1);
+
+    repo.rows.push({ lid: 'lid-imported', phone: '620003', sessionId: null, updatedAt: new Date(1000) });
+    repo.rows.push({ lid: 'lid-newer', phone: '620004', sessionId: null, updatedAt: new Date(2000) });
+    await store.reload(); // cap 1: only lid-newer is preloaded, so lid-imported is never re-indexed
+
+    expect(store.getCached('lid-imported')).toBeUndefined(); // the read itself is still a miss
+    await new Promise(resolve => setImmediate(resolve));
+    expect(store.getCached('lid-imported')).toBe('620003'); // asked the table again rather than blocked
+  });
+
   it('swallows a fallback read error (table unavailable) — the miss stays a miss and never throws', async () => {
     const repo = makeFakeRepo();
     repo.findOne.mockRejectedValueOnce(new Error('no such table: lid_mappings'));
@@ -236,7 +398,8 @@ describe('LidMappingStoreService — deterministic preload + repository fallback
 
     expect(store.getCached('lid-a')).toBeUndefined();
     await new Promise(resolve => setImmediate(resolve));
-    // A table miss is not cached as a negative either — a later remember() must not be shadowed.
+    // A read error is not recorded as an absence: the table said nothing, so there is nothing to
+    // remember, and the next lookup must ask again rather than treat the outage as "no such row".
     expect(store.getCached('lid-a')).toBeUndefined();
   });
 });

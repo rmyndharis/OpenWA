@@ -25,6 +25,8 @@ describe('Session-scoped query endpoints (e2e)', () => {
   let app: INestApplication<App>;
   let sessA: string;
   let sessB: string;
+  let nameA: string;
+  let nameB: string;
   let scopedKey: string; // ADMIN, allowedSessions: [sessA]
   let adminKey: string; // ADMIN, unrestricted
   let throwawayId: string; // a VIEWER key used as the :id target for key-management routes
@@ -44,6 +46,8 @@ describe('Session-scoped query endpoints (e2e)', () => {
     const b = await sessionRepo.save(sessionRepo.create({ name: `e2e-scope-b-${Date.now()}` }));
     sessA = a.id;
     sessB = b.id;
+    nameA = a.name;
+    nameB = b.name;
 
     // One audit row and one delivery-failure row per session, so a cross-tenant read has something to leak.
     for (const sessionId of [sessA, sessB]) {
@@ -104,6 +108,32 @@ describe('Session-scoped query endpoints (e2e)', () => {
       const sessions = body.data.map(r => r.sessionId);
       expect(sessions).toContain(sessA);
       expect(sessions).toContain(sessB);
+    });
+  });
+
+  describe('GET /api/sessions?name=', () => {
+    const list = (key: string, query: string) =>
+      request(app.getHttpServer()).get(`/api/sessions?${query}`).set('X-API-Key', key);
+
+    it('returns only the exactly named session', async () => {
+      const res = await list(adminKey, `name=${nameB}`).expect(200);
+      expect((res.body as Session[]).map(s => s.id)).toEqual([sessB]);
+    });
+
+    it('matches case-sensitively and returns [] for an unknown name', async () => {
+      await list(adminKey, `name=${nameB.toUpperCase()}`).expect(200, []);
+      await list(adminKey, 'name=no-such-session').expect(200, []);
+    });
+
+    it('a scoped key gets [] for a name outside its allowlist, and its own session by name', async () => {
+      await list(scopedKey, `name=${nameB}`).expect(200, []);
+      const res = await list(scopedKey, `name=${nameA}`).expect(200);
+      expect((res.body as Session[]).map(s => s.id)).toEqual([sessA]);
+    });
+
+    it('rejects a repeated or empty name with 400', async () => {
+      await list(adminKey, `name=${nameA}&name=${nameB}`).expect(400);
+      await list(adminKey, 'name=').expect(400);
     });
   });
 

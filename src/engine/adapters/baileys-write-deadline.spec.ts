@@ -18,6 +18,7 @@ const stub = () => jest.fn(never);
 function groups(sock: Record<string, jest.Mock>, budgetMs: number): BaileysGroups {
   const host = {
     ensureReady: () => undefined,
+    sessionProxyUrl: () => undefined,
     getSocket: () => sock as unknown as WASocket,
     logger: { warn: jest.fn(), debug: jest.fn(), info: jest.fn(), error: jest.fn() },
     toNeutralJid: (j: string) => j,
@@ -30,6 +31,7 @@ function groups(sock: Record<string, jest.Mock>, budgetMs: number): BaileysGroup
 function contacts(sock: Record<string, jest.Mock>, budgetMs: number): BaileysContacts {
   const host = {
     ensureReady: () => undefined,
+    sessionProxyUrl: () => undefined,
     getSocket: () => sock as unknown as WASocket,
     logger: { warn: jest.fn(), debug: jest.fn(), info: jest.fn(), error: jest.fn() },
     normalizedSelfJid: () => '628177@s.whatsapp.net',

@@ -1,4 +1,5 @@
 import { withSafeFetch } from '../security/ssrf-guard';
+import { urlFetchProxy } from '../security/proxy-dispatcher';
 
 /** Default cap on a server-side media download: 50 MiB (overridable via MEDIA_DOWNLOAD_MAX_BYTES). */
 const DEFAULT_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
@@ -24,45 +25,58 @@ function positiveIntFromEnv(name: string, fallback: number): number {
  * or wrong) to bound memory use.
  *
  * Engine-neutral: returns raw bytes + the response content-type, so any engine adapter can use it.
+ *
+ * `sessionProxyUrl` is the egress proxy of the session the fetch is attributed to, or undefined for
+ * a direct one. It is required rather than optional so a new call site cannot leave a proxied
+ * session's fetch going direct by omission; `urlFetchProxy` applies the operator's opt-out.
  */
-export async function loadRemoteMediaBuffer(url: string): Promise<{ data: Buffer; mimetype: string }> {
+export async function loadRemoteMediaBuffer(
+  url: string,
+  sessionProxyUrl: string | undefined,
+): Promise<{ data: Buffer; mimetype: string }> {
   const maxBytes = positiveIntFromEnv('MEDIA_DOWNLOAD_MAX_BYTES', DEFAULT_MEDIA_MAX_BYTES);
   const timeoutMs = positiveIntFromEnv('MEDIA_DOWNLOAD_TIMEOUT_MS', DEFAULT_MEDIA_TIMEOUT_MS);
 
   // Always guarded (media SSRF is independent of the webhook opt-out); withSafeFetch validates the
   // host, pins the connection to the vetted IP, and refuses redirects. The streaming cap runs inside
   // the callback so the connection stays open for the body read and is torn down right after.
-  return withSafeFetch(url, { signal: AbortSignal.timeout(timeoutMs) }, async response => {
-    if (!response.ok) {
-      throw new Error(`Media fetch failed with status ${response.status}`);
-    }
-
-    const declaredLength = Number(response.headers.get('content-length') ?? '');
-    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-      throw new Error(`Media exceeds the ${maxBytes}-byte limit`);
-    }
-
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error('Media response has no body');
-    }
-
-    const chunks: Buffer[] = [];
-    let total = 0;
-    for (;;) {
-      const { done, value } = (await reader.read()) as { done: boolean; value: Uint8Array };
-      if (done) {
-        break;
+  const proxyUrl = urlFetchProxy(sessionProxyUrl);
+  return withSafeFetch(
+    url,
+    { signal: AbortSignal.timeout(timeoutMs) },
+    async response => {
+      if (!response.ok) {
+        throw new Error(`Media fetch failed with status ${response.status}`);
       }
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel();
+
+      const declaredLength = Number(response.headers.get('content-length') ?? '');
+      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
         throw new Error(`Media exceeds the ${maxBytes}-byte limit`);
       }
-      chunks.push(Buffer.from(value));
-    }
 
-    const mimetype = (response.headers.get('content-type') ?? '').split(';')[0].trim();
-    return { data: Buffer.concat(chunks), mimetype };
-  });
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('Media response has no body');
+      }
+
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = (await reader.read()) as { done: boolean; value: Uint8Array };
+        if (done) {
+          break;
+        }
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel();
+          throw new Error(`Media exceeds the ${maxBytes}-byte limit`);
+        }
+        chunks.push(Buffer.from(value));
+      }
+
+      const mimetype = (response.headers.get('content-type') ?? '').split(';')[0].trim();
+      return { data: Buffer.concat(chunks), mimetype };
+    },
+    { proxyUrl },
+  );
 }

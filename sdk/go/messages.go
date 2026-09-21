@@ -85,6 +85,11 @@ func (s *MessagesService) Reply(ctx context.Context, sessionID string, body Repl
 	return s.send(ctx, sessionID, "reply", body)
 }
 
+// ClickButton taps a choice on a WhatsApp Business prompt. Baileys only (whatsapp-web.js returns 501).
+func (s *MessagesService) ClickButton(ctx context.Context, sessionID string, body ClickButtonRequest) (*MessageResponse, error) {
+	return s.send(ctx, sessionID, "click-button", body)
+}
+
 // Forward forwards a message between chats.
 func (s *MessagesService) Forward(ctx context.Context, sessionID string, body ForwardMessageRequest) (*MessageResponse, error) {
 	return s.send(ctx, sessionID, "forward", body)

@@ -7,7 +7,13 @@
 
 import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
-import type { CreateWebhookRequest, UpdateWebhookRequest, WebhookResponse, WebhookTestResult } from '../types.js';
+import type {
+  CreateWebhookRequest,
+  UpdateWebhookRequest,
+  WebhookDeliveryFailure,
+  WebhookResponse,
+  WebhookTestResult,
+} from '../types.js';
 
 /** Pagination for the cross-session webhook list and the delivery-failure log. */
 export interface WebhookListQuery {
@@ -36,10 +42,14 @@ export class WebhooksResource {
    * arriving. Requires an ADMIN-level key.
    *
    * Note it records deliveries that were ATTEMPTED: a delivery a smart filter suppressed never reaches
-   * this log. The response has no published schema, so it is returned unshaped.
+   * this log. Most recent first.
    */
-  deliveryFailures(query?: DeliveryFailureQuery): Promise<unknown> {
-    return this.client.request<unknown>({ method: 'GET', path: '/api/webhooks/delivery-failures', query });
+  deliveryFailures(query?: DeliveryFailureQuery): Promise<WebhookDeliveryFailure[]> {
+    return this.client.request<WebhookDeliveryFailure[]>({
+      method: 'GET',
+      path: '/api/webhooks/delivery-failures',
+      query,
+    });
   }
 
   /** List all webhooks for a session. */

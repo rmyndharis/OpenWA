@@ -46,7 +46,7 @@ export interface IngressReconcileStats {
  * Closes the last silent-loss window of the fast-ack ingress pipeline. persist-before-ack makes the
  * ingress_events row durable, but durability alone is not delivery: a crash between the persist and
  * the enqueue, or a fire-and-forget enqueue whose outcome never gets recorded, strands the row
- * 'pending' forever — a provider retry only hits the dedup oracle and 200s as 'duplicate'.
+ * 'pending' forever: a provider retry only hits the dedup oracle and is answered with the route's ack.
  *
  * The reconciler sweeps small batches of stale 'pending' rows and re-dispatches them through the
  * exact same IngressEnqueueService the live path uses (same deliveryId as BullMQ jobId, so a replay

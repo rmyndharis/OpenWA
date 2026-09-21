@@ -71,6 +71,22 @@
   margin-top: 1px;
 }
 
+.brand-update {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 1px 6px;
+  border-radius: var(--radius);
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: var(--primary-text);
+  background: var(--primary-soft);
+  text-decoration: none;
+}
+
+.brand-update:hover {
+  text-decoration: underline;
+}
+
 /* Collapse Toggle Button - Circular design at edge */
 .collapse-toggle {
   position: absolute;

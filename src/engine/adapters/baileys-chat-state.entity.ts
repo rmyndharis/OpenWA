@@ -8,14 +8,14 @@ import { Column, Entity, PrimaryColumn, UpdateDateColumn } from 'typeorm';
  * chats carried `muteEndTime`. So the value is persisted here and rehydrated on boot; live `chats.update`
  * events (including an unmute, which arrives as `muteEndTime = null`) keep it current.
  *
- * One row per (session, chat). `sessionId` is the session NAME used elsewhere in the engine surface,
- * provenance rather than a foreign key, so the row can outlive a single run. `muteEndTime` is stored as
+ * One row per (session, chat). `sessionId` is `Session.id`, the key used elsewhere in the engine
+ * surface, provenance rather than a foreign key, so the row can outlive a single run. `muteEndTime` is stored as
  * canonical epoch MILLISECONDS (or null when unmuted); the numeric transformer keeps it a JS number
  * rather than the string a bigint column otherwise reads back as.
  */
 @Entity('chat_states')
 export class ChatState {
-  /** Session name that owns this chat state. */
+  /** `Session.id` of the session that owns this chat state. */
   @PrimaryColumn()
   sessionId!: string;
 

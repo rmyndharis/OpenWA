@@ -68,18 +68,22 @@ describe('MediaController', () => {
   });
 
   describe('delegation', () => {
-    it('passes the body straight to the voice conversion', async () => {
+    it('passes the body and the session id straight to the voice conversion', async () => {
       const dto = { base64: 'AAAA' };
 
-      await expect(controller.convertVoice(dto)).resolves.toMatchObject({ mimetype: 'audio/ogg; codecs=opus' });
-      expect(convertToVoice).toHaveBeenCalledWith(dto);
+      await expect(controller.convertVoice('session-1', dto)).resolves.toMatchObject({
+        mimetype: 'audio/ogg; codecs=opus',
+      });
+      expect(convertToVoice).toHaveBeenCalledWith('session-1', dto);
     });
 
-    it('passes the body straight to the video conversion', async () => {
+    // The session id is what a URL conversion resolves its egress proxy from, so it must reach the
+    // service rather than being consumed by the guard alone.
+    it('passes the body and the session id straight to the video conversion', async () => {
       const dto = { url: 'https://example.com/clip.mov' };
 
-      await expect(controller.convertVideo(dto)).resolves.toMatchObject({ mimetype: 'video/mp4' });
-      expect(convertToVideo).toHaveBeenCalledWith(dto);
+      await expect(controller.convertVideo('session-1', dto)).resolves.toMatchObject({ mimetype: 'video/mp4' });
+      expect(convertToVideo).toHaveBeenCalledWith('session-1', dto);
     });
 
     it('reports availability as a plain flag', async () => {

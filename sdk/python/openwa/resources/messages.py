@@ -28,6 +28,7 @@ from ..types import (
     ReactionRecord,
     ReactMessageRequest,
     ReplyMessageRequest,
+    ClickButtonRequest,
     SendBulkRequest,
     SendContactRequest,
     SendLocationRequest,
@@ -86,6 +87,12 @@ class MessagesResource:
 
     def reply(self, session_id: str, body: ReplyMessageRequest) -> MessageResponse:
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/messages/reply", body=body)
+
+    def click_button(self, session_id: str, body: ClickButtonRequest) -> MessageResponse:
+        """Click a button on a WhatsApp Business prompt. Baileys only (whatsapp-web.js returns 501)."""
+        return self._http.request(
+            "POST", f"/api/sessions/{quote_segment(session_id)}/messages/click-button", body=body
+        )
 
     def forward(self, session_id: str, body: ForwardMessageRequest) -> MessageResponse:
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/messages/forward", body=body)

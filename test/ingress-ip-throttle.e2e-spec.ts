@@ -62,6 +62,8 @@ describe('Ingress per-IP rate bound (e2e)', () => {
     expect(shed.status).toBe(429);
     // Names the tier that shed it, so an operator can tell this from the per-instance bound.
     expect(shed.headers['retry-after-ingress-ip']).toBeDefined();
+    // The suffixed name says WHICH bucket shed it; the plain one is the only spelling a client reads.
+    expect(shed.headers['retry-after']).toBe(shed.headers['retry-after-ingress-ip']);
     expect(shed.body).toMatchObject({ statusCode: 429 });
   });
 });

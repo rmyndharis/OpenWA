@@ -219,6 +219,33 @@ describe('StorageService S3 re-probe and recovery', () => {
     expect(data.toString()).toBe('from-s3');
   });
 
+  it('openFile hands the S3 body through unread, with the object length as its size', async () => {
+    const body = Readable.from([Buffer.from('from-s3')]);
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof GetObjectCommand) return Promise.resolve({ Body: body, ContentLength: 7 });
+      return Promise.resolve({});
+    });
+    const svc = new StorageService(makeConfig());
+    await flush();
+
+    await expect(svc.openFile('present.bin')).resolves.toEqual({ stream: body, size: 7 });
+  });
+
+  it('openFile reads a missing S3 object through from the local fallback dir, and rejects when neither has it', async () => {
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof GetObjectCommand) return Promise.reject(s3Error('NoSuchKey'));
+      return Promise.resolve({});
+    });
+    const svc = new StorageService(makeConfig());
+    await flush();
+    fs.writeFileSync(path.join(localPath, 'gap.bin'), 'gap-media');
+
+    const { stream, size } = await svc.openFile('gap.bin');
+    stream.destroy();
+    expect(size).toBe(9);
+    await expect(svc.openFile('missing.bin')).rejects.toThrow('NoSuchKey');
+  });
+
   it('deleteFile removes the local fallback copy as well as the S3 object', async () => {
     mockSend.mockResolvedValue({}); // HeadBucket at boot, DeleteObject later
     const svc = new StorageService(makeConfig());

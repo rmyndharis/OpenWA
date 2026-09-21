@@ -1,5 +1,5 @@
 import { ExecutionContext, Injectable } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerLimitDetail } from '@nestjs/throttler';
 import { resolveClientIp, RequestLike } from '../utils/ip';
 import { createLogger } from '../services/logger.service';
 
@@ -77,5 +77,36 @@ export class ProxyAwareThrottlerGuard extends ThrottlerGuard {
       context.getClass(),
     ]);
     return Promise.resolve(skip === true);
+  }
+
+  /**
+   * Emit a plain `Retry-After` alongside the library's `Retry-After-<window>`.
+   *
+   * The base guard suffixes the header with the tier name (`Retry-After-short` here, and
+   * `Retry-After-instance` / `Retry-After-ingress-ip` on the ingress route). That is useful for
+   * telling an operator which bucket shed a request and useless to every HTTP client, none of which
+   * look for those spellings. A shed request therefore advertised a retry hint nothing could read,
+   * and a caller that retries a 429 only when the response carries `Retry-After` gave up instead of
+   * coming back. Written BEFORE delegating, so the suffixed header and the exception are untouched.
+   *
+   * Known ceiling: the first blocked window wins. Tiers are evaluated in order, so the value is the
+   * shortest blocked window rather than the longest. That can cost a caller one wasted retry, but it
+   * never advertises a wait shorter than the window that actually answered. Reporting the maximum
+   * would mean evaluating every tier before answering, which is a much larger change.
+   */
+  protected async throwThrottlingException(
+    context: ExecutionContext,
+    throttlerLimitDetail: ThrottlerLimitDetail,
+  ): Promise<void> {
+    // The same flag the base guard gates its own header on. A per-tier `setHeaders` is not visible
+    // from here; this application configures neither, so both default to true.
+    if (this.commonOptions.setHeaders ?? true) {
+      const { res } = this.getRequestResponse(context);
+      (res as { header: (name: string, value: string) => void }).header(
+        'Retry-After',
+        String(throttlerLimitDetail.timeToBlockExpire),
+      );
+    }
+    await super.throwThrottlingException(context, throttlerLimitDetail);
   }
 }

@@ -46,6 +46,7 @@ describe('Infra controllers access control', () => {
     [InfraStatusController, 'getStatus'], // GET  /infra/status
     [InfraStatusController, 'getEngines'], // GET  /infra/engines
     [InfraStatusController, 'getCurrentEngine'], // GET  /infra/engines/current
+    [InfraStatusController, 'getUpdateCheck'], // GET  /infra/update-check (outbound request to GitHub)
     [InfraStorageController, 'getStorageFileCount'], // GET  /infra/storage/files/count
   ] as const;
 

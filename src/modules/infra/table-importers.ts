@@ -65,10 +65,15 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
     sql: `INSERT INTO sessions (id, name, status, phone, "pushName", config, "proxyUrl", "proxyType", "connectedAt", "lastActiveAt", "createdAt", "updatedAt") 
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     id: (session: SessionRow) => session.id,
-    // A session name becomes the engine auth-directory key, so an unvalidated imported name (this
-    // path bypasses CreateSessionDto) could traverse the filesystem. Skip + warn instead of
-    // throwing, so one bad row doesn't 500 the whole restore.
+    // Both columns reach an auth-directory path: the id keys the directory itself, and the name is
+    // still weighed against it (the boot migration and the legacy purge on delete). An unvalidated
+    // imported value (this path bypasses CreateSessionDto) could traverse the filesystem, and an
+    // unsafe id would only surface later as a refused start. Skip + warn instead of throwing, so one
+    // bad row doesn't 500 the whole restore.
     skip: (session: SessionRow) => {
+      if (!isSafeSessionName(session.id)) {
+        return `Skipped session ${JSON.stringify(session.id)}: unsafe id`;
+      }
       if (isSafeSessionName(session.name)) return null;
       return `Skipped session ${session.id}: unsafe name ${JSON.stringify(session.name)}`;
     },

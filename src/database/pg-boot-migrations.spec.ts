@@ -8,6 +8,7 @@ import {
   POSTGRES_BOOT_MIGRATION_LOCK_KEYS,
   createBootDataSource,
 } from './pg-boot-migrations';
+import { postgresUtcExtra, utcTimestampTypes } from './postgres-utc';
 
 // Protocol wiring of the boot-migration advisory lock: the lock must be taken BEFORE runMigrations
 // starts and dropped after it finishes (on success AND on migration failure), and the DataSource
@@ -31,9 +32,16 @@ const PG_OPTIONS: DataSourceOptions = {
 describe('createBootDataSource (postgres boot migrations)', () => {
   // Fakes keep their inferred jest.Mock types (casts live only at the injection boundary) and
   // record every step in `calls`, so ordering is asserted on one linear trace.
-  function makeFakes(runMigrations: () => Promise<unknown> = jest.fn()) {
+  function makeFakes(runMigrations: () => Promise<unknown> = jest.fn(), sessionOffsetSeconds = 0) {
     const calls: string[] = [];
     const dataSource = {
+      // The UTC pin's boot assertion reads the session's effective zone. It is not part of the lock
+      // protocol these tests trace, so it stays out of `calls`.
+      query: jest.fn(() =>
+        Promise.resolve([
+          { zone: 'UTC', offset_seconds: sessionOffsetSeconds, offset_seconds_later: sessionOffsetSeconds },
+        ]),
+      ),
       initialize: jest.fn(() => {
         calls.push('initialize');
         return Promise.resolve();
@@ -100,9 +108,20 @@ describe('createBootDataSource (postgres boot migrations)', () => {
 
     await createBootDataSource(PG_OPTIONS, deps);
 
-    expect(deps.createDataSource).toHaveBeenCalledWith({ ...PG_OPTIONS, migrationsRun: false });
+    expect(deps.createDataSource).toHaveBeenCalledWith({
+      ...PG_OPTIONS,
+      migrationsRun: false,
+      // The UTC pin rides along with the pool settings the config already carries, rather than
+      // replacing them.
+      extra: {
+        ...(PG_OPTIONS.extra as Record<string, unknown>),
+        types: utcTimestampTypes,
+        onConnect: postgresUtcExtra().onConnect,
+      },
+    });
     // The resolved config object itself is untouched — the flag stays as the built-in fallback.
     expect(PG_OPTIONS.migrationsRun).toBe(true);
+    expect(PG_OPTIONS.extra).toEqual({ statement_timeout: 30000, connectionTimeoutMillis: 10000 });
   });
 
   it('builds the lock client without a statement timeout (pg_advisory_lock must survive the wait)', async () => {
@@ -284,6 +303,9 @@ describe('createBootDataSource (postgres boot migrations)', () => {
     const initialize = jest.spyOn(DataSource.prototype, 'initialize').mockImplementation(function (this: DataSource) {
       return Promise.resolve(this);
     });
+    const query = jest
+      .spyOn(DataSource.prototype, 'query')
+      .mockResolvedValue([{ zone: 'UTC', offset_seconds: 0, offset_seconds_later: 0 }] as never);
     const runMigrations = jest.spyOn(DataSource.prototype, 'runMigrations').mockResolvedValue([]);
     const destroy = jest.spyOn(DataSource.prototype, 'destroy').mockResolvedValue(undefined);
     try {
@@ -312,8 +334,22 @@ describe('createBootDataSource (postgres boot migrations)', () => {
     } finally {
       clientCtor.mockRestore();
       initialize.mockRestore();
+      query.mockRestore();
       runMigrations.mockRestore();
       destroy.mockRestore();
     }
+  });
+
+  it('refuses to migrate on a connection whose session is not on UTC', async () => {
+    // A pin that did not take (a pooler dropping the SET, a server-side default re-applied after it)
+    // would have the driver read every naive timestamp as UTC while the server keeps writing its own
+    // zone. Migrating on that connection would bake the mismatch into the data it rewrites.
+    const { calls, dataSource, deps } = makeFakes(jest.fn(), 25200);
+
+    await expect(createBootDataSource(PG_OPTIONS, deps)).rejects.toThrow(/not on UTC/);
+
+    expect(dataSource.runMigrations).not.toHaveBeenCalled();
+    expect(deps.createLockClient).not.toHaveBeenCalled();
+    expect(calls).toEqual(['initialize', 'destroy']);
   });
 });

@@ -3,40 +3,57 @@ import assert from 'node:assert/strict';
 import { nextReconnectState } from './reconnectState.ts';
 
 test('initial connect (never connected before): no invalidate', () => {
-  assert.deepEqual(nextReconnectState({ isConnected: true, hadConnected: false, wasDisconnected: false }), {
-    invalidate: false,
-    hadConnected: true,
-    wasDisconnected: false,
-  });
+  assert.deepEqual(
+    nextReconnectState({ isConnected: true, hadConnected: false, wasDisconnected: false, connectionFailed: false }),
+    { invalidate: false, hadConnected: true, wasDisconnected: false },
+  );
 });
 
 test('disconnect before any connect (noise): no gap marked, no invalidate', () => {
-  assert.deepEqual(nextReconnectState({ isConnected: false, hadConnected: false, wasDisconnected: false }), {
-    invalidate: false,
-    hadConnected: false,
-    wasDisconnected: false,
-  });
+  assert.deepEqual(
+    nextReconnectState({ isConnected: false, hadConnected: false, wasDisconnected: false, connectionFailed: false }),
+    { invalidate: false, hadConnected: false, wasDisconnected: false },
+  );
 });
 
 test('disconnect after the first connect: mark a gap, no invalidate', () => {
-  assert.deepEqual(nextReconnectState({ isConnected: false, hadConnected: true, wasDisconnected: false }), {
-    invalidate: false,
-    hadConnected: true,
-    wasDisconnected: true,
-  });
+  assert.deepEqual(
+    nextReconnectState({ isConnected: false, hadConnected: true, wasDisconnected: false, connectionFailed: false }),
+    { invalidate: false, hadConnected: true, wasDisconnected: true },
+  );
 });
 
 test('reconnect after a gap (wasDisconnected): invalidate', () => {
-  assert.deepEqual(nextReconnectState({ isConnected: true, hadConnected: true, wasDisconnected: true }), {
-    invalidate: true,
-    hadConnected: true,
-    wasDisconnected: false,
-  });
+  assert.deepEqual(
+    nextReconnectState({ isConnected: true, hadConnected: true, wasDisconnected: true, connectionFailed: false }),
+    { invalidate: true, hadConnected: true, wasDisconnected: false },
+  );
 });
 
 test('stays connected: no invalidate, stays hadConnected', () => {
-  assert.deepEqual(nextReconnectState({ isConnected: true, hadConnected: true, wasDisconnected: false }), {
-    invalidate: false,
+  assert.deepEqual(
+    nextReconnectState({ isConnected: true, hadConnected: true, wasDisconnected: false, connectionFailed: false }),
+    { invalidate: false, hadConnected: true, wasDisconnected: false },
+  );
+});
+
+test('a feed that failed before it ever connected marks a gap', () => {
+  assert.deepEqual(
+    nextReconnectState({ isConnected: false, hadConnected: false, wasDisconnected: false, connectionFailed: true }),
+    { invalidate: false, hadConnected: false, wasDisconnected: true },
+  );
+});
+
+test('the gap survives the retry clearing connectionFailed, so the first connect after it invalidates', () => {
+  const retrying = nextReconnectState({
+    isConnected: false,
+    hadConnected: false,
+    wasDisconnected: true,
+    connectionFailed: false,
+  });
+  assert.deepEqual(retrying, { invalidate: false, hadConnected: false, wasDisconnected: true });
+  assert.deepEqual(nextReconnectState({ ...retrying, isConnected: true, connectionFailed: false }), {
+    invalidate: true,
     hadConnected: true,
     wasDisconnected: false,
   });

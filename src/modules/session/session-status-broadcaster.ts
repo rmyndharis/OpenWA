@@ -18,7 +18,8 @@ import { type createLogger } from '../../common/services/logger.service';
 export class SessionStatusBroadcaster {
   // Last session.status value broadcast per session. Some engines signal one transition via BOTH
   // onStateChanged and a dedicated callback (onQRCode/onDisconnected), so this guards both the WS emit
-  // and the webhook POST against firing the same status twice. Cleared on delete().
+  // and the webhook POST against firing the same status twice. Cleared on delete(), and before a
+  // lapsed-row correction is announced (see SessionEngineLifecycle.announceStatus).
   readonly lastDispatchedStatus = new Map<string, SessionStatus>();
 
   private readonly sessionRepository: Repository<Session>;
@@ -67,7 +68,10 @@ export class SessionStatusBroadcaster {
     }
   }
 
-  /** Drop the de-dup entry for a session — called from delete()'s committed-delete cleanup. */
+  /**
+   * Drop the de-dup entry for a session — called from delete()'s committed-delete cleanup, and
+   * before a lapsed-status correction announces, since that write is a transition this process never saw.
+   */
   clear(id: string): void {
     this.lastDispatchedStatus.delete(id);
   }

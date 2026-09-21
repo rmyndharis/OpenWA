@@ -55,7 +55,9 @@ A non-2xx response throws a typed `OpenWA\Exceptions\OpenWAApiException` subclas
 `OpenWAConflictException` (409), `OpenWARateLimitException` (429),
 `OpenWANotImplementedException` (501), `OpenWAServiceUnavailableException` (503 — the only
 retryable one) — each exposing `getStatus()` and the parsed `getBody()`.
-A timeout throws `OpenWATimeoutException`.
+A timeout throws `OpenWATimeoutException`. In a routed deployment only 503 proves the request
+was never carried out: a forward that fails after the request reached the owner node answers
+502 or 504.
 
 ```php
 use OpenWA\Exceptions\OpenWANotFoundException;

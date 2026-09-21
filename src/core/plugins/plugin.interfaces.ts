@@ -268,6 +268,16 @@ export interface PluginIngressRoute {
   // ordering key (P1). Absent => the P1 lock falls back to per-instance serialization. The host never
   // needs to understand the provider's schema beyond this one pointer.
   conversationId?: { header?: string; jsonPointer?: string };
+  /**
+   * What identifies a retry of the same delivery. `header` (the default) trusts the dedup header
+   * whenever the provider sends one and falls back to a hash of the raw body only when it is
+   * absent. `body` keys every delivery on that hash regardless of the header, for a provider that
+   * mints a fresh delivery id on each retry attempt, so its retries would otherwise never dedup.
+   * Byte-identical bodies collapse within `INGRESS_DEDUP_RETENTION_DAYS`; a provider whose retries
+   * legitimately differ in the body (a fresh timestamp or nonce inside the signed payload) keeps
+   * the default, since `body` would then dedup nothing.
+   */
+  dedupOn?: 'header' | 'body';
   /** Optional synchronous-response contract (host-side preflight + ack). Additive; absent = today's
    *  default 202 fast-ack, byte-identical. Validated by validateIngressManifest. */
   response?: IngressResponseContract;
@@ -348,6 +358,11 @@ export function validateIngressManifest(manifest: PluginManifest, allowUnsignedI
         `Plugin ${manifest.id}: route '${r.route}' toleranceSec must be > 0 (a replay guard would be a no-op)`,
       );
     }
+    if (r.dedupOn !== undefined && r.dedupOn !== 'header' && r.dedupOn !== 'body') {
+      throw new Error(
+        `Plugin ${manifest.id}: route '${r.route}' dedupOn must be 'header' or 'body' (got '${String(r.dedupOn)}')`,
+      );
+    }
     if (r.response) {
       const ackStatus = r.response.ack?.status;
       if (ackStatus !== undefined && (!Number.isInteger(ackStatus) || ackStatus < 100 || ackStatus > 599)) {
@@ -355,12 +370,21 @@ export function validateIngressManifest(manifest: PluginManifest, allowUnsignedI
           `Plugin ${manifest.id}: route '${r.route}' response.ack.status must be a valid HTTP status (100-599)`,
         );
       }
+      const ackBody = r.response.ack?.body;
+      if (ackBody !== undefined && typeof ackBody !== 'string') {
+        throw new Error(`Plugin ${manifest.id}: route '${r.route}' response.ack.body must be a string`);
+      }
       if (r.response.ack?.headers) {
         for (const [name, value] of Object.entries(r.response.ack.headers)) {
           if (!HTTP_HEADER_NAME.test(name)) {
             throw new Error(
               `Plugin ${manifest.id}: route '${r.route}' response.ack header name '${name}' is not a valid HTTP token`,
             );
+          }
+          // Before the CR/LF guard: RegExp.test coerces its argument, so a number would pass it and
+          // then be dropped at render time, leaving the header silently absent from every ack.
+          if (typeof value !== 'string') {
+            throw new Error(`Plugin ${manifest.id}: route '${r.route}' response.ack header '${name}' must be a string`);
           }
           if (!HTTP_HEADER_VALUE_NO_CRLF.test(value)) {
             throw new Error(

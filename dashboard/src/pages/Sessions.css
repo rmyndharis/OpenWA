@@ -194,9 +194,14 @@
   color: var(--text-secondary);
 }
 
-.sessions-page .btn-action:hover {
+.sessions-page .btn-action:hover:not(:disabled) {
   background: var(--bg-white);
   color: var(--text-primary);
+}
+
+.sessions-page .btn-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .sessions-page .btn-action.danger {
@@ -206,6 +211,8 @@
 .sessions-page .btn-action.danger:hover {
   background: rgba(239, 68, 68, 0.12);
   border-color: rgba(239, 68, 68, 0.3);
+  /* Restated: the generic :hover:not(:disabled) rule above is more specific than .danger alone. */
+  color: var(--error-text);
 }
 
 @media (max-width: 1400px) {
@@ -736,6 +743,16 @@
   text-align: start;
   color: var(--error-text);
   background: rgb(239 68 68 / 0.12);
+}
+
+.sessions-page .pairing-warning {
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  text-align: start;
+  color: var(--warning-text);
+  background: rgb(245 158 11 / 0.12);
 }
 
 .sessions-page .pairing-form {

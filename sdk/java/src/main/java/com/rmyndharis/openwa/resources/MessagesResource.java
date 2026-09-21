@@ -19,6 +19,7 @@ import com.rmyndharis.openwa.model.PinMessageRequest;
 import com.rmyndharis.openwa.model.ReactMessageRequest;
 import com.rmyndharis.openwa.model.ReactionRecord;
 import com.rmyndharis.openwa.model.ReplyMessageRequest;
+import com.rmyndharis.openwa.model.ClickButtonRequest;
 import com.rmyndharis.openwa.model.SendBulkRequest;
 import com.rmyndharis.openwa.model.SendContactRequest;
 import com.rmyndharis.openwa.model.SendLocationRequest;
@@ -135,6 +136,19 @@ public final class MessagesResource {
         return client.request(
             HttpMethod.POST,
             "/api/sessions/" + encodeSegment(sessionId) + "/messages/reply",
+            null,
+            body,
+            MessageResponse.class);
+    }
+
+    /**
+     * Click a button on a WhatsApp Business prompt. Baileys only: whatsapp-web.js returns 501.
+     * Sends a structured reply proto quoted to the prompt, not a native UI tap.
+     */
+    public MessageResponse clickButton(String sessionId, ClickButtonRequest body) {
+        return client.request(
+            HttpMethod.POST,
+            "/api/sessions/" + encodeSegment(sessionId) + "/messages/click-button",
             null,
             body,
             MessageResponse.class);

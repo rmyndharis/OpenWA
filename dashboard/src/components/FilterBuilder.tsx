@@ -24,6 +24,7 @@ interface FieldDescriptor {
 const MESSAGE_FIELDS: FieldDescriptor[] = [
   { field: 'sender', kind: 'id', operators: ['is', 'isNot'] },
   { field: 'recipient', kind: 'id', operators: ['is', 'isNot'] },
+  { field: 'chatId', kind: 'id', operators: ['is', 'isNot'] },
   { field: 'body', kind: 'text', operators: ['contains', 'equals'] },
   { field: 'type', kind: 'enum', operators: ['is', 'isNot'], enumValues: MESSAGE_TYPES },
   { field: 'isGroup', kind: 'boolean', operators: ['is'] },
@@ -65,10 +66,14 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
   const suggestions = useMemo(() => {
     const query = text.trim().toLowerCase();
     const chosen = new Set(value);
-    return chats
-      .filter(c => !chosen.has(c.id))
-      .filter(c => !query || c.name.toLowerCase().includes(query) || c.id.toLowerCase().includes(query))
-      .slice(0, 8);
+    return (
+      chats
+        .filter(c => !chosen.has(c.id))
+        .filter(c => !query || c.name.toLowerCase().includes(query) || c.id.toLowerCase().includes(query))
+        // The dropdown scrolls, so this only bounds how much of an account with up to 1000 chats is
+        // rendered on every keystroke. Typing narrows the list further.
+        .slice(0, 50)
+    );
   }, [text, chats, value]);
 
   const labelFor = (jid: string) => chats.find(c => c.id === jid)?.name ?? jid;

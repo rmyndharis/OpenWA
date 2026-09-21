@@ -35,6 +35,23 @@ describe('sessionTools', () => {
     expect(out).toEqual([expect.objectContaining({ id: 's1', engineLoaded: true })]);
   });
 
+  it('SessionFindAll forwards the name filter together with a scoped key allowlist', async () => {
+    const findAll = jest.fn().mockResolvedValue([]);
+    const auth = { ...makeAuth(), validateApiKey: jest.fn().mockResolvedValue({ id: 'k1', allowedSessions: ['s1'] }) };
+    const tool = makeTools({ findAll, isActive: jest.fn() } as unknown as SessionService).get('SessionFindAll')!;
+
+    await expect(invokeTool(tool, { name: 'other-bot' }, 'key', auth as unknown as AuthService)).resolves.toEqual([]);
+    expect(findAll).toHaveBeenCalledWith(['s1'], { limit: undefined, offset: undefined, name: 'other-bot' });
+  });
+
+  it('SessionFindAll rejects an empty name before reaching the service', async () => {
+    const findAll = jest.fn();
+    const tool = makeTools({ findAll } as unknown as SessionService).get('SessionFindAll')!;
+
+    await expect(run(tool, { name: '' })).rejects.toThrow();
+    expect(findAll).not.toHaveBeenCalled();
+  });
+
   it('SessionFindOne delegates to findOne and maps to the response DTO', async () => {
     const findOne = jest.fn().mockResolvedValue({ id: 's1', name: 'main', status: 'ready' });
     const isActive = jest.fn().mockReturnValue(false);

@@ -7,6 +7,7 @@
   },
   "common": {
     "appName": "OpenWA",
+    "updateAvailable": "v{{version}} verfügbar",
     "loading": "Wird geladen...",
     "cancel": "Abbrechen",
     "delete": "Löschen",
@@ -113,6 +114,7 @@
     "groupSubtitle": "Gruppe",
     "privateContactSubtitle": "Privater Kontakt",
     "deleteConfirm": "Diese Nachricht für alle löschen?",
+    "promptButtons": "Nachrichtenoptionen",
     "messageDeleted": "🚫 Diese Nachricht wurde gelöscht",
     "messageMasked": "🔒 Von WhatsApp für verknüpfte Geräte ausgeblendet — prüfe dein Haupttelefon",
     "kind": {
@@ -162,6 +164,7 @@
       "send": "Nachricht konnte nicht gesendet werden",
       "react": "Reaktion auf die Nachricht fehlgeschlagen",
       "delete": "Nachricht konnte nicht gelöscht werden",
+      "clickButton": "Schaltfläche konnte nicht angeklickt werden",
       "fileTooLarge": "Die Datei ist zu groß (max. 18 MB)"
     },
     "loadMessagesError": "Nachrichten konnten nicht geladen werden. Prüfe die Serverprotokolle.",
@@ -305,7 +308,7 @@
       "created": "Erstellt",
       "lastActive": "Zuletzt aktiv",
       "autoRejectCalls": "Anrufe automatisch ablehnen",
-      "autoRejectCallsHint": "Eingehende Anrufe werden abgelehnt, sobald sie klingeln. Der Webhook call.received wird trotzdem zuerst ausgelöst. Gilt ab dem nächsten Anruf — kein Neustart nötig."
+      "autoRejectCallsHint": "Eingehende Anrufe werden abgelehnt, sobald sie klingeln. Der Webhook call.received wird trotzdem zuerst ausgelöst. Gilt ab dem nächsten Anruf, kein Neustart nötig. Nur mit der Baileys-Engine: whatsapp-web.js kann keine Anrufe ablehnen."
     },
     "proxy": {
       "title": "Proxy Configuration",
@@ -379,6 +382,7 @@
       "phoneLabel": "Telefonnummer",
       "phonePlaceholder": "z. B. 491701234567",
       "phoneHint": "Nur Ziffern im internationalen Format (Ländervorwahl + Nummer), ohne +, Leerzeichen oder Bindestriche.",
+      "relinkWarning": "Auf der whatsapp-web.js-Engine kann eine Code-Anfrage für eine Nummer, die bereits eine verknüpfte Sitzung hat, dazu führen, dass WhatsApp dieses Gerät trennt. Nutze den QR-Tab, wenn diese Sitzung aktiv bleiben muss.",
       "invalidPhone": "Gib eine gültige Telefonnummer ein: 6–15 Ziffern, zuerst die Ländervorwahl, keine Sonderzeichen.",
       "generateButton": "Kopplungscode erstellen",
       "generating": "Kopplungscode wird erstellt...",
@@ -393,7 +397,8 @@
     },
     "start": {
       "teardownPendingTitle": "Sitzung wird gestartet",
-      "teardownPending": "Ein Anmeldedatenabbau für diese Sitzung läuft noch. Warten Sie einen Moment und versuchen Sie es erneut."
+      "teardownPending": "Ein Anmeldedatenabbau für diese Sitzung läuft noch. Warten Sie einen Moment und versuchen Sie es erneut.",
+      "errorTitle": "Start fehlgeschlagen"
     },
     "restriction": {
       "reachout_timelock": "Neue Chats blockiert",
@@ -431,6 +436,7 @@
       "fields": {
         "sender": "Absender",
         "recipient": "Empfänger",
+        "chatId": "Chat-ID",
         "body": "Nachrichteninhalt",
         "type": "Nachrichtentyp",
         "isGroup": "Ist Gruppenchat",
@@ -518,7 +524,10 @@
       "title": "Keine Vorlagen gespeichert",
       "description": "Erstelle eine wiederverwendbare Vorlage, um häufige Antworten und Benachrichtigungen schneller zu versenden.",
       "noSessionsTitle": "Keine Sitzungen verfügbar",
-      "noSessionsDesc": "Erstelle eine WhatsApp-Sitzung, bevor du Vorlagen hinzufügst."
+      "noSessionsDesc": "Erstelle eine WhatsApp-Sitzung, bevor du Vorlagen hinzufügst.",
+      "loadErrorTitle": "Vorlagen konnten nicht geladen werden",
+      "forbiddenTitle": "Kein Zugriff auf Vorlagen",
+      "forbiddenDesc": "Vorlagen erfordern einen API-Schlüssel mit der Rolle Operator oder Admin."
     },
     "toasts": {
       "created": "Vorlage wurde erfolgreich erstellt",
@@ -636,6 +645,12 @@
     "loadingGroups": "Gruppen werden geladen...",
     "noGroupsFound": "Keine Gruppen gefunden",
     "selectGroupHint": "Wähle eine Gruppe aus deinem WhatsApp-Konto aus",
+    "selectAllGroups": "Alle auswählen",
+    "selectMatchingGroups": "Treffer auswählen",
+    "clearGroupSelection": "Auswahl aufheben",
+    "groupsSelectedCount": "Ausgewählt: {{count}}/{{max}}",
+    "noGroupsMatch": "Keine Gruppen passen zu deiner Suche",
+    "forwardUsesFirstGroup": "Weiterleiten verwendet nur die erste ausgewählte Gruppe, als Chat, aus dem weitergeleitet wird.",
     "phoneHint": "Verwende das internationale Format ohne Leerzeichen",
     "messageType": "Nachrichtentyp",
     "types": {
@@ -693,17 +708,29 @@
     "bulkRecipientsCount": "Empfänger: {{count}}",
     "bulkDelay": "Verzögerung zwischen Nachrichten (ms)",
     "bulkDelayHint": "1000–60000 ms (Standard: 3000)",
+    "bulkMediaKind": "Senden als",
+    "bulkMediaHint": "Mit Anhang wird die Nachricht zu dessen Bildunterschrift. Eine ausgewählte Datei wird direkt in der Anfrage mitgesendet, daher brauchen große Dateien für viele Empfänger stattdessen eine öffentliche Medien-URL.",
+    "bulkMediaTooLarge": "Diese Datei ist zu groß, um sie direkt an {{count}} Empfänger zu senden: Bei dieser Anzahl darf eine Datei höchstens {{size}} groß sein. Verwende stattdessen eine öffentliche Medien-URL oder sende an weniger Empfänger.",
+    "bulkMediaUrlInvalid": "Gib eine vollständige http://- oder https://-Adresse ein, z. B. https://example.com/file.pdf.",
+    "bulkCaptionTooLong": "Mit Anhang wird die Nachricht als dessen Bildunterschrift gesendet, die auf {{max}} Zeichen begrenzt ist (aktuell {{count}}).",
+    "bulkAudioNoCaption": "Audio wird ohne Bildunterschrift gesendet, dieser Text würde also nicht verschickt. Leere die Nachricht oder wähle eine andere Art.",
     "send": "Nachricht senden",
     "sending": "Wird gesendet...",
+    "sendingProgress": "Wird gesendet {{current}}/{{total}}...",
     "viewOnly": "Nur ansehen",
     "responseEmpty": "Sende eine Nachricht, um die API-Antwort anzuzeigen",
     "successLabel": "Erfolgreich",
     "failedLabel": "Fehlgeschlagen",
+    "groupsSentSummary": "{{sent}}/{{total}} gesendet",
+    "groupSendCancelled": "{{count}}, abgebrochen",
+    "groupSendStopped": "{{count}}, gestoppt nach HTTP {{status}}",
     "response": {
       "timestamp": "Zeitstempel",
       "messageId": "Nachrichten-ID",
       "batchId": "Batch-ID",
-      "error": "Fehler"
+      "error": "Fehler",
+      "groups": "Gruppen",
+      "notSent": "Nicht gesendet"
     },
     "sendFailed": "Nachricht konnte nicht gesendet werden",
     "notOnWhatsApp": "Diese Nummer ist nicht bei WhatsApp registriert",

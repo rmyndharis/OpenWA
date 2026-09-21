@@ -46,6 +46,7 @@ func TestRouting(t *testing.T) {
 		{"Messages.SendTemplate", func(c *Client) { c.Messages.SendTemplate(ctx, "s1", SendTemplateRequest{}) }, "POST", "/api/sessions/s1/messages/send-template"},
 		{"Messages.SendPoll", func(c *Client) { c.Messages.SendPoll(ctx, "s1", SendPollRequest{}) }, "POST", "/api/sessions/s1/messages/send-poll"},
 		{"Messages.Reply", func(c *Client) { c.Messages.Reply(ctx, "s1", ReplyMessageRequest{}) }, "POST", "/api/sessions/s1/messages/reply"},
+		{"Messages.ClickButton", func(c *Client) { c.Messages.ClickButton(ctx, "s1", ClickButtonRequest{}) }, "POST", "/api/sessions/s1/messages/click-button"},
 		{"Messages.Forward", func(c *Client) { c.Messages.Forward(ctx, "s1", ForwardMessageRequest{}) }, "POST", "/api/sessions/s1/messages/forward"},
 		{"Messages.React", func(c *Client) { c.Messages.React(ctx, "s1", ReactMessageRequest{}) }, "POST", "/api/sessions/s1/messages/react"},
 		{"Messages.Delete", func(c *Client) { c.Messages.Delete(ctx, "s1", DeleteMessageRequest{}) }, "POST", "/api/sessions/s1/messages/delete"},

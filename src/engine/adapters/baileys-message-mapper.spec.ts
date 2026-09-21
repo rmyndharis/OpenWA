@@ -2,6 +2,13 @@ import {
   BaileysIncomingFields,
   buildIncomingMessageFromBaileys,
   extractBaileysBody,
+  extractBaileysButtonReply,
+  extractBaileysButtons,
+  extractBaileysClickableButtons,
+  resolveBaileysButtonClick,
+  toBaileysButtonClickContent,
+  BUTTONS_MAX_ENTRIES,
+  BUTTON_TEXT_MAX_LENGTH,
   extractBaileysCommerce,
   extractBaileysContext,
   isBaileysCatalogShare,
@@ -27,6 +34,10 @@ describe('mapBaileysMessageType (baileys content-type -> neutral MessageType)', 
     ['buttonsMessage', false, 'text'],
     ['templateMessage', false, 'text'],
     ['interactiveResponseMessage', false, 'text'],
+    ['buttonsResponseMessage', false, 'text'],
+    ['templateButtonReplyMessage', false, 'text'],
+    ['listResponseMessage', false, 'text'],
+    ['listMessage', false, 'text'],
     // Meta masks high-security business messages (enterprise OTPs) on linked/companion devices,
     // delivering a bodyless `placeholderMessage` (PlaceholderType MASK_LINKED_DEVICES). Surface it as
     // its own `masked` type so it is distinguishable from a genuinely unparseable message (#574).
@@ -171,6 +182,10 @@ describe('extractBaileysBody (inbound text/caption + interactive shapes)', () =>
       'Track order',
     );
   });
+
+  it('extracts a list-row title the user selected', () => {
+    expect(extractBaileysBody({ listResponseMessage: { title: 'Express shipping' } })).toBe('Express shipping');
+  });
 });
 
 describe('extractBaileysContext (quoted body shares the live body extractor)', () => {
@@ -192,6 +207,16 @@ describe('extractBaileysContext (quoted body shares the live body extractor)', (
     expect(quoted({ imageMessage: { caption: 'pic' } })?.body).toBe('pic');
     expect(quoted({ conversation: 'the original' })?.body).toBe('the original');
     expect(quoted({ stickerMessage: {} })?.body).toBe('');
+  });
+
+  it('carries a quote from a button-reply contextInfo', () => {
+    expect(
+      extractBaileysContext({
+        buttonsResponseMessage: {
+          contextInfo: { stanzaId: 'wamid.prompt', quotedMessage: { conversation: 'Pick one' } },
+        },
+      }).quotedMessage,
+    ).toEqual({ id: 'wamid.prompt', body: 'Pick one' });
   });
 });
 
@@ -363,6 +388,585 @@ describe('buildIncomingMessageFromBaileys', () => {
     expect(buildIncomingMessageFromBaileys({ ...base, contentType: 'productMessage', isCatalogShare: true }).type).toBe(
       'unknown',
     );
+  });
+
+  it('carries a button reply and types the reply content as text', () => {
+    const r = buildIncomingMessageFromBaileys({
+      ...base,
+      contentType: 'buttonsResponseMessage',
+      body: 'Yes, notify me',
+      button: { id: 'btn_yes', text: 'Yes, notify me' },
+    });
+    expect(r.type).toBe('text');
+    expect(r.button).toEqual({ id: 'btn_yes', text: 'Yes, notify me' });
+  });
+
+  it('fills body from the button label when the content body is empty', () => {
+    const r = buildIncomingMessageFromBaileys({
+      ...base,
+      contentType: 'interactiveResponseMessage',
+      body: '',
+      button: { id: 'qr_1', text: 'Confirm' },
+    });
+    expect(r.body).toBe('Confirm');
+    expect(r.button).toEqual({ id: 'qr_1', text: 'Confirm' });
+  });
+
+  it('carries prompt buttons on an inbound business message', () => {
+    const r = buildIncomingMessageFromBaileys({
+      ...base,
+      contentType: 'buttonsMessage',
+      body: 'Já é nosso cliente?',
+      buttons: [
+        { id: 'yes', text: 'Sim' },
+        { id: 'no', text: 'Não' },
+      ],
+    });
+    expect(r.type).toBe('text');
+    expect(r.buttons).toEqual([
+      { id: 'yes', text: 'Sim' },
+      { id: 'no', text: 'Não' },
+    ]);
+  });
+});
+
+describe('extractBaileysButtonReply (button / list / native-flow ids)', () => {
+  it('extracts a classic buttonsResponseMessage id and label', () => {
+    expect(
+      extractBaileysButtonReply(
+        {
+          buttonsResponseMessage: { selectedButtonId: 'btn_yes', selectedDisplayText: 'Yes, notify me' },
+        },
+        'buttonsResponseMessage',
+      ),
+    ).toEqual({ id: 'btn_yes', text: 'Yes, notify me' });
+  });
+
+  it('extracts a templateButtonReplyMessage id and label', () => {
+    expect(
+      extractBaileysButtonReply(
+        {
+          templateButtonReplyMessage: { selectedId: 'track', selectedDisplayText: 'Track order' },
+        },
+        'templateButtonReplyMessage',
+      ),
+    ).toEqual({ id: 'track', text: 'Track order' });
+  });
+
+  it('extracts a listResponseMessage row id and title', () => {
+    expect(
+      extractBaileysButtonReply(
+        {
+          listResponseMessage: {
+            title: 'Express shipping',
+            singleSelectReply: { selectedRowId: 'ship_express' },
+          },
+        },
+        'listResponseMessage',
+      ),
+    ).toEqual({ id: 'ship_express', text: 'Express shipping' });
+  });
+
+  it('extracts a native-flow interactiveResponseMessage id from paramsJson', () => {
+    expect(
+      extractBaileysButtonReply(
+        {
+          interactiveResponseMessage: {
+            nativeFlowResponseMessage: {
+              name: 'quick_reply',
+              paramsJson: JSON.stringify({ id: 'qr_1', display_text: 'Confirm' }),
+            },
+          },
+        },
+        'interactiveResponseMessage',
+      ),
+    ).toEqual({ id: 'qr_1', text: 'Confirm' });
+  });
+
+  it('accepts button_id / displayText aliases in native-flow params', () => {
+    expect(
+      extractBaileysButtonReply(
+        {
+          interactiveResponseMessage: {
+            nativeFlowResponseMessage: {
+              paramsJson: JSON.stringify({ button_id: 'alt', displayText: 'OK' }),
+            },
+          },
+        },
+        'interactiveResponseMessage',
+      ),
+    ).toEqual({ id: 'alt', text: 'OK' });
+  });
+
+  it('yields nothing when the actionable id is missing or the JSON is malformed', () => {
+    expect(
+      extractBaileysButtonReply({ buttonsResponseMessage: { selectedDisplayText: 'Yes' } }, 'buttonsResponseMessage'),
+    ).toBeUndefined();
+    expect(
+      extractBaileysButtonReply(
+        { interactiveResponseMessage: { nativeFlowResponseMessage: { paramsJson: '{not-json' } } },
+        'interactiveResponseMessage',
+      ),
+    ).toBeUndefined();
+    expect(
+      extractBaileysButtonReply(
+        {
+          interactiveResponseMessage: {
+            nativeFlowResponseMessage: { paramsJson: JSON.stringify({ display_text: 'OK' }) },
+          },
+        },
+        'interactiveResponseMessage',
+      ),
+    ).toBeUndefined();
+    expect(extractBaileysButtonReply({}, 'conversation')).toBeUndefined();
+  });
+});
+
+describe('extractBaileysButtons (prompt choices Sim/Não / list rows)', () => {
+  it('extracts classic buttonsMessage choices', () => {
+    expect(
+      extractBaileysButtons(
+        {
+          buttonsMessage: {
+            buttons: [
+              { buttonId: 'yes', buttonText: { displayText: 'Sim' } },
+              { buttonId: 'no', buttonText: { displayText: 'Não' } },
+            ],
+          },
+        },
+        'buttonsMessage',
+      ),
+    ).toEqual([
+      { id: 'yes', text: 'Sim' },
+      { id: 'no', text: 'Não' },
+    ]);
+  });
+
+  it('drops a native-flow CTA carried inside a classic buttonsMessage', () => {
+    // The same envelope can hold both a reply button and a CTA that opens a URL or dials a number.
+    // A CTA cannot be answered, so publishing it would offer a choice the click route must refuse.
+    expect(
+      extractBaileysButtons(
+        {
+          buttonsMessage: {
+            buttons: [
+              { buttonId: 'yes', buttonText: { displayText: 'Sim' } },
+              {
+                buttonId: 'docs',
+                buttonText: { displayText: 'Open the docs' },
+                nativeFlowInfo: { name: 'cta_url' },
+              },
+            ],
+          },
+        },
+        'buttonsMessage',
+      ),
+    ).toEqual([{ id: 'yes', text: 'Sim' }]);
+  });
+
+  it('keeps a native-flow quick reply carried inside a classic buttonsMessage', () => {
+    expect(
+      extractBaileysButtons(
+        {
+          buttonsMessage: {
+            buttons: [
+              {
+                buttonId: 'yes',
+                buttonText: { displayText: 'Sim' },
+                nativeFlowInfo: { name: 'quick_reply' },
+              },
+            ],
+          },
+        },
+        'buttonsMessage',
+      ),
+    ).toEqual([{ id: 'yes', text: 'Sim' }]);
+  });
+
+  it('keeps one index namespace for a template that numbers only some of its buttons', () => {
+    // selectedIndex goes back to the business bot verbatim. Falling back to the array position for
+    // an unnumbered entry can hand the bot a number belonging to a different button, so an entry the
+    // template did not number carries no index at all. It is still offered: the user can see and tap
+    // it in WhatsApp, and the reply names it by id.
+    const prompt = {
+      templateMessage: {
+        hydratedTemplate: {
+          hydratedButtons: [
+            { index: 5, quickReplyButton: { id: 'yes', displayText: 'Sim' } },
+            { quickReplyButton: { id: 'maybe', displayText: 'Talvez' } },
+            { index: 7, quickReplyButton: { id: 'no', displayText: 'Não' } },
+          ],
+        },
+      },
+    };
+    expect(extractBaileysButtons(prompt, 'templateMessage')).toEqual([
+      { id: 'yes', text: 'Sim' },
+      { id: 'maybe', text: 'Talvez' },
+      { id: 'no', text: 'Não' },
+    ]);
+    expect(extractBaileysClickableButtons(prompt, 'templateMessage')).toEqual([
+      { id: 'yes', text: 'Sim', index: 5 },
+      { id: 'maybe', text: 'Talvez', index: undefined },
+      { id: 'no', text: 'Não', index: 7 },
+    ]);
+  });
+
+  it('offers the quick replies of a template whose only numbered button is a CTA', () => {
+    // The CTA is never offered, so its index was the only thing making the prompt look numbered.
+    // Requiring an index of every entry emptied the whole prompt, which is how a visible Sim/Não
+    // pair disappeared from buttons[] and was then refused by the click route.
+    const prompt = {
+      templateMessage: {
+        hydratedTemplate: {
+          hydratedButtons: [
+            { index: 1, urlButton: { displayText: 'Open', url: 'https://example.com' } },
+            { quickReplyButton: { id: 'yes', displayText: 'Sim' } },
+            { quickReplyButton: { id: 'no', displayText: 'Não' } },
+          ],
+        },
+      },
+    };
+    expect(extractBaileysButtons(prompt, 'templateMessage')).toEqual([
+      { id: 'yes', text: 'Sim' },
+      { id: 'no', text: 'Não' },
+    ]);
+    expect(extractBaileysClickableButtons(prompt, 'templateMessage')).toEqual([
+      { id: 'yes', text: 'Sim', index: undefined },
+      { id: 'no', text: 'Não', index: undefined },
+    ]);
+  });
+
+  it('numbers by array position when the template carries no indices at all', () => {
+    // Asserted through the clickable list, which keeps the index; extractBaileysButtons projects it
+    // away, so it cannot tell a correct position from any other number.
+    expect(
+      extractBaileysClickableButtons(
+        {
+          templateMessage: {
+            hydratedTemplate: {
+              hydratedButtons: [
+                { quickReplyButton: { id: 'yes', displayText: 'Sim' } },
+                { quickReplyButton: { id: 'no', displayText: 'Não' } },
+              ],
+            },
+          },
+        },
+        'templateMessage',
+      ),
+    ).toEqual([
+      { id: 'yes', text: 'Sim', index: 0 },
+      { id: 'no', text: 'Não', index: 1 },
+    ]);
+  });
+
+  it('extracts interactiveMessage native-flow quick replies', () => {
+    expect(
+      extractBaileysButtons(
+        {
+          interactiveMessage: {
+            nativeFlowMessage: {
+              buttons: [
+                { name: 'quick_reply', buttonParamsJson: JSON.stringify({ id: 'yes', display_text: 'Sim' }) },
+                { name: 'quick_reply', buttonParamsJson: JSON.stringify({ id: 'no', display_text: 'Não' }) },
+              ],
+            },
+          },
+        },
+        'interactiveMessage',
+      ),
+    ).toEqual([
+      { id: 'yes', text: 'Sim' },
+      { id: 'no', text: 'Não' },
+    ]);
+  });
+
+  it('extracts listMessage rows as buttons', () => {
+    expect(
+      extractBaileysButtons(
+        {
+          listMessage: {
+            sections: [
+              {
+                rows: [
+                  { rowId: 'ship_express', title: 'Express' },
+                  { rowId: 'ship_std', title: 'Standard' },
+                ],
+              },
+            ],
+          },
+        },
+        'listMessage',
+      ),
+    ).toEqual([
+      { id: 'ship_express', text: 'Express' },
+      { id: 'ship_std', text: 'Standard' },
+    ]);
+  });
+
+  it('extracts templateMessage quick-replies and drops url/call CTAs', () => {
+    expect(
+      extractBaileysButtons(
+        {
+          templateMessage: {
+            hydratedTemplate: {
+              hydratedButtons: [
+                { index: 1, urlButton: { url: 'https://pay.example', displayText: 'Pay now' } },
+                { index: 2, quickReplyButton: { id: 'yes', displayText: 'Sim' } },
+                { index: 3, callButton: { phoneNumber: '+15551212', displayText: 'Call us' } },
+              ],
+            },
+          },
+        },
+        'templateMessage',
+      ),
+    ).toEqual([{ id: 'yes', text: 'Sim' }]);
+  });
+
+  it('drops native-flow CTA names so published buttons agree with the click allowlist', () => {
+    expect(
+      extractBaileysButtons(
+        {
+          interactiveMessage: {
+            nativeFlowMessage: {
+              buttons: [
+                { name: 'cta_url', buttonParamsJson: JSON.stringify({ id: 'docs', display_text: 'Docs' }) },
+                { name: 'quick_reply', buttonParamsJson: JSON.stringify({ id: 'yes', display_text: 'Sim' }) },
+              ],
+            },
+          },
+        },
+        'interactiveMessage',
+      ),
+    ).toEqual([{ id: 'yes', text: 'Sim' }]);
+  });
+
+  it('caps the number of choices and the length of each label', () => {
+    const rows = Array.from({ length: BUTTONS_MAX_ENTRIES + 5 }, (_, i) => ({
+      rowId: `row_${i}`,
+      title: 'x'.repeat(BUTTON_TEXT_MAX_LENGTH + 10),
+    }));
+    const buttons = extractBaileysButtons({ listMessage: { sections: [{ rows }] } }, 'listMessage');
+    expect(buttons).toHaveLength(BUTTONS_MAX_ENTRIES);
+    expect(buttons![0].text).toHaveLength(BUTTON_TEXT_MAX_LENGTH);
+    expect(buttons![0].id).toBe('row_0');
+  });
+
+  // A row id goes back to the business bot verbatim on a click, so an over-long one is dropped
+  // rather than rewritten into an id the bot would not recognise; only the label is trimmed.
+  it('drops a choice whose id is over the cap instead of truncating it', () => {
+    const rows = [
+      { rowId: 'r'.repeat(BUTTON_TEXT_MAX_LENGTH + 1), title: 'too long to send back' },
+      { rowId: 'ok', title: 'fine' },
+    ];
+    const buttons = extractBaileysButtons({ listMessage: { sections: [{ rows }] } }, 'listMessage');
+    expect(buttons).toEqual([{ id: 'ok', text: 'fine' }]);
+  });
+
+  it('yields nothing for a non-prompt content type', () => {
+    expect(extractBaileysButtons({}, 'conversation')).toBeUndefined();
+    expect(extractBaileysButtons({ buttonsMessage: { buttons: [] } }, 'buttonsMessage')).toBeUndefined();
+  });
+});
+
+describe('resolveBaileysButtonClick (API click against a stored prompt)', () => {
+  it('builds a plain buttonReply for a classic buttonsMessage prompt', () => {
+    const result = resolveBaileysButtonClick(
+      {
+        buttonsMessage: {
+          buttons: [
+            { buttonId: 'yes', buttonText: { displayText: 'Sim' } },
+            { buttonId: 'no', buttonText: { displayText: 'Não' } },
+          ],
+        },
+      },
+      'buttonsMessage',
+      'yes',
+    );
+    expect(result).toEqual({
+      ok: true,
+      payload: {
+        id: 'yes',
+        text: 'Sim',
+        index: 0,
+        content: {
+          buttonReply: { displayText: 'Sim', id: 'yes', index: 0 },
+          type: 'plain',
+        },
+      },
+    });
+  });
+
+  it('answers a choice a numbered template left unnumbered with no selectedIndex', () => {
+    // `selectedIndex` has explicit presence on the wire and Baileys drops an undefined field before
+    // encoding, so the bot receives the id and the label and no number at all, which is honest.
+    // Fabricating a position here could name a different button in the template's own numbering.
+    const result = resolveBaileysButtonClick(
+      {
+        templateMessage: {
+          hydratedTemplate: {
+            hydratedButtons: [
+              { index: 5, quickReplyButton: { id: 'yes', displayText: 'Sim' } },
+              { quickReplyButton: { id: 'maybe', displayText: 'Talvez' } },
+            ],
+          },
+        },
+      },
+      'templateMessage',
+      'maybe',
+    );
+    expect(result).toEqual({
+      ok: true,
+      payload: {
+        id: 'maybe',
+        text: 'Talvez',
+        index: undefined,
+        content: {
+          buttonReply: { displayText: 'Talvez', id: 'maybe', index: undefined },
+          type: 'template',
+        },
+      },
+    });
+  });
+
+  it('rejects an unknown buttonId and a non-prompt content type', () => {
+    expect(
+      resolveBaileysButtonClick(
+        { buttonsMessage: { buttons: [{ buttonId: 'yes', buttonText: { displayText: 'Sim' } }] } },
+        'buttonsMessage',
+        'nope',
+      ),
+    ).toEqual({ ok: false, error: 'unknown_button' });
+    expect(resolveBaileysButtonClick({}, 'conversation', 'yes')).toEqual({ ok: false, error: 'not_a_prompt' });
+  });
+
+  it('skips cta_url interactive buttons so only quick_reply is clickable', () => {
+    const result = resolveBaileysButtonClick(
+      {
+        interactiveMessage: {
+          nativeFlowMessage: {
+            buttons: [
+              {
+                name: 'cta_url',
+                buttonParamsJson: JSON.stringify({ id: 'docs', display_text: 'Docs', url: 'https://x' }),
+              },
+              {
+                name: 'quick_reply',
+                buttonParamsJson: JSON.stringify({ id: 'yes', display_text: 'Sim' }),
+              },
+            ],
+          },
+        },
+      },
+      'interactiveMessage',
+      'yes',
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.content).toEqual({
+        buttonReply: { displayText: 'Sim', id: 'yes', index: 1 },
+        type: 'template',
+      });
+    }
+    expect(
+      resolveBaileysButtonClick(
+        {
+          interactiveMessage: {
+            nativeFlowMessage: {
+              buttons: [
+                {
+                  name: 'cta_url',
+                  buttonParamsJson: JSON.stringify({ id: 'docs', display_text: 'Docs', url: 'https://x' }),
+                },
+              ],
+            },
+          },
+        },
+        'interactiveMessage',
+        'docs',
+      ),
+    ).toEqual({ ok: false, error: 'not_a_prompt' });
+  });
+
+  it('uses the hydrated template button index, not the filtered-list offset', () => {
+    const result = resolveBaileysButtonClick(
+      {
+        templateMessage: {
+          hydratedTemplate: {
+            hydratedButtons: [
+              { index: 1, urlButton: { url: 'https://pay.example', displayText: 'Pay now' } },
+              { index: 2, quickReplyButton: { id: 'yes', displayText: 'Sim' } },
+            ],
+          },
+        },
+      },
+      'templateMessage',
+      'yes',
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.index).toBe(2);
+      expect(result.payload.content).toEqual({
+        buttonReply: { displayText: 'Sim', id: 'yes', index: 2 },
+        type: 'template',
+      });
+    }
+  });
+
+  it('builds a listReply for a listMessage prompt', () => {
+    const result = resolveBaileysButtonClick(
+      {
+        listMessage: {
+          sections: [
+            {
+              rows: [
+                { rowId: 'ship_express', title: 'Express' },
+                { rowId: 'ship_std', title: 'Standard' },
+              ],
+            },
+          ],
+        },
+      },
+      'listMessage',
+      'ship_std',
+    );
+    expect(result).toEqual({
+      ok: true,
+      payload: {
+        id: 'ship_std',
+        text: 'Standard',
+        index: 1,
+        content: {
+          listReply: {
+            title: 'Standard',
+            listType: 1,
+            singleSelectReply: { selectedRowId: 'ship_std' },
+          },
+        },
+      },
+    });
+  });
+
+  it('disambiguates duplicate list row ids by the caller-supplied text', () => {
+    const prompt = {
+      listMessage: {
+        sections: [{ rows: [{ rowId: 'same', title: 'Morning' }] }, { rows: [{ rowId: 'same', title: 'Evening' }] }],
+      },
+    };
+    const evening = resolveBaileysButtonClick(prompt, 'listMessage', 'same', 'Evening');
+    expect(evening.ok).toBe(true);
+    if (evening.ok) {
+      expect(evening.payload.text).toBe('Evening');
+      expect(evening.payload.index).toBe(1);
+    }
+  });
+});
+
+describe('toBaileysButtonClickContent', () => {
+  it('uses the plain buttonReply helper for buttonsMessage', () => {
+    expect(toBaileysButtonClickContent('buttonsMessage', 'yes', 'Sim', 0)).toEqual({
+      buttonReply: { displayText: 'Sim', id: 'yes', index: 0 },
+      type: 'plain',
+    });
   });
 });
 

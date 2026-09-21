@@ -28,10 +28,14 @@ if TYPE_CHECKING:
 
 
 class ListSessionsQuery(TypedDict, total=False):
-    """Pagination for :meth:`SessionsResource.list`. The server applies its own default when omitted."""
+    """Pagination for :meth:`SessionsResource.list`. The server applies its own default when omitted.
+
+    ``name`` returns only the session with exactly that name (case-sensitive).
+    """
 
     limit: int
     offset: int
+    name: str
 
 
 class SessionsResource:

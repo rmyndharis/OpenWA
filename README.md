@@ -129,7 +129,7 @@ For any deployment where ethical, legal, or regulatory compliance matters (healt
 | ------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Groups API          | ✅     | Create, manage, join (invite code), and configure groups                                                                                                                     |
 | Profile Management  | ✅     | Set own display name, about text, and profile picture                                                                                                                        |
-| Call Handling       | ✅     | `call.received` events, reject calls, per-session auto-reject                                                                                                                |
+| Call Handling       | ✅     | `call.received` events (not reliable on whatsapp-web.js), reject calls and per-session auto-reject (Baileys only)                                                            |
 | Channels/Newsletter | ✅     | WhatsApp Channels support                                                                                                                                                    |
 | Labels Management   | ✅     | Organize chats with labels                                                                                                                                                   |
 | Proxy Support       | ✅     | Per-session proxy configuration                                                                                                                                              |
@@ -330,8 +330,10 @@ curl -X POST http://localhost:2785/api/sessions/{sessionId}/webhooks \
 
 > **Smart filters (optional):** add a `filters` object to fire the webhook only when conditions match
 > (AND), e.g. `{ "conditions": [{ "field": "sender", "operator": "is", "value": ["1234567890@c.us"] }] }`.
-> Fields: `sender` / `recipient` / `body` / `type` / `mentions` / `fromMe` / `hasMedia` / `isGroup`. A
-> webhook with no filters behaves exactly as before. See the API specification for the full schema.
+> Fields: `sender` / `recipient` / `chatId` / `body` / `type` / `mentions` / `fromMe` / `hasMedia` /
+> `isGroup` / `kind`. A webhook with no filters behaves exactly as before. Use `chatId` to allowlist
+> specific groups or DMs (e.g. `{ "field": "chatId", "operator": "is", "value": ["120…@g.us"] }`).
+> See the API specification for the full schema.
 
 ## 🤖 MCP Server (AI Agents)
 

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.rmyndharis.openwa.ClientConfig;
 import com.rmyndharis.openwa.OpenWAClient;
 import com.rmyndharis.openwa.http.HttpMethod;
+import com.rmyndharis.openwa.model.ListSessionsQuery;
 import com.rmyndharis.openwa.model.RequestPairingCodeRequest;
 import com.rmyndharis.openwa.model.SetOwnPresenceRequest;
 import com.rmyndharis.openwa.support.MockTransport;
@@ -22,6 +23,17 @@ class SessionsResourceTest {
         client.sessions.list();
         assertEquals("http://h/api/sessions", tx.lastRequest().url());
         assertEquals(HttpMethod.GET, tx.lastRequest().method());
+    }
+
+    @Test
+    void listSerializesNameFilter() {
+        tx.respond(200, "[]");
+        client.sessions.list(ListSessionsQuery.builder().name("my-bot").build());
+        assertEquals("http://h/api/sessions?name=my-bot", tx.lastRequest().url());
+
+        tx.respond(200, "[]");
+        client.sessions.list(new ListSessionsQuery(5, 0));
+        assertEquals("http://h/api/sessions?limit=5&offset=0", tx.lastRequest().url());
     }
 
     @Test

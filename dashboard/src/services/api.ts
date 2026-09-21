@@ -296,6 +296,8 @@ export interface ChatMessage {
     quotedMessage?: { id: string; body: string };
     reactions?: Record<string, string>;
     call?: { video: boolean; missed: boolean };
+    /** Business prompt choices (Baileys). Present on inbound prompts that offer buttons. */
+    buttons?: Array<{ id: string; text: string }>;
   };
 }
 
@@ -324,8 +326,8 @@ export interface EngineHistoryMessage {
   isLidSender?: boolean;
   senderPhone?: string | null;
   /**
-   * Sender contact info, best-effort from the engine's cache. History carries `pushName` only;
-   * the richer fields arrive on `message.received` when `WEBHOOK_CONTACT_DETAILS=true`.
+   * Sender contact info, best-effort from the engine's cache. History carries `name` and `pushName`;
+   * the richer fields are added when `WEBHOOK_CONTACT_DETAILS=true`, as on `message.received`.
    */
   contact?: {
     id?: string;
@@ -533,6 +535,14 @@ export interface HealthStatus {
     redis?: { status: string };
     queue?: { status: string };
   };
+}
+
+/** GET /infra/update-check: the running version against the latest published release. */
+export interface UpdateCheck {
+  current: string;
+  latest: string | null;
+  updateAvailable: boolean;
+  releaseUrl: string | null;
 }
 
 export interface InfraStatus {
@@ -820,7 +830,7 @@ export const sessionApi = {
     }),
   getStats: () => request<SessionStats>('/sessions/stats/overview'),
   getGroups: (id: string) =>
-    request<{ id: string; name: string; linkedParentJID?: string | null }[]>(`/sessions/${id}/groups`),
+    request<{ id: string; name?: string; linkedParentJID?: string | null }[]>(`/sessions/${id}/groups`),
   getChats: (id: string) => request<Chat[]>(`/sessions/${id}/chats`),
   markChatRead: (id: string, chatId: string) =>
     request<{ success: boolean }>(`/sessions/${id}/chats/read`, {
@@ -1083,6 +1093,15 @@ export const messageApi = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  /**
+   * Tap a choice on an inbound business button/list prompt (Baileys only).
+   * `messageId` is the prompt's WhatsApp id; `buttonId` is `buttons[].id`.
+   */
+  clickButton: (sessionId: string, data: { chatId: string; messageId: string; buttonId: string; text?: string }) =>
+    request<MessageResponse>(`/sessions/${sessionId}/messages/click-button`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   react: (sessionId: string, data: { chatId: string; messageId: string; emoji: string }) =>
     request<void>(`/sessions/${sessionId}/messages/react`, {
       method: 'POST',
@@ -1119,6 +1138,7 @@ export const healthApi = {
 
 export const infraApi = {
   getStatus: () => request<InfraStatus>('/infra/status'),
+  getUpdateCheck: () => request<UpdateCheck>('/infra/update-check'),
   getConfig: () => request<SavedConfig>('/infra/config'),
   saveConfig: (config: SaveConfigPayload) =>
     request<{ message: string; saved: boolean; envPath: string; profiles: string[] }>('/infra/config', {

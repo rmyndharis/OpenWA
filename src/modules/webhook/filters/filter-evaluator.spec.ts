@@ -193,6 +193,79 @@ describe('evaluateFilters', () => {
       const f = filters({ field: 'mentions', operator: 'is', value: ['628999'] });
       expect(evaluateFilters(f, 'message.received', msg({ mentionedIds: ['111@lid', 'x@c.us'] }), resolve)).toBe(true);
     });
+
+    // A rule can hold the lid itself: the dashboard's chat picker stores whatever id the chat
+    // carries. Resolving only the payload side made the two stop agreeing as soon as the gateway
+    // learned that lid's phone, which turns an exclusion into a delivery of the excluded chat.
+    it('resolves a lid the RULE names, so it keeps matching once the phone is known', () => {
+      const resolve = (jid: string): string | null => (jid.startsWith('111@lid') ? '628999' : null);
+      const exclude = filters({ field: 'sender', operator: 'isNot', value: ['111@lid'] });
+      const fromThatPerson = msg({ from: '120@g.us', author: '111@lid', isGroup: true });
+
+      // Before the mapping is known, both sides stay a lid and the exclusion holds.
+      expect(evaluateFilters(exclude, 'message.received', fromThatPerson)).toBe(false);
+      // Once it is known, both sides resolve to the phone and the exclusion must still hold.
+      expect(evaluateFilters(exclude, 'message.received', fromThatPerson, resolve)).toBe(false);
+    });
+
+    it('resolves a lid the rule names for an inclusion too', () => {
+      const resolve = (jid: string): string | null => (jid.startsWith('111@lid') ? '628999' : null);
+      const only = filters({ field: 'sender', operator: 'is', value: ['111@lid'] });
+      const fromThatPerson = msg({ from: '120@g.us', author: '111@lid', isGroup: true });
+      expect(evaluateFilters(only, 'message.received', fromThatPerson, resolve)).toBe(true);
+    });
+  });
+
+  describe('chatId (conversation scoping so a webhook can allowlist specific groups)', () => {
+    it('matches an explicit chatId on the payload', () => {
+      const f = filters({ field: 'chatId', operator: 'is', value: ['120@g.us'] });
+      expect(evaluateFilters(f, 'message.received', msg({ chatId: '120@g.us', from: 'part@c.us' }))).toBe(true);
+      expect(evaluateFilters(f, 'message.received', msg({ chatId: '999@g.us', from: 'part@c.us' }))).toBe(false);
+    });
+
+    // `from` is the sender on a DM and this session on an outbound message, so reading it as the
+    // conversation would scope the filter to the wrong chat. A payload without chatId matches
+    // nothing rather than guessing.
+    it('does not read from as the conversation when chatId is absent', () => {
+      const f = filters({ field: 'chatId', operator: 'is', value: ['120@g.us'] });
+      expect(
+        evaluateFilters(f, 'message.received', msg({ from: '120@g.us', author: 'part@c.us', isGroup: true })),
+      ).toBe(false);
+    });
+
+    it('supports isNot and multi-value allowlists', () => {
+      const allow = filters({ field: 'chatId', operator: 'is', value: ['120@g.us', '121@g.us'] });
+      expect(evaluateFilters(allow, 'message.received', msg({ chatId: '121@g.us' }))).toBe(true);
+      expect(evaluateFilters(allow, 'message.received', msg({ chatId: '999@g.us' }))).toBe(false);
+
+      const deny = filters({ field: 'chatId', operator: 'isNot', value: ['120@g.us'] });
+      expect(evaluateFilters(deny, 'message.received', msg({ chatId: '120@g.us' }))).toBe(false);
+      expect(evaluateFilters(deny, 'message.received', msg({ chatId: '999@g.us' }))).toBe(true);
+    });
+
+    // The ack and failure events carry no conversation at all: their payload is the shape the
+    // projector builds, `{ id, messageId, status, ack }`. A chatId condition therefore SUPPRESSES
+    // them rather than scoping them, which is a real surprise for anyone allowlisting a group, so
+    // it is pinned here and warned about in docs/06 rather than left to be discovered.
+    it('suppresses message.ack and message.failed, whose payload carries no conversation', () => {
+      // Real pairings: deliveryStatusToAck maps delivered to 2 and failed to -1, and message.failed
+      // is a copy of the same object, so the fixture must not invent a status/ack pair of its own.
+      const ackPayload = { id: 'M1', messageId: 'M1', status: 'delivered', ack: 2 };
+      const failedPayload = { id: 'M1', messageId: 'M1', status: 'failed', ack: -1 };
+      const allow = filters({ field: 'chatId', operator: 'is', value: ['120@g.us'] });
+      expect(evaluateFilters(allow, 'message.ack', ackPayload)).toBe(false);
+      expect(evaluateFilters(allow, 'message.failed', failedPayload)).toBe(false);
+
+      // And the exclusion direction delivers them, for the same reason: the field is not there.
+      const deny = filters({ field: 'chatId', operator: 'isNot', value: ['120@g.us'] });
+      expect(evaluateFilters(deny, 'message.ack', ackPayload)).toBe(true);
+    });
+
+    it('scopes message.revoked / edited payloads that only carry chatId', () => {
+      const f = filters({ field: 'chatId', operator: 'is', value: ['120@g.us'] });
+      expect(evaluateFilters(f, 'message.revoked', { chatId: '120@g.us' })).toBe(true);
+      expect(evaluateFilters(f, 'message.edited', { chatId: '999@g.us', body: 'x' })).toBe(false);
+    });
   });
 
   describe('kind (chat kind, so a channel can be singled out where isGroup cannot)', () => {

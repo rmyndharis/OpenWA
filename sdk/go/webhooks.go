@@ -21,10 +21,9 @@ func (s *WebhooksService) ListAll(ctx context.Context, query *DeliveryFailureQue
 // DeliveryFailures returns deliveries that were ATTEMPTED and failed — the diagnostic for a webhook
 // that stopped arriving. Requires an ADMIN-level key.
 //
-// A delivery a smart filter suppressed never reaches this log. The response has no published schema,
-// so it decodes into a generic value.
-func (s *WebhooksService) DeliveryFailures(ctx context.Context, query *DeliveryFailureQuery) (any, error) {
-	var out any
+// A delivery a smart filter suppressed never reaches this log. Most recent first.
+func (s *WebhooksService) DeliveryFailures(ctx context.Context, query *DeliveryFailureQuery) ([]WebhookDeliveryFailure, error) {
+	var out []WebhookDeliveryFailure
 	err := s.client.do(ctx, "GET", "/api/webhooks/delivery-failures", query.values(), nil, &out)
 	return out, err
 }

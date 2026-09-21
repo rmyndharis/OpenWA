@@ -72,6 +72,18 @@ describe('validateIngressManifest', () => {
     expect(() => validateIngressManifest(m as never)).toThrow(/toleranceSec/);
   });
 
+  it('rejects a dedupOn value other than header or body', () => {
+    const m = baseManifest();
+    (m.ingress[0] as { dedupOn?: string }).dedupOn = 'bdy';
+    expect(() => validateIngressManifest(m as never)).toThrow(/dedupOn/);
+  });
+
+  it('accepts dedupOn: body', () => {
+    const m = baseManifest();
+    (m.ingress[0] as { dedupOn?: string }).dedupOn = 'body';
+    expect(() => validateIngressManifest(m as never)).not.toThrow();
+  });
+
   it('rejects a duplicate route within one manifest', () => {
     const m = baseManifest();
     m.ingress.push({ ...m.ingress[0] });
@@ -273,6 +285,25 @@ describe('validateIngressManifest: response contract', () => {
         manifestWithRoute({ response: { ack: { headers: { 'content-type': 'text/plain\r\nX-Injected: yes' } } } }),
       ),
     ).toThrow(/invalid characters/);
+  });
+
+  it('rejects a non-string ack body', () => {
+    // A manifest is third-party JSON. Left unchecked, a number or object here reached the renderer,
+    // which drops anything that is not a string, so the route answered every delivery with an EMPTY
+    // ack while the manifest read as if it declared one.
+    expect(() =>
+      validateIngressManifest(manifestWithRoute({ response: { ack: { body: 42 as unknown as string } } })),
+    ).toThrow(/ack\.body/);
+  });
+
+  it('rejects a non-string ack header value', () => {
+    // Same silent drop, and the CR/LF guard below does not catch it: RegExp.test coerces its
+    // argument, so a number passes the injection check and is then filtered out at render time.
+    expect(() =>
+      validateIngressManifest(
+        manifestWithRoute({ response: { ack: { headers: { 'x-retry': 5 as unknown as string } } } }),
+      ),
+    ).toThrow(/'x-retry'/);
   });
 
   it('rejects a non-token ack header name', () => {

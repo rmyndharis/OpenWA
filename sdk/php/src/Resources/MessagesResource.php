@@ -123,6 +123,17 @@ class MessagesResource
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/reply", [], $body);
     }
 
+    /**
+     * Click a button on a WhatsApp Business prompt. Baileys only (whatsapp-web.js returns 501).
+     *
+     * @param array<string,mixed> $body chatId, messageId, buttonId; text optional.
+     * @return array<string,mixed>
+     */
+    public function clickButton(string $sessionId, array $body): array
+    {
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/click-button", [], $body);
+    }
+
     /** @return array<string,mixed> */
     public function forward(string $sessionId, array $body): array
     {

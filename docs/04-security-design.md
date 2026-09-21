@@ -271,19 +271,19 @@ TTL values are in milliseconds. The `/api/metrics` and `/api/health*` routes are
 
 ### Response on limit
 
-Exceeding a window returns `429 Too Many Requests`. Because the windows are **named** throttlers (`short` / `medium` / `long`), `@nestjs/throttler` suffixes every rate-limit header with the throttler name — there are no unsuffixed `Retry-After` or `X-RateLimit-*` headers:
+Exceeding a window returns `429 Too Many Requests`. Because the windows are **named** throttlers (`short` / `medium` / `long`), `@nestjs/throttler` suffixes every rate-limit header with the throttler name, so there are no unsuffixed `X-RateLimit-*` headers. `Retry-After` is the exception: on a `429` the guard emits the plain spelling too, because no HTTP client reads a suffixed one.
 
 - On success, each response carries one header triple per window: `X-RateLimit-Limit-short` / `-Remaining-short` / `-Reset-short`, plus the `-medium` and `-long` equivalents.
-- On `429`, the exceeded window sets `Retry-After-short`, `Retry-After-medium`, or `Retry-After-long` (seconds until the block expires) — read whichever is present rather than a plain `Retry-After`.
+- On `429`, the exceeded window sets `Retry-After-short`, `Retry-After-medium`, or `Retry-After-long` (seconds until the block expires), and the guard mirrors that value into a plain `Retry-After`. Read the plain one; the suffixed name is what tells an operator which window shed the request.
 
 The ingress route (`ALL /api/ingress/:pluginId/:instanceId/*path`) is exempt from the global per-IP tiers (their 100/min medium window sits below the per-instance limit, so a provider fanning every tenant's webhooks through one egress IP was shed before the per-instance bound could fire). It carries its own two windows instead, both on `INGRESS_INSTANCE_TTL` (default 60000 ms):
 
 - `instance`, keyed on `(pluginId, instanceId)`, env `INGRESS_INSTANCE_LIMIT`, default 120. Sheds one noisy tenant without touching its neighbours.
 - `ingress-ip`, keyed on the client (proxy-aware, see `TRUSTED_PROXIES`), env `INGRESS_IP_LIMIT`, default 1200. The `instance` key is built from path segments the caller supplies, so varying them mints a fresh bucket; this window is the bound an unauthenticated caller cannot walk around. It is sized 10x the per-instance default so it never binds first for legitimate traffic.
 
-Responses therefore carry `X-RateLimit-*-instance` and `X-RateLimit-*-ingress-ip`, and on saturation the `Retry-After-*` of whichever window shed the request.
+Responses therefore carry `X-RateLimit-*-instance` and `X-RateLimit-*-ingress-ip`, and on saturation the `Retry-After-*` of whichever window shed the request, mirrored into a plain `Retry-After`.
 
-The API exposes the rate-limit headers via CORS (`exposedHeaders`) so browser clients can read them. The simplest backpressure signal remains the `429` status itself, with the suffixed `Retry-After-*` as the retry delay.
+The API exposes the rate-limit headers via CORS (`exposedHeaders`) so browser clients can read them, the plain `Retry-After` included. The simplest backpressure signal remains the `429` status itself, with `Retry-After` as the retry delay.
 
 ### WebSocket (`/events`) limits
 
@@ -383,6 +383,13 @@ from unauthenticated WhatsApp senders — so the copy amplification is bounded a
 Each webhook still receives its own copy of the event data — a `webhook:before` hook may mutate
 `payload.data` in place and must not bleed into sibling deliveries — but the copy is taken after
 media shedding, so it is small. The HMAC signature is computed over the exact shed bytes sent.
+
+The two media bounds compound. `WEBHOOK_MAX_PAYLOAD_BYTES` is measured on the serialized JSON body
+and applies after `WEBHOOK_MEDIA_INLINE_MAX_BYTES`; base64 inflates media by a third, so at the
+defaults media above roughly 768 KiB reaches webhooks as the omitted marker. Raise both together,
+with the payload limit at least 4/3 of the inline limit plus room for the envelope. The WebSocket
+gateway applies only the inline limit. Media the engine downloaded stays retrievable from
+`GET /api/sessions/:sessionId/messages/:chatId/:messageId/media` (`404` when nothing was stored).
 
 ## 4.9 Security Headers
 
@@ -650,8 +657,8 @@ npm audit --json > audit-report.json
 ### GitHub Dependabot Configuration
 
 ```yaml
-# .github/dependabot.yml — the root npm ecosystem (the file also covers /dashboard,
-# github-actions and docker)
+# .github/dependabot.yml, root npm ecosystem only (the file also covers /dashboard,
+# github-actions and docker). The comment above each ignore is omitted here.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -662,29 +669,40 @@ updates:
     open-pull-requests-limit: 5
     groups:
       minor-and-patch:
-        update-types: [minor, patch]
+        update-types:
+          - minor
+          - patch
       major:
-        update-types: [major]
+        update-types:
+          - major
     labels:
       - dependencies
     ignore:
-      # TypeScript 7 is the native port: typescript-eslint and ts-jest cannot load it (#727/#729).
       - dependency-name: 'typescript'
         versions: ['>=7.0.0']
-      # better-sqlite3 v14: v13 is the shipped line (^13.0.3, TypeORM's optional ^12 peer pinned
-      # to the root version via overrides, prebuild proven on both architectures by the release
-      # boot smoke). The next major stays frozen until re-evaluated.
       - dependency-name: 'better-sqlite3'
         versions: ['>=14.0.0']
+      - dependency-name: 'puppeteer'
+        versions: ['>24.38.0']
+      - dependency-name: 'audio-decode'
+        versions: ['>=3.0.0']
+      - dependency-name: '@types/node'
+        versions: ['>=23.0.0']
+      - dependency-name: '@nestjs/*'
+        versions: ['>=12.0.0']
+      - dependency-name: 'tar-stream'
+        versions: ['>=3.2.1']
 ```
 
-Majors are **not** ignored — they arrive as their own grouped PR, separate from the minor/patch
-group. The only ignores are the two pinned incompatibilities above, each with its lift condition
-documented inline.
+Majors arrive as their own grouped PR, separate from the minor/patch group. Five ignores freeze a
+major line (TypeScript 7, better-sqlite3 14, audio-decode 3, @types/node 23 and later, NestJS 12)
+and two freeze the line in use (puppeteer above the 24.38.0 pin it shares with whatsapp-web.js,
+tar-stream from 3.2.1). Each ignore's reason and lift condition is the comment above it in
+`.github/dependabot.yml`.
 
 ### Security Scanning in CI
 
-> **Aspirational template — not in the repo.** There is no `security.yml`, no Snyk, and no CodeQL workflow today. The actual dependency check is a dedicated `audit` job ("Security audit") in `ci.yml`, on push/PR — not on a schedule. It is deliberately its own job rather than a step inside Lint: an advisory published against an unrelated dependency would otherwise abort the job before ESLint, the type-check and the drift gates ever ran. It runs `npm run check:audit` over the root tree and `npm audit --audit-level=high` over `dashboard/`. Both fence `high` rather than `critical`, because the `overrides` in `package.json` clear the root tree's existing HIGH advisories, so the threshold fences regressions. `check:audit` applies that threshold per advisory instead of all-or-nothing: an advisory with no patched version can be excused by id in `scripts/check-audit.mjs`, with its reason and its removal condition recorded beside it, rather than dropping the whole job to `critical` — and an allowlist entry whose advisory has since gone fails the job too, so an exception cannot outlive its cause. The dashboard keeps the plain form: it has nothing to excuse and stays the stricter of the two. The workflow below is a recommended setup to add if you want scheduled scanning and SAST.
+> **Aspirational template — not in the repo.** There is no Snyk and no CodeQL workflow today. The actual dependency check is a dedicated `audit` job ("Security audit") in `ci.yml`, on push/PR. It is deliberately its own job rather than a step inside Lint: an advisory published against an unrelated dependency would otherwise abort the job before ESLint, the type-check and the drift gates ever ran. It runs `npm run check:audit` over the root tree and `npm audit --audit-level=high` over `dashboard/`. Both fence `high` rather than `critical`, because the `overrides` in `package.json` clear the root tree's existing HIGH advisories, so the threshold fences regressions. `check:audit` applies that threshold per advisory instead of all-or-nothing: an advisory with no patched version can be excused by id in `scripts/check-audit.mjs`, with its reason and its removal condition recorded beside it, rather than dropping the whole job to `critical` — and an allowlist entry whose advisory has since gone fails the job too, so an exception cannot outlive its cause. The dashboard keeps the plain form: it has nothing to excuse and stays the stricter of the two. Between releases, `.github/workflows/security-scan.yml` (Scheduled Security Scan) repeats that job every Wednesday at 03:00 UTC and on demand, together with the release Trivy scan against the published `latest` image on amd64 and arm64. The workflow below is a recommended setup to add if you want Snyk and SAST; its scheduled `npm audit` is already covered by `security-scan.yml`.
 
 ```yaml
 # .github/workflows/security.yml

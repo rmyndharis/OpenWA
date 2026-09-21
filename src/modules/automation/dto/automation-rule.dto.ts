@@ -11,9 +11,9 @@ import { AutomationRule } from '../entities/automation-rule.entity';
 export const AUTOMATION_COOLDOWN_MAX_SECONDS = 86_400;
 
 const CONDITIONS_DESCRIPTION =
-  'Match conditions in the webhook filter format (message family: sender, recipient, body, type, ' +
-  'isGroup, fromMe, hasMedia, mentions). All conditions must match (AND). Omitted or empty means ' +
-  'the rule matches every inbound message.';
+  'Match conditions in the webhook filter format (message family: sender, recipient, chatId, body, ' +
+  'type, isGroup, kind, fromMe, hasMedia, mentions). All conditions must match (AND). Omitted or ' +
+  'empty means the rule matches every inbound message.';
 
 const COOLDOWN_DESCRIPTION =
   'Quiet period per chat, in seconds: after the rule replies in a chat it stays silent there for ' +

@@ -5,10 +5,16 @@ Backed by ``src/modules/webhook/webhook.controller.ts``.
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from .._http import quote_segment
-from ..types import CreateWebhookRequest, UpdateWebhookRequest, WebhookResponse, WebhookTestResult
+from ..types import (
+    CreateWebhookRequest,
+    UpdateWebhookRequest,
+    WebhookDeliveryFailure,
+    WebhookResponse,
+    WebhookTestResult,
+)
 
 if TYPE_CHECKING:
     from .._http import HttpExecutor
@@ -38,11 +44,11 @@ class WebhooksResource:
         """
         return self._http.request("GET", "/api/webhooks", query=query)
 
-    def delivery_failures(self, query: DeliveryFailureQuery | None = None) -> Any:
+    def delivery_failures(self, query: DeliveryFailureQuery | None = None) -> list[WebhookDeliveryFailure]:
         """Deliveries that were ATTEMPTED and failed -- the diagnostic for a webhook that stopped arriving.
 
-        Requires an ADMIN-level key. A delivery a smart filter suppressed never reaches this log. The
-        response has no published schema, so it is returned unshaped.
+        Requires an ADMIN-level key. A delivery a smart filter suppressed never reaches this log. Most
+        recent first.
         """
         return self._http.request("GET", "/api/webhooks/delivery-failures", query=query)
 

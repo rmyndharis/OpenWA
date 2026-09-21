@@ -8,6 +8,7 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { evaluateFilters } from '../webhook/filters/filter-evaluator';
 import { PLUGIN_MESSAGE_PORT, type PluginMessagePort } from '../../core/plugins/plugin-host-ports';
 import { AutomationRule } from './entities/automation-rule.entity';
+import { Session } from '../session/entities/session.entity';
 import { CreateAutomationRuleDto, UpdateAutomationRuleDto } from './dto/automation-rule.dto';
 
 /** Entries above this size trigger a sweep of expired cooldowns before inserting the next one. */
@@ -44,6 +45,8 @@ export class AutomationRulesService {
   constructor(
     @InjectRepository(AutomationRule, 'data')
     private readonly ruleRepository: Repository<AutomationRule>,
+    @InjectRepository(Session, 'data')
+    private readonly sessionRepository: Repository<Session>,
     @Optional()
     private readonly moduleRef?: ModuleRef,
     @Optional()
@@ -53,6 +56,11 @@ export class AutomationRulesService {
   ) {}
 
   async create(sessionId: string, dto: CreateAutomationRuleDto): Promise<AutomationRule> {
+    // The automation_rules.sessionId FK turns a missing session into a driver error (500) at save
+    // time; check first so the caller gets a truthful 404, as the webhook create route does.
+    if (!(await this.sessionRepository.exists({ where: { id: sessionId } }))) {
+      throw new NotFoundException(`Session with id '${sessionId}' not found`);
+    }
     // Per-session cap, the same shape (and softness) the webhook fan-out cap has: every inbound
     // message is evaluated against every rule of its session, so an unbounded count turns each
     // message into unbounded work. A concurrent create can race the count — the cap bounds

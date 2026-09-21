@@ -59,8 +59,8 @@ type GroupEventPayload struct {
 }
 
 // CallReceivedPayload is the payload of the call.received event. CallID is the
-// handle Calls.RejectCall accepts while the call is still ringing. Timestamp
-// is unix seconds.
+// handle Calls.RejectCall accepts while the call is still ringing (Baileys
+// only; whatsapp-web.js answers 501). Timestamp is unix seconds.
 type CallReceivedPayload struct {
 	CallID    string `json:"callId"`
 	From      string `json:"from"`
@@ -164,4 +164,25 @@ type WebhookTestResult struct {
 	Success    bool   `json:"success"`
 	StatusCode int    `json:"statusCode,omitempty"`
 	Error      string `json:"error,omitempty"`
+}
+
+// WebhookDeliveryFailure is a webhook delivery abandoned after every retry,
+// as listed by the delivery-failure log.
+type WebhookDeliveryFailure struct {
+	ID        string `json:"id"`
+	WebhookID string `json:"webhookId"`
+	SessionID string `json:"sessionId"`
+	Event     string `json:"event"`
+	URL       string `json:"url"`
+	// IdempotencyKey is the key the receiver would have deduped on.
+	IdempotencyKey *string `json:"idempotencyKey,omitempty"`
+	DeliveryID     *string `json:"deliveryId,omitempty"`
+	// Attempts is the total number of attempts made before giving up.
+	Attempts int `json:"attempts"`
+	// LastStatusCode is the last HTTP status when the failure was a non-2xx
+	// response; nil for a network or timeout error.
+	LastStatusCode *int   `json:"lastStatusCode,omitempty"`
+	LastError      string `json:"lastError"`
+	// CreatedAt is the ISO timestamp of when the delivery was finally abandoned.
+	CreatedAt string `json:"createdAt"`
 }

@@ -7,6 +7,7 @@ import {
 } from './wwebjs-lifecycle';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import type { Client } from 'whatsapp-web.js';
 
 /**
@@ -52,6 +53,8 @@ describe('requestPairingCode retries a mid-navigation page', () => {
     expect(requestPairingCode).toHaveBeenCalledTimes(2);
   });
 
+  // An exhausted budget is a transport failure, not a broken gateway: it answers 503 so a caller
+  // knows the request is worth retrying, and carries the last attempt's reason as the detail.
   it('bounds a hanging attempt and gives up after the attempt budget', async () => {
     jest.useFakeTimers();
     const requestPairingCode = jest.fn().mockImplementation(() => new Promise<string>(() => undefined)); // never settles
@@ -65,8 +68,25 @@ describe('requestPairingCode retries a mid-navigation page', () => {
       50;
     await jest.advanceTimersByTimeAsync(total);
 
+    await expect(pending).rejects.toBeInstanceOf(EngineTransportError);
     await expect(pending).rejects.toThrow(/attempt timed out/i);
     expect(requestPairingCode).toHaveBeenCalledTimes(PAIRING_CODE_MAX_ATTEMPTS);
+  });
+
+  it('answers 503 for an exhausted budget', async () => {
+    jest.useFakeTimers();
+    const requestPairingCode = jest.fn().mockImplementation(() => new Promise<string>(() => undefined));
+    const lc = makeLifecycle(requestPairingCode);
+
+    const pending = lc.requestPairingCode('628111');
+    const failure = pending.catch((err: unknown) => err);
+    await jest.advanceTimersByTimeAsync(
+      PAIRING_CODE_MAX_ATTEMPTS * PAIRING_CODE_ATTEMPT_TIMEOUT_MS +
+        (PAIRING_CODE_MAX_ATTEMPTS - 1) * PAIRING_CODE_RETRY_DELAY_MS +
+        50,
+    );
+
+    expect(((await failure) as EngineTransportError).getStatus()).toBe(503);
   });
 
   it('propagates a non-navigation failure on the first attempt (no wasted retries)', async () => {

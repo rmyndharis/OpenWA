@@ -122,7 +122,7 @@ function AppContent() {
                 </>
               )}
               {role === 'admin' && <Route path="api-keys" element={<ApiKeys />} />}
-              <Route path="logs" element={<Logs />} />
+              {role === 'admin' && <Route path="logs" element={<Logs />} />}
               <Route path="message-tester" element={<MessageTester />} />
               {role === 'admin' && <Route path="infrastructure" element={<Infrastructure />} />}
               {role === 'admin' && <Route path="plugins" element={<Plugins />} />}

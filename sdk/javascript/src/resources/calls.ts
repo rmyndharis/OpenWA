@@ -13,9 +13,10 @@ export class CallsResource {
   constructor(private readonly client: OpenWAClient) {}
 
   /**
-   * Reject a ringing incoming call. The `callId` comes from the `call.received`
-   * webhook/socket event; the server answers 404 when the call is not found or no
-   * longer ringing. Requires an OPERATOR-level key.
+   * Reject a ringing incoming call. **Baileys only**: whatsapp-web.js answers 501.
+   * The `callId` comes from the `call.received` webhook/socket event; the server
+   * answers 404 when the call is not found or no longer ringing. Requires an
+   * OPERATOR-level key.
    */
   rejectCall(sessionId: string, callId: string): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({

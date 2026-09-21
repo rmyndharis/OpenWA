@@ -122,6 +122,25 @@
   padding: 0 0.5rem 1rem;
 }
 
+.templates-page .template-list-row {
+  position: relative;
+}
+
+.templates-page .template-list-row.deletable .template-list-item {
+  padding-inline-end: 2.75rem;
+}
+
+.templates-page .icon-btn.template-list-delete {
+  position: absolute;
+  top: 0.625rem;
+  inset-inline-end: 0.625rem;
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
 .templates-page .template-list-item {
   display: flex;
   flex-direction: column;
