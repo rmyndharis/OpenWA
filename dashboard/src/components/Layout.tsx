@@ -26,9 +26,8 @@ import {
 import { useTheme } from '../hooks/useTheme';
 import { type UserRole } from '../hooks/useRole';
 import { languageOptions, resolveSupportedLanguage, rtlLanguages, type SupportedLanguage } from '../i18n';
-import { healthApi, sessionApi, workflowHubApi } from '../services/api';
+import { healthApi } from '../services/api';
 import { ThemeLogo } from './ThemeLogo';
-import { isSidebarPathAllowed } from '../utils/roleNavigation';
 import './Layout.css';
 
 interface LayoutProps {

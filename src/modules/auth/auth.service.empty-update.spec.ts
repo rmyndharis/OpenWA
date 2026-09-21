@@ -42,6 +42,7 @@ describe('AuthService update with an empty DTO', () => {
         isActive: true,
         allowedIps: null,
         allowedSessions: null,
+        allowedChats: null,
         expiresAt: null,
         usageCount: 0,
       }),

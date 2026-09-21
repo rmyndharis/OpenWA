@@ -52,6 +52,7 @@ describe('AuthController — API-key lifecycle audit logging', () => {
         role: 'viewer',
         allowedIps: null,
         allowedSessions: null,
+        allowedChats: null,
         expiresAt: null,
       }),
       update: jest.fn().mockResolvedValue({ ...createdKey, role: 'admin' }),

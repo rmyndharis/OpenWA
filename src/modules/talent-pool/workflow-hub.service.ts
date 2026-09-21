@@ -28,6 +28,7 @@ import {
   WorkflowIdentityContact,
   WorkflowInterviewPhase,
   WorkflowRecord,
+  WorkflowRecordIngestEvent,
   WorkflowRecordMenuAction,
   WorkflowRecordMenuConfig,
   WorkflowProximityStatus,
@@ -76,6 +77,7 @@ import {
   type ProximityDestination,
 } from './workflow-proximity';
 import { reconcileWorkflowRecordData } from './workflow-record-schema';
+import { isChatAllowedByScope } from '../../common/utils/chat-id';
 
 const EMPTY_SCHEDULE = { timezone: 'America/Sao_Paulo', weekdays: {}, exceptions: [] };
 const SKIPPED_VALUE = '__OPENWA_SKIPPED__';
@@ -104,6 +106,7 @@ export class WorkflowHubService {
   private readonly logger = createLogger('WorkflowHubService');
   private readonly phoneResolutionAttemptedAt = new Map<string, number>();
   private readonly proximityGeocodeCache = new Map<string, { latitude: number; longitude: number }>();
+  private readonly ingestQueues = new Map<string, Promise<void>>();
   private proximityRequestQueue: Promise<void> = Promise.resolve();
   private nextNominatimRequestAt = 0;
   private proximitySweepRunning = false;
@@ -1503,13 +1506,25 @@ export class WorkflowHubService {
       const entryRepo = manager.getRepository(WorkflowTalentPoolEntry);
       const eventRepo = manager.getRepository(WorkflowTalentPoolEvent);
       const entry = await entryRepo.findOneByOrFail({ id: entryId });
+      if (entry.version !== dto.expectedVersion)
+        throw new ConflictException('O cadastro foi alterado por outro operador. Atualize a lista e tente novamente.');
       if (entry.status === WorkflowTalentPoolStatus.CONVERTED)
         throw new ConflictException('Este cadastro já foi convertido em candidato.');
       const previousStatus = entry.status;
       if (dto.status) entry.status = dto.status;
       if (dto.owner !== undefined) entry.owner = dto.owner?.trim() || null;
       const changed = previousStatus !== entry.status || dto.owner !== undefined;
-      if (changed) await entryRepo.save(entry);
+      if (changed) {
+        const result = await entryRepo.update(
+          { id: entry.id, version: dto.expectedVersion },
+          { status: entry.status, owner: entry.owner, version: dto.expectedVersion + 1 },
+        );
+        if (result.affected !== 1)
+          throw new ConflictException(
+            'O cadastro foi alterado por outro operador. Atualize a lista e tente novamente.',
+          );
+        entry.version = dto.expectedVersion + 1;
+      }
       if (changed || dto.note?.trim())
         await eventRepo.save(
           eventRepo.create({
@@ -1571,6 +1586,10 @@ export class WorkflowHubService {
         relations: { appointment: { slot: true } },
       });
       if (!application) throw new NotFoundException('Candidatura não encontrada.');
+      if (application.version !== dto.expectedVersion)
+        throw new ConflictException(
+          'A candidatura foi alterada por outro operador. Atualize a lista e tente novamente.',
+        );
 
       const previousStatus = application.status;
       if (dto.status && dto.status !== previousStatus) {
@@ -1614,7 +1633,23 @@ export class WorkflowHubService {
         dto.owner !== undefined ||
         dto.rating !== undefined ||
         dto.nextActionAt !== undefined;
-      if (changed) await applicationRepo.save(application);
+      if (changed) {
+        const result = await applicationRepo.update(
+          { id: application.id, version: dto.expectedVersion },
+          {
+            status: application.status,
+            owner: application.owner,
+            rating: application.rating,
+            nextActionAt: application.nextActionAt,
+            version: dto.expectedVersion + 1,
+          },
+        );
+        if (result.affected !== 1)
+          throw new ConflictException(
+            'A candidatura foi alterada por outro operador. Atualize a lista e tente novamente.',
+          );
+        application.version = dto.expectedVersion + 1;
+      }
       if (changed || dto.note?.trim()) {
         await eventRepo.save(
           eventRepo.create({
@@ -1908,6 +1943,7 @@ export class WorkflowHubService {
     sessionId: string,
     dto: import('./dto/workflow-hub.dto').IngestExternalRecordDto,
     apiKeyId: string | null,
+    allowedChats: string[] | null = null,
   ): Promise<{ recordId: string; versionNumber: number; contactId: string }> {
     const department = await this.departments.findOne({ where: { sessionId, enabled: true } });
     if (!department) throw new NotFoundException('Departamento não encontrado para esta sessão');
@@ -1920,92 +1956,147 @@ export class WorkflowHubService {
       throw new NotFoundException('Instância publicada não encontrada ou sem versão ativa');
     }
 
-    const version = instance.currentVersion;
+    const definitionVersionId = instance.currentVersion.id;
     const contactId = dto.contactId.includes('@') ? dto.contactId : `${dto.contactId.replace(/\D/g, '')}@c.us`;
     const phone = contactId.split('@')[0].replace(/\D/g, '') || null;
-
-    return this.dataSource.transaction(async (em: EntityManager) => {
-      const contactRepo = em.getRepository(WorkflowIdentityContact);
-      const recordRepo = em.getRepository(WorkflowRecord);
-      const historyRepo = em.getRepository(WorkflowRecordVersion);
-
-      // Find or create identity via the contact table (WorkflowIdentity has no contactId column)
-      let contact = await contactRepo.findOne({ where: { departmentId: department.id, contactId } });
-      if (!contact) {
-        const identity = await em.getRepository(WorkflowIdentity).save({ departmentId: department.id, cpf: null });
-        contact = await contactRepo.save({
-          departmentId: department.id,
-          identityId: identity.id,
-          contactId,
-          phone,
-          verifiedAt: new Date(),
-        });
-      } else if (phone && !contact.phone) {
-        try {
-          await contactRepo.update(contact.id, { phone, verifiedAt: new Date() });
-          contact.phone = phone;
-        } catch (error) {
-          if (!this.isUniqueConstraintError(error)) throw error;
-        }
-      }
-
-      // Find or create record for this contact + instance
-      let record = await recordRepo.findOne({ where: { instanceId: instance.id, contactId } });
-      const nextVersion = (record?.currentVersion ?? 0) + 1;
-
-      const sanitizedData: Record<string, unknown> = {};
-      for (const field of version.fields) {
-        const key = this.answerKey(field);
-        if (key in dto.answers) sanitizedData[key] = dto.answers[key];
-      }
-
-      const validUntil = new Date();
-      validUntil.setMonth(validUntil.getMonth() + instance.validityMonths);
-
-      if (!record) {
-        record = recordRepo.create({
-          instanceId: instance.id,
-          identityId: contact.identityId,
-          contactId,
-          phone,
-          definitionVersionId: version.id,
-          status: WorkflowRecordStatus.VALID,
-          data: sanitizedData,
-          currentVersion: nextVersion,
-          validUntil,
-        });
-        await recordRepo.save(record);
-      } else {
-        record.data = sanitizedData;
-        record.definitionVersionId = version.id;
-        record.status = WorkflowRecordStatus.VALID;
-        record.currentVersion = nextVersion;
-        record.validUntil = validUntil;
-        record.identityId = contact.identityId;
-        await recordRepo.save(record);
-      }
-
-      await historyRepo.save(
-        historyRepo.create({
-          recordId: record.id,
-          versionNumber: nextVersion,
-          data: sanitizedData,
-          source: dto.source ?? 'PLUGIN',
-          actorId: apiKeyId,
+    if (!this.isChatAllowed(contactId, allowedChats, phone))
+      throw new NotFoundException('Contato não permitido para esta chave.');
+    const payloadHash = createHash('sha256')
+      .update(
+        this.stableJson({
+          definitionVersionId,
+          context: { instanceId: instance.id, contactId, source: dto.source ?? 'PLUGIN' },
+          answers: dto.answers,
         }),
-      );
+      )
+      .digest('hex');
 
-      this.logger.log('Registro externo ingerido', {
-        action: 'external_record_ingested',
-        sessionId,
-        instanceId: instance.id,
-        recordId: record.id,
-        versionNumber: nextVersion,
-        source: dto.source ?? 'plugin',
-      });
+    return this.runIngestSerialized(
+      [`event:${instance.id}:${dto.eventKey}`, `contact:${instance.id}:${contactId}`],
+      () =>
+        this.withIngestTransactionRetry(async em => {
+          await this.acquireIngestDatabaseLocks(em, instance.id, dto.eventKey, contactId);
+          const currentInstance = await em.getRepository(WorkflowInstance).findOne({
+            where: { id: instance.id, status: WorkflowInstanceStatus.PUBLISHED },
+            relations: { currentVersion: true },
+          });
+          if (!currentInstance?.currentVersion || currentInstance.currentVersion.id !== definitionVersionId)
+            throw new ConflictException('A versão publicada mudou; reenvie o evento com o contexto atualizado');
+          const version = currentInstance.currentVersion;
+          const eventRepo = em.getRepository(WorkflowRecordIngestEvent);
+          let ingestEvent = await eventRepo.findOneBy({ instanceId: instance.id, eventKey: dto.eventKey });
+          if (ingestEvent) {
+            if (ingestEvent.payloadHash !== payloadHash)
+              throw new ConflictException('A chave do evento já foi usada com outro conteúdo ou versão');
+            if (ingestEvent.recordId && ingestEvent.versionNumber)
+              return { recordId: ingestEvent.recordId, versionNumber: ingestEvent.versionNumber, contactId };
+            throw new ConflictException('O evento ainda está sendo processado');
+          }
+          try {
+            ingestEvent = await eventRepo.save(
+              eventRepo.create({
+                instanceId: instance.id,
+                eventKey: dto.eventKey,
+                payloadHash,
+                recordId: null,
+                versionNumber: null,
+                contactId,
+              }),
+            );
+          } catch (error) {
+            if (!this.isIngestEventConstraintError(error)) throw error;
+            const concurrent = await eventRepo.findOneBy({ instanceId: instance.id, eventKey: dto.eventKey });
+            if (concurrent?.payloadHash !== payloadHash)
+              throw new ConflictException('A chave do evento já foi usada com outro conteúdo ou versão');
+            if (concurrent?.recordId && concurrent.versionNumber)
+              return { recordId: concurrent.recordId, versionNumber: concurrent.versionNumber, contactId };
+            throw error;
+          }
 
-      return { recordId: record.id, versionNumber: nextVersion, contactId };
-    });
+          const contactRepo = em.getRepository(WorkflowIdentityContact);
+          const recordRepo = em.getRepository(WorkflowRecord);
+          const historyRepo = em.getRepository(WorkflowRecordVersion);
+          let contact = await contactRepo.findOne({ where: { departmentId: department.id, contactId } });
+          if (!contact) {
+            const identity = await em.getRepository(WorkflowIdentity).save({ departmentId: department.id, cpf: null });
+            contact = await contactRepo.save({
+              departmentId: department.id,
+              identityId: identity.id,
+              contactId,
+              phone,
+              verifiedAt: new Date(),
+            });
+          } else if (phone && !contact.phone) {
+            try {
+              await contactRepo.update(contact.id, { phone, verifiedAt: new Date() });
+              contact.phone = phone;
+            } catch (error) {
+              if (!this.isUniqueConstraintError(error)) throw error;
+            }
+          }
+
+          let record = await recordRepo.findOne({ where: { instanceId: instance.id, contactId } });
+          const nextVersion = (record?.currentVersion ?? 0) + 1;
+          let existingData: Record<string, unknown> = {};
+          if (record) {
+            const previousDefinition = record.definitionVersionId
+              ? await em.getRepository(WorkflowDefinitionVersion).findOneBy({ id: record.definitionVersionId })
+              : null;
+            existingData = reconcileWorkflowRecordData(
+              record.data,
+              previousDefinition?.fields ?? [],
+              version.fields,
+            ).data;
+          }
+          const sanitizedData = this.validateExternalRecordData(version, existingData, dto.answers);
+          const validUntil = new Date();
+          validUntil.setMonth(validUntil.getMonth() + currentInstance.validityMonths);
+          if (!record) {
+            record = await recordRepo.save(
+              recordRepo.create({
+                instanceId: instance.id,
+                identityId: contact.identityId,
+                contactId,
+                phone,
+                definitionVersionId,
+                status: WorkflowRecordStatus.VALID,
+                data: sanitizedData,
+                currentVersion: nextVersion,
+                validUntil,
+              }),
+            );
+          } else {
+            record.data = sanitizedData;
+            record.definitionVersionId = definitionVersionId;
+            record.status = WorkflowRecordStatus.VALID;
+            record.currentVersion = nextVersion;
+            record.validUntil = validUntil;
+            record.identityId = contact.identityId;
+            await recordRepo.save(record);
+          }
+          await historyRepo.save(
+            historyRepo.create({
+              recordId: record.id,
+              versionNumber: nextVersion,
+              data: sanitizedData,
+              source: dto.source ?? 'PLUGIN',
+              actorId: apiKeyId,
+            }),
+          );
+          ingestEvent.recordId = record.id;
+          ingestEvent.versionNumber = nextVersion;
+          await eventRepo.save(ingestEvent);
+          this.logger.log('Registro externo ingerido', {
+            action: 'external_record_ingested',
+            sessionId,
+            instanceId: instance.id,
+            recordId: record.id,
+            versionNumber: nextVersion,
+            source: dto.source ?? 'plugin',
+          });
+          return { recordId: record.id, versionNumber: nextVersion, contactId };
+        }),
+    );
   }
 
   async listRecords(
@@ -3220,9 +3311,140 @@ export class WorkflowHubService {
     return digits.length >= 10 && digits.length <= 13 ? digits : null;
   }
 
+  private stableJson(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(item => this.stableJson(item)).join(',')}]`;
+    if (value && typeof value === 'object') {
+      const object = value as Record<string, unknown>;
+      return `{${Object.keys(object)
+        .sort()
+        .map(key => `${JSON.stringify(key)}:${this.stableJson(object[key])}`)
+        .join(',')}}`;
+    }
+    return JSON.stringify(value) ?? 'null';
+  }
+
+  private validateExternalRecordData(
+    version: WorkflowDefinitionVersion,
+    existingData: Record<string, unknown>,
+    suppliedData: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const fieldsByKey = new Map<string, WorkflowFieldDefinition[]>();
+    for (const field of version.fields) {
+      const key = this.answerKey(field);
+      fieldsByKey.set(key, [...(fieldsByKey.get(key) ?? []), field]);
+    }
+    const unknown = Object.keys(suppliedData).filter(key => !fieldsByKey.has(key));
+    if (unknown.length) throw new BadRequestException(`Campo de cadastro desconhecido: ${unknown[0]}.`);
+
+    const merged = { ...existingData, ...suppliedData };
+    const reachable = this.reachableExternalFields(version, merged);
+    for (const key of Object.keys(suppliedData)) {
+      const applicable = (fieldsByKey.get(key) ?? []).some(field => reachable.has(field.id));
+      if (!applicable) throw new BadRequestException(`O campo “${key}” não pertence ao caminho visível do cadastro.`);
+    }
+
+    const result: Record<string, unknown> = {};
+    const validatedKeys = new Set<string>();
+    for (const field of version.fields) {
+      if (!reachable.has(field.id)) continue;
+      const key = this.answerKey(field);
+      if (validatedKeys.has(key)) continue;
+      validatedKeys.add(key);
+      const input = merged[key];
+      const empty = input === undefined || input === null || input === '';
+      if (empty && !field.required) continue;
+      const normalized = this.normalizeAdministrativeRecordValue(field, input, { ...merged, ...result });
+      if (normalized !== undefined) result[key] = normalized;
+    }
+    return result;
+  }
+
+  private reachableExternalFields(version: WorkflowDefinitionVersion, answers: Record<string, unknown>): Set<string> {
+    const graph = this.workflowGraph(version);
+    if (!graph)
+      return new Set(
+        version.fields.filter(field => this.isFieldVisible(field, answers, version.fields)).map(field => field.id),
+      );
+    const reachable = new Set<string>();
+    const visited = new Set<string>();
+    let node = graph.nodes.find(item => item.id === graph.startNodeId);
+    while (node && !visited.has(node.id)) {
+      visited.add(node.id);
+      if (node.type === 'question' && node.data.fieldId) {
+        const field = version.fields.find(item => item.id === node!.data.fieldId);
+        if (field && this.isFieldVisible(field, answers, version.fields)) reachable.add(field.id);
+      }
+      node = this.nextGraphNode(graph, node.id, answers, version.fields);
+    }
+    return reachable;
+  }
+
+  private async runIngestSerialized<T>(keys: string[], operation: () => Promise<T>): Promise<T> {
+    const orderedKeys = [...new Set(keys)].sort();
+    const predecessors = orderedKeys.map(key => this.ingestQueues.get(key) ?? Promise.resolve());
+    let release!: () => void;
+    const own = new Promise<void>(resolve => (release = resolve));
+    const queued = Promise.all(predecessors).then(() => own);
+    for (const key of orderedKeys) this.ingestQueues.set(key, queued);
+    await Promise.all(predecessors);
+    try {
+      return await operation();
+    } finally {
+      release();
+      for (const key of orderedKeys) if (this.ingestQueues.get(key) === queued) this.ingestQueues.delete(key);
+    }
+  }
+
+  private async acquireIngestDatabaseLocks(
+    manager: EntityManager,
+    instanceId: string,
+    eventKey: string,
+    contactId: string,
+  ): Promise<void> {
+    if (this.dataSource.options.type !== 'postgres') return;
+    for (const key of [`event:${instanceId}:${eventKey}`, `contact:${instanceId}:${contactId}`].sort())
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
+  }
+
+  private async withIngestTransactionRetry<T>(operation: (manager: EntityManager) => Promise<T>): Promise<T> {
+    const maxAttempts = 3;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.dataSource.transaction(operation);
+      } catch (error) {
+        if (attempt >= maxAttempts || !this.isRetryableIngestDatabaseError(error)) throw error;
+        await new Promise(resolve => setTimeout(resolve, attempt * 15));
+      }
+    }
+  }
+
+  private databaseErrorCode(error: unknown): string {
+    const candidate = error as { code?: unknown; driverError?: { code?: unknown } };
+    const code = candidate?.driverError?.code ?? candidate?.code;
+    return typeof code === 'string' || typeof code === 'number' ? `${code}`.toUpperCase() : '';
+  }
+
+  private isRetryableIngestDatabaseError(error: unknown): boolean {
+    const code = this.databaseErrorCode(error);
+    return code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED' || code === '40P01' || code === '40001';
+  }
+
+  private isIngestEventConstraintError(error: unknown): boolean {
+    if (!this.isUniqueConstraintError(error)) return false;
+    const value = String(error).toLowerCase();
+    const constraintValue =
+      (error as { constraint?: unknown; driverError?: { constraint?: unknown } })?.driverError?.constraint ??
+      (error as { constraint?: unknown })?.constraint;
+    const constraint = typeof constraintValue === 'string' ? constraintValue.toLowerCase() : '';
+    return (
+      constraint === 'uq_workflow_record_ingest_event_scope_key' ||
+      (value.includes('workflow_record_ingest_events') && value.includes('instanceid') && value.includes('eventkey'))
+    );
+  }
+
   private isUniqueConstraintError(error: unknown): boolean {
     const value = String(error).toLowerCase();
-    return value.includes('unique') || value.includes('duplicate');
+    return value.includes('unique') || value.includes('duplicate') || this.databaseErrorCode(error) === '23505';
   }
 
   async deleteRecord(
@@ -6085,15 +6307,7 @@ export class WorkflowHubService {
   }
 
   private isChatAllowed(chatId: string, allowedChats: string[] | null, phone?: string | null): boolean {
-    if (!allowedChats?.length) return true;
-    const variants = (value: string) => {
-      const normalized = value.trim().toLocaleLowerCase('pt-BR');
-      const bare = normalized.split('@')[0];
-      const digits = bare.replace(/\D/g, '');
-      return new Set([normalized, bare, ...(digits ? [digits, `+${digits}`] : [])]);
-    };
-    const candidateVariants = new Set([...variants(chatId), ...(phone ? variants(phone) : [])]);
-    return allowedChats.some(allowed => [...variants(allowed)].some(value => candidateVariants.has(value)));
+    return isChatAllowedByScope(chatId, allowedChats, phone);
   }
 
   private async requireInstance(sessionId: string, id: string): Promise<WorkflowInstance> {

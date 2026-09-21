@@ -203,6 +203,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       role: dto.role || ApiKeyRole.OPERATOR,
       allowedIps: dto.allowedIps || null,
       allowedSessions: normalizeScopeList(dto.allowedSessions),
+      allowedChats: normalizeScopeList(dto.allowedChats),
       expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
     });
 
@@ -249,6 +250,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       role: apiKey.role,
       allowedIps: apiKey.allowedIps,
       allowedSessions: apiKey.allowedSessions,
+      allowedChats: apiKey.allowedChats,
       expiresAt: apiKey.expiresAt,
     };
 
@@ -257,6 +259,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     if (dto.role) patch.role = dto.role;
     if (dto.allowedIps !== undefined) patch.allowedIps = dto.allowedIps;
     if (dto.allowedSessions !== undefined) patch.allowedSessions = normalizeScopeList(dto.allowedSessions);
+    if (dto.allowedChats !== undefined) patch.allowedChats = normalizeScopeList(dto.allowedChats);
     if (dto.expiresAt !== undefined) patch.expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
 
     let saved: ApiKey;
@@ -282,7 +285,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     // Normalize before comparing: a legacy row stored as '' reads back as [], which means the same
     // as NULL at every enforcement site, so treating them as different would evict live sockets for a
     // write that changed nothing.
-    const ordered = (v: string[] | null) => {
+    const ordered = (v: string[] | null | undefined) => {
       const normalized = normalizeScopeList(v);
       return normalized ? [...normalized].sort() : null;
     };
@@ -290,7 +293,8 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       saved.role !== before.role ||
       saved.expiresAt?.getTime() !== before.expiresAt?.getTime() ||
       JSON.stringify(ordered(saved.allowedIps)) !== JSON.stringify(ordered(before.allowedIps)) ||
-      JSON.stringify(ordered(saved.allowedSessions)) !== JSON.stringify(ordered(before.allowedSessions));
+      JSON.stringify(ordered(saved.allowedSessions)) !== JSON.stringify(ordered(before.allowedSessions)) ||
+      JSON.stringify(ordered(saved.allowedChats)) !== JSON.stringify(ordered(before.allowedChats));
     if (authzChanged) {
       this.evictActiveSockets(id, 'authorization_changed');
     }

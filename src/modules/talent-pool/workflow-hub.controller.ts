@@ -1,5 +1,12 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import {
+  ApiBadRequestResponse,
+  ApiBody,
+  ApiConflictResponse,
+  ApiForbiddenResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { CurrentApiKey, RequireRole, SessionScoped } from '../auth/decorators/auth.decorators';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import {
@@ -248,6 +255,9 @@ export class WorkflowHubController {
 
   @Patch('recruitment-applications/:applicationId')
   @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Update a recruitment application using optimistic concurrency control' })
+  @ApiBadRequestResponse({ description: 'Invalid body, limits, or missing expectedVersion' })
+  @ApiConflictResponse({ description: 'expectedVersion does not match the current application version' })
   updateRecruitmentApplication(
     @Param('sessionId') sessionId: string,
     @Param('applicationId') applicationId: string,
@@ -281,6 +291,9 @@ export class WorkflowHubController {
 
   @Patch('talent-pool/:entryId')
   @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Update a talent-pool entry using optimistic concurrency control' })
+  @ApiBadRequestResponse({ description: 'Invalid body, limits, or missing expectedVersion' })
+  @ApiConflictResponse({ description: 'expectedVersion does not match the current talent-pool entry version' })
   updateTalentPoolEntry(
     @Param('sessionId') sessionId: string,
     @Param('entryId') entryId: string,
@@ -302,12 +315,20 @@ export class WorkflowHubController {
 
   @Post('records/ingest')
   @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({
+    summary: 'Idempotently ingest an external workflow record',
+    description:
+      'contactId uses the same chat-id domain as API-key allowedChats, including individual JIDs and @g.us groups.',
+  })
+  @ApiBody({ type: IngestExternalRecordDto })
+  @ApiBadRequestResponse({ description: 'Invalid event, contact identifier, or workflow answers' })
+  @ApiConflictResponse({ description: 'Concurrent update or reused eventKey with a different payload' })
   ingestRecord(
     @Param('sessionId') sessionId: string,
     @Body() dto: IngestExternalRecordDto,
     @CurrentApiKey() key?: ApiKey,
   ) {
-    return this.service.ingestExternalRecord(sessionId, dto, key?.id ?? null);
+    return this.service.ingestExternalRecord(sessionId, dto, key?.id ?? null, key?.allowedChats ?? null);
   }
 
   @Get('records')
@@ -401,7 +422,10 @@ export class WorkflowHubController {
   }
 
   @Post('proximity/test')
-  @RequireRole(ApiKeyRole.OPERATOR)
+  @RequireRole(ApiKeyRole.ADMIN)
+  @ApiOperation({ summary: 'Test proximity providers without changing candidate data (ADMIN only)' })
+  @ApiBadRequestResponse({ description: 'Invalid address' })
+  @ApiForbiddenResponse({ description: 'ADMIN role required' })
   testProximity(@Param('sessionId') sessionId: string, @Body() dto: TestWorkflowProximityDto) {
     return this.service.testProximity(sessionId, dto.address);
   }

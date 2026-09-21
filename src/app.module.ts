@@ -46,6 +46,7 @@ import { AgentToolsModule } from './core/agent-tools/agent-tools.module';
 import { IntegrationModule } from './modules/integration/integration.module';
 import { SearchModule } from './modules/search/search.module';
 import { SqlitePermissionsBoot } from './database/sqlite-file-permissions';
+import { TalentPoolModule } from './modules/talent-pool/talent-pool.module';
 
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors
 const queueModules: Array<Type | DynamicModule> = [];
@@ -173,6 +174,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
             __dirname + '/modules/integration/**/*.entity{.ts,.js}',
             __dirname + '/modules/status-store/**/*.entity{.ts,.js}',
             __dirname + '/modules/automation/**/*.entity{.ts,.js}',
+            __dirname + '/modules/talent-pool/**/*.entity{.ts,.js}',
           ],
           migrations: [__dirname + '/database/migrations/*{.ts,.js}'],
           logging: configService.get<boolean>('dataDatabase.logging', false),
@@ -311,6 +313,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     StatusStoreModule, // Phase 3: inbound status/story TTL store (24h purge + media persistence)
     ChatMediaModule, // opt-in chat-media archive (retention purge + orphan sweep)
     AutomationModule, // single-message autoreply rules, evaluated on the inbound dispatch
+    TalentPoolModule, // Central de Fluxos and recruitment operations
     TakeoverModule, // adopts sessions whose holder's lease lapsed (crashed peer / recreated node)
     CatalogModule, // Phase 3: Catalog API (WhatsApp Business)
     PluginsApiModule, // Phase 5: Plugins API

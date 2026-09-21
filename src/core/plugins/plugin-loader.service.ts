@@ -215,6 +215,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
   }
 
   onModuleInit(): void {
+    if (process.env.OPENAPI_EXPORT === 'true') return;
     this.scanner.scanAtBoot();
   }
 
@@ -232,6 +233,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
    * and left in ERROR, and never holds up the gateway.
    */
   async onApplicationBootstrap(): Promise<void> {
+    if (process.env.OPENAPI_EXPORT === 'true') return;
     const restorable = this.getAllPlugins().filter(
       p => !p.builtIn && this.pluginStorage.getPluginEntry(p.manifest.id)?.enabledByOperator === true,
     );

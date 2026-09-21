@@ -1,11 +1,14 @@
+import { useTheme } from '../hooks/useTheme';
 import { darkThemeLogoUrl, lightThemeLogoUrl } from '../utils/themeAssets';
 import './ThemeLogo.css';
 
 export function ThemeLogo({ className = '', alt = 'OpenWA' }: { className?: string; alt?: string }) {
+  const { resolvedTheme } = useTheme();
   return (
-    <span className={`theme-logo ${className}`.trim()} role="img" aria-label={alt}>
-      <img className="theme-logo-image theme-logo-light" src={lightThemeLogoUrl} alt="" aria-hidden="true" />
-      <img className="theme-logo-image theme-logo-dark" src={darkThemeLogoUrl} alt="" aria-hidden="true" />
-    </span>
+    <img
+      className={`theme-logo theme-logo-image ${className}`.trim()}
+      src={resolvedTheme === 'dark' ? darkThemeLogoUrl : lightThemeLogoUrl}
+      alt={alt}
+    />
   );
 }

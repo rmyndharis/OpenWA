@@ -19,6 +19,7 @@ import { StatusStoreModule } from '../status-store/status-store.module';
 import { ChatMediaModule } from '../chat-media/chat-media.module';
 import { AutomationModule } from '../automation/automation.module';
 import { PLUGIN_SESSION_PORT } from '../../core/plugins/plugin-host-ports';
+import { TalentPoolModule } from '../talent-pool/talent-pool.module';
 
 @Module({
   // WebhookModule/StatusStoreModule/ChatMediaModule/AutomationModule do not import SessionModule
@@ -29,6 +30,7 @@ import { PLUGIN_SESSION_PORT } from '../../core/plugins/plugin-host-ports';
     StatusStoreModule,
     ChatMediaModule,
     AutomationModule,
+    TalentPoolModule,
   ],
   controllers: [SessionController],
   providers: [

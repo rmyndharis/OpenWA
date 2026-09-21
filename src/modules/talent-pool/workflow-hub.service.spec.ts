@@ -20,6 +20,7 @@ import {
   WorkflowPrivacyEvent,
   WorkflowProximityStatus,
   WorkflowRecord,
+  WorkflowRecordIngestEvent,
   WorkflowRecordMenuAction,
   WorkflowRecordStatus,
   WorkflowRecordVersion,
@@ -60,6 +61,7 @@ describe('WorkflowHubService', () => {
         WorkflowDefinitionVersion,
         WorkflowRun,
         WorkflowRecord,
+        WorkflowRecordIngestEvent,
         WorkflowRecordVersion,
         WorkflowConsent,
         WorkflowDeletionRequest,
@@ -1181,7 +1183,11 @@ describe('WorkflowHubService', () => {
     await service.updateTalentPoolEntry(
       sessionId,
       entry.id,
-      { status: WorkflowTalentPoolStatus.CONTACTED, note: 'Primeiro contato realizado.' },
+      {
+        status: WorkflowTalentPoolStatus.CONTACTED,
+        note: 'Primeiro contato realizado.',
+        expectedVersion: entry.version,
+      },
       'operator-1',
     );
 
@@ -1344,10 +1350,11 @@ describe('WorkflowHubService', () => {
     expect((await service.listRecruitmentApplications(sessionId))[0].status).toBe(
       WorkflowRecruitmentStatus.DOCUMENTATION,
     );
+    const documentation = (await service.listRecruitmentApplications(sessionId))[0];
     const hired = await service.updateRecruitmentApplication(
       sessionId,
       application.id,
-      { status: WorkflowRecruitmentStatus.HIRED },
+      { status: WorkflowRecruitmentStatus.HIRED, expectedVersion: documentation.version },
       'operator-1',
     );
     expect(hired.status).toBe(WorkflowRecruitmentStatus.HIRED);
@@ -1355,14 +1362,14 @@ describe('WorkflowHubService', () => {
       service.updateRecruitmentApplication(
         sessionId,
         application.id,
-        { status: WorkflowRecruitmentStatus.DOCUMENTATION },
+        { status: WorkflowRecruitmentStatus.DOCUMENTATION, expectedVersion: hired.version },
         'operator-1',
       ),
     ).rejects.toThrow('Esta mudança de etapa não é permitida');
     const withdrawn = await service.updateRecruitmentApplication(
       sessionId,
       application.id,
-      { status: WorkflowRecruitmentStatus.WITHDRAWN },
+      { status: WorkflowRecruitmentStatus.WITHDRAWN, expectedVersion: hired.version },
       'operator-1',
     );
     expect(withdrawn.status).toBe(WorkflowRecruitmentStatus.WITHDRAWN);
@@ -1375,6 +1382,75 @@ describe('WorkflowHubService', () => {
         }),
       ]),
     );
+  });
+
+  it('uses a conditional version update for talent-pool changes', async () => {
+    const flow = (await service.listInstances(sessionId))[0];
+    const record = await ds.getRepository(WorkflowRecord).save({
+      instanceId: flow.id,
+      contactId: 'talent-pool-version-check',
+      data: { nome: 'Pessoa disponível' },
+      validUntil: new Date(Date.now() + 86_400_000),
+    });
+    const entry = await ds.getRepository(WorkflowTalentPoolEntry).save({
+      instanceId: flow.id,
+      recordId: record.id,
+      contactId: record.contactId,
+      status: WorkflowTalentPoolStatus.AVAILABLE,
+      owner: null,
+    });
+    const updated = await service.updateTalentPoolEntry(
+      sessionId,
+      entry.id,
+      { status: WorkflowTalentPoolStatus.CONTACTED, expectedVersion: entry.version },
+      'operator-1',
+    );
+
+    expect(updated.version).toBe(entry.version + 1);
+    await expect(
+      service.updateTalentPoolEntry(
+        sessionId,
+        entry.id,
+        { status: WorkflowTalentPoolStatus.WAITING, expectedVersion: entry.version },
+        'operator-2',
+      ),
+    ).rejects.toThrow('alterado por outro operador');
+  });
+
+  it('uses a conditional version update for recruitment changes', async () => {
+    const flow = (await service.listInstances(sessionId))[0];
+    const record = await ds.getRepository(WorkflowRecord).save({
+      instanceId: flow.id,
+      contactId: 'recruitment-version-check',
+      data: { nome: 'Pessoa candidata' },
+      validUntil: new Date(Date.now() + 86_400_000),
+    });
+    const application = await ds.getRepository(WorkflowRecruitmentApplication).save({
+      instanceId: flow.id,
+      recordId: record.id,
+      contactId: record.contactId,
+      appointmentId: null,
+      status: WorkflowRecruitmentStatus.EVALUATION,
+      owner: null,
+      rating: null,
+      nextActionAt: null,
+    });
+    const updated = await service.updateRecruitmentApplication(
+      sessionId,
+      application.id,
+      { owner: 'Recrutamento', expectedVersion: application.version },
+      'operator-1',
+    );
+
+    expect(updated.version).toBe(application.version + 1);
+    await expect(
+      service.updateRecruitmentApplication(
+        sessionId,
+        application.id,
+        { owner: 'Outro responsável', expectedVersion: application.version },
+        'operator-2',
+      ),
+    ).rejects.toThrow('alterada por outro operador');
   });
 
   it('uses the customized scheduling message for the second and third interview phases', async () => {
@@ -2071,7 +2147,13 @@ describe('WorkflowHubService', () => {
     const evaluated = await service.updateRecruitmentApplication(
       sessionId,
       application.id,
-      { status: WorkflowRecruitmentStatus.EVALUATION, owner: 'Recrutamento', rating: 4, note: 'Compareceu.' },
+      {
+        status: WorkflowRecruitmentStatus.EVALUATION,
+        owner: 'Recrutamento',
+        rating: 4,
+        note: 'Compareceu.',
+        expectedVersion: application.version,
+      },
       'operator-1',
     );
 
@@ -2091,7 +2173,7 @@ describe('WorkflowHubService', () => {
       service.updateRecruitmentApplication(
         sessionId,
         application.id,
-        { status: WorkflowRecruitmentStatus.APPROVED },
+        { status: WorkflowRecruitmentStatus.APPROVED, expectedVersion: evaluated.version },
         'operator-1',
       ),
     ).rejects.toThrow('Escolha uma nova data');
@@ -2110,7 +2192,10 @@ describe('WorkflowHubService', () => {
       service.updateRecruitmentApplication(
         sessionId,
         application.id,
-        { status: WorkflowRecruitmentStatus.EVALUATION },
+        {
+          status: WorkflowRecruitmentStatus.EVALUATION,
+          expectedVersion: (await service.listRecruitmentApplications(sessionId))[0].version,
+        },
         'operator-1',
       ),
     ).rejects.toThrow('Esta mudança de etapa não é permitida');
@@ -2421,6 +2506,251 @@ describe('WorkflowHubService', () => {
     expect(resolveContactPhone).toHaveBeenCalledWith(record.contactId);
     expect(listed.phone).toBe('5531999999999');
     expect((await ds.getRepository(WorkflowRecord).findOneByOrFail({ id: record.id })).phone).toBe('5531999999999');
+  });
+
+  it('deduplicates an external event and serializes different events for the same contact', async () => {
+    const flow = (await service.listInstances(sessionId))[0];
+    const request = {
+      eventKey: 'source-event-1',
+      instanceId: flow.id,
+      contactId: '5511999990000',
+      answers: { nome: 'Ana' },
+      source: 'TEST',
+    };
+
+    const [first, replay] = await Promise.all([
+      service.ingestExternalRecord(sessionId, request, null),
+      service.ingestExternalRecord(sessionId, request, null),
+    ]);
+    expect(replay).toEqual(first);
+
+    const second = await service.ingestExternalRecord(
+      sessionId,
+      { ...request, eventKey: 'source-event-2', answers: { nome: 'Bia' } },
+      null,
+    );
+    expect(second.versionNumber).toBe(2);
+    expect(await ds.getRepository(WorkflowRecordVersion).count()).toBe(2);
+    expect(await ds.getRepository(WorkflowRecordIngestEvent).count()).toBe(2);
+  });
+
+  it('returns conflict when an event key is replayed with changed content', async () => {
+    const flow = (await service.listInstances(sessionId))[0];
+    const request = {
+      eventKey: 'source-event-conflict',
+      instanceId: flow.id,
+      contactId: '5511999990001',
+      answers: { nome: 'Ana' },
+    };
+    await service.ingestExternalRecord(sessionId, request, null);
+
+    await expect(
+      service.ingestExternalRecord(sessionId, { ...request, answers: { nome: 'Outra' } }, null),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('enforces allowedChats before external ingest with domain-sensitive chat IDs', async () => {
+    const flow = (await service.listInstances(sessionId))[0];
+    const request = {
+      eventKey: 'scoped-ingest',
+      instanceId: flow.id,
+      contactId: '5511999990002@c.us',
+      answers: { nome: 'Ana' },
+    };
+
+    await expect(
+      service.ingestExternalRecord(sessionId, request, 'scoped-key', ['5511999990002@lid']),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(await ds.getRepository(WorkflowRecordIngestEvent).count()).toBe(0);
+    expect(await ds.getRepository(WorkflowRecord).count({ where: { contactId: request.contactId } })).toBe(0);
+
+    await expect(
+      service.ingestExternalRecord(sessionId, request, 'scoped-key', ['5511999990002@c.us']),
+    ).resolves.toMatchObject({ contactId: request.contactId });
+  });
+
+  it('merges partial external answers with reconciled existing data', async () => {
+    const flow = (await service.listInstances(sessionId))[0];
+    await service.saveDraft(sessionId, flow.id, {
+      fields: [
+        {
+          id: 'nome',
+          answerKey: 'nome_completo',
+          label: 'Nome',
+          prompt: 'Nome?',
+          type: 'text',
+          required: true,
+          order: 1,
+        },
+        { id: 'email', label: 'E-mail', prompt: 'E-mail?', type: 'email', required: false, order: 2 },
+      ],
+    });
+    await service.publish(sessionId, flow.id);
+    const existing = await ds.getRepository(WorkflowRecord).save({
+      instanceId: flow.id,
+      contactId: '5511999990003@c.us',
+      definitionVersionId: (
+        await ds.getRepository(WorkflowDefinitionVersion).findOneByOrFail({ id: flow.currentVersionId! })
+      ).id,
+      data: { nome: 'Ana antiga' },
+      currentVersion: 1,
+      validUntil: new Date(Date.now() + 86_400_000),
+    });
+
+    await service.ingestExternalRecord(
+      sessionId,
+      {
+        eventKey: 'partial-merge',
+        instanceId: flow.id,
+        contactId: existing.contactId,
+        answers: { email: 'ana@example.com' },
+      },
+      null,
+    );
+
+    expect((await ds.getRepository(WorkflowRecord).findOneByOrFail({ id: existing.id })).data).toEqual({
+      nome_completo: 'Ana antiga',
+      email: 'ana@example.com',
+    });
+  });
+
+  it('validates required, type, options and CPF external answers', async () => {
+    const flow = (await service.listInstances(sessionId))[0];
+    await service.saveDraft(sessionId, flow.id, {
+      fields: [
+        { id: 'nome', label: 'Nome', prompt: 'Nome?', type: 'text', required: true, order: 1 },
+        { id: 'idade', label: 'Idade', prompt: 'Idade?', type: 'number', required: true, order: 2 },
+        {
+          id: 'area',
+          label: 'Área',
+          prompt: 'Área?',
+          type: 'select',
+          required: true,
+          order: 3,
+          options: ['Tecnologia', 'Operações'],
+        },
+        { id: 'cpf', label: 'CPF', prompt: 'CPF?', type: 'cpf', required: true, order: 4 },
+      ],
+    });
+    await service.publish(sessionId, flow.id);
+    const base = { instanceId: flow.id, contactId: '5511999990004' };
+    const expectBadRequest = async (eventKey: string, answers: Record<string, unknown>) =>
+      expect(service.ingestExternalRecord(sessionId, { ...base, eventKey, answers }, null)).rejects.toMatchObject({
+        status: 400,
+      });
+
+    await expectBadRequest('missing-required', { idade: 30, area: 'Tecnologia', cpf: '52998224725' });
+    await expectBadRequest('invalid-type', { nome: 'Ana', idade: 'trinta', area: 'Tecnologia', cpf: '52998224725' });
+    await expectBadRequest('invalid-option', { nome: 'Ana', idade: 30, area: 'Outra', cpf: '52998224725' });
+    await expectBadRequest('invalid-cpf', { nome: 'Ana', idade: 30, area: 'Tecnologia', cpf: '11111111111' });
+
+    await service.ingestExternalRecord(
+      sessionId,
+      {
+        ...base,
+        eventKey: 'valid-fields',
+        answers: { nome: 'Ana', idade: 30, area: 'Tecnologia', cpf: '529.982.247-25' },
+      },
+      null,
+    );
+    const record = await ds.getRepository(WorkflowRecord).findOneByOrFail({ contactId: `${base.contactId}@c.us` });
+    expect(record.status).toBe(WorkflowRecordStatus.VALID);
+    expect(record.data.cpf).toBe('52998224725');
+  });
+
+  it('accepts only supplied fields on the visible and reachable external path', async () => {
+    const flow = (await service.listInstances(sessionId))[0];
+    await service.saveDraft(sessionId, flow.id, {
+      fields: [
+        {
+          id: 'destino',
+          label: 'Destino',
+          prompt: 'Destino?',
+          type: 'select',
+          required: true,
+          order: 1,
+          options: ['Cadastro', 'Agenda'],
+        },
+        {
+          id: 'cargo',
+          label: 'Cargo',
+          prompt: 'Cargo?',
+          type: 'text',
+          required: true,
+          order: 2,
+          visibleWhen: { fieldId: 'destino', operator: 'equals', value: 'Cadastro' },
+        },
+        {
+          id: 'data',
+          label: 'Data',
+          prompt: 'Data?',
+          type: 'date',
+          required: true,
+          order: 3,
+          visibleWhen: { fieldId: 'destino', operator: 'equals', value: 'Agenda' },
+        },
+      ],
+    });
+    await service.publish(sessionId, flow.id);
+    const base = { instanceId: flow.id, contactId: '5511999990005' };
+
+    await expect(
+      service.ingestExternalRecord(
+        sessionId,
+        { ...base, eventKey: 'hidden-field', answers: { destino: 'Cadastro', cargo: 'Dev', data: '2026-09-20' } },
+        null,
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      service.ingestExternalRecord(
+        sessionId,
+        { ...base, eventKey: 'visible-path', answers: { destino: 'Cadastro', cargo: 'Dev' } },
+        null,
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('conflicts when an event is replayed after another definition version is published', async () => {
+    const flow = (await service.listInstances(sessionId))[0];
+    const request = {
+      eventKey: 'version-bound-event',
+      instanceId: flow.id,
+      contactId: '5511999990006',
+      answers: { nome: 'Ana' },
+    };
+    await service.ingestExternalRecord(sessionId, request, null);
+    await service.saveDraft(sessionId, flow.id, {
+      fields: [{ id: 'nome', label: 'Nome completo', prompt: 'Nome?', type: 'text', required: true, order: 1, min: 3 }],
+    });
+    await service.publish(sessionId, flow.id);
+
+    await expect(service.ingestExternalRecord(sessionId, request, null)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('conflicts when the same external event key names another contact', async () => {
+    const flow = (await service.listInstances(sessionId))[0];
+    const request = {
+      eventKey: 'contact-bound-event',
+      instanceId: flow.id,
+      contactId: '5511999990007',
+      answers: { nome: 'Ana' },
+    };
+    await service.ingestExternalRecord(sessionId, request, null);
+    await expect(
+      service.ingestExternalRecord(sessionId, { ...request, contactId: '5511999990008' }, null),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('serializes concurrent distinct events for the same external contact', async () => {
+    const flow = (await service.listInstances(sessionId))[0];
+    const base = { instanceId: flow.id, contactId: '5511999990009' };
+    const results = await Promise.all([
+      service.ingestExternalRecord(sessionId, { ...base, eventKey: 'parallel-a', answers: { nome: 'Ana' } }, null),
+      service.ingestExternalRecord(sessionId, { ...base, eventKey: 'parallel-b', answers: { nome: 'Bia' } }, null),
+    ]);
+
+    expect(results.map(result => result.versionNumber).sort()).toEqual([1, 2]);
+    expect(await ds.getRepository(WorkflowRecordVersion).count({ where: { recordId: results[0].recordId } })).toBe(2);
   });
 
   it('enforces chat scope for records, appointments and destructive actions', async () => {

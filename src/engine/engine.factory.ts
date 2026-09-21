@@ -39,6 +39,7 @@ export class EngineFactory implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
+    if (process.env.OPENAPI_EXPORT === 'true') return;
     // Register built-in engine plugins
     await this.registerBuiltInEngines();
   }

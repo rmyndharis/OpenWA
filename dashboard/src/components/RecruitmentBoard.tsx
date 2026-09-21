@@ -316,11 +316,14 @@ export function RecruitmentBoard({
 
   const update = async (
     application: WorkflowRecruitmentApplication,
-    patch: Parameters<typeof workflowHubApi.updateRecruitmentApplication>[2],
+    patch: Omit<Parameters<typeof workflowHubApi.updateRecruitmentApplication>[2], 'expectedVersion'>,
   ) => {
     setSaving(true);
     try {
-      const saved = await workflowHubApi.updateRecruitmentApplication(sessionId, application.id, patch);
+      const saved = await workflowHubApi.updateRecruitmentApplication(sessionId, application.id, {
+        ...patch,
+        expectedVersion: application.version,
+      });
       const [rows, updatedEvents] = await Promise.all([
         workflowHubApi.recruitmentApplications(sessionId),
         workflowHubApi.recruitmentEvents(sessionId, application.id),
@@ -444,6 +447,7 @@ export function RecruitmentBoard({
       const scheduledStatus: WorkflowRecruitmentStatus =
         phaseAdvance.phase === 'FASE_2_ENTREVISTA_FOCADA' ? 'APROVADO' : 'DOCUMENTACAO';
       await workflowHubApi.updateRecruitmentApplication(sessionId, phaseAdvance.application.id, {
+        expectedVersion: phaseAdvance.application.version,
         status: scheduledStatus,
       });
       const rows = await workflowHubApi.recruitmentApplications(sessionId);

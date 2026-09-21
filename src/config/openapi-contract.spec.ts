@@ -167,6 +167,61 @@ describe('openapi.json structural invariants', () => {
     expect(undeclared).toEqual([]);
   });
 
+  it('publishes workflow optimistic-lock bodies and their 400/409 responses', () => {
+    const doc = snapshot();
+    const operations = [
+      doc.paths['/api/sessions/{sessionId}/workflow-hub/recruitment-applications/{applicationId}']?.patch,
+      doc.paths['/api/sessions/{sessionId}/workflow-hub/talent-pool/{entryId}']?.patch,
+    ];
+
+    for (const operation of operations) {
+      expect(operation).toBeDefined();
+      const schema =
+        operation?.requestBody && 'content' in operation.requestBody
+          ? operation.requestBody.content['application/json']?.schema
+          : undefined;
+      expect(schema && '$ref' in schema ? schema.$ref : undefined).toMatch(
+        /\/(UpdateRecruitmentApplicationDto|UpdateTalentPoolEntryDto)$/,
+      );
+      expect(operation?.responses).toHaveProperty('400');
+      expect(operation?.responses).toHaveProperty('409');
+    }
+
+    const schemas = doc.components?.schemas as Record<string, { properties?: object; required?: string[] }>;
+    for (const name of ['UpdateRecruitmentApplicationDto', 'UpdateTalentPoolEntryDto']) {
+      expect(Object.keys(schemas[name]?.properties ?? {}).length).toBeGreaterThan(1);
+      expect(schemas[name]?.required).toContain('expectedVersion');
+    }
+  });
+
+  it('publishes the external record ingestion DTO and its conflict response', () => {
+    const doc = snapshot();
+    const operation = doc.paths['/api/sessions/{sessionId}/workflow-hub/records/ingest']?.post;
+
+    expect(operation).toBeDefined();
+    const schema =
+      operation?.requestBody && 'content' in operation.requestBody
+        ? operation.requestBody.content['application/json']?.schema
+        : undefined;
+    expect(schema && '$ref' in schema ? schema.$ref : undefined).toBe('#/components/schemas/IngestExternalRecordDto');
+    expect(operation?.responses).toHaveProperty('400');
+    expect(operation?.responses).toHaveProperty('409');
+
+    const ingestSchema = doc.components?.schemas?.IngestExternalRecordDto as
+      { properties?: object; required?: string[] } | undefined;
+    expect(Object.keys(ingestSchema?.properties ?? {})).toEqual(
+      expect.arrayContaining(['eventKey', 'instanceId', 'contactId', 'answers', 'source']),
+    );
+    expect(ingestSchema?.required).toEqual(expect.arrayContaining(['eventKey', 'instanceId', 'contactId', 'answers']));
+  });
+
+  it('documents proximity/test as forbidden to non-admin callers', () => {
+    const operation = snapshot().paths['/api/sessions/{sessionId}/workflow-hub/proximity/test']?.post;
+    expect(operation).toBeDefined();
+    expect(operation?.responses).toHaveProperty('403');
+    expect(operation?.summary).toContain('ADMIN');
+  });
+
   it('gives each route exactly one path key, whatever its parameters are named', () => {
     const doc = snapshot();
     // A path template variable is positional: `/x/{id}` and `/x/{sessionId}` are the same URL. Two

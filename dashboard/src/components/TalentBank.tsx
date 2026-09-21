@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useMemo, useState } from 'react';
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { BriefcaseBusiness, History, Search, UserRoundSearch } from 'lucide-react';
 import { useToast } from '../hooks/useToast';
 import {
@@ -73,12 +73,16 @@ export function TalentBank({ sessionId, canWrite, refreshRevision, onCandidateSe
   );
   const [historyEntry, setHistoryEntry] = useState<WorkflowTalentPoolEntry | null>(null);
   const [events, setEvents] = useState<WorkflowTalentPoolEvent[]>([]);
+  const requestRevision = useRef(0);
 
   const load = async (quiet = false) => {
     if (!sessionId) return;
+    const revision = ++requestRevision.current;
+    const requestedSessionId = sessionId;
     if (!quiet) setLoading(true);
     try {
       const rows = await workflowHubApi.talentPoolEntries(sessionId);
+      if (revision !== requestRevision.current || requestedSessionId !== sessionId) return;
       setEntries(rows);
       setDrafts(current => {
         const next = { ...current };
@@ -89,12 +93,18 @@ export function TalentBank({ sessionId, canWrite, refreshRevision, onCandidateSe
     } catch (error) {
       if (!quiet) toast.error(error instanceof Error ? error.message : 'Falha ao carregar o Banco de Talentos');
     } finally {
-      if (!quiet) setLoading(false);
+      if (!quiet && revision === requestRevision.current) setLoading(false);
     }
   };
   const loadCurrent = useEffectEvent((quiet = false) => load(quiet));
 
   useEffect(() => {
+    requestRevision.current += 1;
+    setEntries([]);
+    setDrafts({});
+    setSearch('');
+    setHistoryEntry(null);
+    setEvents([]);
     void loadCurrent();
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void loadCurrent(true);
@@ -137,6 +147,7 @@ export function TalentBank({ sessionId, canWrite, refreshRevision, onCandidateSe
     setSavingId(entry.id);
     try {
       const saved = await workflowHubApi.updateTalentPoolEntry(sessionId, entry.id, {
+        expectedVersion: entry.version,
         status: draft.status,
         owner: draft.owner || null,
         note: draft.note,
@@ -145,7 +156,13 @@ export function TalentBank({ sessionId, canWrite, refreshRevision, onCandidateSe
       setDrafts(current => ({ ...current, [entry.id]: { status: saved.status, owner: saved.owner ?? '', note: '' } }));
       toast.success('Acompanhamento do Banco de Talentos salvo.');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Não foi possível salvar o acompanhamento');
+      const status = (error as (Error & { status?: number }) | null)?.status;
+      if (status === 409) {
+        toast.error('Este cadastro foi alterado por outra pessoa. A lista foi atualizada; revise os dados e tente novamente.');
+        await load(true);
+      } else {
+        toast.error(error instanceof Error ? error.message : 'Não foi possível salvar o acompanhamento');
+      }
     } finally {
       setSavingId(null);
     }
@@ -173,7 +190,12 @@ export function TalentBank({ sessionId, canWrite, refreshRevision, onCandidateSe
       <div className="talent-bank-filters">
         <label className="talent-search">
           <Search size={17} />
-          <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Pesquisar em todo o cadastro" />
+          <input
+            aria-label="Pesquisar no Banco de Talentos"
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            placeholder="Pesquisar em todo o cadastro"
+          />
         </label>
         <select value={status} onChange={event => setStatus(event.target.value)} aria-label="Filtrar por status">
           <option value="all">Todos os status</option>

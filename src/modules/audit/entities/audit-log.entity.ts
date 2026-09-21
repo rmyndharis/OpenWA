@@ -9,6 +9,18 @@ export enum AuditAction {
   API_KEY_DELETED = 'api_key_deleted',
   API_KEY_AUTH_FAILED = 'api_key_auth_failed',
 
+  // Central de Fluxos / banco de talentos
+  TALENT_SETTINGS_UPDATED = 'talent_settings_updated',
+  TALENT_CANDIDATE_CREATED = 'talent_candidate_created',
+  TALENT_CANDIDATE_UPDATED = 'talent_candidate_updated',
+  TALENT_REGISTRATION_EXPIRED = 'talent_registration_expired',
+  TALENT_UPDATE_EXPIRED = 'talent_update_expired',
+  TALENT_TICKET_CREATED = 'talent_ticket_created',
+  TALENT_TICKET_CLOSED = 'talent_ticket_closed',
+  TALENT_CHAT_CLOSED = 'talent_chat_closed',
+  WORKFLOW_OUTBOX_RETRIED = 'workflow_outbox_retried',
+  WORKFLOW_OUTBOX_CANCELLED = 'workflow_outbox_cancelled',
+
   // Rate-limit enforcement (sampled: at most one row per subject+kind per minute — see
   // EventsGateway — so enforcing a limit never becomes an audit-write flood of its own).
   RATE_LIMIT_EXCEEDED = 'rate_limit_exceeded',

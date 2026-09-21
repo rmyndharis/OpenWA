@@ -1670,7 +1670,8 @@ export interface WorkflowRecord {
 }
 export interface WorkflowProximityTestResult {
   success: boolean;
-  errorCode?: 'ADDRESS_NOT_FOUND' | 'GEOCODING_UNAVAILABLE' | 'ROUTING_UNAVAILABLE' | 'NO_GEOREFERENCED_LOCATIONS';
+  errorCode?:
+    'FORBIDDEN' | 'ADDRESS_NOT_FOUND' | 'GEOCODING_UNAVAILABLE' | 'ROUTING_UNAVAILABLE' | 'NO_GEOREFERENCED_LOCATIONS';
   message?: string;
   origin?: { address: string; latitude: number; longitude: number };
   normalizedAddress?: {
@@ -1749,7 +1750,8 @@ export interface WorkflowRecruitmentEvent {
   metadata: Record<string, unknown>;
   createdAt: string;
 }
-export type WorkflowTalentPoolStatus = 'DISPONIVEL' | 'CONTATADO' | 'AGUARDANDO_RESPOSTA' | 'INDISPONIVEL' | 'CONVERTIDO_EM_CANDIDATO';
+export type WorkflowTalentPoolStatus =
+  'DISPONIVEL' | 'CONTATADO' | 'AGUARDANDO_RESPOSTA' | 'INDISPONIVEL' | 'CONVERTIDO_EM_CANDIDATO';
 export interface WorkflowTalentPoolEntry {
   id: string;
   instanceId: string;
@@ -2034,6 +2036,7 @@ export const workflowHubApi = {
     sessionId: string,
     applicationId: string,
     body: {
+      expectedVersion: number;
       status?: WorkflowRecruitmentStatus;
       owner?: string | null;
       rating?: number | null;
@@ -2054,7 +2057,7 @@ export const workflowHubApi = {
   updateTalentPoolEntry: (
     sessionId: string,
     entryId: string,
-    body: { status?: WorkflowTalentPoolStatus; owner?: string | null; note?: string },
+    body: { expectedVersion: number; status?: WorkflowTalentPoolStatus; owner?: string | null; note?: string },
   ) =>
     request<WorkflowTalentPoolEntry>(`/sessions/${sessionId}/workflow-hub/talent-pool/${entryId}`, {
       method: 'PATCH',

@@ -5,7 +5,13 @@ export class AddWorkflowHumanServiceEnabled1789000000000 implements MigrationInt
   name = 'AddWorkflowHumanServiceEnabled1789000000000';
 
   async up(queryRunner: QueryRunner): Promise<void> {
+    const tableExists = await queryRunner.hasTable('workflow_departments');
+    if (!tableExists) {
+      throw new Error('Migration 178900 requires workflow_departments table to exist');
+    }
+
     if (await queryRunner.hasColumn('workflow_departments', 'humanServiceEnabled')) return;
+
     const postgres = queryRunner.connection.options.type === 'postgres';
     await queryRunner.addColumn(
       'workflow_departments',

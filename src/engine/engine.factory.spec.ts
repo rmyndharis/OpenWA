@@ -9,6 +9,13 @@ import { LidMappingStoreService } from './identity/lid-mapping-store.service';
 import { ChatStateStoreService } from './adapters/baileys-chat-state-store.service';
 
 describe('EngineFactory', () => {
+  const originalOpenApiExport = process.env.OPENAPI_EXPORT;
+
+  afterEach(() => {
+    if (originalOpenApiExport === undefined) delete process.env.OPENAPI_EXPORT;
+    else process.env.OPENAPI_EXPORT = originalOpenApiExport;
+  });
+
   const engineBlob = {
     type: 'whatsapp-web.js',
     sessionDataPath: '/var/data/sessions',
@@ -110,6 +117,29 @@ describe('EngineFactory', () => {
       expect.anything(),
       engineBlob,
     );
+  });
+
+  it('does not register or enable engines during an OpenAPI export boot', async () => {
+    process.env.OPENAPI_EXPORT = 'true';
+    const pluginLoader = {
+      registerBuiltInPlugin: jest.fn(),
+      enablePlugin: jest.fn(),
+      getPlugin: jest.fn(),
+    } as unknown as PluginLoaderService;
+    const factory = new EngineFactory(
+      buildConfigService(),
+      pluginLoader,
+      buildMessageStore(),
+      buildLidStore(),
+      buildChatStateStore(),
+    );
+
+    await factory.onModuleInit();
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(pluginLoader.registerBuiltInPlugin).not.toHaveBeenCalled();
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(pluginLoader.enablePlugin).not.toHaveBeenCalled();
   });
 
   it('registers the built-in baileys engine alongside whatsapp-web.js with the opaque config blob', async () => {

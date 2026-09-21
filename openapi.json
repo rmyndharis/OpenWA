@@ -17,6 +17,16 @@
                 "api_key_revoked",
                 "api_key_deleted",
                 "api_key_auth_failed",
+                "talent_settings_updated",
+                "talent_candidate_created",
+                "talent_candidate_updated",
+                "talent_registration_expired",
+                "talent_update_expired",
+                "talent_ticket_created",
+                "talent_ticket_closed",
+                "talent_chat_closed",
+                "workflow_outbox_retried",
+                "workflow_outbox_cancelled",
                 "rate_limit_exceeded",
                 "queue_board_mutated",
                 "session_created",
@@ -34,16 +44,6 @@
                 "session_rebind_rejected",
                 "message_sent",
                 "message_failed",
-                "talent_settings_updated",
-                "talent_candidate_created",
-                "talent_candidate_updated",
-                "talent_registration_expired",
-                "talent_update_expired",
-                "talent_ticket_created",
-                "talent_ticket_closed",
-                "talent_chat_closed",
-                "workflow_outbox_retried",
-                "workflow_outbox_cancelled",
                 "send_pacing_blocked",
                 "send_breaker_tripped",
                 "webhook_created",
@@ -3282,10 +3282,14 @@
           }
         },
         "responses": {
-          "200": {
-            "description": ""
+          "400": {
+            "description": "Invalid body, limits, or missing expectedVersion"
+          },
+          "409": {
+            "description": "expectedVersion does not match the current application version"
           }
         },
+        "summary": "Update a recruitment application using optimistic concurrency control",
         "tags": [
           "workflow-hub"
         ]
@@ -3377,10 +3381,14 @@
           }
         },
         "responses": {
-          "200": {
-            "description": ""
+          "400": {
+            "description": "Invalid body, limits, or missing expectedVersion"
+          },
+          "409": {
+            "description": "expectedVersion does not match the current talent-pool entry version"
           }
         },
+        "summary": "Update a talent-pool entry using optimistic concurrency control",
         "tags": [
           "workflow-hub"
         ]
@@ -3412,6 +3420,44 @@
             "description": ""
           }
         },
+        "tags": [
+          "workflow-hub"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/workflow-hub/records/ingest": {
+      "post": {
+        "description": "contactId uses the same chat-id domain as API-key allowedChats, including individual JIDs and @g.us groups.",
+        "operationId": "WorkflowHubController_ingestRecord",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestExternalRecordDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "description": "Invalid event, contact identifier, or workflow answers"
+          },
+          "409": {
+            "description": "Concurrent update or reused eventKey with a different payload"
+          }
+        },
+        "summary": "Idempotently ingest an external workflow record",
         "tags": [
           "workflow-hub"
         ]
@@ -3698,10 +3744,14 @@
           }
         },
         "responses": {
-          "201": {
-            "description": ""
+          "400": {
+            "description": "Invalid address"
+          },
+          "403": {
+            "description": "ADMIN role required"
           }
         },
+        "summary": "Test proximity providers without changing candidate data (ADMIN only)",
         "tags": [
           "workflow-hub"
         ]
@@ -11652,10 +11702,15 @@
             }
           },
           "allowedChats": {
-            "description": "Chat/contact ids this key may view in workflow records and tickets.",
+            "description": "WhatsApp chat identifier: digits-only phone, an individual @c.us/@s.whatsapp.net/@lid JID, or a group @g.us JID. The same domain is accepted by workflow records/ingest. Empty means every chat.",
+            "example": [
+              "5511999990000@c.us",
+              "120363012345678901@g.us"
+            ],
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^(?:\\d{10,15}|\\d{10,15}@(c\\.us|s\\.whatsapp\\.net|lid)|[0-9-]+@g\\.us)$"
             }
           },
           "expiresAt": {
@@ -11837,9 +11892,15 @@
             }
           },
           "allowedChats": {
+            "description": "WhatsApp chat identifier: digits-only phone, an individual @c.us/@s.whatsapp.net/@lid JID, or a group @g.us JID. The same domain is accepted by workflow records/ingest.",
+            "example": [
+              "5511999990000@c.us",
+              "120363012345678901@g.us"
+            ],
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^(?:\\d{10,15}|\\d{10,15}@(c\\.us|s\\.whatsapp\\.net|lid)|[0-9-]+@g\\.us)$"
             }
           },
           "expiresAt": {
@@ -13206,23 +13267,160 @@
       },
       "UpdateRecruitmentApplicationDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "expectedVersion": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Current version used for optimistic concurrency control."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ENTREVISTA_MARCADA",
+              "EM_AVALIACAO",
+              "APROVADO",
+              "EM_AVALIACAO_FASE_2",
+              "DOCUMENTACAO",
+              "CONTRATADO",
+              "REPROVADO",
+              "NAO_COMPARECEU",
+              "DESISTIU",
+              "ENTREVISTA_CANCELADA"
+            ]
+          },
+          "owner": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 120
+          },
+          "rating": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 5
+          },
+          "nextActionAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "expectedVersion"
+        ]
       },
       "UpdateTalentPoolEntryDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "expectedVersion": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Current version used for optimistic concurrency control."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DISPONIVEL",
+              "CONTATADO",
+              "AGUARDANDO_RESPOSTA",
+              "INDISPONIVEL",
+              "CONVERTIDO_EM_CANDIDATO"
+            ]
+          },
+          "owner": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 120
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "expectedVersion"
+        ]
+      },
+      "IngestExternalRecordDto": {
+        "type": "object",
+        "properties": {
+          "eventKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "instanceId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "contactId": {
+            "type": "string",
+            "description": "WhatsApp chat identifier: digits-only phone, an individual @c.us/@s.whatsapp.net/@lid JID, or a group @g.us JID. This is the same domain validated by API-key allowedChats.",
+            "pattern": "^(?:\\d{10,15}|\\d{10,15}@(c\\.us|s\\.whatsapp\\.net|lid)|[0-9-]+@g\\.us)$",
+            "example": "120363012345678901@g.us"
+          },
+          "answers": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "eventKey",
+          "instanceId",
+          "contactId",
+          "answers"
+        ]
       },
       "UpdateWorkflowRecordDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "expectedVersion": {
+            "type": "number",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "data",
+          "expectedVersion"
+        ]
       },
       "UpdateWorkflowIdentityContactDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "phone": {
+            "type": "string",
+            "pattern": "^\\d{10,15}$",
+            "example": "5511999990000"
+          }
+        },
+        "required": [
+          "phone"
+        ]
       },
       "TestWorkflowProximityDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "address": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "address"
+        ]
       },
       "MessageListItemDto": {
         "type": "object",
@@ -15857,126 +16055,6 @@
             "items": {
               "type": "object"
             }
-          },
-          "talentSettings": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "talentCandidates": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "talentFlows": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "talentTickets": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "talentTicketEvents": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "talentProcessedMessages": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowDepartments": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowInstances": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowVersions": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowRuns": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowRecords": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowRecordVersions": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowConsents": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowDeletionRequests": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowAppointmentSlots": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowAppointments": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowOutbox": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowTickets": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowTicketEvents": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          },
-          "workflowPrivacyEvents": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
           }
         },
         "required": [
@@ -15995,27 +16073,7 @@
           "webhookOutboxEvents",
           "integrationDeliveryFailures",
           "statusUpdates",
-          "automationRules",
-          "talentSettings",
-          "talentCandidates",
-          "talentFlows",
-          "talentTickets",
-          "talentTicketEvents",
-          "talentProcessedMessages",
-          "workflowDepartments",
-          "workflowInstances",
-          "workflowVersions",
-          "workflowRuns",
-          "workflowRecords",
-          "workflowRecordVersions",
-          "workflowConsents",
-          "workflowDeletionRequests",
-          "workflowAppointmentSlots",
-          "workflowAppointments",
-          "workflowOutbox",
-          "workflowTickets",
-          "workflowTicketEvents",
-          "workflowPrivacyEvents"
+          "automationRules"
         ]
       },
       "TableCountsDto": {
@@ -16084,86 +16142,6 @@
           "automationRules": {
             "type": "number",
             "example": 2
-          },
-          "talentSettings": {
-            "type": "number",
-            "example": 1
-          },
-          "talentCandidates": {
-            "type": "number",
-            "example": 10
-          },
-          "talentFlows": {
-            "type": "number",
-            "example": 1
-          },
-          "talentTickets": {
-            "type": "number",
-            "example": 3
-          },
-          "talentTicketEvents": {
-            "type": "number",
-            "example": 12
-          },
-          "talentProcessedMessages": {
-            "type": "number",
-            "example": 100
-          },
-          "workflowDepartments": {
-            "type": "number",
-            "example": 1
-          },
-          "workflowInstances": {
-            "type": "number",
-            "example": 3
-          },
-          "workflowVersions": {
-            "type": "number",
-            "example": 4
-          },
-          "workflowRuns": {
-            "type": "number",
-            "example": 2
-          },
-          "workflowRecords": {
-            "type": "number",
-            "example": 25
-          },
-          "workflowRecordVersions": {
-            "type": "number",
-            "example": 30
-          },
-          "workflowConsents": {
-            "type": "number",
-            "example": 30
-          },
-          "workflowDeletionRequests": {
-            "type": "number",
-            "example": 0
-          },
-          "workflowAppointmentSlots": {
-            "type": "number",
-            "example": 10
-          },
-          "workflowAppointments": {
-            "type": "number",
-            "example": 4
-          },
-          "workflowOutbox": {
-            "type": "number",
-            "example": 0
-          },
-          "workflowTickets": {
-            "type": "number",
-            "example": 0
-          },
-          "workflowTicketEvents": {
-            "type": "number",
-            "example": 0
-          },
-          "workflowPrivacyEvents": {
-            "type": "number",
-            "example": 0
           }
         },
         "required": [
@@ -16182,27 +16160,7 @@
           "webhookOutboxEvents",
           "integrationDeliveryFailures",
           "statusUpdates",
-          "automationRules",
-          "talentSettings",
-          "talentCandidates",
-          "talentFlows",
-          "talentTickets",
-          "talentTicketEvents",
-          "talentProcessedMessages",
-          "workflowDepartments",
-          "workflowInstances",
-          "workflowVersions",
-          "workflowRuns",
-          "workflowRecords",
-          "workflowRecordVersions",
-          "workflowConsents",
-          "workflowDeletionRequests",
-          "workflowAppointmentSlots",
-          "workflowAppointments",
-          "workflowOutbox",
-          "workflowTickets",
-          "workflowTicketEvents",
-          "workflowPrivacyEvents"
+          "automationRules"
         ]
       },
       "OmittedInlineMediaDto": {
@@ -16327,66 +16285,6 @@
                 "type": "array"
               },
               "automationRules": {
-                "type": "array"
-              },
-              "talentSettings": {
-                "type": "array"
-              },
-              "talentCandidates": {
-                "type": "array"
-              },
-              "talentFlows": {
-                "type": "array"
-              },
-              "talentTickets": {
-                "type": "array"
-              },
-              "talentTicketEvents": {
-                "type": "array"
-              },
-              "talentProcessedMessages": {
-                "type": "array"
-              },
-              "workflowDepartments": {
-                "type": "array"
-              },
-              "workflowInstances": {
-                "type": "array"
-              },
-              "workflowVersions": {
-                "type": "array"
-              },
-              "workflowRuns": {
-                "type": "array"
-              },
-              "workflowRecords": {
-                "type": "array"
-              },
-              "workflowRecordVersions": {
-                "type": "array"
-              },
-              "workflowConsents": {
-                "type": "array"
-              },
-              "workflowDeletionRequests": {
-                "type": "array"
-              },
-              "workflowAppointmentSlots": {
-                "type": "array"
-              },
-              "workflowAppointments": {
-                "type": "array"
-              },
-              "workflowOutbox": {
-                "type": "array"
-              },
-              "workflowTickets": {
-                "type": "array"
-              },
-              "workflowTicketEvents": {
-                "type": "array"
-              },
-              "workflowPrivacyEvents": {
                 "type": "array"
               }
             }

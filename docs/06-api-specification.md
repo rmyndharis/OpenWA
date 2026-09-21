@@ -6910,7 +6910,9 @@ Lists the post-interview selection processes visible to the operator's chat scop
 
 #### PATCH /api/sessions/:sessionId/workflow-hub/recruitment-applications/:applicationId
 
-Updates an application's stage, owner, rating, notes, or next action. Appointment synchronization does not overwrite a stage that an operator has already advanced manually.
+Updates an application's stage, owner, rating, notes, or next action. The body must include the latest `expectedVersion`; a stale version returns `409 Conflict` instead of overwriting another operator's change. Appointment synchronization does not overwrite a stage that an operator has already advanced manually.
+
+**Errors:** `400` invalid input or transition · `401` · `403` · `404` application not found · `409` stale `expectedVersion` or missing interview phase
 
 #### GET /api/sessions/:sessionId/workflow-hub/recruitment-applications/:applicationId/events
 
@@ -6919,6 +6921,12 @@ Returns the persisted process history, including appointment imports, cancellati
 #### GET /api/sessions/:sessionId/workflow-hub/records
 
 Lists records visible to the API key's chat scope. Query `search` matches contact and saved answers.
+
+#### POST /api/sessions/:sessionId/workflow-hub/records/ingest
+
+Ingests an external record into a published flow using an idempotent event key. The operation validates the submitted answers against the published definition and the API key's chat scope. Reusing the event key with a different payload or losing an optimistic-concurrency race returns `409 Conflict`.
+
+**Errors:** `400` invalid input or unpublished flow · `401` · `403` · `404` flow not found · `409` idempotency or concurrency conflict
 
 #### PATCH /api/sessions/:sessionId/workflow-hub/records/:recordId
 
@@ -6935,6 +6943,32 @@ Tests a structured address against the department's georeferenced interview loca
 #### DELETE /api/sessions/:sessionId/workflow-hub/records/:recordId
 
 Deletes a record and related personal data, then queues the configured administrative-deletion notice. Requires `admin`.
+
+#### PATCH /api/sessions/:sessionId/workflow-hub/records/:recordId/contacts/:contactLinkId
+
+Updates an existing linked contact.
+
+#### DELETE /api/sessions/:sessionId/workflow-hub/records/:recordId/contacts/:contactLinkId
+
+Removes a linked contact from the record.
+
+#### POST /api/sessions/:sessionId/workflow-hub/records/:recordId/contacts/:contactLinkId/primary
+
+Makes the selected linked contact the record's primary contact.
+
+#### GET /api/sessions/:sessionId/workflow-hub/talent-pool
+
+Lists Banco de Talentos entries visible to the operator's chat scope.
+
+#### PATCH /api/sessions/:sessionId/workflow-hub/talent-pool/:entryId
+
+Updates an entry's operational status, owner, or note. The body must include the latest `expectedVersion`; a stale version returns `409 Conflict` instead of overwriting another operator's change.
+
+**Errors:** `400` invalid status or input · `401` · `403` · `404` entry not found · `409` stale `expectedVersion` or already converted entry
+
+#### GET /api/sessions/:sessionId/workflow-hub/talent-pool/:entryId/events
+
+Returns the persisted operational history for a Banco de Talentos entry.
 
 #### GET /api/sessions/:sessionId/workflow-hub/tickets
 

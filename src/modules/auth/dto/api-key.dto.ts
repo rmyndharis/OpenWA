@@ -7,9 +7,15 @@ import {
   IsDateString,
   MinLength,
   MaxLength,
+  Matches,
   Validate,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  ALLOWED_CHAT_ID_DESCRIPTION,
+  ALLOWED_CHAT_ID_PATTERN,
+  ALLOWED_CHAT_ID_PATTERN_SOURCE,
+} from '../../../common/utils/chat-id';
 import { ApiKeyRole } from '../entities/api-key.entity';
 import { IsIpOrCidrConstraint } from './is-ip-or-cidr.validator';
 import { IsSessionIdConstraint } from './is-session-id.validator';
@@ -58,6 +64,18 @@ export class CreateApiKeyDto {
   allowedSessions?: string[];
 
   @ApiPropertyOptional({
+    description: `${ALLOWED_CHAT_ID_DESCRIPTION} The same domain is accepted by workflow records/ingest. Empty means every chat.`,
+    example: ['5511999990000@c.us', '120363012345678901@g.us'],
+    pattern: ALLOWED_CHAT_ID_PATTERN_SOURCE,
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @Matches(ALLOWED_CHAT_ID_PATTERN, { each: true })
+  @ArrayUnique()
+  allowedChats?: string[];
+
+  @ApiPropertyOptional({
     description: 'Expiration date (ISO 8601)',
     example: '2027-12-31T23:59:59Z',
   })
@@ -86,6 +104,9 @@ export class ApiKeyResponseDto {
 
   @ApiPropertyOptional()
   allowedSessions?: string[];
+
+  @ApiPropertyOptional()
+  allowedChats?: string[];
 
   @ApiProperty()
   isActive!: boolean;
@@ -147,6 +168,18 @@ export class UpdateApiKeyDto {
   @ArrayUnique()
   @Validate(IsSessionIdConstraint, { each: true })
   allowedSessions?: string[];
+
+  @ApiPropertyOptional({
+    description: `${ALLOWED_CHAT_ID_DESCRIPTION} The same domain is accepted by workflow records/ingest.`,
+    example: ['5511999990000@c.us', '120363012345678901@g.us'],
+    pattern: ALLOWED_CHAT_ID_PATTERN_SOURCE,
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @Matches(ALLOWED_CHAT_ID_PATTERN, { each: true })
+  @ArrayUnique()
+  allowedChats?: string[];
 
   @ApiPropertyOptional()
   @IsOptional()

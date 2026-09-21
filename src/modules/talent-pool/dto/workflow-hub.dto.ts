@@ -1,11 +1,18 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
+import {
+  ALLOWED_CHAT_ID_DESCRIPTION,
+  ALLOWED_CHAT_ID_PATTERN,
+  ALLOWED_CHAT_ID_PATTERN_SOURCE,
+} from '../../../common/utils/chat-id';
 import {
   IsArray,
   ArrayMinSize,
   ArrayMaxSize,
   IsBoolean,
   IsDateString,
+  IsDefined,
   IsEnum,
   IsInt,
   IsObject,
@@ -193,43 +200,133 @@ export class UpdateAppointmentStatusDto {
 }
 
 export class UpdateRecruitmentApplicationDto {
-  @IsOptional() @IsEnum(WorkflowRecruitmentStatus) status?: WorkflowRecruitmentStatus;
-  @IsOptional() @IsString() @MaxLength(120) owner?: string | null;
-  @IsOptional() @IsInt() @Min(0) @Max(5) rating?: number | null;
-  @IsOptional() @IsDateString() nextActionAt?: string | null;
-  @IsOptional() @IsString() @MaxLength(2000) note?: string;
+  @ApiProperty({ minimum: 1, description: 'Current version used for optimistic concurrency control.' })
+  @IsDefined()
+  @IsInt()
+  @Min(1)
+  expectedVersion!: number;
+
+  @ApiPropertyOptional({ enum: WorkflowRecruitmentStatus })
+  @IsOptional()
+  @IsEnum(WorkflowRecruitmentStatus)
+  status?: WorkflowRecruitmentStatus;
+
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 120 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  owner?: string | null;
+
+  @ApiPropertyOptional({ type: Number, nullable: true, minimum: 0, maximum: 5 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(5)
+  rating?: number | null;
+
+  @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
+  @IsOptional()
+  @IsDateString()
+  nextActionAt?: string | null;
+
+  @ApiPropertyOptional({ maxLength: 2000 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  note?: string;
 }
 
 export class UpdateTalentPoolEntryDto {
-  @IsOptional() @IsEnum(WorkflowTalentPoolStatus) status?: WorkflowTalentPoolStatus;
-  @IsOptional() @IsString() @MaxLength(120) owner?: string | null;
-  @IsOptional() @IsString() @MaxLength(2000) note?: string;
+  @ApiProperty({ minimum: 1, description: 'Current version used for optimistic concurrency control.' })
+  @IsDefined()
+  @IsInt()
+  @Min(1)
+  expectedVersion!: number;
+
+  @ApiPropertyOptional({ enum: WorkflowTalentPoolStatus })
+  @IsOptional()
+  @IsEnum(WorkflowTalentPoolStatus)
+  status?: WorkflowTalentPoolStatus;
+
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 120 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  owner?: string | null;
+
+  @ApiPropertyOptional({ maxLength: 2000 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  note?: string;
 }
 
 export class UpdateWorkflowRecordDto {
   /** Partial answers keyed by the current flow field answerKey. */
-  @IsObject() data!: Record<string, unknown>;
+  @ApiProperty({ type: 'object', additionalProperties: true })
+  @IsObject()
+  data!: Record<string, unknown>;
+
   /** Prevents one operator from silently overwriting a correction made by another. */
-  @IsInt() @Min(1) expectedVersion!: number;
+  @ApiProperty({ minimum: 1 })
+  @IsInt()
+  @Min(1)
+  expectedVersion!: number;
 }
 
 export class UpdateWorkflowIdentityContactDto {
   /** Canonical international phone number, digits only. */
-  @IsString() @Matches(/^\d{10,15}$/) phone!: string;
+  @ApiProperty({ pattern: '^\\d{10,15}$', example: '5511999990000' })
+  @IsString()
+  @Matches(/^\d{10,15}$/)
+  phone!: string;
 }
 
 export class TestWorkflowProximityDto {
   /** Complete Brazilian address used only for this diagnostic request. */
-  @IsString() @MinLength(5) @MaxLength(500) address!: string;
+  @ApiProperty({ minLength: 5, maxLength: 500 })
+  @IsString()
+  @MinLength(5)
+  @MaxLength(500)
+  address!: string;
 }
 
 export class IngestExternalRecordDto {
+  /** Stable source event identifier, scoped to the workflow instance. */
+  @ApiProperty({ minLength: 1, maxLength: 200 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  eventKey!: string;
+
   /** Published workflow instance ID. */
-  @IsString() @MinLength(1) instanceId!: string;
-  /** Contact WhatsApp chatId (e.g. 5511999990000@c.us) or digits-only phone number. */
-  @IsString() @MinLength(5) @MaxLength(40) contactId!: string;
+  @ApiProperty({ minLength: 1 })
+  @IsString()
+  @MinLength(1)
+  instanceId!: string;
+
+  /**
+   * Contact WhatsApp identifier. Individual ids and groups are accepted deliberately so this
+   * contract matches ApiKey.allowedChats; engine-specific individual ids are normalized internally.
+   */
+  @ApiProperty({
+    description: `${ALLOWED_CHAT_ID_DESCRIPTION} This is the same domain validated by API-key allowedChats.`,
+    pattern: ALLOWED_CHAT_ID_PATTERN_SOURCE,
+    example: '120363012345678901@g.us',
+  })
+  @IsString()
+  @Matches(ALLOWED_CHAT_ID_PATTERN)
+  contactId!: string;
+
   /** Answers keyed by field answerKey. Values: string, number, or string[] for multiselect. */
-  @IsObject() answers!: Record<string, unknown>;
+  @ApiProperty({ type: 'object', additionalProperties: true })
+  @IsObject()
+  answers!: Record<string, unknown>;
+
   /** Optional human-readable channel tag stored in audit. */
-  @IsOptional() @IsString() @MaxLength(40) source?: string;
+  @ApiPropertyOptional({ maxLength: 40 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  source?: string;
 }

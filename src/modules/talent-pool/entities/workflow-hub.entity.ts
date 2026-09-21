@@ -500,6 +500,26 @@ export class WorkflowRecordVersion {
   @CreateDateColumn() createdAt!: Date;
 }
 
+@Entity('workflow_record_ingest_events')
+@Index('UQ_workflow_record_ingest_event_scope_key', ['instanceId', 'eventKey'], { unique: true })
+export class WorkflowRecordIngestEvent {
+  @PrimaryGeneratedColumn('uuid') id!: string;
+  @Column() instanceId!: string;
+  @ManyToOne(() => WorkflowInstance, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'instanceId', foreignKeyConstraintName: 'FK_workflow_record_ingest_event_instance' })
+  instance!: WorkflowInstance;
+  @Column({ length: 200 }) eventKey!: string;
+  @Column({ length: 64 }) payloadHash!: string;
+  @Column({ type: 'varchar', nullable: true }) recordId!: string | null;
+  @ManyToOne(() => WorkflowRecord, { onDelete: 'CASCADE', nullable: true })
+  @JoinColumn({ name: 'recordId', foreignKeyConstraintName: 'FK_workflow_record_ingest_event_record' })
+  record!: WorkflowRecord | null;
+  @Column({ type: 'int', nullable: true }) versionNumber!: number | null;
+  @Column() contactId!: string;
+  @CreateDateColumn() createdAt!: Date;
+  @UpdateDateColumn() updatedAt!: Date;
+}
+
 @Entity('workflow_consents')
 @Index('IDX_workflow_consent_record_created', ['recordId', 'createdAt'])
 export class WorkflowConsent {
