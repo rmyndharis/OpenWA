@@ -26,7 +26,7 @@ import {
 import { useTheme } from '../hooks/useTheme';
 import { type UserRole } from '../hooks/useRole';
 import { languageOptions, resolveSupportedLanguage, rtlLanguages, type SupportedLanguage } from '../i18n';
-import { healthApi, infraApi } from '../services/api';
+import { healthApi } from '../services/api';
 import { ThemeLogo } from './ThemeLogo';
 import './Layout.css';
 
