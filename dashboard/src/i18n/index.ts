@@ -17,6 +17,7 @@ export const supportedLanguages = [
   'it',
   'pt-BR',
   'ko',
+  'hi',
 ] as const;
 export type SupportedLanguage = (typeof supportedLanguages)[number];
 
@@ -36,6 +37,7 @@ export const languageOptions: Array<{ value: SupportedLanguage; label: string; c
   { value: 'it', label: 'Italiano', compactLabel: 'IT' },
   { value: 'pt-BR', label: 'Português (Brasil)', compactLabel: 'PT' },
   { value: 'ko', label: '한국어', compactLabel: 'KO' },
+  { value: 'hi', label: 'हिन्दी', compactLabel: 'HI' },
 ];
 
 export function resolveSupportedLanguage(lang?: string): SupportedLanguage {
