@@ -8,6 +8,7 @@ import {
   ContactCard,
   EngineEventCallbacks,
   IncomingMessage,
+  InteractiveCtaInput,
   LocationInput,
   MediaInput,
   MessageResult,
@@ -509,6 +510,35 @@ export class BaileysMessaging {
 
     const result = await this.sendContent(chatId, resolved.payload.content as AnyMessageContent, { quoted });
     return { ...result, body: resolved.payload.text };
+  }
+
+  /**
+   * Send an interactive Call-To-Action (CTA) URL message via Baileys native flow.
+   */
+  async sendInteractiveCtaMessage(chatId: string, input: InteractiveCtaInput): Promise<MessageResult> {
+    this.host.ensureReady();
+    const quoted = await this.quoteOption(input.quotedMessageId);
+    const content = {
+      interactiveMessage: {
+        body: { text: input.body },
+        footer: input.footer ? { text: input.footer } : undefined,
+        header: input.header ? { title: input.header, hasMediaAttachment: false } : undefined,
+        nativeFlowMessage: {
+          buttons: [
+            {
+              name: 'cta_url',
+              buttonParamsJson: JSON.stringify({
+                display_text: input.displayText,
+                url: input.url,
+                ...(input.merchantUrl ? { merchant_url: input.merchantUrl } : {}),
+              }),
+            },
+          ],
+        },
+      },
+    } as unknown as AnyMessageContent;
+
+    return this.sendContent(chatId, content, quoted);
   }
 
   async forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult> {

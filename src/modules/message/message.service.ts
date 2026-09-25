@@ -3,7 +3,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { MessageProjector } from '../session/message-projector.service';
-import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
+import {
+  SendTextMessageDto,
+  SendMediaMessageDto,
+  SendAudioMessageDto,
+  SendInteractiveCtaDto,
+  MessageResponseDto,
+} from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
 import { ReplyMessageDto, ClickButtonDto } from './dto/message-actions.dto';
 import { Message, MessageDirection } from './entities/message.entity';
@@ -230,6 +236,10 @@ export class MessageService implements PluginMessagePort {
 
   sendSticker(sessionId: string, dto: SendMediaMessageDto): Promise<MessageResponseDto> {
     return this.sender.sendSticker(sessionId, dto);
+  }
+
+  sendInteractiveCta(sessionId: string, dto: SendInteractiveCtaDto): Promise<MessageResponseDto> {
+    return this.sender.sendInteractiveCta(sessionId, dto);
   }
 
   // Typed by the DTO rather than an inline literal, like every sibling forwarder here. The literal

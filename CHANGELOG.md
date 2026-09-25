@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `POST /api/sessions/:sessionId/messages/send-interactive-cta` sends an interactive Call-to-Action (CTA) URL button message via Baileys native-flow messages (`cta_url` native flow button) with optional header, footer, merchant URL, and quoted message support (whatsapp-web.js returns `501`) ([#1701](https://github.com/rmyndharis/OpenWA/issues/1701)).
+
 ## [0.23.6] - 2026-09-23
 
 ### Added

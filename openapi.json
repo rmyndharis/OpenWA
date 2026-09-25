@@ -2986,6 +2986,68 @@
         ]
       }
     },
+    "/api/sessions/{sessionId}/messages/send-interactive-cta": {
+      "post": {
+        "operationId": "MessageController_sendInteractiveCta",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendInteractiveCtaDto"
+              },
+              "examples": {
+                "minimal": {
+                  "summary": "Send an interactive CTA URL message",
+                  "value": {
+                    "chatId": "628123456789@c.us",
+                    "body": "Check out our latest product launch and exclusive discounts!",
+                    "displayText": "Visit Website",
+                    "url": "https://example.com/promo"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Interactive CTA message sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request was rejected before anything was sent. Among the causes: the recipient could not be addressed — WhatsApp reports no deliverable id for that `chatId`, which is how it says the number is not on WhatsApp — as well as body validation and a session that is not active."
+          },
+          "409": {
+            "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and for those few seconds the answer is a `409` naming the reload; retry shortly."
+          },
+          "501": {
+            "description": "The active engine cannot serve this operation. It is part of the engine contract, but the engine currently running has no implementation for it."
+          }
+        },
+        "summary": "Send an interactive CTA URL message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
     "/api/sessions/{sessionId}/messages/reply": {
       "post": {
         "operationId": "MessageController_reply",
@@ -12065,6 +12127,57 @@
           "chatId",
           "name",
           "options"
+        ]
+      },
+      "SendInteractiveCtaDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "WhatsApp chat ID (phone@c.us for individual, groupId@g.us for groups)",
+            "example": "628123456789@c.us"
+          },
+          "body": {
+            "type": "string",
+            "description": "Message body text",
+            "example": "Check out our latest product launch and exclusive discounts!"
+          },
+          "displayText": {
+            "type": "string",
+            "description": "Text label shown on the CTA button",
+            "example": "Visit Website"
+          },
+          "url": {
+            "type": "string",
+            "description": "Destination URL opened when recipient taps the CTA button",
+            "example": "https://example.com/promo"
+          },
+          "merchantUrl": {
+            "type": "string",
+            "description": "Optional merchant / redirect URL",
+            "example": "https://example.com/store"
+          },
+          "header": {
+            "type": "string",
+            "description": "Optional header text displayed above the body",
+            "example": "Special Announcement"
+          },
+          "footer": {
+            "type": "string",
+            "description": "Optional footer text displayed below the body",
+            "example": "Terms and conditions apply"
+          },
+          "quotedMessageId": {
+            "type": "string",
+            "description": "Quoted message ID to reply to",
+            "example": "false_628123456789@c.us_3EB01234567890ABCDEF"
+          }
+        },
+        "required": [
+          "chatId",
+          "body",
+          "displayText",
+          "url"
         ]
       },
       "ReplyMessageDto": {

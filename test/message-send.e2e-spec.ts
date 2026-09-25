@@ -49,6 +49,7 @@ describe('Message send endpoints (e2e)', () => {
     sendLocationMessage: jest.fn().mockResolvedValue(result),
     sendContactMessage: jest.fn().mockResolvedValue(result),
     sendPollMessage: jest.fn().mockResolvedValue(result),
+    sendInteractiveCtaMessage: jest.fn().mockResolvedValue(result),
     replyToMessage: jest.fn().mockResolvedValue(result),
     forwardMessage: jest.fn().mockResolvedValue(result),
   };
@@ -221,6 +222,30 @@ describe('Message send endpoints (e2e)', () => {
     expect(engine.sendPollMessage).toHaveBeenCalledWith(
       '628123@c.us',
       expect.objectContaining({ name: 'Lunch?', options: ['Nasi padang', 'Bakso'], allowMultipleAnswers: false }),
+    );
+  });
+
+  it('send-interactive-cta returns 201 and forwards the CTA payload', async () => {
+    await post('send-interactive-cta', {
+      chatId: '628123@c.us',
+      body: 'Check out our products!',
+      displayText: 'Shop Now',
+      url: 'https://example.com/shop',
+      merchantUrl: 'https://example.com/merchant',
+      header: 'Special Deals',
+      footer: 'OpenWA',
+    }).expect(201);
+
+    expect(engine.sendInteractiveCtaMessage).toHaveBeenCalledWith(
+      '628123@c.us',
+      expect.objectContaining({
+        body: 'Check out our products!',
+        displayText: 'Shop Now',
+        url: 'https://example.com/shop',
+        merchantUrl: 'https://example.com/merchant',
+        header: 'Special Deals',
+        footer: 'OpenWA',
+      }),
     );
   });
 

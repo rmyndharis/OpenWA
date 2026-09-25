@@ -7,6 +7,7 @@ import {
   SendTextMessageDto,
   SendMediaMessageDto,
   SendAudioMessageDto,
+  SendInteractiveCtaDto,
   MessageResponseDto,
   SEND_TEXT_BODY_EXAMPLES,
   SEND_IMAGE_BODY_EXAMPLES,
@@ -17,6 +18,7 @@ import {
   SEND_LOCATION_BODY_EXAMPLES,
   SEND_CONTACT_BODY_EXAMPLES,
   SEND_POLL_BODY_EXAMPLES,
+  SEND_INTERACTIVE_CTA_BODY_EXAMPLES,
 } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
 import {
@@ -359,6 +361,27 @@ export class MessageController {
   @ApiResponse({ status: 400, description: RECIPIENT_UNREACHABLE_400 })
   async sendPoll(@Param('sessionId') sessionId: string, @Body() dto: SendPollDto): Promise<MessageResponseDto> {
     return this.messageService.sendPoll(sessionId, dto);
+  }
+
+  @ChatScoped('fenced')
+  @Post('send-interactive-cta')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Send an interactive CTA URL message' })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiBody({ type: SendInteractiveCtaDto, examples: SEND_INTERACTIVE_CTA_BODY_EXAMPLES })
+  @ApiResponse({
+    status: 201,
+    description: 'Interactive CTA message sent',
+    type: MessageResponseDto,
+  })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 400, description: RECIPIENT_UNREACHABLE_400 })
+  @ApiResponse({ status: 501, description: ENGINE_NOT_SUPPORTED_501 })
+  async sendInteractiveCta(
+    @Param('sessionId') sessionId: string,
+    @Body() dto: SendInteractiveCtaDto,
+  ): Promise<MessageResponseDto> {
+    return this.messageService.sendInteractiveCta(sessionId, dto);
   }
 
   @ChatQuotedAllowed()

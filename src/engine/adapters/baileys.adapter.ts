@@ -29,6 +29,7 @@ import {
   GroupMembershipRequest,
   IncomingMessage,
   IWhatsAppEngine,
+  InteractiveCtaInput,
   Label,
   CustomLinkPreview,
   GroupJoinInfo,
@@ -348,6 +349,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   async clickButton(chatId: string, messageId: string, buttonId: string, text?: string): Promise<MessageResult> {
     return this.messaging.clickButton(chatId, messageId, buttonId, text);
+  }
+
+  async sendInteractiveCtaMessage(chatId: string, input: InteractiveCtaInput): Promise<MessageResult> {
+    return this.messaging.sendInteractiveCtaMessage(chatId, input);
   }
 
   async editMessage(chatId: string, messageId: string, body: string, mentions?: string[]): Promise<MessageResult> {

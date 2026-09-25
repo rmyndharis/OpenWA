@@ -737,6 +737,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     throw new EngineNotSupportedError('clickButton');
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async sendInteractiveCtaMessage(): Promise<MessageResult> {
+    throw new EngineNotSupportedError('sendInteractiveCtaMessage');
+  }
+
   unpinMessage(chatId: string, messageId: string): Promise<void> {
     return this.messaging.unpinMessage(chatId, messageId);
   }

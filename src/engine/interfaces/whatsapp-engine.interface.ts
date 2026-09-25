@@ -65,6 +65,15 @@ export interface MediaInput extends Quotable {
   ptt?: boolean;
 }
 
+export interface InteractiveCtaInput extends Quotable {
+  body: string;
+  displayText: string;
+  url: string;
+  merchantUrl?: string;
+  header?: string;
+  footer?: string;
+}
+
 /**
  * Engine-neutral message type. Each adapter maps its library's native message-type tokens
  * (e.g. whatsapp-web.js `chat`/`ptt`/`vcard`) to this vocabulary at the adapter boundary,
@@ -1013,6 +1022,12 @@ export interface MessagingCapability {
   replyToMessage(chatId: string, quotedMsgId: string, text: string, mentions?: string[]): Promise<MessageResult>;
 
   forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult>;
+
+  /**
+   * Send an interactive CTA URL message. Supported on Baileys via native flow;
+   * unsupported on whatsapp-web.js (throws EngineNotSupportedError).
+   */
+  sendInteractiveCtaMessage(chatId: string, input: InteractiveCtaInput): Promise<MessageResult>;
 }
 
 /**

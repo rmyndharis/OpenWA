@@ -4,7 +4,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, QueryDeepPartialEntity } from 'typeorm';
 import { SessionService } from '../session/session.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
-import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
+import {
+  SendTextMessageDto,
+  SendMediaMessageDto,
+  SendAudioMessageDto,
+  SendInteractiveCtaDto,
+  MessageResponseDto,
+} from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
 import { assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
 import { MediaInput, IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -146,6 +152,35 @@ export class MessageSendService {
     // SessionEngineLifecycle (engine `message_create`, handled by MessageProjector) with a
     // consistent IncomingMessage payload for ALL sends (text, media,
     // and phone-composed), so it is intentionally not fired here to avoid a double dispatch.
+    return this.persistSentState(message, result);
+  }
+
+  async sendInteractiveCta(sessionId: string, dto: SendInteractiveCtaDto): Promise<MessageResponseDto> {
+    const finalDto = await this.applySendingGate(sessionId, 'interactive-cta', dto);
+    const engine = this.getEngine(sessionId);
+
+    const message = await this.saveOutgoingMessage(sessionId, {
+      chatId: finalDto.chatId,
+      body: finalDto.body,
+      type: 'text',
+      quotedMessageId: finalDto.quotedMessageId,
+    });
+
+    let result: MessageResult;
+    try {
+      result = await engine.sendInteractiveCtaMessage(finalDto.chatId, {
+        body: finalDto.body,
+        displayText: finalDto.displayText,
+        url: finalDto.url,
+        merchantUrl: finalDto.merchantUrl,
+        header: finalDto.header,
+        footer: finalDto.footer,
+        quotedMessageId: finalDto.quotedMessageId,
+      });
+    } catch (error) {
+      return this.failSend(sessionId, 'interactive-cta', message, finalDto, error);
+    }
+
     return this.persistSentState(message, result);
   }
 

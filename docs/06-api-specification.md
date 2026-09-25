@@ -1665,10 +1665,10 @@ rejected with `400` rather than guessing which half was meant.
 
 ##### Quoted sends
 
-Nine `send-*` routes accept an optional `quotedMessageId`: `send-text` above, and `send-image`,
-`send-video`, `send-audio`, `send-document`, `send-sticker`, `send-location`, `send-contact` and
-`send-poll` below. Supplying it turns that send into a reply, so a reply can carry media, a location,
-a contact card or a poll — not only text. `POST .../messages/reply` remains the text shorthand, and
+Ten `send-*` routes accept an optional `quotedMessageId`: `send-text` above, and `send-image`,
+`send-video`, `send-audio`, `send-document`, `send-sticker`, `send-location`, `send-contact`,
+`send-poll` and `send-interactive-cta` below. Supplying it turns that send into a reply, so a reply can carry media, a location,
+a contact card, a poll or a CTA button — not only text. `POST .../messages/reply` remains the text shorthand, and
 like the send routes it accepts `mentions`.
 
 `send-template`, `send-bulk` and `send-product` do NOT accept the field, and reject it
@@ -2003,6 +2003,48 @@ Send a native WhatsApp poll.
 ```
 
 **Errors:** `400` validation failure (option count/length) / session not active / unknown body field · `401` missing/invalid API key · `403` key role below OPERATOR · `500` engine error · `409` conflict or engine not ready (retryable)
+
+#### POST /api/sessions/:sessionId/messages/send-interactive-cta
+
+Send an interactive Call-to-Action (CTA) URL button message.
+
+**Auth:** API key (OPERATOR) · **Engines:** Baileys only; whatsapp-web.js returns `501`
+
+**Path parameters**
+
+| Name      | Type   | Description |
+| --------- | ------ | ----------- |
+| sessionId | string | Session ID  |
+
+**Request body** — `SendInteractiveCtaDto`
+
+| Field           | Type   | Required | Constraints               | Description                                                  |
+| --------------- | ------ | -------- | ------------------------- | ------------------------------------------------------------ |
+| chatId          | string | Yes      | non-empty                 | Target chat                                                  |
+| body            | string | Yes      | non-empty, max 1024 chars | Main message text                                            |
+| displayText     | string | Yes      | non-empty, max 256 chars  | CTA button label text                                        |
+| url             | string | Yes      | valid URL, max 2048 chars | Target URL opened when button is clicked                     |
+| merchantUrl     | string | No       | valid URL, max 2048 chars | Optional merchant URL                                        |
+| header          | string | No       | max 1024 chars            | Header text                                                  |
+| footer          | string | No       | max 1024 chars            | Footer text                                                  |
+| quotedMessageId | string | No       | non-empty                 | Quote an earlier message — see [Quoted sends](#quoted-sends) |
+
+```json
+{
+  "chatId": "628123456789@c.us",
+  "body": "Check out our latest product launch and exclusive discounts!",
+  "displayText": "Visit Website",
+  "url": "https://example.com/promo"
+}
+```
+
+**Response** `201`
+
+```json
+{ "messageId": "true_628123456789@c.us_3EB0ABCD", "timestamp": 1719312000 }
+```
+
+**Errors:** `400` validation failure / session not active / unknown body field · `401` missing/invalid API key · `403` key role below OPERATOR · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine
 
 #### POST /api/sessions/:sessionId/messages/reply
 
