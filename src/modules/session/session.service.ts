@@ -769,14 +769,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   /**
-   * Publish the account's own global presence (appear online/offline). Connection-scoped: the
-   * setting resets on reconnect, so callers re-issue it after `session.status` reports one.
+   * Publish the account's own global presence (appear online/offline). A successful call is
+   * remembered for the life of this engine and re-applied once each time the connection opens.
+   * The intent is stored only after the publish succeeds, so a refusal (Baileys has no push name
+   * yet) does not get replayed as if the caller had been told it applied.
    */
   async setOnlinePresence(id: string, available: boolean): Promise<void> {
     await this.findOne(id);
     const engine = this.requireEngine(id);
-
-    return engine.setOnlinePresence(available);
+    await engine.setOnlinePresence(available);
+    this.presence.setOwnIntent(id, available);
   }
 
   /**
@@ -863,7 +865,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
-    await engine.sendChatState(chatId, state);
+    return engine.sendChatState(chatId, state);
   }
 
   /**

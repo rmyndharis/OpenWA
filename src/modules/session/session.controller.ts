@@ -601,9 +601,14 @@ export class SessionController {
       'Publishes whether this account appears online. WhatsApp routes notifications away from the ' +
       'phone while a linked device announces itself online, so a headless bot that never goes ' +
       "offline suppresses the phone's own alerts — set `available: false` to hand them back.\n\n" +
-      'The setting belongs to the connection: it does not survive a restart or reconnect and must ' +
-      'be re-issued after `session.status` reports one (on Baileys the socket re-announces itself ' +
-      'per its connect-time behaviour). Supported on both engines.',
+      'A successful call is remembered for the life of the running engine and re-applied once each ' +
+      'time that connection opens, including a Baileys transient reconnect: the socket broadcasts ' +
+      '`available` on connect (`markOnlineOnConnect`), which would otherwise wipe `available: false`. ' +
+      'The preference is dropped when the engine is replaced (stop, or a restart that builds a new ' +
+      'engine) and must be re-issued after that. Typing, recording, and outbound sends do not ' +
+      'publish global presence.\n\n' +
+      'On Baileys the call fails with 409 when the account push name has not synced yet — the ' +
+      'library would otherwise accept the request and send nothing. Supported on both engines.',
   })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({ status: 200, description: 'Presence published', type: SessionActionResponseDto })

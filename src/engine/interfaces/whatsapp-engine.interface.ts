@@ -1492,9 +1492,16 @@ export interface PresenceCapability {
    * A linked device that announces itself online routes notifications away from the phone, so a
    * headless bot that never goes offline suppresses the phone's own alerts — which is why this is
    * NOT best-effort, unlike sendChatState: the caller asked for a specific visibility, and a
-   * swallowed failure would leave the account silently online. The setting belongs to the
-   * connection and resets on reconnect (Baileys re-announces per its `markOnlineOnConnect`
-   * socket option), so callers re-issue it after a reconnect.
+   * swallowed failure would leave the account silently online. Chat-state updates are a separate
+   * wire operation (`<chatstate>` / `sendStateTyping`) and do not publish this.
+   *
+   * The call itself is one-shot. The gateway remembers a successful one for the life of the running
+   * engine and re-applies it once each time that connection opens: Baileys broadcasts `available`
+   * on connect (`markOnlineOnConnect`), which would otherwise wipe `available: false` on a
+   * transient reconnect. Replacing the engine drops the preference.
+   *
+   * On Baileys this throws when the account push name is not set yet. `sendPresenceUpdate`
+   * resolves without sending in that case (`no name present, ignoring presence update request`).
    */
   setOnlinePresence(available: boolean): Promise<void>;
 

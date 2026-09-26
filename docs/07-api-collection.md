@@ -216,8 +216,10 @@ curl "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/presence/123456789
 
 #### PUT /api/sessions/:sessionId/presence
 
-Set the account's OWN global presence — appear online or offline (OPERATOR, both engines). The
-setting does not survive a restart or reconnect; re-issue it after `session.status` reports one.
+Set the account's OWN global presence — appear online or offline (OPERATOR, both engines). A
+successful call is re-applied once each time that engine's connection opens, including a Baileys
+transient reconnect, and dropped when the engine is replaced. On Baileys a `409` means the push
+name has not synced yet and nothing was sent.
 
 ```bash
 curl -X PUT "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/presence" \

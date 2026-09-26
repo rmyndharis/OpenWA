@@ -888,9 +888,16 @@ from the phone while a linked device announces itself online, so a headless bot 
 offline suppresses the phone's own alerts — `available: false` hands them back. Supported on both
 engines.
 
-The setting belongs to the connection: it does not survive a restart or reconnect and must be
-re-issued after `session.status` reports one. Not best-effort — a failure surfaces instead of
-leaving the account silently online.
+A successful call is remembered for the life of the running engine and re-applied once each time
+that connection opens, including a Baileys transient reconnect. Baileys broadcasts `available` on
+connect (`markOnlineOnConnect`), which would otherwise replace a previous `available: false`. The
+preference is dropped when the engine is replaced (stop, or a restart that builds a new engine) and
+must be re-issued after that. Typing, recording, and outbound sends do not change global presence.
+
+Not best-effort — a failure surfaces instead of leaving the account silently online. On Baileys a
+`409` is also returned when the account push name has not synced yet: `sendPresenceUpdate` returns
+without sending until `creds.me.name` is set, and the endpoint refuses that case instead of
+reporting success.
 
 **Auth:** API key (OPERATOR) · **Scope:** session-scoped
 

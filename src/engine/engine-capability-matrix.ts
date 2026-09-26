@@ -392,7 +392,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      "wwjs Client.sendPresenceAvailable()/sendPresenceUnavailable() (index.d.ts:230/233); baileys sendPresenceUpdate('available'|'unavailable') with no jid — the global whole-account form (Socket/chats.d.ts:38). Connection-scoped on both: resets on reconnect (Baileys re-announces per markOnlineOnConnect)",
+      "wwjs Client.sendPresenceAvailable()/sendPresenceUnavailable() (index.d.ts:230/233); baileys sendPresenceUpdate('available'|'unavailable') with no jid — the global <presence> form, distinct from per-chat <chatstate> (Socket/chats.js). Baileys returns without sending when creds.me.name is unset; the adapter surfaces that as EngineNotReadyError. A successful call is remembered on the engine and re-applied once on each connection open, because markOnlineOnConnect re-broadcasts available",
   },
   setProfileName: {
     wwjs: { status: 'supported' },

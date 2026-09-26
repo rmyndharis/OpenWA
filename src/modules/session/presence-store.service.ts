@@ -29,6 +29,24 @@ const MAX_CHATS_PER_SESSION = 500;
 @Injectable()
 export class PresenceStore {
   private readonly bySession = new Map<string, Map<string, ChatPresence>>();
+  /**
+   * Last successful `PUT /presence` preference per session (`true` = stay online, `false` = stay
+   * offline). Re-applied once each time that engine's connection opens — Baileys broadcasts
+   * `available` on connect, which would otherwise wipe it. Cleared with the rest of the session's
+   * presence when the engine is replaced or the session is deleted. Not written when the publish
+   * itself failed.
+   */
+  private readonly ownIntent = new Map<string, boolean>();
+
+  /** Remember the account's own global presence preference for this connection. */
+  setOwnIntent(sessionId: string, available: boolean): void {
+    this.ownIntent.set(sessionId, available);
+  }
+
+  /** The last setOwnIntent value, or undefined when the caller never set one. */
+  getOwnIntent(sessionId: string): boolean | undefined {
+    return this.ownIntent.get(sessionId);
+  }
 
   /**
    * Record a report. Returns whether it CHANGED anything a consumer would care about — WhatsApp
@@ -69,6 +87,7 @@ export class PresenceStore {
   /** Drop everything for a session — it stopped, was deleted, or its engine was replaced. */
   clear(sessionId: string): void {
     this.bySession.delete(sessionId);
+    this.ownIntent.delete(sessionId);
   }
 }
 

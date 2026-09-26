@@ -133,13 +133,36 @@ describe('PresenceStore', () => {
       expect(store.get('s2', 'a@c.us')).not.toBeNull();
     });
 
-    // After a clear the next report is news again — otherwise a restarted session would stay silent
+    it('also drops the own-presence intent', () => {
+      store.setOwnIntent('s1', true);
+      store.clear('s1');
+      expect(store.getOwnIntent('s1')).toBeUndefined();
+    });
+
+    // After a clear the next report is a change again — otherwise a restarted session would stay silent
     // until the contact happened to change state.
     it('makes the next report a change again', () => {
       store.record('s1', event());
       store.clear('s1');
 
       expect(store.record('s1', event())).toBe(true);
+    });
+  });
+
+  describe('own presence intent', () => {
+    it('remembers the last set preference', () => {
+      expect(store.getOwnIntent('s1')).toBeUndefined();
+      store.setOwnIntent('s1', true);
+      expect(store.getOwnIntent('s1')).toBe(true);
+      store.setOwnIntent('s1', false);
+      expect(store.getOwnIntent('s1')).toBe(false);
+    });
+
+    it('keeps intents per session', () => {
+      store.setOwnIntent('s1', true);
+      store.setOwnIntent('s2', false);
+      expect(store.getOwnIntent('s1')).toBe(true);
+      expect(store.getOwnIntent('s2')).toBe(false);
     });
   });
 

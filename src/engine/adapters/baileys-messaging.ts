@@ -27,6 +27,7 @@ import { buildVCard } from './vcard';
 import { resolveBaileysButtonClick, setBaileysText } from './baileys-message-mapper';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { type createLogger } from '../../common/services/logger.service';
@@ -309,12 +310,21 @@ export class BaileysMessaging {
 
   /**
    * Publish the account's own GLOBAL presence — the no-jid form of sendPresenceUpdate, which
-   * addresses the whole account rather than a chat. Not best-effort, unlike sendChatState: the
-   * caller asked for a specific visibility, so a failure surfaces instead of leaving the account
-   * silently online (#871). Resets on reconnect per the socket's markOnlineOnConnect option.
+   * addresses the whole account rather than a chat (`<presence>`, not a per-chat `<chatstate>`).
+   * Not best-effort, unlike sendChatState: the caller asked for a specific visibility, so a
+   * failure surfaces instead of leaving the account silently online (#871).
+   *
+   * Baileys resolves this call without sending anything when `creds.me.name` is unset (it logs
+   * "no name present, ignoring presence update request" and returns). `sock.user` is that cred.
+   * Refusing here keeps PUT /presence from reporting success for an update that never left.
    */
   async setOnlinePresence(available: boolean): Promise<void> {
     this.host.ensureReady();
+    if (!this.sock().user?.name) {
+      throw new EngineNotReadyError(
+        'The account push name is not available yet, so this presence update would be ignored. Retry once the session has synced its profile name.',
+      );
+    }
     await this.sock().sendPresenceUpdate(available ? 'available' : 'unavailable');
   }
 

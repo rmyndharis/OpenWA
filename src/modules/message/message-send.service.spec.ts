@@ -124,6 +124,7 @@ describe('MessageSendService', () => {
 
       await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'Hello' });
 
+      expect(mockEngine.sendChatState).toHaveBeenCalledTimes(1);
       expect(mockEngine.sendChatState).toHaveBeenCalledWith('628123456789@c.us', 'typing');
       expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('628123456789@c.us', 'Hello');
     });

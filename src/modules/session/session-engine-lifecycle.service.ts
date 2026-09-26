@@ -850,6 +850,13 @@ export class SessionEngineLifecycle {
       }),
     );
 
+    // Re-apply a prior PUT /presence once per open. Baileys' markOnlineOnConnect has already
+    // broadcast `available` during this handshake; without this, an `available: false` the caller
+    // published would not survive a transient reconnect inside the same engine. A replaced engine
+    // cleared the preference in initializeEngine, so this is a no-op there. Not awaited — on
+    // whatsapp-web.js the call is a page evaluate, and READY must not wait on it.
+    this.reapplyOwnPresence(id);
+
     // Best-effort snapshot of the account's own contacts' currently-active statuses. Live status
     // posts arrive through onMessage below; this just backfills what was already up before we
     // connected. Not awaited — onReady must not block on it.
@@ -861,6 +868,25 @@ export class SessionEngineLifecycle {
         action: 'status_seed_on_ready_disabled',
       });
     }
+  }
+
+  /**
+   * Re-publish the last successful PUT /presence for this engine. No-op when the caller never set
+   * one, or the engine is already gone. A failure is logged and swallowed: presence must not turn
+   * a successful connect into an error, and the stored preference stays for the next open.
+   */
+  private reapplyOwnPresence(id: string): void {
+    const desired = this.presence.getOwnIntent(id);
+    if (desired === undefined) return;
+    const engine = this.engines.get(id);
+    if (!engine) return;
+    void engine.setOnlinePresence(desired).catch(error => {
+      this.logger.warn(`Could not re-apply own presence for session ${id} (best-effort)`, {
+        sessionId: id,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'own_presence_reapply_failed',
+      });
+    });
   }
 
   /**
