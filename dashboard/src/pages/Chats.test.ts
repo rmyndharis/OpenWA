@@ -413,9 +413,14 @@ before(async () => {
   ({ Chats } = await import('./Chats.tsx'));
 });
 
-afterEach(() => {
+afterEach(async () => {
   rtl.cleanup();
   resetSocketDouble();
+  // Cancel before clearing. clear() silently cancels a fetch still in flight, and that fetch's finally
+  // then re-arms the gc timer of the query clear() just dropped, where nothing can clear it. The avatar
+  // hooks set a 30 minute gcTime and the message thread 5 minutes, so one such timer held the test
+  // process open for half an hour on CI.
+  await queryClient?.cancelQueries();
   queryClient?.clear();
   queryClient = undefined;
   // A gate left held would stall the next test's fetch forever.
@@ -436,7 +441,8 @@ afterEach(() => {
 });
 
 function renderChats(): { container: HTMLElement } {
-  // Small gcTime so the QueryClient's garbage-collection timers don't hold the test process open.
+  // The avatar and message hooks set their own gcTime over this 1s default; afterEach cancels before it
+  // clears so their timers cannot hold the test process open.
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   return rtl.render(
     createElement(
