@@ -66,6 +66,16 @@ function setsEqual(a, b) {
   return a.size === b.size && [...a].every((x) => b.has(x));
 }
 
+/**
+ * Exempt a string from the "likely untranslated" warning if it has no translatable prose.
+ * A value made up only of {{placeholder}} tokens plus short separator punctuation (spaces, ·, /, :, etc. — no actual alphabetic prose outside the tokens), or a value matching a URL shape (scheme://...) should not be flagged.
+ */
+function hasTranslatableProse(str) {
+  if (/^[a-zA-Z]+:\/\//.test(str)) return false;
+  const noTokens = str.replace(/\{\{.*?\}\}/g, '');
+  return /\p{L}{2,}/u.test(noTokens);
+}
+
 function load(file) {
   return JSON.parse(readFileSync(join(LOCALES_DIR, file), 'utf8'));
 }
@@ -99,7 +109,7 @@ for (const file of localeFiles) {
     const val = entries.get(path);
     if (typeof val !== 'string') continue;
     if (!setsEqual(placeholders(refVal), placeholders(val))) placeholderMismatches.set(path, placeholders(refVal));
-    if (refVal === val && refVal.length >= UNTRANSLATED_MIN_LEN) untranslated.push(path);
+    if (refVal === val && refVal.length >= UNTRANSLATED_MIN_LEN && hasTranslatableProse(refVal)) untranslated.push(path);
   }
   // A plural form en.json has no counterpart for (fr `_many`, ar `_few`, he `_two`) is held to the
   // tokens of the base's `_other`. A subset, not equality: a form for one exact number may spell the
