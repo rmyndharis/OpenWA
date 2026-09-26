@@ -286,7 +286,7 @@ services:
       - BASE_URL=${BASE_URL:-}
       - DASHBOARD_URL=${DASHBOARD_URL:-}
     volumes:
-      - ./data:/app/data
+      - openwa_data:/app/data
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:2785/api/health/ready']
@@ -301,3 +301,6 @@ services:
 networks:
   default:
     name: openwa-network
+    
+volumes:
+  openwa_data:
