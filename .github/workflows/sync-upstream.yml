@@ -1,0 +1,111 @@
+name: Sync Upstream
+
+# Keeps this fork in step with rmyndharis/OpenWA. The scheduled job compares the fork's main with
+# upstream main and, when upstream is ahead, merges it into a `sync/upstream` branch and opens (or
+# updates) a pull request. The branch lives in the fork, so the repository's own CI runs on the PR
+# exactly as it would for any other change — and unlike a cross-fork PR, it needs no maintainer
+# approval to run.
+#
+# The merge is always a real merge commit, never a squash or rebase: that keeps upstream's history
+# verbatim in the fork, which is what makes the next sync a plain fast-forward instead of a
+# recurring conflict.
+#
+# One-time setup, required before the first scheduled run:
+#   Settings -> Actions -> General -> Enable GitHub Actions for this repository. Actions are off by
+#   default on a fork, and a disabled workflow never fires its schedule. Settings -> Actions ->
+#   General -> Workflow permissions must also allow the default token to write.
+# The upstream repository is public, so reading it needs no secret; the only credential in this file
+# is the default GITHUB_TOKEN, scoped to contents:write and pull-requests:write.
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      automerge:
+        description: Enable auto-merge on the sync PR (CI is not a required check in most forks)
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: rmyndharis/OpenWA
+  SYNC_BRANCH: sync/upstream
+
+jobs:
+  sync:
+    name: Sync from upstream
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Merge upstream main into the sync branch
+        id: merge
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream main
+
+          behind=$(git rev-list --count "HEAD..upstream/main")
+          if [ "$behind" -eq 0 ]; then
+            echo "main already contains upstream/main — nothing to sync."
+            echo "synced=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git checkout -B "$SYNC_BRANCH"
+          if ! git merge --no-ff --no-edit upstream/main; then
+            git merge --abort || true
+            echo "::error::upstream/main conflicts with this fork's main. Resolve it by hand (git merge upstream/main on a local main) and push — the workflow will not attempt to resolve conflicts for you."
+            exit 1
+          fi
+
+          # Force-push: the branch exists only to carry this PR, and upstream is the sole writer of
+          # its content, so a stale previous sync is always safe to replace.
+          git push --force-with-lease origin "$SYNC_BRANCH"
+
+          echo "Merged $behind upstream commit(s) into ${SYNC_BRANCH}."
+          echo "synced=true" >> "$GITHUB_OUTPUT"
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the sync pull request
+        if: steps.merge.outputs.synced == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BEHIND: ${{ steps.merge.outputs.behind }}
+        run: |
+          if gh pr view "$SYNC_BRANCH" --json url --jq .url > /dev/null 2>&1; then
+            echo "Sync PR is already open — the force-push above moved it onto the latest upstream."
+            exit 0
+          fi
+
+          gh pr create --base main --head "$SYNC_BRANCH" \
+            --title "chore(sync): merge upstream main (${BEHIND} commit(s))" \
+            --body "$(cat <<EOF
+          Automated sync of \`${UPSTREAM_REPO}@main\` into the fork.
+
+          - ${BEHIND} upstream commit(s) merged
+          - Merged with a merge commit, so upstream history is preserved verbatim and the next sync is a fast-forward
+
+          Merge with **Create a merge commit** to keep that guarantee. Squash or rebase would rewrite upstream's commits and make the following syncs conflict-prone.
+          EOF
+          )"
+
+      - name: Auto-merge the sync pull request
+        if: inputs.automerge && steps.merge.outputs.synced == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge "$SYNC_BRANCH" --merge --auto --delete-branch
