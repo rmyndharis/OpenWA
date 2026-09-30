@@ -20018,12 +20018,14 @@
           "header": {
             "type": "string",
             "description": "Optional header text",
-            "maxLength": 1024
+            "maxLength": 1024,
+            "nullable": true
           },
           "footer": {
             "type": "string",
             "description": "Optional footer text",
-            "maxLength": 1024
+            "maxLength": 1024,
+            "nullable": true
           },
           "type": {
             "type": "string",
@@ -20036,7 +20038,8 @@
           "mediaUrl": {
             "type": "string",
             "description": "Image URL for image templates. Supports {{variable}} placeholders.",
-            "maxLength": 4096
+            "maxLength": 4096,
+            "nullable": true
           }
         }
       },

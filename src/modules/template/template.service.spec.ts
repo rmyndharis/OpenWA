@@ -181,6 +181,21 @@ describe('TemplateService', () => {
       );
     });
 
+    it('should clear nullable fields when null is provided', async () => {
+      const template = createMockTemplate({
+        header: 'Old header',
+        footer: 'Old footer',
+        mediaUrl: 'https://example.com/old.jpg',
+      });
+      (repository.findOne as jest.Mock).mockResolvedValue(template);
+
+      await service.update('sess-1', 'tpl-uuid-1', { header: null, footer: null, mediaUrl: null });
+
+      expect(repository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ header: null, footer: null, mediaUrl: null }),
+      );
+    });
+
     it('should throw NotFoundException for an unknown template', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(null);
 
