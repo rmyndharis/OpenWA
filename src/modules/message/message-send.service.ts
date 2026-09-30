@@ -263,6 +263,19 @@ export class MessageSendService {
       );
     }
 
+    if (template.type === 'image') {
+      if (!template.mediaUrl) {
+        throw new BadRequestException('Image template is missing its media URL');
+      }
+      const mediaUrl = renderTemplate(template.mediaUrl, vars);
+      return this.sendImage(sessionId, {
+        chatId: dto.chatId,
+        url: mediaUrl,
+        caption: text,
+        mentions: dto.mentions,
+      });
+    }
+
     return this.sendText(sessionId, {
       chatId: dto.chatId,
       text,
