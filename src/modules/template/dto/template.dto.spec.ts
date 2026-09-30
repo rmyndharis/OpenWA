@@ -17,10 +17,9 @@ describe('UpdateTemplateDto', () => {
     await expect(through({ [field]: null })).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  // header and footer are nullable columns, and @IsOptional skips null as well as undefined, so an
-  // explicit null reaches update() and clears the stored value. docs/06 documents that; pin it here
-  // so the table and the behaviour cannot drift apart.
-  it.each(['header', 'footer'])('accepts an explicit null %s, which clears the stored value', async field => {
+  // Nullable template fields skip validation for null so an explicit null reaches update() and
+  // clears the stored value. Pin this here so the DTO and persistence behavior cannot drift apart.
+  it.each(['header', 'footer', 'mediaUrl'])('accepts an explicit null %s, which clears the stored value', async field => {
     await expect(through({ [field]: null })).resolves.toEqual({ [field]: null });
   });
 });

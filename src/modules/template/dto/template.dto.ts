@@ -116,7 +116,7 @@ export class UpdateTemplateDto {
     maxLength: MEDIA_URL_MAX_LENGTH,
     nullable: true,
   })
-  @ValidateIf((o: UpdateTemplateDto) => o.mediaUrl !== undefined)
+  @ValidateIf((o: UpdateTemplateDto) => o.mediaUrl !== undefined && o.mediaUrl !== null)
   @IsString()
   @IsNotEmpty()
   @MaxLength(MEDIA_URL_MAX_LENGTH)
