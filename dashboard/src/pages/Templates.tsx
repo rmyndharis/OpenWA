@@ -22,6 +22,8 @@ type TemplateForm = {
   header: string;
   body: string;
   footer: string;
+  type: 'text' | 'image';
+  mediaUrl: string;
 };
 
 const emptyForm: TemplateForm = {
@@ -29,10 +31,14 @@ const emptyForm: TemplateForm = {
   header: '',
   body: '',
   footer: '',
+  type: 'text',
+  mediaUrl: '',
 };
 
 function extractPlaceholders(template: TemplateForm | MessageTemplate) {
-  const source = [template.header, template.body, template.footer].filter(Boolean).join('\n');
+  const source = [template.header, template.body, template.footer, 'mediaUrl' in template ? template.mediaUrl : null]
+    .filter(Boolean)
+    .join('\n');
   return Array.from(new Set(Array.from(source.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g), match => match[1]))).sort();
 }
 
@@ -42,6 +48,8 @@ function toPayload(form: TemplateForm): TemplatePayload {
     header: form.header.trim() || null,
     body: form.body.trim(),
     footer: form.footer.trim() || null,
+    type: form.type,
+    mediaUrl: form.type === 'image' ? form.mediaUrl.trim() : null,
   };
 }
 
@@ -120,12 +128,20 @@ export function Templates() {
       header: template.header || '',
       body: template.body,
       footer: template.footer || '',
+      type: template.type || 'text',
+      mediaUrl: template.mediaUrl || '',
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSave = async () => {
-    if (!selectedSessionId || !form.name.trim() || !form.body.trim()) return;
+    if (
+      !selectedSessionId ||
+      !form.name.trim() ||
+      !form.body.trim() ||
+      (form.type === 'image' && !form.mediaUrl.trim())
+    )
+      return;
 
     try {
       if (editingTemplate) {
@@ -360,6 +376,34 @@ export function Templates() {
                 />
               </div>
 
+              <div className="form-group">
+                <label htmlFor="tpl-type">Template type</label>
+                <select
+                  id="tpl-type"
+                  value={form.type}
+                  onChange={event => setForm({ ...form, type: event.target.value as 'text' | 'image' })}
+                  disabled={!canWrite}
+                >
+                  <option value="text">{t('chats.messageType.text')}</option>
+                  <option value="image">{t('chats.messageType.image')}</option>
+                </select>
+              </div>
+
+              {form.type === 'image' && (
+                <div className="form-group">
+                  <label htmlFor="tpl-media-url">Image URL</label>
+                  <input
+                    id="tpl-media-url"
+                    type="url"
+                    value={form.mediaUrl}
+                    onChange={event => setForm({ ...form, mediaUrl: event.target.value })}
+                    placeholder="https://example.com/image.jpg or {{imageUrl}}"
+                    disabled={!canWrite}
+                    required
+                  />
+                </div>
+              )}
+
               <div className="template-message-fields">
                 <div className="form-group">
                   <label htmlFor="tpl-2">{t('templates.header')}</label>
@@ -403,7 +447,14 @@ export function Templates() {
                 <button
                   className="btn-primary"
                   onClick={handleSave}
-                  disabled={!canWrite || isSaving || !selectedSessionId || !form.name.trim() || !form.body.trim()}
+                  disabled={
+                    !canWrite ||
+                    isSaving ||
+                    !selectedSessionId ||
+                    !form.name.trim() ||
+                    !form.body.trim() ||
+                    (form.type === 'image' && !form.mediaUrl.trim())
+                  }
                   type="button"
                 >
                   {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />}

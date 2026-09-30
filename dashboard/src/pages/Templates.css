@@ -241,6 +241,7 @@
 }
 
 .templates-page .template-form input,
+.templates-page .template-form select,
 .templates-page .template-form textarea,
 .templates-page .placeholder-list input {
   width: 100%;
@@ -252,6 +253,7 @@
 }
 
 .templates-page .template-form input,
+.templates-page .template-form select,
 .templates-page .placeholder-list input {
   padding: 0.8125rem 0.875rem;
 }
@@ -265,6 +267,7 @@
 }
 
 .templates-page .template-form input:focus,
+.templates-page .template-form select:focus,
 .templates-page .template-form textarea:focus,
 .templates-page .placeholder-list input:focus {
   outline: none;

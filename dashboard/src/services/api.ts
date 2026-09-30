@@ -182,6 +182,8 @@ export interface MessageTemplate {
   body: string;
   header?: string | null;
   footer?: string | null;
+  type: 'text' | 'image';
+  mediaUrl?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -191,6 +193,8 @@ export interface TemplatePayload {
   body: string;
   header?: string | null;
   footer?: string | null;
+  type?: 'text' | 'image';
+  mediaUrl?: string | null;
 }
 
 export interface ApiKey {
