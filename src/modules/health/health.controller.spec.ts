@@ -161,6 +161,54 @@ describe('HealthController', () => {
     });
   });
 
+  describe('key-validation budget', () => {
+    const presented = (ip?: string) => reqWith({ 'x-api-key': 'owa_k1_probe' }, ip);
+
+    it('stops looking up keys for a client after 30 failed presentations a minute', async () => {
+      validateApiKey.mockRejectedValue(new UnauthorizedException('Invalid API key'));
+
+      for (let i = 0; i < 35; i++) {
+        const result = await controller.check(presented());
+        expect(result.status).toBe('ok');
+        expect(result).not.toHaveProperty('version');
+      }
+
+      expect(validateApiKey).toHaveBeenCalledTimes(30);
+    });
+
+    it('keeps a separate budget per client, shared across one IPv6 /64', async () => {
+      validateApiKey.mockRejectedValue(new UnauthorizedException('Invalid API key'));
+      for (let i = 0; i < 35; i++) await controller.check(presented());
+      await controller.check(presented('192.0.2.9'));
+      expect(validateApiKey).toHaveBeenCalledTimes(31);
+
+      validateApiKey.mockClear();
+      for (let i = 0; i < 35; i++) await controller.check(presented(`2001:db8:1:2::${(i + 1).toString(16)}`));
+      expect(validateApiKey).toHaveBeenCalledTimes(30);
+      await controller.check(presented('2001:db8:1:3::1'));
+      expect(validateApiKey).toHaveBeenCalledTimes(31);
+    });
+
+    it('never spends the budget on a key that validates', async () => {
+      validateApiKey.mockResolvedValue({ id: 'k1' });
+
+      for (let i = 0; i < 40; i++) {
+        expect((await controller.check(presented())).version).toBeDefined();
+      }
+
+      expect(validateApiKey).toHaveBeenCalledTimes(40);
+    });
+
+    it('does not charge keyless probes', async () => {
+      for (let i = 0; i < 40; i++) await controller.check(reqWith());
+      validateApiKey.mockRejectedValue(new UnauthorizedException('Invalid API key'));
+
+      await controller.check(presented());
+
+      expect(validateApiKey).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('liveness', () => {
     it('returns ok (static — does not probe dependencies)', () => {
       expect(controller.liveness().status).toBe('ok');

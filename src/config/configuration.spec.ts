@@ -14,12 +14,14 @@ describe('configuration — main DB synchronize', () => {
     else process.env.MAIN_DATABASE_SYNCHRONIZE = orig;
   });
 
-  it('defaults main synchronize ON (zero-config first boot)', () => {
+  it('defaults the main DB to its migration chain (synchronize off), including a blank compose forward', () => {
     delete process.env.MAIN_DATABASE_SYNCHRONIZE;
-    expect(configuration().database.synchronize).toBe(true);
+    expect(configuration().database.synchronize).toBe(false);
+    process.env.MAIN_DATABASE_SYNCHRONIZE = '';
+    expect(configuration().database.synchronize).toBe(false);
   });
 
-  it('disables synchronize only when MAIN_DATABASE_SYNCHRONIZE="false"', () => {
+  it('synchronizes only when MAIN_DATABASE_SYNCHRONIZE="true"', () => {
     process.env.MAIN_DATABASE_SYNCHRONIZE = 'false';
     expect(configuration().database.synchronize).toBe(false);
     process.env.MAIN_DATABASE_SYNCHRONIZE = 'true';
@@ -259,7 +261,7 @@ describe('configuration — webhook fan-out knobs are fail-safe', () => {
 describe('configuration search namespace', () => {
   // Save/restore the SEARCH_* env vars so a CI .env that sets them cannot flake the default-value
   // assertions below (mirrors the mutate-and-restore pattern used for PLUGIN_DOWNLOAD_MAX_BYTES etc.).
-  const keys = ['SEARCH_ENABLED', 'SEARCH_PROVIDER', 'SEARCH_LIMIT_MAX'];
+  const keys = ['SEARCH_ENABLED', 'SEARCH_PROVIDER'];
   const orig: Record<string, string | undefined> = {};
   beforeEach(() => keys.forEach(k => (orig[k] = process.env[k])));
   afterEach(() =>
@@ -272,7 +274,7 @@ describe('configuration search namespace', () => {
   it('exposes search defaults', () => {
     keys.forEach(k => delete process.env[k]);
     const cfg = configuration();
-    expect(cfg.search).toEqual({ enabled: true, provider: 'auto', limitMax: 100 });
+    expect(cfg.search).toEqual({ enabled: true, provider: 'auto' });
   });
 });
 
@@ -314,6 +316,27 @@ describe('configuration — webhook payload cap is fail-safe', () => {
       process.env.WEBHOOK_MAX_PAYLOAD_BYTES = bad;
       expect(configuration().webhook.maxPayloadBytes).toBe(1024 * 1024);
     }
+  });
+});
+
+describe('configuration: webhook degraded session concurrency', () => {
+  const orig = process.env.WEBHOOK_DEGRADED_SESSION_CONCURRENCY;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.WEBHOOK_DEGRADED_SESSION_CONCURRENCY;
+    else process.env.WEBHOOK_DEGRADED_SESSION_CONCURRENCY = orig;
+  });
+
+  it('is undefined when unset or unusable, so each path derives it from its own pool', () => {
+    for (const value of [undefined, '', 'abc', '0', '-2']) {
+      if (value === undefined) delete process.env.WEBHOOK_DEGRADED_SESSION_CONCURRENCY;
+      else process.env.WEBHOOK_DEGRADED_SESSION_CONCURRENCY = value;
+      expect(configuration().webhook.degradedSessionConcurrency).toBeUndefined();
+    }
+  });
+
+  it('honors a positive override', () => {
+    process.env.WEBHOOK_DEGRADED_SESSION_CONCURRENCY = '3';
+    expect(configuration().webhook.degradedSessionConcurrency).toBe(3);
   });
 });
 

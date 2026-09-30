@@ -93,9 +93,12 @@ export class StatsService {
    * entries expire after stats.cacheTtlMs; there is no write-path hook. Session-scoped entries
    * are additionally re-validated on serve (getSessionStats), so a deleted session is not
    * resurrected from the memo. Key cardinality is
-   * bounded (4 global shapes + one per session), so no size eviction is needed.
+   * bounded (4 global shapes + one per session), so no size eviction is needed. Concurrent misses
+   * on one key share a single computation (`inflight`), so an expired entry costs one scan, not one
+   * per waiting request; a rejection is handed to every waiter and never stored.
    */
   private readonly memo = new Map<string, { expiresAt: number; value: unknown }>();
+  private readonly inflight = new Map<string, Promise<unknown>>();
 
   constructor(
     @InjectRepository(Session, 'data')
@@ -116,16 +119,34 @@ export class StatsService {
     return this.configService.get<number>('stats.cacheTtlMs', 30000);
   }
 
-  /** Returns the memoized value for `key` while fresh; otherwise computes, stores, returns it. */
-  private async memoized<T>(key: string, compute: () => Promise<T>): Promise<T> {
+  /**
+   * Returns the memoized value for `key` while fresh; otherwise joins the computation already
+   * running for it, or starts one. The TTL runs from completion, so a scan slower than the TTL does
+   * not store an entry that is already stale. The identity check keeps a flight that was dropped
+   * (getSessionStats on a deleted session) from writing its result back.
+   */
+  private memoized<T>(key: string, compute: () => Promise<T>): Promise<T> {
     const ttl = this.memoTtlMs;
     if (ttl <= 0) return compute();
-    const now = Date.now();
     const hit = this.memo.get(key);
-    if (hit && hit.expiresAt > now) return hit.value as T;
-    const value = await compute();
-    this.memo.set(key, { expiresAt: now + ttl, value });
-    return value;
+    if (hit && hit.expiresAt > Date.now()) return Promise.resolve(hit.value as T);
+    const pending = this.inflight.get(key);
+    if (pending) return pending as Promise<T>;
+    const flight: Promise<T> = compute().then(
+      value => {
+        if (this.inflight.get(key) === flight) {
+          this.inflight.delete(key);
+          this.memo.set(key, { expiresAt: Date.now() + ttl, value });
+        }
+        return value;
+      },
+      (err: unknown) => {
+        if (this.inflight.get(key) === flight) this.inflight.delete(key);
+        throw err;
+      },
+    );
+    this.inflight.set(key, flight);
+    return flight;
   }
 
   async getOverview(): Promise<OverviewStats> {
@@ -287,6 +308,7 @@ export class StatsService {
     const key = `session:${sessionId}`;
     if ((await this.sessionRepo.count({ where: { id: sessionId } })) === 0) {
       this.memo.delete(key);
+      this.inflight.delete(key);
       throw new NotFoundException('Session not found');
     }
     return this.memoized(key, () => this.loadSessionStats(sessionId));

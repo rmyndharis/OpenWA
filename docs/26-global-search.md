@@ -176,11 +176,12 @@ Because the route and the response shape are identical across providers, dashboa
 keep working unchanged when you switch backends.
 
 > **Backfill is the plugin's responsibility.** The `message:persisted` hook fires only for **live**
-> traffic — outbound on send, inbound on receive — never for history-backfill persistence. So a plugin
-> provider installed on a deployment that already has message history must perform its own one-time
-> backfill (read `messages` and index) at enablement; its index will otherwise miss pre-installation
-> rows. The built-in DB-FTS provider is unaffected — its index is DB-synced via triggers on every
-> insert, including backfill.
+> traffic — outbound on send, inbound on receive, and again when a stored message is revoked (see
+> [27.3](./27-plugin-search-providers.md#273-indexing-via-the-messagepersisted-hook)) — never for
+> history-backfill persistence. So a plugin provider installed on a deployment that already has message
+> history must perform its own one-time backfill (read `messages` and index) at enablement; its index
+> will otherwise miss pre-installation rows. The built-in DB-FTS provider is
+> unaffected — its index is DB-synced via triggers on every insert, including backfill.
 
 ## 26.8 Migration and backfill
 

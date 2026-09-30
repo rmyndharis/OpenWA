@@ -119,6 +119,13 @@ describe('parsePluginPackage', () => {
     );
   });
 
+  it('rejects a package that needs a newer OpenWA with a 400', () => {
+    const bad = { ...validManifest, minOpenWAVersion: '999.0.0' };
+    const zip = zipOf({ 'manifest.json': JSON.stringify(bad), 'index.js': 'x' });
+    expect(() => parsePluginPackage(zip)).toThrow(BadRequestException);
+    expect(() => parsePluginPackage(zip)).toThrow(/requires OpenWA >= 999\.0\.0/);
+  });
+
   it('rejects a non-string required field (numeric main) with a clean 400, not a TypeError/500', () => {
     // A non-string `main` is truthy, so a bare falsy check would pass it through and then crash
     // path.posix.normalize with an uncaught TypeError (HTTP 500). It must be rejected as a 400.

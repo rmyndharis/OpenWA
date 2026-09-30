@@ -8,11 +8,11 @@
 
 The lifecycle is split across three files with one rule each:
 
-| File                                                                                | Owns                                                                   |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `session-engine-lifecycle.service.ts` (~1,100 lines)                                | Engine creation/initialization, status transitions, teardown           |
-| `session-engine-controls.ts` (~660 lines)                                           | The seven control verbs (start/stop/logout/forceKill/delete/reconnect) |
-| `session-ownership.service.ts` + `src/modules/takeover/session-takeover.service.ts` | Cross-node leases, adoption, orphan reaping                            |
+| File                                                                                | Owns                                                                                                  |
+| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `session-engine-lifecycle.service.ts`                                               | Engine creation/initialization, status transitions, the reconnect loop (`executeReconnect`), teardown |
+| `session-engine-controls.ts`                                                        | The seven control verbs (start/stop/logout/forceKill/delete/shutdown/stopOrphanEngines)               |
+| `session-ownership.service.ts` + `src/modules/takeover/session-takeover.service.ts` | Cross-node leases, adoption, orphan reaping                                                           |
 
 ---
 
@@ -58,8 +58,11 @@ rejects, and neither does a navigation that never completes because WhatsApp Web
 a plain `await` hangs the start forever. The engine's own `authTimeoutMs` poll does not cover that
 case: whatsapp-web.js only starts it in `inject()`, after the page has loaded.
 **Defense:** `Promise.race` deadline in `initializeEngine`; on timeout the engine is evicted +
-force-destroyed + status DISCONNECTED + 504 to the caller. A REAL rejection is NOT treated as a
-timeout: it propagates so `start()` records FAILED with the reason.
+force-destroyed + status DISCONNECTED + 504 to the caller. The eviction, the recorded error and the
+DISCONNECTED write apply only while that engine is still the live one: a stale deadline (a stop +
+start replaced it mid-init) force-destroys its own engine and 504s, and leaves the replacement alone.
+A REAL rejection is NOT treated as a timeout: it propagates so `start()` records FAILED with the
+reason.
 **Pinned by:** `session.service.spec.ts` (start failure-path cases; the timeout/rejection
 split lives in `session.service.spec.ts`'s init-timeout describes).
 **Do not "simplify" the two paths into one** — the distinction is why a bad proxy config returns
@@ -67,12 +70,15 @@ FAILED + reason while an init that never completes returns 504 + eviction.
 
 ### INV-5 — Delete racing a start re-purges auth directories after init resolves
 
-**Interleaving:** delete runs (purges dirs, tombstones the row); the in-flight start's
-`initialize()` resolves and re-creates the auth dir; a phantom session lingers on disk.
-**Defense:** post-init resurrection guards re-check the tombstone and re-purge
-(`session-engine-controls.ts` start path, after the awaited init).
+**Interleaving:** delete runs (purges dirs, removes the session row and its child rows in one
+transaction); the in-flight start's `initialize()` resolves and re-creates the auth dir; a phantom
+session lingers on disk.
+**Defense:** the post-init guards in `start()` (`session-engine-controls.ts`) and `executeReconnect`
+(`session-engine-lifecycle.service.ts`) call `isSessionRetired`, which treats a stop mark or a missing
+row as retired (delete clears its mark before a slow init resolves), then tear down the
+just-registered engine and re-purge with `purgeAuthDirsIfDeleted`.
 **Pinned by:** `session.service.spec.ts` ('tears down the just-initialized engine if a
-stop/delete lands during start() — no resurrection to READY').
+stop/delete lands during start() (no resurrection to READY)').
 
 ### INV-6 — Lease loss tears down local engines only; it never writes session rows
 
@@ -101,16 +107,20 @@ worth resuming: unauthenticated, mid-pairing, or operator-flagged failed').
 **Interleaving:** `client.logout()` chains `authStrategy.logout()` → `fs.rm(userDataDir)` while
 the Chromium process still holds file handles → rm fails or races a browser re-write.
 **Defense:** the logout path force-destroys the browser first, waits, then removes the dir; the
-475-line spec enumerates the interleavings.
+spec enumerates the interleavings.
 **Pinned by:** `logout-teardown-race.spec.ts` — the module's most complete race corpus. Read it
 before touching anything in the logout/forceKill path.
 
 ### INV-9 — The reconnect loop bounds itself: backoff with jitter, clamp ≤ 5 min and ≤ setTimeout's 32-bit range, alert every 5 consecutive attempts
 
 **Defense:** `reconnect-policy.ts` — a pure decision function (attempt budget, loop alerts)
-consumed by the lifecycle, which resets the budget only when the session reaches READY; the clamps
-exist because a naive `delay * 2^attempt` reaches values `setTimeout` silently truncates.
-**Pinned by:** `reconnect-policy.spec.ts`.
+consumed by the lifecycle, which resets the budget only when the session held READY for
+`STABLE_READY_MS` (5 min) before its next drop or its next READY, so a session that flaps keeps
+backing off and still alerts. The stretch ends where the engine first reports a non-READY state
+(`readyEndedAt`), so a Baileys in-engine reconnect between two READYs is not counted as READY time;
+the clamps exist because a naive `delay * 2^attempt` reaches values
+`setTimeout` silently truncates, and overflows to `Infinity` on a long enough streak.
+**Pinned by:** `reconnect-policy.spec.ts`, `session.service.spec.ts` (scheduleReconnect cases).
 
 ### INV-10 — Boot auto-start is sequential, staggered (2s per Chromium), and detached from bootstrap
 
@@ -160,7 +170,11 @@ Collected here so they survive refactors of the code around them:
 - `session-engine-controls.ts` (start): `session.config` is clamped to trusted keys because the
   row is client-writable; an unclamped spread would let a caller smuggle engine options.
 - `EngineRegistry`: identity-based `deleteIfLive` rather than `delete(id)` — see INV-3; every
-  site that bypassed this in review's history created the same phantom-callback bug.
+  site that bypassed this in the past created the same phantom-callback bug. The eviction
+  helpers go through it too: `evictAndForceDestroy`, the init-timeout branch, and `start()`'s catch.
+  `start()` identifies its own engine by capturing the registry entry right after calling
+  `initializeEngine` (which registers it before its first await), not by a lookup in the catch: a
+  mid-init disconnect can schedule a reconnect that registers a replacement first.
 
 ## 31.4 What this document is NOT
 

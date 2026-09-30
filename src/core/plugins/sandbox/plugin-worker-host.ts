@@ -21,6 +21,15 @@ const SEND_CAP_VERBS: ReadonlySet<string> = new Set(['messages.sendText', 'messa
 /** Send-verb budget as a multiple of capTimeoutMs (default 30s → 120s: the 30s media download + upload headroom). */
 const SEND_CAP_TIMEOUT_FACTOR = 4;
 
+/** Worker replies that finish a host request; one arriving during a liveness probe restarts its window. */
+const PROGRESS_KINDS: ReadonlySet<WorkerToHostMessage['kind']> = new Set([
+  'lifecycle-result',
+  'hook-result',
+  'webhook-result',
+  'health-result',
+  'search-result',
+]);
+
 /**
  * Host-side driver for a single untrusted plugin running in a worker. Owns the request/response
  * correlation over a {@link PluginWorkerChannel}: it posts `load`/`lifecycle` messages and resolves
@@ -84,6 +93,9 @@ export class PluginWorkerHost {
   // True once terminate() is called, so onExit can tell a deliberate kill (disable/enable-failure) from an
   // unexpected worker crash — only the latter is logged as a warning.
   private terminated = false;
+  // The liveness probe in flight, if any, and whether onUnresponsive has already fired (it fires once).
+  private probe?: { id: number; timer: ReturnType<typeof setTimeout> };
+  private unresponsiveReported = false;
 
   constructor(
     private readonly channel: PluginWorkerChannel,
@@ -119,6 +131,13 @@ export class PluginWorkerHost {
     // an error cap-result and the slot frees; the underlying host-side work is NOT cancelled (see
     // withCapTimeout). Absent/undefined => no per-call timeout (legacy behavior).
     private readonly capTimeoutMs?: number,
+    // After a hook/webhook/search dispatch times out, the host pings the worker and waits this long for
+    // the pong the bootstrap sends before any plugin code runs. A full window with neither the pong nor
+    // any other dispatch result means the worker's event loop is blocked (a slow async handler still
+    // answers), and onUnresponsive is called once so the caller can terminate it. Either absent => no
+    // probing (legacy behavior).
+    private readonly livenessTimeoutMs?: number,
+    private readonly onUnresponsive?: () => void,
   ) {
     this.channel.onMessage(message => this.handleMessage(message));
     this.channel.onExit(code => this.handleExit(code));
@@ -172,6 +191,7 @@ export class PluginWorkerHost {
       const timer = setTimeout(() => {
         this.hookPending.delete(id);
         options.onTimeout?.();
+        this.probeLiveness();
         settle({ continue: true });
       }, options.timeoutMs);
       this.hookPending.set(id, { resolve: settle, timer });
@@ -217,6 +237,7 @@ export class PluginWorkerHost {
       const timer = setTimeout(() => {
         this.webhookPending.delete(id);
         options.onTimeout?.();
+        this.probeLiveness();
         resolve({ ok: false, status: 504 }); // fail-open: provider already ack'd in async mode
       }, options.timeoutMs);
       this.webhookPending.set(id, { resolve, timer });
@@ -252,6 +273,7 @@ export class PluginWorkerHost {
     return new Promise(resolve => {
       const timer = setTimeout(() => {
         this.searchPending.delete(id);
+        this.probeLiveness();
         resolve({ ok: false, error: 'search timed out' });
       }, options.timeoutMs);
       this.searchPending.set(id, { resolve, timer });
@@ -331,6 +353,34 @@ export class PluginWorkerHost {
     });
   }
 
+  /**
+   * Ask the worker whether its event loop is still turning. A dispatch timeout alone cannot tell a
+   * slow async handler (harmless: its side effect still lands) from a synchronous loop that will never
+   * yield and keeps queueing every later dispatch; the bootstrap answers a ping before plugin code, so
+   * only the latter stays silent past livenessTimeoutMs.
+   */
+  private probeLiveness(): void {
+    if (this.livenessTimeoutMs === undefined || !this.onUnresponsive) return;
+    if (this.dead || this.terminated || this.probe || this.unresponsiveReported) return;
+    const id = this.nextId++;
+    this.armProbe(id);
+    this.channel.postMessage({ kind: 'ping', id });
+  }
+
+  // (Re)start the probe window. The port is FIFO, so a worker working through a burst of dispatches
+  // reads the ping only after that backlog; every result it sends meanwhile proves its loop is turning
+  // and restarts the window (handleMessage). Only a full window with no answer at all is reported.
+  private armProbe(id: number): void {
+    if (this.probe) clearTimeout(this.probe.timer);
+    const timer = setTimeout(() => {
+      this.probe = undefined;
+      if (this.dead || this.terminated || this.unresponsiveReported) return;
+      this.unresponsiveReported = true;
+      this.onUnresponsive?.();
+    }, this.livenessTimeoutMs);
+    this.probe = { id, timer };
+  }
+
   /** Tear the worker down. */
   terminate(): Promise<void> {
     this.terminated = true;
@@ -338,6 +388,9 @@ export class PluginWorkerHost {
   }
 
   private handleMessage(message: WorkerToHostMessage): void {
+    // Only answers to host requests count as progress: a synchronous loop can still post log, cap or
+    // subscribe messages, but it cannot finish a dispatch.
+    if (this.probe && PROGRESS_KINDS.has(message.kind)) this.armProbe(this.probe.id);
     switch (message.kind) {
       case 'ready':
         this.ready = true;
@@ -408,6 +461,12 @@ export class PluginWorkerHost {
         waiter.resolve({ healthy: message.healthy, message: message.message });
         break;
       }
+      case 'pong':
+        if (this.probe?.id === message.id) {
+          clearTimeout(this.probe.timer);
+          this.probe = undefined;
+        }
+        break;
       case 'search-provider-register':
         this.onSearchProviderRegister?.();
         break;
@@ -518,6 +577,10 @@ export class PluginWorkerHost {
 
   private handleExit(code: number): void {
     this.dead = true;
+    if (this.probe) {
+      clearTimeout(this.probe.timer);
+      this.probe = undefined;
+    }
     const error = new Error(`plugin worker exited unexpectedly (code ${code})`);
     this.drain(this.readyWaiters, w => {
       if (w.timer) clearTimeout(w.timer);

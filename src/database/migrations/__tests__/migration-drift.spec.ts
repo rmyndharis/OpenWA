@@ -86,7 +86,7 @@ const tally = (statements: string[]): Map<string, number> =>
   statements.reduce((counts, sql) => counts.set(sql, (counts.get(sql) ?? 0) + 1), new Map<string, number>());
 
 /**
- * Compared as a MULTISET, not a set. 32 of the 95 data statements are repeats (the rebuild cycle
+ * Compared as a MULTISET, not a set. 32 of the 93 data statements are repeats (the rebuild cycle
  * drops and recreates the same index on more than one table pass), so a set comparison would pass a
  * change that only alters HOW MANY times a statement is emitted: one rebuild pass appearing or
  * disappearing leaves the distinct-statement list identical. Counting catches that.

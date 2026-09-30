@@ -451,6 +451,7 @@
     "selectSession": "Sélectionner une session...",
     "session": "Session",
     "events": "Événements",
+    "noEvents": "Sélectionnez au moins un événement.",
     "available": "Événements disponibles",
     "saveChanges": "Enregistrer les modifications",
     "filters": {
@@ -544,6 +545,33 @@
       "call.missed": "Lorsqu'un appel reste sans réponse",
       "status.received": "Lorsqu'un contact publie un statut",
       "all": "Tous les événements"
+    },
+    "auth": {
+      "title": "Authentification des livraisons",
+      "hint": "Facultatif. Les valeurs enregistrées ne sont plus jamais affichées.",
+      "editHint": "Le secret et les en-têtes enregistrés ne sont jamais affichés. Laissez cette section intacte pour les conserver.",
+      "secret": "Secret de signature",
+      "secretHint": "De 16 à 255 caractères. Chaque livraison porte une signature HMAC-SHA256 dans l'en-tête X-OpenWA-Signature.",
+      "secretKeepPlaceholder": "Laissez vide pour conserver le secret actuel",
+      "generateSecret": "Générer",
+      "copySecret": "Copier",
+      "secretCopied": "Secret de signature copié",
+      "removeSecret": "Ne plus signer les livraisons (supprimer le secret)",
+      "headers": "En-têtes personnalisés",
+      "headerName": "Nom de l'en-tête",
+      "headerValue": "Valeur de l'en-tête",
+      "addHeader": "Ajouter un en-tête",
+      "removeHeader": "Retirer l'en-tête",
+      "replaceHeaders": "Remplacer les en-têtes personnalisés",
+      "replaceHint": "Ces lignes remplacent tous les en-têtes enregistrés. Sans ligne, les en-têtes enregistrés sont supprimés.",
+      "errors": {
+        "headerName": "Les noms d'en-tête ne peuvent contenir que des lettres, des chiffres et des tirets.",
+        "headerValue": "Les valeurs d'en-tête sont limitées à 1024 caractères, sans caractères de contrôle ni caractères hors Latin-1.",
+        "headerReserved": "Content-Type, User-Agent, X-OpenWA-* et les en-têtes de connexion sont définis par la passerelle et ne peuvent pas être utilisés.",
+        "headerDuplicate": "Chaque nom d'en-tête ne peut être utilisé qu'une seule fois.",
+        "tooMany": "50 en-têtes personnalisés au maximum sont autorisés.",
+        "secretLength": "Le secret de signature doit comporter entre 16 et 255 caractères."
+      }
     }
   },
   "templates": {
@@ -603,6 +631,7 @@
     "createdTitle": "Clé API créée",
     "createdHint": "Copiez cette clé maintenant. Vous ne pourrez plus la revoir.",
     "namePlaceholder": "ex : Clé de Production",
+    "nameTooShort": "Utilisez au moins 3 caractères.",
     "rolesTitle": "Référence des rôles",
     "roles": {
       "admin": "Administrateur",
@@ -621,11 +650,13 @@
       "status": "Statut",
       "lastUsed": "Dernière utilisation",
       "actions": "Actions",
-      "sessions": "Sessions"
+      "sessions": "Sessions",
+      "restrictions": "Restrictions"
     },
     "statuses": {
       "active": "Active",
-      "revoked": "Révoquée"
+      "revoked": "Révoquée",
+      "expired": "Expirée"
     },
     "empty": {
       "title": "Aucune clé API créée",
@@ -646,7 +677,7 @@
       "copy": "Copier",
       "revoke": "Révoquer",
       "delete": "Supprimer",
-      "editSessions": "Modifier les sessions"
+      "edit": "Modifier l'accès"
     },
     "sessions": {
       "label": "Accès aux sessions",
@@ -654,10 +685,36 @@
       "all": "Toutes les sessions",
       "empty": "Aucune session pour le moment. Cette clé pourra accéder à toutes dès qu’il y en aura.",
       "restricted": "{{count}} sélectionnées",
-      "editTitle": "Modifier l’accès aux sessions",
       "save": "Enregistrer",
       "choose": "Choisir des sessions",
       "leaveAll": "Laisser pour toutes les sessions"
+    },
+    "edit": {
+      "title": "Modifier l'accès de la clé",
+      "signedIn": "Ce tableau de bord est connecté avec cette clé. Modifier son rôle, ses adresses IP, ses discussions ou son expiration peut vous déconnecter."
+    },
+    "restrictions": {
+      "none": "Aucune",
+      "ips": "IP : {{count}}",
+      "chats": "Discussions : {{count}}",
+      "expires": "Expire le {{date}}",
+      "expired": "Expirée le {{date}}"
+    },
+    "ips": {
+      "label": "Adresses IP autorisées (facultatif)",
+      "hint": "Une adresse IP ou une plage CIDR par ligne. Laissez vide pour accepter toute adresse.",
+      "invalid": "Ni une adresse IPv4 ni une plage CIDR : {{value}}"
+    },
+    "chats": {
+      "label": "Accès aux discussions (facultatif)",
+      "hint": "Une discussion par ligne : un ID de groupe se terminant par @g.us, un ID de contact se terminant par @c.us ou @lid, ou un numéro de téléphone. Laissez vide pour toutes les discussions. Une clé limitée à des discussions ne peut utiliser que les routes ouvertes à ce type de clé ; le WebSocket des événements et MCP la refusent.",
+      "invalid": "Ni un ID de discussion ni un numéro de téléphone : {{value}}"
+    },
+    "expiry": {
+      "label": "Expire le (facultatif)",
+      "hint": "Dans le fuseau horaire de ce navigateur. Laissez vide pour une clé qui n'expire jamais.",
+      "clear": "Retirer l'expiration",
+      "invalid": "Saisissez une date et une heure complètes, au plus tard en l'an 9999, ou videz le champ pour une clé qui n'expire jamais."
     }
   },
   "logs": {
@@ -908,6 +965,7 @@
       "dontClose": "Veuillez ne pas fermer cette fenêtre",
       "successMsg": "Le serveur est de nouveau en ligne ! La page va se recharger automatiquement.",
       "errorMsg": "Le serveur n'a pas répondu après 30 secondes. Veuillez vérifier les journaux Docker et redémarrer manuellement.",
+      "outcomeUnknown": "Le proxy a renvoyé une erreur avant que le serveur ne réponde ; on ne sait donc pas si le redémarrage est en cours. Rechargez la page dans une minute pour vérifier.",
       "reload": "Recharger la page"
     },
     "toasts": {
@@ -921,7 +979,7 @@
       "storageWarning": "Les fichiers multimédias existants ne sont pas déplacés automatiquement vers le nouveau backend de stockage ; ils resteront à leur ancien emplacement.",
       "downloadBackup": "Télécharger d'abord la sauvegarde",
       "backupTitle": "Sauvegarde et restauration des données",
-      "backupHint": "Exportez toutes les données au format JSON avant de changer de base de données, puis importez-les après le changement. La sauvegarde contient les secrets de webhook et les identifiants de proxy en clair — conservez-la de manière sécurisée et supprimez-la après la restauration.",
+      "backupHint": "Exportez toutes les données au format JSON avant de changer de base de données, puis importez-les après le changement. Les secrets de signature des webhooks, les en-têtes personnalisés des webhooks et les identifiants de proxy ne sont pas inclus ; saisissez-les à nouveau après la restauration. Les secrets et paramètres des instances d'intégration sont inclus en clair : conservez le fichier de manière sécurisée et supprimez-le après la restauration.",
       "export": "Exporter les données",
       "import": "Importer les données",
       "exportFailed": "Impossible d'exporter les données",

@@ -243,6 +243,17 @@ describe('IngressEnqueueService', () => {
       }
     });
 
+    it.each(['1e1', '0x10', '0'])('falls back to 3 attempts for INGRESS_MAX_ATTEMPTS=%p', raw => {
+      const prevA = process.env.INGRESS_MAX_ATTEMPTS;
+      try {
+        process.env.INGRESS_MAX_ATTEMPTS = raw;
+        expect(resolveIngressJobOptions().attempts).toBe(3);
+      } finally {
+        if (prevA === undefined) delete process.env.INGRESS_MAX_ATTEMPTS;
+        else process.env.INGRESS_MAX_ATTEMPTS = prevA;
+      }
+    });
+
     it('treats a blank INGRESS_RETRY_DELAY_MS as unset, not as 0', () => {
       const prevD = process.env.INGRESS_RETRY_DELAY_MS;
       try {

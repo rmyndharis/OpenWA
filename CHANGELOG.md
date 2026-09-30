@@ -7,12 +7,273 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-09-30
+
+### Added
+
+- `MESSAGE_RETENTION_DAYS` deletes stored messages, and finished bulk batches, older than that many days, at startup and then daily; the default `0` keeps them forever.
+- `INBOUND_MEDIA_GLOBAL_CONCURRENCY` caps concurrent inbound media downloads across all sessions of one process, on both engines; `0` (default) turns it off, and media that waits past `MEDIA_DOWNLOAD_TIMEOUT_MS` for a slot arrives without its payload (`media.omitted: true`).
+- `S3_KEY_PREFIX` sets the key root objects are stored under in the S3 bucket (default `media/`), so deployments with separate databases can share a bucket under prefixes that do not overlap.
+- `REDIS_TLS=true` connects the cache, rate limiter, queue and WebSocket fan-out to Redis over TLS, for managed Redis services that require it; a private CA goes in `NODE_EXTRA_CA_CERTS`, and the built-in Redis serves plain TCP only.
+- `GET /api/metrics` exports event-loop delay (`openwa_event_loop_delay_p99_seconds`, `openwa_event_loop_delay_max_seconds`), unhandled promise rejections by `kind` (`openwa_unhandled_rejections_total`) and, with `QUEUE_ENABLED=true`, webhook and ingress queue job counts by state (`openwa_queue_jobs`).
+- Dashboard Webhooks: the create and edit forms set a signing secret (with Generate and Copy) and custom delivery headers, which stay write-only, and refuse a header the gateway sets itself, such as `User-Agent` or `X-OpenWA-*` ([#1723](https://github.com/rmyndharis/OpenWA/issues/1723)). Thanks @xcode-it for the report.
+- Dashboard API Keys: create and edit set a key's expiry, allowed IPs, role and, for operator and viewer keys, allowed chats, with each IP or chat line checked inline, and the list shows each key's restrictions ([#1634](https://github.com/rmyndharis/OpenWA/issues/1634)). Thanks @bhavyachopra99 for the report.
+- All five SDKs verify a webhook delivery's `X-OpenWA-Signature` against the raw body (`verifyWebhookSignature`, `verify_webhook_signature`, `VerifyWebhookSignature`, `WebhookSignature.verify`, `WebhookSignature::verify`), and the JavaScript, Python, Go and Java SDKs type the delivery body as `WebhookDelivery`.
+- All five SDKs' API errors carry the body's error `code`, a retry delay from the body's `retryAfterSeconds` or a `Retry-After` header, and the response headers.
+- The Docker image can start as a non-root uid, such as `docker run --user 997:997` or a Kubernetes `runAsUser`, when `/app/data` is writable by it, and stops with an error naming the fix when it is not; the default root start is unchanged.
+- Helm chart: a `podSecurityContext` value (empty by default) sets the pod security context; `values.yaml` documents a non-root profile with uid, gid and `fsGroup` 997 and an opt-in `RuntimeDefault` seccomp profile.
+- Indonesian (Bahasa Indonesia) dashboard locale, selectable from the language picker. Thanks @qwerty0999999.
+
+### Changed
+
+- `POST /api/sessions/:sessionId/messages/send-product` passes the `message:sending` plugin gate with type `product`; a plugin veto answers `400`, and a rewritten `chatId` is ignored.
+- `POST /api/integration/instances/:pluginId/:instanceId/redrive` answers `409` for a deleted or disabled instance instead of re-dispatching its dead-lettered rows.
+- `POST /api/infra/storage/import` reports a `failed` count and answers `imported: false` when entries failed and none was written.
+- The webhook filters contract accepts an empty `conditions` list, which means no filter, as the gateway already did.
+- The main (auth/audit) database runs its migration chain at every boot instead of TypeORM synchronize; an existing `main.sqlite` is adopted in place with its rows kept and missing columns added.
+- Boot stops with an error naming the migration or column when `main.sqlite` was migrated by a newer release or lost a recorded column to an older one, instead of starting on it; the error points to the restore steps in the docs.
+- Setting or clearing a session's egress proxy (`proxyUrl` on `POST /api/sessions`, `PATCH /api/sessions/:sessionId/proxy`) requires an ADMIN key; in the dashboard only admin keys can edit it.
+- A valid API key refused by its `allowedSessions` or `allowedIps` gets `403` instead of `401` on REST and `/api/admin/queues`; `401` stays for a missing, unknown, revoked or expired key.
+- `GET /api/sessions/:sessionId/contacts/check/:number` and the MCP `ContactCheckNumber` tool require an OPERATOR key.
+- A key restricted to selected chats can read stored messages through `GET /api/sessions/:sessionId/messages` on both engines by passing an allowed `chatId`; without `chatId` it gets `403` ([#1634](https://github.com/rmyndharis/OpenWA/issues/1634)). Thanks @bhavyachopra99 for the report.
+- A key restricted to selected chats can call `GET /api/sessions/:sessionId/groups`, `GET /api/sessions/:sessionId/contacts` and `GET /api/sessions/:sessionId/labels/:labelId/chats`, which return only its allowed chats, filtered before `limit` and `offset` apply ([#1634](https://github.com/rmyndharis/OpenWA/issues/1634)). Thanks @bhavyachopra99 for the report.
+- A plugin whose manifest `minOpenWAVersion` is newer than the running OpenWA, or is not a `MAJOR.MINOR.PATCH` version, is refused at install with `400` and set to `ERROR` at boot.
+- The plugin loader logs a warning for `hmac-sha256` ingress routes that declare no `timestampHeader` and for `shared-secret` routes, unless the route sets `dedupOn: "body"`.
+- Info-level logs no longer carry third-party chat ids or phone numbers: the whatsapp-web.js per-action lines and the automation reply line moved to `debug`, and the incoming-call line drops the caller's number.
+- Baileys: the chat-state cache logs a warning naming `BAILEYS_CHAT_STATE_CACHE_MAX` the first time it evicts a state.
+- A built-in PostgreSQL, Redis or MinIO container that runs a different image than the one this release pins logs a warning when OpenWA starts or re-enables it, naming both images and how to recreate it.
+- `scripts/backup.sh` adds an `ENGINE-STATE-NOTE` to the archive, and logs a warning, when a whatsapp-web.js profile was open or Baileys state was present during the copy; `scripts/restore.sh` prints it, and `--strict` still refuses only a possibly torn database.
+- The Docker image is built on a refreshed `node:22-slim` base image.
+- Dashboard: fonts ship in the build instead of loading from Google Fonts, and the CSP no longer allows `fonts.googleapis.com` or `fonts.gstatic.com`, so the Bull Board queue UI at `/api/admin/queues` falls back to system fonts.
+
 ### Fixed
 
 - A plugin `configUi` editor receives the dashboard language as `locale` in `config:value`, and the `schema` it gets carries field titles and descriptions localized from the manifest `i18n` block, as the generated form already showed. Thanks @probably-ABHINAV, and @TreIngenia for the proposal.
-- whatsapp-web.js: `GET /api/sessions/:sessionId/contacts` no longer fails with `500` when WhatsApp Web cannot read one contact (`getAlternateUserWid - Invalid get call using deviceWid`). That contact is skipped and counted in a warning, and the rest of the list is returned ([#1720](https://github.com/rmyndharis/OpenWA/issues/1720)). Thanks @onepay-ye for the report.
+- whatsapp-web.js: `GET /api/sessions/:sessionId/contacts` no longer fails with `500` when WhatsApp Web cannot read one contact (`getAlternateUserWid - Invalid get call using deviceWid`). That contact is skipped and counted in a warning, and the rest of the list is returned; when no unblocked contact, or no contact with a readable id, is left, the route answers `500` naming the counts and the first error ([#1720](https://github.com/rmyndharis/OpenWA/issues/1720)). Thanks @onepay-ye for the report.
 - `PUT /api/sessions/:sessionId/presence` is re-applied once each time the engine's connection opens, so an `available: false` survives a Baileys transient reconnect instead of being replaced by the connect-time announcement. It is still dropped when the gateway replaces the engine. On Baileys the route answers `409` while the account push name has not synced, where it answered `200` and sent nothing. Thanks @gabrielmmoraes1999.
-- The container no longer crash-loops at start when `/app/data` is a bind mount that refuses to change a symlink's owner, such as Docker Desktop file sharing, and a whatsapp-web.js profile still holds the Chromium lock files of an unclean stop: the entrypoint removes those locks before it fixes ownership. Thanks @Nexiler for the report.
+- The container no longer crash-loops at start when `/app/data` is a bind mount that refuses to change a symlink's owner, such as Docker Desktop file sharing: the entrypoint re-owns `/app/data` without touching or following symlinks, so a Chromium lock left by an unclean stop, under any session path, no longer stops it. Thanks @Nexiler for the report.
+- whatsapp-web.js: `GET /api/sessions/:sessionId/contacts`, `GET /api/sessions/:sessionId/chats` and `GET /api/sessions/:sessionId/groups` answer `503` instead of `500` when the read outruns the Puppeteer protocol timeout.
+- whatsapp-web.js: a forward no longer reports the id of another message sent to the same chat in the same second.
+- whatsapp-web.js: an inbound media download whose caller already gave up is skipped, so messages that arrive after a burst keep their media.
+- whatsapp-web.js: a document sent from a URL without a filename is named after the percent-decoded URL basename.
+- whatsapp-web.js: listing chats or groups on a large account no longer blocks the page long enough for the liveness watchdog to disconnect a healthy session ([#1501](https://github.com/rmyndharis/OpenWA/issues/1501)).
+- whatsapp-web.js: `GET /api/sessions/:sessionId/contacts` no longer lists one contact twice and leaves another out when the contact list changes while it is being read.
+- whatsapp-web.js: a send or status post that WhatsApp Web throws on inside the page answers `500` with `code: ENGINE_PAGE_ERROR`, a `pageError` carrying the thrown `name` and `message`, and the WhatsApp Web `build` when the page reports it, instead of a bare `Internal server error`; the error message names the build too, so the `message:failed` hook and bulk batch results carry it.
+- whatsapp-web.js: a group write that hits a dead browser page reports the session disconnected so it reconnects; the subject, description, settings and picture writes and the invite-code read answer `503` instead of `500`, as does any group write whose group lookup finds the page dead.
+- whatsapp-web.js: a `WWEBJS_ONBOARDING_CONTINUE_LABELS` label copied from the `onboarding_dialog_unrecognized` warning now matches a button whose text spans several elements or lines or holds a non-breaking space ([#1679](https://github.com/rmyndharis/OpenWA/issues/1679)). Thanks @DavidgFernandes for the report.
+- whatsapp-web.js: the pinned WhatsApp Web build's HTML is downloaded with a 10 s limit before the browser starts; when it cannot be downloaded or is not a WhatsApp Web page, the session starts unpinned with a `web_version_html_unavailable` warning instead of hanging or silently loading the live build.
+- whatsapp-web.js: a session restored from saved credentials that stays `authenticating` for 90 s is marked `failed` with its credentials kept, instead of having them deleted.
+- whatsapp-web.js: an engine config saved with `PUT /api/plugins/whatsapp-web.js/config` whose `puppeteer` object has no `args` launches Chromium with the four default flags (including `--disable-dev-shm-usage`) and `--lang=en-US`, instead of only `--no-sandbox` and `--disable-setuid-sandbox`.
+- Baileys: poll votes, in-chat pins, keep-in-chat toggles, album headers, encrypted reactions and event RSVPs no longer arrive as empty `unknown` messages on the live or history path ([#1568](https://github.com/rmyndharis/OpenWA/issues/1568)). Thanks @berodcdev for the report.
+- Baileys: a message received through a sender's broadcast list is filed under the sender's chat, as WhatsApp lists it: `chatId`, `from` and `author` name the sender and `kind` is `individual`.
+- Baileys: round video notes arrive as `video` messages with their media, quote and mentions instead of empty `unknown` messages.
+- Baileys: a connection that keeps dropping within 5 minutes of its previous drop keeps backing off (1 s up to 60 s) and raises `session.reconnect_loop`, instead of redialing every 1 to 2 s.
+- Baileys: history sync no longer clears a chat's stored pin, archive and mute state ([#1724](https://github.com/rmyndharis/OpenWA/issues/1724)). Thanks @gLeW7 for the report.
+- Baileys: after a start, a full chat-state cache evicts the oldest pin, archive or mute state first instead of the most recently changed one, which the next chat list showed as cleared ([#1724](https://github.com/rmyndharis/OpenWA/issues/1724)). Thanks @gLeW7 for the report.
+- Baileys: `GET /api/sessions/:sessionId/chats` lists a contact known by both phone number and lid once instead of twice, with the newest message under either id and the unread count of the more recently active record ([#1724](https://github.com/rmyndharis/OpenWA/issues/1724)). Thanks @gLeW7 for the report.
+- Baileys: a pin, archive or mute WhatsApp syncs under a contact's lid shows on that contact's chat in `GET /api/sessions/:sessionId/chats` and survives a restart, and a later change under either id wins ([#1724](https://github.com/rmyndharis/OpenWA/issues/1724)). Thanks @gLeW7 for the report.
+- Baileys: right after a restart, `GET /api/sessions/:sessionId/chats` lists each chat with a stored archive, pin or mute state, up to `BAILEYS_CHAT_STATE_CACHE_MAX`, instead of leaving it out until its next message.
+- Baileys: `GET /api/sessions/:sessionId/chats` no longer runs one database query per chat with no stored archive, pin or mute state, after a start or once chats outnumber `BAILEYS_CHAT_STATE_CACHE_MAX`, while the stored states themselves fit in that cache.
+- Baileys: `GET /api/sessions/:sessionId/contacts/:contactId/phone` and the inbound `senderPhone` read an `@lid`'s stored mapping, then Baileys' key store, when the in-memory cache misses, instead of answering `null`; with `RESOLVE_LID_TO_PHONE=true` that `null` was also written over the stored mapping.
+- Baileys: with `RESOLVE_LID_TO_PHONE=true`, an incoming `@lid` sender that nothing maps to a phone is looked up again at most once a minute instead of being recorded as having none.
+- Baileys: a status or broadcast-list message maps its sender's lid to the sender's phone number instead of to `status` or the list id.
+- Baileys: session auth files are written atomically, and a `creds.json` that does not parse, including an empty or `null` file, is moved with the session's key files into a `corrupt-<ms>-<suffix>/` folder in its auth directory and logged as an error before the new QR link, instead of being silently replaced.
+- Baileys: storing a message no longer sorts the session's stored messages to enforce `BAILEYS_MESSAGE_STORE_LIMIT`; a new `(sessionId, createdAt, id)` index serves the trim.
+- A session that drops shortly after reaching READY keeps backing off and raises `session.reconnect_loop` on schedule, instead of retrying at the base delay forever; time the engine spends reconnecting on its own, as Baileys does, no longer counts as READY.
+- A session that kept failing to reconnect for about 84 hours no longer falls from the 5-minute backoff cap to a retry every 5 seconds.
+- A stop that answers `502` `SESSION_STOP_INCOMPLETE` releases the session claim, so another node's takeover no longer restarts the stopped session.
+- A node that adopts a session no longer marks FAILED the bulk batches it started itself while the adopted engine was still initializing, or a batch that finished while the reap was reading it.
+- When a stop and start, or a reconnect, replaces an engine that is still starting, the old start's timeout or failure no longer untracks or tears down the new engine, or marks the session `disconnected` or `failed`.
+- An engine whose graceful shutdown fails is force-killed instead of left running with no handle when its node loses the session's claim, `POST /api/infra/import-data` stops orphan engines, or a stop or delete retires a start or reconnect.
+- With `AUTO_START_SESSIONS=true`, a session stopped with `POST /api/sessions/:sessionId/stop` or `POST /api/sessions/:sessionId/force-kill` stays down across restarts and is not adopted by another node until `POST /api/sessions/:sessionId/start`.
+- Two gateway processes sharing one `NODE_ID` (by default the hostname, as with host networking or pm2 cluster mode) log a `duplicate_node_id` error while either holds a session; give each process its own `NODE_ID`.
+- An inbound message, or one the account sent outside the API, is inserted once more after a transient database error (a SQLite lock, a dropped connection, a PostgreSQL pool timeout or connection limit), instead of reaching webhooks with no stored row.
+- Messages in one chat are stored, emitted over the WebSocket and handed to webhook dispatch in arrival order, even when a plugin's `message:received` or `message:sent` handler is slower on an earlier one. Webhook deliveries themselves can still arrive out of order.
+- A delivery ack, reaction, edit or deletion that arrives before its message is stored is applied once the message is stored.
+- The lid-to-phone cache no longer keeps an empty reverse entry for every phone it evicted or re-mapped, so its memory stays within the cache bound.
+- Webhook custom header values with characters outside Latin-1 are rejected with `400`; they were accepted and made every delivery to that webhook fail.
+- The webhook outbox replay no longer delivers an event the webhook has since been unsubscribed from.
+- A webhook delivery that succeeds removes the delivery-failure rows filed under its idempotency key, so an event the outbox replay delivers after a shed or shutdown refusal is no longer listed as lost.
+- The delivery-failure row of a shed or shutdown-refused webhook delivery takes the reason its replay failed with, and the attempt count once the replay was sent.
+- The `openwa_webhook_delivery_failures_total` help text and the metrics reference say it also counts webhook deliveries that were never sent.
+- `POST /api/sessions/:sessionId/webhooks/:id/test` sends a fresh `X-OpenWA-Idempotency-Key` on every call, so a deduplicating receiver runs each test.
+- Webhook custom headers whose names differ only in case are rejected with `400`, and a custom `User-Agent` in any spelling is dropped at delivery; the HTTP client joined such names into one comma-separated value.
+- With the queue off, each webhook retry, and a first attempt that waited behind the `WEBHOOK_DEGRADED_SESSION_CONCURRENCY` cap, re-reads the webhook: it uses the current URL, headers and secret, and stops without a delivery-failure row once the webhook is deleted, disabled or unsubscribed from the event.
+- With the queue off, webhook retries back off exponentially from `WEBHOOK_RETRY_DELAY`, doubling per retry, as documented; they backed off linearly.
+- A failing webhook receiver no longer holds every delivery slot: a session's deliveries to webhooks whose last attempt failed run at most `WEBHOOK_DEGRADED_SESSION_CONCURRENCY` at a time per node, by default a quarter of `WEBHOOK_WORKER_CONCURRENCY`, or of `WEBHOOK_DISPATCH_CONCURRENCY` with the queue off.
+- With the queue off, a webhook retry waiting out its backoff no longer holds a delivery slot.
+- A WebSocket `message` frame with no payload answers `INVALID_MESSAGE` instead of a generic exception.
+- On PostgreSQL, boot no longer runs FTS schema DDL when the `body_ts` column and its index already exist, so a restart no longer queues every read and write on `messages` behind the open ones.
+- Two plugins with the same instance id no longer serialize each other's ingress deliveries.
+- A sandboxed plugin whose worker stays blocked after a hook, webhook or search call times out is stopped and set to `ERROR`, instead of making every later event wait out the 5 s hook timeout.
+- Storage file count, export and import answer `503` when `STORAGE_TYPE=s3` and the bucket has not been reachable since boot, instead of silently using the local fallback directory; after that, an outage answers `500`, or `imported: false` for the import.
+- With `STORAGE_TYPE=s3`, a bucket still missing when S3 becomes reachable after boot is now created, instead of leaving storage on the local fallback until a restart.
+- Built-in S3 storage (the compose `minio` and `full` profiles and the Dashboard > Infrastructure built-in option) runs `pgsty/silo`, a maintained MinIO fork pinned by release tag and digest, because `minio/minio` can no longer be pulled ([#1729](https://github.com/rmyndharis/OpenWA/issues/1729)).
+- A built-in PostgreSQL, Redis or MinIO container is created from the image already on the host instead of pulling it every time, so it still starts when the registry is unreachable.
+- `POST /api/infra/import-data` retires the plugin bindings of instances the restored backup drops or disables and re-applies the restored ones, so a dropped session-scoped instance no longer keeps receiving message hooks with its old endpoint and credentials.
+- `POST /api/infra/import-data` re-keys `chat_states` rows from a backup taken before 0.23.5, so their mute, archive and pin state is read again.
+- `POST /api/infra/import-data` applies the 0.24.0 cleanup to the rows it restores: revoked messages lose their media, quote and reactions, and lid mappings stored with `status` or a broadcast-list id as the phone are dropped.
+- Concurrent group creates and participant adds can no longer together exceed the send-pacing cold-reachout daily allowance.
+- `GET /api/sessions/:sessionId/contacts/profile-pictures` answers `409` when the engine is not ready, instead of `200` with every picture null.
+- Listing messages (`GET /api/sessions/:sessionId/messages` and the `MessageList` MCP tool) reads a page in size-bounded chunks, so a page of large inline media no longer holds every payload in memory at once.
+- `GET /api/infra/export-data` reads stored messages and bulk batches in size-bounded chunks, so an export no longer holds every inline media payload in memory before the inline media budget drops the ones that do not fit.
+- Listing one chat's messages (`GET /api/sessions/:sessionId/messages?chatId=`) and counting its `total` no longer scan the whole session's history; a new `(sessionId, chatId, createdAt)` index serves them.
+- `POST /api/sessions/:sessionId/messages/send-product` answers `400` for an empty `chatId` or `productId`, a `productId` over 255 characters or a `body` over 4096 characters.
+- The received-status purge deletes expired statuses in batches, so a backlog after downtime no longer makes every purge fail while the table keeps growing.
+- The received-status and `CHAT_MEDIA_ARCHIVE_TTL_DAYS` purges no longer stall behind files they cannot delete.
+- A timed-out media conversion releases its ffmpeg stderr pipe at once, instead of holding it open until a process started by an `FFMPEG_PATH` wrapper script exits.
+- Statistics requests and metrics scrapes that arrive while the statistics memo is empty or expired share one database aggregation instead of each running their own.
+- An `api_key_auth_failed` audit row for a revoked or expired API key, or one refused by its `allowedIps` or `allowedSessions`, names that key on REST, `/api/admin/queues`, `GET /api/health` and MCP; it recorded only the client IP.
+- The `api_key_created` audit row records the new key's allowed IPs, sessions and chats and its expiry, as `api_key_updated` already does.
+- The OpenAPI contract declares `401` and `403` on every operation that takes an API key and gives each documented error response an `ErrorResponse` body schema.
+- `SEARCH_LIMIT_MAX`, `INGRESS_MAX_ATTEMPTS`, `INGRESS_RETRY_DELAY_MS`, `WEBHOOK_WORKER_CONCURRENCY`, `INGRESS_WORKER_CONCURRENCY` and `REDIS_CACHE_DB` are validated at boot; a typo no longer falls back to the default in silence, and a negative or fractional `SEARCH_LIMIT_MAX` no longer reaches the search provider.
+- An invalid environment value stops the boot before the storage root is created or the built-in PostgreSQL container is started, and is logged once instead of twice.
+- Nest framework log lines, including the stack of an unhandled `500`, and the modules that logged through Nest's own logger now follow `LOG_LEVEL` and `LOG_FORMAT` and carry the request id; their debug lines printed at every level.
+- `docker-compose.dev.yml` no longer pins `QUEUE_ENABLED=false`, so enabling the queue in Dashboard > Infrastructure takes effect on the Quick Start stack.
+- `docker-compose.yml` and `docker-compose.dev.yml` forward `REDIS_CACHE_DB` from `.env`; it never reached the container, so the cache stayed on Redis database 1.
+- `docker-compose.yml` checks the API container with `curl` against `/api/health/ready`, like the image and `docker-compose.dev.yml`, instead of a `node -e` one-liner.
+- The container entrypoint re-owns only the paths under `/app/data` that `openwa` does not already own, so a restart no longer rewrites the metadata of every session, media and plugin file.
+- Helm chart: the startup, liveness and readiness probes time out after 5 s instead of the kubelet's 1 s, and liveness allows 6 consecutive failures instead of 3, so a CPU-throttled pod is not restarted over a slow answer.
+- PHP SDK: `sessions->create()` sends an empty `config` as `{}`; it sent `[]`, which the gateway rejected with `400`.
+- Java SDK: a response enum value newer than the SDK decodes to the enum's `UNKNOWN` constant instead of `null`, except for `WebhookEvent`, `ProxyType` and `MessageDirection`, which requests also carry.
+- Dashboard Chats: a message that arrives as the chat list renders no longer triggers a refetch that discards its preview and unread count.
+- Dashboard Chats: the chat list refreshes after a WebSocket reconnect, and the open chat is marked read once the refreshed list loads.
+- Dashboard Plugins: the config editor frame and the uninstall toast use the localized plugin name.
+- Dashboard: the restart dialog shows the server's reason when a restart is refused, says the outcome is unknown when a reverse proxy answers `504` or a `502` without a gateway error code, and lists built-in services that failed to start or stop instead of reloading over them.
+- Dashboard: the WebSocket dials only the origin of `VITE_WS_URL`, else of `VITE_API_URL`, so a split-origin build reaches the API and a trailing slash or path no longer breaks live events.
+- Dashboard: Safari's `Load failed` collapses into the single connection-lost toast.
+- Dashboard Message Tester: bulk progress polling stops and shows the server's message when the batch answers `404` or `403`.
+- Dashboard: the analytics charts load only for an admin key, so an operator or viewer key no longer downloads the chart bundle or gets a `403` from `GET /api/stats/messages`, which was logged as a failed authentication.
+- Dashboard: the Infrastructure backup hint says webhook signing secrets, custom webhook headers and proxy credentials are left out of the data export, and that integration instance secrets and settings are included in plaintext.
+- Dashboard Webhooks: Create and Save stay disabled while the URL is blank or no event is selected, with a hint under the event list, and a double click on Save sends one update.
+- Dashboard API Keys: an expired key is listed as Expired instead of Active, and Create stays disabled for a name shorter than 3 characters.
+- Dashboard: the Headless Mode, Session Data Path, Browser Arguments and Storage Path fields show the environment-pin note when a variable supplies them, and `GET /api/infra/status` lists `PUPPETEER_HEADLESS`, `SESSION_DATA_PATH`, `PUPPETEER_ARGS` and `STORAGE_LOCAL_PATH` in `envPinned`.
+- A release tag with any `-` suffix is marked prerelease on GitHub as well, so it can no longer become the release the update check reads as latest.
+- The `ghcr.io/rmyndharis/openwa:main` image tag moves only after the image passes the CI smoke tests and only while its commit is still the head of `main`, so overlapping merges can no longer leave it on an older build.
+
+### Documentation
+
+- The API reference says `send-bulk` collapses only exact duplicate entries, lists all eight audit actions that are never emitted, says when the `maxReconnectAttempts` count restarts, and describes `author` as the sender of group, status and broadcast-list messages.
+- Rate-limit windows are documented as counted per REST route handler and client IP, with all three tiers enforced; `/mcp` and `/api/admin/queues` have their own per-IP throttle (`MCP_IP_RATE_LIMIT_MAX`, `MCP_IP_RATE_LIMIT_WINDOW_MS`) instead.
+- `API_MASTER_KEY` is documented as a first-boot seed; rotate it by minting a new ADMIN key and revoking the seeded one.
+- The worker-pool docs say ingress and webhook workers are shared across conversations and webhooks, with sizing guidance for `INGRESS_WORKER_CONCURRENCY` and `WEBHOOK_WORKER_CONCURRENCY`.
+- The send-pacing docs count Baileys product sends into the daily cap, and the metrics docs say the database-derived series can lag an outage by up to `STATS_CACHE_TTL_MS` plus 5 s.
+- The devops environment excerpt and the development and architecture env profiles no longer pin dashboard-owned keys, drop Chromium's default flags or ship a sample key pepper, and `.env.example` corrects the Redis, cache and shutdown-delay notes.
+- README points per-session send limits at `SEND_PACING_ENABLED`, and CONTRIBUTING, the community guide and the docs index set up with `npm ci` and `npm run dev` without copying `.env.example`, which ran the dev server in production mode.
+- The migration guide checks that both queues are drained with a header-authenticated Bull Board call, and confirms `s3Available` before a storage migration.
+- `SECURITY.md` says the bundled Docker Compose files are affected by a legacy `ENABLE_SWAGGER=true` in `.env`, and lists plugin activation and the session proxy route among the routes fenced from session-scoped keys.
+- Java SDK: clear a webhook's filters with `new WebhookFilters(List.of())`; `filters(null)` leaves them unchanged.
+- The webhook runbook reads delivery failures with an ADMIN key and says a URL the SSRF guard blocks only at delivery time is recorded there.
+- The API reference documents the error body and lists the stable `code` values some refusals carry; it said errors had no `code` field.
+- The OpenAPI schema for `PUT /api/sessions/:sessionId/webhooks/:id` says an omitted `filters` keeps the stored filters; send `null` or `{ conditions: [] }` to clear them.
+- The engine capability matrix and the `GET /api/sessions/:sessionId/chats` reference say that after a restart Baileys lists a 1:1 chat with no stored archive, pin or mute state only once its next message arrives.
+- The MCP guide says that message text, names and group subjects in tool results are written by other WhatsApp users, and lists the settings that limit what an agent can do with them.
+- The plugin docs describe plugins loaded from disk as fully trusted and the worker as fault containment, matching `SECURITY.md`, list what a loaded plugin can still reach, and point to the Compose override that disables `docker-proxy`.
+- The plugin search-provider guide describes backfill on whatsapp-web.js through `ctx.engine.getChats` and `getChatHistory` (at most 100 recent messages per chat, keyed by WhatsApp id), started unawaited from `onEnable`, and says a Baileys provider indexes live traffic only.
+- The SDK docs list what the 0.5.0 registry builds lack: `getProxy`, `updateProxy` and `clickButton`, the webhook signature helpers and `WebhookDelivery` types, the API error code, retry-delay and headers accessors, and the Java `UNKNOWN` fallback.
+- The horizontal-scaling and deployment guides and the Helm chart README describe API keys and the audit log as kept per node, give the real lease clock-skew margin and two-engine overlap bound, and no longer call session claims unimplemented.
+- The horizontal-scaling guide's hand-applied StatefulSet gets the chart's probe timeouts and startupProbe, checks liveness on `/api/health/live`, and sets `fsGroup: 997` instead of 1000.
+- The quick rollback restores `main.sqlite` and the admin key file from the same backup as the data store, and both rollback procedures say a rollback below 0.23.6 loses API key chat scopes and to revoke chat-scoped keys before one.
+- The migration guide says the data import is one request bounded by `BODY_SIZE_LIMIT`, and that the export carries no webhook secrets, custom headers or proxy credentials.
+- The database design doc lists every data and main migration and the `session_rebind_rejected` audit action, and no longer calls message history optional.
+- The deployment and architecture docs say which media the configured store holds: status media always, chat media only with `CHAT_MEDIA_ARCHIVE_ENABLED=true` ([#1707](https://github.com/rmyndharis/OpenWA/issues/1707)). Thanks @justinkruit for the report.
+- The backup runbook says engine auth state is copied live, and to stop the sessions first for a copy that restores without re-pairing.
+- The backup docs no longer show encryption, an S3 upload or a retention schedule that `scripts/backup.sh` does not perform.
+- The Helm restore runbook runs its helper pod as the app user (uid 997), so a namespace enforcing Pod Security `restricted` admits it.
+- The devops guide quotes the real Dockerfile's install, healthcheck and entrypoint lines instead of a stale hand-written copy, and the healthcheck FAQ targets `/api/health/ready`.
+- README and the risk guide say that WhatsApp's passkey linking step blocks new links on both engines for the accounts that get it, so switching engine does not help ([#560](https://github.com/rmyndharis/OpenWA/issues/560)). Thanks @adampalli for the report.
+- README and the docs index say where to find the first admin API key, and README shows a Compose override that runs the published image instead of building it.
+- The README, release guide, migration guide and upgrade runbook give published-image Compose deployments `docker compose pull openwa-api && docker compose up -d --no-build` as the upgrade command.
+- README, the SDK READMEs and the SDK package descriptions say OpenWA is not affiliated with WhatsApp or Meta.
+- The contributor docs describe the single-`main` branch flow and the labels in use, and the risk guide drops its placeholder trend chart and the maintainer measures that are not in place.
+- The development guide drops its `forwardRef` and request-ID interceptor samples and describes the request-ID middleware and one-directional module wiring the code uses.
+- The roadmap and the migration guide's upgrade matrix say that from 0.24.0 breaking changes and Upgrade notes ship only in a minor release, and list the earlier patch releases that carried them.
+- The troubleshooting FAQ no longer links a Discord server the project does not run.
+
+### Dependencies
+
+- `engine.io` 6.6.9 to 6.6.11, closing a high-severity denial-of-service advisory in the Socket.IO transport. It ships in the runtime tree.
+- `brace-expansion` 5.0.9 to 5.0.12 via the overrides in both trees, closing two high-severity and one moderate-severity denial-of-service advisories. The root copy ships in the runtime tree.
+- `multer` 2.3.0 to 2.4.0 via an override, closing a denial-of-service advisory in which aborted uploads leave orphaned disk writes. It ships in the runtime tree.
+- `qs` 6.15.2 to 6.16.0, closing two moderate-severity advisories, an array-limit bypass and a denial of service. It ships in the runtime tree.
+- `ip-address` 10.4.0 to 10.7.2 via an override, closing four moderate-severity advisories. It reaches the runtime tree through `socks` and `express-rate-limit`.
+- `hono` 4.13.0 to 4.13.11, closing three moderate-severity advisories. It reaches the runtime tree through `@modelcontextprotocol/sdk`.
+- `js-yaml` 5.2.2 to 5.4.2 via an override, closing a moderate-severity CPU denial-of-service advisory. It reaches the runtime tree through `@nestjs/swagger`.
+- `fast-uri` 3.1.7 to 3.1.8 via an override, closing a moderate-severity host-normalization advisory. It reaches the runtime tree through `@modelcontextprotocol/sdk`.
+- `@humanfs/node` 0.16.7 to 0.16.8 in the dashboard tree, closing a moderate-severity advisory. Dev-only, so nothing that ships changes.
+
+### Upgrade notes (behavior changes)
+
+- Baileys: poll votes, in-chat pins, keep-in-chat toggles, album headers, encrypted reactions and event RSVPs no longer produce `message.received` or `message.sent` events or stored rows.
+- With a finite `maxReconnectAttempts`, a session whose gateway reconnect keeps dropping within 5 minutes of READY now spends its budget and ends `failed` instead of retrying forever; a Baileys transient drop is still retried inside the engine without a cap, and that time no longer counts as READY.
+- A plugin whose `message:sending` handler refuses sends now also blocks `send-product`.
+- Webhooks already stored with a header value outside Latin-1 keep failing until their headers are updated.
+- `docker-compose.dev.yml` no longer forwards `QUEUE_ENABLED` from the host `.env`, the same as `docker-compose.yml`; turn the queue on in Dashboard > Infrastructure.
+- `TRUSTED_PROXIES` and `allowedIps` entries that are not a valid IP or CIDR (a leading-zero octet, an empty or padded prefix) are ignored, with a boot warning for `TRUSTED_PROXIES`.
+- An IPv6 range already stored in an API key's `allowedIps` (possible only for keys created before v0.4.3) now matches, and a stored IPv6 address matches however it is written; before, a range never matched and an address matched only when written exactly as the client address.
+- A restore that drops a session-wide (wildcard) plugin instance leaves that instance's settings in the plugin's base config; overwrite them with `PUT /api/plugins/:id/config`.
+- Status media is served with its base type only (`audio/ogg; codecs=opus` becomes `audio/ogg`), and a stored type that is not one well-formed image, video or audio type is served as `application/octet-stream`.
+- `MAIN_DATABASE_SYNCHRONIZE` now defaults to `false` in every environment, so the main (auth/audit) database runs its migrations at boot and the first boot adopts an existing `main.sqlite`; `true` no longer skips the migrations but adds a synchronize pass after them, with a warning under `NODE_ENV=production`.
+- Roll back `main.sqlite` together with the image: from this release on, boot refuses a `main.sqlite` whose migration ledger names a migration it does not ship, or that lacks a column whose migration is recorded, until the file is restored from the backup taken before the upgrade or downgrade.
+- An OPERATOR key that sets `proxyUrl` on `POST /api/sessions` or calls `PATCH /api/sessions/:sessionId/proxy` now gets `403`; use an ADMIN key.
+- Session-scope and IP allow-list refusals answer `403 Forbidden` instead of `401 Unauthorized` on REST and `/api/admin/queues`, and the SDKs raise their forbidden error for them; on MCP an `allowedIps` refusal gets `403` from `POST /mcp`, and a tool call outside `allowedSessions` returns `ForbiddenException` instead of `UnauthorizedException`.
+- A VIEWER key now gets `403` from `GET /api/sessions/:sessionId/contacts/check/:number` and a `ForbiddenException` result from the MCP `ContactCheckNumber` tool; use an OPERATOR key.
+- MCP clients must send the API key on every request: `initialize` and `tools/list` without one now get `401`, and a `tools/call` with a missing or invalid key gets `401` instead of an `isError` result.
+- An `openwa-minio` container created by an earlier release keeps the `minio/minio` image, and a Dashboard-created one its `127.0.0.1:9000` and `9001` ports, until it is recreated. Compose: with `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` set in the `.env`, run `docker compose --profile minio pull minio && docker compose --profile minio up -d minio`. Dashboard built-in: `docker rm -f openwa-minio`, then restart OpenWA. The `openwa_minio-data` volume and its media are kept.
+- The compose `minio` service (profiles `minio` and `full`) no longer starts without an S3 secret in the `.env` next to `docker-compose.yml`; set `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` there to the pair OpenWA uses.
+- `DELETE /api/sessions/:sessionId/chats/:chatId/messages` and `POST /api/sessions/:sessionId/chats/delete` now also remove the chat's stored messages from the gateway (rows, inline and archived media, search entries) and send plugins `message:deleted` for each; on Baileys the engine's own message store keeps its copies until its cap evicts them or the session is deleted. Export the history first if you need it.
+- Baileys: a message received through a contact's broadcast list arrives with the sender's `chatId` and `from` and `kind: individual` instead of the list id and `kind: broadcast`, as do its edits, revokes and reactions; an automation rule without a `kind` condition now answers it, and messages stored earlier keep the list id.
+- The image's `openwa` user is pinned at uid and gid 997: a volume for a non-root start must be writable by 997, and a Kubernetes `fsGroup` should be 997, not the 1000 the horizontal-scaling guide gave; the default root start re-owns `/app/data` as before.
+- whatsapp-web.js: sessions keep the pinned build's HTML, including the default auto-resolved pin, in `<SESSION_DATA_PATH>/.wa-web-cache/` (`./data/sessions/.wa-web-cache/` by default), which `scripts/backup.sh` archives with the sessions; a build no session has started on for 7 days is deleted, and if the directory cannot be written the session starts unpinned with a `web_version_html_unavailable` warning.
+- whatsapp-web.js: a `WWEBJS_WEB_VERSION` that is not a build number (it must start with a digit and contain only letters, digits, `.`, `_` and `-`) is dropped with a `web_version_html_unavailable` warning, and the session starts unpinned.
+- Baileys: a session whose `creds.json` exists but cannot be read (for example a permission or I/O error) now ends `failed` with that error at start instead of asking for a new QR link; fix the file and start the session again.
+- whatsapp-web.js: a restored session stuck at `authenticating` no longer comes back with a fresh QR on its own; it ends `failed`, so restart it, or delete the session and create it again to pair anew.
+- With `AUTO_START_SESSIONS=true`, a session stopped with `POST /api/sessions/:sessionId/stop` or `POST /api/sessions/:sessionId/force-kill` is no longer auto-started on boot or adopted by another node until `POST /api/sessions/:sessionId/start`; a session stopped before the upgrade still auto-starts once, and only a backup taken on this release restores the stopped state.
+- The upgrade clears the media, quote and reactions still stored on messages already deleted for everyone, and the chat-media orphan sweep then removes their archived files; this migration does not run on SQLite with `DATABASE_SYNCHRONIZE=true`.
+- Plugins receive `message:persisted` again, with the same row `id`, when a stored message is deleted for everyone or through `POST /api/sessions/:sessionId/messages/delete`; the emitted row is the cleared one (`type: 'revoked'`, empty `body`, null `metadata`).
+- The first boot builds two indexes, `(sessionId, chatId, createdAt)` on `messages` and `(sessionId, createdAt, id)` on `baileys_stored_messages`, not concurrently; on a large table boot takes longer, and on PostgreSQL writes to that table wait until the build finishes.
+- Baileys: `chat_states` gains a nullable `observed` column, and a row stored under a contact's lid moves to the contact's phone JID on that chat's next state update.
+- Baileys: the upgrade removes lid-to-phone mappings that earlier releases stored with `status` or a broadcast-list id as the phone, so those contacts resolve to their real number from new traffic; this migration does not run on SQLite with `DATABASE_SYNCHRONIZE=true`.
+- A deployment that sets `SEARCH_LIMIT_MAX`, `INGRESS_MAX_ATTEMPTS`, `WEBHOOK_WORKER_CONCURRENCY` or `INGRESS_WORKER_CONCURRENCY` to anything but a positive integer, or `INGRESS_RETRY_DELAY_MS` or `REDIS_CACHE_DB` to anything but a non-negative integer, now fails to start instead of running with the default or the raw value.
+- Nest framework log lines (route mapping, unhandled exception stacks) now use the OpenWA format: JSON when `LOG_FORMAT=json`, or with it unset under `NODE_ENV=production`, and `[OpenWA]`-tagged text otherwise; a log parser keyed on the `[Nest]` prefix needs updating.
+- Log lines changed: `Incoming call from <number>` is now `Incoming call`, `Session ready: <phone>` is now `Session ready` with `phone` in its metadata, and the whatsapp-web.js contact, label, message, group-invite and channel-unsubscribe action lines and `Automation rule replied` log at `debug`.
+- `POST /api/sessions/:sessionId/messages/send-product` refuses a `body` over 4096 characters with `400`, the same cap as `send-text`.
+- Webhooks already stored with header names that differ only in case keep sending the joined value until their headers are updated.
+- Deliveries to a webhook whose last attempt failed now queue per session: with the queue on, a job over the cap returns to the delayed set without spending an attempt; with it off, a session's backlog past a quarter of `WEBHOOK_DISPATCH_MAX_QUEUED` is recorded as a delivery failure with `attempts: 0` and replayed by the outbox.
+- An installed plugin with a malformed `minOpenWAVersion`, or one newer than the running OpenWA, no longer loads; fix the value or upgrade, and it loads again with its settings.
+- A sandboxed plugin whose worker answers nothing for 5 s after one of its calls timed out is now stopped and set to `ERROR`; re-enable it once fixed.
+- An upload slower than its size divided by `REQUEST_TIMEOUT_MS` (about 85 KiB/s for a 25 MiB body at defaults), counted after a 15-second grace, is now dropped instead of held until the request timeout.
+- Each active API key gets one half-share of the in-flight body budget however many addresses use it, where each client IP had its own half.
+- Behind a reverse proxy, set `TRUSTED_PROXIES`: without it every request without an API key, ingress deliveries included, draws on one address's share of the unkeyed body pool (25 MiB at defaults).
+- `DELETE` requests to `/api/...` paths ending in `/` now answer `404`; drop the trailing slash. Paths under `/api/ingress/` are exempt.
+- Java SDK: `SessionStatus`, `DeliveryStatus`, `BatchMessageStatus`, `BatchLifecycleStatus`, `PresenceState`, `AccountRestrictionKind`, `MemberAddMode` and `MembershipRequestMethod` gain an `UNKNOWN` constant, so a `switch` expression over one of them needs a `default` or `UNKNOWN` branch; code that tested these fields, `MessageType` or `ChatKind` for `null` to spot an unrecognised value now sees `UNKNOWN`.
+
+### Security
+
+- A REST, queue-dashboard or MCP request with a missing or unknown API key writes at most 10 audit rows per client IP per minute, and every audit row caps the stored path and user agent at 500 characters; on those surfaces a rejected stored key and every `403` are still recorded each time.
+- A `TRUSTED_PROXIES` entry with an empty prefix (`127.0.0.1/`) trusted every IPv4 peer and is now ignored. IPv6 addresses and CIDR ranges match, and a port on an `X-Forwarded-For` hop no longer changes the resolved client IP.
+- Queued, retried, inline and redriven ingress deliveries are no longer dispatched to a plugin instance disabled or deleted after the delivery arrived; a deleted instance's delivery ran with the plugin's base configuration.
+- All five SDKs refuse an empty, `.` or `..` id before sending, instead of sending a request that resolved to the parent route; the JavaScript, Go and Java raw-request methods also refuse a `.` or `..` path segment (also written `%2e`) and still send a trailing or double slash as written.
+- Status media stored with a mixed-case `image/svg+xml` type, or several comma-joined types, is served as `application/octet-stream`.
+- Queued webhook jobs no longer copy the webhook's custom headers and signature into Redis, where the queue dashboard displayed them.
+- The JavaScript SDK release job pins npm 12.0.2 instead of installing `npm@latest` while it can mint a publish credential.
+- The Python SDK release workflow builds and tests in a job that cannot mint the PyPI publish credential; the publish job only downloads the built files and uploads them.
+- MCP: every `POST /mcp` request, including `initialize` and `tools/list`, needs a valid API key; a missing, unknown, revoked or expired key gets `401`.
+- `GET /api/health` looks up at most 30 failing API keys per client IP per minute; past that, the client gets the answer without `version` whatever key it sends.
+- Requests without a body, health probes included, are no longer refused with `503` when the in-flight body budget already tracks its maximum of 10,000 clients.
+- A request body that falls behind the pace needed to arrive within `REQUEST_TIMEOUT_MS` is dropped after a 15-second grace, releasing its in-flight body budget.
+- Request bodies without an active API key, ingress deliveries included, share a pool of a quarter of the in-flight body budget or twice `BODY_SIZE_LIMIT`, whichever is larger (half the budget at defaults), so requests carrying an active key keep the rest.
+- A `DELETE` to an `/api/` path ending in `/` answers `404`, except under `/api/ingress/`.
+- An `hmac-sha256` ingress route's declared signature header is stored, and passed to the plugin, as `[redacted]`, as `shared-secret` routes already were.
+- The ingress per-instance rate limit (`INGRESS_INSTANCE_LIMIT`) counts only deliveries that pass signature verification; unknown-instance, challenge, oversized and unverified requests count against the per-client-IP limit (`INGRESS_IP_LIMIT`) alone.
+- `DELETE /api/sessions/:sessionId` also removes the session's webhook outbox rows, webhook delivery-failure records and integration dead-letter rows.
+- Once WhatsApp accepts it, clearing a chat's messages or deleting a chat also removes the gateway's stored message rows for that chat, their inline and archived media and their search entries; messages stored while the call runs are kept, and on Baileys the engine's own message store keeps its copies until its cap evicts them.
+- A message deleted for everyone, or through `POST /api/sessions/:sessionId/messages/delete`, is stored without its media, quote or reactions; a later edit no longer restores its text, and `GET /api/sessions/:sessionId/messages/:chatId/:messageId/media` answers `404` for it.
+- `PUT /api/sessions/:sessionId/groups/:groupId/settings` no longer returns the engine's internal error text for a partly applied change; a failure that is not an HTTP error reads `internal error` and is logged, and the failed and applied fields are still named.
+- Media conversion (`POST /api/sessions/:sessionId/media/convert/voice` and `POST /api/sessions/:sessionId/media/convert/video`) stops ffmpeg once its output passes `MEDIA_CONVERSION_MAX_OUTPUT_BYTES`, instead of writing the whole output before refusing it with `400`.
+- The compose `minio` service no longer starts when no S3 secret is set, instead of starting with the server's default credentials.
+- The MinIO container that Dashboard > Infrastructure creates for built-in storage no longer publishes ports 9000 and 9001 on the host's `127.0.0.1`; OpenWA reaches it over the Docker network.
+- Release images on GHCR and Docker Hub carry a signed build provenance attestation from the release workflow; verify one with `gh attestation verify oci://ghcr.io/rmyndharis/openwa:<version> --repo rmyndharis/OpenWA --signer-workflow rmyndharis/OpenWA/.github/workflows/release.yml --source-ref refs/tags/v<version>`.
 
 ## [0.23.7] - 2026-09-25
 

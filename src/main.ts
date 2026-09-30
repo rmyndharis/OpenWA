@@ -9,9 +9,15 @@ import { SwaggerModule } from '@nestjs/swagger';
 import { AppModule, DASHBOARD_DIST, dashboardServingEnabled, dashboardBuildPresent } from './app.module';
 import { ShutdownService } from './common/services/shutdown.service';
 import { LoggerService, LogLevel, createLogger } from './common/services/logger.service';
-import { createSwaggerConfig, dropUnexpressibleOperations, exemptPublicOperations } from './config/swagger.config';
+import {
+  createSwaggerConfig,
+  documentErrorResponses,
+  dropUnexpressibleOperations,
+  exemptPublicOperations,
+} from './config/swagger.config';
 import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './config/process-error-monitor';
 import { runBootstrapOrExit } from './config/bootstrap-fatal';
+import { validateEnv } from './config/env.validation';
 import { resolveStorageRoot } from './config/storage-root';
 import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
 import { applyGlobalValidation } from './config/app-validation';
@@ -21,9 +27,11 @@ import {
   isDashboardCspUpgradeTrapLikely,
   assertNoDefaultSecretsInProduction,
   isApiKeyPepperMissingInProduction,
+  isMainDbSynchronizeInProduction,
   isNodeEnvUnset,
 } from './config/bootstrap-security';
 import { BullBoardAuthMiddleware } from './common/security/bull-board-auth.middleware';
+import { invalidTrustedProxies } from './common/utils/ip';
 import { AuthService } from './modules/auth/auth.service';
 import { AuditService } from './modules/audit/audit.service';
 import { Request, Response, NextFunction } from 'express';
@@ -37,8 +45,7 @@ let appInstance: INestApplication | undefined;
 
 async function bootstrap() {
   // Apply the operator-configured log verbosity (LOG_LEVEL) before anything logs. Unset means INFO.
-  // A misspelling is skipped here; env.validation.ts rejects it and the boot fails inside
-  // NestFactory.create.
+  // A misspelling is skipped here; validateEnv below rejects it before the boot has any side effect.
   const requestedLevel = process.env.LOG_LEVEL?.trim().toLowerCase();
   if (requestedLevel && (Object.values(LogLevel) as string[]).includes(requestedLevel)) {
     LoggerService.setLogLevel(requestedLevel as LogLevel);
@@ -53,6 +60,11 @@ async function bootstrap() {
   // raw stack to stderr, bypassing the structured log pipeline, and exits(1). Route the stack through the
   // logger WITHOUT swallowing the exception, so the crash-and-restart posture is unchanged (see the helper).
   registerUncaughtExceptionMonitor(bootstrapLogger);
+
+  // Validate the environment before anything acts on it. ConfigModule.forRoot runs the same check, but
+  // only once NestFactory.create awaits it, which is after the storage root is created and a built-in
+  // PostgreSQL container is started; an invalid config would do both and then be reported twice.
+  validateEnv(process.env);
 
   // Advisory (not enforced): an unset/blank NODE_ENV is the deliberate local-dev default, but it
   // silently degrades four controls to their dev posture (the default-secret guard, wildcard CORS,
@@ -94,6 +106,24 @@ async function bootstrap() {
     );
   }
 
+  // Advisory (not enforced): the main DB normally runs its migration chain; synchronize is an opt-in.
+  if (isMainDbSynchronizeInProduction(process.env.NODE_ENV, process.env.MAIN_DATABASE_SYNCHRONIZE)) {
+    bootstrapLogger.warn(
+      'MAIN_DATABASE_SYNCHRONIZE=true in production: after its migrations the auth/audit schema is also ' +
+        "synchronized to this release's entities, and those changes are not recorded in the migration ledger. " +
+        'Unset it to use the main migrations alone.',
+    );
+  }
+
+  // Advisory (not enforced): a TRUSTED_PROXIES entry that is not an IP or CIDR never matches, so the
+  // proxy it meant to name is treated as a client. Failing the boot would break configs that run today.
+  const badTrustedProxies = invalidTrustedProxies(process.env.TRUSTED_PROXIES);
+  if (badTrustedProxies.length > 0) {
+    bootstrapLogger.warn(
+      `TRUSTED_PROXIES entries that are not an IP address or CIDR range are ignored: ${badTrustedProxies.join(', ')}`,
+    );
+  }
+
   // Fail fast on a media storage root the app cannot write to, BEFORE Nest builds the module graph:
   // StorageService only checks that the root EXISTS, so a root owned by another user passes boot and
   // fails later on the first media write instead (#1065). Runs ahead of NestFactory.create so
@@ -107,8 +137,10 @@ async function bootstrap() {
   // must be started before it, not from DockerService.onModuleInit (see the helper).
   await prestartBuiltinDatabase();
 
-  // Disable Nest's default body parser so we can set an explicit size cap below.
-  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  // Disable Nest's default body parser so we can set an explicit size cap below. Framework lines
+  // (route mapping, unhandled-exception stacks) go through the app logger so LOG_LEVEL, LOG_FORMAT and
+  // the request id apply to them too.
+  const app = await NestFactory.create(AppModule, { bodyParser: false, logger: createLogger('Nest') });
   appInstance = app;
 
   // Cross-replica WebSocket fan-out: when Redis is enabled, broadcasts reach clients on every
@@ -163,11 +195,12 @@ async function bootstrap() {
   if (swaggerEnabled) {
     const config = createSwaggerConfig();
     const document = SwaggerModule.createDocument(app, config);
-    // Same two passes, in the same order, as scripts/export-openapi.ts. The document is produced in
+    // Same passes, in the same order, as scripts/export-openapi.ts. The document is produced in
     // TWO places — here for the live /api/docs and there for the committed snapshot — and fixing only
     // the snapshot leaves a running gateway serving a document that fails schema validation.
     dropUnexpressibleOperations(document);
     exemptPublicOperations(document);
+    documentErrorResponses(document);
     SwaggerModule.setup('api/docs', app, document);
   }
 

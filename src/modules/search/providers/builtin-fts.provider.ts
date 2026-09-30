@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotImplementedException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, NotImplementedException, OnModuleInit } from '@nestjs/common';
+import { createLogger } from '../../../common/services/logger.service';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
@@ -38,7 +39,7 @@ type PlaceholderFn = () => string;
 export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
   readonly id = 'builtin-fts';
   readonly label = 'Built-in database full-text search';
-  private readonly logger = new Logger('BuiltInFtsProvider');
+  private readonly logger = createLogger('BuiltInFtsProvider');
 
   // OpenWA has two TypeORM connections (main: auth/audit SQLite, data: messages). Bind explicitly to
   // 'data' so the provider queries the connection that owns the `messages` table + the FTS migration,
@@ -51,7 +52,8 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
    * the entity but NEVER runs migrations — so the migration that establishes `messages_fts` /
    * `body_ts` is skipped and search would 501 on a fresh SQLite box. This re-applies the same
    * idempotent DDL as the migration (1782400000000-AddMessagesFts); `IF NOT EXISTS` / `IF NOT` guards
-   * make it a no-op once the schema exists, so migrations-based deployments are unaffected. Probes the
+   * make it a no-op once the schema exists, and on Postgres no DDL is issued at all when the catalog
+   * already holds the column and index, so migrations-based deployments take no table lock. Probes the
    * result into `ftsAvailable` so the first search() / health() call doesn't re-probe.
    */
   async onModuleInit(): Promise<void> {
@@ -132,7 +134,10 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
   /**
    * Creates the FTS schema if missing. Mirrors migration 1782400000000-AddMessagesFts verbatim and is
    * idempotent (every statement is `IF NOT EXISTS` / `IF NOT`), so:
-   *   - migrations-based deployments: the migration has already run; this is a set of no-ops.
+   *   - migrations-based deployments: the migration has already run; SQLite runs a set of no-ops,
+   *     and Postgres reads the catalog and issues no DDL, because `ALTER TABLE ... IF NOT EXISTS`
+   *     still queues for ACCESS EXCLUSIVE on `messages` before it finds the column, stalling every
+   *     message read and write behind any open transaction.
    *   - synchronize-based deployments (dev compose / zero-config first boot): migrations are skipped,
    *     so this is what actually brings the index up at boot. Without it search 501s on every fresh
    *     SQLite box, contradicting docs/26's "zero-config, on by default" promise.
@@ -142,12 +147,22 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
   private async ensureFtsSchema(): Promise<boolean> {
     const isPostgres = this.dataSource.options.type === 'postgres';
     if (isPostgres) {
-      await this.dataSource.query(
-        `ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "body_ts" tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(body, ''))) STORED`,
+      // Uncached on purpose (probeFts caches and swallows errors). Both objects are looked up on the
+      // table to_regclass resolves, the same one the runtime queries hit; only a missing one is created.
+      const rows: Array<{ col: boolean; idx: boolean }> = await this.dataSource.query(
+        `SELECT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = to_regclass('messages') AND a.attname = 'body_ts' AND NOT a.attisdropped) AS col,
+                EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = to_regclass('messages') AND c.relname = 'idx_messages_body_ts') AS idx`,
       );
-      await this.dataSource.query(
-        `CREATE INDEX IF NOT EXISTS "idx_messages_body_ts" ON "messages" USING GIN ("body_ts")`,
-      );
+      if (!rows[0]?.col) {
+        await this.dataSource.query(
+          `ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "body_ts" tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(body, ''))) STORED`,
+        );
+      }
+      if (!rows[0]?.idx) {
+        await this.dataSource.query(
+          `CREATE INDEX IF NOT EXISTS "idx_messages_body_ts" ON "messages" USING GIN ("body_ts")`,
+        );
+      }
       return true;
     }
     // SQLite: probe FTS5 first; skip leaving any schema if this build lacks it.

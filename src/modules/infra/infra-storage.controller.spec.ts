@@ -26,7 +26,7 @@ jest.mock('fs', () => {
   };
 });
 
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import { InfraStorageController } from './infra-storage.controller';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 
@@ -50,14 +50,14 @@ describe('InfraStorageController.importStorage filePath validation', () => {
     (fs.existsSync as jest.Mock).mockImplementation((p: string) => p === '/srv/openwa/data/exports/export.tar.gz');
     (fs.createReadStream as jest.Mock).mockClear();
     const storage = {
-      importFromStream: jest.fn().mockResolvedValue(3),
+      importFromStream: jest.fn().mockResolvedValue({ imported: 3, failed: 0 }),
       getCurrentStorageType: jest.fn(() => 'local'),
     };
     try {
       const result = await buildController(storage).importStorage({ filePath: 'data/exports/export.tar.gz' });
       expect(fs.createReadStream).toHaveBeenCalledWith('/srv/openwa/data/exports/export.tar.gz');
       expect(storage.importFromStream).toHaveBeenCalledTimes(1);
-      expect(result).toEqual({ imported: true, count: 3, storageType: 'local' });
+      expect(result).toEqual({ imported: true, count: 3, failed: 0, storageType: 'local' });
     } finally {
       cwdSpy.mockRestore();
       (fs.existsSync as jest.Mock).mockReturnValue(false);
@@ -67,7 +67,7 @@ describe('InfraStorageController.importStorage filePath validation', () => {
 
 describe('InfraStorageController.exportStorage keeps the export import-able and sweeps it', () => {
   function buildController(storage: Partial<{ createExportStream: jest.Mock }>) {
-    return new InfraStorageController(storage as never);
+    return new InfraStorageController({ getCurrentStorageType: () => 'local', ...storage } as never);
   }
 
   // fs.existsSync is globally mocked in this file, so probe the real filesystem via fs.promises.access.
@@ -243,7 +243,7 @@ describe('InfraStorageController storage stream failures surface as request erro
           this.push(Buffer.alloc(1024));
         },
       });
-      const storage = { createExportStream: jest.fn().mockResolvedValue(source) };
+      const storage = { createExportStream: jest.fn().mockResolvedValue(source), getCurrentStorageType: () => 'local' };
       await expect(new InfraStorageController(storage as never).exportStorage()).rejects.toThrow(/disk full/);
       expect(source.destroyed).toBe(true);
     } finally {
@@ -263,7 +263,10 @@ describe('InfraStorageController storage stream failures surface as request erro
           this.destroy(new Error('archive boom'));
         },
       });
-      const storage = { createExportStream: jest.fn().mockResolvedValue(errStream) };
+      const storage = {
+        createExportStream: jest.fn().mockResolvedValue(errStream),
+        getCurrentStorageType: () => 'local',
+      };
       const controller = new InfraStorageController(storage as never);
       await expect(controller.exportStorage()).rejects.toThrow(/archive boom/);
     } finally {
@@ -291,13 +294,38 @@ describe('InfraStorageController audit trail (light-dependency handlers)', () =>
     const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue('/srv/openwa');
     (fs.existsSync as jest.Mock).mockImplementation((p: string) => p === '/srv/openwa/data/exports/x.tar.gz');
     try {
-      const storageService = { importFromStream: jest.fn().mockResolvedValue(5), getCurrentStorageType: () => 'local' };
+      const storageService = {
+        importFromStream: jest.fn().mockResolvedValue({ imported: 5, failed: 0 }),
+        getCurrentStorageType: () => 'local',
+      };
       await build(audit, { storageService }).importStorage({ filePath: 'data/exports/x.tar.gz' });
       const calls = audit.logInfo.mock.calls as Array<
         [AuditAction, { metadata: { count: number; storageType: string } }]
       >;
       expect(calls[0][0]).toBe(AuditAction.INFRA_STORAGE_IMPORTED);
-      expect(calls[0][1].metadata).toEqual({ count: 5, storageType: 'local' });
+      expect(calls[0][1].metadata).toEqual({ count: 5, failed: 0, storageType: 'local' });
+    } finally {
+      cwdSpy.mockRestore();
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
+    }
+  });
+
+  it('importStorage records an import that wrote nothing as a warning, with its failed count', async () => {
+    const audit = { logInfo: jest.fn().mockResolvedValue(null), logWarn: jest.fn().mockResolvedValue(null) };
+    const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue('/srv/openwa');
+    (fs.existsSync as jest.Mock).mockImplementation((p: string) => p === '/srv/openwa/data/exports/x.tar.gz');
+    try {
+      const storageService = {
+        importFromStream: jest.fn().mockResolvedValue({ imported: 0, failed: 4 }),
+        getCurrentStorageType: () => 'local',
+      };
+      await new InfraStorageController(storageService as never, audit as never).importStorage({
+        filePath: 'data/exports/x.tar.gz',
+      });
+      expect(audit.logInfo).not.toHaveBeenCalled();
+      expect(audit.logWarn).toHaveBeenCalledWith(AuditAction.INFRA_STORAGE_IMPORTED, {
+        metadata: { count: 0, failed: 4, storageType: 'local' },
+      });
     } finally {
       cwdSpy.mockRestore();
       (fs.existsSync as jest.Mock).mockReturnValue(false);
@@ -310,7 +338,10 @@ describe('InfraStorageController audit trail (light-dependency handlers)', () =>
     const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(cwd);
     process.env.STORAGE_EXPORT_TTL_MS = '30';
     try {
-      const storageService = { createExportStream: jest.fn().mockResolvedValue(Readable.from([Buffer.from('x')])) };
+      const storageService = {
+        createExportStream: jest.fn().mockResolvedValue(Readable.from([Buffer.from('x')])),
+        getCurrentStorageType: () => 'local',
+      };
       await build(audit, { storageService }).exportStorage();
       const calls = audit.logInfo.mock.calls as Array<[AuditAction, { metadata: { download: string } }]>;
       expect(calls[0][0]).toBe(AuditAction.INFRA_STORAGE_EXPORTED);
@@ -320,5 +351,83 @@ describe('InfraStorageController audit trail (light-dependency handlers)', () =>
       fs.rmSync(cwd, { recursive: true, force: true });
       delete process.env.STORAGE_EXPORT_TTL_MS;
     }
+  });
+});
+
+describe('InfraStorageController refuses to run a storage migration against the local fallback', () => {
+  function unavailableS3() {
+    return {
+      getCurrentStorageType: jest.fn(() => 's3'),
+      refreshS3Availability: jest.fn().mockResolvedValue(false),
+      getFileCount: jest.fn(),
+      createExportStream: jest.fn(),
+      importFromStream: jest.fn(),
+    };
+  }
+
+  it('answers 503 for the file count, the export and the import when the configured bucket is unusable', async () => {
+    const storage = unavailableS3();
+    const controller = new InfraStorageController(storage as never);
+
+    await expect(controller.getStorageFileCount()).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await expect(controller.exportStorage()).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await expect(controller.importStorage({ filePath: 'data/exports/x.tar.gz' })).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(storage.refreshS3Availability).toHaveBeenCalledTimes(3);
+    expect(storage.getFileCount).not.toHaveBeenCalled();
+    expect(storage.createExportStream).not.toHaveBeenCalled();
+    expect(storage.importFromStream).not.toHaveBeenCalled();
+  });
+
+  it('proceeds once the re-probe finds the bucket', async () => {
+    const storage = unavailableS3();
+    storage.refreshS3Availability.mockResolvedValue(true);
+    storage.getFileCount.mockResolvedValue({ count: 2, sizeBytes: 0 });
+
+    await expect(new InfraStorageController(storage as never).getStorageFileCount()).resolves.toMatchObject({
+      storageType: 's3',
+      count: 2,
+    });
+  });
+
+  it('never probes S3 for a local backend', async () => {
+    const storage = { ...unavailableS3(), getCurrentStorageType: jest.fn(() => 'local') };
+    storage.getFileCount.mockResolvedValue({ count: 0, sizeBytes: 0 });
+
+    await new InfraStorageController(storage as never).getStorageFileCount();
+
+    expect(storage.refreshS3Availability).not.toHaveBeenCalled();
+  });
+});
+
+describe('InfraStorageController.importStorage reports an import that wrote nothing', () => {
+  async function importWith(result: { imported: number; failed: number }) {
+    const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue('/srv/openwa');
+    (fs.existsSync as jest.Mock).mockImplementation((p: string) => p === '/srv/openwa/data/exports/x.tar.gz');
+    try {
+      const storage = { importFromStream: jest.fn().mockResolvedValue(result), getCurrentStorageType: () => 'local' };
+      return await new InfraStorageController(storage as never).importStorage({ filePath: 'data/exports/x.tar.gz' });
+    } finally {
+      cwdSpy.mockRestore();
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
+    }
+  }
+
+  it('answers imported:false when every entry was refused', async () => {
+    await expect(importWith({ imported: 0, failed: 4 })).resolves.toEqual({
+      imported: false,
+      count: 0,
+      failed: 4,
+      storageType: 'local',
+    });
+  });
+
+  it('keeps imported:true when only some entries were skipped', async () => {
+    await expect(importWith({ imported: 3, failed: 1 })).resolves.toMatchObject({ imported: true, failed: 1 });
+  });
+
+  it('keeps imported:true for an empty archive', async () => {
+    await expect(importWith({ imported: 0, failed: 0 })).resolves.toMatchObject({ imported: true, count: 0 });
   });
 });

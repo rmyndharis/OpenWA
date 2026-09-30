@@ -682,7 +682,7 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `archiveChat`    | ✅ `archiveChat`                                                                                                                                                                                                                                                                                                                                                                         |
 | `getChatById`    | ✅ `muteChannel`, `sendSeen`, `clearChatMessages`, `markUnread`, `deleteChat`, `sendChatState`, `getGroupInfo`, `addParticipants`, `leaveGroup`, `setGroupSubject`, `setGroupDescription`, `getGroupInviteCode`, `revokeGroupInviteCode`, `getChatLabels`, `replyToMessage`, `forwardMessage`, `reactToMessage`, `getMessageReactions`, `getChatHistory`, `deleteMessage`, `editMessage` |
-| `getChats`       | ✅ `getChats`, `getGroups`                                                                                                                                                                                                                                                                                                                                                               |
+| `getChats`       | ⚙️ read via a direct page walk, not `Client.getChats`, for `getChats` and `getGroups`                                                                                                                                                                                                                                                                                                    |
 | `markChatUnread` | ❌ **not exposed**                                                                                                                                                                                                                                                                                                                                                                       |
 | `muteChat`       | ✅ `muteChat`                                                                                                                                                                                                                                                                                                                                                                            |
 | `pinChat`        | ✅ `pinChat`                                                                                                                                                                                                                                                                                                                                                                             |
@@ -941,6 +941,15 @@ adapter boundary — none silently stubs.
   the same engine, and the list with it.
   The `sendMessage(status@broadcast, {delete})` revoke shape is _empirically unverified_: only posting
   was live-spiked. On wwjs it calls `revokeStatusMessage(statusId)` (own status only).
+- **`getChats` after a restart (baileys).** Baileys keeps no chat list of its own, and WhatsApp
+  skips history sync on every connect after the first link, so a new engine (a process restart, a
+  session stop and start, or a reconnect the gateway runs itself, as for `deleteStatus` above) starts
+  with an empty one. `GET /chats` then lists the groups, re-fetched on every connect, and every chat
+  with a persisted archive, pin or mute state (bounded by `BAILEYS_CHAT_STATE_CACHE_MAX`); any other
+  1:1 chat comes back when its next message arrives and stays out of the list until then. Rows
+  rebuilt this way carry timestamp `0` and no `lastMessage` until a message arrives. The transient
+  reconnects Baileys runs on its own keep the list. whatsapp-web.js reads WhatsApp Web's own chat
+  list and is unaffected.
 - **`getContactStatus` / `getContactStatuses` (wwjs).** `Status.type` is the `text|image|video`
   union — audio/other story types collapse to `text`.
 - **`archiveChat` / `clearChatMessages` / `deleteChat` / `sendSeen` / `markUnread` (baileys).** The
@@ -1006,8 +1015,8 @@ adapter sources — re-derive the same way when anything changes:
   **9** wwjs-only; `sendCatalog` (unavailable on both engines) is not exposed.
 - Full engine inventory (29.5), split by the exposure legend rather than lumped: Baileys **152**
   socket methods — 48 wired into interface methods, 5 internal wiring, 29 plumbing, **70 ❌ not
-  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 42 wired,
-  3 internal wiring, 1 class plumbing, **35 ❌ not exposed** (27 real capabilities + 8
+  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 41 wired,
+  4 internal wiring, 1 class plumbing, **35 ❌ not exposed** (27 real capabilities + 8
   session/transport settings that are not WhatsApp capabilities). The backlog is the ❌ rows minus
   those 8 settings; 🔩 plumbing is correctly never exposed.
 - Events: Baileys **34** (17 consumed / 17 dropped), wwjs **31** (16 consumed / 15 dropped).

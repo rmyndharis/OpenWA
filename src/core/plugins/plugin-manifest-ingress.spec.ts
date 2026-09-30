@@ -253,22 +253,51 @@ describe('warnUnsignedTimestampRoutes', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it('stays silent when no timestamp is involved at all', () => {
+  const withDedupOnBody = (manifest: ReturnType<typeof hmacRoute>) => ({
+    ...manifest,
+    ingress: manifest.ingress.map(route => ({ ...route, dedupOn: 'body' })),
+  });
+
+  it('warns once when an hmac route binds no timestamp and dedups on its header', () => {
     const logger = { warn: jest.fn() };
     warnUnsignedTimestampRoutes(
       hmacRoute({ scheme: 'hmac-sha256', header: 'X-Sig', contentTemplate: '{rawBody}' }) as never,
       logger,
     );
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/dedupOn: 'body'/),
+      expect.objectContaining({ pluginId: 'p', route: 'r', action: 'ingress_replayable_route' }),
+    );
+  });
+
+  it('stays silent for an hmac route without a timestamp that dedups on the body', () => {
+    const logger = { warn: jest.fn() };
+    warnUnsignedTimestampRoutes(
+      withDedupOnBody(hmacRoute({ scheme: 'hmac-sha256', header: 'X-Sig', contentTemplate: '{rawBody}' })) as never,
+      logger,
+    );
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it('ignores non-hmac schemes (their wire format is not templatable)', () => {
+  it('warns for a shared-secret route unless it dedups on the body', () => {
+    const logger = { warn: jest.fn() };
+    const route = hmacRoute({ scheme: 'shared-secret', header: 'X-Token', timestampHeader: 'X-Ts' });
+    warnUnsignedTimestampRoutes(route as never, logger);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/shared-secret/),
+      expect.objectContaining({ pluginId: 'p', route: 'r', action: 'ingress_replayable_route' }),
+    );
+
+    logger.warn.mockClear();
+    warnUnsignedTimestampRoutes(withDedupOnBody(route) as never, logger);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('ignores standard-webhooks (its dedup id and timestamp are signed)', () => {
     const logger = { warn: jest.fn() };
     warnUnsignedTimestampRoutes(hmacRoute({ scheme: 'standard-webhooks', dedupHeader: 'webhook-id' }) as never, logger);
-    warnUnsignedTimestampRoutes(
-      hmacRoute({ scheme: 'shared-secret', header: 'X-Token', timestampHeader: 'X-Ts' }) as never,
-      logger,
-    );
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });

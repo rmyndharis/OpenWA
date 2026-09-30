@@ -22,6 +22,9 @@ export interface WwebjsStuckAuthHost {
   getCallbacks(): EngineEventCallbacks;
 }
 
+/** The Puppeteer Browser whatsapp-web.js keeps on the client; `process()` is null once Chromium is gone. */
+type BrowserHandle = { pupBrowser?: { process?: () => { kill?: (sig: string) => void } | null } };
+
 export class WwebjsStuckAuth {
   // Guards the stuck-auth self-heal so it runs at most once per engine: a re-paired session that still
   // can't reach readiness fails terminally instead of looping QR -> timeout -> clear forever.
@@ -69,8 +72,19 @@ export class WwebjsStuckAuth {
 
     const client = this.host.getClient();
     this.host.setClient(null);
-    // Clear auth + disconnect FIRST (the recovery path), then tear the wedged client down in the
-    // background so a hung Chromium destroy can't block (or skip) the recovery.
+    // Kill the wedged Chromium before removing its profile: a live browser keeps writing into the
+    // directory being removed, which can exhaust the rm retries and leave half a profile behind.
+    try {
+      const browser = (client as unknown as BrowserHandle | null)?.pupBrowser;
+      browser?.process?.()?.kill?.('SIGKILL');
+    } catch (err) {
+      this.host.logger.warn('Could not kill the browser before clearing the saved session', {
+        sessionId: this.host.config.sessionId,
+        error: String(err),
+      });
+    }
+    // Clear auth + disconnect (the recovery path), then finish the client teardown in the background
+    // so a hung destroy can't block (or skip) the recovery.
     await this.clearLocalAuth();
     this.host.setStatus(EngineStatus.DISCONNECTED);
     // onDisconnected drives the lifecycle's reconnect, which re-creates the engine with no saved auth

@@ -14,8 +14,10 @@ import { WorkerSearchRegistry, WorkerSearchHandler } from './worker-search-regis
  * filesystem, and network credentials. It provides crash / heap-OOM CONTAINMENT, NOT a security
  * boundary. Plugin code can `require('fs' | 'net' | 'child_process')` and reach the host's files and
  * sockets directly — `parentPort` is NOT the worker's only channel out, and the capability permission
- * model gates only the `ctx.*` verbs, not raw Node access. Load only trusted plugin code, or run
- * OpenWA under an OS-level sandbox (container / seccomp) when untrusted plugins must be supported.
+ * model gates only the `ctx.*` verbs, not raw Node access. Load only plugin code you trust as much as
+ * OpenWA itself. OS-level containment of the OpenWA process limits what the process can do to the host,
+ * not what a plugin inside it can reach; run a plugin you do not fully trust in a separate container or
+ * VM against the API instead (see docs/30).
  */
 
 interface LifecyclePlugin {
@@ -59,6 +61,13 @@ let context: Record<string, unknown> | null = null;
 let baseConfig: Record<string, unknown> = {};
 
 port.on('message', (message: HostToWorkerMessage) => {
+  // Answered here, before any plugin code, so a pending async handler never delays it. Dispatches
+  // queued ahead of it still do; the host counts their results as progress while it waits, so only a
+  // worker whose event loop is blocked (a synchronous loop in plugin code) goes silent.
+  if (message.kind === 'ping') {
+    send({ kind: 'pong', id: message.id });
+    return;
+  }
   if (message.kind === 'cap-result') {
     capClient.handleResult(message);
     return;

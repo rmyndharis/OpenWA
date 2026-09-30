@@ -35,7 +35,8 @@ Every page — and most shared components — ships its own stylesheet colocated
 (`Sessions.tsx` + `Sessions.css`, `Layout.tsx` + `Layout.css`, ...), imported directly by the
 component (see §17.4 for the handful that carry no stylesheet of their own). Icons come from
 `lucide-react`; charts from `recharts`; i18n from `react-i18next`.
-Client state is **TanStack Query** for server data (see `src/hooks/queries.ts`) plus two small React
+Client state is **TanStack Query** for most server data (see `src/hooks/queries.ts`; §17.5 names the
+pages that keep their own copy) plus two small React
 Context providers (`RoleProvider`, `ToastProvider`); theme mode is a provider-less `useTheme` hook
 backed by `localStorage` — there is no Zustand store.
 
@@ -458,20 +459,34 @@ library — those visuals are composed directly with `div`s and the page's own C
 
 ## 17.5 State Management
 
-There is **no Zustand store** (and no global client-state library). Server data is owned by
+There is **no Zustand store** (and no global client-state library). Most server data is owned by
 **TanStack Query** (`@tanstack/react-query`); the only other shared state lives in the two React
 Context providers in the app — `RoleProvider` (the authenticated key's role, read through the
 `useRole` hook) and `ToastProvider` (transient notifications). Theme mode is deliberately _not_ a
 context: `useTheme` is a plain hook that persists to `localStorage` and writes one attribute on
 `<html>` (see §17.7).
 
+Three pages keep a server list in local state instead of the query cache:
+
+- **Sessions** (`Sessions.tsx`) holds the session list itself and sequences each read against its
+  own row writes and socket pushes, so an older answer never overwrites a newer row. After each read
+  it applies, it invalidates the `['sessions']` key prefix so the Dashboard and per-session views
+  refetch.
+- **Chats** (`Chats.tsx`) reads the ready sessions directly on mount, and again when a search hit
+  names a session that list lacks, and keeps the chat list in local state that socket pushes, sends
+  and marking a chat read update.
+- **Plugins** (`Plugins.tsx`) keeps the catalog in local state. It prefetches it silently on mount
+  so installed cards can show an update chip, fetches it again when the Catalog tab opens with an
+  empty list, and reloads it after an install or update.
+
 ### API client — raw payloads, no `{ data }` envelope
 
 The client lives in `src/services/api.ts`. A single `request<T>()` helper attaches the `X-API-Key`
 header from `sessionStorage`, then returns **the parsed JSON body as-is** — the backend sends the
 raw handler payload, so `request<Session[]>('/sessions')` resolves to a bare `Session[]`, not
-`{ data: Session[] }`. (A `204 No Content` resolves to `undefined`; a `401` clears the stored key
-and redirects to login.) Endpoints are grouped into typed namespaces — `sessionApi`, `webhookApi`,
+`{ data: Session[] }`. (A `204 No Content` resolves to `undefined`; a `401`, or a `403` because the
+key's `allowedIps` refuse this client, clears the stored key and redirects to login; any other `403`
+leaves the key in place.) Endpoints are grouped into typed namespaces — `sessionApi`, `webhookApi`,
 `templateApi`, `apiKeyApi`, `auditApi`, `messageApi`, `infraApi`, `pluginsApi`, `statsApi`, ...
 
 ```typescript
@@ -548,9 +563,10 @@ export function useStopSessionMutation() {
 Real-time updates use **socket.io** (`socket.io-client`), not a raw browser `WebSocket`. The hook is
 `src/hooks/useWebSocket.ts`. Key facts:
 
-- **Namespace `/events`** (not `/ws`). The client connects to
-  `${VITE_WS_URL || window.location.origin}/events` — same-origin by default; `VITE_WS_URL` only
-  overrides it for split-origin deployments.
+- **Namespace `/events`** (not `/ws`). The client connects to `<origin>/events`, where the origin is
+  that of `VITE_WS_URL` when set, else that of `VITE_API_URL` (so a split-origin build reaches the
+  API), else `window.location.origin`. A path or trailing slash on either variable is dropped, and a
+  value with no scheme (`host:port`) is dialled on the page's protocol.
 - **API key via the socket.io `auth` payload (and an `X-API-Key` header for proxies), deliberately
   _not_ in the query string** — a key in the handshake URL would leak into access logs / `Referer`.
 - **Reconnection is socket.io's built-in mechanism** — `reconnectionAttempts: 5`,
@@ -566,8 +582,11 @@ Real-time updates use **socket.io** (`socket.io-client`), not a raw browser `Web
 // src/hooks/useWebSocket.ts (abridged)
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { API_ORIGIN } from '../services/api';
+import { resolveSocketUrl } from '../utils/urlSecurity';
 
-const SOCKET_URL = import.meta.env.VITE_WS_URL || window.location.origin;
+// The origin of VITE_WS_URL, else of VITE_API_URL, else the page origin.
+const SOCKET_URL = resolveSocketUrl(import.meta.env.VITE_WS_URL, API_ORIGIN, window.location.origin);
 
 interface ServerEventEnvelope {
   type: string; // 'event'
@@ -746,8 +765,9 @@ VITE_API_URL=https://api.example.com npm run build   # in dashboard/
 ```
 
 `dashboard/src/services/api.ts` reads `VITE_API_URL` and calls that origin instead of same-origin
-`/api`. Set `SERVE_DASHBOARD=false` on the API so it stops serving its own copy. Remember to add the
-dashboard's origin to `CORS_ORIGINS` on the API.
+`/api`. The realtime socket follows the same origin unless `VITE_WS_URL` overrides it. Set
+`SERVE_DASHBOARD=false` on the API so it stops serving its own copy. Remember to add the dashboard's
+origin to `CORS_ORIGINS` on the API.
 
 For TLS or public exposure of the default single-port setup, terminate at your own reverse proxy
 (nginx, Caddy, a cloud load balancer, or a k8s Ingress) in front of the API; see

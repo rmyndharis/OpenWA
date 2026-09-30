@@ -13,7 +13,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IngressUrl } from '../ingress-url';
 import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
 
-// Safe charset: also prevents an instanceId containing ':' (which would collide the P1 ordering key).
+// Safe charset: the instanceId goes unencoded into the ingress URL path and the `<pluginId>:<instanceId>` row id.
 const INSTANCE_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
 export class CreateInstanceDto {

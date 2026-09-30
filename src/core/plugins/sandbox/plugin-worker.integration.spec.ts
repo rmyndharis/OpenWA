@@ -9,6 +9,7 @@ const FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/echo-plugin.cjs');
 const CAP_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/cap-echo-plugin.cjs');
 const HOOK_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-plugin.cjs');
 const HOOK_HANG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-hang-plugin.cjs');
+const BUSY_HOOK_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/busy-hook-plugin.cjs');
 const RUNAWAY_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/runaway-plugin.cjs');
 const CTX_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/ctx-aware-plugin.cjs');
 const HOOK_CONFIG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-config-plugin.cjs');
@@ -143,6 +144,76 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
     }
 
     await expect(host.terminate()).resolves.toBeUndefined();
+  });
+
+  const probingHost = (onUnresponsive: () => void): PluginWorkerHost =>
+    new PluginWorkerHost(
+      makeChannel(),
+      undefined,
+      () => undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      300,
+      onUnresponsive,
+    );
+
+  it('a slow async hook handler answers the liveness probe, so it is not reported', async () => {
+    const onUnresponsive = jest.fn();
+    const host = probingHost(onUnresponsive);
+    try {
+      await host.load(HOOK_HANG_FIXTURE);
+      await host.runLifecycle('onEnable');
+      await flushAsync();
+
+      await host.dispatchHook({ event: 'message:received', data: {}, source: 'Engine', timeoutMs: 200 });
+      await new Promise(resolve => setTimeout(resolve, 900));
+      expect(onUnresponsive).not.toHaveBeenCalled();
+    } finally {
+      await host.terminate();
+    }
+  });
+
+  it('a worker working through a burst of short synchronous handlers is not reported', async () => {
+    const onUnresponsive = jest.fn();
+    const host = probingHost(onUnresponsive);
+    try {
+      await host.load(BUSY_HOOK_FIXTURE);
+      await host.runLifecycle('onEnable');
+      await flushAsync();
+
+      // ~1 s of queued work against a 300 ms hook budget and a 300 ms probe: most dispatches time out
+      // and the ping waits behind the backlog, but results keep arriving the whole time.
+      const burst = Array.from({ length: 100 }, () =>
+        host.dispatchHook({ event: 'message:received', data: {}, source: 'Engine', timeoutMs: 300 }),
+      );
+      await Promise.all(burst);
+      await expect(host.healthCheck(5000)).resolves.toMatchObject({ healthy: true });
+      expect(onUnresponsive).not.toHaveBeenCalled();
+    } finally {
+      await host.terminate();
+    }
+  });
+
+  it('reports a worker whose event loop is blocked, and terminate() reclaims it', async () => {
+    let reported!: () => void;
+    const unresponsive = new Promise<void>(resolve => (reported = resolve));
+    const host = probingHost(() => reported());
+    try {
+      await host.load(RUNAWAY_FIXTURE);
+      const wedged = host.runLifecycle('onEnable');
+      wedged.catch(() => undefined); // terminate() rejects this pending call
+
+      // The dispatch queues behind the spinning onEnable and times out; the ping behind it is never read.
+      await host.dispatchHook({ event: 'message:received', data: {}, source: 'Engine', timeoutMs: 200 });
+      await unresponsive;
+    } finally {
+      await expect(host.terminate()).resolves.toBeUndefined();
+    }
   });
 
   it('a throwing worker hook handler is reported back on the hook-result (not silently swallowed)', async () => {

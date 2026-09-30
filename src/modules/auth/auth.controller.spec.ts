@@ -68,7 +68,13 @@ describe('AuthController — API-key lifecycle audit logging', () => {
     | {
         apiKey?: ApiKey;
         ipAddress?: string;
-        metadata?: { targetKeyId?: string; before?: { role?: string }; after?: { role?: string } };
+        metadata?: {
+          targetKeyId?: string;
+          role?: string;
+          scope?: unknown;
+          before?: { role?: string };
+          after?: { role?: string };
+        };
       }
     | undefined => {
     const calls = auditService.logInfo.mock.calls as Array<
@@ -77,7 +83,13 @@ describe('AuthController — API-key lifecycle audit logging', () => {
         {
           apiKey?: ApiKey;
           ipAddress?: string;
-          metadata?: { targetKeyId?: string; before?: { role?: string }; after?: { role?: string } };
+          metadata?: {
+            targetKeyId?: string;
+            role?: string;
+            scope?: unknown;
+            before?: { role?: string };
+            after?: { role?: string };
+          };
         },
       ]
     >;
@@ -92,6 +104,32 @@ describe('AuthController — API-key lifecycle audit logging', () => {
     expect(ctx?.ipAddress).toBe('203.0.113.7');
     expect(ctx?.metadata?.targetKeyId).toBe('k1');
     expect(JSON.stringify(auditService.logInfo.mock.calls)).not.toContain('raw-secret');
+  });
+
+  it("records the created key's full authorization scope on API_KEY_CREATED", async () => {
+    const expiresAt = new Date('2027-01-01T00:00:00Z');
+    authService.createApiKey.mockResolvedValue({
+      apiKey: {
+        id: 'k2',
+        name: 'scoped',
+        role: 'operator',
+        allowedIps: ['10.0.0.1'],
+        allowedSessions: ['s1'],
+        allowedChats: ['628123@c.us'],
+        expiresAt,
+      },
+      rawKey: 'raw-secret',
+    });
+    await controller.create({ name: 'scoped' }, makeReq(), actor);
+    const metadata = lastContextFor(AuditAction.API_KEY_CREATED)?.metadata;
+    expect(metadata?.role).toBe('operator');
+    expect(metadata?.scope).toEqual({
+      role: 'operator',
+      allowedIps: ['10.0.0.1'],
+      allowedSessions: ['s1'],
+      allowedChats: ['628123@c.us'],
+      expiresAt,
+    });
   });
 
   it('logs API_KEY_DELETED on delete', async () => {

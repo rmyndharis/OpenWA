@@ -162,3 +162,19 @@ describe('createExportStream streams one file at a time', () => {
     expect(stats.opened).toBe(openedBefore);
   });
 });
+
+describe('importFromStream reports refused writes', () => {
+  it('counts every entry putFile rejects as failed, and none as imported', async () => {
+    const { openFile } = trackingOpener();
+    const names = files.slice(0, 3);
+    const output = await createExportStream(() => Promise.resolve(names), openFile, makeLogger() as never);
+
+    const result = await importFromStream(
+      output,
+      () => Promise.reject(new Error('AccessDenied')),
+      makeLogger() as never,
+    );
+
+    expect(result).toEqual({ imported: 0, failed: names.length });
+  });
+});

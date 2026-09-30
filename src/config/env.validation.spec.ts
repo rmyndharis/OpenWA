@@ -67,6 +67,13 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ MEDIA_DOWNLOAD_TIMEOUT_MS: '30000' })).not.toThrow();
   });
 
+  it('accepts 0 for INBOUND_MEDIA_GLOBAL_CONCURRENCY (off) and rejects a negative or suffixed value', () => {
+    expect(() => validateEnv({ INBOUND_MEDIA_GLOBAL_CONCURRENCY: '0' })).not.toThrow();
+    expect(() => validateEnv({ INBOUND_MEDIA_GLOBAL_CONCURRENCY: '16' })).not.toThrow();
+    expect(() => validateEnv({ INBOUND_MEDIA_GLOBAL_CONCURRENCY: '-1' })).toThrow(/INBOUND_MEDIA_GLOBAL_CONCURRENCY/);
+    expect(() => validateEnv({ INBOUND_MEDIA_GLOBAL_CONCURRENCY: '4x' })).toThrow(/INBOUND_MEDIA_GLOBAL_CONCURRENCY/);
+  });
+
   // Unset and empty stay the operator's way of taking the default; compose forwards a blank.
   it('leaves an unset or blank media knob alone', () => {
     expect(() => validateEnv({})).not.toThrow();
@@ -199,6 +206,15 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ AUDIT_RETENTION_DAYS: '0' })).not.toThrow();
     expect(() => validateEnv({ AUDIT_RETENTION_DAYS: '-1' })).not.toThrow();
     expect(() => validateEnv({ AUDIT_RETENTION_DAYS: '90' })).not.toThrow();
+  });
+
+  it('rejects a non-integer message retention and accepts 0 and negatives as "keep forever"', () => {
+    expect(() => validateEnv({ MESSAGE_RETENTION_DAYS: '30d' })).toThrow(/MESSAGE_RETENTION_DAYS/);
+    expect(() => validateEnv({ MESSAGE_RETENTION_DAYS: '0' })).not.toThrow();
+    expect(() => validateEnv({ MESSAGE_RETENTION_DAYS: '-1' })).not.toThrow();
+    expect(() => validateEnv({ MESSAGE_RETENTION_DAYS: '30' })).not.toThrow();
+    expect(() => validateEnv({ MESSAGE_RETENTION_DAYS: '36500' })).not.toThrow();
+    expect(() => validateEnv({ MESSAGE_RETENTION_DAYS: '36501' })).toThrow(/MESSAGE_RETENTION_DAYS.*36500/);
   });
 
   it('rejects a non-positive / non-integer WEBHOOK_MAX_PAYLOAD_BYTES (0 would reject every dispatch)', () => {
@@ -535,10 +551,39 @@ describe('validateEnv', () => {
     'S3_REPROBE_INTERVAL_MS',
     'STORAGE_EXPORT_TTL_MS',
     'STORAGE_EXPORT_SWEEP_MAX_AGE_MS',
+    'WEBHOOK_DEGRADED_SESSION_CONCURRENCY',
   ])('rejects a unit-suffixed or non-positive %s and accepts a plain count', key => {
     expect(() => validateEnv({ [key]: '1h' })).toThrow(new RegExp(`${key} must be a positive integer`));
     expect(() => validateEnv({ [key]: '0' })).toThrow(new RegExp(`${key} must be a positive integer`));
     expect(() => validateEnv({ [key]: '3600000' })).not.toThrow();
+  });
+
+  // Each read fell back to the default on 0 or garbage, or passed a negative or fractional value on.
+  it.each(['SEARCH_LIMIT_MAX', 'INGRESS_MAX_ATTEMPTS', 'WEBHOOK_WORKER_CONCURRENCY', 'INGRESS_WORKER_CONCURRENCY'])(
+    'rejects a non-positive or non-integer %s and accepts a plain count',
+    key => {
+      for (const bad of ['0', '-5', '2.5', 'abc', '5x']) {
+        expect(() => validateEnv({ [key]: bad })).toThrow(new RegExp(`${key} must be a positive integer`));
+      }
+      expect(() => validateEnv({ [key]: '7' })).not.toThrow();
+      expect(() => validateEnv({ [key]: '' })).not.toThrow();
+      expect(() => validateEnv({ [key]: '  ' })).not.toThrow();
+    },
+  );
+
+  it('accepts only an exact true or false for REDIS_TLS', () => {
+    expect(() => validateEnv({ REDIS_TLS: 'yes' })).toThrow(/REDIS_TLS must be "true" or "false"/);
+    expect(() => validateEnv({ REDIS_TLS: 'true ' })).toThrow(/REDIS_TLS/);
+    expect(() => validateEnv({ REDIS_TLS: 'true' })).not.toThrow();
+    expect(() => validateEnv({ REDIS_TLS: '' })).not.toThrow();
+  });
+
+  it.each(['INGRESS_RETRY_DELAY_MS', 'REDIS_CACHE_DB'])('rejects a negative or non-integer %s and keeps 0', key => {
+    for (const bad of ['-1', '1.5', 'abc']) {
+      expect(() => validateEnv({ [key]: bad })).toThrow(new RegExp(`${key} must be a non-negative integer`));
+    }
+    expect(() => validateEnv({ [key]: '0' })).not.toThrow();
+    expect(() => validateEnv({ [key]: '' })).not.toThrow();
   });
 
   it('rejects a unit-suffixed CHAT_MEDIA_ARCHIVE_TTL_DAYS but keeps 0 (keep forever)', () => {

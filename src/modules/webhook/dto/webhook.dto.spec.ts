@@ -52,6 +52,18 @@ describe('webhook DTO event validation', () => {
     expect(await errorsFor(UpdateWebhookDto, {})).toHaveLength(0);
     expect(await errorsFor(UpdateWebhookDto, { filters: null })).toHaveLength(0);
   });
+
+  // WebhookService.update applies filters only when the field is present, so an update that omits it
+  // keeps the stored filter. The published schema must not offer omission as a way to clear one.
+  it('UpdateWebhookDto: documents that an omitted filters keeps the stored one', () => {
+    const descriptionOf = (target: object): string | undefined =>
+      (Reflect.getMetadata('swagger/apiModelProperties', target, 'filters') as { description?: string } | undefined)
+        ?.description;
+
+    expect(descriptionOf(UpdateWebhookDto.prototype)).toContain('Omit to keep the stored filters');
+    expect(descriptionOf(UpdateWebhookDto.prototype)).not.toContain('Omit or null to fire');
+    expect(descriptionOf(CreateWebhookDto.prototype)).toContain('Omit or null to fire');
+  });
 });
 
 describe('webhook DTO custom-header validation', () => {
@@ -87,9 +99,43 @@ describe('webhook DTO custom-header validation', () => {
     expect(errs.some(e => e.property === 'headers')).toBe(true);
   });
 
+  // The HTTP client joins case-variant names into one comma-separated value, so neither value is
+  // sent as written and a receiver checking one credential sees both.
+  it('rejects two header names that differ only in case, on create and update', async () => {
+    const headers = { Authorization: 'Bearer a', authorization: 'Bearer b' };
+    const create = await errorsFor(CreateWebhookDto, { url: 'https://x.example/hook', headers });
+    expect(create.some(e => e.property === 'headers')).toBe(true);
+    const update = await errorsFor(UpdateWebhookDto, { headers });
+    expect(update.some(e => e.property === 'headers')).toBe(true);
+    expect(await errorsFor(UpdateWebhookDto, { headers: { 'X-A': '1', 'X-B': '2' } })).toHaveLength(0);
+  });
+
   it('UpdateWebhookDto applies the same header validation', async () => {
     const errs = await errorsFor(UpdateWebhookDto, { headers: { 'X-Evil': 'a\nb' } });
     expect(errs.some(e => e.property === 'headers')).toBe(true);
+  });
+
+  // Header values go out as Latin-1 bytes; a wider code unit throws inside the HTTP client on every
+  // delivery, so it must be refused when the webhook is saved.
+  it.each(['Caf\u00e9 \u2192 Norte', '\u6771\u4eac', 'hi \u{1F600}'])(
+    'rejects a header value outside Latin-1 (%s) on create and update',
+    async value => {
+      const create = await errorsFor(CreateWebhookDto, {
+        url: 'https://example.com/hook',
+        headers: { 'X-Tenant': value },
+      });
+      expect(create.some(e => e.property === 'headers')).toBe(true);
+      const update = await errorsFor(UpdateWebhookDto, { headers: { 'X-Tenant': value } });
+      expect(update.some(e => e.property === 'headers')).toBe(true);
+    },
+  );
+
+  it('accepts a Latin-1 header value on create and update', async () => {
+    const headers = { 'X-Tenant': 'Caf\u00e9 Norte \u00ff' };
+    const create = await errorsFor(CreateWebhookDto, { url: 'https://example.com/hook', headers });
+    expect(create.some(e => e.property === 'headers')).toBe(false);
+    const update = await errorsFor(UpdateWebhookDto, { headers });
+    expect(update.some(e => e.property === 'headers')).toBe(false);
   });
 });
 

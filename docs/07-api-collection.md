@@ -109,7 +109,9 @@ curl -X POST "$BASE/api/sessions" \
 
 With an optional per-session egress proxy — only if your network can't reach WhatsApp directly. The
 proxy **must be a real, reachable host**; an unreachable value silently blocks the WhatsApp WebSocket
-(no QR is ever delivered) and `POST /api/sessions/:sessionId/start` returns `504` after ~30s:
+(no QR is ever delivered) and `POST /api/sessions/:sessionId/start` returns `504` after ~30s.
+
+Setting `proxyUrl` requires an unscoped ADMIN key; any other key gets `403`.
 
 ```bash
 curl -X POST "$BASE/api/sessions" \
@@ -129,7 +131,7 @@ curl "$BASE/api/sessions/$SESSION_ID/proxy" \
 
 #### PATCH /api/sessions/:sessionId/proxy
 
-Update per-session proxy settings (OPERATOR). No restart — changes apply on the next start. Send `"proxyUrl": null` to clear.
+Update per-session proxy settings (ADMIN, unscoped key). No restart — changes apply on the next start. Send `"proxyUrl": null` to clear.
 
 ```bash
 curl -X PATCH "$BASE/api/sessions/$SESSION_ID/proxy" \
@@ -617,7 +619,7 @@ curl -X GET "$BASE/api/sessions/$SESSION_ID/contacts?limit=100&offset=0" \
 
 #### GET /api/sessions/:sessionId/contacts/check/:number
 
-Check whether a phone number is on WhatsApp.
+Check whether a phone number is on WhatsApp. Requires an `OPERATOR` key.
 
 ```bash
 curl -X GET "$BASE/api/sessions/$SESSION_ID/contacts/check/628123456789" \
@@ -1208,7 +1210,7 @@ curl -X DELETE "$BASE/api/sessions/$SESSION_ID/webhooks/f1e2d3c4-b5a6-7890-1234-
 
 ### 07.11 API Keys
 
-All `/api/auth/api-keys` routes require an unscoped **ADMIN** key: one with `allowedSessions` or `allowedChats` set is refused with `403`. `POST /api/auth/validate` accepts any valid key except one restricted with `allowedChats`, which gets `403`. The plaintext key is returned only by the create call.
+All `/api/auth/api-keys` routes require an unscoped **ADMIN** key: one with `allowedSessions` or `allowedChats` set is refused with `403`. `POST /api/auth/validate` accepts any valid key except one its `allowedIps` refuses or one restricted with `allowedChats`, each of which gets `403`. The plaintext key is returned only by the create call.
 
 #### GET /api/auth/api-keys
 
@@ -1649,7 +1651,7 @@ curl -X DELETE "$BASE/api/plugins/chat-flow" \
 
 #### POST /mcp
 
-MCP JSON-RPC 2.0 transport (no `/api` prefix; gated by `MCP_ENABLED=true`). The API key goes via `X-Api-Key` or `Authorization: Bearer`; auth is enforced per tool call. The server is **read-only by default** — write tools such as `MessageSendText` are only mounted when `MCP_READONLY=false`. See doc 24 for the tool catalog.
+MCP JSON-RPC 2.0 transport (no `/api` prefix; gated by `MCP_ENABLED=true`). The API key goes via `X-Api-Key` or `Authorization: Bearer` on every request, `initialize` and `tools/list` included (a missing or invalid key answers `401`, a key carrying `allowedIps` `403`); role and session scope are checked per tool call. The server is **read-only by default** — write tools such as `MessageSendText` are only mounted when `MCP_READONLY=false`. See doc 24 for the tool catalog.
 
 ```bash
 # Initialize handshake

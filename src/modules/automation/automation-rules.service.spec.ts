@@ -142,6 +142,19 @@ describe('AutomationRulesService', () => {
       expect(sends).toEqual([{ sessionId: 'sessA', chatId: '628111@c.us', text: 'welcome!' }]);
     });
 
+    // The chat id is a third party's number: the reply line carries it as debug metadata only.
+    it('logs the reply at debug and keeps the chat id out of info-level lines', async () => {
+      await service.create('sessA', { name: 'any', replyText: 'hi' });
+      const logger = (service as unknown as { logger: { log: () => void; debug: () => void } }).logger;
+      const log = jest.spyOn(logger, 'log');
+      const debug = jest.spyOn(logger, 'debug').mockImplementation(() => undefined);
+
+      await service.evaluateInbound('sessA', inbound());
+
+      expect(debug).toHaveBeenCalledWith('Automation rule replied', expect.objectContaining({ chatId: '628111@c.us' }));
+      expect(JSON.stringify(log.mock.calls)).not.toContain('628111');
+    });
+
     it('a rule without conditions matches every inbound message', async () => {
       await service.create('sessA', { name: 'all', replyText: 'ack' });
 

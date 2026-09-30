@@ -1,5 +1,6 @@
 import {
   BaileysIncomingFields,
+  baileysChatJid,
   buildIncomingMessageFromBaileys,
   extractBaileysBody,
   extractBaileysButtonReply,
@@ -23,6 +24,8 @@ describe('mapBaileysMessageType (baileys content-type -> neutral MessageType)', 
     ['extendedTextMessage', false, 'text'],
     ['imageMessage', false, 'image'],
     ['videoMessage', false, 'video'],
+    // A round video note is a VideoMessage under its own key.
+    ['ptvMessage', false, 'video'],
     ['audioMessage', false, 'audio'],
     ['audioMessage', true, 'voice'],
     ['documentMessage', false, 'document'],
@@ -233,6 +236,25 @@ describe('extractBaileysContext (quoted body shares the live body extractor)', (
     expect(quoted({ stickerMessage: {} })?.body).toBe('');
   });
 
+  it('reads the quote, timer and mentions off a video note', () => {
+    expect(
+      extractBaileysContext({
+        ptvMessage: {
+          contextInfo: {
+            stanzaId: 'wamid.original',
+            quotedMessage: { conversation: 'the original' },
+            expiration: 86400,
+            mentionedJid: ['628222@s.whatsapp.net'],
+          },
+        },
+      }),
+    ).toMatchObject({
+      quotedMessage: { id: 'wamid.original', body: 'the original' },
+      ephemeralDuration: 86400,
+      mentionedJids: ['628222@s.whatsapp.net'],
+    });
+  });
+
   it('carries a quote from a button-reply contextInfo', () => {
     expect(
       extractBaileysContext({
@@ -338,6 +360,55 @@ describe('buildIncomingMessageFromBaileys', () => {
     // Without this, buildIncomingStatus can only resolve the poster to the status@broadcast
     // pseudo-JID itself and drops the status entirely.
     expect(r.author).toBe('628111@s.whatsapp.net');
+  });
+
+  it("files a received broadcast-list message under the sender's chat, as Baileys does", () => {
+    const normalize = (jid: string) => jid.replace('@s.whatsapp.net', '@c.us');
+    const r = buildIncomingMessageFromBaileys(
+      { ...base, remoteJid: '1700000000@broadcast', participant: '628222@s.whatsapp.net' },
+      normalize,
+    );
+    expect(r.chatId).toBe('628222@c.us');
+    expect(r.from).toBe('628222@c.us');
+    expect(r.to).toBe('628999@c.us');
+    expect(r.kind).toBe('individual');
+    expect(r.isStatusBroadcast).toBe(false);
+    expect(r.isGroup).toBe(false);
+    expect(r.author).toBe('628222@c.us');
+  });
+
+  it('keeps the list as the chat for a received list message with no participant', () => {
+    const r = buildIncomingMessageFromBaileys({ ...base, remoteJid: '1700000000@broadcast' });
+    expect(r.chatId).toBe('1700000000@broadcast');
+    expect(r.kind).toBe('broadcast');
+  });
+
+  it('flags a lid sender of a received list message and files it under the lid', () => {
+    const r = buildIncomingMessageFromBaileys({ ...base, remoteJid: '1700000000@broadcast', participant: '222@lid' });
+    expect(r.chatId).toBe('222@lid');
+    expect(r.isLidSender).toBe(true);
+  });
+
+  it('baileysChatJid mirrors Baileys getChatId without throwing', () => {
+    const list = '1700000000@broadcast';
+    const sender = '628222@s.whatsapp.net';
+    expect(baileysChatJid(list, sender, false)).toBe(sender);
+    expect(baileysChatJid(list, sender, true)).toBe(list);
+    expect(baileysChatJid(list, undefined, false)).toBe(list);
+    expect(baileysChatJid('status@broadcast', sender, false)).toBe('status@broadcast');
+    expect(baileysChatJid('120363@g.us', sender, false)).toBe('120363@g.us');
+  });
+
+  it('keeps the list as the chat for a broadcast-list message the account sent', () => {
+    const normalize = (jid: string) => jid.replace('@s.whatsapp.net', '@c.us');
+    const r = buildIncomingMessageFromBaileys(
+      { ...base, remoteJid: '1700000000@broadcast', fromMe: true, participant: '628999@s.whatsapp.net' },
+      normalize,
+    );
+    expect(r.chatId).toBe('1700000000@broadcast');
+    expect(r.from).toBe('628999@c.us');
+    expect(r.to).toBe('1700000000@broadcast');
+    expect(r.author).toBe('628999@c.us');
   });
 
   it('converts extended-text status styling: backgroundArgb -> #RRGGBB, font passed through', () => {

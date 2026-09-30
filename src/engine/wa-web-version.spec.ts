@@ -3,8 +3,12 @@ jest.mock('../common/services/logger.service', () => ({
   createLogger: () => ({ warn: mockWarn, log: jest.fn(), error: jest.fn(), info: jest.fn(), debug: jest.fn() }),
 }));
 
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
   __resetWebVersionCache,
+  PINNED_HTML_TIMEOUT_MS,
   pickSettledWebVersion,
   resolveCurrentWebVersion,
   resolveWebVersionPin,
@@ -268,5 +272,147 @@ describe('resolveCurrentWebVersion failure warning', () => {
     await resolveCurrentWebVersion(fetcher as never);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(mockWarn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// whatsapp-web.js fetches a remote pin's HTML with no timeout and, non-strict, loads the live build
+// when that fails, silently. The HTML is now fetched here, bounded, and served as a strict local file.
+describe('resolveWebVersionPin with a cache directory', () => {
+  const ORIGINAL_ENV = process.env.WWEBJS_WEB_VERSION;
+  const VERSION = '2.3000.1234';
+  const HTML = `<!DOCTYPE html><html><head></head><body>${'x'.repeat(2048)}</body></html>`;
+  let dir: string;
+
+  const page = (body: string, status = 200) => ({ ok: status < 400, status, text: () => Promise.resolve(body) });
+  const htmlWarning = (): Record<string, unknown> | undefined =>
+    (mockWarn.mock.calls as [string, Record<string, unknown>][]).find(
+      ([, meta]) => meta?.action === 'web_version_html_unavailable',
+    )?.[1];
+
+  beforeEach(() => {
+    __resetWebVersionCache();
+    mockWarn.mockClear();
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-web-cache-'));
+    process.env.WWEBJS_WEB_VERSION = VERSION;
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    __resetWebVersionCache();
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (ORIGINAL_ENV === undefined) delete process.env.WWEBJS_WEB_VERSION;
+    else process.env.WWEBJS_WEB_VERSION = ORIGINAL_ENV;
+  });
+
+  it('writes the HTML and answers a strict local cache for it', async () => {
+    const fetcher = jest.fn(() => Promise.resolve(page(HTML)));
+
+    await expect(resolveWebVersionPin(fetcher as never, dir)).resolves.toEqual({
+      webVersion: VERSION,
+      webVersionCache: { type: 'local', path: dir, strict: true },
+    });
+    expect(fs.readFileSync(path.join(dir, `${VERSION}.html`), 'utf8')).toBe(HTML);
+    expect(fs.readdirSync(dir)).toEqual([`${VERSION}.html`]);
+    expect(htmlWarning()).toBeUndefined();
+  });
+
+  it('sends URL credentials as a Basic header, since fetch refuses a URL that carries them', async () => {
+    process.env.WWEBJS_WEB_VERSION_REMOTE_PATH = 'https://u:p@mirror.example/{version}.html';
+    try {
+      const fetcher = jest.fn(() => Promise.resolve(page(HTML)));
+
+      await expect(resolveWebVersionPin(fetcher as never, dir)).resolves.toMatchObject({
+        webVersionCache: { type: 'local' },
+      });
+      expect(fetcher).toHaveBeenCalledWith(
+        `https://mirror.example/${VERSION}.html`,
+        expect.objectContaining({ headers: { Authorization: 'Basic dTpw' } }),
+      );
+
+      fetcher.mockResolvedValue(page('', 503));
+      __resetWebVersionCache();
+      await resolveWebVersionPin(fetcher as never, dir);
+      expect(htmlWarning()?.remotePath).toBe(`https://mirror.example/${VERSION}.html`);
+      const logged = JSON.stringify(mockWarn.mock.calls);
+      expect(logged).not.toContain('u:p@');
+    } finally {
+      delete process.env.WWEBJS_WEB_VERSION_REMOTE_PATH;
+    }
+  });
+
+  it('removes a build no start has written for a week, and keeps a recent one', async () => {
+    const stale = path.join(dir, '2.3000.1.html');
+    const recent = path.join(dir, '2.3000.2.html');
+    fs.writeFileSync(stale, HTML);
+    fs.writeFileSync(recent, HTML);
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(stale, eightDaysAgo, eightDaysAgo);
+    const fetcher = jest.fn(() => Promise.resolve(page(HTML)));
+
+    await resolveWebVersionPin(fetcher as never, dir);
+
+    expect(fs.readdirSync(dir).sort()).toEqual(['2.3000.1234.html', '2.3000.2.html']);
+  });
+
+  it('gives up at the bound and drops the pin with a named warning', async () => {
+    jest.useFakeTimers();
+    const fetcher = jest.fn(
+      (_url: string, init: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted')))),
+    );
+
+    const pending = resolveWebVersionPin(fetcher as never, dir);
+    await jest.advanceTimersByTimeAsync(PINNED_HTML_TIMEOUT_MS);
+
+    await expect(pending).resolves.toBeUndefined();
+    const warning = htmlWarning();
+    expect(warning?.webVersion).toBe(VERSION);
+    expect(warning?.reason).toContain(`${PINNED_HTML_TIMEOUT_MS} ms`);
+    expect(warning?.remotePath).toContain(VERSION);
+  });
+
+  it.each([
+    ['a non-ok status', page(HTML, 404), 'HTTP 404'],
+    ['a body too short to be the page', page('<html></html>'), 'not a WhatsApp Web page'],
+    ['a body that is not HTML', page('x'.repeat(4096)), 'not a WhatsApp Web page'],
+  ])('drops the pin on %s and writes nothing', async (_label, response, reason) => {
+    const fetcher = jest.fn(() => Promise.resolve(response));
+
+    await expect(resolveWebVersionPin(fetcher as never, dir)).resolves.toBeUndefined();
+    expect(htmlWarning()?.reason).toContain(reason);
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it('fetches a build once, shares a concurrent fetch, and retries after a failure', async () => {
+    const fetcher = jest.fn().mockResolvedValueOnce(page('', 503)).mockResolvedValue(page(HTML));
+
+    await expect(resolveWebVersionPin(fetcher as never, dir)).resolves.toBeUndefined();
+    const [a, b] = await Promise.all([
+      resolveWebVersionPin(fetcher as never, dir),
+      resolveWebVersionPin(fetcher as never, dir),
+    ]);
+    await resolveWebVersionPin(fetcher as never, dir);
+
+    expect(a?.webVersionCache.type).toBe('local');
+    expect(b?.webVersionCache.type).toBe('local');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a version that is not a build number, without fetching or writing', async () => {
+    process.env.WWEBJS_WEB_VERSION = '../../etc/x';
+    const fetcher = jest.fn(() => Promise.resolve(page(HTML)));
+
+    await expect(resolveWebVersionPin(fetcher as never, dir)).resolves.toBeUndefined();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(htmlWarning()).toBeDefined();
+  });
+
+  it('keeps the remote shape when no cache directory is given', async () => {
+    const fetcher = jest.fn();
+
+    await expect(resolveWebVersionPin(fetcher as never)).resolves.toMatchObject({
+      webVersionCache: { type: 'remote' },
+    });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

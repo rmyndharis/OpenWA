@@ -44,6 +44,21 @@ export class SessionLifecycleFences {
   }
 
   /**
+   * Graceful destroy(), escalating to forceDestroy() when it throws or hits its deadline, like stop()
+   * does. For teardowns that leave the engine unreachable afterwards (it is removed from the Map), a
+   * failed graceful destroy would otherwise leave a live browser with no handle to kill it by.
+   * Resolves `false` only when both attempts failed. Not for shutdown(): the process is exiting.
+   */
+  async destroyWithEscalation(sessionId: string, engine: IWhatsAppEngine): Promise<boolean> {
+    if (await this.teardownEngineSafely(sessionId, engine, e => e.destroy(), 'destroy')) return true;
+    this.logger.warn(`Graceful destroy failed for session ${sessionId}; escalating to force-destroy`, {
+      sessionId,
+      action: 'destroy_escalate_force_destroy',
+    });
+    return this.teardownEngineSafely(sessionId, engine, e => e.forceDestroy(), 'force-destroy');
+  }
+
+  /**
    * Run an engine teardown (destroy/disconnect), isolating + time-bounding failures so a stuck
    * Chromium/socket can neither hang nor abort the caller. Always resolves — the caller is then free
    * to reconcile the engines Map and proceed with DB cleanup regardless of teardown outcome.
@@ -192,9 +207,12 @@ export class SessionLifecycleFences {
    * concurrency slot and makes a later start() see the session as "already started"; forceDestroy()
    * (not the graceful destroy()) is used because such an engine's browser/CDP connection is typically
    * already broken, so a graceful close would only time out before the process is reaped.
+   *
+   * The eviction is identity-checked (deleteIfLive): if a replacement engine is already registered
+   * for `id`, it stays. The passed engine is force-destroyed either way, since it is dead or abandoned.
    */
   evictAndForceDestroy(id: string, engine: IWhatsAppEngine): void {
-    this.engines.delete(id);
+    this.engines.deleteIfLive(id, engine);
     void this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
   }
 }

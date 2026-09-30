@@ -13,5 +13,7 @@ public enum DeliveryStatus {
     @SerializedName("read")
     READ,
     @SerializedName("failed")
-    FAILED
+    FAILED,
+    /** Decoded when the gateway sends a value newer than this SDK; not a wire value itself. */
+    UNKNOWN
 }

@@ -364,6 +364,54 @@ describe('StatsService aggregate memo (in-process TTL)', () => {
     expect(spy.mock.calls.length).toBeGreaterThan(afterS1);
   });
 
+  // The private loaders, reached through a cast so the spies count computations rather than queries.
+  type Loaders = { loadOverview: () => Promise<unknown>; loadSessionStats: (id: string) => Promise<unknown> };
+
+  it('runs one aggregate for concurrent callers on a cold memo', async () => {
+    const service = makeService(30000);
+    const loadOverview = jest.spyOn(service as unknown as Loaders, 'loadOverview');
+    const loadSession = jest.spyOn(service as unknown as Loaders, 'loadSessionStats');
+
+    const [a, b] = await Promise.all([service.getOverview(), service.getOverview()]);
+    await Promise.all([service.getSessionStats('s1'), service.getSessionStats('s1')]);
+
+    expect(loadOverview).toHaveBeenCalledTimes(1);
+    expect(b).toEqual(a);
+    expect(loadSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares a rejection with the concurrent callers and does not memoize it', async () => {
+    const service = makeService(30000);
+    const loadOverview = jest
+      .spyOn(service as unknown as Loaders, 'loadOverview')
+      .mockRejectedValueOnce(new Error('boom'));
+
+    const results = await Promise.allSettled([service.getOverview(), service.getOverview()]);
+    expect(results.map(r => r.status)).toEqual(['rejected', 'rejected']);
+    expect(loadOverview).toHaveBeenCalledTimes(1);
+
+    await expect(service.getOverview()).resolves.toBeDefined();
+    expect(loadOverview).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts the TTL when the aggregate completes, not when it starts', async () => {
+    const service = makeService(30000);
+    const loadOverview = jest.spyOn(service as unknown as Loaders, 'loadOverview');
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      // A scan that outlives the TTL: stamping the entry at the start would store it already expired.
+      loadOverview.mockImplementationOnce(() => {
+        nowSpy.mockReturnValue(1_000_000 + 40_000);
+        return Promise.resolve({} as never);
+      });
+      await service.getOverview();
+      await service.getOverview();
+      expect(loadOverview).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('a 0 TTL disables the memo (every call hits the DB)', async () => {
     const service = makeService(0);
     const spy = jest.spyOn(ds.getRepository(Message), 'createQueryBuilder');

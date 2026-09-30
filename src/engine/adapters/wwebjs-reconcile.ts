@@ -20,7 +20,9 @@ export interface WwebjsReadyReconcileHost {
   getCallbacks(): EngineEventCallbacks;
   /** Promote to READY off the live client's info — the lifecycle's own ready path. */
   markReadyFromClientInfo(): void;
-  /** The deadline's non-bridge branch: clear the broken auth and let the lifecycle re-pair. */
+  /** Whether this engine showed a QR before authenticating: a fresh pairing, not a restored session. */
+  wasFreshPairing(): boolean;
+  /** The deadline's fresh-pairing branch: clear the broken auth and let the lifecycle re-pair. */
   recoverFromStuckAuth(): Promise<void>;
 }
 
@@ -86,6 +88,27 @@ export class WwebjsReadyReconcile {
             .onError?.(
               'WhatsApp Web is connected but its event bridge never attached, so inbound messages would be ' +
                 'lost. The saved session was kept — restart the session to relaunch the browser.',
+            );
+          return;
+        }
+        // A session restored from saved credentials never showed a QR, so nothing says those
+        // credentials are bad: a stuck restore is far more often an incompatible WhatsApp Web build,
+        // which a re-pair does not fix. Clearing them is not reversible, so keep them and fail loudly.
+        if (!this.host.wasFreshPairing()) {
+          this.host.logger.error(
+            'WhatsApp Web restored the saved session but it never became ready within the readiness ' +
+              'deadline; the session is marked failed and the saved credentials were kept.',
+            undefined,
+            { sessionId: this.host.config.sessionId, action: 'ready_reconcile_timeout_restored' },
+          );
+          this.clearReadyReconcile();
+          this.host.setStatus(EngineStatus.FAILED);
+          this.host
+            .getCallbacks()
+            .onError?.(
+              'WhatsApp Web restored the saved session but never became ready; the saved credentials were kept. ' +
+                'Restart the session; to pair again, delete it (which clears the saved credentials) and create ' +
+                'it anew. Pin WWEBJS_WEB_VERSION if it keeps recurring.',
             );
           return;
         }

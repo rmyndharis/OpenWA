@@ -105,17 +105,18 @@ at evalTypeScript (node:internal/process/execution:256:22)
 **Cause:** Node 22 routes `node -e` through its TypeScript evaluator which rejects arrow-function
 syntax. Podman also splits quoted shell commands on whitespace, truncating the `-e` argument.
 
-**Fix:** Use `curl` for the healthcheck instead of `node -e`:
+**Fix:** Use `curl` for the healthcheck instead of `node -e`. The shipped image, `docker-compose.yml`
+and `docker-compose.dev.yml` already do; this applies to a healthcheck you wrote yourself:
 
 ```dockerfile
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:2785/api/health || exit 1
+    CMD curl -f http://localhost:2785/api/health/ready || exit 1
 ```
 
 ```yaml
-# docker-compose.dev.yml
+# docker-compose healthcheck
 healthcheck:
-  test: ['CMD', 'curl', '-f', 'http://localhost:2785/api/health']
+  test: ['CMD', 'curl', '-f', 'http://localhost:2785/api/health/ready']
 ```
 
 Ensure `curl` is installed in the production stage:
@@ -343,20 +344,24 @@ WWEBJS_WEB_VERSION=<a build from that registry's html/ folder>
 
 Restart the container after changing it. Pick the build from
 [wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder) — a
-build the registry no longer serves is fetched, missed, and ignored, leaving you on the default
-behaviour rather than the pin you asked for (the `ready`-time warning below names both builds). With
+build the registry no longer serves cannot be fetched, and the session starts on the live build rather
+than the pin you asked for, with a warning at start (action `web_version_html_unavailable`, naming the
+build, the URL and the reason). With
 `WWEBJS_WEB_VERSION` unset, `latest`, or `auto` (the default), OpenWA auto-resolves a settled build
 from that registry and pins its HTML — note this HTML is fetched from a third-party repository and
 executed inside the `web.whatsapp.com` origin without an integrity check. Set
 `WWEBJS_WEB_VERSION=off` to disable pinning and use the first-party build served by WhatsApp. An
 unpinned session (this setting, or an auto-resolve that could not reach the registry) caches nothing to
-disk, so it also works on the image's read-only root filesystem.
+disk, so it also works on the image's read-only root filesystem. A pinned build's HTML is downloaded
+at start, with a 10 s bound, into `<SESSION_DATA_PATH>/.wa-web-cache/` on the writable data volume and
+served from there; a build no session has started on for a week is removed.
 
 A pin is not guaranteed to hold. whatsapp-web.js applies it by answering the page's document request
 with the pinned HTML, and that can miss in two ways: a pin whose HTML could not be fetched is dropped
-and the live build loads, and WhatsApp Web's service worker can serve its own cached build without the
-request reaching whatsapp-web.js. Either way the page can run a different build than the one
-requested, while the startup line `Pinning WhatsApp Web version …` still names the requested build.
+at start (the `web_version_html_unavailable` warning above) and the live build loads, and WhatsApp
+Web's service worker can serve its own cached build without the request reaching whatsapp-web.js. In
+the second case the page runs a different build than the one requested, while the startup line
+`Pinning WhatsApp Web version …` still names the requested build.
 When a session reaches `ready`, OpenWA reads the build the page reports and logs it (action
 `web_version_running`); when a pin was requested and the page runs a different build, it logs a
 warning naming both (action `web_version_pin_not_applied`). The comparison ignores the registry's
@@ -364,9 +369,17 @@ suffix such as `-alpha`, so a pin and the same bare build count as a match.
 
 The warning changes nothing about the session. It reached `ready` on the build the warning names, so
 the pin did not cover that page load, and a session that works on that build needs no action.
-If the pin is one you set yourself, check that the registry still serves it. Whether the service worker
-answers can differ from one page load to the next, so a later restart may load the pin. When you report
-a problem with the session, include both builds.
+Whether the service worker answers can differ from one page load to the next, so a later restart may
+load the pin. When you report a problem with the session, include both builds.
+
+If the session is still `authenticating` 90 s after the link, OpenWA stops waiting. If WhatsApp Web
+reports the session connected but its event bridge never attached, the session is marked `failed` with
+the credentials kept (action `ready_reconcile_bridge_dead`), whether it was linked in that start or
+restored: restart it to relaunch the browser. Otherwise, a session linked by a QR or pairing code in
+that start has its saved credentials cleared once and comes back with a fresh QR. A session restored
+from saved credentials is marked `failed` with the credentials kept (action
+`ready_reconcile_timeout_restored`): restart it; to pair again, delete it (which clears the saved
+credentials) and create it anew; or pin `WWEBJS_WEB_VERSION`.
 
 ### Issue: QR generation times out on slow first boot (WSL2 / low-resource)
 
@@ -585,7 +598,8 @@ once, so the session stops instead of being silently unlinked by WhatsApp about 
 > minutes later and the device disappears from the phone's Linked devices list. That miss is not
 > silent: when the watcher finds a visible dialog it cannot match, it logs a warning
 > (`action: onboarding_dialog_unrecognized`) carrying the dialog's heading and button labels, including
-> the label to add, minutes before the unlink would happen. Because that path wipes the stored
+> the label to add, minutes before the unlink would happen. Copy that label as printed: a multi-word
+> label works, and whitespace runs compare as one space. Because that path wipes the stored
 > credentials, the automatic reconnect comes back with a fresh QR on its own, so the session is
 > usually already sitting at `qr_ready` rather than needing a manual start. Acknowledge the modal once
 > in a browser signed in as that account, then scan the QR. It does not recur — the modal is shown
@@ -646,10 +660,12 @@ The reconnect backoff is configured **per session**, not by environment variable
 `reconnectBaseDelay` is the exponential-backoff base in milliseconds (clamped to 1000–300000,
 default 5000). `maxReconnectAttempts` is clamped to 0–20 — `0` disables auto-reconnect entirely, and
 leaving it unset means unlimited retries with the delay parking at a 5-minute cap. Both keys bound
-the gateway's own reconnect. On Baileys that is only the reconnect after a logged-out close: every
-other drop is retried inside the engine, with a fixed 1s to 60s backoff and no attempt cap, so a
-session behind an unreachable network keeps retrying there whatever these keys say. Subscribe to the
-`session.reconnect_loop` webhook to be alerted on every 5th consecutive attempt.
+the gateway's own reconnect, whose attempt count restarts only once the session has stayed READY for
+5 minutes, so a session that keeps dropping sooner than that spends a finite cap and ends FAILED. On
+Baileys that is only the reconnect after a logged-out close: every other drop is retried inside the
+engine, with a fixed 1s to 60s backoff and no attempt cap, so a session behind an unreachable network
+keeps retrying there whatever these keys say. Subscribe to the `session.reconnect_loop` webhook to be
+alerted on every 5th consecutive attempt.
 
 On a slow host, raise the first-boot init wait with `WWEBJS_AUTH_TIMEOUT_MS` (see _QR generation
 times out on slow first boot_ above).
@@ -675,7 +691,7 @@ curl -H "X-API-Key: $API_KEY" \
 curl -H "X-API-Key: $API_KEY" \
   http://localhost:2785/api/infra/status
 
-# Rate limiting is global (throttler, env-configured) — there is no per-session rate-limit endpoint
+# Rate limiting is env-configured, per route and client IP; there is no per-session rate-limit endpoint
 ```
 
 **Common Causes:**
@@ -777,21 +793,24 @@ quoting the message it printed.
 > A patch that never applied is not fatal on its own: only the capability it repairs is affected and
 > the rest of the gateway runs normally, which is why this is easy to misread as a bug in one route.
 
-### Issue: Reads on a large account fail with `Runtime.callFunctionOn timed out`
+### Issue: Reads on a large account fail with `did not answer ... in time` or `Runtime.callFunctionOn timed out`
 
 > **Engine:** This issue applies to the `whatsapp-web.js` engine only (Chromium/Puppeteer-based). It does not affect `ENGINE_TYPE=baileys`.
 
 **Symptoms:**
 
-- `GET /api/sessions/{id}/chats` (or another read that walks the whole store) fails on an account
-  with thousands of chats, while smaller accounts on the same deployment are fine
-- The error names a CDP method and the setting: `Runtime.callFunctionOn timed out. Increase the 'protocolTimeout' setting in launch/connect calls for a higher timeout if needed.`
+- `GET /api/sessions/{id}/chats`, `GET /api/sessions/{id}/groups` (or another read that walks the
+  whole store) fails on an account with thousands of chats, while smaller accounts on the same deployment are fine
+- The chat, group and contact lists answer `503` with `WhatsApp Web did not answer the chat list read in time`
+  (or `the contact list read`); another read may answer `500` with the raw error, which names a CDP
+  method and the setting: `Runtime.callFunctionOn timed out. Increase the 'protocolTimeout' setting in launch/connect calls for a higher timeout if needed.`
 - The session stays `ready` and the next request works, so the page did not die
 
 **Cause:** Puppeteer gives every browser command a time budget, 180 000 ms by default, and one
-`getChats()` over a very large store can run past it. The renderer is still working; only the
+read of the whole chat list over a very large store can run past it. The renderer is still working; only the
 command is dropped. That is also why this is **not** treated as a dead page — a transport death
-answers `503` and takes the session down with it, and this is just a slow command on a live page.
+takes the session down with it, while this is just a slow command on a live page. The chat, group and
+contact lists answer it with a `503` as well, but the session stays `ready`.
 
 **Solution:** raise the budget for that deployment.
 
@@ -880,8 +899,9 @@ curl -X POST http://localhost:2785/api/sessions/{id}/messages/send-image \
 curl -H "X-API-Key: $API_KEY" \
   http://localhost:2785/api/sessions/{sessionId}/webhooks
 
-# Abandoned deliveries, most recent first: those that exhausted every retry, plus those never
-# attempted at all (recorded with `attempts: 0`). Requires an ADMIN key — an OPERATOR key gets
+# Abandoned deliveries, most recent first: those that exhausted every retry, plus those recorded
+# with `attempts: 0`: never attempted, or (queue disabled) stopped by shutdown during a retry
+# backoff after earlier attempts. Requires an ADMIN key — an OPERATOR key gets
 # a 403, which reads like the endpoint does not exist. Rows older than
 # WEBHOOK_FAILURE_RETENTION_DAYS (default 90) are pruned.
 curl -H "X-API-Key: $ADMIN_API_KEY" \
@@ -1027,8 +1047,9 @@ curl -H "X-API-Key: $API_KEY" \
 
 ```sql
 -- Indexes ship with the schema (migrations) — there is nothing to add by hand. `messages`
--- carries ("sessionId", "createdAt"), ("chatId"), ("status"), ("createdAt") and a unique
--- ("sessionId", "waMessageId").
+-- carries ("sessionId", "createdAt"), ("sessionId", "chatId", "createdAt"), ("chatId"),
+-- ("status"), ("createdAt"), a partial ("mediaPath") where it is not null, a unique
+-- ("sessionId", "waMessageId"), and on PostgreSQL a GIN index on the full-text "body_ts" column.
 
 -- PostgreSQL: refresh planner statistics on the hot tables
 ANALYZE sessions;
@@ -1129,14 +1150,18 @@ npm run migration:run:main
 
 **Solutions:**
 
-The entrypoint starts as root, re-owns `/app/data` to the `openwa` user on every start, and then
-drops privileges with `gosu`. Keep that path intact:
+By default the entrypoint starts as root, re-owns `/app/data` to the `openwa` user (uid/gid 997) on
+every start, and then drops privileges with `gosu`. Keep that path intact:
 
-- Do not set `user:` on `openwa-api` (or `--user` on `docker run`). The entrypoint then cannot
-  `chown` or drop privileges, exits, and the container restarts in a loop.
 - Keep the `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID` and `SETUID` entries under `cap_add` in
   `docker-compose.yml`; the `chown` and the `gosu` drop need them.
-- A `chown` of the host directory is not a fix: the entrypoint re-owns `/app/data` at the next start.
+- Setting `user:` on `openwa-api` (or `--user` on `docker run`) starts the entrypoint as that uid
+  instead. It then skips the `chown` and the drop, so `/app/data` must already be writable by that
+  uid: `user: "997:997"` works on a volume a root start has already re-owned, and the `cap_add` list
+  can then be removed. Any other uid needs the volume chowned to it first. When the volume is not
+  writable the container stops with `FATAL: /app/data is not writable by uid ...`.
+- On the default root start, a `chown` of the host directory is not a fix: the entrypoint re-owns
+  `/app/data` at the next start. A non-root start (above) is the case that needs one.
 - If the error persists on a bind mount, the host filesystem is refusing the `chown` (NFS with
   `root_squash`, some rootless or SMB setups) or SELinux is denying access (add `:z` to the mount).
   Use the named volume from the shipped `docker-compose.yml` instead.
@@ -1202,10 +1227,12 @@ docker exec openwa-api curl http://host.docker.internal:8080
 > - 8GB RAM: 15-20 sessions
 >
 > With `ENGINE_TYPE=baileys` (browser-free), RAM per session is significantly lower — you can run more sessions on the same hardware. Exact figures depend on message volume and group membership.
+>
+> A media burst adds roughly `INBOUND_MEDIA_CONCURRENCY` x `MEDIA_DOWNLOAD_MAX_BYTES` per session on top of that (4 x 50 MiB by default; about a third more on whatsapp-web.js, which holds each payload as base64). Set `INBOUND_MEDIA_GLOBAL_CONCURRENCY` to cap concurrent inbound media downloads across all sessions. On whatsapp-web.js a download that times out keeps its slot until Puppeteer fails the call (`PUPPETEER_PROTOCOL_TIMEOUT_MS`, 180 s by default), since it cannot be aborted.
 
 **Q: Can I run 10+ sessions in one container? Will they get banned for sharing one IP?**
 
-> A: Yes — there is no hard session limit; the practical ceiling is RAM/CPU (see the table above). Sharing one IP across sessions is not itself a ban trigger: carrier NAT already puts hundreds of ordinary users on a single IP, so WhatsApp cannot treat a shared IP as a violation. Ten sessions on one residential IP behave like ten phones on one home WiFi. What actually matters:
+> A: Yes: there is no session limit by default (`MAX_CONCURRENT_SESSIONS` sets one); the practical ceiling is RAM/CPU (see the table above). Sharing one IP across sessions is not itself a ban trigger: carrier NAT already puts hundreds of ordinary users on a single IP, so WhatsApp cannot treat a shared IP as a violation. Ten sessions on one residential IP behave like ten phones on one home WiFi. What actually matters:
 >
 > - **IP reputation** — cheap datacenter IPs are flagged more aggressively than residential ones. A residential proxy (per-session, via the proxy settings) can help; it is not a license to spam.
 > - **Sending behavior** — bans follow message patterns (volume, identical templates, cold reachouts), not session count. See "How to avoid getting banned?" below.
@@ -1514,7 +1541,6 @@ When creating GitHub issue, include:
 
 - **GitHub Issues**: [github.com/rmyndharis/OpenWA/issues](https://github.com/rmyndharis/OpenWA/issues)
 - **Discussions**: [github.com/rmyndharis/OpenWA/discussions](https://github.com/rmyndharis/OpenWA/discussions)
-- **Discord**: [discord.gg/openwa](https://discord.gg/openwa) (if available)
 - **Stack Overflow**: Tag with `openwa`
 ---
 

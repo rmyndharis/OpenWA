@@ -1,5 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { SessionTakeoverService } from './session-takeover.service';
+import { SessionStoppedException } from '../session/session-engine-controls';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import type { SessionService } from '../session/session.service';
 import type { SessionOwnershipService } from '../session/session-ownership.service';
@@ -122,6 +123,17 @@ describe('SessionTakeoverService', () => {
     expect(start).not.toHaveBeenCalled();
   });
 
+  it('leaves a session an operator stopped down, and adopts one nobody stopped', async () => {
+    const { svc, start } = build([
+      lapsed({ name: 'stopped', status: SessionStatus.DISCONNECTED, desiredState: 'stopped' }),
+      lapsed({ name: 'dropped', status: SessionStatus.DISCONNECTED, desiredState: null }),
+    ]);
+
+    await svc.sweep();
+
+    expect(start.mock.calls).toEqual([['id-dropped']]);
+  });
+
   it('a lost claim race is a non-event: no batch reconcile, and the next candidate still starts', async () => {
     jest.useFakeTimers();
     const start = jest.fn().mockRejectedValueOnce(new ConflictException('held elsewhere')).mockResolvedValueOnce({});
@@ -134,6 +146,19 @@ describe('SessionTakeoverService', () => {
     expect(start).toHaveBeenCalledTimes(2);
     expect(reap).toHaveBeenCalledTimes(1);
     expect(reap).toHaveBeenCalledWith('id-ours', expect.any(String));
+  });
+
+  it('a session stopped after the sweep read it is logged as skipped, not as a lost claim race', async () => {
+    const start = jest.fn().mockRejectedValueOnce(new SessionStoppedException('Session id-halted was stopped'));
+    const { svc, reap } = build([lapsed({ name: 'halted' })], { startImpl: start });
+    const debug = jest.spyOn((svc as unknown as { logger: { debug: jest.Mock } }).logger, 'debug');
+
+    await svc.sweep();
+
+    expect(reap).not.toHaveBeenCalled();
+    expect(debug.mock.calls.map(([message]) => message as string)).toEqual([
+      'Session halted skipped: stopped by an operator',
+    ]);
   });
 
   it('a non-conflict start failure is logged and does not abort the rest of the sweep', async () => {

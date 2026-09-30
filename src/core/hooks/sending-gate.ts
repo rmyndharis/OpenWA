@@ -11,7 +11,8 @@ const logger = createLogger('SendingGate');
  * Lives here rather than on a service so callers in different modules share one implementation.
  * A second copy of a moderation chokepoint is a chokepoint that will eventually disagree with itself.
  *
- * Current callers: `MessageService` (all senders + edit) and `StatusService` (the three posts).
+ * Current callers: `MessageService` (all senders + edit), `StatusService` (the three posts) and
+ * `CatalogService` (`sendProduct`, which ignores a rewritten `chatId` as bulk does).
  * `BulkMessageService` still runs its own inlined copy — it has to flag a plugin block separately
  * from a delivery failure so the per-item `message:failed` hook is skipped, which this signature
  * cannot express. If you change the gate's semantics here, change it there too

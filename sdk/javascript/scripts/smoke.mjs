@@ -5,6 +5,7 @@
  * so this guards `npm publish` against shipping an unconsumable package.
  * Run after `npm run build`.
  */
+import { createHmac } from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -13,6 +14,20 @@ if (typeof cjs.OpenWAClient !== 'function') throw new Error('CJS: OpenWAClient m
 
 const esm = await import(new URL('../dist/esm/index.js', import.meta.url).href);
 if (typeof esm.OpenWAClient !== 'function') throw new Error('ESM: OpenWAClient missing');
+
+// The webhook helper is a value export in both builds; on Node 18 this also runs its node:crypto
+// fallback through the real CJS require() and ESM import() paths.
+const secret = 'test-secret-0123456789';
+const body = '{"event":"test"}';
+const signature = 'sha256=' + createHmac('sha256', secret).update(body).digest('hex');
+for (const [format, mod] of [
+  ['CJS', cjs],
+  ['ESM', esm],
+]) {
+  if ((await mod.verifyWebhookSignature(body, signature, secret)) !== true) {
+    throw new Error(`${format}: verifyWebhookSignature rejected a valid signature`);
+  }
+}
 
 // Typings smoke: each runtime condition must carry its OWN types entry pointing at the matching
 // build. A single top-level "types" condition ahead of "require" makes a node16-family CommonJS

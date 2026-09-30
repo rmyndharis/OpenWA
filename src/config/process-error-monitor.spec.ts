@@ -1,4 +1,5 @@
 import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './process-error-monitor';
+import { getUnhandledRejections } from '../common/metrics/process-error-metrics';
 
 const EVENT = 'uncaughtExceptionMonitor';
 
@@ -120,6 +121,19 @@ describe('registerUnhandledRejectionHandler', () => {
     handler(new TypeError('window.somethingElse is not a function'));
     expect(warns).toHaveLength(0);
     expect(errors).toHaveLength(1);
+  });
+
+  it('counts each rejection under its classification', () => {
+    const { handler } = register();
+    const before = getUnhandledRejections();
+    handler(new Error('something genuinely broke'));
+    handler(new Error('Execution context was destroyed'));
+    handler('a bare string');
+
+    expect(getUnhandledRejections()).toEqual({
+      other: before.other + 2,
+      page_context_lost: before.page_context_lost + 1,
+    });
   });
 
   it('stringifies a non-Error rejection without throwing', () => {

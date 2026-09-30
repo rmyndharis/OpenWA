@@ -272,7 +272,7 @@ flowchart TB
    - WhatsApp rate limiting
 
 2. **Legal**
-   - Unofficial API, not affiliated with Meta
+   - Unofficial API, not affiliated with WhatsApp or Meta (see the [disclaimer](../README.md#disclaimer))
    - Users are responsible for compliant usage
 
 3. **Resource**

@@ -9,7 +9,8 @@ import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { resolveSessionScope } from '../../common/security/session-scope';
 import { ListOptions, resolveListWindow } from '../../common/utils/paginate';
-import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
+import { generateDeliveryId } from './utils/idempotency.util';
+import { buildDeliveryHeaders } from './utils/deliver-once';
 import {
   assertSafeFetchUrl,
   withSafeFetch,
@@ -244,12 +245,15 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
   async test(sessionId: string, webhookId: string): Promise<{ success: boolean; statusCode?: number; error?: string }> {
     const webhook = await this.findOne(sessionId, webhookId);
 
+    // Every test is a new event: a key derived from the webhook alone repeats on every call, so a
+    // receiver that dedups on it acknowledges the second test without running its handler.
+    const deliveryId = generateDeliveryId();
     const testPayload: WebhookPayload = {
       event: 'test',
       timestamp: new Date().toISOString(),
       sessionId,
-      idempotencyKey: generateIdempotencyKey('test', { webhookId: webhook.id }),
-      deliveryId: generateDeliveryId(),
+      idempotencyKey: `test_${deliveryId}_${webhook.id}`,
+      deliveryId,
       data: {
         message: 'This is a test webhook from OpenWA',
         webhookId: webhook.id,
@@ -258,20 +262,8 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     };
 
     const body = JSON.stringify(testPayload);
-    const headers: Record<string, string> = {
-      // Custom headers FIRST so the system headers below always win.
-      ...this.delivery.sanitizeCustomHeaders(webhook.headers),
-      'Content-Type': 'application/json',
-      'User-Agent': 'OpenWA-Webhook/1.0.0',
-      'X-OpenWA-Event': 'test',
-      'X-OpenWA-Idempotency-Key': testPayload.idempotencyKey,
-      'X-OpenWA-Delivery-Id': testPayload.deliveryId,
-      'X-OpenWA-Retry-Count': '0',
-    };
-
-    if (webhook.secret) {
-      headers['X-OpenWA-Signature'] = this.delivery.generateSignature(body, webhook.secret);
-    }
+    // The same header builder as a real delivery, so the probe tests what the receiver will get.
+    const headers = buildDeliveryHeaders(webhook, 'test', testPayload.idempotencyKey, deliveryId, body);
 
     try {
       return await withSafeFetch(

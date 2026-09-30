@@ -216,7 +216,9 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
       .createQueryBuilder()
       .delete()
       .where('sessionId = :sessionId', { sessionId })
-      .andWhere('(createdAt < :createdAt OR (createdAt = :createdAt AND id <= :id))', { createdAt, id })
+      // Row-value form, not `createdAt < c OR (createdAt = c AND id <= i)`: same rows, but the OR keeps
+      // the planner from bounding the range, so it walked every row of the session on each write.
+      .andWhere('(createdAt, id) <= (:createdAt, :id)', { createdAt, id })
       .execute();
   }
 }

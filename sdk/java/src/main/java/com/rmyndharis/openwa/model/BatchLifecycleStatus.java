@@ -8,5 +8,7 @@ public enum BatchLifecycleStatus {
     @SerializedName("processing") PROCESSING,
     @SerializedName("completed") COMPLETED,
     @SerializedName("failed") FAILED,
-    @SerializedName("cancelled") CANCELLED
+    @SerializedName("cancelled") CANCELLED,
+    /** Decoded when the gateway sends a value newer than this SDK; not a wire value itself. */
+    UNKNOWN
 }

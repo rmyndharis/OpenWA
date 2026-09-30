@@ -10,9 +10,12 @@
 # The per-arch runtime deps are installed natively in the target-platform production stage below.
 # NOTE: $BUILDPLATFORM requires BuildKit (CI uses buildx; modern `docker build`/compose default to it).
 # The digest pins the multi-arch node:22-slim index, so every build starts from the same immutable
-# base; dependabot's docker ecosystem proposes the new digest when the tag moves. Update tag and
-# digest together.
-FROM --platform=$BUILDPLATFORM docker.io/node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS builder
+# base. Dependabot proposes a refreshed digest when the tag moves; if none has arrived, refresh by
+# hand (`docker buildx imagetools inspect docker.io/node:22-slim`). The base-image-drift job in
+# security-scan.yml fails once the pin differs from what the tag serves and either the tag has
+# served that image for 7 or more days, or for 3 or more days with the pin last changed 28 or more
+# days ago. Update both stages together.
+FROM --platform=$BUILDPLATFORM docker.io/node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS builder
 
 WORKDIR /app
 
@@ -59,7 +62,7 @@ RUN npm run build && npm run dashboard:ci -- --include=dev && npm run dashboard:
 
 # ===== Stage 2: Production =====
 # Same digest-pinned node:22-slim base as the builder stage.
-FROM docker.io/node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS production
+FROM docker.io/node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS production
 
 # Run the app with production defaults from the first boot: an unset NODE_ENV selects the
 # development branch of the CORS/Swagger/DTO-error-detail/default-secret hardening (main.ts
@@ -170,8 +173,10 @@ http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.l
 # Set Puppeteer to skip automatic download during npm install (we download it explicitly below)
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
-# Create app user for security
-RUN groupadd -r openwa && useradd -r -g openwa openwa
+# Create app user for security. The ids are pinned (997 is what `-r` assigned on both arches) so a
+# Kubernetes runAsUser/fsGroup or a `docker run --user` can name the runtime user; the root start
+# re-owns /app/data by name either way.
+RUN groupadd -r -g 997 openwa && useradd -r -u 997 -g openwa openwa
 
 WORKDIR /app
 
@@ -219,8 +224,9 @@ RUN npm ci --omit=dev --ignore-scripts \
 # Replace the npm the base image bundles. npm is not on the request path — the entrypoint runs
 # `node dist/main` — but it stays in the image because the operator runbooks drive it
 # (`docker exec openwa npm run cli …`, `npm run export`), and its own bundled dependency tree is
-# what the release image scan reports. node:22-slim currently ships npm 10.9.8, whose bundle
-# carries a critical node-tar advisory plus sigstore/picomatch ones; npm 12 fixes all three.
+# what the release image scan reports. node:22-slim ships npm 10.9 (10.9.9 at the pinned digest),
+# whose bundle has carried a critical node-tar advisory plus sigstore/picomatch ones; npm 12 fixes
+# all three.
 # Deliberately AFTER `npm ci`, so the application tree is still resolved by the npm the lockfile
 # was generated with and only the global CLI is swapped. Pinned to the exact patch release —
 # a floating npm@12 would make the image's bundled npm tree depend on when the build happened.
@@ -262,9 +268,9 @@ COPY --from=builder /app/dashboard/dist ./dashboard/dist
 
 # Create data directories with correct ownership. Only ./data is chowned, NOT all of /app: the app
 # tree (node_modules, dist) only needs read access, which root-owned files already grant, and the
-# entrypoint re-chowns /app/data at every container start for the mounted-volume case. A full
-# /app chown walks every production dependency file (issue #1045: ~35 minutes on a small VPS) and
-# duplicates their metadata into a new image layer.
+# entrypoint re-owns any wrong-owned path under /app/data at every start for the mounted-volume
+# case. A full /app chown walks every production dependency file (issue #1045: ~35 minutes on a
+# small VPS) and duplicates their metadata into a new image layer.
 RUN mkdir -p ./data/sessions ./data/media ./data/plugins && \
     chown -R openwa:openwa ./data
 
@@ -302,9 +308,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 # then drops to the openwa user via gosu before starting the node process.
 #
 # NOTE — no `USER openwa` directive on purpose (Trivy DS-0002 will flag it, ignore).
-# The Node process does NOT run as root: docker-entrypoint.sh:30 is
-# `exec gosu openwa "$@"` after the chowns on lines 7 and 25. Adding `USER openwa`
-# here would run the entrypoint as openwa and break the chown-before-drop pattern
-# that makes named-volume mounts work on first boot (#254, #259).
+# The Node process does NOT run as root: docker-entrypoint.sh ends with
+# `exec gosu openwa "$@"`, after it chowns /app/data and the Chromium XDG
+# dirs. Adding `USER openwa` here would run the entrypoint as openwa and break
+# the chown-before-drop pattern that makes named-volume mounts work on first
+# boot (#254, #259). Starting it as a non-root uid on purpose (`--user 997:997`,
+# a Kubernetes runAsUser) is supported: the entrypoint skips the chown and the
+# drop, and needs /app/data to be writable by that uid.
 ENTRYPOINT ["dumb-init", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/main"]

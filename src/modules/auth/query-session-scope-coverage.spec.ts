@@ -5,8 +5,8 @@
 // scoped by the guard, and must derive scope from the calling key itself — the established pattern is
 // to inject `@CurrentApiKey()` and pass `apiKey.allowedSessions` to the service (see
 // search.controller / webhooks-list findAll / audit). This test fails if a controller handler takes
-// `@Query('sessionId')` without also injecting `@CurrentApiKey`, so a future endpoint cannot silently
-// re-introduce the leak.
+// `@Query('sessionId')`, or a whole `@Query()` / `@Body()` DTO declaring `sessionId` or `sessionIds`,
+// without also injecting `@CurrentApiKey`, so a future endpoint cannot silently re-introduce the leak.
 import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -28,19 +28,63 @@ export function methodPattern(): RegExp {
 }
 
 /**
- * Return the names of handlers in `source` that take a `sessionId` query param but do NOT inject
- * `@CurrentApiKey` in the same parameter list — i.e. that bypass the guard fence without re-scoping.
+ * Return the names of handlers in `source` that take a `sessionId` query param, or a whole `@Query()` /
+ * `@Body()` DTO named in `sessionDtos`, but do NOT inject `@CurrentApiKey` in the same parameter list:
+ * i.e. that bypass the guard fence without re-scoping.
  */
-export function handlersMissingSessionScope(source: string): string[] {
+export function handlersMissingSessionScope(source: string, sessionDtos: ReadonlySet<string> = new Set()): string[] {
   const offenders: string[] = [];
   const methodRe = methodPattern();
   for (let m = methodRe.exec(source); m !== null; m = methodRe.exec(source)) {
     const [, name, params] = m;
     const takesSessionIdQuery = /@Query\(\s*['"]sessionId['"]\s*\)/.test(params);
+    const takesSessionDto = [...params.matchAll(/@(?:Query|Body)\(\s*\)\s*\w+\??\s*:\s*(\w+)/g)].some(p =>
+      sessionDtos.has(p[1]),
+    );
     const injectsCurrentApiKey = /@CurrentApiKey\(/.test(params);
-    if (takesSessionIdQuery && !injectsCurrentApiKey) offenders.push(name);
+    if ((takesSessionIdQuery || takesSessionDto) && !injectsCurrentApiKey) offenders.push(name);
   }
   return offenders;
+}
+
+/**
+ * The classes in `sources` that declare `sessionId` or `sessionIds`, themselves or through a parent
+ * (`extends Y`, or a mapped type such as `PartialType(Y)` / `IntersectionType(Y, Z)`).
+ */
+export function sessionScopedDtos(sources: readonly string[]): Set<string> {
+  const own = new Set<string>();
+  const parents = new Map<string, string[]>();
+  for (const source of sources) {
+    for (const chunk of source.split(/export\s+class\s+/).slice(1)) {
+      const name = /^(\w+)/.exec(chunk)?.[1];
+      if (!name) continue;
+      if (/^\s+sessionIds?[?!]?\s*:/m.test(chunk)) own.add(name);
+      const heritage = /^\w+\s+extends\s+([^{]*)\{/.exec(chunk)?.[1] ?? '';
+      parents.set(
+        name,
+        [...heritage.matchAll(/\b([A-Z]\w*Dto|[A-Z]\w*)\b/g)].map(p => p[1]),
+      );
+    }
+  }
+  const out = new Set<string>();
+  const carries = (name: string, seen: Set<string>): boolean => {
+    if (own.has(name)) return true;
+    if (seen.has(name)) return false;
+    seen.add(name);
+    return (parents.get(name) ?? []).some(parent => carries(parent, seen));
+  };
+  for (const name of parents.keys()) if (carries(name, new Set())) out.add(name);
+  return out;
+}
+
+function listSourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...listSourceFiles(full));
+    else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.spec.ts')) out.push(full);
+  }
+  return out;
 }
 
 function listControllerFiles(dir: string): string[] {
@@ -78,6 +122,48 @@ describe('query-param sessionId endpoints are session-scoped', () => {
   }
 `;
     expect(handlersMissingSessionScope(vulnerable)).toEqual(['findAll']);
+  });
+
+  it('flags a whole @Query() or @Body() DTO carrying sessionId or sessionIds, inherited or declared', () => {
+    const dtos = sessionScopedDtos([
+      `
+export class FilterDto {
+  @IsOptional()
+  sessionId?: string;
+}
+export class FanOutDto {
+  sessionIds!: string[];
+}
+export class UpdateFilterDto extends PartialType(FilterDto) {}
+export class PlainDto {
+  name?: string;
+}
+`,
+    ]);
+    expect([...dtos].sort()).toEqual(['FanOutDto', 'FilterDto', 'UpdateFilterDto']);
+
+    const handlers = `
+  async list(@Query() dto: FilterDto) {
+    return this.svc.list(dto);
+  }
+
+  async fanOut(@Body() dto: FanOutDto): Promise<unknown> {
+    return this.svc.fanOut(dto);
+  }
+
+  async update(@Body() dto: UpdateFilterDto) {
+    return this.svc.update(dto);
+  }
+
+  async plain(@Body() dto: PlainDto) {
+    return this.svc.plain(dto);
+  }
+
+  async scoped(@Query() dto: FilterDto, @CurrentApiKey() apiKey?: ApiKey) {
+    return this.svc.list(dto, apiKey?.allowedSessions);
+  }
+`;
+    expect(handlersMissingSessionScope(handlers, dtos)).toEqual(['list', 'fanOut', 'update']);
   });
 
   it('clears a handler that injects @CurrentApiKey alongside the query param', () => {
@@ -122,11 +208,14 @@ describe('query-param sessionId endpoints are session-scoped', () => {
     expect(blind).toEqual([]);
   });
 
-  it('no real controller takes @Query(sessionId) without scoping to the calling key', () => {
+  it('no real controller takes a session id from its query or body without scoping to the calling key', () => {
     const modulesDir = join(__dirname, '..');
+    const sessionDtos = sessionScopedDtos(listSourceFiles(modulesDir).map(f => readFileSync(f, 'utf8')));
+    // The DTO scan must see the one real request DTO carrying sessionId, or it checks nothing.
+    expect(sessionDtos.has('SearchQueryDto')).toBe(true);
     const offenders: string[] = [];
     for (const file of listControllerFiles(modulesDir)) {
-      for (const handler of handlersMissingSessionScope(readFileSync(file, 'utf8'))) {
+      for (const handler of handlersMissingSessionScope(readFileSync(file, 'utf8'), sessionDtos)) {
         offenders.push(`${file.replace(/.*\/src\//, 'src/')} :: ${handler}`);
       }
     }

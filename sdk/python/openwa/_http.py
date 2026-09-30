@@ -23,8 +23,15 @@ def quote_segment(segment: Any) -> str:
     """Percent-encode a single path segment so a value containing ``/``, ``#`` or
     ``?`` can't break out of its path position. WhatsApp-id characters that are
     already path-safe (``@``, ``:``, ``+``) are kept readable.
+
+    Raises :class:`ValueError` for an empty, ``.`` or ``..`` segment: httpx
+    resolves dot segments before sending, so such an id would reach the
+    parent resource instead of the intended one.
     """
-    return quote(str(segment), safe="@:+")
+    text = str(segment)
+    if text in ("", ".", ".."):
+        raise ValueError(f"OpenWA: empty or dot path segment {text!r}")
+    return quote(text, safe="@:+")
 
 
 def build_url(base_url: str, path: str, query: Mapping[str, Any] | None = None) -> str:
@@ -131,5 +138,5 @@ class HttpExecutor:
         # rather than a success. Matches the JS transport's `!res.ok`.
         if res.status_code >= 300:
             context = f"{method} {path}"
-            raise OpenWAApiError.from_response(res.status_code, res.text, context)
+            raise OpenWAApiError.from_response(res.status_code, res.text, context, headers=res.headers)
         return res

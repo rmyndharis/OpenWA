@@ -1,8 +1,9 @@
 # replicaCount MUST stay 1. A session lease now stops two pods from launching the same
 # session, so the shared-auth corruption this warning used to describe can no longer
-# happen. What is still process-local is the reason: API-key socket eviction, the WS
+# happen. The reasons now: API keys and the audit log live in each pod's own main.sqlite,
+# so a key created, revoked or narrowed on one pod is unchanged on the others, and the WS
 # rate-limit buckets, the liveness watchdog and reconnect timers, and in-flight bulk
-# batches. See docs/13-horizontal-scaling.md.
+# batches are process-local. See docs/13-horizontal-scaling.md.
 # Postgres boot migrations no longer add a cross-replica hazard: replicas serialize them
 # with a session-scoped advisory lock at startup, so simultaneous boots cannot race DDL
 # against the shared migrations ledger. That part is enforced in-process, not by keeping
@@ -77,9 +78,41 @@ resources:
 # teardown can exceed the 30s k8s default.
 terminationGracePeriodSeconds: 45
 
-# Parity with docker-compose hardening. The image entrypoint STARTS AS ROOT to
-# chown /app/data + the XDG dirs, then drops to the openwa user via gosu — so do
-# NOT add runAsNonRoot here; it breaks that pattern.
+# Pod-level securityContext, empty by default. The default image start is as
+# root: the entrypoint re-owns /app/data and the XDG dirs, then drops to the
+# openwa user (uid/gid 997) via gosu, which needs the capabilities added below.
+#
+# To run as non-root from the first instruction instead (Pod Security Standard
+# "restricted"), set:
+#
+#   podSecurityContext:
+#     runAsNonRoot: true
+#     runAsUser: 997
+#     runAsGroup: 997
+#     fsGroup: 997
+#     fsGroupChangePolicy: OnRootMismatch
+#     seccompProfile:
+#       type: RuntimeDefault
+#   containerSecurityContext:
+#     readOnlyRootFilesystem: true
+#     allowPrivilegeEscalation: false
+#     capabilities:
+#       drop: [ALL]
+#       add: null
+#
+# The entrypoint then skips its chown and privilege drop and runs as that uid;
+# fsGroup is what makes a fresh volume writable by it. OnRootMismatch makes the
+# kubelet re-own the volume only when its root has the wrong group or mode,
+# instead of touching every file on every mount. `add: null` removes the
+# default list below; Helm merges maps, so leaving it out keeps all five.
+# The RuntimeDefault seccomp profile is opt-in (it can also be set alone,
+# under either context) until a whatsapp-web.js session start under it has
+# been confirmed on arm64, where the image uses Debian's Chromium.
+podSecurityContext: {}
+
+# Parity with docker-compose hardening. The five added capabilities are used
+# only by the root entrypoint (chown, then the gosu drop); see
+# podSecurityContext above for the non-root alternative.
 containerSecurityContext:
   readOnlyRootFilesystem: true
   allowPrivilegeEscalation: false

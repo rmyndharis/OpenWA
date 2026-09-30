@@ -1,4 +1,4 @@
-import { Controller, NotFoundException, Param, Post } from '@nestjs/common';
+import { ConflictException, Controller, NotFoundException, Param, Post } from '@nestjs/common';
 import { ApiTags, ApiResponse } from '@nestjs/swagger';
 import { CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
 import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
@@ -28,6 +28,10 @@ export class RedriveController {
     description: 'One bounded batch of dead-lettered ingress deliveries re-dispatched, with remaining depth.',
     type: RedriveResultDto,
   })
+  @ApiResponse({
+    status: 409,
+    description: 'The instance is disabled or deleted; its dead-lettered deliveries cannot be re-dispatched.',
+  })
   async redriveInstance(
     @Param('pluginId') pluginId: string,
     @Param('instanceId') instanceId: string,
@@ -36,11 +40,20 @@ export class RedriveController {
     // Session-scoped keys may only redrive instances bound inside their own fence; an out-of-scope
     // instance answers 404 (same as a missing one) so redrive can't be used to probe other sessions.
     // A MISSING instance row is refused too: its retained DLQ rows still carry the deleted instance's
-    // sessionId and would be re-dispatched unscoped. Only an unrestricted key may drain those.
+    // sessionId and would be re-dispatched unscoped.
     const inst = await this.instances.resolve(pluginId, instanceId);
     const scoped = (apiKey?.allowedSessions?.length ?? 0) > 0;
     if (scoped && (!inst || !sessionScopeVisible(apiKey?.allowedSessions, inst.sessionScope))) {
       throw new NotFoundException('instance not found');
+    }
+    // Dispatch refuses a deleted or disabled instance, so every replayed row would only fail again. A
+    // queued replay still counts as redriven and retires its DLQ row before the job fails, which would
+    // report success for deliveries that are then dead-lettered anew. Refuse up front instead; re-enable
+    // the instance first to replay its backlog.
+    if (!inst || inst.enabled === false) {
+      throw new ConflictException(
+        `instance ${instanceId} of plugin ${pluginId} is ${inst ? 'disabled' : 'deleted'}; its dead-lettered deliveries cannot be redriven`,
+      );
     }
     // Thread the authorized binding down as an explicit DLQ provenance filter. A scoped key is
     // authorized against the instance's CURRENT sessionScope, but retained DLQ rows still carry the
@@ -48,7 +61,7 @@ export class RedriveController {
     // lets a sess-current key replay historical sess-old rows. The filter is derived from the
     // PERSISTED current instance (not the request body), and null means an unrestricted caller may
     // drain every retained row — never undefined, which would silently fail open.
-    const sessionIdFilter = scoped ? inst!.sessionScope : null;
+    const sessionIdFilter = scoped ? inst.sessionScope : null;
     const result = await this.redrive.redriveInstance(pluginId, instanceId, sessionIdFilter);
     // A redrive can trigger real downstream sends, so every successful batch is audited with its
     // outcome counts (no payload content — the DLQ rows themselves hold those).

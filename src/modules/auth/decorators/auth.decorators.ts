@@ -52,8 +52,9 @@ export type ChatScopeKind = 'fenced' | 'filtered' | 'agnostic';
  *
  * - `'fenced'` — names a chat the ApiKeyGuard inspects: a `:chatId` / `:groupId` / `:contactId`
  *   path param, or a REQUIRED guard-read body field (`chatId` / `fromChatId` / `toChatId` /
- *   `messages[]`). An optional `?chatId=` does not qualify — the guard would have nothing to check
- *   when it is omitted.
+ *   `messages[]`). An optional `?chatId=` qualifies only when the handler also calls
+ *   `this.chatScope.requireChat(apiKey, chatId)`, which refuses a restricted key that omits it or
+ *   sends it blank; on its own the guard would have nothing to check.
  * - `'filtered'` — lists chats instead of naming one, and filters the result through
  *   ChatScopeService.
  * - `'agnostic'` — names no chat and cannot reach one, so the mark itself is the assertion. This is

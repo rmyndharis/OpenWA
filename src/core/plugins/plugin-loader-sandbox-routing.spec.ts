@@ -21,6 +21,7 @@ class TestableLoader extends PluginLoaderService {
   capturedOnHookSubscribe?: (event: string, priority?: number) => void;
   capturedOnLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void;
   capturedOnWorkerExit?: (code: number, intentional: boolean) => void;
+  capturedOnUnresponsive?: () => void;
   protected createSandboxHost(
     _capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
     onHookSubscribe?: (event: string, priority?: number) => void,
@@ -29,10 +30,12 @@ class TestableLoader extends PluginLoaderService {
     _runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
     _onSearchProviderRegister?: () => void,
     onWorkerExit?: (code: number, intentional: boolean) => void,
+    onUnresponsive?: () => void,
   ): PluginWorkerHost {
     this.capturedOnHookSubscribe = onHookSubscribe;
     this.capturedOnLog = onLog;
     this.capturedOnWorkerExit = onWorkerExit;
+    this.capturedOnUnresponsive = onUnresponsive;
     const host: FakeHost = {
       load: jest.fn().mockResolvedValue(undefined),
       runLifecycle: jest.fn().mockResolvedValue(undefined),
@@ -332,6 +335,92 @@ describe('PluginLoaderService — sandbox hook error surfacing', () => {
     expect(warnSpy).not.toHaveBeenCalled();
     const health = await loader.checkPluginHealth('p1');
     expect(health.message ?? '').not.toContain('last hook error');
+  });
+});
+
+describe('PluginLoaderService - blocked sandbox worker', () => {
+  const loggerOf = (loader: TestableLoader): { warn: jest.Mock } =>
+    (loader as unknown as { logger: { warn: jest.Mock } }).logger;
+  const hostsOf = (loader: TestableLoader): Map<string, unknown> =>
+    (loader as unknown as { sandboxHosts: Map<string, unknown> }).sandboxHosts;
+  const storageOf = (loader: TestableLoader): { setPluginStatus: jest.Mock } =>
+    (loader as unknown as { pluginStorage: { setPluginStatus: jest.Mock } }).pluginStorage;
+
+  it('terminates an unresponsive worker and leaves the plugin in ERROR with its hooks removed', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+    const hookManager = (loader as unknown as { hookManager: HookManager }).hookManager;
+    const unregisterSpy = jest.spyOn(hookManager, 'unregisterPlugin');
+    const warnSpy = jest.spyOn(loggerOf(loader), 'warn').mockImplementation(() => undefined);
+    await loader.enablePlugin('p1');
+    const host = loader.hosts[0];
+
+    loader.capturedOnUnresponsive!();
+
+    const plugin = pluginOf(loader);
+    expect(plugin.status).toBe(PluginStatus.ERROR);
+    expect(plugin.error).toMatch(/unresponsive/);
+    expect(storageOf(loader).setPluginStatus).toHaveBeenCalledWith('p1', PluginStatus.ERROR);
+    expect(unregisterSpy).toHaveBeenCalledWith('p1');
+    expect(hostsOf(loader).has('p1')).toBe(false);
+    expect(host.terminate).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('p1'),
+      expect.objectContaining({ action: 'sandbox_worker_unresponsive', pluginId: 'p1' }),
+    );
+
+    // The deliberate terminate() then exits the worker; that must not undo or repeat the above.
+    loader.capturedOnWorkerExit!(1, true);
+    expect(pluginOf(loader).status).toBe(PluginStatus.ERROR);
+  });
+
+  it('ignores a late report from a worker generation that has already been replaced', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+    await loader.enablePlugin('p1');
+    const staleReport = loader.capturedOnUnresponsive!;
+    await loader.disablePlugin('p1');
+    await loader.enablePlugin('p1');
+    const current = loader.hosts[1];
+
+    staleReport();
+
+    expect(pluginOf(loader).status).toBe(PluginStatus.ENABLED);
+    expect(hostsOf(loader).get('p1')).toBe(current);
+    expect(current.terminate).not.toHaveBeenCalled();
+  });
+
+  it('rate-limits the hook timeout warn per event and surfaces the timeout in plugin health', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+    const hookManager = (loader as unknown as { hookManager: HookManager }).hookManager;
+    const registerSpy = jest.spyOn(hookManager, 'register');
+    await loader.enablePlugin('p1');
+    loader.capturedOnHookSubscribe!('message:received');
+    const handler = registerSpy.mock.calls.find(c => c[1] === 'message:received')![2];
+    loader.hosts[0].dispatchHook.mockImplementation((options: { onTimeout?: () => void }) => {
+      options.onTimeout?.();
+      return Promise.resolve({ continue: true });
+    });
+    const warnSpy = jest.spyOn(loggerOf(loader), 'warn').mockImplementation(() => undefined);
+    const hookCtx: HookContext = {
+      event: 'message:received',
+      data: {},
+      sessionId: 's1',
+      timestamp: new Date(0),
+      source: 'Engine',
+    };
+
+    await handler(hookCtx);
+    await handler(hookCtx);
+
+    const timeoutWarns = warnSpy.mock.calls.filter(
+      c => (c[1] as { action?: string } | undefined)?.action === 'sandbox_hook_timeout',
+    );
+    expect(timeoutWarns).toHaveLength(1);
+    const health = await loader.checkPluginHealth('p1');
+    expect(health.message).toContain("last hook error in 'message:received'");
+    expect(health.message).toContain('timed out');
   });
 });
 

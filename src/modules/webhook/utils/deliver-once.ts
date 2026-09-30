@@ -6,23 +6,37 @@ import { WebhookDeliveryFailure } from '../entities/webhook-delivery-failure.ent
 import { recordWebhookDeliveryFailure, statusCodeFromError } from './record-delivery-failure';
 
 /**
- * Drop operator-supplied custom headers that target reserved names (Content-Type or any
- * X-OpenWA-* header) so a webhook config cannot forge the signature/event/idempotency
- * headers. Spread the result BEFORE the system headers so system always wins. Connection-level
- * and framing headers are dropped too: the HTTP client owns them, undici throws on several
- * (failing every delivery) and a wrong Content-Length breaks the request.
+ * Drop operator-supplied custom headers that target the names the system sets (Content-Type,
+ * User-Agent or any X-OpenWA-* header, in any spelling) so a webhook config cannot forge the
+ * signature/event/idempotency headers. Dropping, not overriding, is what makes the system value
+ * win: the HTTP client joins a case variant with the system one instead of replacing it.
+ * Connection-level and framing headers are dropped too: the HTTP client owns them, undici throws on
+ * several (failing every delivery) and a wrong Content-Length breaks the request.
  */
 export function sanitizeCustomHeaders(custom: Record<string, string> | null | undefined): Record<string, string> {
   const safe: Record<string, string> = {};
   for (const [key, value] of Object.entries(custom ?? {})) {
     if (
       !/^(content-type|x-openwa-)/i.test(key) &&
-      !/^(connection|content-length|expect|keep-alive|te|trailer|transfer-encoding|upgrade)$/i.test(key)
+      !/^(user-agent|connection|content-length|expect|keep-alive|te|trailer|transfer-encoding|upgrade)$/i.test(key)
     ) {
       safe[key] = value;
     }
   }
   return safe;
+}
+
+/**
+ * Whether a webhook row as read now may still receive `event`: it exists, is active and subscribes to
+ * the event or to '*'. Its filters are not re-applied here, since they need the event data. Every
+ * path that delivers after the dispatch moment (a queued job, a direct retry, an outbox replay) runs
+ * this against a fresh row, so a removed, disabled or unsubscribed webhook stops receiving the event.
+ */
+export function isDeliverableWebhook<T extends { active: boolean; events: string[] }>(
+  row: T | null | undefined,
+  event: string,
+): row is T {
+  return !!row && row.active && (row.events.includes(event) || row.events.includes('*'));
 }
 
 /** HMAC-SHA256 over the exact pre-serialized body, prefixed for receiver-side verification. */

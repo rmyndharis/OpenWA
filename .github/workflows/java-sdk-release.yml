@@ -20,6 +20,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: sdk/java

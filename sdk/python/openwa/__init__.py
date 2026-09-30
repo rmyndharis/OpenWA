@@ -37,6 +37,7 @@ from .errors import (
     OpenWARateLimitError,
     OpenWATimeoutError,
 )
+from .webhook import verify_webhook_signature
 
 __all__ = [
     "OpenWAClient",
@@ -50,4 +51,5 @@ __all__ = [
     "OpenWANotImplementedError",
     "OpenWAServiceUnavailableError",
     "OpenWATimeoutError",
+    "verify_webhook_signature",
 ]

@@ -1,7 +1,8 @@
 # OpenWA SDKs
 
-Official client libraries for the [OpenWA](https://github.com/rmyndharis/OpenWA)
-WhatsApp API Gateway.
+Official client libraries for [OpenWA](https://github.com/rmyndharis/OpenWA), the
+open-source WhatsApp API Gateway. OpenWA is an independent project, not
+affiliated with or endorsed by WhatsApp or Meta.
 
 All five SDKs are **hand-written** against the exact API surface (paths, DTOs,
 response shapes) and **unit-tested with mocked HTTP transports** that assert on
@@ -40,6 +41,20 @@ All five SDKs expose the same fluent resource surface:
 | `calls`     | rejectCall, createLink _(OPERATOR)_                                                                                                                                                                                                                                                        |
 | `media`     | conversionStatus, convertVoice, convertVideo _(OPERATOR)_                                                                                                                                                                                                                                  |
 | `health`    | check, live, ready                                                                                                                                                                                                                                                                         |
+
+The table describes `main`. The 0.5.0 registry builds do not include
+`sessions.getProxy`, `sessions.updateProxy` or `messages.clickButton`
+(`get_proxy`, `update_proxy` and `click_button` in Python; `GetProxy`,
+`UpdateProxy` and `ClickButton` in Go); they ship with the next SDK release.
+The webhook signature helpers (`verifyWebhookSignature`,
+`verify_webhook_signature`, `VerifyWebhookSignature`, `WebhookSignature.verify`,
+`WebhookSignature::verify`), the `WebhookDelivery` types and the API error code,
+retry-delay and headers accessors are not in 0.5.0 either; they also ship with
+the next SDK release.
+Nor is the Java fallback to `UNKNOWN`: 0.5.0 decodes a response enum value it
+does not recognise to `null` (`MessageType` and `ChatKind` included), and
+`SessionStatus`, `DeliveryStatus` and the other response enums that lack an
+`unknown` wire value have no `UNKNOWN` constant there.
 
 > ⚠️ Endpoints requiring an `OPERATOR`-level API key are noted in the inline
 > docs. Deliberately **not** exposed, matching `docs/18-sdk-design.md` exactly:
@@ -245,6 +260,12 @@ testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
   retries a send-pacing `429` (`code: "SEND_PACING_LIMITED"`), honors
   `Retry-After`, and rewinds request bodies —
   still off unless you ask for it.
+- **Webhook signatures.** Every SDK verifies a delivery's `X-OpenWA-Signature`
+  against the raw request body: `verifyWebhookSignature` (JavaScript),
+  `verify_webhook_signature` (Python), `VerifyWebhookSignature` (Go),
+  `WebhookSignature.verify` (Java) and `WebhookSignature::verify` (PHP). The
+  JavaScript, Python, Go and Java SDKs also type the delivery body as
+  `WebhookDelivery`.
 - **Redirects are never followed.** A `3xx` surfaces to the caller rather than
   being followed, so the API key is never re-sent to a redirect target.
 - **Default per-request timeout** is 30s (configurable). Path segments (chat /

@@ -1,3 +1,5 @@
+import { incrementUnhandledRejections } from '../common/metrics/process-error-metrics';
+
 /** Minimal structured-logger surface the monitor needs (satisfied by createLogger()'s result). */
 interface FatalLogger {
   error: (message: string, detail?: string) => void;
@@ -81,7 +83,9 @@ export function registerUnhandledRejectionHandler(logger: RejectionLogger): void
   process.on('unhandledRejection', (reason: unknown) => {
     const message = reason instanceof Error ? reason.message : String(reason);
     const detail = reason instanceof Error ? reason.stack : String(reason);
-    if (PAGE_CONTEXT_LOST_REJECTION.test(message)) {
+    const pageContextLost = PAGE_CONTEXT_LOST_REJECTION.test(message);
+    incrementUnhandledRejections(pageContextLost ? 'page_context_lost' : 'other');
+    if (pageContextLost) {
       // The stack goes in the context object, not the second positional slot: `warn`'s second
       // parameter is the log context, and a string there becomes the line's scope name.
       logger.warn(

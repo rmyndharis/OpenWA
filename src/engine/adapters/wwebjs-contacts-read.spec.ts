@@ -44,6 +44,27 @@ describe('readLeanContacts (in-page contact walk)', () => {
     });
   });
 
+  it('walks the contact list as it stood at the start, even if the store grows during a yield', async () => {
+    const models = Array.from({ length: 300 }, (_, i) => String(i));
+    const original = [...models];
+    const read: string[] = [];
+    withModels(models, m => {
+      read.push(m);
+      return row(m);
+    });
+    // A new contact lands at the front of WhatsApp Web's live array while the walk yields.
+    const realSetTimeout = globalThis.setTimeout;
+    jest.spyOn(globalThis, 'setTimeout').mockImplementationOnce((cb: () => void) => {
+      models.unshift('new');
+      return realSetTimeout(cb);
+    });
+
+    const result = await readLeanContacts();
+
+    expect(read).toEqual(original);
+    expect(result.rows.map(r => r.number)).toEqual(original);
+  });
+
   it('still yields to the page event loop when the models throw (#1501)', async () => {
     withModels(
       Array.from({ length: 300 }, (_, i) => String(i)),

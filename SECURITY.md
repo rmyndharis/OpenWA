@@ -6,13 +6,13 @@ socket. Security matters here, and we appreciate responsible disclosure.
 
 ## Supported versions
 
-Security fixes land on the latest minor release (currently 0.23.x). Older minor
+Security fixes land on the latest minor release (currently 0.24.x). Older minor
 lines receive no backports — please upgrade older deployments.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.23.x  | :white_check_mark: |
-| < 0.23  | :x:                |
+| 0.24.x  | :white_check_mark: |
+| < 0.24  | :x:                |
 
 ## Reporting a vulnerability
 
@@ -54,17 +54,23 @@ If you created your `.env` by copying `.env.example` before this advisory, check
 `ENABLE_SWAGGER=true`. Earlier templates shipped that line uncommented alongside
 `NODE_ENV=production`, so a copied file pinned the opt-in that production otherwise
 withholds, and `/api/docs` is served outside the API-key guard. Comment the line out or
-set it to `false` to restore the production default. Docker Compose and the Helm chart
-are unaffected — neither forwards `ENABLE_SWAGGER` and the container never reads `.env`.
+set it to `false` to restore the production default. The bundled Docker Compose files
+(`docker-compose.yml` and `docker-compose.dev.yml`) are affected too: Compose substitutes
+`ENABLE_SWAGGER` from the `.env` next to the compose file and forwards it to the container.
+Fix the line there, then run `docker compose up -d` so the container is recreated with the
+new value. The Helm chart does not set `ENABLE_SWAGGER`.
 
 ### Plugins are full host trust — by design
 
 Installing or enabling a plugin is executing third-party code on the host that runs OpenWA.
 This is inherent to what a plugin IS here: the sandbox (a `worker_threads` isolate with a
-capped heap, an allowlisted environment, a deny-by-default network manifest, and a
-capability router with per-call timeouts) contains a buggy or runaway plugin — it is NOT a
-security boundary against a malicious one. A worker shares the process's filesystem and
-OS privileges with the API.
+capped heap, an allowlisted environment, a deny-by-default network manifest for
+`ctx.net.fetch`, and a capability router with per-call timeouts) contains a buggy or
+runaway plugin — it is NOT a security boundary against a malicious one. A worker shares
+the process's filesystem and OS privileges with the API, so it can reach anything the API
+container can, including the process environment, the data volume and the `docker-proxy`
+described below. See [docs/30-plugin-sandboxing.md](docs/30-plugin-sandboxing.md) for the
+full list.
 
 The compensating gates on the install path:
 
@@ -98,14 +104,14 @@ it as one:
   bind-mount, which is host-root-equivalent.
 
 Mitigations in place: the proxy is unreachable except from `openwa-api` (dedicated
-`internal: true` network), the orchestration endpoints require an ADMIN-role API key,
-both teardown and start are constrained to the three managed profiles (`postgres`,
-`redis`, `minio`) — non-managed names are dropped before reaching `DockerService` —
-and OpenWA itself never issues deletes (profile teardown is stop-only). If you do not
-use the built-in datastore orchestration (Dashboard → Infrastructure built-in
-toggles), disable the proxy entirely — see the `docker-proxy` comments in
-`docker-compose.yml`; `DockerService` then reports Docker unavailable and
-orchestration degrades gracefully.
+`internal: true` network; any plugin loaded into `openwa-api` shares that reach), the
+orchestration endpoints require an ADMIN-role API key, both teardown and start are
+constrained to the three managed profiles (`postgres`, `redis`, `minio`) — non-managed
+names are dropped before reaching `DockerService` — and OpenWA itself never issues
+deletes (profile teardown is stop-only). If you do not use the built-in datastore
+orchestration (Dashboard → Infrastructure built-in toggles), disable the proxy entirely —
+see the `docker-proxy` comments in `docker-compose.yml`; `DockerService` then reports
+Docker unavailable and orchestration degrades gracefully.
 
 ### Session-restricted API keys
 
@@ -115,12 +121,14 @@ deployment rather than on a single session:
 
 - Infrastructure routes (`/api/infra/*`)
 - API-key lifecycle routes (`/api/auth/api-keys/*`)
-- Plugin installation and lifecycle (`/api/plugins/*` — per-session activation
-  and per-session config remain available, scoped to the sessions the key
-  allows)
+- Plugin installation, lifecycle and activation (`/api/plugins/*`, including
+  `PUT /api/plugins/:id/sessions`, which replaces the whole activation set);
+  only the per-session config override (`PUT /api/plugins/:id/config/:sessionId`)
+  remains available, scoped to the sessions the key allows
 - Cross-session statistics (`GET /api/stats/overview`, `GET /api/stats/messages`)
 - Application settings (`GET /api/settings`)
 - Session creation (`POST /api/sessions`)
+- Session egress proxy configuration (`PATCH /api/sessions/:sessionId/proxy`)
 - The queue dashboard (`/api/admin/queues`)
 
 Redriving a dead-lettered integration delivery also fails closed (`404`) when

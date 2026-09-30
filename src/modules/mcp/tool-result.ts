@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { HttpException, Logger } from '@nestjs/common';
+import { HttpException } from '@nestjs/common';
+import { createLogger } from '../../common/services/logger.service';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-const logger = new Logger('Mcp');
+const logger = createLogger('Mcp');
 
 /**
  * Format a tool result, inlining small payloads as text and offloading large

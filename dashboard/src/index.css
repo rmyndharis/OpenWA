@@ -1,19 +1,16 @@
-@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap');
-
 :root {
-  font-family: 'Plus Jakarta Sans', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'Plus Jakarta Sans Variable', 'Plus Jakarta Sans', system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.6;
   font-weight: 400;
 }
 
 html[lang='he'],
 html[dir='rtl'] {
-  font-family: 'Heebo', 'Rubik', 'Noto Sans Hebrew', 'Segoe UI', Arial, sans-serif;
+  font-family: 'Heebo Variable', 'Heebo', 'Rubik', 'Noto Sans Hebrew', 'Segoe UI', Arial, sans-serif;
 }
 
 html[lang='ar'] {
-  font-family: 'Noto Sans Arabic', 'Cairo', 'Tajawal', 'Segoe UI', Arial, sans-serif;
+  font-family: 'Noto Sans Arabic Variable', 'Noto Sans Arabic', 'Cairo', 'Tajawal', 'Segoe UI', Arial, sans-serif;
 }
 
 :root {

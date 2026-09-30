@@ -371,7 +371,7 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
         className="plugin-config-ui-frame"
         sandbox="allow-scripts"
         srcDoc={hardenConfigUiHtml(html)}
-        title={plugin.name}
+        title={localizePlugin(plugin, i18n.language).name}
         style={{ height: plugin.configUi?.height ?? 600 }}
       />
     </>
@@ -818,7 +818,7 @@ export default function Plugins() {
     try {
       await pluginsApi.uninstall(plugin.id);
       refetchAll();
-      toast.success(t('plugins.toasts.uninstalled', 'Plugin uninstalled'), plugin.name);
+      toast.success(t('plugins.toasts.uninstalled', 'Plugin uninstalled'), localizePlugin(plugin, i18n.language).name);
     } catch (err) {
       toast.error(t('plugins.toasts.uninstallFailed', 'Uninstall failed'), err instanceof Error ? err.message : '');
     } finally {

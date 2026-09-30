@@ -61,7 +61,10 @@ public final class WebhooksResource {
             HttpMethod.POST, "/api/sessions/" + encodeSegment(sessionId) + "/webhooks", null, body, WebhookResponse.class);
     }
 
-    /** Update a webhook. */
+    /**
+     * Update a webhook. Fields left null are not sent and stay unchanged. To remove every filter,
+     * set {@code filters(new WebhookFilters(List.of()))}; {@code filters(null)} keeps the current ones.
+     */
     public WebhookResponse update(String sessionId, String id, UpdateWebhookRequest body) {
         return client.request(
             HttpMethod.PUT,

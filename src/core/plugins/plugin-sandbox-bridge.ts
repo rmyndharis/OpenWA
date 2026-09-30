@@ -66,6 +66,7 @@ type CreateSandboxHostFn = (
   runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
   onSearchProviderRegister?: () => void,
   onWorkerExit?: (code: number, intentional: boolean) => void,
+  onUnresponsive?: () => void,
 ) => PluginWorkerHost;
 
 /**
@@ -122,20 +123,23 @@ export class PluginSandboxBridge {
     event: string,
     error: string,
     rateLimit: Map<string, { lastAt: number; suppressed: number }>,
+    action: 'sandbox_hook_error' | 'sandbox_hook_timeout' = 'sandbox_hook_error',
   ): void {
     this.lastSandboxHookError.set(pluginId, { event, error, at: new Date() });
     const now = Date.now();
-    const state = rateLimit.get(event);
+    // Errors and timeouts are windowed apart, so a burst of one never hides the other.
+    const key = `${action}:${event}`;
+    const state = rateLimit.get(key);
     if (state && now - state.lastAt < SANDBOX_HOOK_ERROR_LOG_INTERVAL_MS) {
       state.suppressed++;
       return;
     }
     const suppressed = state?.suppressed ?? 0;
-    rateLimit.set(event, { lastAt: now, suppressed: 0 });
+    rateLimit.set(key, { lastAt: now, suppressed: 0 });
     this.logger.warn(`Sandboxed plugin ${pluginId} hook '${event}' handler failed: ${error}`, {
       pluginId,
       event,
-      action: 'sandbox_hook_error',
+      action,
       ...(suppressed > 0 ? { suppressed } : {}),
     });
   }
@@ -175,7 +179,8 @@ export class PluginSandboxBridge {
   /**
    * Dispatch a queued ingress job into its plugin's live sandbox worker. Called from IngressProcessor,
    * mirroring checkPluginHealth's sandboxHosts lookup. Throws when the plugin has no live
-   * worker (disabled/crashed since the job was enqueued) or when the worker's handler itself reports
+   * worker (disabled/crashed since the job was enqueued), when the instance was disabled or deleted
+   * since, or when the worker's handler itself reports
    * failure (`!result.ok`, e.g. a 502/504/500) — either way BullMQ's retry/DLQ machinery takes over.
    */
   async dispatchWebhookForInstance(d: IngressJobData): Promise<void> {
@@ -193,6 +198,14 @@ export class PluginSandboxBridge {
     // Missing/hot-swapped route metadata fails closed.
     const verified = route ? route.signature.scheme !== 'none' : false;
     const instance = await this.hostServices.getPluginInstancePort().resolve(d.pluginId, d.instanceId);
+    // The live door and the reconciler refuse an unknown or disabled instance; a queued job, a retry,
+    // the inline fallback and a redrive all land here instead, so the same rule is enforced once more.
+    // A missing row must never fall through to the base config below: a wildcard instance projects its
+    // own config there, so the delivery would run with another instance's endpoint and credentials.
+    // Throwing hands the job to the normal retry/dead-letter path.
+    if (!instance || instance.enabled === false) {
+      throw new Error('instance ' + d.instanceId + ' of plugin ' + d.pluginId + ' is disabled or deleted');
+    }
     // Three layers, most specific last: the base ('*') config, then the operator's per-session
     // override from PUT /plugins/:id/sessions/:sessionId/config, then THIS instance's own config.
     // The instance layer is what keeps two instances sharing one session scope apart — provisioning
@@ -331,7 +344,21 @@ export class PluginSandboxBridge {
 
     const onWorkerExit = this.buildWorkerExitHandler(pluginId, logRelayState);
 
-    const host = this.createHost(
+    // A worker whose event loop stays blocked after a dispatch timeout (a synchronous loop in plugin
+    // code) would otherwise keep running and queue every later dispatch for the full budget each.
+    // Same policy as a crash: terminate it and leave the plugin in ERROR for the operator to re-enable.
+    // The generation check keeps a late report from marking a replacement worker.
+    const onUnresponsive = (): void => {
+      if (this.sandboxHosts.get(pluginId) !== host) return;
+      this.markWorkerFailed(pluginId, 'worker unresponsive: event loop blocked past the liveness probe');
+      this.logger.warn(`Sandboxed plugin ${pluginId} worker is unresponsive; terminating it`, {
+        pluginId,
+        action: 'sandbox_worker_unresponsive',
+      });
+      void host.terminate().catch(() => undefined);
+    };
+
+    const host: PluginWorkerHost = this.createHost(
       (verb, args) => dispatchCapabilityVerb(context, verb, args),
       onHookSubscribe,
       onWebhookSubscribe,
@@ -341,6 +368,7 @@ export class PluginSandboxBridge {
       (events, run) => this.hookManager.runInFlight(events as HookEvent[], run),
       onSearchProviderRegister,
       onWorkerExit,
+      onUnresponsive,
     );
     this.sandboxHosts.set(pluginId, host);
     try {
@@ -499,12 +527,16 @@ export class PluginSandboxBridge {
               // against re-firing any event of it (not only this one) once it returns to the host.
               inFlight: this.hookManager.currentInFlight(),
               timeoutMs: SANDBOX_HOOK_TIMEOUT_MS,
+              // Rate-limited like a handler error: a plugin that times out on every message must be
+              // visible (log + health) without writing one line per event.
               onTimeout: () =>
-                this.logger.warn(`Sandboxed plugin ${pluginId} hook '${event}' timed out`, {
+                this.recordSandboxHookError(
                   pluginId,
                   event,
-                  action: 'sandbox_hook_timeout',
-                }),
+                  `timed out after ${SANDBOX_HOOK_TIMEOUT_MS}ms`,
+                  hookErrorLogState,
+                  'sandbox_hook_timeout',
+                ),
             })
             .then(result => {
               // The worker reports (not throws) a hook-handler failure: surface it host-side instead
@@ -581,11 +613,23 @@ export class PluginSandboxBridge {
     };
   }
 
+  // Shared ERROR transition for a crashed or unresponsive worker: mark the plugin ERROR, drop its hook
+  // shims and the dead host. The exit handler releases the search provider.
+  private markWorkerFailed(pluginId: string, reason: string): void {
+    const plugin = this.plugins.get(pluginId);
+    if (plugin) {
+      plugin.status = PluginStatus.ERROR;
+      plugin.error = reason;
+      this.pluginStorage.setPluginStatus(pluginId, PluginStatus.ERROR);
+    }
+    this.hookManager.unregisterPlugin(pluginId);
+    this.sandboxHosts.delete(pluginId);
+  }
+
   // A worker that crashes AFTER a successful enable is otherwise invisible to the loader (handleExit only
   // drains in-flight calls). Drop the plugin's search-provider entry so the registry falls back to
   // builtin-fts instead of routing every /search to a dead worker (auto mode would otherwise pin the dead
-  // provider ACTIVE). Mirrors the enable-failure cleanup. Broader crash-lifecycle cleanup (status, hooks)
-  // is a pre-existing gap for all bridges and out of scope here.
+  // provider ACTIVE). Mirrors the enable-failure cleanup.
   private buildWorkerExitHandler(
     pluginId: string,
     logRelayState: SandboxLogRelayState,
@@ -610,14 +654,7 @@ export class PluginSandboxBridge {
       // unregister the hook shims (so they don't keep dispatching into the dead worker) + mark the
       // plugin ERROR so the dashboard reflects reality. The dispatchHook/dispatchWebhook dead-checks
       // fail-fast; this cleanup is the root-cause fix (it also makes the shim's !liveHost guard fire).
-      const crashed = this.plugins.get(pluginId);
-      if (crashed) {
-        crashed.status = PluginStatus.ERROR;
-        crashed.error = `worker exited unexpectedly (code ${code})`;
-        this.pluginStorage.setPluginStatus(pluginId, PluginStatus.ERROR);
-      }
-      this.hookManager.unregisterPlugin(pluginId);
-      this.sandboxHosts.delete(pluginId);
+      this.markWorkerFailed(pluginId, `worker exited unexpectedly (code ${code})`);
       this.logger.warn(`Sandboxed plugin ${pluginId} worker exited unexpectedly (code ${code})`, {
         pluginId,
         code,

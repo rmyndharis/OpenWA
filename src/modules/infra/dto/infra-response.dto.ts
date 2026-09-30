@@ -135,7 +135,7 @@ export class InfraStatusResponseDto {
   @ApiProperty({
     type: [String],
     description:
-      'Which of the four settings the dashboard can edit are supplied by a layer ABOVE ' +
+      'Which dashboard-editable settings are supplied by a layer ABOVE ' +
       '`data/.env.generated` — the container environment or a project `.env` — and so cannot be ' +
       'changed from the dashboard until that layer is. Reported, not inferred from a running-vs-saved ' +
       'mismatch: a save that has not been restarted yet looks identical and needs the opposite advice.',
@@ -549,6 +549,13 @@ export class StorageImportResponseDto {
 
   @ApiProperty({ description: 'Objects written.', example: 128 })
   count!: number;
+
+  @ApiProperty({
+    description:
+      'Archive entries the store refused to write. `imported` is false when entries failed and none was written.',
+    example: 0,
+  })
+  failed!: number;
 
   @ApiProperty({ enum: ['local', 's3'], example: 'local' })
   storageType!: string;

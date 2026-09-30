@@ -12,9 +12,8 @@ process.env.RATE_LIMIT_SHORT_LIMIT = '100000';
 process.env.RATE_LIMIT_MEDIUM_LIMIT = '100000';
 process.env.RATE_LIMIT_LONG_LIMIT = '100000';
 process.env.DATABASE_SYNCHRONIZE = 'false';
-// The main connection defaults synchronize to true when the env is merely absent (configuration.ts
-// maps !== 'false'), so deleting the env would silently boot main through synchronize. Set it to
-// 'false' explicitly: BOTH connections must run their migration chains.
+// The main connection already runs its chain when the env is absent; 'false' is set explicitly so a
+// value leaking in from the shell cannot boot main through synchronize. BOTH chains must run.
 process.env.MAIN_DATABASE_SYNCHRONIZE = 'false';
 // Fresh throwaway files per run; the chain must CREATE everything that exists in them.
 import { existsSync, readFileSync, rmSync } from 'fs';

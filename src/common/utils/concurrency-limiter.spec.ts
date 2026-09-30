@@ -67,6 +67,7 @@ describe('ConcurrencyLimiter', () => {
 
   it('clamps a non-positive max to 1 (never deadlocks)', async () => {
     const limiter = new ConcurrencyLimiter(0);
+    expect(limiter.maxCount).toBe(1);
     await expect(limiter.run(() => Promise.resolve('ok'))).resolves.toBe('ok');
   });
 
@@ -135,5 +136,111 @@ describe('ConcurrencyLimiter', () => {
     expect(() => limiter.close()).not.toThrow();
     expect(limiter.activeCount).toBe(0);
     expect(limiter.queuedCount).toBe(0);
+  });
+
+  describe('yieldSlot', () => {
+    const gate = (): { wait: Promise<void>; open: () => void } => {
+      let open!: () => void;
+      const wait = new Promise<void>(resolve => (open = resolve));
+      return { wait, open };
+    };
+
+    it('lets a parked task run while the holder waits, then gives the holder a slot back', async () => {
+      const limiter = new ConcurrencyLimiter(1);
+      const order: string[] = [];
+      let peak = 0;
+      const sample = (): void => void (peak = Math.max(peak, limiter.activeCount));
+      const sleep = gate();
+
+      const a = limiter.run(async yieldSlot => {
+        order.push('a:start');
+        await yieldSlot(() => sleep.wait);
+        sample();
+        order.push('a:end');
+      });
+      const b = limiter.run(() => {
+        sample();
+        order.push('b');
+        return Promise.resolve();
+      });
+
+      await b; // runs although A has not finished: A gave its slot up while waiting
+      sleep.open();
+      await a;
+
+      expect(order).toEqual(['a:start', 'b', 'a:end']);
+      expect(peak).toBe(1);
+      expect(limiter.activeCount).toBe(0);
+    });
+
+    it('rejects the holder with "closed" when the limiter closes while it waits, releasing nothing twice', async () => {
+      const limiter = new ConcurrencyLimiter(1);
+      const sleep = gate();
+      const a = limiter.run(yieldSlot => yieldSlot(() => sleep.wait));
+      await Promise.resolve();
+
+      limiter.close();
+      sleep.open();
+
+      await expect(a).rejects.toThrow('ConcurrencyLimiter closed');
+      expect(limiter.activeCount).toBe(0);
+      expect(limiter.queuedCount).toBe(0);
+    });
+
+    it('rejects a holder parked for its slot back when the limiter closes', async () => {
+      const limiter = new ConcurrencyLimiter(1);
+      const sleep = gate();
+      const hold = gate();
+      const a = limiter.run(yieldSlot => yieldSlot(() => sleep.wait));
+      const b = limiter.run(() => hold.wait);
+      sleep.open();
+      await new Promise(resolve => setImmediate(resolve)); // A is now parked behind B
+
+      expect(limiter.queuedCount).toBe(1);
+      limiter.close();
+      hold.open();
+
+      await expect(a).rejects.toThrow('ConcurrencyLimiter closed');
+      await expect(b).resolves.toBeUndefined();
+      expect(limiter.activeCount).toBe(0);
+    });
+
+    it('takes the slot back even when the park queue is full', async () => {
+      // The task was admitted already; shedding it mid-way would drop work that is half done.
+      const limiter = new ConcurrencyLimiter(1, 0);
+      const sleep = gate();
+      const hold = gate();
+      const a = limiter.run(async yieldSlot => {
+        await yieldSlot(() => sleep.wait);
+        return 'a';
+      });
+      const b = limiter.run(() => hold.wait);
+      sleep.open();
+      await new Promise(resolve => setImmediate(resolve));
+      await expect(limiter.run(() => Promise.resolve())).rejects.toThrow('ConcurrencyLimiter queue full');
+
+      hold.open();
+      await expect(a).resolves.toBe('a');
+      await b;
+      expect(limiter.activeCount).toBe(0);
+    });
+
+    it('does not count a task taking its slot back against the park queue', async () => {
+      const limiter = new ConcurrencyLimiter(1, 1);
+      const sleep = gate();
+      const hold = gate();
+      const a = limiter.run(yieldSlot => yieldSlot(() => sleep.wait));
+      const b = limiter.run(() => hold.wait);
+      sleep.open();
+      await new Promise(resolve => setImmediate(resolve)); // A is now parked behind B
+
+      expect(limiter.reacquiringCount).toBe(1);
+      const c = expect(limiter.run(() => Promise.resolve('c'))).resolves.toBe('c');
+
+      hold.open();
+      await Promise.all([a, b, c]);
+      expect(limiter.reacquiringCount).toBe(0);
+      expect(limiter.activeCount).toBe(0);
+    });
   });
 });

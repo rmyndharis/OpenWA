@@ -960,19 +960,16 @@ same value: `sessionId` is the session **UUID** (`Session.id`), which is the on-
 since 0.23.5, and `dbSessionId` is that UUID under the name FK-bound stores such as
 `baileys_stored_messages` read. An out-of-tree engine plugin that keys its own storage by `sessionId`
 has to re-key it on upgrade: `SessionAuthDirMigration` renames the two built-in shapes only. There is
-no `EngineType` union, no `switch`, and no `Unknown engine type` throw: if the plugin is unavailable it
-logs a warning and falls back to the legacy direct adapter — but that fallback can only build
-`whatsapp-web.js`. For any other configured engine (e.g. `ENGINE_TYPE=baileys` with its plugin
-missing) `createFallbackEngine` **throws** rather than silently running the wrong engine, so the
-session fails loudly at start. (A typo in `ENGINE_TYPE` is rejected at boot by `validateEnv`, which
-whitelists `whatsapp-web.js` | `baileys`.)
+no `EngineType` union and no `switch`. If the configured engine's plugin is not registered,
+`create()` throws `Engine '<type>' is not registered`; there is no direct-adapter fallback, so the
+session fails loudly at start instead of running some other engine. (A typo in `ENGINE_TYPE` is
+rejected at boot by `validateEnv`, which whitelists `whatsapp-web.js` | `baileys`.)
 
 ```typescript
 // engine/engine.factory.ts
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { IWhatsAppEngine } from './interfaces/whatsapp-engine.interface';
-import { WhatsAppWebJsAdapter } from './adapters/whatsapp-web-js.adapter';
 import { PluginLoaderService, PluginType, IEnginePlugin } from '../core/plugins';
 
 export interface EngineCreateOptions {
@@ -1015,19 +1012,8 @@ export class EngineFactory implements OnModuleInit {
       }) as IWhatsAppEngine;
     }
 
-    // Plugin missing -> warn, then fall back to the direct whatsapp-web.js adapter.
-    return this.createFallbackEngine(options);
-  }
-
-  private createFallbackEngine(options: EngineCreateOptions): IWhatsAppEngine {
-    // The legacy fallback can only construct whatsapp-web.js. Building it for a different configured
-    // engine would silently run the WRONG one — fail loudly instead.
-    if (this.engineType !== 'whatsapp-web.js') {
-      throw new Error(
-        `Engine '${this.engineType}' is unavailable and has no direct fallback; cannot start the session.`,
-      );
-    }
-    return new WhatsAppWebJsAdapter(/* ...sessionDataPath, puppeteer, proxy, lidMappingStore... */);
+    // Both built-ins are always registered, so this is reached only by a broken host.
+    throw new Error(`Engine '${this.engineType}' is not registered; cannot start the session.`);
   }
 }
 ```
@@ -1056,7 +1042,10 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
 
     this.client = new Client({
       authStrategy: new LocalAuth({ clientId: this.sessionId, dataPath: this.sessionDataPath }),
-      puppeteer: { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] },
+      puppeteer: {
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+      },
     });
 
     this.setupEventHandlers();
@@ -1104,7 +1093,9 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
 
 ```typescript
 // engine/adapters/baileys.adapter.ts
-import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
+import makeWASocket, { DisconnectReason } from '@whiskeysockets/baileys';
+import * as baileys from '@whiskeysockets/baileys';
+import { useAtomicMultiFileAuthState } from './baileys-auth-store';
 import {
   IWhatsAppEngine,
   EngineEventCallbacks,
@@ -1122,7 +1113,13 @@ export class BaileysAdapter implements IWhatsAppEngine {
     this.callbacks = callbacks;
     this.setStatus(EngineStatus.INITIALIZING);
 
-    const { state, saveCreds } = await useMultiFileAuthState(`${this.authDir}/${this.sessionId}`);
+    // Same file layout as Baileys' useMultiFileAuthState, but every write is atomic and an
+    // unparseable creds.json is moved aside with its key files before a new link starts.
+    const { state, saveCreds } = await useAtomicMultiFileAuthState(
+      `${this.authDir}/${this.sessionId}`,
+      baileys,
+      this.logger,
+    );
     this.socket = makeWASocket({ auth: state });
     this.socket.ev.on('creds.update', saveCreds);
     this.setupEventHandlers();
@@ -1194,9 +1191,9 @@ flowchart TB
     end
 
     subgraph Migration["Migration Path"]
-        C[Update whatsapp-web.js]
+        C[Update engine library]
         D[Switch to Baileys]
-        E[Community Fork]
+        E[Track upstream fix\nOperators use fallback channel]
     end
 
     subgraph Resolution["Resolution"]
@@ -1206,7 +1203,7 @@ flowchart TB
     A --> B
     B -->|Minor| C --> F
     B -->|Major wwebjs| D --> F
-    B -->|Major Both| E --> F
+    B -->|Major Both| E --> C
 ```
 
 ### Engine Comparison
@@ -1289,7 +1286,9 @@ internally on `storageType` — there is no `I*Adapter` interface, separate adap
 The main producer/consumer is the storage export/import migration and backup flow; the status store
 also writes status media through `putFile` (under `statuses/`) and sweeps orphans back out with
 `deleteFile`. Incoming and outgoing message media is returned inline to REST/webhook consumers and is
-**not** automatically written through `StorageService`.
+**not** written through `StorageService` unless `CHAT_MEDIA_ARCHIVE_ENABLED=true`, which archives a copy
+under `chat-media/<sessionId>/` (media this account sent also needs `CHAT_MEDIA_ARCHIVE_OUTBOUND=true`).
+On S3 every key sits under the `S3_KEY_PREFIX` root (default `media/`).
 **MinIO is not a separate type** — it is the `s3` backend. The S3 client is created from credentials
 alone, so plain AWS S3 works with no endpoint (the SDK derives one from the region); `S3_ENDPOINT` is
 for S3-compatible stores (MinIO, R2, …), and setting it is also what enables `forcePathStyle: true`.
@@ -1335,7 +1334,7 @@ export class StorageService {
   async putFile(filePath: string, data: Buffer): Promise<void> {
     if (!isSafeStorageKey(filePath)) throw new Error(`Refusing unsafe storage key: ${filePath}`);
     return this.storageType === 's3' && this.s3Client
-      ? this.putS3File(filePath, data) // keyed under media/<filePath>
+      ? this.putS3File(filePath, data) // keyed under <S3_KEY_PREFIX, default media/><filePath>
       : this.putLocalFile(filePath, data);
   }
 
@@ -1343,7 +1342,7 @@ export class StorageService {
     /* mirrors putFile */
   }
   async listFiles(): Promise<string[]> {
-    /* local recurse, or S3 ListObjectsV2 under media/ */
+    /* local recurse, or S3 ListObjectsV2 under <S3_KEY_PREFIX, default media/> */
   }
   // createExportStream(): tar.gz of all files; importFromStream(): extract with zip-bomb caps
 }
@@ -1533,68 +1532,72 @@ flowchart LR
 
 ### Configuration Examples
 
+Every key below is managed in Dashboard > Infrastructure, so the blocks show them commented out: an
+uncommented key in `.env` pins its value over the one the dashboard saves (see the header of
+`.env.example`). Uncomment only what you intend to manage by hand.
+
 #### Minimal Profile (.env)
 
 ```bash
 # Database
-DATABASE_TYPE=sqlite
-DATABASE_NAME=./data/openwa.sqlite
+# DATABASE_TYPE=sqlite
+# DATABASE_NAME=./data/openwa.sqlite
 
 # Storage
-STORAGE_TYPE=local
-STORAGE_LOCAL_PATH=./data/media
+# STORAGE_TYPE=local
+# STORAGE_LOCAL_PATH=./data/media
 
 # Cache: omit / leave Redis disabled -> the cache layer no-ops (no in-memory cache)
-REDIS_ENABLED=false
+# REDIS_ENABLED=false
 ```
 
 #### Standard Profile (.env)
 
 ```bash
 # Database (Postgres uses discrete host/port/credentials, not a single URL)
-DATABASE_TYPE=postgres
-DATABASE_HOST=localhost
-DATABASE_PORT=5432
-DATABASE_NAME=openwa
-DATABASE_USERNAME=openwa
-DATABASE_PASSWORD=password
+# DATABASE_TYPE=postgres
+# DATABASE_HOST=localhost
+# DATABASE_PORT=5432
+# DATABASE_NAME=openwa
+# DATABASE_USERNAME=openwa
+# DATABASE_PASSWORD=<set-a-strong-password>
 
 # Storage
-STORAGE_TYPE=local
-STORAGE_LOCAL_PATH=./data/media
+# STORAGE_TYPE=local
+# STORAGE_LOCAL_PATH=./data/media
 
 # Cache
-REDIS_ENABLED=true
-REDIS_HOST=localhost
-REDIS_PORT=6379
+# REDIS_ENABLED=true
+# REDIS_HOST=localhost
+# REDIS_PORT=6379
 ```
 
 #### Enterprise Profile (.env)
 
 ```bash
 # Database
-DATABASE_TYPE=postgres
-DATABASE_HOST=db-cluster
-DATABASE_PORT=5432
-DATABASE_NAME=openwa
-DATABASE_USERNAME=openwa
-DATABASE_PASSWORD=password
-DATABASE_POOL_SIZE=50
+# DATABASE_TYPE=postgres
+# DATABASE_HOST=db-cluster
+# DATABASE_PORT=5432
+# DATABASE_NAME=openwa
+# DATABASE_USERNAME=openwa
+# DATABASE_PASSWORD=<set-a-strong-password>
+# DATABASE_POOL_SIZE=50
 
 # Storage (S3 or any S3-compatible endpoint; MinIO uses the same vars)
-STORAGE_TYPE=s3
-S3_BUCKET=openwa-media
-S3_REGION=ap-southeast-1
-S3_ACCESS_KEY_ID=xxx
-S3_SECRET_ACCESS_KEY=xxx
+# STORAGE_TYPE=s3
+# S3_BUCKET=openwa-media
+# S3_REGION=ap-southeast-1
+# S3_ACCESS_KEY_ID=<access-key-id>
+# S3_SECRET_ACCESS_KEY=<secret-access-key>
 # AWS S3 needs NO endpoint (one is derived from the region) — leave S3_ENDPOINT unset for it. An
 # endpoint is only for S3-compatible stores (MinIO, R2, …), where setting it also enables path-style:
 # S3_ENDPOINT=http://minio:9000
 
 # Cache
-REDIS_ENABLED=true
-REDIS_HOST=redis-cluster
-REDIS_PORT=6379
+# REDIS_ENABLED=true
+# REDIS_HOST=redis-cluster
+# REDIS_PORT=6379
 ```
 
 > OpenWA runs as a single API instance per session-data volume; there is no cluster-mode flag.

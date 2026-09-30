@@ -51,7 +51,7 @@ describe('WebhookReconcilerService', () => {
       redeliver: jest.fn().mockResolvedValue('delivered'),
       isLocallyPending: jest.fn().mockReturnValue(false),
     };
-    webhooks = { findOne: jest.fn().mockResolvedValue({ id: 'wh-1', active: true }) };
+    webhooks = { findOne: jest.fn().mockResolvedValue({ id: 'wh-1', active: true, events: ['*'] }) };
     service = new WebhookReconcilerService(webhooks as never, outbox as never, delivery as never);
   });
 
@@ -63,7 +63,7 @@ describe('WebhookReconcilerService', () => {
     // Deriving a fresh key would make the replay read as a second event at the receiver rather than
     // a retry of the first, which is the whole reason the key is stored rather than recomputed.
     expect(delivery.redeliver).toHaveBeenCalledWith(
-      { id: 'wh-1', active: true },
+      { id: 'wh-1', active: true, events: ['*'] },
       'sess-1',
       'message.received',
       'stored-key_wh-1',
@@ -145,6 +145,17 @@ describe('WebhookReconcilerService', () => {
     expect(delivery.redeliver).not.toHaveBeenCalled();
     expect(outbox.close).toHaveBeenCalledWith('wh-1', 'stored-key_wh-1', 'failed');
     expect(stats).toMatchObject({ skipped: 1 });
+  });
+
+  it('does not replay an event the webhook has since unsubscribed from', async () => {
+    outbox.findStale.mockResolvedValue([row({ event: 'message.received' })]);
+    webhooks.findOne.mockResolvedValue({ id: 'wh-1', active: true, events: ['session.status'] });
+
+    const stats = await service.sweep(OPTS);
+
+    expect(delivery.redeliver).not.toHaveBeenCalled();
+    expect(outbox.close).toHaveBeenCalledWith('wh-1', 'stored-key_wh-1', 'failed');
+    expect(stats).toMatchObject({ skipped: 1, replayed: 0 });
   });
 
   it('leaves a row alone while this node is still dispatching it', async () => {

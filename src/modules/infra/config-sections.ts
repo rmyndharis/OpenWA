@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { DEFAULT_PUPPETEER_ARGS } from '../../config/configuration';
 import { postgresSchemaError } from '../../config/env.validation';
 import type { EngineFactory } from '../../engine/engine.factory';
 import { DatabaseConfigDto, EngineConfigDto, RedisConfigDto, StorageConfigDto } from './dto/save-config.dto';
@@ -222,10 +223,8 @@ export function applyEngineSection(
     updates.SESSION_DATA_PATH = engine.sessionDataPath || './data/sessions';
   }
   if (engine.browserArgs !== undefined) {
-    // Must match configuration.ts's PUPPETEER_ARGS default (4 flags). Once compose blank-forwards
-    // PUPPETEER_ARGS, this saved value wins at runtime — a 2-flag default here would silently drop
-    // --disable-dev-shm-usage (the Docker /dev/shm tab-crash guard) after any Infrastructure save.
-    updates.PUPPETEER_ARGS =
-      engine.browserArgs || '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu';
+    // Once compose blank-forwards PUPPETEER_ARGS, this saved value wins at runtime, so an empty field
+    // saves the same default configuration.ts applies.
+    updates.PUPPETEER_ARGS = engine.browserArgs || DEFAULT_PUPPETEER_ARGS.join(' ');
   }
 }

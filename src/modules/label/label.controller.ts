@@ -5,8 +5,9 @@ import { ChatSummaryDto } from '../session/dto/chat-summary.dto';
 import { LabelService } from './label.service';
 import { AddLabelDto } from './dto/add-label.dto';
 import { UpsertLabelDto } from './dto/upsert-label.dto';
-import { ChatScoped, RequireRole } from '../auth/decorators/auth.decorators';
-import { ApiKeyRole } from '../auth/entities/api-key.entity';
+import { ChatScoped, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
+import { ChatScopeService } from '../auth/chat-scope.service';
 import {
   ENGINE_NOT_READY_409,
   ENGINE_NOT_SUPPORTED_501,
@@ -16,7 +17,10 @@ import {
 @ApiTags('labels')
 @Controller('sessions/:sessionId/labels')
 export class LabelController {
-  constructor(private readonly labelService: LabelService) {}
+  constructor(
+    private readonly labelService: LabelService,
+    private readonly chatScope: ChatScopeService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'Get all labels (WhatsApp Business only)' })
@@ -57,6 +61,7 @@ export class LabelController {
     return this.labelService.getLabelById(sessionId, labelId);
   }
 
+  @ChatScoped('filtered')
   @Get(':labelId/chats')
   @ApiOperation({
     summary: 'Get every chat carrying a label',
@@ -77,8 +82,12 @@ export class LabelController {
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: LABEL_NOT_FOUND_404 })
-  async getChatsByLabel(@Param('sessionId') sessionId: string, @Param('labelId') labelId: string) {
-    return this.labelService.getChatsByLabel(sessionId, labelId);
+  async getChatsByLabel(
+    @Param('sessionId') sessionId: string,
+    @Param('labelId') labelId: string,
+    @CurrentApiKey() apiKey?: ApiKey,
+  ) {
+    return this.chatScope.filter(apiKey, await this.labelService.getChatsByLabel(sessionId, labelId), c => c.id);
   }
 
   @Put(':labelId')

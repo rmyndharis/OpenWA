@@ -155,13 +155,15 @@ async function appendEntries(
 // Best-effort, NOT atomic: a single bad/traversing entry is skipped and the rest still import, and a
 // resource-cap breach aborts the rest but KEEPS the entries already written (no rollback). Callers
 // re-running an import is safe (putFile overwrites). A staging-dir + atomic promote would make it
-// transactional, but is out of scope here.
+// transactional, but is out of scope here. Resolves with how many entries were written and how many
+// putFile refused, so a caller can tell an import that wrote nothing from an empty archive.
 export async function importFromStream(
   inputStream: Readable,
   putFile: (filePath: string, data: Buffer) => Promise<void>,
   logger: LoggerService,
-): Promise<number> {
+): Promise<{ imported: number; failed: number }> {
   let importedCount = 0;
+  let failedCount = 0;
   let entryCount = 0;
   const maxEntryBytes = positiveIntFromEnv('STORAGE_IMPORT_MAX_BYTES', DEFAULT_IMPORT_MAX_BYTES);
   const maxEntries = positiveIntFromEnv('STORAGE_IMPORT_MAX_ENTRIES', DEFAULT_IMPORT_MAX_ENTRIES);
@@ -169,7 +171,7 @@ export async function importFromStream(
   const extract = tar.extract();
   const gunzip = createGunzip();
 
-  return new Promise<number>((resolve, reject) => {
+  return new Promise<{ imported: number; failed: number }>((resolve, reject) => {
     let settled = false;
     // Abort the whole import: a per-entry overflow or too many entries is a (zip-bomb) attack, not
     // a per-file skip — tear down the pipeline and reject so nothing further is buffered or written.
@@ -232,6 +234,7 @@ export async function importFromStream(
             next();
           })
           .catch((error: unknown) => {
+            failedCount++;
             logger.error(`Failed to import file: ${header.name}`, String(error));
             next();
           });
@@ -242,8 +245,8 @@ export async function importFromStream(
     extract.on('finish', () => {
       if (settled) return;
       settled = true;
-      logger.log(`Import completed: ${importedCount} files`);
-      resolve(importedCount);
+      logger.log(`Import completed: ${importedCount} files, ${failedCount} failed`);
+      resolve({ imported: importedCount, failed: failedCount });
     });
 
     extract.on('error', (err: Error) => {

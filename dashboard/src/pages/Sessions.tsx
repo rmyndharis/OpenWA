@@ -70,7 +70,7 @@ export function Sessions() {
   const { t } = useTranslation();
   useDocumentTitle(t('sessions.title'));
   const toast = useToast();
-  const { canWrite } = useRole();
+  const { canWrite, isAdmin } = useRole();
   const queryClient = useQueryClient();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
@@ -730,33 +730,36 @@ export function Sessions() {
             <p className="input-error">{t('sessions.create.tooLong', { length: newSessionName.length })}</p>
           )}
           {nameIssues.includes('duplicate') && <p className="input-error">{t('sessions.create.duplicate')}</p>}
-          <div className="proxy-form-section">
-            <label className="detail-toggle-row" htmlFor="create-use-proxy">
-              <span>{t('sessions.proxy.enabled')}</span>
-              <input
-                id="create-use-proxy"
-                type="checkbox"
-                checked={useProxy}
-                onChange={e => setUseProxy(e.target.checked)}
-              />
-            </label>
-            {useProxy && (
-              <>
-                <label htmlFor="create-proxy-url">{t('sessions.proxy.url')}</label>
+          {/* The API refuses proxyUrl from a key below ADMIN, so the section is not offered. */}
+          {isAdmin && (
+            <div className="proxy-form-section">
+              <label className="detail-toggle-row" htmlFor="create-use-proxy">
+                <span>{t('sessions.proxy.enabled')}</span>
                 <input
-                  id="create-proxy-url"
-                  type="text"
-                  placeholder={t('sessions.proxy.urlPlaceholder')}
-                  value={createProxyUrl}
-                  onChange={e => setCreateProxyUrl(e.target.value)}
+                  id="create-use-proxy"
+                  type="checkbox"
+                  checked={useProxy}
+                  onChange={e => setUseProxy(e.target.checked)}
                 />
-                {createProxyInvalid && createProxyUrl.trim() && (
-                  <p className="input-error">{t('sessions.proxy.invalidUrl')}</p>
-                )}
-                <p className="input-hint">{t('sessions.proxy.createHint')}</p>
-              </>
-            )}
-          </div>
+              </label>
+              {useProxy && (
+                <>
+                  <label htmlFor="create-proxy-url">{t('sessions.proxy.url')}</label>
+                  <input
+                    id="create-proxy-url"
+                    type="text"
+                    placeholder={t('sessions.proxy.urlPlaceholder')}
+                    value={createProxyUrl}
+                    onChange={e => setCreateProxyUrl(e.target.value)}
+                  />
+                  {createProxyInvalid && createProxyUrl.trim() && (
+                    <p className="input-error">{t('sessions.proxy.invalidUrl')}</p>
+                  )}
+                  <p className="input-hint">{t('sessions.proxy.createHint')}</p>
+                </>
+              )}
+            </div>
+          )}
         </Modal>
       )}
 
@@ -987,7 +990,7 @@ export function Sessions() {
               <button className="btn-secondary" onClick={() => setProxySession(null)}>
                 {t('common.cancel')}
               </button>
-              {canWrite && !proxyLoadFailed && (
+              {isAdmin && !proxyLoadFailed && (
                 <button
                   className="btn-primary"
                   onClick={() => void handleProxySave()}
@@ -1037,7 +1040,7 @@ export function Sessions() {
                       type="checkbox"
                       aria-labelledby="proxy-enabled-label"
                       checked={proxyEnabled}
-                      disabled={!canWrite || proxySaving}
+                      disabled={!isAdmin || proxySaving}
                       onChange={e => setProxyEnabled(e.target.checked)}
                     />
                     <span className="toggle-slider"></span>
@@ -1059,7 +1062,7 @@ export function Sessions() {
                           : t('sessions.proxy.urlPlaceholder')
                       }
                       value={proxyUrl}
-                      disabled={!canWrite || proxySaving}
+                      disabled={!isAdmin || proxySaving}
                       onChange={e => {
                         setProxyUrl(e.target.value);
                         setProxyUrlError(null);

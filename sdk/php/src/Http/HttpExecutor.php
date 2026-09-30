@@ -55,9 +55,18 @@ class HttpExecutor
      * Percent-encode a single path segment (e.g. a chat/message id) so a value
      * containing /, # or ? can't break out of its path position. WhatsApp-id
      * characters that are already path-safe (@, :, +) are kept readable.
+     *
+     * An empty, "." or ".." segment is refused: the HTTP stack resolves dot
+     * segments before sending, so such an id would reach the parent resource
+     * instead of the intended one.
+     *
+     * @throws \InvalidArgumentException For an empty, "." or ".." segment.
      */
     public function encodeSegment(string $segment): string
     {
+        if ($segment === '' || $segment === '.' || $segment === '..') {
+            throw new \InvalidArgumentException(sprintf('OpenWA: empty or dot path segment "%s"', $segment));
+        }
         return str_replace(['%40', '%3A', '%2B'], ['@', ':', '+'], rawurlencode($segment));
     }
 
@@ -207,6 +216,12 @@ class HttpExecutor
         $reason = $response->getReasonPhrase();
         $message = "OpenWA API {$status} {$reason} — {$method} {$path}: {$messageText}";
 
-        return OpenWAApiException::classify($status, $message, $data, $envelope['error'] ?? null);
+        return OpenWAApiException::classify(
+            $status,
+            $message,
+            $data,
+            $envelope['error'] ?? null,
+            $response->getHeaders(),
+        );
     }
 }

@@ -12,15 +12,20 @@
 > resets only the sessions it may claim, instead of reporting a live peer's sessions as
 > disconnected. Claims are released on a clean shutdown and expire otherwise, so failover
 > does not depend on one. `NODE_ID` names the process; it defaults to the hostname and must
-> be stable across restarts.
+> be stable across restarts and unique per running process: two processes sharing a hostname
+> (host networking, pm2 cluster mode) must each set it, and a node that sees another process
+> renewing leases under its `NODE_ID` logs `duplicate_node_id`.
 >
 > A node that loses its claim gives up the engine. A lease can lapse while the process is
 > perfectly healthy — a slow query is enough — after which a peer may legitimately take the
-> session; renewal detects the loss and tears the local engine down at the next heartbeat, so
-> any two-engine overlap is bounded to roughly one heartbeat interval (and a teardown failure
-> is logged as an error rather than silently retried). A failed renewal is deliberately not
-> read as a loss: the TTL is sized to absorb a database blip, and concluding otherwise would
-> stop every healthy engine on the node.
+> session; while the holder can reach the database, renewal detects the loss and tears the local
+> engine down at the next heartbeat, so any two-engine overlap is bounded to roughly one heartbeat
+> interval (and a teardown failure is logged as an error rather than silently retried). A failed
+> renewal is deliberately not read as a loss: the TTL is sized to absorb a database blip, and
+> concluding otherwise would stop every healthy engine on the node. The price is the partition case:
+> a holder that cannot reach the database keeps its engines, a peer may adopt the session once the
+> lease lapses, and both engines run until the holder's first successful renewal after it
+> reconnects, so the overlap lasts as long as the outage plus up to one heartbeat.
 >
 > Bulk-send batches follow the same rule. A batch is only ever driven by the process
 > holding its session's engine, so a booting replica now reaps only the batches whose
@@ -42,6 +47,8 @@
 > `qr_ready` row is marked too while it has no phone, since the sweep never adopts a row without one;
 > a `qr_ready` row with a phone keeps its status, so the correction never makes it adoptable.
 > Nothing else revisits such a row, since the boot reset skips a foreign claim that is still live.
+> A session an operator stopped (`POST /stop` or `/force-kill`) is never adopted, even when its
+> claim did lapse, until an explicit `POST /start`.
 >
 > Known limitation: a holder that is alive but cannot reach the database for more than three lease
 > TTLs minus one heartbeat (160s at defaults) is marked disconnected by a peer too, and does not write its status back when it reconnects. Its
@@ -52,7 +59,7 @@
 > reachable URL (e.g. `NODE_URL=http://10.0.0.5:2785`), a session-scoped request landing on
 > a non-owner is forwarded to the live owner and the owner's response is relayed back
 > (`x-openwa-served-by` names it). The forward happens after API-key auth, carries the
-> caller's credentials (both nodes share the auth database), is bounded by
+> caller's credentials, is bounded by
 > `SESSION_PROXY_TIMEOUT_MS` (default 60s), and is one hop only — a forwarded request is
 > never forwarded again; one that still lands on a live non-owner (stale ownership, or a
 > client-forged hop marker) is refused with a retryable 409 rather than executed there. A
@@ -65,6 +72,20 @@
 > proxy under that prefix (`NODE_URL=https://gw.example.com/node-a`); a node reached directly takes
 > none. A `NODE_URL` ending in `/api` forwards to `/api/api/...`, and every routed request answers
 > `404`.
+>
+> **The owner authenticates a forwarded request again, against its own key store.** API keys and the
+> audit log live in each node's main SQLite file (`MAIN_DATABASE_NAME`, default `./data/main.sqlite`),
+> not in the shared data database, and nothing replicates them. A forwarded key must therefore also
+> exist on the owner. The receiving node checks its own copy's role, `allowedIps`, `allowedSessions`
+> and `allowedChats` before forwarding, and the owner checks its copy again; a filtered list, such as
+> a session's chats, is filtered by the owner's copy alone. A missing or narrower copy on the owner
+> answers `401` or `403` (or a shorter list). A broader one is accepted and widens those lists, so
+> keep the copies identical. A key created through the API or the dashboard gets a fresh random value
+> and exists only on the node that created it. Matching keys come only from the same
+> `API_MASTER_KEY` seeded on each node's first boot (it seeds only while no key exists), or from a
+> copy of one node's `main.sqlite` taken while it is stopped (never one file shared over network
+> storage), which authenticates only on nodes with the same `API_KEY_PEPPER`, since the copied hashes
+> carry the source node's pepper. Each node's audit log records only the requests it handled.
 >
 > **List and stats routes answer from the node that received them.** `GET /api/sessions` and
 > `GET /api/sessions/stats/overview` name no session, so they are never forwarded. `lastError`,
@@ -88,10 +109,12 @@
 > be repeated blindly on either.
 >
 > **The lease compares timestamps written by different nodes, so their clocks must agree.** Each
-> node writes `leaseExpiresAt` from its own clock and reads every other node's the same way, so a
-> node whose clock runs more than one lease TTL (default 60s) ahead sees healthy peers as lapsed and
+> node writes `leaseExpiresAt` from its own clock and reads every other node's the same way. Just
+> before each renewal the holder's lease is only one TTL minus one heartbeat ahead, so a node whose
+> clock runs more than about `SESSION_LEASE_TTL_MS - SESSION_LEASE_HEARTBEAT_MS` ahead (40s at
+> defaults, 20s once one renewal is missed) sees healthy peers as lapsed and
 > will take their sessions over. Run NTP (or any time sync) on every node — the default on ordinary
-> server images — and treat a skew larger than `SESSION_LEASE_TTL_MS` as a misconfiguration.
+> server images — and treat any skew near that margin as a misconfiguration.
 > The status correction reads the same timestamps: a node whose clock runs more than three TTLs minus
 > one heartbeat ahead (160s at defaults) marks a healthy peer's sessions disconnected, even with
 > `AUTO_START_SESSIONS` off, and nothing writes them back. The zone each node runs in is no longer
@@ -121,20 +144,26 @@
 > are still process-local. Without `REDIS_ENABLED` the adapter is inert and delivery is single-node,
 > exactly as before.
 >
-> **Mid-connection key eviction converges on a timer, not a broadcast.** The node that processes a
-> revoke, delete, or narrowing tears down that key's sockets synchronously, in the same request.
-> Nothing is published to peers; instead every node re-validates the keys behind its own live
-> sockets against the database once a minute (`EventsGateway.sweepApiKeyAuthorization`, one batched
-> read of the key ids currently holding sockets) and evicts on a row that is gone, inactive, expired,
-> or whose role, `allowedIps`, `allowedSessions`, `allowedChats` or expiry no longer matches the snapshot the socket
-> authenticated with. So a peer node's sockets close within a minute of the change. Before, a revoke,
-> delete or expiry there waited for the client's next subscribe, and a narrowing was never caught at
-> all: it leaves the key valid, so only the new subscribe is rejected while every room joined earlier
-> stays joined. That minute is the current worst case for a socket streaming events its key has just
-> lost; a key's REST calls are rejected immediately everywhere, since REST reads the row per request.
+> **Mid-connection key eviction converges on a timer, not a broadcast, and only on one node.** The
+> node that processes a revoke, delete, or narrowing tears down that key's sockets synchronously, in
+> the same request. Nothing is published to peers. Every node re-validates the keys behind its own
+> live sockets against its own key store once a minute (`EventsGateway.sweepApiKeyAuthorization`, one
+> batched read of the key ids currently holding sockets) and evicts on a row that is gone, inactive,
+> expired, or whose role, `allowedIps`, `allowedSessions`, `allowedChats` or expiry no longer matches
+> the snapshot the socket authenticated with. That catches an expiry, and a change written to the
+> node's main database other than through its own API. Before this sweep, a revoke, delete or expiry
+> that reached a node that way waited for the client's next subscribe, and a narrowing was never
+> caught at all: it leaves the key valid, so only the new subscribe is rejected while every room
+> joined earlier stays joined. REST reads the row per request, so the node that processed a change
+> rejects the key's REST calls at once. Every other node keeps accepting the key, on REST and on its
+> sockets, until the same change is made there: repeat a revoke, delete, expiry change or narrowing
+> on every node.
 >
 > **What does not exist yet, and is why one replica is still the answer.** The cross-replica gap just
-> named (WS rate-limit state) remains process-local. Not every lifecycle path is fenced: the
+> named (WS rate-limit state) remains process-local. API keys and the audit log are per node: each
+> node keeps them in its own main SQLite file, so a key created, revoked or narrowed on one node is
+> unchanged on the others (see the routing paragraph above). Leases are timed by each node's own
+> clock, not the database's (see the clock paragraph above). Not every lifecycle path is fenced: the
 > liveness watchdog and reconnect timers still act on whatever is in the local
 > registry. `BulkMessageService` keeps its live batch state in process, so a takeover cannot resume
 > a batch — only fail it. MCP/agent tool invocations execute on the node that received them rather
@@ -197,16 +226,10 @@ Since WhatsApp sessions maintain active connections (a browser instance for `wha
 
 ### Strategy 1: Session-to-Node Mapping (Recommended)
 
-Store session-node mapping in the database. **(Not implemented — no `node_id` / `node_url` column
-exists in any entity or migration; the DDL below is illustrative of the future design.)**
-
-```sql
--- Illustrative only: these columns do not exist in the shipped schema
-ALTER TABLE sessions ADD COLUMN node_id VARCHAR(50);
-ALTER TABLE sessions ADD COLUMN node_url VARCHAR(255);
-```
-
-The load balancer reads the mapping and routes accordingly.
+This mapping ships: each `sessions` row records its owner in `nodeId`, `nodeUrl`, `claimedAt` and
+`leaseExpiresAt` (migrations `AddSessionOwnership` and `AddSessionNodeUrl`). No load balancer reads it:
+a node that receives a request for a session it does not own forwards it to the owner's `NODE_URL`, as
+the routing paragraph at the top of this guide describes.
 
 ### Strategy 2: Consistent Hashing
 
@@ -223,7 +246,7 @@ function getNodeForSession(sessionId: string, nodes: string[]): string {
 
 ### Strategy 3: Session Claim
 
-Each node "claims" sessions on startup and releases them on shutdown. **(Not implemented — no claim/lease logic exists in code; this is the design target.)**
+Each node "claims" sessions on startup and releases them on shutdown. This is implemented: see the claim, lease and takeover description at the top of this guide.
 
 ## 13.3 Docker Swarm Deployment
 
@@ -236,7 +259,7 @@ services:
   openwa:
     image: ghcr.io/rmyndharis/openwa:latest
     deploy:
-      replicas: 1 # MUST stay 1 until session-claim is implemented — multiple replicas on one session volume corrupt WhatsApp auth
+      replicas: 1 # MUST stay 1 until multi-replica is supported — multiple replicas on one session volume corrupt WhatsApp auth
       update_config:
         parallelism: 1
         delay: 30s
@@ -329,7 +352,7 @@ docker service ps openwa_openwa
 > node: replicas co-located on a single node share that directory and corrupt the WhatsApp auth
 > state, while replicas placed on other nodes each get a fresh empty volume and start an
 > unauthenticated engine instead. Either way the deployment breaks — see the warning at the top of
-> this guide. Scaling only becomes safe once session-claim exists.
+> this guide. Scaling only becomes safe once the gaps listed at the top of this guide are closed.
 
 ## 13.4 Kubernetes Deployment
 
@@ -386,7 +409,7 @@ metadata:
   namespace: openwa
 spec:
   serviceName: openwa-headless # must match the headless Service declared in k8s/service.yaml
-  replicas: 1 # MUST stay 1 until session-claim is implemented — see the warning at the top of this guide
+  replicas: 1 # MUST stay 1 until multi-replica is supported — see the warning at the top of this guide
   selector:
     matchLabels:
       app: openwa
@@ -395,15 +418,21 @@ spec:
       labels:
         app: openwa
     spec:
-      # OS-level containment is the second half of the plugin sandbox boundary (see docs/23-plugin-
-      # sandboxing.md). Without it a worker_thread plugin that abuses Node built-ins (fs, net) runs with
-      # the same privileges as the API and can read host files / open raw sockets outside the capability
-      # model. The shipped compose file runs the image read-only + cap_drop:ALL, and the node process
-      # runs as the non-root openwa user; the manifest below mirrors that so a k8s deploy is not
-      # silently weaker. Do NOT add runAsNonRoot: the entrypoint starts as root to chown /app/data,
-      # then drops to openwa via gosu (same as charts/openwa/values.yaml).
+      # OS-level containment is defence in depth for the plugin sandbox (see docs/30-plugin-sandboxing.md):
+      # it limits the privileges the API process holds, not what a plugin inside that process can reach.
+      # Without it the API process, and every plugin loaded into it, keeps whatever the container runtime
+      # grants by default, so a plugin that abuses Node built-ins (fs, net) can read host files / open raw
+      # sockets outside the capability model. The shipped compose file runs the image read-only +
+      # cap_drop:ALL, and the node process runs as the non-root openwa user; the manifest below mirrors
+      # that so a k8s deploy is not silently weaker. By default the entrypoint starts as root to chown
+      # /app/data, then drops to openwa (uid/gid 997) via gosu. To run non-root from the start instead,
+      # add runAsNonRoot: true, runAsUser: 997 and runAsGroup: 997 here and remove the capabilities `add`
+      # list below; the entrypoint then skips the chown and the drop (see podSecurityContext in
+      # charts/openwa/values.yaml). fsGroup makes the volume writable by openwa in either mode;
+      # OnRootMismatch re-owns it only when its root is wrong, not every file on every mount.
       securityContext:
-        fsGroup: 1000
+        fsGroup: 997
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: openwa
           image: ghcr.io/rmyndharis/openwa:latest
@@ -447,18 +476,31 @@ spec:
               mountPath: /app/data
             - name: tmp
               mountPath: /tmp
+          # Same probes as charts/openwa/templates/statefulset.yaml. The startupProbe holds liveness
+          # off during boot (migrations, connect retry, plugin load, backfills), and every timeoutSeconds is
+          # explicit because the 1s kubelet default is shorter than /ready's 3s database bound.
+          startupProbe:
+            httpGet:
+              path: /api/health/live
+              port: 2785
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
           livenessProbe:
             httpGet:
-              path: /api/health
+              path: /api/health/live
               port: 2785
             initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
           readinessProbe:
             httpGet:
               path: /api/health/ready
               port: 2785
             initialDelaySeconds: 10
             periodSeconds: 5
+            timeoutSeconds: 5
       volumes:
         - name: tmp
           emptyDir: {}
@@ -646,7 +688,7 @@ server {
 The replica count stays at **1** (see 13.3 and 13.4), so the only levers available today are
 **vertical** — adjust the `resources` limits/reservations in the manifests above — or run a second
 single-instance deployment with its own session volume and split sessions between them. Horizontal
-`scale up` / `scale down` becomes an option only once session-claim is implemented.
+`scale up` / `scale down` becomes an option only once the gaps listed at the top of this guide are closed.
 
 | Metric                            | Threshold  | Action                                                                                                     |
 | --------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |

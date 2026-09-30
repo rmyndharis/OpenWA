@@ -1,4 +1,9 @@
-import { workerConnectionOptions, webhookWorkerConcurrency } from './redis-connection';
+import {
+  ingressWorkerConcurrency,
+  queueConnectionOptions,
+  workerConnectionOptions,
+  webhookWorkerConcurrency,
+} from './redis-connection';
 
 describe('workerConnectionOptions (webhook Worker connection)', () => {
   const ORIGINAL_ENV = process.env;
@@ -43,6 +48,12 @@ describe('workerConnectionOptions (webhook Worker connection)', () => {
       connectTimeout: 1234,
     });
   });
+
+  it('connects the Worker and the producer over TLS when REDIS_TLS=true', () => {
+    process.env = { ...ORIGINAL_ENV, REDIS_TLS: 'true' };
+    expect(workerConnectionOptions().tls).toEqual({});
+    expect(queueConnectionOptions()).toMatchObject({ tls: {}, enableOfflineQueue: false });
+  });
 });
 
 describe('webhookWorkerConcurrency', () => {
@@ -67,5 +78,12 @@ describe('webhookWorkerConcurrency', () => {
     expect(webhookWorkerConcurrency()).toBe(10);
     process.env = { ...ORIGINAL_ENV, WEBHOOK_WORKER_CONCURRENCY: 'abc' };
     expect(webhookWorkerConcurrency()).toBe(10);
+  });
+
+  it('does not read the leading digits of a unit-suffixed value', () => {
+    process.env = { ...ORIGINAL_ENV, WEBHOOK_WORKER_CONCURRENCY: '5abc' };
+    expect(webhookWorkerConcurrency()).toBe(10);
+    process.env = { ...ORIGINAL_ENV, INGRESS_WORKER_CONCURRENCY: '5abc' };
+    expect(ingressWorkerConcurrency()).toBe(10);
   });
 });

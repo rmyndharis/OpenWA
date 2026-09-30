@@ -40,9 +40,18 @@ const RAW = {
   timestamp: 1_700_000_000,
 };
 
+/** The page model a listed chat is rehydrated from: Chat._patch reads formattedTitle, t, archive and pin. */
+const toPageModel = ({ name, timestamp, archived, pinned, ...rest }: Record<string, unknown>) => ({
+  ...rest,
+  formattedTitle: name,
+  t: timestamp,
+  archive: archived,
+  pin: pinned,
+});
+
 describe('WwebjsChats.getChats chat state', () => {
   const listWith = async (over: Record<string, unknown>) => {
-    const client = { getChats: jest.fn().mockResolvedValue([{ ...RAW, ...over }]) };
+    const client = { pupPage: { evaluate: jest.fn().mockResolvedValue([toPageModel({ ...RAW, ...over })]) } };
     const chats = new WwebjsChats(makeHost(client), {} as unknown as WwebjsMessaging);
     return (await chats.getChats())[0];
   };

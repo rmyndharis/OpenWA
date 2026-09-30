@@ -148,7 +148,7 @@ export class ExampleModule {}
 
 ```typescript
 // modules/example/example.controller.ts
-import { Controller, Get, Post, Body, Headers, Param, Delete, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Delete, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { ExampleService } from './example.service';
 import { CreateExampleDto } from './dto/create-example.dto';
@@ -163,11 +163,8 @@ export class ExampleController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create example' })
   @ApiResponse({ status: 201, type: ExampleResponseDto })
-  async create(
-    @Body() dto: CreateExampleDto,
-    @Headers('x-request-id') requestId?: string,
-  ): Promise<ExampleResponseDto> {
-    return this.exampleService.create(dto, { requestId });
+  async create(@Body() dto: CreateExampleDto): Promise<ExampleResponseDto> {
+    return this.exampleService.create(dto);
   }
 
   @Get(':id')
@@ -213,7 +210,8 @@ export class ExampleService {
 
 ```typescript
 // modules/example/example.service.ts
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { createLogger } from '../../common/services/logger.service';
 import { ExampleRepository } from './example.repository';
 import { CreateExampleDto } from './dto/create-example.dto';
 import { Example } from './entities/example.entity';
@@ -224,8 +222,8 @@ export class ExampleService {
 
   constructor(private readonly repository: ExampleRepository) {}
 
-  async create(dto: CreateExampleDto, context?: { requestId?: string }): Promise<Example> {
-    this.logger.log(`Creating example: ${dto.name}`, context);
+  async create(dto: CreateExampleDto): Promise<Example> {
+    this.logger.log(`Creating example: ${dto.name}`);
 
     const example = this.repository.create(dto);
     return this.repository.save(example);
@@ -306,47 +304,24 @@ new module is the standard template above: declare `exports` and let consumers `
 
 ### Branch Strategy
 
-```mermaid
-gitGraph
-    commit id: "initial"
-    branch develop
-    commit id: "setup"
-    branch feature/session-api
-    commit id: "session controller"
-    commit id: "session service"
-    checkout develop
-    merge feature/session-api
-    branch feature/webhook
-    commit id: "webhook impl"
-    checkout develop
-    merge feature/webhook
-    checkout main
-    merge develop tag: "v1.0.0"
-    checkout develop
-    branch hotfix/bug-fix
-    commit id: "fix bug"
-    checkout main
-    merge hotfix/bug-fix tag: "v1.0.1"
-    checkout develop
-    merge hotfix/bug-fix
-```
+`main` is the only long-lived branch. Each change is made on a short-lived branch cut from `main`,
+opened as a pull request against `main`, and merged with a merge commit once CI passes. Releases are
+tagged from `main`; see [15.7 Cutting a Release](./15-project-roadmap.md#157-cutting-a-release).
 
 ### Branch Naming
 
 ```
-main            # Production-ready code
-develop         # Integration branch
-feature/*       # New features
-bugfix/*        # Bug fixes
-hotfix/*        # Production hotfixes
-release/*       # Release preparation
+fix/*       # Bug fixes
+feat/*      # New features
+docs/*      # Documentation only
+chore/*     # Tooling, dependencies, release housekeeping
+refactor/*  # Restructuring without a behavior change
+test/*      # Tests only
 
 Examples:
-feature/session-management
-feature/webhook-retry
-bugfix/qr-code-timeout
-hotfix/security-patch
-release/1.0.0
+fix/qr-code-timeout
+feat/webhook-retry
+docs/update-api-reference
 ```
 
 ### Commit Message Convention
@@ -657,7 +632,12 @@ docker compose --profile full up -d
 
 A profile only starts the extra containers. Point OpenWA at them first, from Dashboard >
 Infrastructure or with the `.env` variables listed under Production Deployment in the README;
-otherwise it stays on SQLite and local storage.
+otherwise it stays on SQLite and local storage. The dashboard's built-in storage option creates its
+own `openwa-minio` container, so do not also start the `minio` or `full` profile for it. The same goes
+for built-in PostgreSQL and Redis: each built-in option creates its own container, and the compose
+profiles are for the manual `.env` route. The compose `minio` service starts only once
+`S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are set in the `.env` next to `docker-compose.yml`; if it
+was already started without them, run `docker rm -f openwa-minio` before you enable built-in storage.
 
 ### VS Code Extensions
 
@@ -700,33 +680,39 @@ OpenWA supports multiple infrastructure configurations. Choose based on your nee
 #### Minimal Profile (Development / Single Session)
 
 ```bash
+# Keys the dashboard manages (Dashboard > Infrastructure) are commented out with their defaults:
+# an uncommented key in .env pins that value over the one the dashboard saves (see the header of
+# `.env.example`). Uncomment only what you intend to manage by hand.
+
 # Application
 NODE_ENV=development
 PORT=2785
 LOG_LEVEL=debug
 
 # Database: SQLite (zero config)
-DATABASE_TYPE=sqlite
-DATABASE_NAME=./data/openwa.sqlite
-DATABASE_SYNCHRONIZE=true
+# DATABASE_TYPE=sqlite
+# DATABASE_NAME=./data/openwa.sqlite
+# SQLite runs migrations by default. DATABASE_SYNCHRONIZE=true is SQLite-only: PostgreSQL refuses it
+# at boot, so an uncommented true here stops a later switch to PostgreSQL in the dashboard from booting.
+# DATABASE_SYNCHRONIZE=false
 
 # Storage: Local filesystem
-STORAGE_TYPE=local
-STORAGE_LOCAL_PATH=./data/media
+# STORAGE_TYPE=local
+# STORAGE_LOCAL_PATH=./data/media
 
 # Redis and queue disabled by default
-REDIS_ENABLED=false
-QUEUE_ENABLED=false
+# REDIS_ENABLED=false
+# QUEUE_ENABLED=false
 
 # Optional: seed a known admin key. If omitted, OpenWA generates a random key and writes data/.api-key.
 API_MASTER_KEY=
 
 # Session
-SESSION_DATA_PATH=./data/sessions
+# SESSION_DATA_PATH=./data/sessions
 
 # Engine: whatsapp-web.js = Chromium-based; baileys = browser-free WebSocket
-ENGINE_TYPE=whatsapp-web.js
-PUPPETEER_HEADLESS=true
+# ENGINE_TYPE=whatsapp-web.js
+# PUPPETEER_HEADLESS=true
 
 # Swagger defaults ON outside production and OFF under NODE_ENV=production.
 # Set it explicitly to force either way.
@@ -736,43 +722,52 @@ ENABLE_SWAGGER=true
 #### Standard Profile (Production / Multi-Session)
 
 ```bash
+# Keys the dashboard manages (Dashboard > Infrastructure) are commented out with the values this
+# profile uses; set the ones that differ from the defaults (PostgreSQL, Redis, the queue, /app/data
+# paths) there. An uncommented key in .env pins that value over the one the dashboard saves (see the
+# header of `.env.example`). Uncomment only what you intend to manage by hand.
+
 # Application
 NODE_ENV=production
 PORT=2785
 LOG_LEVEL=info
 
 # Database: PostgreSQL
-DATABASE_TYPE=postgres
-DATABASE_HOST=postgres
-DATABASE_PORT=5432
-DATABASE_USERNAME=openwa
-DATABASE_PASSWORD=<set-a-strong-password>
-DATABASE_NAME=openwa
+# DATABASE_TYPE=postgres
+# DATABASE_HOST=postgres
+# DATABASE_PORT=5432
+# DATABASE_USERNAME=openwa
+# DATABASE_PASSWORD=<set-a-strong-password>
+# DATABASE_NAME=openwa
 DATABASE_SYNCHRONIZE=false
-DATABASE_POOL_SIZE=10
+# DATABASE_POOL_SIZE=10
 
 # Storage: Local filesystem
-STORAGE_TYPE=local
-STORAGE_LOCAL_PATH=/app/data/media
+# STORAGE_TYPE=local
+# STORAGE_LOCAL_PATH=/app/data/media
 
 # Cache: Redis
-REDIS_ENABLED=true
-REDIS_HOST=redis
-REDIS_PORT=6379
-QUEUE_ENABLED=true
+# REDIS_ENABLED=true
+# REDIS_HOST=redis
+# REDIS_PORT=6379
+# QUEUE_ENABLED=true
 
 # Security
-API_MASTER_KEY=<set-a-strong-initial-admin-key>
-API_KEY_PEPPER=<optional-hash-pepper>
+# First-boot seed for the initial ADMIN key, ignored once any key exists. Leave it unset to
+# generate a random key into data/.api-key, or set one generated with: openssl rand -base64 32
+# API_MASTER_KEY=
+# Optional HMAC pepper so a DB leak alone can't precompute key hashes. Generate a random value
+# (openssl rand -base64 32); setting or changing it invalidates every API key issued before.
+# API_KEY_PEPPER=
 CORS_ORIGINS=https://dashboard.example.com
 
 # Session
-SESSION_DATA_PATH=/app/data/sessions
+# SESSION_DATA_PATH=/app/data/sessions
 
 # Engine
-ENGINE_TYPE=whatsapp-web.js
-PUPPETEER_HEADLESS=true
-PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu
+# ENGINE_TYPE=whatsapp-web.js
+# PUPPETEER_HEADLESS=true
+# PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu
 ENABLE_SWAGGER=false
 ```
 
@@ -814,28 +809,22 @@ ENABLE_SWAGGER=false
 
 ```typescript
 // Use createLogger from the shared LoggerService, not console.*
-import { Inject, Scope } from '@nestjs/common';
-import { REQUEST } from '@nestjs/core';
-import { Request } from 'express';
+import { Injectable } from '@nestjs/common';
 import { createLogger } from '../common/services/logger.service';
 
-@Injectable({ scope: Scope.REQUEST })
+@Injectable()
 export class MyService {
   private readonly logger = createLogger('MyService');
 
-  constructor(@Inject(REQUEST) private readonly request: Request) {}
-
   async doSomething(id: string): Promise<void> {
-    // Log entry with context
-    const requestId = this.request?.requestId;
-    this.logger.log(`Processing item`, { id, requestId });
+    this.logger.log('Processing item', { id });
 
     try {
       await this.process(id);
-      this.logger.log(`Item processed successfully`, { id, requestId });
+      this.logger.log('Item processed successfully', { id });
     } catch (error) {
       // Log error with full stack
-      this.logger.error(`Failed to process item`, error.stack, { id, requestId });
+      this.logger.error('Failed to process item', error instanceof Error ? error.stack : String(error), { id });
       throw error;
     }
   }
@@ -843,43 +832,17 @@ export class MyService {
 ```
 
 > [!NOTE]
-> Propagate `X-Request-ID` from controller to service and include it in all logs for easier cross-component tracing.
+> LoggerService stamps the request ID on every log line on its own (it reads it through `getRequestId()`). Do
+> not pass `X-Request-ID` from controller to service, and do not make a provider request-scoped to reach it;
+> call `getRequestId()` from `common/services/request-context` when code needs the value.
 
-### Request ID Interceptor (Optional)
+### Request ID
 
-Use an interceptor to ensure every request has a `requestId` and propagate it to the response header.
-
-```typescript
-// common/interceptors/request-id.interceptor.ts
-import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
-import { Observable } from 'rxjs';
-
-@Injectable()
-export class RequestIdInterceptor implements NestInterceptor {
-  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
-    const request = context.switchToHttp().getRequest();
-    const response = context.switchToHttp().getResponse();
-
-    const requestId = request.headers['x-request-id'] || `req_${Date.now()}`;
-    request.requestId = requestId;
-    response.setHeader('X-Request-ID', requestId);
-
-    return next.handle();
-  }
-}
-```
-
-```typescript
-// main.ts
-async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  app.useGlobalInterceptors(new RequestIdInterceptor());
-  await app.listen(3000);
-}
-```
-
-> [!NOTE]
-> If you use `REQUEST` injection in a service, make sure the provider is **request-scoped** (`@Injectable({ scope: Scope.REQUEST })`) so requestId does not get mixed across requests.
+`requestContextMiddleware` (`src/common/middleware/request-context.middleware.ts`, registered in
+`src/configure-app.ts`) gives every request an ID. It keeps a client `X-Request-ID` only when it matches
+`^[A-Za-z0-9-]{1,128}$` and otherwise generates a UUID, echoes it on the `X-Request-ID` response header,
+and runs the request inside AsyncLocalStorage (`runWithRequestId`), so `getRequestId()`, every log line
+and every audit row carry it. There is no request-ID interceptor.
 
 ### Debug WhatsApp Engine
 
@@ -1017,8 +980,7 @@ export class EngineTeardownService {
 
 ### WhatsApp Engine Issues
 
-```markdown
-## QR Code Not Generated
+#### QR Code Not Generated
 
 **Symptom:** Session stuck in 'initializing' status
 
@@ -1026,7 +988,7 @@ export class EngineTeardownService {
 
 1. **Chrome/Puppeteer issue**
    - Ensure Chrome for Testing is installed: `ls /usr/local/bin/puppeteer-chrome`
-   - Check Puppeteer args: `--no-sandbox --disable-setuid-sandbox`
+   - Check Puppeteer args (`PUPPETEER_ARGS`); the default is `--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu`
 
 2. **Previous session data corrupted**
    - Clear the stored auth/session data for the session under `data/sessions`
@@ -1035,7 +997,7 @@ export class EngineTeardownService {
 3. **WhatsApp rate limit**
    - Wait 5-10 minutes before retrying
 
-## Session Disconnects Randomly
+#### Session Disconnects Randomly
 
 **Causes & Solutions:**
 
@@ -1050,12 +1012,10 @@ export class EngineTeardownService {
 3. **WhatsApp detected automation**
    - Add random delays between messages
    - Avoid sending too many messages quickly
-```
 
 ### Database Issues
 
-````markdown
-## Connection Pool Exhausted
+#### Connection Pool Exhausted
 
 **Symptom:** "too many clients already" error
 
@@ -1073,9 +1033,8 @@ export class EngineTeardownService {
   },
 }
 ```
-````
 
-## Migration Fails
+#### Migration Fails
 
 **Symptom:** "relation already exists" error
 
@@ -1092,33 +1051,18 @@ npm run migration:revert
 npm run migration:generate --name=FixMigration
 ```
 
-````
-
 ### TypeScript/NestJS Issues
 
-```markdown
-## Circular Dependency
+#### Circular Dependency
 
-**Symptom:** "Cannot read property 'X' of undefined"
+**Symptom:** "Nest can't resolve dependencies" or an undefined injected provider at startup
 
-**Solution:**
-```typescript
-// Use forwardRef for circular deps
-@Module({
-  imports: [
-    forwardRef(() => SessionModule),
-  ],
-})
-export class WebhookModule {}
+**Solution:** this codebase does not use `forwardRef`. Break the cycle by moving the shared piece into
+a lower module that both sides import (for example the global `EngineModule`'s `EngineRegistry`), or
+by one-directional delegation, as `SessionService` does to `SessionEngineLifecycle` (see the class
+comment on `SessionService` in `src/modules/session/session.service.ts`).
 
-// In service
-constructor(
-  @Inject(forwardRef(() => SessionService))
-  private readonly sessionService: SessionService,
-) {}
-````
-
-## DI Token Not Found
+#### DI Token Not Found
 
 **Symptom:** "Nest can't resolve dependencies"
 
@@ -1128,17 +1072,15 @@ constructor(
 - Check if module is imported where needed
 - Use @Injectable() decorator on services
 
-````
-
 ### Docker Issues
 
-```markdown
-## Container Keeps Restarting
+#### Container Keeps Restarting
 
 **Check logs:**
+
 ```bash
 docker compose logs openwa-api --tail 100
-````
+```
 
 **Common causes:**
 
@@ -1146,7 +1088,7 @@ docker compose logs openwa-api --tail 100
 2. Database not ready (use depends_on + healthcheck)
 3. Port already in use
 
-## Chrome Crashes in Docker
+#### Chrome Crashes in Docker
 
 **Solution:**
 
@@ -1163,23 +1105,21 @@ services:
     shm_size: '2gb'
 ```
 
-````
-
 ## 8.12 Contributing Guide
 
 ### Getting Started
 
 ```markdown
 1. Fork the repository
-2. Create feature branch: `git checkout -b feature/amazing-feature`
+2. Create feature branch: `git checkout -b feat/amazing-feature`
 3. Make changes following our coding standards
 4. Write/update tests
 5. Run linter: `npm run lint`
 6. Run tests: `npm test`
 7. Commit: `git commit -m 'feat(scope): add amazing feature'`
-8. Push: `git push origin feature/amazing-feature`
+8. Push: `git push origin feat/amazing-feature`
 9. Open Pull Request
-````
+```
 
 ### Code Review Checklist
 

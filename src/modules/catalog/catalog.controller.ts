@@ -75,7 +75,11 @@ export class CatalogController {
   @ApiOperation({ summary: 'Send a product message (Baileys engine only)' })
   @ApiResponse({ status: 201, description: 'Product message accepted for sending', type: ProductMessageResponseDto })
   @ApiResponse({ status: 404, description: 'Product id not found in the session catalog.' })
-  @ApiResponse({ status: 400, description: 'Product has no image — a product card requires one.' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Product has no image (a product card requires one), a plugin blocked the send, or a plugin returned an invalid productId or body.',
+  })
   @ApiResponse({
     status: 501,
     description: 'Not supported by the active engine: whatsapp-web.js cannot send product messages.',

@@ -7,8 +7,9 @@ import type { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { ChatScopeService } from '../auth/chat-scope.service';
 import type { ChatSummary } from '../../engine/interfaces/whatsapp-engine.interface';
-import type { ApiKey } from '../auth/entities/api-key.entity';
-import { BadGatewayException, BadRequestException, ConflictException } from '@nestjs/common';
+import { ApiKeyRole, type ApiKey } from '../auth/entities/api-key.entity';
+import { REQUIRED_ROLE_KEY, UNSCOPED_KEY } from '../auth/decorators/auth.decorators';
+import { BadGatewayException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 
 // POST /sessions declared a SessionResponseDto in its Swagger metadata but returned the raw
 // TypeORM entity, leaking internal columns (config, proxyUrl, proxyType) and the entity-only
@@ -30,6 +31,7 @@ describe('SessionController — create() response contract', () => {
     claimedAt: null,
     nodeUrl: null,
     leaseExpiresAt: null,
+    desiredState: null,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-01-01T00:00:00Z'),
   };
@@ -101,6 +103,50 @@ describe('SessionController — create() response contract', () => {
   });
 });
 
+// A session proxy is deployment-level egress: setting or clearing one needs an ADMIN key on every
+// route that writes it.
+describe('SessionController: session proxy writes are ADMIN only', () => {
+  const key = (role: ApiKeyRole) => ({ id: 'k', role }) as ApiKey;
+  let sessionService: { create: jest.Mock; engineLoaded: jest.Mock };
+  let controller: SessionController;
+
+  beforeEach(() => {
+    sessionService = {
+      create: jest.fn().mockResolvedValue({ id: 'sess-uuid-1', name: 'with-proxy', config: {} }),
+      engineLoaded: jest.fn().mockReturnValue(false),
+    };
+    controller = new SessionControllerClass(
+      sessionService as unknown as SessionService,
+      { logInfo: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService,
+      new ChatScopeService(),
+    );
+  });
+
+  it('PATCH :sessionId/proxy requires the ADMIN role and an unscoped key', () => {
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- reading route metadata, not invoking
+    const handler = SessionControllerClass.prototype.updateProxy;
+    expect(Reflect.getMetadata(REQUIRED_ROLE_KEY, handler)).toBe(ApiKeyRole.ADMIN);
+    expect(Reflect.getMetadata(UNSCOPED_KEY, handler)).toBe(true);
+  });
+
+  it.each([
+    ['an OPERATOR key', key(ApiKeyRole.OPERATOR)],
+    ['no key', undefined],
+  ])('POST /sessions with proxyUrl from %s is refused before anything is created', async (_, apiKey) => {
+    await expect(
+      controller.create({ name: 'with-proxy', proxyUrl: 'http://proxy.internal:8080' }, apiKey),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(sessionService.create).not.toHaveBeenCalled();
+  });
+
+  it('POST /sessions with proxyUrl from an ADMIN key, or without one from an OPERATOR key, creates', async () => {
+    await controller.create({ name: 'with-proxy', proxyUrl: 'http://proxy.internal:8080' }, key(ApiKeyRole.ADMIN));
+    await controller.create({ name: 'no-proxy' }, key(ApiKeyRole.OPERATOR));
+
+    expect(sessionService.create).toHaveBeenCalledTimes(2);
+  });
+});
+
 // POST /sessions/:sessionId/logout audits SESSION_LOGGED_OUT only after the service resolves — an
 // incomplete engine-backed attempt (502 SESSION_LOGOUT_INCOMPLETE) must NOT record a success
 // audit row, and the service's structured rejection must be forwarded verbatim.
@@ -120,6 +166,7 @@ describe('SessionController — logout() audit + error forwarding contract', () 
     claimedAt: null,
     nodeUrl: null,
     leaseExpiresAt: null,
+    desiredState: null,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-01-01T00:00:00Z'),
   };
@@ -185,6 +232,7 @@ describe('SessionController — start/stop lifecycle', () => {
     claimedAt: null,
     nodeUrl: null,
     leaseExpiresAt: null,
+    desiredState: null,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-01-01T01:00:00Z'),
   };
@@ -217,6 +265,14 @@ describe('SessionController — start/stop lifecycle', () => {
     expect(result.status).toBe(SessionStatus.READY);
     expect(result.engineLoaded).toBe(true);
     expect(sessionService.engineLoaded).toHaveBeenCalledWith(expect.objectContaining({ id: 'sess-uuid-1' }));
+  });
+
+  it('start is an explicit start, which clears an operator stop', async () => {
+    sessionService.start.mockResolvedValue({ ...runningEntity });
+
+    await controller.start('sess-uuid-1');
+
+    expect(sessionService.start).toHaveBeenCalledWith('sess-uuid-1', { explicit: true });
   });
 
   it('start audits SESSION_STARTED once the service has resolved', async () => {
@@ -484,5 +540,43 @@ describe('SessionController — GET .../chats filters before paginating', () => 
     sessionService.listChats.mockResolvedValue([chat('123@g.us', 3), chat('999@g.us', 2)]);
     const out = await controller.getChats('sess-uuid-1', { allowedChats: null } as ApiKey, undefined, undefined);
     expect(out).toHaveLength(2);
+  });
+});
+
+// GET /sessions/:sessionId/groups follows the same rule: a restricted key sees only its groups, and
+// the window is taken after the filter.
+describe('SessionController: GET .../groups filters before paginating', () => {
+  const group = (id: string) => ({ id, name: id, linkedParentJID: '777@g.us' });
+  let sessionService: { listGroups: jest.Mock };
+  let controller: SessionController;
+
+  beforeEach(() => {
+    sessionService = { listGroups: jest.fn() };
+    controller = new SessionControllerClass(
+      sessionService as unknown as SessionService,
+      { logInfo: jest.fn() } as unknown as AuditService,
+      new ChatScopeService(),
+    );
+  });
+
+  it('filters the full list before the window, keeping the allowed group as returned', async () => {
+    sessionService.listGroups.mockResolvedValue([group('999@g.us'), group('123@g.us'), group('456@g.us')]);
+    const apiKey = { allowedChats: ['123@g.us', '456@g.us'] } as ApiKey;
+
+    const out = await controller.getGroups('sess-uuid-1', apiKey, '1', '0');
+
+    expect(out).toEqual([group('123@g.us')]);
+  });
+
+  it('pages the whole list for an unrestricted key', async () => {
+    sessionService.listGroups.mockResolvedValue([group('1@g.us'), group('2@g.us'), group('3@g.us')]);
+    const out = await controller.getGroups('sess-uuid-1', { allowedChats: null } as ApiKey, '2', '1');
+    expect(out.map(g => g.id)).toEqual(['2@g.us', '3@g.us']);
+  });
+
+  it('caps an unbounded group list at the default limit (1000)', async () => {
+    sessionService.listGroups.mockResolvedValue(Array.from({ length: 1500 }, (_, i) => group(`${i}@g.us`)));
+    const out = await controller.getGroups('sess-uuid-1', { allowedChats: null } as ApiKey);
+    expect(out).toHaveLength(1000);
   });
 });

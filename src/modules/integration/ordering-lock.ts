@@ -23,10 +23,11 @@ export class KeyedAsyncLock {
 
 // Key on the CONVERSATION, never the deliveryId (a delivery-unique key would serialize nothing).
 // providerConversationId is populated host-side when the plugin manifest declares a conversationId
-// pointer; absent it, we serialize per instance — correct (never reorders within a conversation) but
-// coarse. Per-instance fallback is the lazy-correct default; the conversation key unlocks
-// intra-instance parallelism once the manifest declares the pointer.
+// pointer; absent it, we serialize per instance: correct (never reorders within a conversation) but
+// coarse. The conversation key unlocks intra-instance parallelism once the manifest declares the
+// pointer. The key is scoped per (plugin, instance): an instanceId is unique only within its plugin,
+// so two plugins may both name an instance 'prod' and must not serialize each other. NUL-joined so
+// no choice of ids can make one tuple read as another; an absent conversation is the empty field.
 export function orderingKeyFor(job: IngressJobData): string {
-  if (job.providerConversationId) return `${job.instanceId}:${job.providerConversationId}`;
-  return `instance:${job.instanceId}`;
+  return [job.pluginId, job.instanceId, job.providerConversationId ?? ''].join('\u0000');
 }

@@ -6,7 +6,7 @@ OpenWA uses a database to store:
 
 - Session configuration & state
 - Webhook configurations
-- Message history (optional)
+- Message history (with `STORE_EPHEMERAL_MESSAGES=false`, messages received in a disappearing-messages chat and sends made from the linked phone there are not stored; sends made through the API's message send routes still are; a product send is not)
 - API keys & authentication
 - Audit logs
 
@@ -18,6 +18,10 @@ OpenWA supports two database backends that can be selected at deployment time:
 | -------------- | ------------------------------------------- | -------- | ------------------ |
 | **SQLite**     | Development, personal bot, low-resource VPS | 1-5      | ❌                 |
 | **PostgreSQL** | Production, multi-session, high volume      | 5+       | ✅                 |
+
+The PostgreSQL row covers the data database only. The main database (`api_keys`, `audit_logs`) is
+always a SQLite file on each node, and running more than one replica is not supported yet; see
+[13 - Horizontal Scaling Guide](./13-horizontal-scaling.md).
 
 > [!NOTE]
 > **SQLite as a Production Option**
@@ -68,7 +72,10 @@ OpenWA v0.2+ implements a **dual-database architecture** that separates boot con
 
 The main DB is unconditionally SQLite, but its _path_ is not fixed: `MAIN_DATABASE_NAME` overrides the
 `./data/main.sqlite` default, and is honoured by both the runtime connection factory
-(`src/config/configuration.ts`) and the CLI DataSource (`src/database/data-source-main.ts`).
+(`src/config/configuration.ts`) and the CLI DataSource (`src/database/data-source-main.ts`). Each
+process opens its own main DB file and nothing replicates it, so in a multi-node deployment API keys
+and audit logs are per node: a key created, revoked or narrowed on one node is unchanged on the
+others.
 
 > [!IMPORTANT]
 > **Why Dual-Database?**
@@ -208,6 +215,7 @@ erDiagram
         timestamp claimedAt
         varchar nodeUrl
         timestamp leaseExpiresAt
+        varchar desiredState
         timestamp createdAt
         timestamp updatedAt
     }
@@ -319,6 +327,10 @@ CREATE TABLE sessions (
     "claimedAt" TIMESTAMP,
     "nodeUrl" VARCHAR(2048),
     "leaseExpiresAt" TIMESTAMP,
+    -- 'stopped' after POST /stop or /force-kill, NULL again after an explicit POST /start. Boot
+    -- auto-start and the takeover sweep skip a stopped row. Server-owned: not in any session
+    -- response, only in the /api/infra/export-data backup.
+    "desiredState" VARCHAR(20),
     "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
     "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -328,7 +340,7 @@ CREATE TABLE sessions (
 > The **types** above are illustrative — the schema is defined by the TypeORM entity (`src/modules/session/entities/session.entity.ts`) and column types are dialect-portable (`jsonColumnType()` → `simple-json`, dates via `DateTransformer`). The **column names are literal**: see the naming note in §5.3 below before writing SQL against any of these tables. The `sessions` entity declares only the index implied by the `UNIQUE` constraint on `name`; there are no separate `status`/`phone`/`createdAt` indexes.
 
 > [!NOTE]
-> Auth state is **not** stored in this table. Both engines persist credentials on the **filesystem** (`whatsapp-web.js` LocalAuth; Baileys `useMultiFileAuthState`). The `baileys_stored_messages` table holds only Baileys' serialized message store (the library ships none), not credentials.
+> Auth state is **not** stored in this table. Both engines persist credentials on the **filesystem**: `whatsapp-web.js` through LocalAuth, Baileys in a multi-file auth dir with the layout of its `useMultiFileAuthState`, written atomically. An unparseable Baileys `creds.json` is moved aside with its key files to `corrupt-<ms>-<suffix>/` and the session relinks by QR. The `baileys_stored_messages` table holds only Baileys' serialized message store (the library ships none), not credentials.
 
 **Session Status Values:**
 
@@ -383,6 +395,10 @@ clears it, and so does a gateway restart.
 | `maxReconnectAttempts` | unlimited | Reconnect attempt cap, clamped to 0-20 (`0` disables reconnect entirely). Bounds the gateway's own reconnect: every reconnect on whatsapp-web.js, and on Baileys only the one after a logged-out close |
 | `reconnectBaseDelay`   | `5000` ms | Base delay of the reconnect backoff, clamped to 1000-300000 ms. Same engine scope as `maxReconnectAttempts`                                                                                            |
 | `autoRejectCalls`      | `false`   | Auto-reject an incoming call as soon as it rings (Baileys only)                                                                                                                                        |
+
+The gateway's reconnect attempt count restarts only once the session has stayed READY for 5 minutes,
+so a session that keeps dropping sooner than that spends a finite `maxReconnectAttempts` and ends
+FAILED. The Baileys in-engine retry has no attempt cap and never ends FAILED on a transient drop.
 
 Set them at creation with `POST /api/sessions`, or on an existing session with
 `PATCH /api/sessions/{sessionId}/config` — no restart, and no re-scan of the QR. The patch merges, so a key
@@ -460,7 +476,9 @@ CREATE TABLE webhooks (
 
 Per-session single-message autoreply rules. `conditions` reuses the webhook filter shape verbatim
 (null/empty matches every inbound message except channel, broadcast-list and status messages, which
-need a `kind` condition); the reply goes through the ordinary send path.
+need a `kind` condition); the reply goes through the ordinary send path. On Baileys a message the
+account received through a contact's broadcast list is filed under the sender's own chat (`kind`
+`individual`), as WhatsApp lists it, so a rule without a `kind` condition matches it.
 
 ```sql
 CREATE TABLE automation_rules (
@@ -480,7 +498,7 @@ CREATE TABLE automation_rules (
 
 ### 5.3.3 messages
 
-Stores message history (optional, can be disabled). This is a **plain (non-partitioned)** table — the same schema on SQLite and PostgreSQL.
+Stores message history. With `STORE_EPHEMERAL_MESSAGES=false`, a message received in a disappearing-messages chat is neither stored nor dispatched, a history sync skips such messages, and the echo of a send made from the linked phone there is dispatched but not stored. A send made through the API's message send routes into such a chat (single or bulk) is still stored, because those routes write their own row. A product send (`POST .../messages/send-product`) writes none and is dropped like a phone-side send (see [06 - API Specification](./06-api-specification.md)). This is a **plain (non-partitioned)** table — the same schema on SQLite and PostgreSQL.
 
 ```sql
 CREATE TABLE messages (
@@ -489,7 +507,7 @@ CREATE TABLE messages (
     "waMessageId" VARCHAR,                -- nullable; transient outgoing rows have none yet
     "chatId" VARCHAR NOT NULL,
     "chatName" VARCHAR,                   -- nullable; inbound sender pushName (the member, in a group)
-    author VARCHAR,                       -- nullable; participant JID for a group message ("from" is the group)
+    author VARCHAR,                       -- nullable; sender JID for a group, status or broadcast-list message
     "from" VARCHAR NOT NULL,
     "to" VARCHAR NOT NULL,
     body TEXT,
@@ -509,6 +527,7 @@ CREATE TABLE messages (
 -- "sessionId", so it already serves session-only lookups (see DropRedundantMessagesSessionIdIndex).
 CREATE INDEX "IDX_399833392126349ef0b04b9bed" ON messages("sessionId", "createdAt");
 CREATE INDEX "IDX_36bc604c820bb9adc4c75cd411" ON messages("chatId");
+CREATE INDEX "IDX_messages_sessionId_chatId_createdAt" ON messages("sessionId", "chatId", "createdAt");
 CREATE INDEX "IDX_befd307485dbf0559d17e4a4d2" ON messages(status);
 CREATE INDEX "IDX_messages_createdAt" ON messages("createdAt");   -- createdAt-only stats aggregates
 
@@ -555,7 +574,7 @@ CREATE TABLE api_keys (
     "updatedAt" DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE UNIQUE INDEX "IDX_df3b25181df0b4b59bd93f16e1" ON api_keys("keyHash");
+CREATE UNIQUE INDEX "IDX_api_keys_keyHash" ON api_keys("keyHash");
 ```
 
 > [!NOTE]
@@ -586,19 +605,29 @@ CREATE TABLE audit_logs (
     "createdAt" DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
--- Indexes (declared on the entity; TypeORM-derived hash names)
-CREATE INDEX "IDX_cee5459245f652b75eb2759b4c" ON audit_logs(action);
-CREATE INDEX "IDX_741fa976d1e04e695f3aa23cb8" ON audit_logs("apiKeyId");
-CREATE INDEX "IDX_dd2b6e43c767b6b5b2bb227ace" ON audit_logs("sessionId");
-CREATE INDEX "IDX_c69efb19bf127c97e6740ad530" ON audit_logs("createdAt");
+-- Indexes (created by migrations-main/)
+CREATE INDEX "IDX_audit_logs_action" ON audit_logs(action);
+CREATE INDEX "IDX_audit_logs_apiKeyId" ON audit_logs("apiKeyId");
+CREATE INDEX "IDX_audit_logs_sessionId" ON audit_logs("sessionId");
+CREATE INDEX "IDX_audit_logs_createdAt" ON audit_logs("createdAt");
 ```
 
+These are the index names on a default install. With `MAIN_DATABASE_SYNCHRONIZE=true`, the
+synchronize pass after the chain replaces them with the TypeORM-derived hash names the entities'
+`@Index()` declarations generate (`IDX_df3b25181df0b4b59bd93f16e1` on `api_keys` and
+`IDX_cee5459245f652b75eb2759b4c`, `IDX_741fa976d1e04e695f3aa23cb8`, `IDX_dd2b6e43c767b6b5b2bb227ace`,
+`IDX_c69efb19bf127c97e6740ad530` on `audit_logs`).
+
 **Audit actions** are an enum (`AuditAction`) spanning API-key lifecycle (`api_key_created`,
-`api_key_updated`, `api_key_used`, `api_key_revoked`, `api_key_deleted`, `api_key_auth_failed`), session
+`api_key_updated`, `api_key_used`, `api_key_revoked`, `api_key_deleted`, `api_key_auth_failed`, capped
+at 10 rows per client IP per minute for a REST, queue-dashboard or MCP rejection that names no stored
+key, where a rejection of a stored key is recorded every time, and at 10 per client IP per minute for
+any rejection on `/api/health`), session
 lifecycle (`session_created`, `session_started`, `session_stopped`, `session_force_killed`,
 `session_logged_out`, `session_deleted`, `session_qr_generated`, `session_connected`,
 `session_disconnected`, `session_config_updated`), WhatsApp-imposed account restrictions (`session_restricted`,
-`session_restriction_lifted`), messages
+`session_restriction_lifted`), a refused relink of a session to a different WhatsApp number
+(`session_rebind_rejected`, written as a WARN row), messages
 (`message_sent`, `message_failed`), send-pacing enforcement (`send_pacing_blocked`, sampled to at
 most one row per session per minute; `send_breaker_tripped`, never sampled), webhooks (`webhook_created`, `webhook_deleted`,
 `webhook_triggered`, `webhook_failed`), rate-limit enforcement (`rate_limit_exceeded`, sampled to at
@@ -608,6 +637,11 @@ plugin instances (`integration_instance_created`, `integration_instance_updated`
 `integration_instance_redriven`), and ADMIN-only infrastructure operations (`infra_config_saved`,
 `infra_restart_requested`, `infra_data_exported`, `infra_data_imported`, `infra_storage_exported`,
 `infra_storage_imported`).
+
+Eight of these are reserved and never emitted, so no row ever carries them: `api_key_used`,
+`session_connected`, `message_sent`, `message_failed`, `webhook_created`, `webhook_deleted`,
+`webhook_triggered` and `webhook_failed`. `src/modules/audit/intentionally-unemitted-actions.ts` is the
+authoritative list, with the reason for each.
 
 > [!NOTE]
 > Audit-log retention is automatic: see [§5.7 Data Retention](#57-data-retention). Other event types (session logs, API access logs) are surfaced via structured application logging, not dedicated database tables. The one exception is a webhook delivery that exhausts every retry — that lands in the `webhook_delivery_failures` table (§5.3.8), not just the log stream.
@@ -664,7 +698,7 @@ The data connection also owns:
 - **`integration_delivery_failures`** — DLQ-of-record for both inbound (ingress) and outbound (provider egress) delivery failures (`src/modules/integration/entities/integration-delivery-failure.entity.ts`).
 - **`baileys_stored_messages`** — Baileys engine message store — the serialized WAMessage proto (`src/engine/adapters/baileys-stored-message.entity.ts`); present only when the Baileys engine is used. (Credentials live on the filesystem, not here.)
 - **`lid_mappings`** — LID↔phone-number identity mappings (`src/engine/identity/lid-mapping.entity.ts`).
-- **`chat_states`** (engine): per-session mute, archive and pin state of each Baileys chat (`src/engine/adapters/baileys-chat-state.entity.ts`), keyed `(sessionId, chatId)`. WhatsApp does not re-deliver that state, so it is kept in backups. A chat deleted on the phone or through the API loses its row, so a later message starts it clean.
+- **`chat_states`** (engine): per-session mute, archive and pin state of each Baileys chat (`src/engine/adapters/baileys-chat-state.entity.ts`), keyed `(sessionId, chatId)`. `chatId` is the person's phone JID (`<phone>@s.whatsapp.net`) whenever their lid resolves, so a state WhatsApp syncs under the lid and one set through the phone number land on the same row; it stays `<lid>@lid` while the lid is unresolved, and a row found under the lid later is folded onto the phone JID on the chat's next change (reads and the fold take each field from the newest row that observed it: `observed` lists the fields a row has seen, and null, on a row not written since the column was added, means the fields it holds a set value for; the next write that can read the row records the list). WhatsApp does not re-deliver that state, so it is kept in backups. A chat deleted on the phone or through the API loses its row, so a later message starts it clean.
 
 Additionally, the `AddMessagesFts` migration creates the full-text-search structures over `messages` (a FTS5 virtual table on SQLite, a generated `body_ts` `tsvector` column plus GIN index on PostgreSQL) that back the `/search` endpoint.
 
@@ -684,7 +718,9 @@ These indexes are the ones declared on the entities (see §5.3); the rows below 
 | Get session by ID                | `sessions.id` (PK)                                          | Very High |
 | Get session by name              | `sessions.name` (UNIQUE)                                    | High      |
 | List messages by session (paged) | `("sessionId", "createdAt")` composite                      | Very High |
-| Look up message by chat          | `"chatId"`                                                  | High      |
+| List a chat's messages (paged)   | `IDX_messages_sessionId_chatId_createdAt`                   | Very High |
+| Send-pacing chat history probes  | `IDX_messages_sessionId_chatId_createdAt`                   | Very High |
+| Search / stats by chat           | `"chatId"`                                                  | Medium    |
 | Ack/dedup a message              | `UQ_messages_sessionId_waMessageId` (UNIQUE)                | Very High |
 | Message stats over a date range  | `IDX_messages_createdAt`                                    | Medium    |
 | Find a session's webhooks        | `IDX_webhooks_sessionId`                                    | Very High |
@@ -696,6 +732,7 @@ These indexes are the ones declared on the entities (see §5.3); the rows below 
 ```sql
 -- messages: paged listing per session + ack-driven status update / inbound dedup
 CREATE INDEX        "IDX_399833392126349ef0b04b9bed"      ON messages("sessionId", "createdAt");
+CREATE INDEX        "IDX_messages_sessionId_chatId_createdAt" ON messages("sessionId", "chatId", "createdAt");
 CREATE UNIQUE INDEX "UQ_messages_sessionId_waMessageId"   ON messages("sessionId", "waMessageId");
 CREATE INDEX        "IDX_messages_createdAt"              ON messages("createdAt");
 
@@ -707,8 +744,8 @@ CREATE INDEX "IDX_webhooks_sessionId" ON webhooks("sessionId");
 CREATE UNIQUE INDEX "UQ_message_batches_session_id_batch_id" ON message_batches(session_id, batch_id);
 
 -- audit_logs (main DB): filter by action / key / session, ordered by time
-CREATE INDEX "IDX_cee5459245f652b75eb2759b4c" ON audit_logs(action);
-CREATE INDEX "IDX_c69efb19bf127c97e6740ad530" ON audit_logs("createdAt");
+CREATE INDEX "IDX_audit_logs_action" ON audit_logs(action);
+CREATE INDEX "IDX_audit_logs_createdAt" ON audit_logs("createdAt");
 ```
 
 > [!NOTE]
@@ -751,21 +788,20 @@ REINDEX TABLE messages;
 ```mermaid
 flowchart TB
     subgraph Inbound["Inbound Message"]
-        E[Engine Event] --> P[Process]
-        P --> S{Store Enabled?}
-        S -->|Yes| DB[(Database)]
-        S -->|No| W[Webhook Only]
-        DB --> W
+        E[Engine Event] --> G{Disappearing chat and STORE_EPHEMERAL_MESSAGES=false?}
+        G -->|Yes| D[Drop: no row, no webhook]
+        G -->|No| P[Hooks / Process]
+        P --> DB[(Insert, UNIQUE sessionId + waMessageId)]
+        DB -->|Duplicate| X[Stop]
+        DB -->|Stored, or a non-duplicate DB error| W[Webhook + WebSocket]
     end
 
-    subgraph Outbound["Outbound Message"]
+    subgraph Outbound["Outbound Message (single send)"]
         A[API Request] --> V[Validate]
-        V --> Q[Queue]
-        Q --> EN[Engine Send]
-        EN --> SR{Store Enabled?}
-        SR -->|Yes| DBO[(Database)]
-        SR -->|No| R[Response]
-        DBO --> R
+        V --> DBP[(Persist PENDING)]
+        DBP --> EN[Engine Send]
+        EN --> DBO[(Update SENT or FAILED)]
+        DBO --> R[Response]
     end
 ```
 
@@ -787,7 +823,7 @@ flowchart LR
 
     subgraph FS["Engine Auth (not in sessions table)"]
         FSAUTH[whatsapp-web.js: filesystem LocalAuth]
-        BAUTH[Baileys: filesystem useMultiFileAuthState]
+        BAUTH[Baileys: filesystem multi-file auth dir]
     end
 
     Memory -->|Sync| Persistent
@@ -806,13 +842,15 @@ OpenWA runs **two separate TypeORM connections**, each with its own migrations d
 Migrations are hand-authored and idempotent (`IF NOT EXISTS`) so they are safe to adopt on a database originally created by `synchronize`. The two connections differ in how schema is managed:
 
 - **data** — `synchronize` defaults **off**, so this connection is migration-managed by default. On PostgreSQL `migrationsRun` is hardcoded on, and `DATABASE_SYNCHRONIZE=true` is rejected outright at boot validation (it would drop the migration-created `body_ts` tsvector column that `/search` depends on). On SQLite there is no such rejection and `migrationsRun` is the inverse of `synchronize` — so an opted-in `DATABASE_SYNCHRONIZE=true` switches the data connection to entity-synchronized schema and turns its migrations **off**.
-- **main** — `synchronize` defaults **on** (zero-config first boot) regardless of `NODE_ENV`; set `MAIN_DATABASE_SYNCHRONIZE=false` to manage `api_keys` / `audit_logs` via `migrations-main/` instead. Never both at once — `migrationsRun` on this connection is the inverse of `synchronize`.
+- **main**: migration-managed by default, like data: `migrations-main/` creates and upgrades `api_keys` / `audit_logs` at boot. The chain is idempotent, so a `main.sqlite` an earlier release built with synchronize is adopted in place on the first boot (rows kept, missing columns added, the ledger written). `MAIN_DATABASE_SYNCHRONIZE=true` additionally synchronizes after the chain, for development; it cannot add an entity column that has no migration yet, because the missing-column check below refuses the boot first, so write the migration in `migrations-main/`. Boot logs a warning when it is set under `NODE_ENV=production`. Before any provider reads the file, boot refuses to start (in both modes) when the ledger records a migration this release does not ship (a newer release upgraded the file) or when an entity column is still missing after the chain ran (an older release rebuilt the table, so its values are gone, or the column has no migration yet); the error names the migration or column. For a newer ledger or a rebuilt table, the remedy is restoring `main.sqlite` from the backup taken before the downgrade or upgrade; for a column with no migration yet, it is adding one in `migrations-main/`. For a table rebuilt without `api_keys.allowedChats` and no backup, stop the instance, delete that migration's ledger row from the file the error names (the `MAIN_DATABASE_NAME` path, `data/main.sqlite` by default) and start it. On a source install that is `sqlite3 data/main.sqlite "DELETE FROM migrations WHERE name = 'AddApiKeyAllowedChats1786600000000'"`. On the compose deployment the file lives in the `openwa-data` volume, not on the host, and a stopped container cannot be exec'd into, so run the CLI in a one-off container of the service: `docker compose stop openwa-api && docker compose run --rm --no-deps openwa-api sqlite3 /app/data/main.sqlite "DELETE FROM migrations WHERE name = 'AddApiKeyAllowedChats1786600000000'"` (with `MAIN_DATABASE_NAME` set, use that path under `/app`). Then the chain re-creates `api_keys.allowedChats` empty, which means every chat, so re-apply each key's `allowedChats` before exposing the API. A file whose ledger does not record the lost column's migration (0.23.6 and 0.23.7 wrote the ledger only with `MAIN_DATABASE_SYNCHRONIZE=false`) is not detected: the column comes back empty, which means every chat, so each key's `allowedChats` must be re-applied. Never delete or rename a `migrations-main/` file: its ledger row would read as a newer release's.
 
 ### Migration Files
 
 ```
 src/database/migrations-main/      # main connection (auth + audit, SQLite)
-└── 1779900000000-CreateAuthAuditTables.ts   # creates api_keys + audit_logs
+├── 1779900000000-CreateAuthAuditTables.ts   # creates api_keys + audit_logs
+├── 1786600000000-AddApiKeyAllowedChats.ts   # adds api_keys.allowedChats
+└── 1786610000000-DropSynchronizeIndexDuplicates.ts  # drops synchronize-named duplicate indexes
 
 src/database/migrations/           # data connection (pluggable)
 ├── 1770108659848-AddMessageStatus.ts
@@ -843,7 +881,17 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1785800000000-AddSessionOwnership.ts
 ├── 1785900000000-AddAutomationRules.ts            # 14th migration table; FKs sessions ON DELETE CASCADE
 ├── 1786000000000-AddSessionNodeUrl.ts
-└── 1786100000000-AddMessageMediaPathIndex.ts   # partial index on messages.mediaPath (orphan sweep)
+├── 1786100000000-AddMessageMediaPathIndex.ts   # partial index on messages.mediaPath (orphan sweep)
+├── 1786200000000-AddWebhookOutboxEvents.ts   # webhook_outbox_events (durable outbound delivery record)
+├── 1786300000000-AddWebhookDeliveryFailureLookupIndex.ts   # (webhookId, idempotencyKey) lookup index
+├── 1786400000000-AddChatStates.ts   # chat_states (persisted mute/archive/pin)
+├── 1786500000000-ReKeyChatStatesBySessionId.ts   # re-keys chat_states from session name to session id
+├── 1786600000000-AddSessionDesiredState.ts   # sessions.desiredState (an operator stop survives a restart)
+├── 1786650000000-AddChatStateObserved.ts   # chat_states.observed (fields a row has seen)
+├── 1786700000000-AddMessagesSessionChatCreatedAtIndex.ts   # (sessionId, chatId, createdAt): chat thread pages
+├── 1786800000000-AddBaileysStoredMessagesSessionCreatedIdIndex.ts   # (sessionId, createdAt, id) index for the Baileys store cap trim
+├── 1786900000000-ScrubRevokedMessageContent.ts   # clears content kept on rows revoked by earlier releases
+└── 1786950000000-ScrubNonPhoneLidMappings.ts   # drops lid_mappings rows where earlier releases stored a broadcast id as the phone
 ```
 
 > [!NOTE]
@@ -878,12 +926,12 @@ export class AddMessagesWaMessageIdUnique1781300000000 implements MigrationInter
 
 ### Retention Policies
 
-Six tables have an automated _time-based_ retention job, across five services: **`audit_logs`**, **`status_updates`**, **`webhook_delivery_failures`**, **`webhook_outbox_events`** (settled rows only), **`ingress_events`** and **`integration_delivery_failures`**. Separately, **`baileys_stored_messages`** is capped per session rather than by age — each write keeps the newest `BAILEYS_MESSAGE_STORE_LIMIT` rows (default 5000) for that session and deletes the rest. Everything else is kept indefinitely (api keys, sessions, webhooks, batches, templates, conversation mappings, plugin instances, lid mappings, chat states, automation rules) and is removed only by user action (e.g. deleting a session) or operational backup/restore — the `messages` history table in particular has no auto-purge and grows without bound.
+Six tables have an automated _time-based_ retention job, across five services: **`audit_logs`**, **`status_updates`**, **`webhook_delivery_failures`**, **`webhook_outbox_events`** (settled rows only), **`ingress_events`** and **`integration_delivery_failures`**. Separately, **`baileys_stored_messages`** is capped per session rather than by age: each write keeps the newest `BAILEYS_MESSAGE_STORE_LIMIT` rows (default 5000) for that session and deletes the rest. Everything else is kept indefinitely (api keys, sessions, webhooks, pending and processing batches, templates, conversation mappings, plugin instances, lid mappings, chat states, automation rules) and is removed only by user action (e.g. deleting a session) or operational backup/restore. Two more, `messages` and finished `message_batches`, have an opt-in time-based job (`MESSAGE_RETENTION_DAYS`, off by default); until it is set they are kept indefinitely too.
 
 | Data Type                     | Default Retention | Configurable                                                    |
 | ----------------------------- | ----------------- | --------------------------------------------------------------- |
 | Sessions / Webhooks           | Indefinite        | No                                                              |
-| Messages / Batches            | Indefinite        | No (delete a session to drop its data)                          |
+| Messages / finished batches   | Indefinite        | Yes, `MESSAGE_RETENTION_DAYS` (≤ 0 keeps them, max 36500)       |
 | Status updates                | 24 hours          | No (fixed, matches WhatsApp's own story expiry)                 |
 | Audit logs                    | 90 days           | Yes — `AUDIT_RETENTION_DAYS` (≤ 0 disables)                     |
 | Webhook delivery failures     | 90 days           | Yes — `WEBHOOK_FAILURE_RETENTION_DAYS` (≤ 0 disables)           |
@@ -918,11 +966,12 @@ async cleanup(olderThanDays = 30): Promise<number> {
 
 ### Sibling Prune Jobs
 
-The other four interval-based prunes are the same shape — one prune at startup, then a 24-hour `setInterval`, `unref`'d, never a `@Cron`:
+The other interval-based prunes are the same shape: one prune at startup, then a 24-hour `setInterval`, `unref`'d, never a `@Cron`:
 
 - **`webhook_delivery_failures`** — `WebhookService.onModuleInit()` (`src/modules/webhook/webhook.service.ts`), window `WEBHOOK_FAILURE_RETENTION_DAYS` (default 90; ≤ 0 disables the prune and logs that it is off).
 - **`webhook_outbox_events`**: `WebhookOutboxService.onModuleInit()` (`src/modules/webhook/webhook-outbox.service.ts`), window `WEBHOOK_OUTBOX_RETENTION_DAYS` (default 7). Only settled rows are deleted; a `pending` row is a delivery that can still be replayed and is never pruned on age. A non-positive value does **not** disable the prune: a settled row carries no payload, so the service warns and falls back to 7 days.
 - **`ingress_events`** and **`integration_delivery_failures`** — `IntegrationRetentionService` (`src/modules/integration/integration-retention.service.ts`) prunes both in one timer on two independent windows. `INGRESS_DEDUP_RETENTION_DAYS` (default 7) bounds the dedup rows; a non-positive value does **not** disable it — an unpruned dedup table grows without bound for no functional gain, so the service warns and falls back to the 7-day default. `INGRESS_RETENTION_DAYS` (default 90) bounds the DLQ rows, where long retention can be a deliberate operator choice, so ≤ 0 disables that prune (and only that prune).
+- **`messages`** and finished **`message_batches`**: `MessageRetentionService` (`src/modules/message/message-retention.service.ts`), window `MESSAGE_RETENTION_DAYS` (default 0, which keeps everything; boot rejects a value above 36500). Messages are deleted by `createdAt` in batches of 500 ids, at most 200 batches per run, so a run deletes at most 100,000 messages; a run that hits that limit logs a warning and is followed by another a minute later until the backlog is cleared. Pending and processing batches are never pruned. Once enabled, send pacing treats a contact silent for longer than the window as a new (cold) contact again, stats totals and search results shrink, archived media files are reclaimed by the chat-media orphan sweep, and a history sync does not write back messages older than the window. Search plugins get no `message:deleted` for pruned rows, so an external index keeps its copies.
 
 ### Status-Update TTL Sweep
 
@@ -936,50 +985,10 @@ The 24-hour TTL itself is a fixed constant (`STATUS_TTL_MS`) and is not configur
 ## 5.8 Backup Strategy
 
 > [!NOTE]
-> This section is **operational guidance**, not a built-in feature. OpenWA ships no scheduler, encryption step, or S3 uploader for backups — the diagram and script below are a recommended setup you wire up externally (cron, your host's backup tooling, etc.). For SQLite, back up the `./data/*.sqlite` files (including `./data/main.sqlite`); for PostgreSQL, use `pg_dump`. The JSON export/import endpoints in §5.1 are a portability path, not a backup mechanism.
+> This section is **operational guidance**, not a built-in feature. OpenWA ships no scheduler, encryption step, S3 uploader or pruning for backups; wire those up externally (cron, your host's backup tooling, etc.). The JSON export/import endpoints in §5.1 are a portability path, not a backup mechanism.
 > The authoritative full-system backup is [`scripts/backup.sh`](../scripts/backup.sh), documented in the [operational runbook](./11-operational-runbooks.md#runbook-database-backup); it also captures engine auth state, including `BAILEYS_AUTH_DIR` for Baileys.
 
-### Backup Components
-
-```mermaid
-flowchart TB
-    subgraph Backup["Backup Strategy"]
-        DB[(Database)] --> DUMP[pg_dump]
-        DUMP --> COMPRESS[Compress]
-        COMPRESS --> ENCRYPT[Encrypt]
-        ENCRYPT --> S3[S3/Cloud Storage]
-    end
-
-    subgraph Schedule["Schedule (external, e.g. cron)"]
-        FULL[Full Backup<br/>Daily]
-        INCR[Incremental<br/>Hourly]
-    end
-
-    Schedule --> Backup
-```
-
-### Backup Script Example
-
-```bash
-#!/bin/bash
-# backup.sh
-
-DATE=$(date +%Y%m%d_%H%M%S)
-BACKUP_DIR="/backups"
-DB_NAME="openwa"
-
-# Create backup
-pg_dump -Fc $DB_NAME > $BACKUP_DIR/openwa_$DATE.dump
-
-# Compress
-gzip $BACKUP_DIR/openwa_$DATE.dump
-
-# Upload to S3 (optional)
-aws s3 cp $BACKUP_DIR/openwa_$DATE.dump.gz s3://backups/openwa/
-
-# Cleanup old backups (keep last 7 days)
-find $BACKUP_DIR -name "*.dump.gz" -mtime +7 -delete
-```
+Build any scheduled or off-site pipeline around the archive `scripts/backup.sh` writes, not around a bare `pg_dump` or a copy of the `.sqlite` files. The data store alone omits `main.sqlite` (API keys and the audit log) and the engine auth state, so a restore from it comes back with no API keys and every session unpaired. The flow, and which steps stay with the operator, is in [10.7 Backup & Recovery](./10-devops-infrastructure.md#107-backup--recovery).
 
 ---
 

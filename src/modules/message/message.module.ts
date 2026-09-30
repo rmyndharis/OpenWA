@@ -5,6 +5,7 @@ import { MessageSendService } from './message-send.service';
 import { BulkMessageService } from './bulk-message.service';
 import { MessageTypeBackfillService } from './message-type-backfill.service';
 import { PendingMessageReaperService } from './pending-message-reaper.service';
+import { MessageRetentionService } from './message-retention.service';
 import { MessageController } from './message.controller';
 import { SessionModule } from '../session/session.module';
 import { TemplateModule } from '../template/template.module';
@@ -29,6 +30,7 @@ import { PLUGIN_MESSAGE_PORT } from '../../core/plugins/plugin-host-ports';
     BulkMessageService,
     MessageTypeBackfillService,
     PendingMessageReaperService,
+    MessageRetentionService,
     SendPacingService,
     // Binds the core-owned plugin capability port to this module's service. The plugin runtime
     // resolves the token lazily via ModuleRef (PluginHostServices), which keeps its provider cycle

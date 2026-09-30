@@ -32,3 +32,4 @@ export * from './errors.js';
 export type * from './types.js';
 export type { BinaryResponse, ClientConfig, FetchLike, HttpMethod, RequestOptions } from './http.js';
 export { buildUrl, warnIfInsecureHttpUrl } from './http.js';
+export { verifyWebhookSignature } from './webhook.js';

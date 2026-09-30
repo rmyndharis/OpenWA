@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import { Not, Repository } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm';
 import { Message } from '../message/entities/message.entity';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
@@ -96,7 +96,11 @@ export class MessageMutationProjector {
   /** Persist an edit before notifying consumers, while still surfacing the occurrence if storage fails. */
   private async applyMessageEdit(id: string, message: EditedMessage): Promise<void> {
     try {
-      await this.messageRepository.update({ sessionId: id, waMessageId: message.messageId }, { body: message.body });
+      // Never onto a revoked row: a late edit must not bring back text the sender deleted.
+      await this.messageRepository.update(
+        { sessionId: id, waMessageId: message.messageId, type: Not('revoked') },
+        { body: message.body },
+      );
     } catch (err) {
       this.logger.error(`Failed to update edited message: ${message.messageId}`, String(err));
     }
@@ -117,7 +121,7 @@ export class MessageMutationProjector {
     await new Promise<void>(resolve => {
       this.enqueueMessageMutation(sessionId, messageId, async () => {
         try {
-          await this.messageRepository.update({ sessionId, waMessageId: messageId }, { body });
+          await this.messageRepository.update({ sessionId, waMessageId: messageId, type: Not('revoked') }, { body });
         } catch (err) {
           this.logger.warn(`Failed to update stored body of edited message ${messageId}`, { error: String(err) });
         } finally {

@@ -136,6 +136,20 @@ describe('sendSeen', () => {
     expect(readMessages).toHaveBeenCalledWith([{ id: 'D1', remoteJid: '628123@c.us', fromMe: true }]);
   });
 
+  it('keeps the stored key of a received broadcast-list message addressed by its sender chat', async () => {
+    // The message is reported under the sender's chat, but its key names the list and the sender.
+    // Synthesising a key for the sender's chat dropped the participant the receipt needs.
+    const readMessages = jest.fn().mockResolvedValue(undefined);
+    const key = { id: 'B1', remoteJid: '1700000000@broadcast', participant: '628123@s.whatsapp.net', fromMe: false };
+    const host = makeHost({
+      getSocket: () => ({ readMessages }) as unknown as WASocket,
+      getStoredMessages: () => Promise.resolve([stored(key)]),
+    });
+
+    await expect(new BaileysContacts(host, 500).sendSeen('628123@c.us', ['B1'])).resolves.toBe(true);
+    expect(readMessages).toHaveBeenCalledWith([key]);
+  });
+
   it('treats a null id list as absent rather than dereferencing it', async () => {
     // The REST body rejects an explicit null, but this is the engine boundary; it used to throw a
     // TypeError here and surface as a 500.

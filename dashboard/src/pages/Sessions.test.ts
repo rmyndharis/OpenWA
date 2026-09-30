@@ -484,6 +484,33 @@ test('saving proxy settings issues PATCH /api/sessions/:id/proxy', async () => {
   });
 });
 
+// The API accepts a session proxy only from an ADMIN key, so an operator is not offered the controls.
+test('an operator key is not offered proxy writes, in the create modal or the proxy modal', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  try {
+    renderSessions();
+    await screen.findByText('new-device');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Session' }));
+    const createDialog = await screen.findByRole('dialog');
+    assert.equal(createDialog.querySelector('#create-use-proxy'), null);
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => assert.equal(screen.queryByRole('dialog'), null));
+
+    const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
+    fireEvent.click(within(qrCard).getByRole('button', { name: 'Proxy' }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => assert.ok(findFetchCall('GET', '/api/sessions/sess-qr-1/proxy')));
+    const toggle = (await within(dialog).findByRole('checkbox')) as HTMLInputElement;
+    assert.equal(toggle.disabled, true);
+    assert.equal(within(dialog).queryByRole('button', { name: 'Save' }), null);
+  } finally {
+    window.sessionStorage.setItem('openwa_user_role', 'admin');
+  }
+});
+
 test('a typed pairing phone number survives toggling to the QR tab and back', async () => {
   const { screen, fireEvent, within } = rtl;
   resetFetchCalls();

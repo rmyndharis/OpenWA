@@ -2,11 +2,12 @@ import { HttpException, UnauthorizedException, ForbiddenException } from '@nestj
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
 import { BullBoardAuthMiddleware } from './bull-board-auth.middleware';
-import { AuthService } from '../../modules/auth/auth.service';
+import { AuthService, UnresolvedApiKeyException } from '../../modules/auth/auth.service';
 import { ApiKeyRole } from '../../modules/auth/entities/api-key.entity';
 import { AuditService } from '../../modules/audit/audit.service';
 import { AuditAction } from '../../modules/audit/entities/audit-log.entity';
 import { KeyRateLimiter } from '../../modules/mcp/mcp-rate-limit';
+import { allowUnauthenticatedAuditRow } from '../../modules/audit/auth-failure-audit-limiter';
 import * as fs from 'fs';
 import * as path from 'path';
 import { runWithRequestId, getRequestActor } from '../services/request-context';
@@ -426,6 +427,70 @@ describe('BullBoardAuthMiddleware audit trail', () => {
     expect(next).toHaveBeenCalledWith(expect.any(HttpException));
     expect(auditService.logWarn).not.toHaveBeenCalled();
     expect(auditService.logInfo).not.toHaveBeenCalled();
+  });
+
+  // Unauthenticated rows are bounded per client IP, on a budget shared with the REST guard. These
+  // tests use IPs no other test in this file uses, since the budget is a module-level singleton.
+  it('writes at most 10 unauthenticated rows a minute for one IP, while every request still gets its 401', async () => {
+    const fromIp = (ip: string): Request =>
+      ({ ...reqFor('GET', {}, '/api/admin/queues/'), ip, socket: { remoteAddress: ip } }) as unknown as Request;
+    const next = jest.fn();
+    for (let i = 0; i < 50; i++) await mw.use(fromIp('198.51.100.81'), res, next);
+
+    expect(next).toHaveBeenCalledTimes(50);
+    for (const [err] of next.mock.calls as Array<[unknown]>) expect(err).toBeInstanceOf(UnauthorizedException);
+    expect(auditService.logWarn).toHaveBeenCalledTimes(10);
+
+    await mw.use(fromIp('198.51.100.82'), res, jest.fn());
+    expect(auditService.logWarn).toHaveBeenCalledTimes(11);
+    expect(auditService.logWarn).toHaveBeenLastCalledWith(
+      AuditAction.API_KEY_AUTH_FAILED,
+      expect.objectContaining({ ipAddress: '198.51.100.82' }),
+    );
+  });
+
+  it('shares the unauthenticated budget with the REST guard and still records a 403', async () => {
+    // Ten rows already written for this IP by the REST guard.
+    for (let i = 0; i < 10; i++) expect(allowUnauthenticatedAuditRow('198.51.100.83')).toBe(true);
+    const fromIp = (headers: Record<string, unknown>): Request =>
+      ({
+        ...reqFor('GET', headers, '/api/admin/queues/'),
+        ip: '198.51.100.83',
+        socket: { remoteAddress: '198.51.100.83' },
+      }) as unknown as Request;
+
+    await mw.use(fromIp({}), res, jest.fn());
+    expect(auditService.logWarn).not.toHaveBeenCalled();
+
+    authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.OPERATOR });
+    authService.hasPermission.mockReturnValue(false);
+    const next = jest.fn();
+    await mw.use(fromIp({ 'x-api-key': 'op' }), res, next);
+    expect(next).toHaveBeenCalledWith(expect.any(ForbiddenException));
+    expect(auditService.logWarn).toHaveBeenCalledTimes(1);
+  });
+
+  it('still records a rejected stored key from an IP whose budget is spent, but not an unknown one', async () => {
+    for (let i = 0; i < 10; i++) expect(allowUnauthenticatedAuditRow('198.51.100.84')).toBe(true);
+    const fromIp = (): Request =>
+      ({
+        ...reqFor('GET', { 'x-api-key': 'k' }, '/api/admin/queues/'),
+        ip: '198.51.100.84',
+        socket: { remoteAddress: '198.51.100.84' },
+      }) as unknown as Request;
+
+    authService.validateApiKey.mockRejectedValue(new UnresolvedApiKeyException('Invalid API key'));
+    await mw.use(fromIp(), res, jest.fn());
+    expect(auditService.logWarn).not.toHaveBeenCalled();
+
+    authService.validateApiKey.mockRejectedValue(new UnauthorizedException('API key is revoked'));
+    const next = jest.fn();
+    await mw.use(fromIp(), res, next);
+    expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedException));
+    expect(auditService.logWarn).toHaveBeenCalledWith(
+      AuditAction.API_KEY_AUTH_FAILED,
+      expect.objectContaining({ ipAddress: '198.51.100.84', errorMessage: 'API key is revoked' }),
+    );
   });
 
   it('degrades gracefully when no audit service is provided (rejections still work)', async () => {

@@ -11,7 +11,7 @@ import { SessionLidResolver } from './session-lid-resolver.service';
 import { buildMessageMetadata, storableWaMessageId } from './message-row.mapper';
 import { MessageMutationProjector } from './message-mutation-projector';
 import { persistHistoryMessages } from './message-history-projector';
-import { isUniqueViolation } from '../../common/utils/db-errors';
+import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
@@ -58,6 +58,34 @@ import { isMessagePayload } from '../../core/hooks/hook-results';
  */
 export const ACK_RECONCILE_DELAY_MS = 750;
 
+/**
+ * What a revoke leaves of a stored message: the placeholder WhatsApp itself shows. Body, archived-media
+ * pointers and metadata (inline media, quote, reactions, buttons) are all cleared, so the row carries
+ * nothing of what the sender took back. The archived file, now unreferenced, is reaped by the chat-media
+ * orphan sweep.
+ */
+const REVOKED_ROW_PATCH = {
+  body: '',
+  type: 'revoked',
+  metadata: null,
+  mediaPath: null,
+  mediaMimetype: null,
+} as unknown as QueryDeepPartialEntity<Message>;
+
+/**
+ * Delay before the single retry of a message insert that failed transiently (lock contention, a
+ * dropped connection, a pool timeout). The engine delivers each message once, so without the retry
+ * one busy moment loses the row for good.
+ */
+export const PERSIST_RETRY_DELAY_MS = 300;
+
+/**
+ * How a message insert ended: `yes` the row landed, `dup` a unique violation (`retried` says whether
+ * it came from the retry, when the first attempt may have committed before its error), `failed` a
+ * non-conflict error, `stale` the engine was retired while the retry waited.
+ */
+type InsertOutcome = { landed: 'yes' | 'failed' | 'stale' } | { landed: 'dup'; retried: boolean };
+
 /** Persist-stage outcome threaded into the inbound dispatch stage (was closure state in the hook continuation). */
 interface InboundPersistOutcome {
   dbMessage: Message;
@@ -86,13 +114,27 @@ export class MessageProjector {
     this.logger.error(`Unexpected failure applying message mutation: ${key}`, String(err));
   });
 
-  // Inbound messages whose `message:received` chain is running, by `${sessionId}:${waMessageId}`. The
-  // row is written only after the chain, so a handler that quotes the message reads it from here, and
-  // a revoke or edit landing meanwhile finds no row to update: it is recorded here and applied once
-  // the row is written (see applyChangesMadeInFlight).
+  // Serializes the insert and dispatch of each chat's messages, by `${sessionId}:${chatId}`: hook
+  // chains finish in any order, but a chat's rows, websocket events and webhooks follow arrival.
+  private readonly chatCommits = new KeyedMutationQueue((key, err) => {
+    this.logger.error(`Unexpected failure committing a message: ${key}`, String(err));
+  });
+
+  // Messages not yet written, by `${sessionId}:${waMessageId}`: inbound ones from the start of their
+  // `message:received` chain, own-send echoes from the start of their `message:sent` chain, each until
+  // its commit (which may wait behind earlier messages of the chat) ends. A handler that quotes the
+  // message reads it from here, and a revoke, edit or ack landing meanwhile finds no row to update: it
+  // is recorded here and applied once the row is written (see applyChangesMadeInFlight).
   private readonly inboundInFlight = new Map<
     string,
-    { message: InboundMessageData; revoked?: boolean; editedBody?: string }
+    {
+      message: InboundMessageData;
+      revoked?: boolean;
+      editedBody?: string;
+      ackStatus?: MessageStatus;
+      // Latest reaction per sender; '' means the sender withdrew theirs.
+      reactions?: Record<string, string>;
+    }
   >();
 
   // Reaction/edit applies, extracted to a plain collaborator. It shares this instance's
@@ -149,13 +191,16 @@ export class MessageProjector {
     const messageData = { ...message };
     // Tracks the chain's current copy, so a quote taken mid-chain carries an earlier handler's rewrite.
     const inFlightKey = `${id}:${message.id}`;
-    // A re-fire of the same id keeps a change recorded against the chain it replaces.
-    const { revoked, editedBody } = this.inboundInFlight.get(inFlightKey) ?? {};
-    const inFlight = { message: messageData, revoked, editedBody };
-    this.inboundInFlight.set(inFlightKey, inFlight);
+    const inFlight = this.trackInFlight(inFlightKey, messageData);
 
-    // Execute hook for message received - plugins can modify or stop processing
-    void this.hookManager
+    const onFailure = (err: unknown): null => {
+      this.logger.error(`onMessage handler failed for ${id}`, String(err));
+      return null;
+    };
+    // Execute hook for message received - plugins can modify or stop processing. The hook chain and
+    // sender resolution run concurrently across messages; the catch is attached now so a failure
+    // while the commit waits its turn is never an unhandled rejection.
+    const prepared = this.hookManager
       .execute('message:received', messageData, {
         sessionId: id,
         source: 'Engine',
@@ -166,13 +211,42 @@ export class MessageProjector {
         },
       })
       .then(({ data }) =>
-        this.projectInboundMessage(id, engine, this.messageOrEngineCopy(id, 'message:received', data, message)),
+        this.prepareInboundMessage(id, this.messageOrEngineCopy(id, 'message:received', data, message)),
       )
-      .catch(err => this.logger.error(`onMessage handler failed for ${id}`, String(err)))
-      .finally(() => {
-        // A re-fire of the same id may have replaced the entry; leave that one to its own chain.
-        if (this.inboundInFlight.get(inFlightKey) === inFlight) this.inboundInFlight.delete(inFlightKey);
-      });
+      .catch(onFailure);
+    this.chatCommits.enqueue(this.chatCommitKey(id, message), async () => {
+      try {
+        const finalMessage = await prepared;
+        if (finalMessage) await this.commitInboundMessage(id, engine, finalMessage);
+      } catch (err) {
+        onFailure(err);
+      } finally {
+        this.untrackInFlight(inFlightKey, inFlight);
+      }
+    });
+  }
+
+  /** Record a message as not yet written; a re-fire of the same id keeps the changes recorded so far. */
+  private trackInFlight(key: string, message: InboundMessageData) {
+    const { revoked, editedBody, ackStatus, reactions } = this.inboundInFlight.get(key) ?? {};
+    const inFlight = { message, revoked, editedBody, ackStatus, reactions };
+    this.inboundInFlight.set(key, inFlight);
+    return inFlight;
+  }
+
+  /** Drop the entry once its commit ended, unless a re-fire of the same id replaced it. */
+  private untrackInFlight(key: string, inFlight: object): void {
+    if (this.inboundInFlight.get(key) === inFlight) this.inboundInFlight.delete(key);
+  }
+
+  /**
+   * Key of the per-chat commit queue. A slow hook chain for one message must not let a later message
+   * of the same chat be stored and announced first, so the insert and dispatch of every message in a
+   * chat (inbound and own-send echo alike) run in arrival order. Keyed on the engine's chatId, not
+   * on a hook's rewrite.
+   */
+  private chatCommitKey(id: string, message: IncomingMessage): string {
+    return `${id}:${message.chatId}`;
   }
 
   /**
@@ -182,7 +256,9 @@ export class MessageProjector {
    * table.
    */
   inFlightInbound(sessionId: string, waMessageId: string): Pick<IncomingMessage, 'chatId' | 'body'> | undefined {
-    return waMessageId ? this.inboundInFlight.get(`${sessionId}:${waMessageId}`)?.message : undefined;
+    const entry = waMessageId ? this.inboundInFlight.get(`${sessionId}:${waMessageId}`) : undefined;
+    // A revoked message lends no text, as its cleared row would not; the chatId still scopes the quote.
+    return entry && (entry.revoked ? { chatId: entry.message.chatId, body: '' } : entry.message);
   }
 
   /**
@@ -192,7 +268,7 @@ export class MessageProjector {
    * ({@link isMessagePayload}), keeping an earlier handler's rewrite; this is the last guard. A plugin
    * returning `data: null` to mean "I consumed it" used to throw below and erase the message from
    * history, webhooks and the websocket. A plugin may rewrite a message; it cannot make the gateway
-   * forget it (see projectInboundMessage).
+   * forget it (see {@link prepareInboundMessage}).
    */
   private messageOrEngineCopy(
     id: string,
@@ -263,12 +339,8 @@ export class MessageProjector {
     return false;
   }
 
-  /** Post-hook continuation of {@link handleInboundMessage}: resolve sender, persist, dispatch. */
-  private async projectInboundMessage(
-    id: string,
-    engine: IWhatsAppEngine,
-    finalMessage: InboundMessageData,
-  ): Promise<void> {
+  /** Post-hook continuation of {@link handleInboundMessage} that may run concurrently: resolve the sender. */
+  private async prepareInboundMessage(id: string, finalMessage: InboundMessageData): Promise<InboundMessageData> {
     // `continue: false` is deliberately NOT read here. It means "stop the handler chain", which
     // HookManager has already done — the plugins after the one that returned it never ran. It
     // does not mean "this message never happened".
@@ -295,8 +367,16 @@ export class MessageProjector {
     if (resolveFeatureFlags(this.configService).resolveLidToPhone && incoming.isLidSender && !incoming.fromMe) {
       incoming.senderPhone = await this.lidResolver.resolveSenderPhone(id, incoming.author ?? incoming.from);
     }
+    return finalMessage;
+  }
 
-    const outcome = await this.persistInboundMessage(id, engine, incoming);
+  /** Per-chat, in-order stage of {@link handleInboundMessage}: persist, then dispatch. */
+  private async commitInboundMessage(
+    id: string,
+    engine: IWhatsAppEngine,
+    finalMessage: InboundMessageData,
+  ): Promise<void> {
+    const outcome = await this.persistInboundMessage(id, engine, finalMessage);
     if (!outcome) return;
     this.dispatchInboundMessage(id, finalMessage, outcome);
   }
@@ -343,50 +423,143 @@ export class MessageProjector {
     // near-simultaneous re-fire loses the race and is skipped here, so persist + webhook + WS
     // happen exactly once. Fail-open: a non-conflict DB error still dispatches, so a real
     // message is never dropped by a transient DB failure.
-    let isNewMessage = true;
-    let persisted = false;
-    try {
-      // `insert()` (not `save()`) is load-bearing: the UNIQUE(sessionId, waMessageId) constraint
-      // makes a duplicate insert throw, which is the atomic dedup oracle for #464 re-fires.
-      // Unlike `save()`, `insert()` does NOT merge DB-generated columns (@PrimaryGeneratedColumn,
+    const outcome = await this.insertWithRetry(id, engine, dbMessage, 'incoming');
+    if (outcome.landed === 'yes') {
+      this.applyChangesMadeInFlight(id, incoming.id);
+      return { dbMessage, persisted: true };
+    }
+    if (outcome.landed === 'stale') return null;
+    // A duplicate on the first attempt is a re-fire: the original already persisted and dispatched.
+    // A duplicate on the retry is ambiguous: the first attempt may have committed before its error,
+    // in which case nothing dispatched yet, so dispatch fail-open (without the row-bound hook), and
+    // that row still has to take a revoke or edit that arrived in flight.
+    if (outcome.landed === 'dup' && !outcome.retried) return null;
+    if (outcome.landed === 'dup') this.applyChangesMadeInFlight(id, incoming.id);
+    return { dbMessage, persisted: false };
+  }
+
+  /**
+   * Insert a message row under the UNIQUE(sessionId, waMessageId) dedup oracle. `insert()` (not
+   * `save()`) is load-bearing: a duplicate insert throws, which is the atomic dedup oracle for #464
+   * re-fires. A transient failure is retried once after {@link PERSIST_RETRY_DELAY_MS}, re-checking
+   * that the engine is still live so a retired session never gets an orphan row. On success the
+   * DB-generated columns are merged onto `dbMessage`.
+   */
+  private async insertWithRetry(
+    id: string,
+    engine: IWhatsAppEngine,
+    dbMessage: Message,
+    direction: 'incoming' | 'outgoing',
+  ): Promise<InsertOutcome> {
+    const label = `Failed to save ${direction} message ${dbMessage.waMessageId} to database`;
+    const insert = async (): Promise<InsertOutcome> => {
+      const result = await this.messageRepository.insert(dbMessage as unknown as QueryDeepPartialEntity<Message>);
+      // `insert()` (not `save()`) does NOT merge DB-generated columns (@PrimaryGeneratedColumn,
       // @CreateDateColumn) back onto the entity instance — so merge them explicitly here, before
       // the `message:persisted` emit. `identifiers[0]` always carries the PK on both SQLite and
       // Postgres; `generatedMaps[0]` adds createdAt where the driver returns it (Postgres yes;
       // SQLite historically does not — acceptable; the PK is the load-bearing field for plugins).
-      const result = await this.messageRepository.insert(dbMessage as unknown as QueryDeepPartialEntity<Message>);
       Object.assign(dbMessage, result.identifiers[0] ?? {}, result.generatedMaps?.[0] ?? {});
-      persisted = true;
-      this.applyChangesMadeInFlight(id, incoming.id);
+      return { landed: 'yes' };
+    };
+    try {
+      return await insert();
     } catch (err) {
-      if (isUniqueViolation(err)) {
-        isNewMessage = false;
-      } else {
-        this.logger.error(`Failed to save incoming message ${incoming.id} to database`, String(err));
+      if (isUniqueViolation(err)) return { landed: 'dup', retried: false };
+      if (!isTransientDbError(err)) {
+        this.logger.error(label, String(err));
+        return { landed: 'failed' };
       }
+      this.logger.warn(`${label}, retrying once`, { sessionId: id, error: String(err) });
     }
-    if (!isNewMessage) {
-      return null; // duplicate re-fire — the original already persisted and dispatched
+    await new Promise(resolve => setTimeout(resolve, PERSIST_RETRY_DELAY_MS));
+    if (!this.engines.isLive(id, engine)) return { landed: 'stale' };
+    try {
+      return await insert();
+    } catch (err) {
+      if (isUniqueViolation(err)) return { landed: 'dup', retried: true };
+      this.logger.error(label, String(err));
+      return { landed: 'failed' };
     }
-    return { dbMessage, persisted };
   }
 
   /**
-   * Write a revoke or edit that arrived while the message's `message:received` chain ran onto the row
-   * that chain just inserted: its own UPDATE matched no row then. Queued on the message's mutation
-   * chain, so it lands after any edit already queued, and a revoke wins over an edit. A change arriving
-   * after the insert finds the row itself.
+   * Write a revoke, edit, reaction or ack that arrived before the message's row existed onto the row
+   * just inserted: its own write matched no row then. Queued on the message's mutation chain, so it
+   * lands after any edit already queued, and a revoke wins over the rest. A change arriving after the
+   * insert finds the row itself. Reactions are only stored here; their event already went out.
    */
   private applyChangesMadeInFlight(id: string, waMessageId: string): void {
     const pending = waMessageId ? this.inboundInFlight.get(`${id}:${waMessageId}`) : undefined;
-    if (!pending?.revoked && pending?.editedBody === undefined) return;
+    const ackStatus = pending?.ackStatus;
+    if (ackStatus) {
+      void this.advanceAck(id, waMessageId, ackStatus).catch(err =>
+        this.logger.error(`Failed to advance ack for ${waMessageId}`, String(err)),
+      );
+    }
+    if (!pending?.revoked && pending?.editedBody === undefined && !pending?.reactions) return;
     this.enqueueMessageMutation(id, waMessageId, async () => {
-      const change = pending.revoked ? { body: '', type: 'revoked' } : { body: pending.editedBody };
+      if (pending.revoked) return this.revokeRow(id, waMessageId);
       try {
-        await this.messageRepository.update({ sessionId: id, waMessageId }, change);
+        if (pending.editedBody !== undefined) {
+          await this.messageRepository.update({ sessionId: id, waMessageId }, { body: pending.editedBody });
+        }
+        if (pending.reactions) await this.storeReactions(id, waMessageId, pending.reactions);
       } catch (err) {
-        this.logger.error(`Failed to apply a revoke or edit to message ${waMessageId}`, String(err));
+        this.logger.error(`Failed to apply changes to message ${waMessageId}`, String(err));
       }
     });
+  }
+
+  /** Merge reactions into the row's metadata, withdrawing a sender's on ''. Must run on the mutation chain. */
+  private async storeReactions(id: string, waMessageId: string, changes: Record<string, string>): Promise<void> {
+    const row = await this.messageRepository.findOne({ where: { sessionId: id, waMessageId } });
+    if (!row) return;
+    const metadata = row.metadata ?? {};
+    const reactions = { ...(metadata.reactions as Record<string, string> | undefined) };
+    for (const [sender, reaction] of Object.entries(changes)) {
+      if (reaction) reactions[sender] = reaction;
+      else delete reactions[sender];
+    }
+    // Only the metadata column, so a concurrent ack UPDATE is not overwritten.
+    await this.messageRepository.update({ sessionId: id, waMessageId }, { metadata: { ...metadata, reactions } });
+  }
+
+  /**
+   * Clear a revoked message's stored row, on the message's mutation chain so a reaction or edit queued
+   * before it cannot write content back afterwards. Used by the engine's revoke event and by the REST
+   * delete. Best-effort like every stored-message mutation: never rejects, and resolves once the write
+   * has run.
+   */
+  recordRevoke(sessionId: string, waMessageId: string): Promise<void> {
+    // A message not written yet takes the revoke once its row lands; the UPDATE below matches nothing.
+    const inFlight = this.inboundInFlight.get(`${sessionId}:${waMessageId}`);
+    if (inFlight) inFlight.revoked = true;
+    return new Promise(resolve =>
+      this.enqueueMessageMutation(sessionId, waMessageId, () =>
+        this.revokeRow(sessionId, waMessageId).finally(resolve),
+      ),
+    );
+  }
+
+  /**
+   * Apply {@link REVOKED_ROW_PATCH}, then hand the cleared row to `message:persisted` so a plugin index
+   * keyed by row id drops the content too. Must run on the message's mutation chain.
+   */
+  private async revokeRow(sessionId: string, waMessageId: string): Promise<void> {
+    // An undefined condition is DROPPED from the where-clause, which would clear every row of the session.
+    if (!waMessageId) return;
+    try {
+      const result = await this.messageRepository.update({ sessionId, waMessageId }, REVOKED_ROW_PATCH);
+      if (!result?.affected) return;
+      const row = await this.messageRepository.findOne({ where: { sessionId, waMessageId } });
+      if (!row) return;
+      void this.hookManager
+        .execute('message:persisted', { sessionId, message: row }, { sessionId, source: 'SessionService' })
+        .catch(() => undefined);
+    } catch (err) {
+      this.logger.error(`Failed to clear revoked message ${waMessageId}`, String(err));
+    }
   }
 
   /** Fan an accepted inbound message out: `message:persisted` plugin hook, webhook, websocket emit. */
@@ -451,93 +624,113 @@ export class MessageProjector {
     void this.sessionRepository.update(id, { lastActiveAt: new Date() }).catch(() => undefined);
     const messageData = { ...message };
 
-    // Execute hook for message sent - plugins can modify or stop processing
-    void this.hookManager
+    const onFailure = (err: unknown): null => {
+      this.logger.error(`onMessageCreate handler failed for ${id}`, String(err));
+      return null;
+    };
+    // Execute hook for message sent - plugins can modify or stop processing. Like the inbound path,
+    // the hook chain runs concurrently and the commit waits its turn on the chat's queue.
+    const prepared = this.hookManager
       .execute('message:sent', messageData, {
         sessionId: id,
         source: 'Engine',
         accept: isMessagePayload,
       })
-      .then(async ({ data }) => {
-        const finalMessage = this.messageOrEngineCopy(id, 'message:sent', data, message);
-        // `continue: false` is not read here, for the same reason as the message:received path
-        // above: the send has already happened, so a plugin can stop the handler chain but cannot
-        // un-send it. Skipping the persist below dropped the operator's own outgoing message from
-        // history and from `message.sent` webhooks.
+      .then(({ data }) => this.messageOrEngineCopy(id, 'message:sent', data, message))
+      .catch(onFailure);
+    // The commit may wait behind a slow earlier message of the chat; a revoke, edit or ack of this
+    // send landing meanwhile is recorded here and applied once the row is written.
+    const inFlightKey = `${id}:${message.id}`;
+    const inFlight = this.trackInFlight(inFlightKey, messageData);
+    this.chatCommits.enqueue(this.chatCommitKey(id, message), async () => {
+      try {
+        const finalMessage = await prepared;
+        if (finalMessage) await this.commitOwnSendEcho(id, engine, finalMessage);
+      } catch (err) {
+        onFailure(err);
+      } finally {
+        this.untrackInFlight(inFlightKey, inFlight);
+      }
+    });
+  }
 
-        // Persist the outgoing message so local history reflects sends composed on a linked phone
-        // (message_create is the ONLY event those produce). It also fires for API-originated sends,
-        // which the REST send path persists itself — the UNIQUE(sessionId, waMessageId) index is
-        // the atomic dedup oracle between the two writers: the loser skips its insert, and
-        // persistSentState additionally drops its redundant PENDING row when the echo won. The
-        // webhook/WS dispatch below is identical whether the insert won, lost, or failed — the
-        // message.sent contract is unchanged.
-        const outgoing: IncomingMessage = finalMessage;
-        const metadata = buildMessageMetadata(outgoing, true);
+  /** Per-chat, in-order stage of {@link handleOwnSendEcho}: persist, then dispatch `message.sent`. */
+  private async commitOwnSendEcho(
+    id: string,
+    engine: IWhatsAppEngine,
+    finalMessage: InboundMessageData,
+  ): Promise<void> {
+    // `continue: false` is not read here, for the same reason as the message:received path
+    // above: the send has already happened, so a plugin can stop the handler chain but cannot
+    // un-send it. Skipping the persist below dropped the operator's own outgoing message from
+    // history and from `message.sent` webhooks.
 
-        // The ephemeral opt-out gates STORAGE only (mirrors onMessage); the live dispatch below
-        // is today's contract and stays.
-        const mayPersist =
-          resolveFeatureFlags(this.configService).storeEphemeralMessages ||
-          !(outgoing.ephemeralDuration && outgoing.ephemeralDuration > 0);
+    // Persist the outgoing message so local history reflects sends composed on a linked phone
+    // (message_create is the ONLY event those produce). It also fires for API-originated sends,
+    // which the REST send path persists itself; the UNIQUE(sessionId, waMessageId) index is
+    // the atomic dedup oracle between the two writers: the loser skips its insert, and
+    // persistSentState additionally drops its redundant PENDING row when the echo won. The
+    // webhook/WS dispatch below is identical whether the insert won, lost, or failed: the
+    // message.sent contract is unchanged.
+    const outgoing: IncomingMessage = finalMessage;
+    const metadata = buildMessageMetadata(outgoing, true);
 
-        if (mayPersist) {
-          const dbMessage = this.messageRepository.create({
-            sessionId: id,
-            waMessageId: storableWaMessageId(outgoing.id),
-            chatId: outgoing.chatId,
-            from: outgoing.from,
-            to: outgoing.to,
-            body: outgoing.body,
-            type: outgoing.type,
-            direction: MessageDirection.OUTGOING,
-            timestamp: outgoing.timestamp,
-            status: MessageStatus.SENT,
-            metadata,
-          });
-          // The hook chain above is async; a delete()/teardown can retire this engine while it
-          // awaits. Re-check liveness so a late continuation can't persist an orphan row
-          // (mirrors onMessage).
-          if (!this.engines.isLive(id, engine)) return;
-          let persisted = false;
-          try {
-            const result = await this.messageRepository.insert(dbMessage as unknown as QueryDeepPartialEntity<Message>);
-            Object.assign(dbMessage, result.identifiers[0] ?? {}, result.generatedMaps?.[0] ?? {});
-            persisted = true;
-          } catch (err) {
-            // Unique violation = the REST send path already persisted this API-originated send —
-            // the dedup oracle working as intended, not an error. Anything else is a real DB
-            // failure; fail open so a real send is never dropped on a transient DB fault.
-            if (!isUniqueViolation(err)) {
-              this.logger.error(`Failed to save outgoing message ${outgoing.id} to database`, String(err));
-            }
-          }
-          if (persisted) {
-            // Fire-and-forget, mirroring onMessage: plugin providers (search etc.) see phone-
-            // composed sends exactly like API sends.
-            void this.hookManager
-              .execute(
-                'message:persisted',
-                { sessionId: id, message: dbMessage },
-                { sessionId: id, source: 'SessionService' },
-              )
-              .catch(() => undefined);
+    // The ephemeral opt-out gates STORAGE only (mirrors onMessage); the live dispatch below
+    // is today's contract and stays.
+    const mayPersist =
+      resolveFeatureFlags(this.configService).storeEphemeralMessages ||
+      !(outgoing.ephemeralDuration && outgoing.ephemeralDuration > 0);
 
-            // Archive this send's media, mirroring onMessage. This is the ONLY path a phone-composed
-            // send takes, so the REST-side chokepoint would never see it. Opt-in twice over
-            // (CHAT_MEDIA_ARCHIVE_ENABLED + _OUTBOUND) and a no-op otherwise; archive() itself
-            // refuses a row that is already archived, so the REST writer racing us costs nothing.
-            if (this.configService?.get<boolean>('chatMedia.archiveOutbound', false) === true) {
-              void this.chatMediaArchive?.archive(dbMessage).catch(() => undefined);
-            }
-          }
+    if (mayPersist) {
+      const dbMessage = this.messageRepository.create({
+        sessionId: id,
+        waMessageId: storableWaMessageId(outgoing.id),
+        chatId: outgoing.chatId,
+        from: outgoing.from,
+        to: outgoing.to,
+        body: outgoing.body,
+        type: outgoing.type,
+        direction: MessageDirection.OUTGOING,
+        timestamp: outgoing.timestamp,
+        status: MessageStatus.SENT,
+        metadata,
+      });
+      // The hook chain above is async; a delete()/teardown can retire this engine while it
+      // awaits. Re-check liveness so a late continuation can't persist an orphan row
+      // (mirrors onMessage).
+      if (!this.engines.isLive(id, engine)) return;
+      // A unique violation means the REST send path already persisted this API-originated
+      // send: the dedup oracle working as intended, not an error. Any other failure (after the
+      // one transient retry) fails open, so a real send is never dropped on a DB fault.
+      const outcome = await this.insertWithRetry(id, engine, dbMessage, 'outgoing');
+      if (outcome.landed === 'stale') return;
+      // The first attempt may have committed before its error: that row still takes what arrived.
+      if (outcome.landed === 'dup' && outcome.retried) this.applyChangesMadeInFlight(id, outgoing.id);
+      if (outcome.landed === 'yes') {
+        this.applyChangesMadeInFlight(id, outgoing.id);
+        // Fire-and-forget, mirroring onMessage: plugin providers (search etc.) see phone-
+        // composed sends exactly like API sends.
+        void this.hookManager
+          .execute(
+            'message:persisted',
+            { sessionId: id, message: dbMessage },
+            { sessionId: id, source: 'SessionService' },
+          )
+          .catch(() => undefined);
+
+        // Archive this send's media, mirroring onMessage. This is the ONLY path a phone-composed
+        // send takes, so the REST-side chokepoint would never see it. Opt-in twice over
+        // (CHAT_MEDIA_ARCHIVE_ENABLED + _OUTBOUND) and a no-op otherwise; archive() itself
+        // refuses a row that is already archived, so the REST writer racing us costs nothing.
+        if (this.configService?.get<boolean>('chatMedia.archiveOutbound', false) === true) {
+          void this.chatMediaArchive?.archive(dbMessage).catch(() => undefined);
         }
+      }
+    }
 
-        void this.webhookService.dispatch(id, 'message.sent', finalMessage);
-        // Emit real-time event to WebSocket clients (as message.sent, not message.received)
-        this.eventsGateway.emitMessageSent(id, finalMessage);
-      })
-      .catch(err => this.logger.error(`onMessageCreate handler failed for ${id}`, String(err)));
+    void this.webhookService.dispatch(id, 'message.sent', finalMessage);
+    // Emit real-time event to WebSocket clients (as message.sent, not message.received)
+    this.eventsGateway.emitMessageSent(id, finalMessage);
   }
 
   /** Engine callback body, lifted out of initializeEngine so the wiring table stays readable. */
@@ -557,16 +750,13 @@ export class MessageProjector {
     // fire-and-forget writes race-safe at the DB level.
     const messageStatus = deliveryStatusToMessageStatus(status);
     if (messageStatus) {
-      // Scope by sessionId: waMessageId is unique per account/chat, not global — an ack on one
-      // session must never advance a same-id row in another session. The In() guard makes the
-      // UPDATE forward-only (a late/out-of-order ack can't downgrade) and idempotent on retry.
-      const advanceAck = (): Promise<number> =>
-        this.messageRepository
-          .update(
-            { sessionId: id, waMessageId: messageId, status: In(ackStatusTransitionFrom(messageStatus)) },
-            { status: messageStatus },
-          )
-          .then(result => result.affected ?? 0);
+      // A message not written yet (its commit waits behind an earlier one of the chat) keeps the
+      // furthest ack for when its row lands; the UPDATEs below would match nothing.
+      const inFlight = this.inboundInFlight.get(`${id}:${messageId}`);
+      if (inFlight && (!inFlight.ackStatus || ackStatusTransitionFrom(messageStatus).includes(inFlight.ackStatus))) {
+        inFlight.ackStatus = messageStatus;
+      }
+      const advanceAck = (): Promise<number> => this.advanceAck(id, messageId, messageStatus);
 
       const logNoop = (): void =>
         this.logger.debug(`Message ack ${messageId}: no status row advanced to ${messageStatus} (${status})`, {
@@ -629,6 +819,21 @@ export class MessageProjector {
     );
   }
 
+  /**
+   * Advance a stored message's delivery status, returning the rows changed. Scoped by sessionId:
+   * waMessageId is unique per account/chat, not global, so an ack on one session must never advance a
+   * same-id row in another session. The In() guard makes the UPDATE forward-only (a late/out-of-order
+   * ack can't downgrade) and idempotent on retry.
+   */
+  private advanceAck(id: string, messageId: string, messageStatus: MessageStatus): Promise<number> {
+    return this.messageRepository
+      .update(
+        { sessionId: id, waMessageId: messageId, status: In(ackStatusTransitionFrom(messageStatus)) },
+        { status: messageStatus },
+      )
+      .then(result => result.affected ?? 0);
+  }
+
   /** Engine callback body, lifted out of initializeEngine so the wiring table stays readable. */
   handleMessageRevoked(id: string, engine: IWhatsAppEngine, message: RevokedMessage): void {
     if (!this.engines.isLive(id, engine)) return;
@@ -638,21 +843,15 @@ export class MessageProjector {
       action: 'message_revoked',
     });
 
-    // Flag the stored message as revoked (best-effort; the message may not be in the
-    // DB). The dashboard renders the localized "message deleted" text, so no display
-    // string is persisted here.
+    // Clear the stored message (best-effort; the message may not be in the DB). The
+    // dashboard renders the localized "message deleted" text, so no display string is
+    // persisted here.
     //
     // Match on `revokedId` (the ORIGINAL deleted message's id) when present: on wwebjs
     // `message.id` is the revocation notification, which never matches a stored row.
     // `revokedId` falls back to `id` (Baileys, where the two are the same).
     const revokedWaMessageId = message.revokedId ?? message.id;
-    const inFlight = this.inboundInFlight.get(`${id}:${revokedWaMessageId}`);
-    if (inFlight) inFlight.revoked = true;
-    void this.messageRepository
-      .update({ sessionId: id, waMessageId: revokedWaMessageId }, { body: '', type: 'revoked' })
-      .catch(err => {
-        this.logger.error(`Failed to update revoked message: ${revokedWaMessageId}`, String(err));
-      });
+    void this.recordRevoke(id, revokedWaMessageId);
 
     // Notify consumers regardless of whether the row existed: webhook (message.revoked
     // is a declared event) + the real-time dashboard stream.
@@ -670,6 +869,9 @@ export class MessageProjector {
 
   /** Reaction apply, queued on the per-message mutation chain — see MessageMutationProjector. */
   applyReactionQueued(id: string, event: ReactionEvent): void {
+    // A message not written yet keeps the reaction for its row; the live event still goes out now.
+    const inFlight = event.messageId ? this.inboundInFlight.get(`${id}:${event.messageId}`) : undefined;
+    if (inFlight) (inFlight.reactions ??= {})[event.senderId] = event.reaction ?? '';
     this.mutationProjector.applyReactionQueued(id, event);
   }
 
@@ -687,6 +889,8 @@ export class MessageProjector {
 
   /** Stored-row update for a REST outbound edit, on the same mutation chain — see MessageMutationProjector. */
   recordOutboundMessageEdit(sessionId: string, messageId: string, body: string): Promise<void> {
+    const inFlight = this.inboundInFlight.get(`${sessionId}:${messageId}`);
+    if (inFlight) inFlight.editedBody = body;
     return this.mutationProjector.recordOutboundMessageEdit(sessionId, messageId, body);
   }
 

@@ -47,18 +47,31 @@ describe('WhatsAppWebJsPlugin.createEngine (opaque config)', () => {
     );
   });
 
-  it('falls back to safe defaults when context has no config', () => {
+  it('falls back to safe defaults when context has no config, leaving the flag list to the adapter', () => {
     const plugin = new WhatsAppWebJsPlugin();
 
     plugin.createEngine({ sessionId: 'sess-2' });
 
-    expect(WhatsAppWebJsAdapter).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: 'sess-2',
-        sessionDataPath: './data/sessions',
-        puppeteer: { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'], executablePath: undefined },
-      }),
-    );
+    const [config] = (WhatsAppWebJsAdapter as unknown as jest.Mock).mock.calls[0] as [
+      { sessionId: string; sessionDataPath: string; puppeteer: Record<string, unknown> },
+    ];
+    expect(config.sessionId).toBe('sess-2');
+    expect(config.sessionDataPath).toBe('./data/sessions');
+    expect(config.puppeteer.headless).toBe(true);
+    expect(config.puppeteer.args).toBeUndefined();
+  });
+
+  it('does not pin a flag list when a persisted puppeteer override carries no args', () => {
+    const plugin = new WhatsAppWebJsPlugin();
+    withContext(plugin, { puppeteer: { headless: false } });
+
+    plugin.createEngine({ sessionId: 'sess-4' });
+
+    const [config] = (WhatsAppWebJsAdapter as unknown as jest.Mock).mock.calls[0] as [
+      { puppeteer: Record<string, unknown> },
+    ];
+    expect(config.puppeteer.headless).toBe(false);
+    expect(config.puppeteer.args).toBeUndefined();
   });
 
   it('Uses the constructor-supplied engine config when onLoad never ran (enable-failure path)', () => {

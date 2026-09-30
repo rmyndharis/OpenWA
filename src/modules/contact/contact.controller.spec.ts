@@ -1,9 +1,11 @@
 import { ContactController } from './contact.controller';
 import { ContactService } from './contact.service';
+import { ChatScopeService } from '../auth/chat-scope.service';
+import type { ApiKey } from '../auth/entities/api-key.entity';
 
 describe('ContactController', () => {
   const service = {
-    getContacts: jest.fn(),
+    listContacts: jest.fn(),
     getProfilePictures: jest.fn(),
     getContactById: jest.fn(),
     getNumberId: jest.fn(),
@@ -15,20 +17,38 @@ describe('ContactController', () => {
     unblockContact: jest.fn(),
     getBlockedContacts: jest.fn(),
   };
-  const controller = new ContactController(service as unknown as ContactService);
+  const controller = new ContactController(service as unknown as ContactService, new ChatScopeService());
 
   beforeEach(() => jest.clearAllMocks());
 
-  it('findAll parses limit/offset query strings', async () => {
-    service.getContacts.mockResolvedValue([]);
-    await controller.findAll('s1', '5', '10');
-    expect(service.getContacts).toHaveBeenCalledWith('s1', { limit: 5, offset: 10 });
+  const contacts = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `${i}@c.us` }));
+
+  it('findAll applies limit/offset query strings', async () => {
+    service.listContacts.mockResolvedValue(contacts(50));
+    const page = (await controller.findAll('s1', '5', '10')) as { id: string }[];
+    expect(service.listContacts).toHaveBeenCalledWith('s1');
+    expect(page.map(c => c.id)).toEqual(['10@c.us', '11@c.us', '12@c.us', '13@c.us', '14@c.us']);
   });
 
-  it('findAll leaves paging undefined without query params', async () => {
-    service.getContacts.mockResolvedValue([]);
-    await controller.findAll('s1');
-    expect(service.getContacts).toHaveBeenCalledWith('s1', { limit: undefined, offset: undefined });
+  it('findAll caps an unpaged list at the default window', async () => {
+    service.listContacts.mockResolvedValue(contacts(1500));
+    await expect(controller.findAll('s1')).resolves.toHaveLength(1000);
+  });
+
+  it('findAll filters to a chat-restricted key before the window, matching either phone dialect', async () => {
+    // The disallowed contact comes first, so a page of 1 taken before filtering would hold nothing allowed.
+    service.listContacts.mockResolvedValue([
+      { id: '999@c.us' },
+      { id: '62811@s.whatsapp.net' },
+      { id: '62811@c.us' },
+      { id: '555000111@lid' },
+    ]);
+    const apiKey = { allowedChats: ['62811@c.us'] } as ApiKey;
+
+    const all = (await controller.findAll('s1', undefined, undefined, apiKey)) as { id: string }[];
+    expect(all.map(c => c.id)).toEqual(['62811@s.whatsapp.net', '62811@c.us']);
+    const first = (await controller.findAll('s1', '1', '0', apiKey)) as { id: string }[];
+    expect(first.map(c => c.id)).toEqual(['62811@s.whatsapp.net']);
   });
 
   it('getProfilePictures splits, trims and drops empty ids', async () => {

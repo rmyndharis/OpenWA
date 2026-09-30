@@ -3,9 +3,8 @@
 jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
 
 // Set BEFORE AppModule is imported: InstanceThrottlerGuard reads these in onModuleInit (once, at
-// boot), not per request. A low ip limit with the per-instance limit left at its default isolates
-// the tier under test: the instance bucket can never bind here, because every request below uses a
-// different (pluginId, instanceId) pair and therefore its own instance bucket.
+// boot), not per request. The per-instance limit is left at its default and never binds here: it is
+// charged only after signature verification, and every request below names an unknown instance.
 process.env.INGRESS_IP_LIMIT = '4';
 process.env.INGRESS_INSTANCE_LIMIT = '120';
 process.env.INGRESS_INSTANCE_TTL = '60000';
@@ -20,10 +19,9 @@ import { applyGlobalValidation } from './../src/config/app-validation';
 /**
  * The ingress route is `@Public` and carries `@SkipThrottle()` so the global per-IP tiers leave it
  * alone (their 100/min sits below the per-instance 120/min and would 429 a shared-egress provider
- * before the instance bound ever fired). That left the per-instance bucket as the only limiter, and
- * its key is built from the caller-supplied `:pluginId/:instanceId` path segments, so walking those
- * segments minted a fresh bucket per request: an unauthenticated client had no effective bound at
- * all. This proves the client-keyed tier now binds regardless of the path.
+ * before the instance bound ever fired). The per-instance bucket is charged only once a delivery's
+ * signature verifies, so the client-keyed tier of the ingress guard is the only bound on
+ * unauthenticated traffic. This proves it binds regardless of the path.
  *
  * The pairs below name no registered instance, so each request 404s at the handler. That is the
  * point: the guard runs BEFORE the handler, so a 404 still consumes budget, and an unknown-instance

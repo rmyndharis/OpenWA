@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DataSource } from 'typeorm';
 
@@ -107,5 +107,39 @@ describe('docs/05 documents the real column names', () => {
 
     expect(snakeCased).toEqual(['message_batches']);
     expect(readFileSync(DOC, 'utf8')).toContain('The exception is **`message_batches`**');
+  });
+
+  // The Migration Files tree drifted while nothing checked it; a migration missing from the
+  // document fails here, named.
+  it('lists every migration file under Migration Files', () => {
+    const markdown = readFileSync(DOC, 'utf8');
+    for (const dir of ['migrations', 'migrations-main']) {
+      const files = readdirSync(join(__dirname, dir)).filter(file => /^\d+-\w+\.ts$/.test(file));
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.filter(file => !markdown.includes(file))).toEqual([]);
+    }
+  });
+
+  // STORE_EPHEMERAL_MESSAGES=false is gated in the projector only; the message send routes write their
+  // own row without reading the flag. A product send writes none, so only its own-send echo could
+  // store it, and the projector gate drops that. Every sentence the document spends on the flag must
+  // say both, or an operator reads it as "nothing in a disappearing chat is kept" or "every API send is".
+  it('scopes the disappearing-chat opt-out to what the flag actually skips', () => {
+    const sendPath = ['message-send.service.ts', 'bulk-message.service.ts']
+      .map(file => readFileSync(join(__dirname, '..', 'modules', 'message', file), 'utf8'))
+      .join('\n');
+    expect(sendPath).not.toMatch(/ephemeral/i);
+    expect(sendPath).toMatch(/saveOutgoingMessage/);
+    const productSend = readFileSync(join(__dirname, '..', 'modules', 'catalog', 'catalog.service.ts'), 'utf8');
+    expect(productSend).not.toMatch(/saveOutgoingMessage|messageRepository/);
+
+    const mentions = readFileSync(DOC, 'utf8')
+      .split('\n')
+      .filter(line => line.includes('STORE_EPHEMERAL_MESSAGES') && !line.trimStart().startsWith('E['));
+    expect(mentions.length).toBeGreaterThanOrEqual(2);
+    for (const line of mentions) {
+      expect(line).toMatch(/through the API/);
+      expect(line).toMatch(/product send/);
+    }
   });
 });

@@ -14,6 +14,14 @@ export interface HttpTimeoutConfig {
   keepAliveTimeoutMs: number;
 }
 
+/**
+ * REQUEST_TIMEOUT_MS as configured, defaulting to Node's 300 s. Shared by the server config and the
+ * in-flight body budget, which paces declared bodies against the same timeout.
+ */
+export function resolveRequestTimeoutMs(raw: string | undefined): number {
+  return parseInt(raw || '300000', 10);
+}
+
 /** The values actually written, after any normalization. */
 export type HttpTimeoutReport = HttpTimeoutConfig;
 

@@ -54,6 +54,11 @@ export class HealthController {
 
   private readonly authFailureAuditLimiter: SlidingWindowLimiter;
 
+  // Bounds the key lookups one client can drive through this unthrottled route. Charged before the
+  // lookup and refunded when the key validates, so only failed presentations spend it: past the
+  // budget the probe still answers 200, without `version` and without touching the key table.
+  private readonly keyValidationLimiter = new SlidingWindowLimiter(30, 60_000);
+
   @Get()
   @ApiOperation({ summary: 'Basic health check' })
   @ApiResponse({ status: 200, description: 'Application is healthy', type: HealthCheckResponseDto })
@@ -80,19 +85,21 @@ export class HealthController {
     const xApiKey = req.headers['x-api-key'];
     const rawKey = (typeof xApiKey === 'string' && xApiKey) || bearerToken(req.headers['authorization']);
     if (!rawKey) return false;
+    const clientIp = resolveClientIp(req, this.configService.get<string[]>('security.trustedProxies') ?? []);
+    const subject = limiterKeyForIp(clientIp);
+    if (!this.keyValidationLimiter.allow(subject)) return false;
     try {
-      const clientIp = resolveClientIp(req, this.configService.get<string[]>('security.trustedProxies') ?? []);
       await this.authService.validateApiKey(rawKey, clientIp);
+      this.keyValidationLimiter.refund(subject);
       return true;
     } catch (err) {
       // A PRESENTED key that failed validation is a credential probe against an endpoint every
       // other key-validation surface audits (REST guard, WebSocket, MCP mount, Bull Board). This
       // route was the one blind spot: the failure only withheld the version, invisibly. Fire-and-
       // forget and rate-bounded per IP (constructor): audit logging must never fail the probe.
-      const failureIp = resolveClientIp(req, this.configService.get<string[]>('security.trustedProxies') ?? []);
-      if (this.authFailureAuditLimiter.allow(limiterKeyForIp(failureIp))) {
+      if (this.authFailureAuditLimiter.allow(subject)) {
         void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
-          ipAddress: failureIp,
+          ipAddress: clientIp,
           method: req.method,
           path: req.path,
           errorMessage: err instanceof Error ? err.message : String(err),

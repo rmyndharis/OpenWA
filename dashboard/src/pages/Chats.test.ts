@@ -793,6 +793,267 @@ test('a chat whose newest message has no text does not claim to have no messages
   assert.equal(row.querySelector('.no-message')?.textContent ?? null, null, 'the row reads "No messages yet"');
 });
 
+test('a message arriving the moment the chat list commits updates the listed row without a refetch', async () => {
+  const { screen, waitFor } = rtl;
+  resetFetchCalls();
+  // Deliver the frame from a MutationObserver callback, a microtask right after the commit that puts
+  // the Alice row on screen and before React flushes that commit's passive effects. A list the socket
+  // handler reads from a passive effect is still empty there, so the chat reads as unlisted and the
+  // refetch it fires replaces the row this frame just updated.
+  let delivered = false;
+  const observer = new MutationObserver(() => {
+    if (delivered || !screen.queryByText('Alice')) return;
+    delivered = true;
+    observer.disconnect();
+    const socket = lastSocket();
+    assert.ok(socket, 'expected the page to have opened a socket');
+    socket.receive('message', {
+      type: 'event',
+      timestamp: new Date(1_700_002_000_000).toISOString(),
+      payload: {
+        event: 'message.received',
+        sessionId: SESSION.id,
+        data: {
+          id: 'wamid.live.commit',
+          chatId: CHAT.id,
+          from: CHAT.id,
+          to: 'me',
+          body: 'right on the commit',
+          type: 'text',
+          fromMe: false,
+          timestamp: 1_700_001_800,
+        },
+      },
+    });
+  });
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  try {
+    renderChats();
+    await waitFor(() => assert.ok(screen.queryByLabelText('3 unread messages'), 'the arrival did not reach the row'));
+    await flush();
+    assert.ok(delivered, 'the frame was never delivered');
+    assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`), 1, 'a listed chat refetched the list');
+    assert.ok(screen.queryByLabelText('3 unread messages'), 'a refetch overwrote the live row');
+  } finally {
+    observer.disconnect();
+  }
+});
+
+test('a socket reconnect refetches the chat list so the sidebar shows what arrived during the gap', async () => {
+  const { screen, act } = rtl;
+  resetFetchCalls();
+  renderChats();
+  await screen.findByText('Alice');
+  const chatsPath = `/api/sessions/${SESSION.id}/chats`;
+  assert.equal(countFetchCalls('GET', chatsPath), 1);
+
+  // While the socket was down, Alice wrote again and a new chat started.
+  const DAVE: Chat = { ...CHAT_2, id: '15550005555@c.us', name: 'Dave', timestamp: 1_700_000_900 };
+  chatsResponder = () =>
+    Promise.resolve(
+      jsonResponse([{ ...CHAT, unreadCount: 4, lastMessage: 'sent during the gap', timestamp: 1_700_000_800 }, DAVE]),
+    );
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  act(() => socket.receive('disconnect', 'transport close'));
+  act(() => socket.receive('connect'));
+
+  await screen.findByText('Dave');
+  await screen.findByText('sent during the gap');
+  assert.ok(screen.queryByLabelText('4 unread messages'), 'the unread count missed during the gap is not shown');
+  assert.equal(countFetchCalls('GET', chatsPath), 2);
+});
+
+test('a socket reconnect keeps the open chat read instead of badging it with the gap count', async () => {
+  const { screen, fireEvent, within, act, waitFor } = rtl;
+  const { container } = renderChats();
+  await screen.findByText('Main (15551234567)');
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages'), 'opening the chat kept its badge'));
+  // Past the mark-as-read quiet window, so the open's own call is out before counting.
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  resetFetchCalls();
+
+  // Alice wrote into the open chat while the socket was down; the snapshot still counts it unread.
+  chatsResponder = () =>
+    Promise.resolve(jsonResponse([{ ...CHAT, unreadCount: 4, lastMessage: 'sent during the gap' }, CHAT_2]));
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  act(() => socket.receive('disconnect', 'transport close'));
+  act(() => socket.receive('connect'));
+
+  await screen.findByText('sent during the gap');
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  assert.ok(!screen.queryByLabelText('4 unread messages'), 'the open chat was badged with the gap count');
+  assert.ok(findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`), 'the gap messages were not marked read');
+});
+
+test('a reconnect whose refetch fails while the engine starts sends no mark-as-read', async () => {
+  const { screen, fireEvent, within, act } = rtl;
+  const { container } = renderChats();
+  await screen.findByText('Main (15551234567)');
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  resetFetchCalls();
+
+  // After a backend restart the socket is back before the engine: the session's routes answer 409.
+  chatsResponder = () =>
+    Promise.resolve(jsonResponse({ statusCode: 409, message: 'Engine not ready', code: 'ENGINE_NOT_READY' }, 409));
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  act(() => socket.receive('disconnect', 'transport close'));
+  act(() => socket.receive('connect'));
+
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`), 1);
+  assert.ok(
+    !findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`),
+    'a mark-as-read went out while the engine was starting',
+  );
+});
+
+test('a reconnect refetch that settles after the open chat was left keeps its unread count', async () => {
+  const { screen, fireEvent, within, act, waitFor } = rtl;
+  const { container } = renderChats();
+  await screen.findByText('Main (15551234567)');
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  resetFetchCalls();
+
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  chatsResponder = () =>
+    gate.then(() => jsonResponse([{ ...CHAT, unreadCount: 4, lastMessage: 'sent after leaving' }, CHAT_2]));
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  act(() => socket.receive('disconnect', 'transport close'));
+  act(() => socket.receive('connect'));
+  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`), 1));
+
+  // The user moves on to Carol before the refetch lands; Alice's new message was never seen.
+  fireEvent.click(await screen.findByText('Carol'));
+  release();
+  await screen.findByText('sent after leaving');
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  assert.ok(screen.queryByLabelText('4 unread messages'), 'the chat the user left lost its unread count');
+  assert.ok(
+    !fetchCalls.some(
+      c =>
+        c.method === 'POST' &&
+        c.path === `/api/sessions/${SESSION.id}/chats/read` &&
+        (c.body as { chatId?: string } | undefined)?.chatId === CHAT.id,
+    ),
+    'the chat the user left was marked read',
+  );
+});
+
+test('a reconnect refetch overtaken by a newer list still marks the open chat read', async () => {
+  const { screen, fireEvent, within, act, waitFor } = rtl;
+  const { container } = renderChats();
+  await screen.findByText('Main (15551234567)');
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  resetFetchCalls();
+
+  // The reconnect refetch stays out while a live frame for an unlisted chat fires a second one, which
+  // lands first. Both snapshots count Alice's gap messages, although her chat is open.
+  const DAVE: Chat = { ...CHAT_2, id: '15550005555@c.us', name: 'Dave', timestamp: 1_700_000_900 };
+  const snapshot = [{ ...CHAT, unreadCount: 4, lastMessage: 'sent during the gap' }, CHAT_2, DAVE];
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>(resolve => {
+    releaseFirst = resolve;
+  });
+  let served = 0;
+  chatsResponder = () =>
+    ++served === 1 ? firstGate.then(() => jsonResponse(snapshot)) : Promise.resolve(jsonResponse(snapshot));
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  act(() => socket.receive('disconnect', 'transport close'));
+  act(() => socket.receive('connect'));
+  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`), 1));
+
+  act(() =>
+    socket.receive('message', {
+      type: 'event',
+      timestamp: new Date(1_700_002_000_000).toISOString(),
+      payload: {
+        event: 'message.received',
+        sessionId: SESSION.id,
+        data: {
+          id: 'wamid.live.dave',
+          chatId: DAVE.id,
+          from: DAVE.id,
+          to: 'me',
+          body: 'dave says hi',
+          type: 'text',
+          fromMe: false,
+          timestamp: 1_700_001_900,
+        },
+      },
+    }),
+  );
+  await screen.findByText('sent during the gap');
+
+  releaseFirst();
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  assert.ok(!screen.queryByLabelText('4 unread messages'), 'the open chat was badged with the gap count');
+  assert.ok(
+    fetchCalls.some(
+      c =>
+        c.method === 'POST' &&
+        c.path === `/api/sessions/${SESSION.id}/chats/read` &&
+        (c.body as { chatId?: string } | undefined)?.chatId === CHAT.id,
+    ),
+    'the gap messages in the open chat were not marked read',
+  );
+});
+
+test("a reconnect refetch that settles after a session switch leaves the new session's unread badge", async () => {
+  const { screen, fireEvent, within, act, waitFor } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await screen.findByText('Main (15551234567)');
+    fireEvent.click(await screen.findByText('Alice'));
+    await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+
+    // Session 1's reconnect refetch stays out; session 2 lists Alice too (a contact both accounts
+    // share), unread there, and its list lands first.
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>(resolve => {
+      releaseFirst = resolve;
+    });
+    chatsResponder = sessionId =>
+      sessionId === SESSION.id
+        ? firstGate.then(() => jsonResponse([CHAT, CHAT_2]))
+        : Promise.resolve(jsonResponse([{ ...CHAT, unreadCount: 3, lastMessage: 'alice on two' }, CHAT_2]));
+    const socket = lastSocket();
+    assert.ok(socket, 'expected the page to have opened a socket');
+    act(() => socket.receive('disconnect', 'transport close'));
+    act(() => socket.receive('connect'));
+    await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`) >= 2, true));
+
+    fireEvent.change(container.querySelector('select.session-selector') as HTMLSelectElement, {
+      target: { value: SESSION_2.id },
+    });
+    await screen.findByText('alice on two');
+    assert.ok(screen.queryByLabelText('3 unread messages'), "session 2's unread count is not shown");
+
+    releaseFirst();
+    await flush();
+    await flush();
+    assert.ok(screen.queryByLabelText('3 unread messages'), "session 1's refetch cleared session 2's unread badge");
+  } finally {
+    twoSessions = false;
+  }
+});
+
 test('a read-only key opening a chat sends no mark-as-read', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   resetFetchCalls();

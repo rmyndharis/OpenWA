@@ -3,6 +3,7 @@ import { type EngineEventCallbacks, type IncomingMessage } from '../interfaces/w
 import { type createLogger } from '../../common/services/logger.service';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { type WhatsAppWebJsConfig } from './whatsapp-web-js.adapter';
+import { toCapturedPageError } from './wwebjs-lifecycle';
 
 /**
  * Shared host surface for the delegates extracted from WhatsAppWebJsAdapter (./wwebjs-groups,
@@ -49,7 +50,8 @@ export async function withPage<T>(host: WwebjsEngineHost, context: string, op: (
 
 /**
  * The NON-IDEMPOTENT counterpart of {@link withPage}: report a dead page as the same early death
- * signal, then rethrow the error untouched so the caller's status is unchanged.
+ * signal, then rethrow the error with the caller's status unchanged (a failure WhatsApp Web threw in
+ * the page keeps its 500 and only gains its reason, see toCapturedPageError).
  *
  * whatsapp-web.js can throw AFTER the request is already on the wire (see `sendResolved` in
  * ./wwebjs-messaging, which reports and rethrows for exactly this reason), so a transport failure
@@ -58,14 +60,25 @@ export async function withPage<T>(host: WwebjsEngineHost, context: string, op: (
  * it, so answering it would have a retrying caller publish the status twice.
  *
  * ./baileys-channels leaves `createChannel` unbounded on the same reasoning, and the message sends
- * keep their opaque `500`. Use {@link withPage} for reads and for operations that converge when
- * repeated, including DELETE.
+ * keep their `500` rather than a replayable `503`. Use {@link withPage} for reads and for
+ * operations that converge when repeated, including DELETE.
  */
 export async function reportPageDeath<T>(host: WwebjsEngineHost, context: string, op: () => Promise<T>): Promise<T> {
   try {
     return await op();
   } catch (error) {
     host.reportIfPageTransportError(error, context);
-    throw error;
+    // A status post runs the same patched Client.sendMessage as a message send, so a failure WhatsApp
+    // Web threw in the page reaches the caller with its reason. A no-op for every other error.
+    const mapped = toCapturedPageError(error);
+    if (mapped !== error) {
+      // The mapped error is an HttpException, which Nest does not log, and the status path logs
+      // nothing of its own: this is the one line that keeps the full in-page summary.
+      host.logger.warn(`WhatsApp Web threw during ${context}`, {
+        sessionId: host.config.sessionId,
+        cause: (error as Error).message,
+      });
+    }
+    throw mapped;
   }
 }

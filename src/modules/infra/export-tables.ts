@@ -161,11 +161,23 @@ export interface ExportTable<K extends keyof MigrationTables = keyof MigrationTa
   optional?: boolean;
   /** In-place row mutation applied right after the read (redaction, artifact stripping). */
   afterRead?: (rows: MigrationTables[K]) => void;
-  /** Spends the export's shared inline-media budget on this table's payloads. */
+  /**
+   * Spends the export's shared inline-media budget on this table's payloads. Such a table is never
+   * read whole: the export reads `id`, `recencyColumn` and the stored size of `payloadColumn` for
+   * every row, then the full rows in chunks, newest-first, stripping each chunk before reading the next.
+   */
   inlineMedia?: {
     /** Which arm of `omittedInlineMedia` reports this table's dropped payloads. */
     bucket: 'messages' | 'messageBatches';
-    /** Recency key: the budget is spent newest-first, so the most recent media survives. */
+    /** Column `newestFirst` reads. */
+    recencyColumn: keyof MigrationTables[K][number] & string;
+    /** Column holding the inline payloads; its stored size bounds each chunk of full rows. */
+    payloadColumn: keyof MigrationTables[K][number] & string;
+    /**
+     * Recency key: the budget is spent newest-first, so the most recent media survives. It is called
+     * on the key rows, which hold only `id`, `recencyColumn` and the payload size, so it must read
+     * nothing but `recencyColumn`.
+     */
     newestFirst: (row: MigrationTables[K][number]) => number;
     /** Drops the row's inline payload in place when it does not fit the budget. */
     strip: (row: MigrationTables[K][number], exceedsBudget: (encodedBytes: number) => boolean) => void;
@@ -182,6 +194,8 @@ export type AnyExportTable = Omit<ExportTable, 'afterRead' | 'inlineMedia'> & {
   afterRead?: (rows: never[]) => void;
   inlineMedia?: {
     bucket: 'messages' | 'messageBatches';
+    recencyColumn: string;
+    payloadColumn: string;
     newestFirst: (row: never) => number;
     strip: (row: never, exceedsBudget: (encodedBytes: number) => boolean) => void;
   };
@@ -214,6 +228,8 @@ export const EXPORT_TABLES: AnyExportTable[] = [
     afterRead: stripBodyTs,
     inlineMedia: {
       bucket: 'messages',
+      recencyColumn: 'timestamp',
+      payloadColumn: 'metadata',
       newestFirst: (row: MessageRow) => Number(row.timestamp),
       strip: stripInlineMediaPayload,
     },
@@ -224,6 +240,8 @@ export const EXPORT_TABLES: AnyExportTable[] = [
     optional: true,
     inlineMedia: {
       bucket: 'messageBatches',
+      recencyColumn: 'created_at',
+      payloadColumn: 'messages',
       newestFirst: (row: MessageBatchRow) => Date.parse(row.created_at),
       strip: stripBatchInlineMedia,
     },

@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { auditUnavailable, collectAdvisories, evaluate } from './check-audit.mjs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { auditUnavailable, collectAdvisories, evaluate, unavailableOutcome } from './check-audit.mjs';
 
 /**
  * The report shape is taken from a real `npm audit --json` run, not invented: one advisory
@@ -126,3 +131,66 @@ test('a clean or vulnerable report is not audit-unavailable', () => {
   assert.equal(auditUnavailable({ vulnerabilities: {} }), false);
   assert.equal(auditUnavailable(puppeteerReport), false);
 });
+
+// PR CI keeps the skip so an npm outage does not block every merge, but it must show on the run as a
+// warning annotation rather than a plain log line inside a green job.
+test('an unavailable audit skips with exit 0 outside a required path', () => {
+  const plain = unavailableOutcome('down', {});
+  assert.equal(plain.exitCode, 0);
+  assert.equal(
+    plain.lines.some(line => line.startsWith('::warning')),
+    false,
+  );
+  const actions = unavailableOutcome('down', { GITHUB_ACTIONS: 'true' });
+  assert.equal(actions.exitCode, 0);
+  assert.match(actions.lines[0], /^::warning title=check:audit skipped::.*down/);
+});
+
+// The release and the weekly scan set CHECK_AUDIT_REQUIRED=1: publishing, or reporting a week clean,
+// with no advisory checked at all is not a skip they may take.
+test('an unavailable audit fails when the path requires it', () => {
+  const required = unavailableOutcome('down', { CHECK_AUDIT_REQUIRED: '1', GITHUB_ACTIONS: 'true' });
+  assert.equal(required.exitCode, 1);
+  assert.match(required.lines.join('\n'), /required on this path/);
+  assert.match(required.lines[0], /^::error title=check:audit could not run::/);
+  assert.equal(unavailableOutcome('down', { CHECK_AUDIT_REQUIRED: '0' }).exitCode, 0);
+});
+
+test('the annotation stays on one line when npm reports a multi-line summary', () => {
+  const [annotation] = unavailableOutcome('100% down\nretry later', { GITHUB_ACTIONS: 'true' }).lines;
+  assert.equal(annotation.includes('\n'), false);
+  assert.match(annotation, /100%25 down%0Aretry later/);
+});
+
+// End to end through the real entrypoint, with `npm` replaced by a shim that answers like a down
+// audit endpoint, so the exit code the workflow sees is the one asserted.
+test(
+  'the script exits by CHECK_AUDIT_REQUIRED when npm audit cannot answer',
+  { skip: process.platform === 'win32' },
+  () => {
+    const bin = mkdtempSync(join(tmpdir(), 'check-audit-'));
+    try {
+      writeFileSync(join(bin, 'npm'), '#!/bin/sh\necho \'{"error":{"summary":"endpoint down"}}\'\nexit 1\n');
+      chmodSync(join(bin, 'npm'), 0o755);
+      const script = fileURLToPath(new URL('./check-audit.mjs', import.meta.url));
+      const run = extra =>
+        spawnSync(process.execPath, [script], {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            GITHUB_ACTIONS: '',
+            CHECK_AUDIT_REQUIRED: '',
+            ...extra,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
+          },
+        });
+      const skipped = run({});
+      assert.equal(skipped.status, 0, skipped.stderr);
+      assert.match(skipped.stdout, /check:audit SKIPPED/);
+      const required = run({ CHECK_AUDIT_REQUIRED: '1' });
+      assert.equal(required.status, 1);
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  },
+);

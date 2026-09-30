@@ -451,6 +451,7 @@
     "selectSession": "Seleccionar sesión...",
     "session": "Sesión",
     "events": "Eventos",
+    "noEvents": "Selecciona al menos un evento.",
     "available": "Eventos disponibles",
     "saveChanges": "Guardar cambios",
     "filters": {
@@ -544,6 +545,33 @@
       "call.missed": "Cuando una llamada no se contesta",
       "status.received": "Cuando un contacto publica un estado",
       "all": "Todos los eventos"
+    },
+    "auth": {
+      "title": "Autenticación de entrega",
+      "hint": "Opcional. Los valores guardados no se vuelven a mostrar después de guardar.",
+      "editHint": "El secreto y los encabezados guardados nunca se muestran. Deja esta sección sin cambios para conservarlos.",
+      "secret": "Secreto de firma",
+      "secretHint": "De 16 a 255 caracteres. Cada entrega lleva una firma HMAC-SHA256 en el encabezado X-OpenWA-Signature.",
+      "secretKeepPlaceholder": "Déjalo vacío para conservar el secreto actual",
+      "generateSecret": "Generar",
+      "copySecret": "Copiar",
+      "secretCopied": "Secreto de firma copiado",
+      "removeSecret": "Dejar de firmar las entregas (eliminar el secreto)",
+      "headers": "Encabezados personalizados",
+      "headerName": "Nombre del encabezado",
+      "headerValue": "Valor del encabezado",
+      "addHeader": "Añadir encabezado",
+      "removeHeader": "Quitar encabezado",
+      "replaceHeaders": "Reemplazar los encabezados personalizados",
+      "replaceHint": "Estas filas reemplazan todos los encabezados guardados. Sin filas, se eliminan los encabezados guardados.",
+      "errors": {
+        "headerName": "Los nombres de encabezado solo pueden contener letras, dígitos y guiones.",
+        "headerValue": "Los valores de encabezado tienen un máximo de 1024 caracteres, sin caracteres de control ni caracteres fuera de Latin-1.",
+        "headerReserved": "Content-Type, User-Agent, X-OpenWA-* y los encabezados de conexión los establece la pasarela y no se pueden usar.",
+        "headerDuplicate": "Cada nombre de encabezado solo puede usarse una vez.",
+        "tooMany": "Se permiten como máximo 50 encabezados personalizados.",
+        "secretLength": "El secreto de firma debe tener entre 16 y 255 caracteres."
+      }
     }
   },
   "apiKeys": {
@@ -554,6 +582,7 @@
     "createdTitle": "Clave API creada",
     "createdHint": "Copia esta clave ahora. No podrás verla de nuevo.",
     "namePlaceholder": "ej., Clave de producción",
+    "nameTooShort": "Usa al menos 3 caracteres.",
     "rolesTitle": "Referencia de roles",
     "roles": {
       "admin": "Administrador",
@@ -572,11 +601,13 @@
       "status": "Estado",
       "lastUsed": "Último uso",
       "actions": "Acciones",
-      "sessions": "Sesiones"
+      "sessions": "Sesiones",
+      "restrictions": "Restricciones"
     },
     "statuses": {
       "active": "Activa",
-      "revoked": "Revocada"
+      "revoked": "Revocada",
+      "expired": "Caducada"
     },
     "empty": {
       "title": "No hay claves API creadas",
@@ -597,7 +628,7 @@
       "copy": "Copiar",
       "revoke": "Revocar",
       "delete": "Eliminar",
-      "editSessions": "Editar sesiones"
+      "edit": "Editar acceso"
     },
     "sessions": {
       "label": "Acceso a sesiones",
@@ -605,10 +636,36 @@
       "all": "Todas las sesiones",
       "empty": "Todavía no hay sesiones. Esta clave podrá acceder a todas cuando existan.",
       "restricted": "{{count}} seleccionadas",
-      "editTitle": "Editar acceso a sesiones",
       "save": "Guardar",
       "choose": "Elegir sesiones",
       "leaveAll": "Dejar para todas las sesiones"
+    },
+    "edit": {
+      "title": "Editar acceso de la clave",
+      "signedIn": "Este panel ha iniciado sesión con esta clave. Cambiar su rol, direcciones IP, chats o caducidad puede cerrar tu sesión."
+    },
+    "restrictions": {
+      "none": "Ninguna",
+      "ips": "IP: {{count}}",
+      "chats": "Chats: {{count}}",
+      "expires": "Caduca el {{date}}",
+      "expired": "Caducó el {{date}}"
+    },
+    "ips": {
+      "label": "Direcciones IP permitidas (opcional)",
+      "hint": "Una dirección IP o un rango CIDR por línea. Déjalo vacío para aceptar cualquier dirección.",
+      "invalid": "No es una dirección IPv4 ni un rango CIDR: {{value}}"
+    },
+    "chats": {
+      "label": "Acceso a chats (opcional)",
+      "hint": "Un chat por línea: un ID de grupo que termina en @g.us, un ID de contacto que termina en @c.us o @lid, o un número de teléfono. Déjalo vacío para todos los chats. Una clave restringida a chats solo puede usar las rutas abiertas a ese tipo de clave; el WebSocket de eventos y MCP la rechazan.",
+      "invalid": "No es un ID de chat ni un número de teléfono: {{value}}"
+    },
+    "expiry": {
+      "label": "Caduca el (opcional)",
+      "hint": "En la zona horaria de este navegador. Déjalo vacío para una clave que nunca caduca.",
+      "clear": "Quitar caducidad",
+      "invalid": "Introduce una fecha y hora completas, no posteriores al año 9999, o vacía el campo para una clave que nunca caduca."
     }
   },
   "logs": {
@@ -908,6 +965,7 @@
       "dontClose": "Por favor, no cierres esta ventana",
       "successMsg": "¡El servidor volvió a estar en línea! La página se recargará automáticamente.",
       "errorMsg": "El servidor no respondió tras 30 segundos. Revisa los logs de Docker y reinicia manualmente.",
+      "outcomeUnknown": "El proxy devolvió un error antes de que el servidor respondiera, así que no se sabe si el reinicio está en curso. Recarga la página en un minuto para comprobarlo.",
       "reload": "Recargar página"
     },
     "toasts": {
@@ -921,7 +979,7 @@
       "storageWarning": "Los archivos multimedia existentes no se trasladan automáticamente al nuevo backend de almacenamiento; permanecerán en la ubicación anterior.",
       "downloadBackup": "Descargar copia de seguridad primero",
       "backupTitle": "Copia de seguridad y restauración de datos",
-      "backupHint": "Exporta todos los datos como JSON antes de cambiar de base de datos y luego impórtalos tras el cambio. La copia de seguridad contiene secretos de webhook y credenciales de proxy en texto plano: guárdala de forma segura y elimínala después de restaurarla.",
+      "backupHint": "Exporta todos los datos como JSON antes de cambiar de base de datos y luego impórtalos tras el cambio. Los secretos de firma de webhook, los encabezados personalizados de webhook y las credenciales de proxy no se incluyen; vuelve a introducirlos después de restaurar. Los secretos y la configuración de las instancias de integración se incluyen en texto plano, así que guarda el archivo de forma segura y elimínalo después de restaurarlo.",
       "export": "Exportar datos",
       "import": "Importar datos",
       "exportFailed": "No se pudieron exportar los datos",

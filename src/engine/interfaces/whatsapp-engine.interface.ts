@@ -114,7 +114,12 @@ export interface IncomingMessage {
    *  in the raw payload. 0 or undefined = no disappearing timer.
    *  Known values: 86400 (24h), 604800 (7d), 7776000 (90d). */
   ephemeralDuration?: number;
-  /** For group messages, the WID of the participant who actually sent it (`from` is the group JID there). */
+  /**
+   * For group, status and broadcast-list messages, the WID of the sender, where `from` is the group or
+   * `status@broadcast`. A broadcast-list message the account received is filed under the sender's own
+   * chat on Baileys, as WhatsApp lists it, so there `chatId` and `from` name the sender and `author`
+   * repeats it.
+   */
   author?: string;
   /** WIDs @mentioned in the message (empty/absent when none). Surfaced for command targeting. */
   mentionedIds?: string[];
@@ -822,10 +827,13 @@ export interface EngineEventCallbacks {
    * the credentials are still good. Purely informational, so a consumer must not tear anything down on
    * it; the engine keeps owning the retry.
    *
-   * `attempt` is the 1-based number of the attempt being scheduled, and it resets once the connection
-   * is back, a QR is scanned or a QR window runs out (or after a long enough healthy stretch), so
-   * attempt 1 always opens a fresh episode. The close that ends an unscanned QR window is not a reconnect
-   * and is never reported; any other close while a QR waits is.
+   * `attempt` is the 1-based number of the attempt being scheduled. An engine may carry it across a
+   * short-lived connection, so a link that drops right after opening keeps climbing the backoff; it
+   * resets on a scan, when a QR window runs out, or once no drop has occurred for the engine's
+   * stability window. An episode can therefore start at attempt > 1 after a brief READY, so a
+   * consumer should treat the first attempt after a READY, not only attempt 1, as a new episode.
+   * The close that ends an unscanned QR window is not a reconnect and is never reported; any other
+   * close while a QR waits is.
    * `nextDelayMs` is how long the engine waits before making it. Together they are what a consumer
    * needs to tell a one-second blip from a session that has been down for an hour, which the status
    * alone cannot: the engine reports INITIALIZING for the whole episode, exactly as it does for a
@@ -1130,9 +1138,11 @@ export interface ContactCapability {
   getNumberId(number: string): Promise<string | null>;
 
   /**
-   * Best-effort resolution of a contact id to a phone number (MSISDN digits), or `null` when the
-   * engine cannot map it (e.g. a privacy `@lid` the account has never seen). The contact id is the
-   * engine's native scheme; the adapter decides how to resolve it.
+   * Best-effort resolution of a contact id to a phone number (MSISDN digits). `null` is a definitive
+   * "no phone for this id"; a lookup that could not decide (a failed page read, or a lid no cache,
+   * table or key store maps) rejects instead, so a caller that stores the answer never overwrites a
+   * known mapping with a null. The contact id is the engine's native scheme; the adapter decides how
+   * to resolve it.
    */
   resolveContactPhone(contactId: string): Promise<string | null>;
 

@@ -7,8 +7,8 @@ services:
     image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: openwa-docker-proxy
     restart: unless-stopped
-    # Only on the isolated internal network — reachable solely by openwa-api, NOT the
-    # dashboard or any other peer. `internal: true` also denies the proxy
+    # Only on the isolated internal network, reachable solely by openwa-api (including any
+    # plugin loaded into it), NOT the dashboard or any other peer. `internal: true` also denies the proxy
     # outbound access; it only needs the locally-mounted docker socket.
     networks:
       - internal-docker
@@ -72,7 +72,7 @@ services:
     cap_drop:
       - ALL
     cap_add:
-      - CHOWN # entrypoint: chown -R openwa /app/data on the named volume
+      - CHOWN # entrypoint: chown openwa /app/data on the named volume
       - DAC_OVERRIDE # entrypoint: chown across pre-existing files
       - FOWNER
       - SETGID # gosu: drop to the openwa group
@@ -194,6 +194,7 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY:-}
       - S3_REGION=${S3_REGION:-}
       - S3_BUCKET=${S3_BUCKET:-}
+      - S3_KEY_PREFIX=${S3_KEY_PREFIX:-}
       # Chat-media archiving (opt-in). Forwarded explicitly: this file has no env_file, so a
       # variable absent from this list simply never reaches the container and the feature stays off
       # no matter what the operator's .env says.
@@ -218,6 +219,7 @@ services:
       - MEDIA_DOWNLOAD_MAX_BYTES=${MEDIA_DOWNLOAD_MAX_BYTES:-}
       - MEDIA_DOWNLOAD_TIMEOUT_MS=${MEDIA_DOWNLOAD_TIMEOUT_MS:-}
       - INBOUND_MEDIA_CONCURRENCY=${INBOUND_MEDIA_CONCURRENCY:-}
+      - INBOUND_MEDIA_GLOBAL_CONCURRENCY=${INBOUND_MEDIA_GLOBAL_CONCURRENCY:-}
       - SESSION_PROXY_URL_FETCH=${SESSION_PROXY_URL_FETCH:-}
       # Server-side media conversion (opt-in). The image ships ffmpeg, but without these forwards
       # the feature could not be switched on from .env at all.
@@ -303,6 +305,7 @@ services:
       - WEBHOOK_MAX_PER_SESSION=${WEBHOOK_MAX_PER_SESSION:-}
       - WEBHOOK_FAILURE_RETENTION_DAYS=${WEBHOOK_FAILURE_RETENTION_DAYS:-}
       - WEBHOOK_WORKER_CONCURRENCY=${WEBHOOK_WORKER_CONCURRENCY:-}
+      - WEBHOOK_DEGRADED_SESSION_CONCURRENCY=${WEBHOOK_DEGRADED_SESSION_CONCURRENCY:-}
       # Integration Fabric ingress: per-instance fairness, retries, retention, reconciler, workers.
       - INGRESS_INSTANCE_LIMIT=${INGRESS_INSTANCE_LIMIT:-}
       - INGRESS_INSTANCE_TTL=${INGRESS_INSTANCE_TTL:-}
@@ -337,6 +340,8 @@ services:
       - REDIS_USERNAME=${REDIS_USERNAME:-}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_CONNECT_TIMEOUT_MS=${REDIS_CONNECT_TIMEOUT_MS:-}
+      - REDIS_TLS=${REDIS_TLS:-}
+      - REDIS_CACHE_DB=${REDIS_CACHE_DB:-}
       # Engine / session tuning.
       - MAX_CONCURRENT_SESSIONS=${MAX_CONCURRENT_SESSIONS:-}
       - BAILEYS_AUTH_DIR=${BAILEYS_AUTH_DIR:-}
@@ -378,6 +383,7 @@ services:
       - UPDATE_CHECK_ENABLED=${UPDATE_CHECK_ENABLED:-}
       # Misc application tuning.
       - AUDIT_RETENTION_DAYS=${AUDIT_RETENTION_DAYS:-}
+      - MESSAGE_RETENTION_DAYS=${MESSAGE_RETENTION_DAYS:-}
       - BULK_MAX_CONCURRENT_BATCHES=${BULK_MAX_CONCURRENT_BATCHES:-}
       - TEMPLATE_RENDER_MAX_CHARS=${TEMPLATE_RENDER_MAX_CHARS:-}
       - STATS_CACHE_TTL_MS=${STATS_CACHE_TTL_MS:-}
@@ -404,13 +410,7 @@ services:
         condition: service_healthy
         required: false
     healthcheck:
-      test:
-        [
-          'CMD',
-          'node',
-          '-e',
-          "require('http').get('http://localhost:2785/api/health/ready', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
-        ]
+      test: ['CMD', 'curl', '-f', 'http://localhost:2785/api/health/ready']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -483,9 +483,12 @@ services:
       - 'com.openwa.service=cache'
       - 'com.openwa.builtin=true'
 
-  # ===== OPTIONAL: Built-in MinIO (S3-compatible) =====
+  # ===== OPTIONAL: Built-in S3-compatible storage (pgsty/silo, a maintained MinIO fork) =====
+  # Pinned by release tag and digest. Same server command, MINIO_ROOT_* variables, /data layout and
+  # health route as MinIO, so an existing openwa_minio-data volume is used as-is. The service,
+  # container and host name stay `minio`.
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46
     container_name: openwa-minio
     profiles: ['minio', 'full']
     restart: unless-stopped
@@ -495,12 +498,15 @@ services:
       - 'no-new-privileges:true'
     command: server /data --console-address ":9001"
     environment:
-      # M16: no committed default creds. MinIO refuses to start with empty root creds
-      # (clear fail-fast); the app's production boot guard rejects empty/placeholder secrets.
+      # No committed default credentials. With both left empty the server would start on its own
+      # built-in default pair, so the password falls back to a placeholder shorter than the
+      # 8-character minimum: every combination without a real secret stops at startup with a fatal
+      # credential error (with a user set and no secret it reads "Invalid credentials"). The user
+      # default stays empty on purpose: a non-empty placeholder would be a valid access key.
       # Canonical names, matching what the app/dashboard read (legacy S3_ACCESS_KEY/S3_SECRET_KEY
       # still accepted as a fallback so older .env files keep working).
       MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-}}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-}}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-unset}}
     volumes:
       - minio-data:/data
     ports:
@@ -539,6 +545,7 @@ networks:
     name: openwa-network
   # Isolated network for the Docker socket proxy. `internal: true` means no external
   # connectivity; only openwa-api joins it, so nothing else can reach docker-proxy:2375.
+  # Plugins run inside openwa-api, so a loaded plugin can reach it too (see SECURITY.md).
   internal-docker:
     name: openwa-internal-docker
     internal: true

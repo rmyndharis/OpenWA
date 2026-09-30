@@ -64,7 +64,10 @@ class SessionsResource:
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/proxy")
 
     def update_proxy(self, session_id: str, body: UpdateSessionProxyRequest) -> SessionProxy:
-        """Update per-session proxy settings. No restart — changes apply on the next start."""
+        """Update per-session proxy settings. No restart — changes apply on the next start.
+
+        Requires an unscoped ADMIN key.
+        """
         return self._http.request(
             "PATCH", f"/api/sessions/{quote_segment(session_id)}/proxy", body=body
         )
@@ -74,7 +77,7 @@ class SessionsResource:
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}")
 
     def create(self, body: CreateSessionRequest) -> SessionResponse:
-        """Provision a new session."""
+        """Provision a new session. Requires an OPERATOR-level key; setting proxyUrl requires an ADMIN key."""
         return self._http.request("POST", "/api/sessions", body=body)
 
     def delete(self, session_id: str) -> None:

@@ -1,5 +1,5 @@
 import { QueryFailedError } from 'typeorm';
-import { isUniqueViolation, isMissingTableError } from './db-errors';
+import { isUniqueViolation, isMissingTableError, isTransientDbError } from './db-errors';
 
 // Realistic driver errors: better-sqlite3 / pg both throw an Error carrying a `code` property, which
 // TypeORM wraps in QueryFailedError (message copied from the driver error). better-sqlite3 messages are
@@ -97,5 +97,31 @@ describe('isUniqueViolation', () => {
   it('returns false for an unrelated error and for null', () => {
     expect(isUniqueViolation(new Error('boom'))).toBe(false);
     expect(isUniqueViolation(null)).toBe(false);
+  });
+});
+
+describe('isTransientDbError', () => {
+  it.each([
+    ['a wrapped SQLITE_BUSY', qfe('database is locked', 'SQLITE_BUSY')],
+    ['a code-bearing SQLITE_LOCKED', driverErr('database table is locked', 'SQLITE_LOCKED')],
+    ['a Postgres admin shutdown', { driverError: { code: '57P01' } }],
+    ['a Postgres too-many-connections', qfe('sorry, too many clients already', '53300')],
+    ["pg-pool's connection timeout", new Error('timeout exceeded when trying to connect')],
+    ['a dropped connection', new Error('Connection terminated unexpectedly')],
+  ])('is true for %s', (_label, err) => {
+    expect(isTransientDbError(err)).toBe(true);
+  });
+
+  it.each([
+    ['a Postgres unique violation', qfe('duplicate key value violates unique constraint', '23505')],
+    ['a SQLite unique violation', qfe('UNIQUE constraint failed: messages.id', 'SQLITE_CONSTRAINT_UNIQUE')],
+    ['a foreign-key failure', qfe('FOREIGN KEY constraint failed', 'SQLITE_CONSTRAINT_FOREIGNKEY')],
+    ['a plain error', new Error('db down')],
+    // Code-less: the SQLite token only ever travels as a code, so its text alone does not retry.
+    ['a code-less SQLITE_BUSY message', new Error('SQLITE_BUSY: database is locked')],
+    ['a non-object', 'connection lost'],
+    ['null', null],
+  ])('is false for %s', (_label, err) => {
+    expect(isTransientDbError(err)).toBe(false);
   });
 });

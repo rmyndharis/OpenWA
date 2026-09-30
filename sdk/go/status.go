@@ -30,7 +30,7 @@ func (s *StatusService) FromContact(ctx context.Context, sessionID, contactID st
 // Media fetches the stored media bytes for a status update. The server
 // answers 404 when no media is stored (text status, omitted, or expired).
 func (s *StatusService) Media(ctx context.Context, sessionID, statusID string) (*StatusMedia, error) {
-	data, contentType, err := s.client.doRaw(ctx, "GET", s.base(sessionID)+"/"+pathEscape(statusID)+"/media", nil, nil)
+	data, contentType, err := s.client.doRaw(ctx, "GET", s.base(sessionID)+"/"+pathEscape(statusID)+"/media", nil, nil, false)
 	if err != nil {
 		return nil, err
 	}

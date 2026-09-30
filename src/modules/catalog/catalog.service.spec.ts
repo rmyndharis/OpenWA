@@ -1,9 +1,10 @@
-import { NotFoundException, NotImplementedException } from '@nestjs/common';
+import { BadRequestException, HttpException, NotFoundException, NotImplementedException } from '@nestjs/common';
 import { CatalogService } from './catalog.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import type { SendPacingService } from '../message/send-pacing.service';
+import { HookManager } from '../../core/hooks';
 import type {
   IWhatsAppEngine,
   Catalog,
@@ -25,8 +26,17 @@ const product: Product = {
 const page: PaginatedProducts = { products: [product], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } };
 const sent: MessageResult = { id: 'wamid.product', timestamp: 1_706_868_000 };
 
+/** No plugin registered: HookManager hands the envelope back unchanged. */
+const passThroughHooks = () => ({
+  execute: jest.fn((_event: string, data: unknown) => Promise.resolve({ continue: true, data })),
+});
+
 describe('CatalogService', () => {
-  const makeService = (engine: Partial<IWhatsAppEngine> | undefined, pacing?: { assertSendAllowed: jest.Mock }) => {
+  const makeService = (
+    engine: Partial<IWhatsAppEngine> | undefined,
+    pacing?: { assertSendAllowed: jest.Mock },
+    hookManager = passThroughHooks(),
+  ) => {
     const engines = new EngineRegistry();
     if (engine) engines.set('s1', engine as IWhatsAppEngine);
     const sendPacing = {
@@ -35,7 +45,15 @@ describe('CatalogService', () => {
       recordSendFailure: jest.fn(),
       ...pacing,
     };
-    return { svc: new CatalogService(engines, sendPacing as unknown as SendPacingService), pacing: sendPacing };
+    return {
+      svc: new CatalogService(
+        engines,
+        sendPacing as unknown as SendPacingService,
+        hookManager as unknown as HookManager,
+      ),
+      pacing: sendPacing,
+      hookManager,
+    };
   };
 
   describe('catalog reads', () => {
@@ -89,17 +107,10 @@ describe('CatalogService', () => {
   });
 
   describe('product-message sends', () => {
-    it.each(['sendProduct', 'sendCatalog'] as const)(
-      'rejects with 404 for %s when the session is not started',
-      async method => {
-        const { svc } = makeService(undefined);
-        const promise =
-          method === 'sendProduct'
-            ? svc.sendProduct('s1', '628123@c.us', 'prod-1')
-            : svc.sendCatalog('s1', '628123@c.us');
-        await expect(promise).rejects.toBeInstanceOf(NotFoundException);
-      },
-    );
+    it('rejects with 404 for sendProduct when the session is not started', async () => {
+      const { svc } = makeService(undefined);
+      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1')).rejects.toBeInstanceOf(NotFoundException);
+    });
 
     it('paces a product send BEFORE it reaches the engine', async () => {
       const order: string[] = [];
@@ -121,19 +132,64 @@ describe('CatalogService', () => {
       expect(sendProduct).toHaveBeenCalledWith('628123@c.us', 'prod-1', 'Back in stock!');
     });
 
-    // No engine can send a catalog link today — the route stays live (and paced) so the day one
-    // gains support the send is not unpaced, but until then the adapter's 501 must reach the
-    // caller unchanged. Pin the refusal; do not "fix" it into a success.
-    it('sendCatalog surfaces the engine’s deliberate 501 unchanged', async () => {
-      const pacing = { assertSendAllowed: jest.fn().mockResolvedValue(undefined) };
-      const unsupported = new EngineNotSupportedError('sendCatalog');
-      const sendCatalog = jest.fn().mockRejectedValue(unsupported);
-      const { svc } = makeService({ sendCatalog }, pacing);
+    // A product card is a chat send like any other, so a moderation plugin that polices every chat
+    // send must be able to stop it too.
+    it('offers the product send to message:sending and sends nothing when a plugin vetoes it', async () => {
+      const hookManager = { execute: jest.fn().mockResolvedValue({ continue: false }) };
+      const sendProduct = jest.fn().mockResolvedValue(sent);
+      const { svc, pacing } = makeService({ sendProduct }, undefined, hookManager);
 
-      await expect(svc.sendCatalog('s1', '628123@c.us', 'Browse our catalog')).rejects.toBe(unsupported);
-      expect(unsupported.getStatus()).toBe(501);
-      expect(pacing.assertSendAllowed).toHaveBeenCalledWith('s1', '628123@c.us');
-      expect(sendCatalog).toHaveBeenCalledWith('628123@c.us', 'Browse our catalog');
+      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1', 'Back in stock!')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(hookManager.execute).toHaveBeenCalledWith(
+        'message:sending',
+        {
+          sessionId: 's1',
+          type: 'product',
+          input: { chatId: '628123@c.us', productId: 'prod-1', body: 'Back in stock!' },
+        },
+        { sessionId: 's1', source: 'CatalogService' },
+      );
+      expect(sendProduct).not.toHaveBeenCalled();
+      expect(pacing.recordSendFailure).not.toHaveBeenCalled();
+    });
+
+    it('sends the gated productId and body, but always to the requested chat', async () => {
+      const hookManager = {
+        execute: jest.fn().mockResolvedValue({
+          continue: true,
+          data: { input: { chatId: 'other@c.us', productId: 'prod-2', body: 'Rewritten' } },
+        }),
+      };
+      const sendProduct = jest.fn().mockResolvedValue(sent);
+      const { svc } = makeService({ sendProduct }, undefined, hookManager);
+
+      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1', 'Back in stock!')).resolves.toBe(sent);
+      expect(sendProduct).toHaveBeenCalledWith('628123@c.us', 'prod-2', 'Rewritten');
+    });
+
+    it.each([
+      ['a non-string productId', { productId: 42 }],
+      ['an empty productId', { productId: '' }],
+      ['a non-string body', { productId: 'prod-1', body: { text: 'x' } }],
+    ])('refuses with 400 when a plugin returns %s', async (_label, input) => {
+      const hookManager = { execute: jest.fn().mockResolvedValue({ continue: true, data: { input } }) };
+      const sendProduct = jest.fn().mockResolvedValue(sent);
+      const { svc } = makeService({ sendProduct }, undefined, hookManager);
+
+      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(sendProduct).not.toHaveBeenCalled();
+    });
+
+    it('refuses on pacing before the plugin gate is consulted', async () => {
+      const pacing = { assertSendAllowed: jest.fn().mockRejectedValue(new HttpException('paced', 429)) };
+      const sendProduct = jest.fn();
+      const { svc, hookManager } = makeService({ sendProduct }, pacing);
+
+      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1')).rejects.toMatchObject({ status: 429 });
+      expect(hookManager.execute).not.toHaveBeenCalled();
+      expect(sendProduct).not.toHaveBeenCalled();
     });
 
     it('propagates an engine failure from sendProduct', async () => {
@@ -155,12 +211,25 @@ describe('CatalogService', () => {
     });
 
     it('does not feed a client-fault or unsupported refusal to the breaker', async () => {
-      const sendProduct = jest.fn().mockRejectedValue(new NotFoundException('Product not found'));
-      const sendCatalog = jest.fn().mockRejectedValue(new EngineNotSupportedError('sendCatalog'));
-      const { svc, pacing } = makeService({ sendProduct, sendCatalog });
+      const sendProduct = jest
+        .fn()
+        .mockRejectedValueOnce(new NotFoundException('Product not found'))
+        .mockRejectedValueOnce(new EngineNotSupportedError('sendProduct'));
+      const { svc, pacing } = makeService({ sendProduct });
       await expect(svc.sendProduct('s1', '628123@c.us', 'prod-404')).rejects.toBeInstanceOf(NotFoundException);
-      await expect(svc.sendCatalog('s1', '628123@c.us')).rejects.toBeInstanceOf(EngineNotSupportedError);
+      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1')).rejects.toBeInstanceOf(EngineNotSupportedError);
       expect(pacing.recordSendFailure).not.toHaveBeenCalled();
+    });
+
+    // A JSON null body passes the DTO (IsOptional) and, with no plugin installed, the gate hands the
+    // caller's own envelope back. It must send like an absent body, not fail as a plugin's bad output.
+    it('sends a null body as no body when no plugin is installed', async () => {
+      const sendProduct = jest.fn().mockResolvedValue(sent);
+      const { svc } = makeService({ sendProduct }, undefined, new HookManager() as never);
+
+      await expect(svc.sendProduct('s1', '628123@c.us', 'prod-1', null as unknown as string)).resolves.toBe(sent);
+
+      expect(sendProduct).toHaveBeenCalledWith('628123@c.us', 'prod-1', undefined);
     });
   });
 });

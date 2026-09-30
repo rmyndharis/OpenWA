@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Webhook } from './entities/webhook.entity';
 import { WebhookOutboxService } from './webhook-outbox.service';
 import { WebhookDeliveryService } from './webhook-delivery.service';
+import { isDeliverableWebhook } from './utils/deliver-once';
 import { createLogger } from '../../common/services/logger.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 
@@ -108,9 +109,10 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
         const webhook = await this.webhooks.findOne({ where: { id: row.webhookId } });
-        if (!webhook || !webhook.active) {
-          // The subscription is gone or switched off; replaying it would deliver an event the
-          // operator has already unsubscribed from.
+        if (!isDeliverableWebhook(webhook, row.event)) {
+          // The subscription is gone, switched off or no longer lists this event; replaying it would
+          // deliver an event the operator has already unsubscribed from. Same test as the queue
+          // processor applies before every attempt.
           await this.outbox.close(row.webhookId, row.idempotencyKey, 'failed');
           stats.skipped++;
           continue;
@@ -139,8 +141,9 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
             stats.failed++;
             continue;
           }
-          // 'delivered', 'enqueued' and 'cancelled' all retire the row: the delivery either reached a
-          // durable owner or a plugin dropped it on purpose. Only 'failed' is worth another sweep.
+          // 'delivered', 'enqueued' and 'cancelled' all retire the row: the delivery reached a durable
+          // owner, a plugin dropped it on purpose, or a retry found the webhook removed, disabled or
+          // unsubscribed. Only 'failed' is worth another sweep.
           await this.outbox.close(row.webhookId, row.idempotencyKey, 'dispatched');
           stats.replayed++;
         } catch (error) {

@@ -53,6 +53,11 @@ public record UpdateWebhookRequest(
             return this;
         }
 
+        /**
+         * Replace the webhook's filters. To remove every filter, pass
+         * {@code new WebhookFilters(List.of())}; {@code filters(null)} leaves the existing filters
+         * unchanged, because a null field is omitted from the request.
+         */
         public Builder filters(WebhookFilters v) {
             this.filters = v;
             return this;

@@ -628,9 +628,8 @@ describe('StatusStoreService.purgeExpired', () => {
 
     // Every expired row has a media file and every delete fails, so nothing is deletable — an
     // unguarded delete([]) would throw TypeORM's empty-criteria error instead of returning 0.
-    const failingStorage = {
-      deleteFile: jest.fn().mockRejectedValue(new Error('backend down')),
-    } as unknown as StorageService;
+    const deleteFile = jest.fn().mockRejectedValue(new Error('backend down'));
+    const failingStorage = { deleteFile } as unknown as StorageService;
     const failingService = new StatusStoreService(repository, failingStorage, fakeConfigService());
 
     const now = 2000 + 24 * 60 * 60 * 1000 + 1;
@@ -641,7 +640,77 @@ describe('StatusStoreService.purgeExpired', () => {
     expect(remaining.map(r => r.waStatusId).sort()).toEqual(['expired-a', 'expired-b']);
     expect(fs.existsSync(path.join(baseDir, 'media', a.mediaPath!))).toBe(true);
     expect(fs.existsSync(path.join(baseDir, 'media', b.mediaPath!))).toBe(true);
+    // Tried once each, not re-selected in a loop.
+    expect(deleteFile).toHaveBeenCalledTimes(2);
   });
+
+  /** Seed rows cheaply, in statements well under SQLite's bind-parameter ceiling. */
+  const seed = async (rows: Array<Partial<StatusUpdate>>): Promise<void> => {
+    for (let i = 0; i < rows.length; i += 100) {
+      await repository.insert(
+        rows.slice(i, i + 100).map(r => ({
+          sessionId: 'sess',
+          contactJid: '628111@c.us',
+          waStatusId: r.id,
+          type: 'text' as const,
+          mediaOmitted: false,
+          postedAt: 1000,
+          expiresAt: 2000,
+          ...r,
+        })),
+      );
+    }
+  };
+  const id = (prefix: string, i: number): string => `${prefix}-0000-4000-8000-${String(i).padStart(12, '0')}`;
+
+  it('drains a backlog in batches, never deleting more than 500 rows in one statement', async () => {
+    await seed([
+      ...Array.from({ length: 1201 }, (_, i) => ({ id: id('00000000', i) })),
+      { id: id('ffffffff', 0), expiresAt: Date.now() + 60_000 },
+    ]);
+    const del = jest.spyOn(repository, 'delete');
+
+    expect(await service.purgeExpired(Date.now())).toBe(1201);
+
+    const sizes = del.mock.calls.map(([ids]) => (ids as string[]).length);
+    expect(sizes).toEqual([500, 500, 201]);
+    expect((await repository.find()).map(r => r.id)).toEqual([id('ffffffff', 0)]);
+    del.mockRestore();
+  }, 30_000);
+
+  it('does not let a batch of undeletable media block newer expired rows', async () => {
+    // Ids sort the undeletable rows first: a purge that restarted from the lowest id after an
+    // all-failed batch would never reach the rows behind them.
+    await seed([
+      ...Array.from({ length: 510 }, (_, i) => ({
+        id: id('00000000', i),
+        type: 'image' as const,
+        mediaPath: `bad/${i}`,
+      })),
+      ...Array.from({ length: 5 }, (_, i) => ({
+        id: id('ffffffff', i),
+        type: 'image' as const,
+        mediaPath: `good/${i}`,
+      })),
+    ]);
+    const deleteFile = jest.fn((key: string) =>
+      key.startsWith('bad/') ? Promise.reject(new Error('EACCES')) : Promise.resolve(),
+    );
+    const storage = { deleteFile } as unknown as StorageService;
+
+    const purger = new StatusStoreService(repository, storage, fakeConfigService());
+
+    // A batch where every delete fails ends the run instead of walking on through the backlog.
+    expect(await purger.purgeExpired(Date.now())).toBe(0);
+    expect(deleteFile).toHaveBeenCalledTimes(500);
+    // The next run resumes after that batch.
+    expect(await purger.purgeExpired(Date.now())).toBe(5);
+    expect(deleteFile).toHaveBeenCalledTimes(515);
+    expect(await repository.count()).toBe(510);
+    // Once the walk is drained, the next run starts over and retries the undeletable rows.
+    await purger.purgeExpired(Date.now());
+    expect(deleteFile.mock.calls[515][0]).toBe('bad/0');
+  }, 30_000);
 });
 
 describe('StatusStoreService.sweepOrphanedMedia', () => {
@@ -768,7 +837,7 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
     return { repo, storage, find };
   };
 
-  it('purges once at startup and schedules a recurring sweep, cleared on destroy', () => {
+  it('purges once at startup and schedules a recurring sweep, cleared on destroy', async () => {
     const { repo, storage } = mockDeps();
     const service = new StatusStoreService(repo, storage, fakeConfigService());
 
@@ -779,14 +848,40 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
       expect(purgeSpy).toHaveBeenCalledTimes(1);
 
       purgeSpy.mockClear();
-      jest.advanceTimersByTime(15 * 60 * 1000);
+      await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
       expect(purgeSpy).toHaveBeenCalledTimes(1);
 
       service.onModuleDestroy();
       purgeSpy.mockClear();
-      jest.advanceTimersByTime(15 * 60 * 1000);
+      await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
       expect(purgeSpy).not.toHaveBeenCalled();
     } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('skips a purge tick while the previous purge is still running', async () => {
+    const { repo, storage } = mockDeps();
+    const service = new StatusStoreService(repo, storage, fakeConfigService());
+
+    jest.useFakeTimers();
+    let release: () => void = () => undefined;
+    const purgeSpy = jest
+      .spyOn(service, 'purgeExpired')
+      .mockImplementationOnce(() => new Promise<number>(resolve => (release = () => resolve(0))))
+      .mockResolvedValue(0);
+    try {
+      service.onModuleInit();
+      await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
+      await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
+      expect(purgeSpy).toHaveBeenCalledTimes(1);
+
+      release();
+      await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
+      expect(purgeSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      service.onModuleDestroy();
+      release();
       jest.useRealTimers();
     }
   });

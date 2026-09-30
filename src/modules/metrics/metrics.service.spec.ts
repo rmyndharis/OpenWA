@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { MetricsService, METRICS_RENDER_TTL_MS } from './metrics.service';
+import { Queue } from 'bullmq';
+import { MetricsService, METRICS_RENDER_TTL_MS, QUEUE_READ_TIMEOUT_MS } from './metrics.service';
 import { StatsService, OverviewStats } from '../stats/stats.service';
 import { getWebhookDeliveryFailuresTotal } from '../../common/metrics/webhook-delivery-metrics';
 import {
@@ -8,6 +9,7 @@ import {
   getSessionReconnectLoopAlertsTotal,
 } from '../../common/metrics/session-reconnect-metrics';
 import { setRestrictedSessionCount } from '../../common/metrics/session-restriction-metrics';
+import { getUnhandledRejections, incrementUnhandledRejections } from '../../common/metrics/process-error-metrics';
 
 describe('MetricsService', () => {
   const overview: OverviewStats = {
@@ -188,5 +190,112 @@ describe('MetricsService.render survives a failing stats query', () => {
 
     expect(text).toContain('openwa_stats_available 1');
     expect(text).toContain('openwa_sessions_active 2');
+  });
+});
+
+describe('MetricsService runtime series', () => {
+  const overview: OverviewStats = {
+    sessions: { active: 0, total: 0, byStatus: {} },
+    messages: { sent: 0, received: 0, failed: 0, today: { sent: 0, received: 0 } },
+  };
+  const config = { get: () => undefined } as unknown as ConfigService;
+  const stats = { getOverview: jest.fn().mockResolvedValue(overview) } as unknown as StatsService;
+  const queue = (getJobCounts: () => Promise<Record<string, number>>): Queue => ({ getJobCounts }) as unknown as Queue;
+  const services: MetricsService[] = [];
+  const make = (webhook?: Queue, ingress?: Queue): MetricsService => {
+    const svc = new MetricsService(config, stats, webhook, ingress);
+    services.push(svc);
+    return svc;
+  };
+
+  afterEach(() => {
+    services.splice(0).forEach(svc => svc.onModuleDestroy());
+    jest.useRealTimers();
+  });
+
+  const sample = (text: string, series: string): number => {
+    const line = text.split('\n').find(l => l.startsWith(`${series} `));
+    expect(line).toBeDefined();
+    return Number(line!.split(' ')[1]);
+  };
+
+  it('reports event-loop delay since the previous uncached render, then starts a new window', async () => {
+    const svc = make();
+    const histogram = (svc as unknown as { loopDelay: { reset: () => void } }).loopDelay;
+    const reset = jest.spyOn(histogram, 'reset');
+
+    const text = await svc.render();
+
+    expect(text).toContain('# TYPE openwa_event_loop_delay_p99_seconds gauge');
+    expect(text).toContain('# TYPE openwa_event_loop_delay_max_seconds gauge');
+    for (const series of ['openwa_event_loop_delay_p99_seconds', 'openwa_event_loop_delay_max_seconds']) {
+      const value = sample(text, series);
+      expect(Number.isFinite(value)).toBe(true);
+      expect(value).toBeGreaterThanOrEqual(0);
+    }
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports event-loop delay net of the sampling interval, so an idle loop reads zero', async () => {
+    const svc = make();
+    const histogram = (svc as unknown as { loopDelay: { percentile: (p: number) => number; max: number } }).loopDelay;
+    // The histogram records the whole gap between its 20 ms timer callbacks: an idle loop reads about
+    // 20 ms, and a 200 ms synchronous block reads about 220 ms.
+    jest.spyOn(histogram, 'percentile').mockReturnValue(19.8e6);
+    jest.spyOn(histogram, 'max', 'get').mockReturnValue(220e6);
+
+    const text = await svc.render();
+
+    expect(sample(text, 'openwa_event_loop_delay_p99_seconds')).toBe(0);
+    expect(sample(text, 'openwa_event_loop_delay_max_seconds')).toBeCloseTo(0.2, 9);
+  });
+
+  it('counts unhandled rejections by kind', async () => {
+    const before = getUnhandledRejections();
+    incrementUnhandledRejections('other');
+    const text = await make().render();
+
+    expect(text).toContain('# TYPE openwa_unhandled_rejections_total counter');
+    expect(sample(text, 'openwa_unhandled_rejections_total{kind="other"}')).toBe(before.other + 1);
+    expect(sample(text, 'openwa_unhandled_rejections_total{kind="page_context_lost"}')).toBe(before.page_context_lost);
+  });
+
+  it('reports job counts per queue and state', async () => {
+    const text = await make(
+      queue(() => Promise.resolve({ wait: 4, active: 1, delayed: 2, failed: 3 })),
+      queue(() => Promise.resolve({ wait: 0, active: 0, delayed: 0, failed: 7 })),
+    ).render();
+
+    expect(text).toContain('# TYPE openwa_queue_jobs gauge');
+    expect(text).toContain('openwa_queue_jobs{queue="webhook-queue",state="wait"} 4');
+    expect(text).toContain('openwa_queue_jobs{queue="webhook-queue",state="failed"} 3');
+    expect(text).toContain('openwa_queue_jobs{queue="ingress-queue",state="failed"} 7');
+  });
+
+  it('omits a queue whose read fails or hangs instead of reporting zero', async () => {
+    jest.useFakeTimers();
+    const rendering = make(
+      queue(() => new Promise(() => undefined)),
+      queue(() => Promise.reject(new Error('Connection is closed.'))),
+    ).render();
+    await jest.advanceTimersByTimeAsync(QUEUE_READ_TIMEOUT_MS);
+    const text = await rendering;
+
+    expect(text).toContain('openwa_up 1');
+    expect(text).not.toContain('openwa_queue_jobs');
+  });
+
+  it('keeps the healthy queue when only the other one fails', async () => {
+    const text = await make(
+      queue(() => Promise.resolve({ wait: 1, active: 0, delayed: 0, failed: 0 })),
+      queue(() => Promise.reject(new Error('Connection is closed.'))),
+    ).render();
+
+    expect(text).toContain('openwa_queue_jobs{queue="webhook-queue",state="wait"} 1');
+    expect(text).not.toContain('queue="ingress-queue"');
+  });
+
+  it('emits no queue series when the queue is disabled', async () => {
+    expect(await make().render()).not.toContain('openwa_queue_jobs');
   });
 });

@@ -1,6 +1,6 @@
 # @rmyndharis/openwa
 
-Official JavaScript/TypeScript SDK for the [OpenWA](https://github.com/rmyndharis/OpenWA) WhatsApp API Gateway.
+Official JavaScript/TypeScript SDK for [OpenWA](https://github.com/rmyndharis/OpenWA), the open-source WhatsApp API Gateway. OpenWA is an independent project, not affiliated with or endorsed by WhatsApp or Meta.
 
 Ships dual CJS + ESM builds with bundled type declarations.
 
@@ -51,12 +51,12 @@ retry — wrap calls with your own backoff if needed. 503 is transient, but a
 catalog 503 can persist because WhatsApp may never answer that query, so bound
 any retry. A 429 from the global rate limiter lifts when its window expires
 (seconds for the per-second tier, up to an hour for the hourly tier by
-default); its delay is only in the `Retry-After` response header, which the
-error does not carry. A 429 whose body has `code: "SEND_PACING_LIMITED"` is
-not transient: do not retry it before the body's `retryAfterSeconds`, which
-can be hours. In a routed deployment only 503 proves the request was never
-carried out: a forward that fails after the request reached the owner node
-answers 502 or 504.
+default), and `.retryAfterSeconds` carries its `Retry-After` header. A 429 whose
+`.code` is `"SEND_PACING_LIMITED"` is not transient: do not retry it before
+`.retryAfterSeconds`, which then comes from the body and can be hours. Every API
+error also exposes the response `.headers`. In a routed deployment only 503
+proves the request was never carried out: a forward that fails after the request
+reached the owner node answers 502 or 504.
 
 ## Releasing
 

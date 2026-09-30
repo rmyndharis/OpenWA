@@ -70,7 +70,8 @@ function runAuditOnce() {
 /**
  * Runs the audit, retrying once when the endpoint does not answer. A transient blip clears on the
  * retry; a retired or persistently-down endpoint returns the last error report, which the caller
- * turns into a loud skip rather than a false "stale allowlist" failure.
+ * turns into a loud skip (or, on a required path, a failure) rather than a false "stale allowlist"
+ * failure.
  */
 function runAudit() {
   const ATTEMPTS = 2;
@@ -105,6 +106,34 @@ export function collectAdvisories(report) {
     }
   }
   return found;
+}
+
+/**
+ * What to do when npm audit could not answer at all. PR and push CI skip, so an npm outage does not
+ * block every merge, but the skip is raised as a warning annotation on GitHub Actions rather than a
+ * log line inside a green job. A path that sets CHECK_AUDIT_REQUIRED=1 (the release gate and the
+ * weekly scan) fails instead: publishing, or reporting a week clean, with no advisory checked is not
+ * a skip those paths may take. A re-run clears a transient outage.
+ */
+export function unavailableOutcome(summary, env = process.env) {
+  const required = env.CHECK_AUDIT_REQUIRED === '1';
+  const text = `npm audit endpoint is unavailable after a retry (${summary}); advisories were not checked this run.`;
+  const lines = [];
+  if (env.GITHUB_ACTIONS === 'true') {
+    // A workflow command ends at the first newline, and npm's summary can span several lines.
+    const message = text.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+    lines.push(
+      required
+        ? `::error title=check:audit could not run::${message}`
+        : `::warning title=check:audit skipped::${message}`,
+    );
+  }
+  lines.push(
+    required
+      ? `check:audit FAILED: ${text} The audit is required on this path (CHECK_AUDIT_REQUIRED=1).`
+      : `check:audit SKIPPED: ${text}`,
+  );
+  return { exitCode: required ? 1 : 0, lines };
 }
 
 /** The gate's verdict, split out so a spec can drive it without shelling out to npm. */
@@ -147,16 +176,14 @@ export function evaluate(report, allowlist = ALLOWLIST) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const report = runAudit();
 
-  // A registry that cannot answer the audit request must not be read as a clean tree, and blocking
-  // every merge while npm's audit endpoint is down (or being retired) is worse than the risk of a
-  // missed advisory for the duration. Skip loudly instead: the gate resumes the moment the endpoint
-  // answers, and a working audit still fails on any unexcused high or critical.
+  // A registry that cannot answer the audit request must not be read as a clean tree. On a merge
+  // path, blocking every merge while npm's audit endpoint is down (or being retired) is worse than
+  // the risk of a missed advisory for the duration, so it skips loudly; a required path fails. See
+  // unavailableOutcome.
   if (auditUnavailable(report)) {
-    console.warn(
-      `check:audit SKIPPED: npm audit endpoint is unavailable after a retry (${report?.error?.summary ?? 'no report'}). ` +
-        'Advisories were not checked this run.',
-    );
-    process.exit(0);
+    const outcome = unavailableOutcome(report?.error?.summary ?? 'no report');
+    for (const line of outcome.lines) console.log(line);
+    process.exit(outcome.exitCode);
   }
 
   const errors = evaluate(report);

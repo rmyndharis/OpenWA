@@ -39,8 +39,8 @@ export type ReconnectDecision = ReconnectExhausted | ReconnectScheduled;
 /**
  * A reconnect-loop alert fires once per this many CONSECUTIVE attempts of a session — one signal per
  * ongoing episode, not spam per attempt. A broken-forever setup retries without limit (by design), so
- * the 5th/10th/15th… scheduled attempt is the operator-facing tell; the streak resets only when the
- * session reaches READY, so a later episode re-arms the alert from attempt 5 again.
+ * the 5th/10th/15th… scheduled attempt is the operator-facing tell; the streak resets only once the
+ * session has held READY for STABLE_READY_MS, so a later episode re-arms the alert from attempt 5 again.
  */
 export const RECONNECT_LOOP_ALERT_INTERVAL_ATTEMPTS = 5;
 
@@ -50,16 +50,24 @@ export const RECONNECT_LOOP_ALERT_INTERVAL_ATTEMPTS = 5;
  */
 export const RECONNECT_DELAY_CAP_MS = 300_000;
 
+/**
+ * How long a session must stay READY before its next drop starts a fresh streak. A READY that drops
+ * sooner is part of the same flapping episode: the backoff keeps growing and the loop alert still
+ * fires, instead of relaunching at the base delay forever.
+ */
+export const STABLE_READY_MS = RECONNECT_DELAY_CAP_MS;
+
 export function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
 /**
  * Clamp a computed backoff delay finite and within setTimeout's safe range (a huge value would
- * overflow its 32-bit ms field and fire immediately).
+ * overflow its 32-bit ms field and fire immediately). NaN falls back to baseDelay; +Infinity is
+ * simply huge, so it takes the cap like any other oversized delay.
  */
 export function clampReconnectDelay(rawDelay: number, baseDelay: number): number {
-  return clampNumber(Number.isFinite(rawDelay) ? rawDelay : baseDelay, 0, RECONNECT_DELAY_CAP_MS);
+  return clampNumber(Number.isNaN(rawDelay) ? baseDelay : rawDelay, 0, RECONNECT_DELAY_CAP_MS);
 }
 
 /**
@@ -74,9 +82,10 @@ export function decideReconnect(
   state: ReconnectAttemptState,
   jitter: number = Math.random() * 1000,
 ): ReconnectDecision {
-  // The attempt counter only resets when the session reaches READY (the lifecycle does that). A reset
-  // keyed on elapsed time would fire as soon as the backoff delay itself grew past the window, so an
-  // explicit cap would never be reached.
+  // The attempt counter only resets after the session has held READY for STABLE_READY_MS (the
+  // lifecycle does that). The window is measured from READY, never from the last attempt: a reset
+  // keyed on time between attempts would fire as soon as the backoff delay itself grew past the
+  // window, so an explicit cap would never be reached.
   if (state.attempts >= state.maxAttempts) {
     // maxAttempts:0 means auto-reconnect is disabled, not that N attempts were tried and failed — say
     // so instead of the misleading "failed after 0 attempts".
@@ -91,8 +100,12 @@ export function decideReconnect(
 
   // Exponential backoff: baseDelay * 2^attempts (with jitter), clamped finite + within
   // setTimeout's safe range so the timer can't overflow and fire immediately. With the default
-  // unlimited budget the delay parks at RECONNECT_DELAY_CAP_MS once the exponent outgrows it.
-  const delayMs = clampReconnectDelay(state.baseDelay * Math.pow(2, state.attempts) + jitter, state.baseDelay);
+  // unlimited budget the delay parks at RECONNECT_DELAY_CAP_MS once the exponent outgrows it; the
+  // exponent is bounded so a very long streak never overflows the product to Infinity.
+  const delayMs = clampReconnectDelay(
+    state.baseDelay * Math.pow(2, Math.min(state.attempts, 30)) + jitter,
+    state.baseDelay,
+  );
   state.attempts++;
 
   return {

@@ -27,3 +27,20 @@ describe('sessions table importer', () => {
     expect(sessions?.skip?.(row({ name: '../alice' }) as never)).toMatch(/unsafe name/);
   });
 });
+
+describe('sessions table importer: desiredState', () => {
+  const sessions = TABLE_IMPORTERS.find(importer => importer.key === 'sessions');
+  const base = { id: '0a941dac-a965-45e7-b318-74ae8be134f0', name: 'my-bot', status: 'disconnected' };
+  const mapped = (extra: Record<string, unknown>): unknown[] => sessions!.map({ ...base, ...extra } as never);
+
+  it('writes desiredState so a stopped session stays down after a restore', () => {
+    expect(sessions?.sql).toContain('"desiredState"');
+    expect(sessions?.sql).toContain('$13');
+    expect(mapped({ desiredState: 'stopped' })[12]).toBe('stopped');
+  });
+
+  it('restores a row without the field, or with an unknown value, as eligible (NULL)', () => {
+    expect(mapped({})[12]).toBeNull();
+    expect(mapped({ desiredState: 'bogus' })[12]).toBeNull();
+  });
+});

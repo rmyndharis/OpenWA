@@ -89,6 +89,7 @@ const ALLOWED = new Map([
  */
 const SEND_MEDIA_VERBS = [
   { name: 'javascript', dir: 'sdk/javascript/src', exts: ['.ts'], re: /\.sendMedia\(\s*\w+\s*,\s*['"`]([\w-]+)['"`]/g },
+  { name: 'php', dir: 'sdk/php/src', exts: ['.php'], re: /->sendMedia\(\s*\$\w+\s*,\s*["']([\w-]+)["']/g },
   { name: 'python', dir: 'sdk/python/openwa', exts: ['.py'], re: /\._send_media\(\s*\w+\s*,\s*["']([\w-]+)["']/g },
 ];
 

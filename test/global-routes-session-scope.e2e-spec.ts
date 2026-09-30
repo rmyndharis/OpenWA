@@ -9,9 +9,11 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { applyGlobalValidation } from './../src/config/app-validation';
+import { requestContextMiddleware } from './../src/common/middleware/request-context.middleware';
 import { AuthService } from './../src/modules/auth/auth.service';
 import { ApiKeyRole } from './../src/modules/auth/entities/api-key.entity';
 import { Session } from './../src/modules/session/entities/session.entity';
+import { AuditAction, AuditLog } from './../src/modules/audit/entities/audit-log.entity';
 
 /**
  * Cross-session aggregates, environment-derived settings, and session creation all act outside any
@@ -22,6 +24,7 @@ import { Session } from './../src/modules/session/entities/session.entity';
 describe('Global read and create routes reject session-scoped keys (e2e)', () => {
   let app: INestApplication<App>;
   let scopedAdminKey: string; // ADMIN, allowedSessions: [sessA]
+  let scopedAdminKeyId: string;
   let scopedOperatorKey: string; // OPERATOR, allowedSessions: [sessA]
   let adminKey: string; // ADMIN, unrestricted
   let scopedSessionId: string; // the session the scoped keys are confined to
@@ -30,6 +33,8 @@ describe('Global read and create routes reject session-scoped keys (e2e)', () =>
     const moduleFixture: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleFixture.createNestApplication();
     applyGlobalValidation(app);
+    // Installed by configureApp in production; audit rows take their key from this context.
+    app.use(requestContextMiddleware);
     await app.init();
 
     const sessionRepo: Repository<Session> = app.get(getRepositoryToken(Session, 'data'));
@@ -37,9 +42,13 @@ describe('Global read and create routes reject session-scoped keys (e2e)', () =>
     scopedSessionId = a.id;
 
     const authService = app.get(AuthService);
-    scopedAdminKey = (
-      await authService.createApiKey({ name: 'e2e-global-scoped', role: ApiKeyRole.ADMIN, allowedSessions: [a.id] })
-    ).rawKey;
+    const scoped = await authService.createApiKey({
+      name: 'e2e-global-scoped',
+      role: ApiKeyRole.ADMIN,
+      allowedSessions: [a.id],
+    });
+    scopedAdminKey = scoped.rawKey;
+    scopedAdminKeyId = scoped.apiKey.id;
     scopedOperatorKey = (
       await authService.createApiKey({ name: 'e2e-global-op', role: ApiKeyRole.OPERATOR, allowedSessions: [a.id] })
     ).rawKey;
@@ -98,14 +107,24 @@ describe('Global read and create routes reject session-scoped keys (e2e)', () =>
   });
 
   it('denies a session-scoped key per-session stats for a session outside its scope', async () => {
-    // The param-scope check surfaces as 401 (the key is not authorized for that session) — a
-    // different code path than the fence's 403 above, pinned here so the two are not conflated.
+    // The param-scope check refuses a live key, so it answers 403 like the fence above, and the audit
+    // row names the key that was refused.
     const sessionRepo: Repository<Session> = app.get(getRepositoryToken(Session, 'data'));
     const other = await sessionRepo.save(sessionRepo.create({ name: `e2e-global-scope-other-${Date.now()}` }));
-    await request(app.getHttpServer())
+    const res = await request(app.getHttpServer())
       .get(`/api/stats/sessions/${other.id}`)
       .set('X-API-Key', scopedAdminKey)
-      .expect(401);
+      .expect(403);
+    expect((res.body as { message: string }).message).toBe('API key not authorized for this session');
+
+    const auditRepo: Repository<AuditLog> = app.get(getRepositoryToken(AuditLog, 'main'));
+    const path = `/api/stats/sessions/${other.id}`;
+    let row: AuditLog | null = null;
+    for (let i = 0; i < 50 && !row; i++) {
+      row = await auditRepo.findOne({ where: { action: AuditAction.API_KEY_AUTH_FAILED, path } });
+      if (!row) await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    expect(row?.apiKeyId).toBe(scopedAdminKeyId);
   });
 
   it('leaves an unrestricted ADMIN able to create a session', async () => {

@@ -22,6 +22,20 @@ sha256=<hex digest>
 
 The digest is computed over the exact raw request body bytes using the webhook secret.
 
+## With an OpenWA SDK
+
+From the next SDK release (after 0.5.0), each SDK ships this check. Pass the raw body, the `X-OpenWA-Signature` header value and the secret; the helper returns false for a missing, malformed or wrong signature and compares in constant time.
+
+| SDK        | Call                                                    |
+| ---------- | ------------------------------------------------------- |
+| JavaScript | `await verifyWebhookSignature(rawBody, header, secret)` |
+| Python     | `verify_webhook_signature(raw_body, header, secret)`    |
+| Go         | `openwa.VerifyWebhookSignature(body, header, secret)`   |
+| Java       | `WebhookSignature.verify(body, header, secret)`         |
+| PHP        | `WebhookSignature::verify($rawBody, $header, $secret)`  |
+
+The raw-body rule below still applies: parse the JSON only after the check passes. The receivers below show the same check without an SDK.
+
 ## Node.js / Express
 
 Use `express.raw()` for the webhook route so the signature is checked against the raw body. Parse JSON only after verification succeeds.

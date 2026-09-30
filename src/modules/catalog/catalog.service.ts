@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import type {
   Catalog,
@@ -7,12 +7,15 @@ import type {
   MessageResult,
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { SendPacingService, countsTowardSendBreaker } from '../message/send-pacing.service';
+import { HookManager, applySendingGate } from '../../core/hooks';
 
 @Injectable()
 export class CatalogService {
+  // HookManager comes from the @Global() HooksModule, so no module import is needed.
   constructor(
     private readonly engines: EngineRegistry,
     private readonly pacing: SendPacingService,
+    private readonly hookManager: HookManager,
   ) {}
 
   async getCatalog(sessionId: string): Promise<Catalog | null> {
@@ -40,32 +43,39 @@ export class CatalogService {
   }
 
   /**
-   * Sending a product is a real outbound chat message, not a catalog read, so it is paced like every
-   * other send. It does NOT go through MessageService, which is why the pacing call has to be here:
-   * this path persists no row and fires no message hooks either — deliberately out of scope for this
-   * change, but worth knowing when reading the counts.
+   * Sending a product is a real outbound chat message, not a catalog read. It does NOT go through
+   * MessageService, so this method runs the two pre-send steps every chat send gets: pacing, then the
+   * `message:sending` plugin gate (input `{ chatId, productId, body }`, type `product`). A plugin may
+   * rewrite `productId` or `body`; a rewritten `chatId` is ignored, because `chatId` is the value the
+   * API key's chat scope was checked against. No PENDING row is written up front. On Baileys the
+   * own-send echo (MessageProjector.handleOwnSendEcho) persists the OUTGOING row afterwards and fires
+   * `message:sent` and `message:persisted`, so the send is counted into the pacing daily cap once
+   * that row lands.
    */
   async sendProduct(sessionId: string, chatId: string, productId: string, body?: string): Promise<MessageResult> {
     await this.pacing.assertSendAllowed(sessionId, chatId);
+    const gated = await applySendingGate(
+      this.hookManager,
+      sessionId,
+      'product',
+      // The DTO lets a JSON null through as "no body". Normalised here, so the checks below only ever
+      // judge what a plugin handed back, never the caller's own input.
+      { chatId, productId, body: body ?? undefined },
+      'CatalogService',
+    );
+    const gatedProductId: unknown = gated.productId;
+    const gatedBody: unknown = gated.body;
+    if (typeof gatedProductId !== 'string' || gatedProductId === '') {
+      throw new BadRequestException('A message:sending handler returned an invalid productId');
+    }
+    if (gatedBody !== undefined && typeof gatedBody !== 'string') {
+      throw new BadRequestException('A message:sending handler returned an invalid body');
+    }
     const engine = this.engines.require(
       sessionId,
       () => new NotFoundException(`Session ${sessionId} not found or not connected`),
     );
-    return this.recordedSend(sessionId, () => engine.sendProduct(chatId, productId, body));
-  }
-
-  /**
-   * Paced for the same reason as sendProduct. Both engines answer 501 today, so the adapter refuses
-   * before any traffic leaves — but the route is live, and pacing it now means the day an engine
-   * gains support does not silently open an unpaced send path.
-   */
-  async sendCatalog(sessionId: string, chatId: string, body?: string): Promise<MessageResult> {
-    await this.pacing.assertSendAllowed(sessionId, chatId);
-    const engine = this.engines.require(
-      sessionId,
-      () => new NotFoundException(`Session ${sessionId} not found or not connected`),
-    );
-    return this.recordedSend(sessionId, () => engine.sendCatalog(chatId, body));
+    return this.recordedSend(sessionId, () => engine.sendProduct(chatId, gatedProductId, gatedBody));
   }
 
   /**

@@ -1,7 +1,8 @@
 # OpenWA Java SDK
 
-Official Java client for the [OpenWA](https://github.com/rmyndharis/OpenWA)
-WhatsApp API Gateway.
+Official Java client for [OpenWA](https://github.com/rmyndharis/OpenWA), the
+open-source WhatsApp API Gateway. OpenWA is an independent project, not
+affiliated with or endorsed by WhatsApp or Meta.
 
 Hand-written against the exact API surface (paths, DTOs, response shapes) and
 unit-tested with a mock HTTP transport that asserts on the precise request URL,
@@ -78,6 +79,16 @@ plus `client.auth()`.
 Operator-only modules (`docker`, `metrics`, `infra`, `plugins`, `mcp`) are
 intentionally not exposed; all user-facing resources are.
 
+`UpdateWebhookRequest` omits null fields, so `filters(null)` leaves a
+webhook's filters unchanged. To remove every filter, pass
+`new WebhookFilters(List.of())` instead.
+
+A response enum value newer than this SDK decodes to that enum's `UNKNOWN`
+constant (for example `SessionStatus.UNKNOWN`) rather than `null`, so give a
+`switch` over one a `default` branch. `WebhookEvent`, `ProxyType` and
+`MessageDirection` are also sent in requests and have no `UNKNOWN`: an
+unrecognised value there still decodes to `null`.
+
 ## Error handling
 
 Errors are a typed, unchecked hierarchy — branch with `instanceof` or on
@@ -99,7 +110,7 @@ try {
 | Class                           | HTTP | Meaning                                 |
 | ------------------------------- | ---- | --------------------------------------- |
 | `OpenWAAuthError`               | 401  | Missing or invalid API key              |
-| `OpenWAForbiddenError`          | 403  | API key role insufficient               |
+| `OpenWAForbiddenError`          | 403  | API key role or scope refuses the call  |
 | `OpenWANotFoundError`           | 404  | Resource not found                      |
 | `OpenWAConflictError`           | 409  | Engine not ready                        |
 | `OpenWARateLimitError`          | 429  | Rate limited                            |
@@ -108,7 +119,7 @@ try {
 | `OpenWAApiError`                | —    | Any other non-2xx (carries `.status()`) |
 | `OpenWATimeoutError`            | —    | Request exceeded the configured timeout |
 
-All extend `OpenWAError` (a `RuntimeException`). 503 is transient, but a catalog 503 can persist because WhatsApp may never answer that query, so bound any retry. A 429 from the global rate limiter clears within seconds; its delay is only in the `Retry-After` response header, which the error does not carry. A 429 whose body has `code: "SEND_PACING_LIMITED"` is not transient: do not retry it before the body's `retryAfterSeconds`, which can be hours. In a routed deployment only 503 proves the request was never carried out: a forward that fails after the request reached the owner node answers 502 or 504.
+All extend `OpenWAError` (a `RuntimeException`). 503 is transient, but a catalog 503 can persist because WhatsApp may never answer that query, so bound any retry. A 429 from the global rate limiter lifts when its window expires (seconds for the per-second tier, up to an hour for the hourly tier by default), and `retryAfterSeconds()` carries its `Retry-After` header. A 429 whose `code()` is `"SEND_PACING_LIMITED"` is not transient: do not retry it before `retryAfterSeconds()`, which then comes from the body and can be hours. `headers()` returns the response headers. In a routed deployment only 503 proves the request was never carried out: a forward that fails after the request reached the owner node answers 502 or 504.
 
 ## Reliability & security
 
@@ -124,6 +135,11 @@ All extend `OpenWAError` (a `RuntimeException`). 503 is transient, but a catalog
 - **Default per-request timeout** is 30 s (configurable). Path segments (chat /
   message ids) are percent-encoded; a base-URL path prefix (e.g. behind a proxy
   at `/v1`) is preserved.
+- **Empty and dot ids are refused.** An empty, `.` or `..` id throws
+  `IllegalArgumentException` and nothing is sent, so a proxy that resolves dot
+  segments cannot turn the call into one on the parent resource. The raw
+  `request*` methods refuse a `.` or `..` segment the same way but send an
+  empty one (a trailing slash) as written.
 
 ## Development
 

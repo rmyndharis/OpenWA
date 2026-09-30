@@ -1,5 +1,10 @@
 import * as path from 'path';
 import { PluginManifest, PluginType } from './plugin.interfaces';
+import { compareSemver } from '../../modules/plugins/catalog';
+
+// The version of the running code (same source as /api/health), the default floor check target.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { version: HOST_VERSION } = require('../../../package.json') as { version: string };
 
 /**
  * Plugin ids a plugin package / directory must never use. `whatsapp-web.js` / `baileys` are built-in
@@ -14,6 +19,8 @@ export const INSTALLABLE_TYPES = new Set<string>([PluginType.EXTENSION]);
 
 const SAFE_ID = /^[a-z0-9][a-z0-9._-]*$/i;
 const REQUIRED_FIELDS = ['id', 'name', 'version', 'type', 'main'] as const;
+// compareSemver reads garbage as 0.0.0, so a floor must be well-formed before it is compared.
+const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /**
  * The manifest validation BOTH install-time (parsePluginPackage) and boot-time
@@ -23,12 +30,17 @@ const REQUIRED_FIELDS = ['id', 'name', 'version', 'type', 'main'] as const;
  * logged + the directory skipped).
  *
  * Checks: plain-object shape; required fields present as non-empty strings; id format + reserved
- * ids; installable (extension) type; and that `main` is a relative path that cannot escape the
- * plugin directory. The `main` check here is lexical (forward-slash semantics); the loader
- * additionally anchors it against the real on-disk directory, which also catches platform-separator
- * tricks, and requires the entry file to exist (parity with install's in-archive check).
+ * ids; installable (extension) type; that `main` is a relative path that cannot escape the
+ * plugin directory; and that an optional `minOpenWAVersion` is a MAJOR.MINOR.PATCH version no newer
+ * than `hostVersion` (pre-release suffixes are ignored, so 0.24.0-rc.1 satisfies 0.24.0). The
+ * `main` check here is lexical (forward-slash semantics); the loader additionally anchors it
+ * against the real on-disk directory, which also catches platform-separator tricks, and requires
+ * the entry file to exist (parity with install's in-archive check).
  */
-export function validatePluginManifest(manifest: unknown): asserts manifest is PluginManifest {
+export function validatePluginManifest(
+  manifest: unknown,
+  hostVersion: string = HOST_VERSION,
+): asserts manifest is PluginManifest {
   // JSON.parse("null") / "[]" / "5" don't throw — but indexing a field on a non-object then throws a
   // TypeError downstream. Require a plain object up front.
   if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
@@ -56,6 +68,15 @@ export function validatePluginManifest(manifest: unknown): asserts manifest is P
     );
   }
   assertMainContained(m.main);
+  const min: unknown = m.minOpenWAVersion;
+  if (min !== undefined && min !== null) {
+    if (typeof min !== 'string' || !SEMVER.test(min)) {
+      throw new Error('manifest.json minOpenWAVersion must be a MAJOR.MINOR.PATCH version');
+    }
+    if (compareSemver(hostVersion, min) < 0) {
+      throw new Error(`Plugin ${m.id} requires OpenWA >= ${min} (running ${hostVersion})`);
+    }
+  }
 }
 
 /**

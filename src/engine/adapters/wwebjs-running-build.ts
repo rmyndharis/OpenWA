@@ -26,10 +26,11 @@ function numericBuild(version: string): string | null {
  * whatsapp-web.js applies a pin by answering the page's document request from its request
  * interceptor, so the pin holds only for a page load that goes through it. WhatsApp Web's service
  * worker can answer the document from its own cache without the request ever reaching the
- * interceptor, and a pin whose HTML could not be fetched installs no interceptor at all (the
- * library's remote cache is non-strict and falls back to the live build). Either way the startup
- * line `Pinning WhatsApp Web version …` still names the pin, and nothing read back the build that
- * actually booted, so a session reported to be on one build could be running another.
+ * interceptor. (A pin whose HTML could not be fetched is dropped before the Client is built: it
+ * logs `web_version_html_unavailable`, no pin is requested, and the page loads the live build.) In
+ * the service-worker case the startup line `Pinning WhatsApp Web version …` still names the pin,
+ * and nothing read back the build that actually booted, so a session reported to be on one build
+ * could be running another.
  *
  * The comparison is on the numeric build only (see {@link numericBuild}). A pin that does not parse
  * as one cannot be compared, and gets the info line rather than a warning. A read that fails or

@@ -102,6 +102,10 @@ export interface PluginManifest {
   // is enforced — see SUPPORTED_SDK_MAJOR / validateIngressManifest. Absent = treated as '1'.
   sdkVersion?: string;
 
+  // Oldest OpenWA release the plugin runs on (MAJOR.MINOR.PATCH). validatePluginManifest refuses the
+  // plugin at install and at boot load when the running host is older. Absent or null = no floor.
+  minOpenWAVersion?: string | null;
+
   // Inbound webhook routes this plugin claims (requires the `webhook:ingress` permission). Validated
   // by validateIngressManifest, which the loader calls on every external plugin load (loadPlugin).
   // (Built-in registration declares no ingress and bypasses that validation.)
@@ -460,14 +464,31 @@ export function warnUnauthenticatedIngressRoutes(
  * timestamp and a new delivery id forever. Binding the timestamp (`contentTemplate` containing
  * `{timestamp}`, e.g. `{timestamp}.{rawBody}`) makes the signed bytes expire with the window. The
  * inverse declaration — a `{timestamp}` token with no `timestampHeader` — signs the empty string,
- * which is equally inert. Warn-only (SDK v1 is additive within a major; a load-time rejection would
- * break already-installed manifests). Called from PluginLoaderService.loadPlugin.
+ * which is equally inert.
+ *
+ * It also warns about routes whose default header-keyed dedup is the only thing between a copy of a
+ * delivery and a second enqueue: an hmac-sha256 route that binds no timestamp, and a shared-secret
+ * route (which binds neither body nor time). The dedup header is not covered by the credential, so a
+ * copy sent with a different header value is accepted as new. `dedupOn: 'body'` silences it.
+ *
+ * Warn-only (SDK v1 is additive within a major; a load-time rejection would break already-installed
+ * manifests). Called from PluginLoaderService.loadPlugin.
  */
 export function warnUnsignedTimestampRoutes(
   manifest: PluginManifest,
   logger: { warn: (message: string, context?: Record<string, unknown>) => void },
 ): void {
   for (const r of manifest.ingress ?? []) {
+    if (r.signature.scheme === 'shared-secret' && r.dedupOn !== 'body') {
+      logger.warn(
+        `Ingress route '${r.route}' of plugin '${manifest.id}' uses scheme 'shared-secret', which binds ` +
+          `neither the body nor a timestamp, and dedups on a header the secret does not cover: a copy of a ` +
+          `delivery sent with a different header value is accepted as new. Prefer an hmac-sha256 scheme ` +
+          `with a signed timestamp, or set dedupOn: 'body' if the provider's retries are byte-identical.`,
+        { pluginId: manifest.id, route: r.route, action: 'ingress_replayable_route' },
+      );
+      continue;
+    }
     if (r.signature.scheme !== 'hmac-sha256') continue; // only hmac templates can bind a timestamp
     const signsTimestamp = (r.signature.contentTemplate ?? '{rawBody}').includes('{timestamp}');
     if (r.signature.timestampHeader && !signsTimestamp) {
@@ -484,6 +505,14 @@ export function warnUnsignedTimestampRoutes(
           `timestampHeader — the token binds the empty string and no freshness check runs. Declare the ` +
           `provider's timestamp header (and optionally toleranceSec) to activate the replay window.`,
         { pluginId: manifest.id, route: r.route, action: 'ingress_unsigned_timestamp' },
+      );
+    } else if (!r.signature.timestampHeader && r.dedupOn !== 'body') {
+      logger.warn(
+        `Ingress route '${r.route}' of plugin '${manifest.id}' signs no timestamp and dedups on a header ` +
+          `the signature does not cover: a copy of a delivery sent with a different header value is ` +
+          `accepted as new. Declare and sign the provider's timestamp (timestampHeader plus {timestamp} ` +
+          `in the contentTemplate), or set dedupOn: 'body' if the provider's retries are byte-identical.`,
+        { pluginId: manifest.id, route: r.route, action: 'ingress_replayable_route' },
       );
     }
   }

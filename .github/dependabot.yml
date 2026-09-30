@@ -146,9 +146,13 @@ updates:
     labels:
       - ci
 
-  # Base images (Dockerfile) + the compose stack's pinned images (socket-proxy, postgres,
-  # redis, minio). Keeps the security-critical docker-socket-proxy pin and the datastore
-  # images moving instead of drifting on a stale tag.
+  # Base image (Dockerfile only: node:22-slim@digest in both stages). This ecosystem does not
+  # read docker-compose.yml; the entry below does. It proposes a tag bump when an allowed one
+  # exists and otherwise a refreshed 22-slim digest. The digest pinned on 2026-08-13 still
+  # stayed for weeks while the tag moved, so the base-image-drift job in security-scan.yml
+  # backstops a refresh that is late or left unmerged: it fails once the pin differs from what
+  # the tag serves and either the tag has served that image for 7 or more days, or for 3 or
+  # more days with the pin last changed 28 or more days ago.
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -161,7 +165,34 @@ updates:
     ignore:
       # A Node major moves by hand, together with the CI Node version, the @types/node ignore above
       # and the amd64/arm64 build and browser-launch smoke (#783 proposed 26 before its LTS date,
-      # #1684 proposed 25, which never became one). Digest refreshes of node:22-slim and the other
-      # images still come through.
+      # #1684 proposed 25, which never became one). Digest refreshes of node:22-slim are not
+      # affected by this ignore.
       - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+
+  # The compose stack's pinned images (docker-compose.yml): socket-proxy, postgres, redis, and
+  # pgsty/silo for the `minio` service. A postgres, redis or silo bump fails
+  # src/modules/docker/compose-parity.spec.ts until the same image reference (for silo, tag and
+  # digest) is set in src/modules/docker/docker.service.ts; that failure is intended, so edit both
+  # on the Dependabot branch. tecnativa/docker-socket-proxy has no such mirror and no CI gate on its
+  # behaviour: review its release notes against the allow-list in docker-compose.yml and re-run
+  # scripts/smoke-test-docker-proxy.sh by hand before merging one.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+    ignore:
+      # A PostgreSQL major cannot open the previous major's data directory: a 16 -> 17 bump merged
+      # as-is stops every existing openwa-postgres volume from starting. It moves by hand, with a
+      # dump/restore or pg_upgrade note.
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+      # Redis 8 changes the license and must stay in step with the CI service containers
+      # (ci.yml, release.yml), which no ecosystem updates. A deliberate, by-hand move.
+      - dependency-name: "redis"
         update-types: ["version-update:semver-major"]

@@ -4,6 +4,7 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import Redis, { type RedisOptions } from 'ioredis';
 import type { Server, ServerOptions } from 'socket.io';
 import { createLogger } from '../../common/services/logger.service';
+import { redisConnectionOptions } from '../../config/redis-options';
 
 const logger = createLogger('RedisIoAdapter');
 
@@ -22,11 +23,7 @@ export function isWsRedisEnabled(): boolean {
 /** ioredis options for the pub/sub pair, mirroring the throttler/cache connection env exactly. */
 export function wsRedisOptions(): RedisOptions {
   return {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT || '6379', 10),
-    username: process.env.REDIS_USERNAME,
-    password: process.env.REDIS_PASSWORD,
-    connectTimeout: parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS || '5000', 10),
+    ...redisConnectionOptions(),
     // The adapter's SUBSCRIBE connection cannot issue ordinary commands, so a bounded retry that
     // gives up (returning null) would strand fan-out permanently after one blip. Reconnect forever
     // with capped backoff, matching the cache client.

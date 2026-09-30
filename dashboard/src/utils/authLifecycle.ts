@@ -22,6 +22,17 @@ export function clearActorState(...caches: ClearableCache[]): void {
   for (const cache of caches) cache.clear();
 }
 
+const IP_REFUSALS: ReadonlySet<string> = new Set(['IP address not allowed', 'Client IP could not be determined']);
+
+/**
+ * True when a response proves the stored key cannot be used from this client, so the dashboard must
+ * log out: a 401, or a 403 because the key's allowedIps refuse this client (the IP can change
+ * mid-session). A role or scope 403 leaves the key usable for other requests.
+ */
+export function isKeyUnusable(status: number, message: unknown): boolean {
+  return status === 401 || (status === 403 && typeof message === 'string' && IP_REFUSALS.has(message));
+}
+
 export type StartupValidation =
   { action: 'role'; role: UserRole; engineType?: string } | { action: 'logout' } | { action: 'keep' };
 

@@ -25,3 +25,23 @@ export function warnIfInsecureHttpUrl(url: string, label: string): string {
   }
   return url;
 }
+
+/**
+ * The origin the realtime socket dials: that of VITE_WS_URL when set, else of VITE_API_URL (a
+ * split-origin build serves the socket from the API, not from the dashboard's host), else the page's
+ * own origin. Only the origin is taken from either value: socket.io reads a URL path as the namespace,
+ * so a path (even a trailing slash) would turn '/events' into an unknown namespace the gateway rejects.
+ */
+export function resolveSocketUrl(wsUrl: string | undefined, apiUrl: string, pageOrigin: string): string {
+  const raw = wsUrl || apiUrl;
+  if (!raw) return pageOrigin;
+  // socket.io dials a value with no scheme ('host:port') on the page's protocol; URL would read
+  // 'host:' as a scheme (opaque 'null' origin) or a bare host as a path on the page's own host.
+  const source = /^[a-z][a-z\d+.-]*:\/\//i.test(raw) || raw.startsWith('/') ? raw : `//${raw}`;
+  try {
+    const origin = new URL(source, pageOrigin).origin;
+    return origin === 'null' ? pageOrigin : origin;
+  } catch {
+    return pageOrigin;
+  }
+}

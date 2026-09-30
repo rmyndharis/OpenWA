@@ -7,6 +7,7 @@ import { Session, SessionStatus } from '../session/entities/session.entity';
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { SessionService } from '../session/session.service';
+import { SessionStoppedException } from '../session/session-engine-controls';
 import { BulkMessageService } from '../message/bulk-message.service';
 
 /**
@@ -172,7 +173,10 @@ export class SessionTakeoverService implements OnApplicationBootstrap, OnModuleD
         // than leaving them stuck in PROCESSING until some node happens to reboot.
         await this.bulkMessages.reapProcessingBatches(session.id, 'session adopted from a lapsed node');
       } catch (error) {
-        if (error instanceof ConflictException) {
+        if (error instanceof SessionStoppedException) {
+          // Stopped between the sweep's read and this start; the start refused it, as it should.
+          this.logger.debug(`Session ${session.name} skipped: stopped by an operator`, { sessionId: session.id });
+        } else if (error instanceof ConflictException) {
           // A peer won the race — exactly the claim doing its job.
           this.logger.debug(`Session ${session.name} was adopted by another node first`, { sessionId: session.id });
         } else {
@@ -190,7 +194,8 @@ export class SessionTakeoverService implements OnApplicationBootstrap, OnModuleD
 
   private isEligible(session: Session): boolean {
     // Only authenticated sessions (phone set): an engine is worth relaunching exactly when the
-    // saved credentials can restore the link without a human scanning anything.
-    return Boolean(session.phone) && TAKEOVER_STATUSES.has(session.status);
+    // saved credentials can restore the link without a human scanning anything. A session an
+    // operator stopped stays down until an explicit start, wherever its claim lapsed.
+    return Boolean(session.phone) && TAKEOVER_STATUSES.has(session.status) && session.desiredState !== 'stopped';
   }
 }

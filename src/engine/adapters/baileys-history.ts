@@ -2,6 +2,7 @@ import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { Chat, Contact as BaileysContact, WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { EngineEventCallbacks, IncomingMessage } from '../interfaces/whatsapp-engine.interface';
 import {
+  BAILEYS_NON_CONTENT_TYPES,
   buildIncomingMessageFromBaileys,
   extractBaileysBody,
   extractBaileysButtonReply,
@@ -229,7 +230,8 @@ export class BaileysHistory {
   /**
    * Media-free WAMessage -> IncomingMessage map for bulk history (downloading media for thousands of
    * messages would be ruinous; the type is kept, the payload dropped). Returns null for protocol /
-   * reaction / key / empty messages, which carry nothing for the chat view.
+   * reaction / key / empty messages and for BAILEYS_NON_CONTENT_TYPES, which carry nothing for the
+   * chat view.
    */
   private mapHistoryMessage(b: typeof BaileysLib, msg: WAMessage): IncomingMessage | null {
     const raw = msg.message;
@@ -246,7 +248,8 @@ export class BaileysHistory {
       !contentType ||
       contentType === 'protocolMessage' ||
       contentType === 'reactionMessage' ||
-      contentType === 'senderKeyDistributionMessage'
+      contentType === 'senderKeyDistributionMessage' ||
+      BAILEYS_NON_CONTENT_TYPES.has(contentType)
     ) {
       return null;
     }

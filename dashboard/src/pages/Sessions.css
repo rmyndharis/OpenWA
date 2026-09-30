@@ -406,7 +406,7 @@
   background: var(--bg-light);
   padding: 0.125rem 0.375rem;
   border-radius: 4px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', monospace;
   font-size: 0.7rem;
 }
 
@@ -550,7 +550,7 @@
 }
 
 .sessions-page .detail-value.mono {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', monospace;
   font-size: 0.8125rem;
   background: var(--bg-light);
   padding: 0.5rem;
@@ -797,7 +797,7 @@
   padding: 1rem 2rem;
   border-radius: 12px;
   letter-spacing: 0.1em;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', monospace;
   margin: 1.5rem 0;
 }
 

@@ -49,6 +49,12 @@
 # sqlite3 CLI is unavailable the databases are plain-copied (possibly torn if the app is live) and
 # the archive carries a CONSISTENCY-WARNING marker that restore.sh surfaces.
 #
+# Engine authentication state (sessions/, baileys/) is copied, not snapshotted: the engines rewrite
+# it while they run, so an online backup can hold a copy torn mid-write. When a whatsapp-web.js
+# profile is open or Baileys state is present, the archive carries an ENGINE-STATE-NOTE that
+# restore.sh prints without refusing (--strict gates only the database marker). For a copy that is
+# consistent by construction, stop the sessions (or the container) first.
+#
 set -euo pipefail
 # The archive now contains bootstrap credentials and generated database secrets. Never inherit a
 # permissive operator umask for newly-created backup artifacts.
@@ -121,6 +127,24 @@ EOF
   echo "plain-copied: $1" >>"$CONSISTENCY_WARNING"
 }
 
+ENGINE_STATE_NOTE="$STAGE/ENGINE-STATE-NOTE"
+
+# Marker file shipped INSIDE the archive: engine auth state was copied while an engine may have been
+# writing it. Separate from the database marker so restore.sh --strict does not refuse every online
+# backup; a torn auth copy costs a re-pair, not data.
+record_engine_state_note() {
+  if [ ! -f "$ENGINE_STATE_NOTE" ]; then
+    cat >"$ENGINE_STATE_NOTE" <<'EOF'
+The engine authentication state listed below was copied while the app may have been writing it:
+these directories are plain copies. This note does not cover the databases; a CONSISTENCY-WARNING
+in the same archive does. If a restored session does not reconnect, pair it again, or re-take the
+backup with the sessions (or the container) stopped.
+EOF
+  fi
+  echo "$1" >>"$ENGINE_STATE_NOTE"
+  log "WARN: engine auth state may have been written during the copy; a restore may need re-pairing: $1"
+}
+
 # Online SQLite backup (consistent without stopping the app) when sqlite3 is present. A missing
 # source database is FATAL: an archive without the configured databases is not a backup, and a
 # silent skip is how an empty archive gets reported as "Backup complete".
@@ -179,6 +203,13 @@ fi
 if [ -d "$SESSIONS_DIR" ]; then
   log "Backing up whatsapp-web.js sessions"
   cp -pRH "$SESSIONS_DIR" "$STAGE/sessions"
+  # Chromium holds a SingletonLock (a symlink, so not `-e`) in every profile it has open, and the
+  # entrypoint clears stale ones at start, so a lock here means a browser was writing that profile.
+  OPEN_PROFILES="$(find -H "$SESSIONS_DIR" -mindepth 2 -maxdepth 2 -name SingletonLock -exec dirname {} \; |
+    sed 's|.*/||' | sort | tr '\n' ' ')"
+  if [ -n "$OPEN_PROFILES" ]; then
+    record_engine_state_note "sessions/ (whatsapp-web.js profiles open in a browser: ${OPEN_PROFILES% })"
+  fi
 else
   log "WARN: $SESSIONS_DIR not found — skipping sessions"
 fi
@@ -186,6 +217,11 @@ fi
 if [ -d "$BAILEYS_DIR" ]; then
   log "Backing up Baileys authentication state"
   cp -pRH "$BAILEYS_DIR" "$STAGE/baileys"
+  # Baileys rewrites creds.json and its key files during normal traffic and leaves no sign of being
+  # live, so any session's state counts, stopped or not.
+  if [ -n "$(find -H "$BAILEYS_DIR" -mindepth 1 -maxdepth 1 -type d -print -quit)" ]; then
+    record_engine_state_note "baileys/ (recorded whenever Baileys state exists; it cannot show whether it was live)"
+  fi
 elif [ "${ENGINE_TYPE:-}" = "baileys" ]; then
   log "WARN: ENGINE_TYPE=baileys but $BAILEYS_DIR was not found — restored sessions will require pairing"
 fi

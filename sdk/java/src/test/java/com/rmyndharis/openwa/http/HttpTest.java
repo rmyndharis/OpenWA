@@ -2,6 +2,7 @@ package com.rmyndharis.openwa.http;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.gson.Gson;
@@ -19,6 +20,26 @@ class HttpTest {
         assertEquals("a%23b", Http.encodeSegment("a#b"));
         assertEquals("a%3Fb", Http.encodeSegment("a?b"));
         assertEquals("1:2+3", Http.encodeSegment("1:2+3"));
+    }
+
+    @Test
+    void encodeSegmentRefusesEmptyAndDotSegments() {
+        for (String id : new String[] {"", ".", ".."}) {
+            assertThrows(IllegalArgumentException.class, () -> Http.encodeSegment(id), id);
+        }
+        // Dots inside an id are not a dot segment.
+        assertEquals("a.b", Http.encodeSegment("a.b"));
+        assertEquals("...", Http.encodeSegment("..."));
+    }
+
+    @Test
+    void buildUrlRefusesDotSegmentsButKeepsEmptyOnes() {
+        for (String path : new String[] {"/api/sessions/s1/..", "/api/./x", "/api/sessions/s1/labels/%2E%2e"}) {
+            assertThrows(IllegalArgumentException.class, () -> Http.buildUrl("http://h", path, null, gson), path);
+        }
+        assertEquals("http://h/api/sessions/", Http.buildUrl("http://h", "/api/sessions/", null, gson));
+        assertEquals("http://h/a//b", Http.buildUrl("http://h", "/a//b", null, gson));
+        assertEquals("http://h/api/labels/a.b?x=/..", Http.buildUrl("http://h", "/api/labels/a.b?x=/..", null, gson));
     }
 
     @Test

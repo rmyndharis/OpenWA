@@ -132,7 +132,11 @@ describe('createInflightBodyBudget middleware', () => {
     expect(state.code).toBe(503);
     expect(headers['retry-after']).toBe('1');
     expect(headers['connection']).toBe('close');
-    expect((state.payload as { statusCode: number }).statusCode).toBe(503);
+    expect(state.payload).toEqual({
+      statusCode: 503,
+      message: 'Too much request body data in flight; retry later',
+      error: 'Service Unavailable',
+    });
     // Nothing was reserved for the rejected request and its stream was never tapped.
     expect(budget.currentBytes()).toBe(800);
     expect(rejected.listenerCount('data')).toBe(0);
@@ -241,6 +245,44 @@ describe('createInflightBodyBudget middleware', () => {
     expect(req.listenerCount('data')).toBe(0);
   });
 
+  describe('with the client map at capacity', () => {
+    const fromIp = (ip: string, headers: Record<string, string> = {}): Request & EventEmitter => {
+      const req = makeReq(headers);
+      (req as unknown as { socket: { remoteAddress: string } }).socket.remoteAddress = ip;
+      return req;
+    };
+    const saturated = (): InflightBodyBudget => {
+      const budget = createInflightBodyBudget(1_000_000, { perClientShare: 1 });
+      for (let i = 0; i < 10_000; i++) {
+        const ip = `10.${Math.floor(i / 65536)}.${Math.floor(i / 256) % 256}.${i % 256}`;
+        expect(run(budget, fromIp(ip, { 'content-length': '10' })).next).toHaveBeenCalledTimes(1);
+      }
+      expect(budget.currentBytes()).toBe(100_000);
+      return budget;
+    };
+
+    it('still admits bodyless requests from a new client, without tracking them', () => {
+      const budget = saturated();
+      for (const headers of [{}, { 'content-length': '0' }] as Record<string, string>[]) {
+        const req = fromIp('192.0.2.200', headers);
+        const { next, state, res } = run(budget, req);
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(state.code).toBe(0);
+        expect(budget.clientBytes(req)).toBe(0);
+        expect(req.listenerCount('close')).toBe(0);
+        expect(res.listenerCount('finish')).toBe(0);
+      }
+      expect(budget.currentBytes()).toBe(100_000);
+    });
+
+    it('still refuses a body-carrying request from a new client', () => {
+      const budget = saturated();
+      const { next, state } = run(budget, fromIp('192.0.2.200', { 'content-length': '10' }));
+      expect(next).not.toHaveBeenCalled();
+      expect(state.code).toBe(503);
+    });
+  });
+
   it('drops the socket instead of writing a 503 when the response is already flushing', () => {
     const budget = createInflightBodyBudget(1000, { perClientShare: 1 });
     run(budget, makeReq({ 'content-length': '800' }));
@@ -266,6 +308,114 @@ describe('createInflightBodyBudget middleware', () => {
       res.emit('finish');
       expect(budget.currentBytes()).toBe(0);
     }
+  });
+});
+
+describe('anonymous tier', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  // Budget 1000 with a 250-byte body cap: the anonymous pool is max(2 x 250, 25% of 1000) = 500,
+  // each anonymous IP's share is 250 and each key's share is half the budget, 500.
+  const tiered = () => {
+    const classify = jest.fn((req: Request) => {
+      const key = req.headers['x-api-key'];
+      return typeof key === 'string' ? `hash-${key}` : undefined;
+    });
+    return { budget: createInflightBodyBudget(1000, { classify, bodyLimitBytes: 250 }), classify };
+  };
+  const from = (ip: string, headers: Record<string, string>): Request & EventEmitter => {
+    const req = makeReq(headers);
+    (req as unknown as { socket: { remoteAddress: string } }).socket.remoteAddress = ip;
+    return req;
+  };
+
+  it('keeps unrecognised requests inside their pool while a keyed request still gets in', () => {
+    const { budget } = tiered();
+    expect(run(budget, from('198.51.100.1', { 'content-length': '250' })).next).toHaveBeenCalledTimes(1);
+    expect(run(budget, from('198.51.100.2', { 'content-length': '250' })).next).toHaveBeenCalledTimes(1);
+    expect(budget.anonymousBytes()).toBe(500);
+
+    // The aggregate has 500 free, but none of it is open to a third anonymous client.
+    const refused = run(budget, from('198.51.100.3', { 'content-length': '10' }));
+    expect(refused.next).not.toHaveBeenCalled();
+    expect(refused.state.code).toBe(503);
+
+    const keyed = run(budget, from('198.51.100.3', { 'content-length': '400', 'x-api-key': 'k1' }));
+    expect(keyed.next).toHaveBeenCalledTimes(1);
+    expect(budget.currentBytes()).toBe(900);
+    expect(budget.anonymousBytes()).toBe(500);
+  });
+
+  it('leaves room for other unkeyed senders while one client holds a full-size body (defaults)', () => {
+    const budget = createInflightBodyBudget(100 * MB, { classify: () => undefined, bodyLimitBytes: 25 * MB });
+    const big = run(budget, from('198.51.100.1', { 'content-length': String(25 * MB) }));
+    expect(big.next).toHaveBeenCalledTimes(1);
+    // The same client gets no more than one full-size body.
+    expect(run(budget, from('198.51.100.1', { 'content-length': '2048' })).state.code).toBe(503);
+
+    // A small delivery from another address (an ingress webhook, say) still gets in.
+    const other = run(budget, from('203.0.113.9', { 'content-length': '2048' }));
+    expect(other.next).toHaveBeenCalledTimes(1);
+    expect(budget.anonymousBytes()).toBe(25 * MB + 2048);
+  });
+
+  it('charges an anonymous body no more than the body cap, so the parser can still answer 413', () => {
+    const { budget } = tiered();
+    const { next, res } = run(budget, from('198.51.100.1', { 'content-length': '900' }));
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(budget.currentBytes()).toBe(250);
+    res.emit('finish');
+    expect(budget.currentBytes()).toBe(0);
+    expect(budget.anonymousBytes()).toBe(0);
+  });
+
+  it('shares per key across addresses, and per address never across keys', () => {
+    const { budget } = tiered();
+    expect(run(budget, from('198.51.100.1', { 'content-length': '400', 'x-api-key': 'k1' })).next).toHaveBeenCalled();
+    const sameKey = run(budget, from('198.51.100.2', { 'content-length': '200', 'x-api-key': 'k1' }));
+    expect(sameKey.state.code).toBe(503);
+    const otherKey = run(budget, from('198.51.100.1', { 'content-length': '400', 'x-api-key': 'k2' }));
+    expect(otherKey.next).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts an anonymous body whose growth crosses the pool, releasing every counter once', () => {
+    // Budget 8 MiB, body cap 2 MiB: pool 4 MiB, 2 MiB per anonymous IP, 1 MiB chunked placeholder.
+    const budget = createInflightBodyBudget(8 * MB, { classify: () => undefined, bodyLimitBytes: 2 * MB });
+    const slow = from('198.51.100.1', { 'transfer-encoding': 'chunked' });
+    const slowRes = run(budget, slow).res;
+    const second = run(budget, from('198.51.100.2', { 'content-length': String(2 * MB) }));
+    const third = run(budget, from('198.51.100.3', { 'content-length': String(MB) }));
+    expect(second.next).toHaveBeenCalledTimes(1);
+    expect(third.next).toHaveBeenCalledTimes(1);
+    expect(budget.anonymousBytes()).toBe(4 * MB);
+
+    // Within its own share and the aggregate, but past the pool.
+    (slow as unknown as { socket: { bytesRead: number } }).socket.bytesRead = 1.5 * MB;
+    jest.advanceTimersByTime(5_000);
+    expect((slow as unknown as { destroy: jest.Mock }).destroy).toHaveBeenCalledTimes(1);
+    slow.emit('close');
+    slowRes.emit('finish');
+    expect(budget.anonymousBytes()).toBe(3 * MB);
+    expect(budget.clientBytes(slow)).toBe(0);
+
+    second.res.emit('finish');
+    third.res.emit('finish');
+    expect(budget.anonymousBytes()).toBe(0);
+    expect(budget.currentBytes()).toBe(0);
+  });
+
+  it('does not classify a request without a body', () => {
+    const { budget, classify } = tiered();
+    run(budget, from('198.51.100.1', { 'x-api-key': 'k1' }));
+    expect(classify).not.toHaveBeenCalled();
+  });
+
+  it('keeps one pool with per-IP shares when no classifier is given', () => {
+    const budget = createInflightBodyBudget(1000, { bodyLimitBytes: 250 });
+    expect(run(budget, from('198.51.100.1', { 'content-length': '400' })).next).toHaveBeenCalledTimes(1);
+    expect(run(budget, from('198.51.100.2', { 'content-length': '400' })).next).toHaveBeenCalledTimes(1);
+    expect(budget.anonymousBytes()).toBe(0);
   });
 });
 
@@ -303,7 +453,7 @@ describe('stall reaper', () => {
     expect(budget.currentBytes()).toBe(0);
   });
 
-  it('does not reap a connection that keeps making progress, however slow', () => {
+  it('does not reap a connection that keeps making progress, and keeps its declared size', () => {
     const budget = createInflightBodyBudget(1000, { perClientShare: 1 });
     const req = makeReq({ 'content-length': '400' });
     run(budget, req);
@@ -316,6 +466,183 @@ describe('stall reaper', () => {
     }
     expect(destroyMock(req)).not.toHaveBeenCalled();
     expect(budget.currentBytes()).toBe(400);
+    expect(budget.clientBytes(req)).toBe(400);
+  });
+
+  describe('reservation of a slow body', () => {
+    const socketOf = (req: Request): { bytesRead: number; remoteAddress: string } =>
+      (req as unknown as { socket: { bytesRead: number; remoteAddress: string } }).socket;
+    const trickle = (reqs: Request[], bytes: number, ms: number): void => {
+      for (let t = 0; t < ms; t += 1_000) {
+        jest.advanceTimersByTime(1_000);
+        if ((t + 1_000) % 4_000 === 0) for (const r of reqs) socketOf(r).bytesRead += bytes;
+      }
+    };
+
+    it('drops a declared body that falls behind the pace the request timeout allows, releasing it once', () => {
+      const budget = createInflightBodyBudget(1000, { perClientShare: 1 });
+      const req = makeReq({ 'content-length': '400' });
+      const { res } = run(budget, req);
+
+      // One byte every 4 s: never idle long enough for the stall reaper, far too slow to finish.
+      trickle([req], 1, 20_000);
+      expect(destroyMock(req)).toHaveBeenCalledTimes(1);
+      expect(budget.currentBytes()).toBe(0);
+      expect(budget.clientBytes(req)).toBe(0);
+
+      // The terminal events the destroy triggers do not release it a second time.
+      const other = makeReq({ 'content-length': '1000' });
+      expect(run(budget, other).next).toHaveBeenCalledTimes(1);
+      req.emit('close');
+      res.emit('close');
+      expect(budget.currentBytes()).toBe(1000);
+    });
+
+    it('keeps a declared body that arrives fast enough to finish within the request timeout', () => {
+      const budget = createInflightBodyBudget(2000, { perClientShare: 1, requestTimeoutMs: 100_000 });
+      const req = makeReq({ 'content-length': '1000' });
+      run(budget, req);
+
+      // 10 bytes/s finishes 1000 bytes in exactly the 100 s timeout.
+      trickle([req], 40, 96_000);
+      expect(destroyMock(req)).not.toHaveBeenCalled();
+      expect(budget.currentBytes()).toBe(1000);
+    });
+
+    it('measures the pace against the configured request timeout', () => {
+      const budget = createInflightBodyBudget(2000, { perClientShare: 1, requestTimeoutMs: 100_000 });
+      const req = makeReq({ 'content-length': '1000' });
+      run(budget, req);
+
+      // Half the pace a 100 s timeout needs; the default 300 s timeout would still allow it.
+      trickle([req], 20, 40_000);
+      expect(destroyMock(req)).toHaveBeenCalledTimes(1);
+      expect(budget.currentBytes()).toBe(0);
+    });
+
+    it('drops a chunked body that trickles below the pace its placeholder needs, releasing it once', () => {
+      const budget = createInflightBodyBudget(2 * MB, { perClientShare: 1 });
+      const req = makeReq({ 'transfer-encoding': 'chunked' });
+      const { res } = run(budget, req);
+
+      trickle([req], 1, 20_000);
+      expect(destroyMock(req)).toHaveBeenCalledTimes(1);
+      expect(budget.currentBytes()).toBe(0);
+      expect(budget.clientBytes(req)).toBe(0);
+
+      const other = makeReq({ 'content-length': String(2 * MB) });
+      expect(run(budget, other).next).toHaveBeenCalledTimes(1);
+      req.emit('close');
+      res.emit('close');
+      expect(budget.currentBytes()).toBe(2 * MB);
+    });
+
+    it('keeps a chunked body that stays on pace, and stops pacing it once it passes the placeholder', () => {
+      const budget = createInflightBodyBudget(64 * MB, { perClientShare: 1, requestTimeoutMs: 100_000 });
+      const req = makeReq({ 'transfer-encoding': 'chunked' });
+      run(budget, req);
+
+      // 10.5 KB/s delivers the 1 MiB placeholder inside the 100 s timeout, then keeps going past it.
+      trickle([req], 42_000, 200_000);
+      expect(destroyMock(req)).not.toHaveBeenCalled();
+      expect(budget.currentBytes()).toBeGreaterThan(MB);
+    });
+
+    it('paces an anonymous chunked body against the smaller amount it is charged', () => {
+      const budget = createInflightBodyBudget(MB, { classify: () => undefined, bodyLimitBytes: 64 * 1024 });
+      const req = makeReq({ 'transfer-encoding': 'chunked' });
+      run(budget, req);
+      expect(budget.anonymousBytes()).toBe(64 * 1024);
+
+      // 64 KiB in 300 s is about 220 B/s; 1 KiB every 4 s keeps up, 1 MiB in 300 s would not.
+      trickle([req], 1024, 60_000);
+      expect(destroyMock(req)).not.toHaveBeenCalled();
+    });
+
+    it('does not let trickling unkeyed chunked bodies hold the unkeyed pool past the pace window', () => {
+      const budget = createInflightBodyBudget(100 * MB, { classify: () => undefined, bodyLimitBytes: 25 * MB });
+      const held: Request[] = [];
+      for (const ip of ['198.51.100.1', '198.51.100.2']) {
+        for (let i = 0; i < 25; i++) {
+          const req = makeReq({ 'transfer-encoding': 'chunked' });
+          socketOf(req).remoteAddress = ip;
+          expect(run(budget, req).next).toHaveBeenCalledTimes(1);
+          held.push(req);
+        }
+      }
+      expect(budget.anonymousBytes()).toBe(50 * MB);
+      const early = makeReq({ 'content-length': '2000' });
+      socketOf(early).remoteAddress = '203.0.113.9';
+      expect(run(budget, early).state.code).toBe(503);
+
+      trickle(held, 1, 20_000);
+      for (const r of held) expect(destroyMock(r)).toHaveBeenCalledTimes(1);
+      expect(budget.anonymousBytes()).toBe(0);
+      const late = makeReq({ 'content-length': '2000' });
+      socketOf(late).remoteAddress = '203.0.113.9';
+      expect(run(budget, late).next).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps a client share held by trickling requests', () => {
+      const budget = createInflightBodyBudget(1000); // share 0.5 -> cap 500
+      const a = makeReq({ 'content-length': '250' });
+      const b = makeReq({ 'content-length': '250' });
+      run(budget, a);
+      run(budget, b);
+
+      trickle([a, b], 1, 16_000);
+      expect(budget.clientBytes(a)).toBe(500);
+      expect(run(budget, makeReq({ 'content-length': '200' })).state.code).toBe(503);
+
+      // Once they fall behind the pace the request timeout allows, both are dropped and the share frees.
+      trickle([a, b], 1, 10_000);
+      expect(destroyMock(a)).toHaveBeenCalledTimes(1);
+      expect(destroyMock(b)).toHaveBeenCalledTimes(1);
+      expect(budget.clientBytes(a)).toBe(0);
+      expect(run(budget, makeReq({ 'content-length': '200' })).next).toHaveBeenCalledTimes(1);
+    });
+
+    it('never lets trickling bodies that complete together exceed the budget', () => {
+      const budget = createInflightBodyBudget(1000, { perClientShare: 1 });
+      const live: Request[] = [];
+      // A new 200-byte body every second for two minutes, each trickling one byte every 4 s.
+      for (let s = 1; s <= 120; s++) {
+        const req = makeReq({ 'content-length': '200' });
+        socketOf(req).remoteAddress = `198.51.100.${s}`;
+        if (run(budget, req).next.mock.calls.length > 0) live.push(req);
+        jest.advanceTimersByTime(1_000);
+        if (s % 4 === 0) for (const r of live) socketOf(r).bytesRead += 4;
+      }
+
+      // Every live body then lands before the next poll.
+      for (const r of live) {
+        socketOf(r).bytesRead = 200;
+        (r as unknown as { complete: boolean }).complete = true;
+      }
+      jest.advanceTimersByTime(5_000);
+      expect(budget.currentBytes()).toBeLessThanOrEqual(1000);
+      expect(live).toHaveLength(5);
+      for (const r of live) expect(destroyMock(r)).not.toHaveBeenCalled();
+    });
+
+    it('refuses a new body while a trickling one holds its declaration, and settles it at its size', () => {
+      const budget = createInflightBodyBudget(1000, { perClientShare: 1 });
+      const req = makeReq({ 'content-length': '400' });
+      const { res } = run(budget, req);
+      trickle([req], 5, 16_000);
+      expect(budget.currentBytes()).toBe(400);
+      expect(run(budget, makeReq({ 'content-length': '900' })).state.code).toBe(503);
+
+      // The rest of the body lands between polls and Node marks the message complete.
+      socketOf(req).bytesRead = 400;
+      (req as unknown as { complete: boolean }).complete = true;
+      jest.advanceTimersByTime(5_000);
+      expect(destroyMock(req)).not.toHaveBeenCalled();
+      expect(budget.currentBytes()).toBe(400);
+
+      res.emit('finish');
+      expect(budget.currentBytes()).toBe(0);
+    });
   });
 
   it('stops reaping once the declared body has fully arrived', () => {
@@ -337,10 +664,12 @@ describe('stall reaper', () => {
     const req = makeReq({ 'transfer-encoding': 'chunked' });
     const { res } = run(budget, req);
 
+    // A finished chunked body is priced at what arrived, not the opening placeholder.
+    (req as unknown as { socket: { bytesRead: number } }).socket.bytesRead = 300;
     req.emit('end');
     jest.advanceTimersByTime(120_000);
     expect(destroyMock(req)).not.toHaveBeenCalled();
-    expect(budget.currentBytes()).toBe(1000);
+    expect(budget.currentBytes()).toBe(300);
 
     res.emit('finish');
     expect(budget.currentBytes()).toBe(0);

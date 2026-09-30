@@ -14,11 +14,11 @@ import { isMediaUrl } from '../../common/media/media-url';
  * status type — without it the dashboard's audio player is handed an octet-stream it cannot play.
  * `image/svg+xml` is excluded despite the image/ prefix: SVG is scriptable, so serving it with its
  * declared Content-Type would make the endpoint stored-XSS material — same exclusion the chat-media
- * path applies. The stored mimetype is engine-reported verbatim, so the exclusion matches what a
- * browser will parse it as: MIME parameters (`;charset=…`) and trailing whitespace are stripped by
- * the Content-Type parser, and `image/svg+xml;charset=utf-8` still renders as SVG. */
-const SAFE_STATUS_MIMETYPE = /^(image|video|audio)\//;
-const SCRIPTABLE_SVG_MIMETYPE = /^image\/svg\+xml\s*(;|$)/;
+ * path applies. The stored mimetype is engine-reported verbatim, so only its essence (the part before
+ * any `;`, trimmed and lowercased) is checked and served, and it must be a single well-formed type:
+ * a parameter list or a comma-joined second type could otherwise make a browser read the header as
+ * something else. */
+const SAFE_STATUS_MIMETYPE = /^(image|video|audio)\/[a-z0-9][a-z0-9.+-]*$/;
 
 // The padding and its trailing whitespace are one optional group: a bare `=*\s*` after a class that
 // also matches whitespace let a long whitespace run followed by any other character backtrack
@@ -94,10 +94,11 @@ export class StatusService {
     }
     try {
       const buffer = await this.storageService.getFile(media.path);
+      // MIME types are case-insensitive, and a browser treats `image/SVG+XML` exactly as it treats
+      // `image/svg+xml`: the check runs on the normalized essence, and that is what gets served.
+      const essence = media.mimetype.split(';')[0].trim().toLowerCase();
       const mimetype =
-        SAFE_STATUS_MIMETYPE.test(media.mimetype) && !SCRIPTABLE_SVG_MIMETYPE.test(media.mimetype)
-          ? media.mimetype
-          : 'application/octet-stream';
+        SAFE_STATUS_MIMETYPE.test(essence) && essence !== 'image/svg+xml' ? essence : 'application/octet-stream';
       return { buffer, mimetype };
     } catch (error) {
       // The row outlived its file: purgeExpired (or a concurrent delete) removed it between the

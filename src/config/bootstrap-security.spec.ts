@@ -7,6 +7,7 @@ import {
   resolveBodyLimit,
   assertNoDefaultSecretsInProduction,
   isApiKeyPepperMissingInProduction,
+  isMainDbSynchronizeInProduction,
   isNodeEnvUnset,
 } from './bootstrap-security';
 
@@ -416,6 +417,17 @@ describe('assertNoDefaultSecretsInProduction', () => {
         apiMasterKey: 'root-pw-8821x-and-the-rest-of-entropy',
       }),
     ).not.toThrow();
+  });
+});
+
+describe('isMainDbSynchronizeInProduction', () => {
+  it('is true only for an explicit MAIN_DATABASE_SYNCHRONIZE=true in production', () => {
+    expect(isMainDbSynchronizeInProduction('production', 'true')).toBe(true);
+    expect(isMainDbSynchronizeInProduction('production', 'false')).toBe(false);
+    expect(isMainDbSynchronizeInProduction('production', undefined)).toBe(false);
+    expect(isMainDbSynchronizeInProduction('production', '')).toBe(false);
+    expect(isMainDbSynchronizeInProduction('test', 'true')).toBe(false);
+    expect(isMainDbSynchronizeInProduction(undefined, 'true')).toBe(false);
   });
 });
 

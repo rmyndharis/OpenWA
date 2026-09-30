@@ -20,8 +20,8 @@ export function isPathWithin(root: string, target: string): boolean {
  * Returns true if `key` is a safe, contained relative storage key: a non-empty relative path with no
  * `..` traversal segment. Used to validate untrusted archive entry names / object keys at the
  * backend-agnostic `putFile`/`getFile` boundary so an S3 key (which has no host filesystem root to
- * check against `isPathWithin`) still can't escape the intended `media/` prefix. Ordinary keys —
- * including plugin/JID-style ones with `:`, `@`, `.`, `-` — are preserved.
+ * check against `isPathWithin`) still can't escape the configured S3 key root (`S3_KEY_PREFIX`,
+ * default `media/`). Ordinary keys — including plugin/JID-style ones with `:`, `@`, `.`, `-` — are preserved.
  */
 export function isSafeStorageKey(key: string): boolean {
   if (typeof key !== 'string' || key.length === 0) return false;

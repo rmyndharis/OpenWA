@@ -20,8 +20,7 @@ if (sqlitePathCollision) {
  * The app runs the main connection as a separate, ALWAYS-SQLite connection (app.module.ts), distinct
  * from the pluggable data connection. The default data-source.ts CLI only manages the data
  * connection's migrations, so without this the CLI could not run/generate the main-owned migrations
- * (migrations-main) — which matters the moment boot auto-migration is turned off
- * (MAIN_DATABASE_SYNCHRONIZE=false), where the schema must be managed via the CLI instead.
+ * (migrations-main), which also run at every boot.
  *
  * Mirrors the runtime main connection exactly: SQLite at ./data/main.sqlite, auth/audit entities,
  * migrations-main. synchronize is always false here — the CLI manages schema via migrations.

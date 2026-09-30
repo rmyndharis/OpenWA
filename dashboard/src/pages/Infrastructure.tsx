@@ -177,14 +177,17 @@ export function Infrastructure() {
   //   - the value WAS saved and the server has not been restarted yet — a restart applies it.
   // Both look identical as "running differs from saved", which is why drift alone used to be reported
   // as an environment pin even on a stock stack with no variable set anywhere (#1082).
+  // Pin-only: PUPPETEER_ARGS cannot go through settingNote, because the running list is re-tokenized and
+  // gains the pinned `--lang` flag, so it never string-compares equal to the saved value. The headless
+  // flag and the two paths do have a running and a saved value, but show only a reported pin as well.
+  const pinNote = (envKey: string) =>
+    infraStatus?.envPinned?.includes(envKey) ? (
+      <p className="env-pin-note">
+        <AlertTriangle size={14} /> {t('infrastructure.envPinNote', { name: envKey })}
+      </p>
+    ) : null;
   const settingNote = (envKey: string, running: unknown, saved: unknown) => {
-    if (infraStatus?.envPinned?.includes(envKey)) {
-      return (
-        <p className="env-pin-note">
-          <AlertTriangle size={14} /> {t('infrastructure.envPinNote', { name: envKey })}
-        </p>
-      );
-    }
+    if (infraStatus?.envPinned?.includes(envKey)) return pinNote(envKey);
     // Suppressed only while the request is actually in flight. `saving` is that flag; `savePending` is
     // a latch set once a save SUCCEEDS and cleared only by a restart's page reload, so gating on it
     // hid this note for the whole life of the page from the first successful save — which is exactly
@@ -196,6 +199,19 @@ export function Infrastructure() {
       </p>
     ) : null;
   };
+
+  // Built-in services the restart failed to start or stop. Shown whether or not the server came back:
+  // a service that failed to start is the likeliest reason it did not.
+  const restartWarningBox = restartFlow.restartWarnings.length > 0 && (
+    <div className="migration-warning" role="alert">
+      <AlertTriangle size={18} />
+      <div>
+        {restartFlow.restartWarnings.map((warning, index) => (
+          <p key={index}>{warning}</p>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div className="infrastructure-page">
@@ -453,6 +469,7 @@ export function Infrastructure() {
                   <span className="toggle-slider"></span>
                 </label>
               </div>
+              {pinNote('PUPPETEER_HEADLESS')}
               <div className="form-group">
                 <label htmlFor="infra-8">{t('infrastructure.engine.sessionDataPath')}</label>
                 <input
@@ -461,6 +478,7 @@ export function Infrastructure() {
                   value={configForm.engineConfig.sessionDataPath}
                   onChange={e => configForm.updateEngineConfig('sessionDataPath', e.target.value)}
                 />
+                {pinNote('SESSION_DATA_PATH')}
               </div>
               <div className="form-group">
                 <label htmlFor="infra-9">{t('infrastructure.engine.browserArgs')}</label>
@@ -471,6 +489,7 @@ export function Infrastructure() {
                   onChange={e => configForm.updateEngineConfig('browserArgs', e.target.value)}
                   placeholder="--no-sandbox --disable-gpu"
                 />
+                {pinNote('PUPPETEER_ARGS')}
               </div>
             </div>
           ) : (
@@ -714,6 +733,7 @@ export function Infrastructure() {
                   value={configForm.storageConfig.localPath}
                   onChange={e => configForm.updateStorageConfig('localPath', e.target.value)}
                 />
+                {pinNote('STORAGE_LOCAL_PATH')}
               </div>
             )}
 
@@ -803,7 +823,8 @@ export function Infrastructure() {
             <>
               {restartFlow.restartStatus === 'idle' && t('infrastructure.restart.idleTitle')}
               {restartFlow.restartStatus === 'restarting' && t('infrastructure.restart.restartingTitle')}
-              {restartFlow.restartStatus === 'waiting' && t('infrastructure.restart.waitingTitle')}
+              {(restartFlow.restartStatus === 'waiting' || restartFlow.restartStatus === 'unknown') &&
+                t('infrastructure.restart.waitingTitle')}
               {restartFlow.restartStatus === 'success' && t('infrastructure.restart.successTitle')}
               {restartFlow.restartStatus === 'error' && t('infrastructure.restart.errorTitle')}
             </>
@@ -876,13 +897,32 @@ export function Infrastructure() {
           {restartFlow.restartStatus === 'success' && (
             <>
               <CheckCircle size={48} className="restart-status-icon" />
-              <p className="restart-success-msg">{t('infrastructure.restart.successMsg')}</p>
+              {restartFlow.restartWarnings.length === 0 ? (
+                <p className="restart-success-msg">{t('infrastructure.restart.successMsg')}</p>
+              ) : (
+                <>
+                  {restartWarningBox}
+                  <button className="btn-primary" onClick={() => window.location.reload()}>
+                    {t('infrastructure.restart.reload')}
+                  </button>
+                </>
+              )}
+            </>
+          )}
+
+          {restartFlow.restartStatus === 'unknown' && (
+            <>
+              <p className="restart-error-msg">{t('infrastructure.restart.outcomeUnknown')}</p>
+              <button className="btn-primary" onClick={() => window.location.reload()}>
+                {t('infrastructure.restart.reload')}
+              </button>
             </>
           )}
 
           {restartFlow.restartStatus === 'error' && (
             <>
-              <p className="restart-error-msg">{t('infrastructure.restart.errorMsg')}</p>
+              <p className="restart-error-msg">{restartFlow.restartError ?? t('infrastructure.restart.errorMsg')}</p>
+              {restartWarningBox}
               <button className="btn-primary" onClick={() => window.location.reload()}>
                 {t('infrastructure.restart.reload')}
               </button>

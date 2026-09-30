@@ -45,7 +45,7 @@ func (s *SessionsService) GetProxy(ctx context.Context, sessionID string) (*Sess
 }
 
 // UpdateProxy changes per-session proxy settings. No restart is performed -- changes apply on the
-// next start. Send ProxyURL as JSON null to clear the proxy.
+// next start. Send ProxyURL as JSON null to clear the proxy. Requires an unscoped ADMIN key.
 func (s *SessionsService) UpdateProxy(ctx context.Context, sessionID string, body UpdateSessionProxyRequest) (*SessionProxy, error) {
 	var out SessionProxy
 	err := s.client.do(ctx, "PATCH", "/api/sessions/"+pathEscape(sessionID)+"/proxy", nil, body, &out)
@@ -65,7 +65,7 @@ func (s *SessionsService) Get(ctx context.Context, sessionID string) (*SessionRe
 	return &out, nil
 }
 
-// Create provisions a new session.
+// Create provisions a new session. Requires an OPERATOR-level key; setting ProxyURL requires an ADMIN key.
 func (s *SessionsService) Create(ctx context.Context, body CreateSessionRequest) (*SessionResponse, error) {
 	var out SessionResponse
 	err := s.client.do(ctx, "POST", "/api/sessions", nil, body, &out)

@@ -12,5 +12,7 @@ public enum MembershipRequestMethod {
     @SerializedName("linked_group_join")
     LINKED_GROUP_JOIN,
     @SerializedName("non_admin_add")
-    NON_ADMIN_ADD
+    NON_ADMIN_ADD,
+    /** Decoded when the gateway sends a value newer than this SDK; not a wire value itself. */
+    UNKNOWN
 }

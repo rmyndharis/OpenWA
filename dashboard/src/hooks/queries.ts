@@ -9,8 +9,8 @@ import {
   pluginsApi,
   pluginInstancesApi,
   statsApi,
-  type Webhook,
-  type WebhookFilters,
+  type CreateWebhookRequest,
+  type UpdateWebhookRequest,
   type TemplatePayload,
   type StatsPeriod,
   type CreateInstanceInput,
@@ -101,8 +101,8 @@ export function useWebhooksQuery() {
 export function useCreateWebhookMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (params: { sessionId: string; url: string; events: string[]; filters?: WebhookFilters | null }) =>
-      webhookApi.create(params.sessionId, { url: params.url, events: params.events, filters: params.filters }),
+    mutationFn: ({ sessionId, ...body }: CreateWebhookRequest & { sessionId: string }) =>
+      webhookApi.create(sessionId, body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.webhooks });
     },
@@ -112,7 +112,7 @@ export function useCreateWebhookMutation() {
 export function useUpdateWebhookMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (params: { sessionId: string; id: string; data: Partial<Webhook> }) =>
+    mutationFn: (params: { sessionId: string; id: string; data: UpdateWebhookRequest }) =>
       webhookApi.update(params.sessionId, params.id, params.data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.webhooks });
@@ -191,6 +191,7 @@ export function useCreateApiKeyMutation() {
       role: string;
       allowedIps?: string[];
       allowedSessions?: string[];
+      allowedChats?: string[];
       expiresAt?: string;
     }) => apiKeyApi.create(data),
     onSuccess: () => {
@@ -212,7 +213,8 @@ export function useUpdateApiKeyMutation() {
         role?: string;
         allowedIps?: string[];
         allowedSessions?: string[];
-        expiresAt?: string;
+        allowedChats?: string[];
+        expiresAt?: string | null;
       };
     }) => apiKeyApi.update(id, data),
     onSuccess: () => {

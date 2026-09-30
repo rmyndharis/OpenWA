@@ -11,7 +11,8 @@
 # Options:
 #   --strict          refuse to restore an archive whose CONSISTENCY-WARNING marker reports
 #                     plain-copied (possibly torn) database snapshots; without it the restore
-#                     continues after a loud warning
+#                     continues after a loud warning. An ENGINE-STATE-NOTE (engine auth state that
+#                     may have been copied while the app ran) is printed either way and never refused.
 #   --force           overwrite databases that already hold a working install's data; without it
 #                     the restore refuses to touch a live target before changing anything
 # Environment:
@@ -343,6 +344,13 @@ if [ -f "$STAGE/CONSISTENCY-WARNING" ]; then
     exit 1
   fi
   log "WARN: continuing anyway; verify data integrity after the restore (re-run with --strict to make this fatal)"
+fi
+
+# Engine auth state copied while an engine may have been writing it. Informational only: every
+# online backup of a running install carries it, and the worst case is a re-pair, not lost data.
+if [ -f "$STAGE/ENGINE-STATE-NOTE" ]; then
+  log "WARN: archive carries ENGINE-STATE-NOTE; engine auth state may have been copied while the app was running:"
+  sed 's/^/[restore]   /' "$STAGE/ENGINE-STATE-NOTE"
 fi
 
 # Refuse to overwrite a live database without --force, BEFORE any existing state is touched (the

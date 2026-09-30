@@ -183,7 +183,7 @@ export class AutomationRulesService {
       const messagePort = this.resolveMessagePort();
       if (!messagePort) return;
       await messagePort.sendText(sessionId, { chatId, text: rule.replyText });
-      this.logger.log('Automation rule replied', { sessionId, ruleId: rule.id, chatId });
+      this.logger.debug('Automation rule replied', { sessionId, ruleId: rule.id, chatId });
     } catch (error) {
       // The send path already persisted/audited its own failure; here it only must not propagate.
       this.logger.warn('Automation rule reply failed', {

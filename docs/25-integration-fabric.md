@@ -27,12 +27,12 @@ public contract — Integration SDK v1** — because the contract, not any singl
 
 ## 25.2 Design principle: one new primitive, everything else a clone
 
-The overriding goal is to preserve the untrusted-worker safety invariants _by construction_. OpenWA
-plugins run in a capability-gated worker thread with no ambient host access (see
-[30 - Plugin Sandboxing](./30-plugin-sandboxing.md)). Every host↔worker message is a serializable POJO
-across a `structuredClone` boundary; host-initiated calls fail open on a timeout and drain on a worker
-crash; permissions are manifest-static and cannot be widened by configuration; session scope is enforced
-host-side.
+The overriding goal is to preserve the sandboxed-worker safety invariants _by construction_. OpenWA
+plugins reach the host through a capability-gated worker bridge; the worker is fault containment, not a
+security boundary against a malicious plugin (see [30 - Plugin Sandboxing](./30-plugin-sandboxing.md)).
+Every host↔worker message is a serializable POJO across a `structuredClone` boundary; host-initiated
+calls fail open on a timeout and drain on a worker crash; permissions are manifest-static and cannot be
+widened by configuration; session scope is enforced host-side.
 
 Rather than invent new machinery that would have to re-earn those properties, the Integration Fabric is
 **~90% a faithful clone of seams OpenWA already ships**:
@@ -160,10 +160,11 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   the API-key guard but validates a **per-instance HMAC (or shared secret)** over the **raw** request
   bytes with a constant-time comparison. The raw body is preserved by a verify callback on the body parser
   because a re-serialized payload is not byte-identical to what the provider signed. The route is exempt from
-  the global per-IP throttle and bounded by its own guard instead, on two keys, `(pluginId, instanceId)` and
-  the client IP: a provider delivering every tenant's webhooks from one egress address would otherwise be
-  shed at the global tier before the per-instance bound ever fired. The payload is intentionally not bound
-  to a DTO so strict validation cannot reject unknown provider fields.
+  the global per-IP throttle and bounded on two keys instead: the client IP, checked by its own guard before
+  anything else, and `(pluginId, instanceId)`, charged only once the delivery's signature verifies. A
+  provider delivering every tenant's webhooks from one egress address would otherwise be shed at the global
+  tier before the per-instance bound ever fired. The payload is intentionally not bound to a DTO so strict
+  validation cannot reject unknown provider fields.
 - **Replay and duplication.** A signed-timestamp tolerance rejects stale deliveries, and
   `(pluginId, instanceId, providerDeliveryId)` deduplication plus a queue job id keyed on the delivery id
   provides best-effort de-duplication when the provider supplies a stable delivery id. Standard Webhooks defaults
@@ -182,7 +183,15 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   so the signature itself expires with the window; the loader warns when a route declares the header
   without signing it (or signs the token without declaring the header). `standard-webhooks` binds
   id + timestamp by spec. A provider that sends no timestamp header at all stays outside the replay
-  window by construction — dedup and handler idempotency are its only protections.
+  window by construction. For such an hmac-sha256 route, and for every `shared-secret` route, the default
+  header-keyed dedup does not stop a copy of a delivery: the dedup header is not covered by the
+  credential, so a copy with a different header value is accepted as new. `dedupOn: "body"` collapses
+  byte-identical copies within `INGRESS_DEDUP_RETENTION_DAYS` (a copy gets the route's ack and is not
+  enqueued again); beyond that, handler idempotency is the only protection. The loader logs a warning
+  for each such route that keeps the header-keyed default.
+  The value of a route's declared signature header (hmac-sha256 or shared-secret) is redacted from the
+  persisted and enqueued payload, like the well-known signature headers, so the plugin's handler sees
+  `[redacted]` in its place.
 - **Tenancy scoping.** Every durable ingress artifact — secret, dedup store, and dead-letter row — is
   partitioned by instance, and downstream capability calls carry the instance's resolved session scope, so
   a cross-tenant send is blocked host-side.
@@ -196,8 +205,9 @@ Four tables live on the data connection, each created by a hand-authored dual-di
 - **Raw-body content types.** Signature verification observes exact bytes for `application/json` and
   `application/x-www-form-urlencoded`. Plain text, XML, octet streams, and non-UTF JSON charsets are not
   supported ingress body formats and fail verification/content handling rather than being re-serialized.
-- **Egress.** The only outbound path remains the existing SSRF-guarded `ctx.net.fetch`, scoped to the
-  manifest's allowed hosts.
+- **Egress.** The only sanctioned outbound path remains the SSRF-guarded `ctx.net.fetch`, scoped to the
+  manifest's allowed hosts; a direct Node socket opened by the worker is not covered (see [30 - Plugin
+  Sandboxing](./30-plugin-sandboxing.md)).
 - **Re-entrancy.** A reply issued _inside_ an ingress handler seeds the in-flight hook set, so an adapter's
   own outbound message hook cannot echo-loop the reply back out to the external system.
 
@@ -210,6 +220,12 @@ strict FIFO is not preserved across retry/redrive, and the lock is single-node s
 PostgreSQL state. When the queue is disabled, ingress dispatches inline after persisting and does not
 serialize concurrent same-conversation deliveries. Providers already deliver over unordered,
 at-least-once HTTP, so plugin handlers must be idempotent and treat ingress as a reconciliation trigger.
+
+A job waiting on that lock still holds one of the `INGRESS_WORKER_CONCURRENCY` worker slots (default
+10). A burst on one lane larger than that fills every slot with same-lane waiters, and events for other
+conversations and instances queue behind the burst until it drains. Size `INGRESS_WORKER_CONCURRENCY`
+above the largest burst you expect on a single lane, and declare a `conversationId` pointer on the
+route so the lane is one conversation; without it the lane is the whole instance.
 
 Persist-before-acknowledge alone is not delivery: a crash between the persist and the enqueue, or a
 fire-and-forget enqueue on a `response` route whose outcome is never recorded, would strand the row
@@ -239,7 +255,7 @@ dedup rows and re-admit their replays, which is worse than the bounded growth it
 
 ## 25.8 The Integration SDK (v1)
 
-The stable surface untrusted adapters consume. A plugin declares `sdkVersion: "1"` and an `ingress`
+The stable surface sandboxed adapters consume. A plugin declares `sdkVersion: "1"` and an `ingress`
 descriptor (the route, which is a single URL path segment such as `chatwoot` and never contains a `/`, its
 signature scheme, replay tolerance, dedup header, and an optional verification handshake) in its manifest,
 and requests the `webhook:ingress` and `conversation:send` permissions. The host refuses to load an

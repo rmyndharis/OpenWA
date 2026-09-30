@@ -1,4 +1,5 @@
 import { resolve } from 'path';
+import { normalizeS3KeyPrefix } from '../common/storage/s3-key-prefix';
 
 type EnvConfig = Record<string, unknown>;
 
@@ -86,9 +87,9 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     errors.push(`DATABASE_TYPE must be "sqlite" or "postgres" (got ${JSON.stringify(dbType)})`);
   }
 
-  // Whitelist the registered engine/storage ids so a typo fails fast at boot instead of silently
-  // falling back to the default (engine.factory swallows an unknown ENGINE_TYPE → legacy wwebjs;
-  // STORAGE_TYPE → local). Values must match the ids registered in engine.factory / configuration.
+  // Whitelist the registered engine/storage ids so a typo fails fast at boot: an unknown ENGINE_TYPE
+  // would otherwise fail every session start, and an unknown STORAGE_TYPE would silently fall back to
+  // local. Values must match the ids registered in engine.factory / configuration.
   const checkEnum = (key: string, allowed: string[]): void => {
     const value = rawEnum(key);
     if (value !== undefined && !allowed.includes(value)) {
@@ -97,6 +98,15 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   };
   checkEnum('ENGINE_TYPE', ['whatsapp-web.js', 'baileys']);
   checkEnum('STORAGE_TYPE', ['local', 's3']);
+  // The S3 key root. A prefix that is absolute, traverses, or is only slashes would put this
+  // deployment's objects (and its orphan sweeps' deletes) at the bucket root or outside its own root;
+  // one with an empty or '.' segment builds keys an S3-compatible store refuses on every write.
+  const s3KeyPrefix = str('S3_KEY_PREFIX');
+  if (s3KeyPrefix !== undefined && normalizeS3KeyPrefix(s3KeyPrefix) === null) {
+    errors.push(
+      `S3_KEY_PREFIX must be a relative key prefix such as "staging/" with no empty, "." or ".." segment (got ${JSON.stringify(s3KeyPrefix)})`,
+    );
+  }
   // Every production hardening in the repo gates on the exact string 'production', so an
   // unrecognised value silently selects the permissive branch of each one — CORS, Swagger, DTO
   // error detail, the default-secret guard and the ALLOW_DEV_API_KEY rejection that stops the public
@@ -220,6 +230,9 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'EXPORT_INLINE_MEDIA_BUDGET_BYTES', // 0 = a data export carries no inline media at all
     'MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES', // 0 = a message list carries no inline media at all
     'CHAT_MEDIA_ARCHIVE_TTL_DAYS', // 0 = keep archived chat media forever
+    'INGRESS_RETRY_DELAY_MS', // 0 = retry without backoff
+    'REDIS_CACHE_DB',
+    'INBOUND_MEDIA_GLOBAL_CONCURRENCY', // 0 = no process-wide ceiling, only the per-session one
   ]) {
     checkNonNegativeInt(key);
   }
@@ -243,8 +256,15 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   // into a bare checkInt('AUDIT_RETENTION_DAYS') call would silently drop the knob out of that gate.
   for (const key of [
     'AUDIT_RETENTION_DAYS', // <= 0 disables retention
+    'MESSAGE_RETENTION_DAYS', // unset or <= 0 keeps messages forever
   ]) {
     checkInt(key);
+  }
+  // A window past about a century gives a cutoff SQLite compares as a later date, deleting every
+  // message. Keep in step with MAX_MESSAGE_RETENTION_DAYS in message-retention.service.ts.
+  const messageRetentionDays = str('MESSAGE_RETENTION_DAYS');
+  if (messageRetentionDays !== undefined && Number(messageRetentionDays) > 36500) {
+    errors.push(`MESSAGE_RETENTION_DAYS must be at most 36500 (got "${messageRetentionDays}")`);
   }
 
   // BAILEYS_WA_VERSION: optional version pin for the Baileys engine (e.g. 2.3000.1045340097 or 2,3000,1045340097)
@@ -297,6 +317,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'HEADERS_TIMEOUT_MS',
     'KEEPALIVE_TIMEOUT_MS',
     'WEBHOOK_DISPATCH_CONCURRENCY',
+    'WEBHOOK_DEGRADED_SESSION_CONCURRENCY',
     // 0 would reject every webhook dispatch (a total, silent webhook outage).
     'WEBHOOK_MAX_PAYLOAD_BYTES',
     // 0 would refuse every request carrying a body (a self-DoS), so the budget is positive-only.
@@ -337,6 +358,12 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     // the boot sweep delete every archive older than 24 ms, breaking export, restart, import.
     'STORAGE_EXPORT_TTL_MS',
     'STORAGE_EXPORT_SWEEP_MAX_AGE_MS',
+    // Each read fell back to its default on 0 or garbage, or passed a negative or fractional value on
+    // (SEARCH_LIMIT_MAX reached plugin search providers as-is).
+    'SEARCH_LIMIT_MAX',
+    'INGRESS_MAX_ATTEMPTS',
+    'WEBHOOK_WORKER_CONCURRENCY',
+    'INGRESS_WORKER_CONCURRENCY',
   ]) {
     checkPositiveInt(key);
   }
@@ -435,6 +462,9 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     // Read at boot by the throttler factory (app.module.ts) and CacheService with `=== 'true'`: a
     // typo like `ture` silently downgrades rate-limit storage + cache to per-process in-memory.
     'REDIS_ENABLED',
+    // `=== 'true'` in redis-options.ts: a typo silently connects in plaintext to a Redis the operator
+    // expected to reach over TLS, which a TLS-only managed Redis then refuses.
+    'REDIS_TLS',
     // Read by the SSRF guard's redirect loop with `=== 'true'`: a typo silently keeps the secure
     // default, but an accidental 'true'-ish string is not the flag the operator meant to audit.
     'PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS',
@@ -454,9 +484,8 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     // `!== 'false'`, so a typo keeps the SECURE value — but it is still not the flag the operator set,
     // and it is only meaningful alongside DATABASE_SSL above.
     'DATABASE_SSL_REJECT_UNAUTHORIZED',
-    // `!== 'false'`, so a typo keeps synchronize ON — and app.module.ts derives `migrationsRun` from
-    // its negation, so the main connection's migration ledger silently never advances for an operator
-    // who deliberately opted into migration-managed api_keys/audit_logs.
+    // `=== 'true'`: a typo keeps the main connection on its migrations, so an operator who meant to
+    // opt into synchronize for api_keys/audit_logs silently does not get it.
     'MAIN_DATABASE_SYNCHRONIZE',
     // Read with `=== 'true'` by the plugin ingress gate: a typo turns an intentional
     // `ALLOW_UNSIGNED_INGRESS=true` back off, and a route the operator meant to open stops loading.

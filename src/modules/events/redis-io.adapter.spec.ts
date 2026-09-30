@@ -85,6 +85,15 @@ describe('RedisIoAdapter', () => {
       expect(typeof opts.retryStrategy).toBe('function');
       expect((opts.retryStrategy as (n: number) => number)(100)).toBe(5000);
     });
+
+    it('connects over TLS when REDIS_TLS=true', () => {
+      process.env.REDIS_TLS = 'true';
+      try {
+        expect(wsRedisOptions().tls).toEqual({});
+      } finally {
+        delete process.env.REDIS_TLS;
+      }
+    });
   });
 
   describe('createIOServer', () => {

@@ -446,6 +446,7 @@
     "selectSession": "Oturum seçin...",
     "session": "Oturum",
     "events": "Olaylar",
+    "noEvents": "En az bir olay seçin.",
     "available": "Kullanılabilir Olaylar",
     "saveChanges": "Değişiklikleri Kaydet",
     "filters": {
@@ -538,6 +539,33 @@
       "call.missed": "Bir arama yanıtsız kaldığında",
       "status.received": "Bir kişi durum paylaştığında",
       "all": "Tüm olaylar"
+    },
+    "auth": {
+      "title": "Teslimat kimlik doğrulaması",
+      "hint": "İsteğe bağlı. Kaydedilen değerler bir daha gösterilmez.",
+      "editHint": "Kayıtlı gizli anahtar ve başlıklar hiçbir zaman gösterilmez. Korumak için bu bölüme dokunmayın.",
+      "secret": "İmzalama gizli anahtarı",
+      "secretHint": "16 ile 255 karakter arası. Her teslimat, X-OpenWA-Signature başlığında bir HMAC-SHA256 imzası taşır.",
+      "secretKeepPlaceholder": "Mevcut gizli anahtarı korumak için boş bırakın",
+      "generateSecret": "Oluştur",
+      "copySecret": "Kopyala",
+      "secretCopied": "İmzalama gizli anahtarı kopyalandı",
+      "removeSecret": "Teslimatları imzalamayı durdur (gizli anahtarı kaldır)",
+      "headers": "Özel başlıklar",
+      "headerName": "Başlık adı",
+      "headerValue": "Başlık değeri",
+      "addHeader": "Başlık ekle",
+      "removeHeader": "Başlığı kaldır",
+      "replaceHeaders": "Özel başlıkları değiştir",
+      "replaceHint": "Bu satırlar kayıtlı tüm başlıkların yerini alır. Satır yoksa kayıtlı başlıklar kaldırılır.",
+      "errors": {
+        "headerName": "Başlık adları yalnızca harf, rakam ve kısa çizgi içerebilir.",
+        "headerValue": "Başlık değerleri en fazla 1024 karakter olabilir; kontrol karakterleri ve Latin-1 dışındaki karakterler kullanılamaz.",
+        "headerReserved": "Content-Type, User-Agent, X-OpenWA-* ve bağlantı başlıkları ağ geçidi tarafından ayarlanır ve kullanılamaz.",
+        "headerDuplicate": "Her başlık adı yalnızca bir kez kullanılabilir.",
+        "tooMany": "En fazla 50 özel başlığa izin verilir.",
+        "secretLength": "İmzalama gizli anahtarı 16 ile 255 karakter arasında olmalıdır."
+      }
     }
   },
   "templates": {
@@ -597,6 +625,7 @@
     "createdTitle": "API Anahtarı Oluşturuldu",
     "createdHint": "Bu anahtarı şimdi kopyalayın. Bir daha göremeyeceksiniz.",
     "namePlaceholder": "ör. Prodüksiyon Anahtarı",
+    "nameTooShort": "En az 3 karakter kullanın.",
     "rolesTitle": "Roller Referansı",
     "roles": {
       "admin": "Yönetici (Admin)",
@@ -615,11 +644,13 @@
       "status": "Durum",
       "lastUsed": "Son Kullanım",
       "actions": "İşlemler",
-      "sessions": "Oturumlar"
+      "sessions": "Oturumlar",
+      "restrictions": "Kısıtlamalar"
     },
     "statuses": {
       "active": "Aktif",
-      "revoked": "Geçersiz Kılındı"
+      "revoked": "Geçersiz Kılındı",
+      "expired": "Süresi doldu"
     },
     "empty": {
       "title": "Oluşturulmuş API anahtarı yok",
@@ -640,7 +671,7 @@
       "copy": "Kopyala",
       "revoke": "Geçersiz Kıl",
       "delete": "Sil",
-      "editSessions": "Oturumları düzenle"
+      "edit": "Erişimi düzenle"
     },
     "sessions": {
       "label": "Oturum erişimi",
@@ -648,10 +679,36 @@
       "all": "Tüm oturumlar",
       "empty": "Henüz oturum yok. Oturumlar oluşunca bu anahtar hepsine erişebilir.",
       "restricted": "{{count}} seçildi",
-      "editTitle": "Oturum erişimini düzenle",
       "save": "Kaydet",
       "choose": "Oturumları seç",
       "leaveAll": "Tüm oturumlar için bırak"
+    },
+    "edit": {
+      "title": "Anahtar erişimini düzenle",
+      "signedIn": "Bu panel bu anahtarla oturum açtı. Rolünü, IP adreslerini, sohbetlerini veya son kullanma tarihini değiştirmek oturumunuzu kapatabilir."
+    },
+    "restrictions": {
+      "none": "Yok",
+      "ips": "IP'ler: {{count}}",
+      "chats": "Sohbetler: {{count}}",
+      "expires": "Son kullanma: {{date}}",
+      "expired": "Süresi doldu: {{date}}"
+    },
+    "ips": {
+      "label": "İzin verilen IP adresleri (isteğe bağlı)",
+      "hint": "Her satıra bir IP adresi veya CIDR aralığı. Tüm adresleri kabul etmek için boş bırakın.",
+      "invalid": "IPv4 adresi veya CIDR aralığı değil: {{value}}"
+    },
+    "chats": {
+      "label": "Sohbet erişimi (isteğe bağlı)",
+      "hint": "Her satıra bir sohbet: @g.us ile biten bir grup kimliği, @c.us veya @lid ile biten bir kişi kimliği ya da bir telefon numarası. Tüm sohbetler için boş bırakın. Sohbetle sınırlı bir anahtar yalnızca bu tür anahtarlara açık yolları kullanabilir; olay WebSocket'i ve MCP onu reddeder.",
+      "invalid": "Sohbet kimliği veya telefon numarası değil: {{value}}"
+    },
+    "expiry": {
+      "label": "Son kullanma tarihi (isteğe bağlı)",
+      "hint": "Bu tarayıcının saat diliminde. Süresi hiç dolmayan bir anahtar için boş bırakın.",
+      "clear": "Son kullanma tarihini kaldır",
+      "invalid": "9999 yılını geçmeyen eksiksiz bir tarih ve saat girin ya da süresi hiç dolmayan bir anahtar için alanı temizleyin."
     }
   },
   "logs": {
@@ -896,7 +953,7 @@
       "storageWarning": "Mevcut medya dosyaları yeni depolama arka ucuna otomatik olarak taşınmaz; eski konumda kalırlar.",
       "downloadBackup": "Önce yedeği indirin",
       "backupTitle": "Veri yedekleme ve geri yükleme",
-      "backupHint": "Veritabanlarını değiştirmeden önce tüm verileri JSON olarak dışa aktarın, ardından değişiklikten sonra içe aktarın. Yedekleme; webhook gizli anahtarlarını ve proxy kimlik bilgilerini düz metin olarak içerir — güvenli bir şekilde saklayın ve geri yükledikten sonra silin.",
+      "backupHint": "Veritabanlarını değiştirmeden önce tüm verileri JSON olarak dışa aktarın, ardından değişiklikten sonra içe aktarın. Webhook imzalama gizli anahtarları, özel webhook başlıkları ve proxy kimlik bilgileri dahil edilmez; geri yükledikten sonra bunları yeniden girin. Entegrasyon örneklerinin gizli anahtarları ve ayarları düz metin olarak dahil edilir; dosyayı güvenli bir şekilde saklayın ve geri yükledikten sonra silin.",
       "export": "Verileri dışa aktar",
       "import": "Verileri içe aktar",
       "exportFailed": "Veriler dışa aktarılamadı",
@@ -922,6 +979,7 @@
       "dontClose": "Lütfen bu pencereyi kapatmayın",
       "successMsg": "Sunucu tekrar çevrimiçi! Sayfa otomatik olarak yeniden yüklenecektir.",
       "errorMsg": "Sunucu 30 saniye sonra yanıt vermedi. Lütfen Docker kayıtlarını kontrol edin ve manuel olarak yeniden başlatın.",
+      "outcomeUnknown": "Sunucu yanıt vermeden önce proxy bir hata döndürdü, bu nedenle yeniden başlatmanın sürüp sürmediği bilinmiyor. Kontrol etmek için bir dakika sonra sayfayı yeniden yükleyin.",
       "reload": "Sayfayı Yeniden Yükle"
     },
     "toasts": {

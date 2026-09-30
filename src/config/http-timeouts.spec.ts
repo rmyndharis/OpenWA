@@ -1,4 +1,12 @@
-import { applyHttpTimeouts, HttpTimeoutSink } from './http-timeouts';
+import { applyHttpTimeouts, HttpTimeoutSink, resolveRequestTimeoutMs } from './http-timeouts';
+
+describe('resolveRequestTimeoutMs', () => {
+  it("defaults to Node's 300 s and honours REQUEST_TIMEOUT_MS", () => {
+    expect(resolveRequestTimeoutMs(undefined)).toBe(300000);
+    expect(resolveRequestTimeoutMs('')).toBe(300000);
+    expect(resolveRequestTimeoutMs('120000')).toBe(120000);
+  });
+});
 
 describe('applyHttpTimeouts', () => {
   const sink = (): HttpTimeoutSink => ({ requestTimeout: 0, headersTimeout: 0, keepAliveTimeout: 0 });

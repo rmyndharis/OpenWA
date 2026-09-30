@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient } from '@tanstack/react-query';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
-import { clearActorState, isUserRole, resolveStartupValidation } from './authLifecycle.ts';
+import { clearActorState, isKeyUnusable, isUserRole, resolveStartupValidation } from './authLifecycle.ts';
 
 test('logout cleanup wipes the React Query cache (no cross-actor residue)', () => {
   const queryClient = new QueryClient();
@@ -214,4 +214,20 @@ test('a page reload with a saved key re-validates once at startup and refreshes 
 
   assert.equal(validateCallCount(), 1);
   assert.equal(sessionStorage.getItem(ENGINE_KEY), 'baileys');
+});
+
+test('a 401, or a 403 from allowedIps refusing this client, makes the key unusable', () => {
+  assert.equal(isKeyUnusable(401, undefined), true);
+  assert.equal(isKeyUnusable(401, 'Invalid API key'), true);
+  assert.equal(isKeyUnusable(403, 'IP address not allowed'), true);
+  assert.equal(isKeyUnusable(403, 'Client IP could not be determined'), true);
+});
+
+test('a role or scope 403 and other failures keep the key', () => {
+  assert.equal(isKeyUnusable(403, 'Insufficient permissions'), false);
+  assert.equal(isKeyUnusable(403, undefined), false);
+  assert.equal(isKeyUnusable(403, ['IP address not allowed']), false);
+  assert.equal(isKeyUnusable(400, 'IP address not allowed'), false);
+  assert.equal(isKeyUnusable(429, undefined), false);
+  assert.equal(isKeyUnusable(500, undefined), false);
 });

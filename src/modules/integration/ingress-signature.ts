@@ -88,9 +88,9 @@ function verifyStandardWebhooks(spec: IngressSignatureSpec, input: VerifyInput):
 }
 
 /**
- * Inverts the outbound signer (webhook.service.ts:527-531) — but over the provider's declared
- * contentTemplate applied to the RAW request bytes, and with a constant-time compare. `now` is
- * injected so the replay-window check is deterministic in tests.
+ * Inverts the outbound signer (generateSignature in src/modules/webhook/utils/deliver-once.ts), but
+ * over the provider's declared contentTemplate applied to the RAW request bytes, and with a
+ * constant-time compare. `now` is injected so the replay-window check is deterministic in tests.
  */
 export function verifyIngressSignature(
   spec: IngressSignatureSpec,

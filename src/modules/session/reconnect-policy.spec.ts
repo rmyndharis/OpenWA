@@ -101,7 +101,20 @@ describe('decideReconnect', () => {
     it('never exhausts on the default unlimited budget', () => {
       const s = state({ attempts: 10_000 });
 
-      expect(decideReconnect(s, NO_JITTER).kind).toBe('schedule');
+      const d = decideReconnect(s, NO_JITTER);
+
+      expect(d.kind).toBe('schedule');
+      expect((d as { delayMs: number }).delayMs).toBe(RECONNECT_DELAY_CAP_MS);
+    });
+
+    it('stays parked at the cap once baseDelay * 2^attempts would overflow to Infinity', () => {
+      // 5000 * 2^1012 is Infinity; it must keep the cap rather than drop back to the base delay.
+      for (const attempts of [1011, 1012, 1013, 10_000]) {
+        expect(decideReconnect(state({ attempts }), NO_JITTER)).toMatchObject({
+          kind: 'schedule',
+          delayMs: RECONNECT_DELAY_CAP_MS,
+        });
+      }
     });
   });
 
@@ -195,10 +208,10 @@ describe('clampReconnectDelay', () => {
     expect(clampReconnectDelay(Number.MAX_SAFE_INTEGER, 5000)).toBe(RECONNECT_DELAY_CAP_MS);
   });
 
-  it('falls back to baseDelay when the computed delay is not finite', () => {
-    // An operator-supplied non-numeric config would otherwise yield NaN → setTimeout fires at 0.
-    // Infinity is likewise not finite, so it takes the same fallback rather than the cap.
+  it('falls back to baseDelay for NaN and caps +Infinity', () => {
+    // An operator-supplied non-numeric config would otherwise yield NaN and setTimeout fires at 0.
+    // Infinity is an oversized delay, not a missing one, so it takes the cap like any other.
     expect(clampReconnectDelay(NaN, 5000)).toBe(5000);
-    expect(clampReconnectDelay(Number.POSITIVE_INFINITY, 5000)).toBe(5000);
+    expect(clampReconnectDelay(Number.POSITIVE_INFINITY, 5000)).toBe(RECONNECT_DELAY_CAP_MS);
   });
 });

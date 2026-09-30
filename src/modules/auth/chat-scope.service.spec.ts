@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { ChatScopeService } from './chat-scope.service';
 import { FindOperator, Repository } from 'typeorm';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
@@ -21,6 +22,17 @@ function fakeStore(): LidMappingStoreService {
 }
 
 describe('ChatScopeService', () => {
+  it('requireChat refuses a restricted key that names no chat, and nothing else', () => {
+    const svc = new ChatScopeService();
+    const restricted = { allowedChats: ['1@c.us'] };
+    for (const chatId of [undefined, '', '   ']) {
+      expect(() => svc.requireChat(restricted, chatId)).toThrow(ForbiddenException);
+    }
+    expect(() => svc.requireChat(restricted, '1@c.us')).not.toThrow();
+    expect(() => svc.requireChat({ allowedChats: null }, undefined)).not.toThrow();
+    expect(() => svc.requireChat(undefined, undefined)).not.toThrow();
+  });
+
   it('is unrestricted without an allowlist', async () => {
     const svc = new ChatScopeService();
     expect(svc.isRestricted({ allowedChats: null })).toBe(false);

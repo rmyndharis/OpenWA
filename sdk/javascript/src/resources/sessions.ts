@@ -68,7 +68,7 @@ export class SessionsResource {
 
   /**
    * Update per-session proxy settings. No restart is performed — changes apply on the next start.
-   * Send `proxyUrl: null` to clear the proxy. **OPERATOR**
+   * Send `proxyUrl: null` to clear the proxy. **ADMIN** (unscoped key)
    */
   updateProxy(id: string, body: UpdateSessionProxyRequest): Promise<SessionProxy> {
     return this.client.request<SessionProxy>({
@@ -83,7 +83,7 @@ export class SessionsResource {
     return this.client.request<SessionResponse>({ method: 'GET', path: `/api/sessions/${encodeSegment(id)}` });
   }
 
-  /** Create a new session. Requires an OPERATOR-level key. */
+  /** Create a new session. Requires an OPERATOR-level key; setting proxyUrl requires an ADMIN key. */
   create(body: CreateSessionRequest): Promise<SessionResponse> {
     return this.client.request<SessionResponse>({ method: 'POST', path: '/api/sessions', body });
   }

@@ -1,5 +1,5 @@
 import type { WAMessage } from '@whiskeysockets/baileys';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, DeleteQueryBuilder, Repository } from 'typeorm';
 import { BaileysStoredMessage } from './baileys-stored-message.entity';
 import { BaileysMessageStoreService } from './baileys-message-store.service';
 import { Session, SessionStatus } from '../../modules/session/entities/session.entity';
@@ -180,6 +180,35 @@ describe('BaileysMessageStoreService', () => {
     expect(await repo.count({ where: { sessionId: 's2' } })).toBe(2);
     // T4 is the newest (distinct createdAt = now) and must survive.
     expect(await s.getMessage('s2', 'T4')).not.toBeNull();
+  });
+
+  it('evicts same-createdAt rows by id at the cap and bounds the trim delete by the index', async () => {
+    process.env.BAILEYS_MESSAGE_STORE_LIMIT = '3';
+    await seedSession('s3');
+    const s = new BaileysMessageStoreService(repo);
+    const sharedTs = new Date('2024-01-01T00:00:00.000Z');
+    for (const id of ['a', 'b', 'c', 'd']) {
+      await repo.save(
+        repo.create({ id, sessionId: 's3', waMessageId: `W${id}`, serializedMessage: '{}', createdAt: sharedTs }),
+      );
+    }
+    // Pass-through spy: records the SQL every delete builder runs.
+    const spy = jest.spyOn(DeleteQueryBuilder.prototype, 'getQueryAndParameters');
+
+    await s.put('s3', msg('NEW'));
+    const deletes = spy.mock.results.map(r => r.value as [string, unknown[]]);
+    spy.mockRestore();
+
+    // The newest row and the two highest ids of the tied run survive.
+    const left = await repo.find({ where: { sessionId: 's3' }, order: { id: 'ASC' } });
+    expect(left.map(r => r.waMessageId).sort()).toEqual(['NEW', 'Wc', 'Wd']);
+    // The range delete must be bounded by (createdAt, id) on the index, not walk the whole session.
+    expect(deletes).toHaveLength(1);
+    const [sql, params] = deletes[0];
+    const detail = (await ds.query<{ detail: string }[]>(`EXPLAIN QUERY PLAN ${sql}`, params))
+      .map(r => r.detail)
+      .join(' | ');
+    expect(detail).toMatch(/IDX_baileys_stored_messages_session_created_id \(sessionId=\? AND \(createdAt,id\)/);
   });
 
   // Issue #319 — an orphaned adapter (its session was deleted/recreated during reconnect

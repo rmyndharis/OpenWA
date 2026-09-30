@@ -3,6 +3,7 @@ import { EngineRegistry } from '../../engine/engine-registry.service';
 import { createLogger } from '../../common/services/logger.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { paginate, ListOptions } from '../../common/utils/paginate';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { isIndividualWid, parseWaId, toNeutralJid } from '../../engine/identity/wa-id';
 
 /**
@@ -20,12 +21,15 @@ export class ContactService {
     return this.engines.require(sessionId);
   }
 
+  /** Every contact WITHOUT the response window, for callers that filter before paging. */
+  listContacts(sessionId: string) {
+    // getEngine throws synchronously (keeps the "session not started" guard a sync 400).
+    return this.getEngine(sessionId).getContacts();
+  }
+
   getContacts(sessionId: string, opts: ListOptions = {}) {
-    // getEngine throws synchronously (keeps the "session not started" guard a sync 400); the
-    // engine returns the full set and we bound the HTTP response window via paginate().
-    return this.getEngine(sessionId)
-      .getContacts()
-      .then(contacts => paginate(contacts, opts.limit, opts.offset));
+    // The engine returns the full set and we bound the HTTP response window via paginate().
+    return this.listContacts(sessionId).then(contacts => paginate(contacts, opts.limit, opts.offset));
   }
 
   async getContactById(sessionId: string, contactId: string) {
@@ -85,7 +89,10 @@ export class ContactService {
    * Batch-resolve profile picture URLs for a list of contact ids (the dashboard's chat-list avatars
    * — one HTTP call instead of N, so the per-IP throttle isn't exhausted by a sidebar full of
    * parallel fetches). Engine lookups run 5 at a time with a per-id deadline; a per-id failure or
-   * timeout yields null for that id (hidden/no picture), never aborts the batch. Ids beyond
+   * timeout yields null for that id (hidden/no picture), never aborts the batch. The exception is
+   * EngineNotReadyError: it describes the session, not the id, so it fails the whole request with
+   * 409 after the current chunk and the remaining chunks are not started. Answering 200 with every
+   * avatar null would be cached by the dashboard as "no pictures". Ids beyond
    * PROFILE_PICTURES_MAX_IDS are ignored.
    */
   async getProfilePictures(sessionId: string, ids: string[]): Promise<Record<string, string | null>> {
@@ -93,6 +100,7 @@ export class ContactService {
     const capped = ids.slice(0, ContactService.PROFILE_PICTURES_MAX_IDS);
     const pictures: Record<string, string | null> = {};
     const CHUNK = 5;
+    let notReady: EngineNotReadyError | undefined;
     for (let i = 0; i < capped.length; i += CHUNK) {
       const chunk = capped.slice(i, i + CHUNK);
       const results = await Promise.all(
@@ -109,14 +117,16 @@ export class ContactService {
                 clearTimeout(timer);
                 resolve([id, url] as const);
               },
-              () => {
+              (error: unknown) => {
                 clearTimeout(timer);
+                if (error instanceof EngineNotReadyError) notReady = error;
                 resolve([id, null] as const);
               },
             );
           });
         }),
       );
+      if (notReady) throw notReady;
       for (const [id, url] of results) {
         pictures[id] = url;
       }

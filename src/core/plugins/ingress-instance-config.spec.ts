@@ -260,3 +260,27 @@ describe('ingress dispatch resolves config per INSTANCE, not per session scope',
     expect(calls[0].config).toEqual({ apiToken: 'token-A' });
   });
 });
+
+describe('ingress dispatch refuses an instance that is disabled or deleted', () => {
+  it('rejects a disabled instance without reaching the worker', async () => {
+    const a = { ...instanceRow('acct-a', { apiToken: 'token-A' }, SHARED_SCOPE), enabled: false };
+    const { bridge, calls } = makeBridge({ rows: [a] });
+
+    await expect(bridge.dispatchWebhookForInstance(job('acct-a'))).rejects.toThrow(
+      'instance acct-a of plugin chat-adapter is disabled or deleted',
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects a deleted instance instead of dispatching it with the base config a wildcard sibling wrote', async () => {
+    // A wildcard instance projects its config into the base config; a job for a row that no longer
+    // exists must not run with it.
+    const wildcard = instanceRow('acct-b', { apiToken: 'token-B' }, null);
+    const { bridge, calls } = makeBridge({ rows: [wildcard], baseConfig: { apiToken: 'token-B' } });
+
+    await expect(bridge.dispatchWebhookForInstance(job('acct-a'))).rejects.toThrow(
+      'instance acct-a of plugin chat-adapter is disabled or deleted',
+    );
+    expect(calls).toHaveLength(0);
+  });
+});

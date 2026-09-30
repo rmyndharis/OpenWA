@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { infraApi } from '../services/api';
 import { restartPollAttempts } from '../utils/restartPoll';
 
-export type RestartStatus = 'idle' | 'restarting' | 'waiting' | 'success' | 'error';
+// 'unknown': a proxy gave up waiting for the restart request, so whether it went through cannot be told.
+export type RestartStatus = 'idle' | 'restarting' | 'waiting' | 'success' | 'error' | 'unknown';
 
 export interface RestartOpenRequest {
   profiles: string[];
@@ -16,6 +17,10 @@ export interface RestartFlow {
   showRestartModal: boolean;
   restartCountdown: number;
   restartStatus: RestartStatus;
+  /** The server's reason when it refused the restart; shown in place of the generic error text. */
+  restartError: string | null;
+  /** Services the server reported it could not start or stop; the page does not reload over them. */
+  restartWarnings: string[];
   pendingProfiles: string[];
   runningProfiles: string[];
   dbSwitch: boolean;
@@ -39,6 +44,8 @@ export function useRestartFlow(): RestartFlow {
   const [showRestartModal, setShowRestartModal] = useState(false);
   const [restartCountdown, setRestartCountdown] = useState(0);
   const [restartStatus, setRestartStatus] = useState<RestartStatus>('idle');
+  const [restartError, setRestartError] = useState<string | null>(null);
+  const [restartWarnings, setRestartWarnings] = useState<string[]>([]);
   const [profiles, setProfiles] = useState<{ pending: string[]; running: string[] }>({
     pending: [],
     running: [],
@@ -101,7 +108,7 @@ export function useRestartFlow(): RestartFlow {
     if (restartStatus === 'idle') setShowRestartModal(false);
   };
 
-  const checkServerHealth = (estimatedTime?: number) => {
+  const checkServerHealth = (estimatedTime: number | undefined, hasWarnings: boolean) => {
     let attempts = 0;
     const maxAttempts = restartPollAttempts(estimatedTime);
 
@@ -111,7 +118,8 @@ export function useRestartFlow(): RestartFlow {
         stopCountdown();
         setRestartCountdown(0);
         setRestartStatus('success');
-        schedulePollTimeout(() => window.location.reload(), 2000);
+        // With warnings on screen the operator reloads by hand, after reading them.
+        if (!hasWarnings) schedulePollTimeout(() => window.location.reload(), 2000);
       } catch {
         attempts++;
         if (attempts < maxAttempts) schedulePollTimeout(check, 1000);
@@ -131,12 +139,33 @@ export function useRestartFlow(): RestartFlow {
     // Kept outside the try: the poll deadline is derived from it, and the restart call is expected to
     // fail sometimes (the server may go down before it answers).
     let estimatedTime: number | undefined;
+    let warnings: string[] = [];
     try {
       const response = await infraApi.restart(profiles.pending, profilesToRemove);
       estimatedTime = response.estimatedTime;
       if (response.estimatedTime) setRestartCountdown(response.estimatedTime);
-    } catch {
-      // Expected — server shutting down
+      warnings = [...(response.orchestration?.errors ?? []), ...(response.removal?.errors ?? [])];
+      setRestartWarnings(warnings);
+    } catch (err) {
+      // An HTTP status (a proxy 503 included) means no shutdown was confirmed and the old
+      // process may still be serving, so a readiness poll would report a restart that never happened.
+      // Only a status-less network failure is the expected sign of the server going down mid-answer.
+      const failure = err as { status?: unknown; code?: unknown } | null;
+      if (typeof failure?.status === 'number') {
+        stopCountdown();
+        setRestartCountdown(0);
+        // A 504, or a 502 the gateway did not stamp with a code, is a proxy answering in the gateway's place:
+        // a timeout, or an upstream connection that failed or dropped. The client cannot tell which, and the
+        // request may still be running (a first-time enable pulls an image before the restart), so this is
+        // neither a refusal nor something a readiness poll can settle: the old process answers.
+        if (failure.status === 504 || (failure.status === 502 && failure.code === undefined)) {
+          setRestartStatus('unknown');
+          return;
+        }
+        setRestartError(err instanceof Error ? err.message : String(err));
+        setRestartStatus('error');
+        return;
+      }
     }
 
     setRestartStatus('waiting');
@@ -151,13 +180,15 @@ export function useRestartFlow(): RestartFlow {
       });
     }, 1000);
 
-    checkServerHealth(estimatedTime);
+    checkServerHealth(estimatedTime, warnings.length > 0);
   };
 
   return {
     showRestartModal,
     restartCountdown,
     restartStatus,
+    restartError,
+    restartWarnings,
     pendingProfiles: profiles.pending,
     runningProfiles: profiles.running,
     dbSwitch,

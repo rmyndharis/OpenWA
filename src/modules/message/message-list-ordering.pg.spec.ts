@@ -121,6 +121,26 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
   });
 
   /**
+   * A chat filter on a user id expands to several dialect candidates, which picks a SQLite-only sort
+   * key there. PostgreSQL must keep the plain one, so the chat-filtered walk runs on the real server.
+   */
+  it('walks one chat by its several dialect candidates in the same total order', async () => {
+    const served: string[] = [];
+    for (let offset = 0; offset < ROWS; offset += PAGE * 10) {
+      const { messages } = await service.getMessages(SESSION_ID, { chatId: 'peer@c.us', limit: PAGE, offset });
+      served.push(...messages.map(m => m.id));
+    }
+    const unfiltered: string[] = [];
+    for (let offset = 0; offset < ROWS; offset += PAGE * 10) {
+      const { messages } = await service.getMessages(SESSION_ID, { limit: PAGE, offset });
+      unfiltered.push(...messages.map(m => m.id));
+    }
+
+    expect(served).toHaveLength(ROWS / 10);
+    expect(served).toEqual(unfiltered);
+  });
+
+  /**
    * The tiebreaker gives the list a total order; it does not stop the WINDOW drifting, because
    * `offset` addresses a position by count. A message arriving mid-walk pushes every older row down
    * one, so the next offset re-reads a row the previous page already served. `after` anchors on the
@@ -195,5 +215,41 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
         /Unknown cursor/,
       );
     });
+  });
+
+  /**
+   * The page is picked by id, sized by a raw `OCTET_LENGTH(metadata)` select and read back in chunks, so
+   * the dialect SQL and the order restore after the IN read are only proven against the real server.
+   */
+  it('reads a media page in order and omits the payloads past the budget', async () => {
+    const MEDIA_SESSION = 'sess-media-budget';
+    const prev = process.env.MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES;
+    process.env.MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES = String(3000);
+    try {
+      await repository.insert(
+        Array.from({ length: 6 }, (_, i) => ({
+          id: randomUUID(),
+          sessionId: MEDIA_SESSION,
+          chatId: 'peer@c.us',
+          from: 'peer@c.us',
+          to: 'me@c.us',
+          body: `media-${i}`,
+          direction: MessageDirection.INCOMING,
+          metadata: { media: { mimetype: 'image/jpeg', data: 'A'.repeat(1000) } },
+          createdAt: new Date(Date.UTC(2026, 2, 1, 0, 0, i)),
+        })),
+      );
+
+      const { messages, total } = await service.getMessages(MEDIA_SESSION, { limit: 100 });
+
+      expect(total).toBe(6);
+      expect(messages.map(m => m.body)).toEqual(['media-5', 'media-4', 'media-3', 'media-2', 'media-1', 'media-0']);
+      const inline = messages.map(m => typeof (m.metadata as { media: { data?: unknown } }).media.data === 'string');
+      expect(inline).toEqual([true, true, true, false, false, false]);
+    } finally {
+      if (prev === undefined) delete process.env.MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES;
+      else process.env.MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES = prev;
+      await repository.delete({ sessionId: MEDIA_SESSION });
+    }
   });
 });

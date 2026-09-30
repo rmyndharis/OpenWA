@@ -27,11 +27,10 @@ describe('isIpOrCidr', () => {
     expect(isIpOrCidr(v)).toBe(false);
   });
 
-  // IPv6 is rejected on purpose: the allowedIps matcher (auth.service) is IPv4-only, so an IPv6
-  // CIDR would either lock out its own client (/128) or match every IPv6 client (/<=32). The
-  // validator must not bless an entry the matcher can't enforce. allowedIps is IPv4-only.
+  // IPv6 is rejected on purpose: allowedIps is documented as IPv4-only. Widening it is a separate
+  // change, even though the shared matcher handles IPv6.
   it.each(['::1', '2001:db8::1', '::/0', '2001:db8::/32', '::1/128', 'fe80::1%eth0', '::ffff:10.0.0.1'])(
-    'rejects IPv6 (unsupported by the matcher) %s',
+    'rejects IPv6 (allowedIps is IPv4-only) %s',
     v => {
       expect(isIpOrCidr(v)).toBe(false);
     },
@@ -55,7 +54,7 @@ describe('CreateApiKeyDto allowedIps (@Validate each)', () => {
     expect(msgs.length).toBeGreaterThan(0);
   });
 
-  it('rejects an IPv6 element (matcher is IPv4-only)', async () => {
+  it('rejects an IPv6 element (allowedIps is IPv4-only)', async () => {
     expect((await errorsFor(['2001:db8::/32'])).length).toBeGreaterThan(0);
   });
 

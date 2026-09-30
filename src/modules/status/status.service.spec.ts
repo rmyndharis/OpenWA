@@ -151,7 +151,15 @@ describe('StatusService media validation and selection', () => {
       expect(media.mimetype).toBe('application/octet-stream');
     });
 
-    it.each(['image/svg+xml;charset=utf-8', 'image/svg+xml ', 'image/svg+xml ;charset=utf-8'])(
+    it.each([
+      'image/svg+xml;charset=utf-8',
+      'image/svg+xml ',
+      'image/svg+xml ;charset=utf-8',
+      'image/SVG+XML',
+      'image/Svg+Xml; charset=utf-8',
+      'IMAGE/svg+xml;charset=utf-8',
+      ' image/svg+xml',
+    ])(
       'serves the parameterized/spaced form %s as inert octet-stream too (browsers parse it as SVG)',
       async mimetype => {
         // The stored mimetype is engine-reported verbatim, so it can carry MIME parameters or
@@ -166,7 +174,21 @@ describe('StatusService media validation and selection', () => {
       },
     );
 
-    it('still serves a parameterized NON-scriptable image with its declared mimetype', async () => {
+    // A browser splits a Content-Type on commas and takes the last valid type, so a stored value
+    // that is not one single type must not be echoed back.
+    it.each(['image/png,text/html', 'image/svg+xml,', 'image/png, image/svg+xml'])(
+      'serves the comma-joined form %s as inert octet-stream',
+      async mimetype => {
+        store.getMedia.mockResolvedValue({ path: 'statuses/sess/x', mimetype });
+        storageService.getFile.mockResolvedValue(Buffer.from('x'));
+
+        const media = await service.getStatusMedia('sess', 'w1');
+
+        expect(media.mimetype).toBe('application/octet-stream');
+      },
+    );
+
+    it('still serves a parameterized NON-scriptable image as its essence', async () => {
       // The exclusion is scoped to SVG: a perfectly ordinary `image/jpeg` with a charset parameter
       // (or any other image/video/audio type) must not be dragged down to octet-stream by it.
       store.getMedia.mockResolvedValue({ path: 'statuses/sess/x.jpg', mimetype: 'image/jpeg;charset=ISO-8859-1' });
@@ -174,7 +196,21 @@ describe('StatusService media validation and selection', () => {
 
       const media = await service.getStatusMedia('sess', 'w1');
 
-      expect(media.mimetype).toBe('image/jpeg;charset=ISO-8859-1');
+      expect(media.mimetype).toBe('image/jpeg');
+    });
+
+    it.each([
+      ['text/HTML', 'application/octet-stream'],
+      ['IMAGE/JPEG', 'image/jpeg'],
+      ['audio/ogg; codecs=opus', 'audio/ogg'],
+      ['image/png;x=1,text/html', 'image/png'],
+    ])('serves a stored %s as %s', async (stored, served) => {
+      store.getMedia.mockResolvedValue({ path: 'statuses/sess/x', mimetype: stored });
+      storageService.getFile.mockResolvedValue(Buffer.from('x'));
+
+      const media = await service.getStatusMedia('sess', 'w1');
+
+      expect(media.mimetype).toBe(served);
     });
   });
 

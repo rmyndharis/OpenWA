@@ -199,7 +199,7 @@
   margin: 0;
   color: #e2e8f0;
   font-size: 0.8125rem;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', monospace;
   white-space: pre-wrap;
 }
 

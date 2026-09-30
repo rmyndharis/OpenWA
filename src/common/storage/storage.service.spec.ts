@@ -97,11 +97,11 @@ describe('StorageService (local) path traversal protection', () => {
       { name: '../evil.txt', data: 'bad' },
     ]);
 
-    const count = await service.importFromStream(Readable.from(gz));
+    const result = await service.importFromStream(Readable.from(gz));
 
     expect(fs.readFileSync(path.join(localPath, 'safe.txt'), 'utf8')).toBe('good');
     expect(fs.existsSync(path.join(baseDir, 'evil.txt'))).toBe(false);
-    expect(count).toBe(1);
+    expect(result).toEqual({ imported: 1, failed: 1 });
   });
 });
 
@@ -244,8 +244,8 @@ describe('StorageService import resource caps (decompression-bomb defense)', () 
 
   it('imports normally within the (generous default) caps', async () => {
     const gz = await makeTarGz([{ name: 'ok.txt', data: 'fine' }]);
-    const count = await service.importFromStream(Readable.from(gz));
-    expect(count).toBe(1);
+    const result = await service.importFromStream(Readable.from(gz));
+    expect(result).toEqual({ imported: 1, failed: 0 });
   });
 });
 

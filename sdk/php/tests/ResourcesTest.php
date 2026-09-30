@@ -250,6 +250,10 @@ class ResourcesTest extends TestCase
         $backend->on(200, ['id' => 'm1']);
         $client->messages->sendTemplate('s', ['chatId' => 'c', 'templateName' => 't', 'vars' => []]);
         $this->assertSame('{"chatId":"c","templateName":"t","vars":{}}', $backend->rawBody(2));
+
+        $backend->on(201, ['id' => 's1']);
+        $client->sessions->create(['name' => 'n', 'config' => []]);
+        $this->assertSame('{"name":"n","config":{}}', $backend->rawBody(3));
     }
 
     public function testBulkItemsEncodeEmptyVariablesAsJsonObject(): void

@@ -90,7 +90,7 @@ For a **split-origin** deployment (dashboard hosted separately from the API), se
 
 ```bash
 VITE_API_URL=http://localhost:2785
-# real-time events (WebSocket) origin; defaults to the page origin
+# real-time events (WebSocket) origin; defaults to VITE_API_URL, else the page origin
 VITE_WS_URL=http://localhost:2785
 ```
 

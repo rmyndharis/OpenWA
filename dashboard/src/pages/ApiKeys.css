@@ -359,6 +359,97 @@
   color: var(--text-primary);
 }
 
+/* Key limit fields (IP allow-list, chats, expiry) in the create and edit modals. */
+.api-keys-page .modal-body > textarea {
+  width: 100%;
+  padding: 0.625rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', monospace;
+  background: var(--bg-light);
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.api-keys-page .modal-body > select,
+.api-keys-page .modal-body > textarea {
+  margin-bottom: 0.25rem;
+}
+
+.api-keys-page .key-field-hint {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 0.875rem;
+}
+
+.api-keys-page .key-field-hint.error {
+  color: var(--error-text);
+  margin-bottom: 0.25rem;
+}
+
+.api-keys-page .key-expiry-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.25rem;
+}
+
+.api-keys-page .key-expiry-row input {
+  flex: 1 1 auto;
+}
+
+.api-keys-page .key-expiry-row button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.api-keys-page .key-signed-in-warning {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin: 0 0 1rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+}
+
+.api-keys-page .key-signed-in-warning svg {
+  flex: none;
+  margin-top: 0.125rem;
+  color: var(--warning, #f59e0b);
+}
+
+.api-keys-page .restrictions-cell {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+}
+
+.api-keys-page .restrictions-cell.none {
+  color: var(--text-muted);
+}
+
+.api-keys-page .restriction-badge {
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.api-keys-page .restriction-badge.expired {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: transparent;
+  color: var(--error-text);
+}
+
 /* Mobile Responsive */
 /* Status badges — must apply on DESKTOP too (they were stranded inside the mobile media query,
    leaving every Active/Revoked badge unstyled on wide screens). */
@@ -467,6 +558,7 @@
   /* Role, sessions & status sit together as chips */
   .api-keys-page .keys-table tbody tr.table-row td:has(.permission-badge),
   .api-keys-page .keys-table tbody tr.table-row td:has(.sessions-cell),
+  .api-keys-page .keys-table tbody tr.table-row td:has(.restrictions-cell),
   .api-keys-page .keys-table tbody tr.table-row td:has(.status-badge) {
     display: inline-block;
     order: 3;

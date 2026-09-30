@@ -9,7 +9,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
-import { AuthService } from '../auth.service';
+import { AuthService, UnresolvedApiKeyException } from '../auth.service';
 import { ChatScopeService } from '../chat-scope.service';
 import { BULK_MESSAGES_MAX } from '../../message/dto/bulk-message.dto';
 import { ApiKey, ApiKeyRole } from '../entities/api-key.entity';
@@ -27,6 +27,7 @@ import { bearerToken } from '../../../common/security/bearer-token';
 import { setRequestActor } from '../../../common/services/request-context';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/entities/audit-log.entity';
+import { allowUnauthenticatedAuditRow } from '../../audit/auth-failure-audit-limiter';
 
 @Injectable()
 export class ApiKeyGuard implements CanActivate {
@@ -56,13 +57,18 @@ export class ApiKeyGuard implements CanActivate {
       if (err instanceof UnauthorizedException || err instanceof ForbiddenException) {
         // Stamp at least the IP so the failed-auth audit row below is attributable even though the
         // key was never resolved. setRequestActor is a no-op outside a request scope.
-        setRequestActor({ ipAddress: this.getClientIp(request) });
-        void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
-          ipAddress: this.getClientIp(request),
-          method: request.method,
-          path: request.path,
-          errorMessage: err.message,
-        });
+        const clientIp = this.getClientIp(request);
+        setRequestActor({ ipAddress: clientIp });
+        // A 401 that resolved no key is bounded per client IP (see UnresolvedApiKeyException); any
+        // rejection of a stored key, 401 or 403, is always recorded.
+        if (!(err instanceof UnresolvedApiKeyException) || allowUnauthenticatedAuditRow(clientIp)) {
+          void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
+            ipAddress: clientIp,
+            method: request.method,
+            path: request.path,
+            errorMessage: err.message,
+          });
+        }
       }
       throw err;
     }
@@ -72,7 +78,7 @@ export class ApiKeyGuard implements CanActivate {
     const apiKeyHeader = this.extractApiKey(request);
 
     if (!apiKeyHeader) {
-      throw new UnauthorizedException('API key is required');
+      throw new UnresolvedApiKeyException('API key is required');
     }
 
     const requiredRole = this.reflector.getAllAndOverride<ApiKeyRole>(REQUIRED_ROLE_KEY, [

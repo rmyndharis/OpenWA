@@ -57,6 +57,16 @@ describe('audit action emit coverage', () => {
     expect(stale).toEqual([]);
   });
 
+  // Filtering GET /api/audit for an unemitted action silently returns nothing, so the API docs must
+  // name every one of them.
+  it('docs/06 names every intentionally-unemitted action in the GET /api/audit description', () => {
+    const docs = readFileSync(join(SRC_DIR, '..', 'docs', '06-api-specification.md'), 'utf8');
+    const paragraph = docs.split('\n').find(line => line.startsWith('List audit-log entries, newest first.')) ?? '';
+    const missing = Object.keys(INTENTIONALLY_UNEMITTED_ACTIONS).filter(value => !paragraph.includes(`\`${value}\``));
+    expect(paragraph).not.toBe('');
+    expect(missing).toEqual([]);
+  });
+
   it('intentionally-unemitted registry entries each carry a non-empty reason', () => {
     const empties = Object.entries(INTENTIONALLY_UNEMITTED_ACTIONS)
       .filter(([, reason]) => typeof reason !== 'string' || reason.trim().length === 0)

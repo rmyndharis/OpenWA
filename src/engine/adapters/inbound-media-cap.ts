@@ -1,4 +1,5 @@
 import type { IncomingMessage } from '../interfaces/whatsapp-engine.interface';
+import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 
 /** Default inbound media cap: 50 MiB. Shares MEDIA_DOWNLOAD_MAX_BYTES with the outbound download cap. */
 const DEFAULT_INBOUND_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
@@ -27,6 +28,41 @@ const DEFAULT_INBOUND_MEDIA_CONCURRENCY = 4;
 export function inboundMediaConcurrency(): number {
   const parsed = Number.parseInt(process.env.INBOUND_MEDIA_CONCURRENCY ?? '', 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_INBOUND_MEDIA_CONCURRENCY;
+}
+
+/**
+ * Process-wide ceiling on inbound media downloads, across every session (INBOUND_MEDIA_GLOBAL_CONCURRENCY).
+ * INBOUND_MEDIA_CONCURRENCY bounds one session, so without this the worst case grows with the session
+ * count. 0 (the default, and unset or empty) turns it off.
+ */
+export function inboundMediaGlobalConcurrency(): number {
+  const parsed = Number.parseInt(process.env.INBOUND_MEDIA_GLOBAL_CONCURRENCY ?? '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+let globalGate: ConcurrencyLimiter | null | undefined;
+
+/**
+ * The gate every session's downloads share, built on first use and never closed. Null when off:
+ * ConcurrencyLimiter clamps 0 to 1, which would serialize every download in the process.
+ */
+export function globalInboundMediaGate(): ConcurrencyLimiter | null {
+  if (globalGate === undefined) {
+    const max = inboundMediaGlobalConcurrency();
+    globalGate = max > 0 ? new ConcurrencyLimiter(max) : null;
+  }
+  return globalGate;
+}
+
+/** Run one media download under the process-wide gate, or directly when it is off. */
+export function runUnderGlobalMediaGate<T>(task: () => Promise<T>): Promise<T> {
+  const gate = globalInboundMediaGate();
+  return gate ? gate.run(task) : task();
+}
+
+/** Forget the built gate so the next call reads INBOUND_MEDIA_GLOBAL_CONCURRENCY again. Tests only. */
+export function __resetGlobalInboundMediaGate(): void {
+  globalGate = undefined;
 }
 
 /** Default inbound media download timeout: 30s. Shares MEDIA_DOWNLOAD_TIMEOUT_MS with the outbound download. */

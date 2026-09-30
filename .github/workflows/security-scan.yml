@@ -29,11 +29,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Mirrors the ci.yml `audit` job step for step, so a scheduled failure means exactly what a
-  # merge-gate failure means — no stricter, no looser.
+  # Mirrors the ci.yml `audit` job step for step, with one difference: an audit npm cannot answer
+  # fails here (CHECK_AUDIT_REQUIRED=1) instead of skipping, because this job exists to detect
+  # advisories.
   audit:
     name: Security audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -53,7 +55,10 @@ jobs:
       - name: Security audit
         # check:audit, not bare `npm audit`: the per-advisory allowlist in scripts/check-audit.mjs
         # applies, so an advisory already excused by id (with its recorded reason and drop
-        # condition) does not fire a false weekly alarm.
+        # condition) does not fire a false weekly alarm. Required here: this job exists to detect
+        # advisories, and a skipped audit would report the whole week clean.
+        env:
+          CHECK_AUDIT_REQUIRED: '1'
         run: npm run check:audit
 
       # The dashboard is a second dependency tree and the one that reaches a browser; same
@@ -64,11 +69,64 @@ jobs:
       - name: Security audit (dashboard)
         run: cd dashboard && npm audit --audit-level=high
 
+  # Dependabot proposes refreshed node:22-slim digests, yet the pin has trailed the tag for weeks
+  # (a refresh that is late or left unmerged), and a stale base ages silently: Node patch releases
+  # and Debian fixes that the image scan below does not flag (medium/low, or not yet fixed upstream)
+  # stay out. This compares the pin with what the tag serves today. The tag can sit unchanged for
+  # weeks, so the pin's age alone cannot tell a late refresh from a tag that moved yesterday: the
+  # run fails only once the tag has served the newer image for 7 days (a Monday Dependabot run has
+  # seen it), or once the pin is 28 days old and the tag has served the newer image for 3 days (the
+  # Wednesday scan then follows a Monday run that saw it). The first move after a quiet month still
+  # gets its Monday run, and a tag that keeps moving holds a stale pin only while every move lands
+  # in the three days before a scan.
+  base-image-drift:
+    name: Base image drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The pin's age comes from git history; a shallow clone would date every pin to today.
+          fetch-depth: 0
+
+      - name: Compare the Dockerfile pin with node:22-slim
+        run: |
+          pins=$(grep -oE 'node:22-slim@sha256:[0-9a-f]{64}' Dockerfile | sort -u)
+          if [ "$(printf '%s\n' "$pins" | grep -c .)" -ne 1 ]; then
+            echo "::error file=Dockerfile::expected one node:22-slim digest shared by both stages, found: ${pins:-none}"
+            exit 1
+          fi
+          pinned=${pins#node:22-slim@}
+          # A registry outage or rate limit is not drift.
+          if ! live=$(docker buildx imagetools inspect docker.io/node:22-slim --format '{{.Manifest.Digest}}'); then
+            echo "::warning::could not resolve docker.io/node:22-slim; drift not checked this run"
+            exit 0
+          fi
+          if [ "$pinned" = "$live" ]; then
+            echo "node:22-slim pin is current: $pinned"
+            exit 0
+          fi
+          # The live image's build time stands in for when the tag moved; the push follows it by minutes.
+          if ! created=$(docker buildx imagetools inspect docker.io/node:22-slim --format '{{json .Image}}' |
+            jq -er '.["linux/amd64"].created | sub("\\.[0-9]+"; "") | fromdateiso8601'); then
+            echo "::warning::could not read when node:22-slim $live was built; drift not checked this run"
+            exit 0
+          fi
+          live_days=$(( ($(date +%s) - created) / 86400 ))
+          age_days=$(( ($(date +%s) - $(git log -1 --format=%ct -G 'node:22-slim@sha256' -- Dockerfile)) / 86400 ))
+          if [ "$live_days" -lt 7 ] && { [ "$age_days" -lt 28 ] || [ "$live_days" -lt 3 ]; }; then
+            echo "::notice::node:22-slim moved to $live $live_days day(s) ago; the $age_days-day-old pin $pinned is inside the grace"
+            exit 0
+          fi
+          echo "::error file=Dockerfile::node:22-slim pin $pinned is $age_days days old and the tag now serves $live; refresh both FROM lines"
+          exit 1
+
   # Mirrors the release.yml `image-scan` job, minus the staging ref: this scans the image the
   # release pipeline actually promoted, on both architectures.
   image-scan:
     name: Image scan (${{ matrix.platform }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       packages: read
     strategy:

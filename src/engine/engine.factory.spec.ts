@@ -138,36 +138,41 @@ describe('EngineFactory', () => {
     expect(registeredIds).toContain('baileys');
   });
 
-  it('falls back to the direct adapter when no engine plugin is available', () => {
-    const pluginLoader = {
-      getPlugin: jest.fn().mockReturnValue(undefined),
-    } as unknown as PluginLoaderService;
+  describe('create() with no usable engine plugin', () => {
+    let tmpRoot: string;
+    beforeEach(() => {
+      tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engine-missing-'));
+    });
+    afterEach(() => {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    });
 
-    const factory = new EngineFactory(
-      buildConfigService(),
-      pluginLoader,
-      buildMessageStore(),
-      buildLidStore(),
-      buildChatStateStore(),
-    );
-    expect(() => factory.create({ sessionId: 'sess-2', dbSessionId: 'db-2' })).not.toThrow();
-  });
+    const missing: Array<[string, unknown]> = [
+      ['no plugin', undefined],
+      ['a plugin without an instance', { instance: undefined }],
+      ['a non-engine plugin', { instance: { type: PluginType.EXTENSION } }],
+    ];
 
-  it('throws instead of silently building whatsapp-web.js when a non-wwebjs engine has no plugin', () => {
-    // The legacy fallback only builds wwebjs; reaching it with ENGINE_TYPE=baileys must fail loudly
-    // rather than run the wrong engine.
-    const pluginLoader = {
-      getPlugin: jest.fn().mockReturnValue(undefined),
-    } as unknown as PluginLoaderService;
-
-    const factory = new EngineFactory(
-      buildConfigService({ 'engine.type': 'baileys' }),
-      pluginLoader,
-      buildMessageStore(),
-      buildLidStore(),
-      buildChatStateStore(),
-    );
-    expect(() => factory.create({ sessionId: 'sess-b', dbSessionId: 'db-b' })).toThrow(/baileys/i);
+    describe.each(['whatsapp-web.js', 'baileys'])('ENGINE_TYPE=%s', engineType => {
+      it.each(missing)('throws for %s instead of building another engine', (_label, entry) => {
+        const pluginLoader = {
+          getPlugin: jest.fn().mockReturnValue(entry),
+        } as unknown as PluginLoaderService;
+        const factory = new EngineFactory(
+          buildConfigService({
+            'engine.type': engineType,
+            'engine.sessionDataPath': path.join(tmpRoot, 'sessions'),
+            'engine.baileys.authDir': path.join(tmpRoot, 'baileys'),
+          }),
+          pluginLoader,
+          buildMessageStore(),
+          buildLidStore(),
+          buildChatStateStore(),
+        );
+        const create = () => factory.create({ sessionId: SESSION_ID, dbSessionId: SESSION_ID });
+        expect(create).toThrow(`Engine '${engineType}' is not registered; cannot start the session.`);
+      });
+    });
   });
 
   describe('create() makes the session credential directories owner-only', () => {

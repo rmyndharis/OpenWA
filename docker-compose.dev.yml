@@ -121,7 +121,6 @@ services:
       # raise this for large documents (e.g. BODY_SIZE_LIMIT=50mb). Blank keeps the app default of 25mb.
       - BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-}
       - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
-      - QUEUE_ENABLED=${QUEUE_ENABLED:-false}
       # Opt-in feature flags. Forwarded explicitly for the same reason as docker-compose.yml: this
       # file has no env_file, so a variable absent from this list never reaches the container and
       # the feature it gates stays off however the operator's .env is written.
@@ -141,6 +140,7 @@ services:
       - MEDIA_DOWNLOAD_MAX_BYTES=${MEDIA_DOWNLOAD_MAX_BYTES:-}
       - MEDIA_DOWNLOAD_TIMEOUT_MS=${MEDIA_DOWNLOAD_TIMEOUT_MS:-}
       - INBOUND_MEDIA_CONCURRENCY=${INBOUND_MEDIA_CONCURRENCY:-}
+      - INBOUND_MEDIA_GLOBAL_CONCURRENCY=${INBOUND_MEDIA_GLOBAL_CONCURRENCY:-}
       - SESSION_PROXY_URL_FETCH=${SESSION_PROXY_URL_FETCH:-}
       - MEDIA_CONVERSION_ENABLED=${MEDIA_CONVERSION_ENABLED:-}
       - FFMPEG_PATH=${FFMPEG_PATH:-}
@@ -181,6 +181,7 @@ services:
       - DATABASE_SSL_REJECT_UNAUTHORIZED=${DATABASE_SSL_REJECT_UNAUTHORIZED:-}
       - S3_ENDPOINT=${S3_ENDPOINT:-}
       - S3_BUCKET=${S3_BUCKET:-}
+      - S3_KEY_PREFIX=${S3_KEY_PREFIX:-}
       - S3_REGION=${S3_REGION:-}
       - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-}
       - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-}
@@ -190,6 +191,8 @@ services:
       - REDIS_USERNAME=${REDIS_USERNAME:-}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_CONNECT_TIMEOUT_MS=${REDIS_CONNECT_TIMEOUT_MS:-}
+      - REDIS_TLS=${REDIS_TLS:-}
+      - REDIS_CACHE_DB=${REDIS_CACHE_DB:-}
       # Fetch statuses on ready (off unless the exact string 'true', matching docker-compose.yml).
       - STATUS_SEED_ON_READY=${STATUS_SEED_ON_READY:-false}
       - AUTOMATION_MAX_PER_SESSION=${AUTOMATION_MAX_PER_SESSION:-}
@@ -205,6 +208,7 @@ services:
       - WEBHOOK_MAX_PER_SESSION=${WEBHOOK_MAX_PER_SESSION:-}
       - WEBHOOK_FAILURE_RETENTION_DAYS=${WEBHOOK_FAILURE_RETENTION_DAYS:-}
       - WEBHOOK_WORKER_CONCURRENCY=${WEBHOOK_WORKER_CONCURRENCY:-}
+      - WEBHOOK_DEGRADED_SESSION_CONCURRENCY=${WEBHOOK_DEGRADED_SESSION_CONCURRENCY:-}
       # Integration Fabric ingress: fairness, retries, retention, reconciler, workers.
       - INGRESS_INSTANCE_LIMIT=${INGRESS_INSTANCE_LIMIT:-}
       - INGRESS_INSTANCE_TTL=${INGRESS_INSTANCE_TTL:-}
@@ -277,6 +281,7 @@ services:
       - UPDATE_CHECK_ENABLED=${UPDATE_CHECK_ENABLED:-}
       # Misc application tuning.
       - AUDIT_RETENTION_DAYS=${AUDIT_RETENTION_DAYS:-}
+      - MESSAGE_RETENTION_DAYS=${MESSAGE_RETENTION_DAYS:-}
       - BULK_MAX_CONCURRENT_BATCHES=${BULK_MAX_CONCURRENT_BATCHES:-}
       - TEMPLATE_RENDER_MAX_CHARS=${TEMPLATE_RENDER_MAX_CHARS:-}
       - STATS_CACHE_TTL_MS=${STATS_CACHE_TTL_MS:-}

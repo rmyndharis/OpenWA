@@ -2,6 +2,8 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { createLogger } from '../services/logger.service';
+import { resolveNonNegativeIntEnv } from '../../config/configuration';
+import { redisConnectionOptions } from '../../config/redis-options';
 
 export interface SessionInfo {
   id: string;
@@ -57,23 +59,17 @@ export class CacheService implements OnModuleDestroy {
   private ensureClient(): void {
     if (this.redis) return;
 
-    const host = process.env.REDIS_HOST || this.configService.get<string>('REDIS_HOST', 'localhost');
-    const port = parseInt(process.env.REDIS_PORT || '', 10) || this.configService.get<number>('REDIS_PORT', 6379);
-
-    this.logger.log(`Connecting to Redis at ${host}:${port}`);
+    const connection = redisConnectionOptions();
+    this.logger.log(`Connecting to Redis at ${connection.host}:${connection.port}`);
 
     const redis = new Redis({
-      host,
-      port,
-      username: this.configService.get<string>('REDIS_USERNAME'),
-      password: this.configService.get<string>('REDIS_PASSWORD'),
-      db: this.configService.get<number>('REDIS_CACHE_DB', 1),
+      ...connection,
+      db: resolveNonNegativeIntEnv(process.env.REDIS_CACHE_DB, 1),
       lazyConnect: true,
       // Cache is best-effort: a command issued while disconnected fails fast (the caller falls back to
       // the source of truth) instead of being queued and stalling the request until reconnect.
       enableOfflineQueue: false,
       maxRetriesPerRequest: 3,
-      connectTimeout: this.configService.get<number>('redis.connectTimeoutMs', 5000),
       // Reconnect forever with bounded backoff. Returning null (the previous behavior after 3 tries)
       // makes ioredis abandon reconnection permanently, which is exactly what left the cache dead
       // across a Redis restart.

@@ -3,12 +3,12 @@ import { runWithRequestId, getRequestActor } from '../../../common/services/requ
 import { Reflector } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { ApiKeyGuard } from './api-key.guard';
-import { AuthService } from '../auth.service';
+import { AuthService, UnresolvedApiKeyException } from '../auth.service';
 import { ChatScopeService } from '../chat-scope.service';
 import { ApiKey, ApiKeyRole } from '../entities/api-key.entity';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/entities/audit-log.entity';
-import { CHAT_QUOTED_ALLOWED_KEY, CHAT_SCOPED_KEY } from '../decorators/auth.decorators';
+import { CHAT_QUOTED_ALLOWED_KEY, CHAT_SCOPED_KEY, REQUIRED_ROLE_KEY } from '../decorators/auth.decorators';
 
 function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
   return {
@@ -185,6 +185,91 @@ describe('ApiKeyGuard', () => {
     await new Promise(resolve => setImmediate(resolve));
 
     expect(auditService.logWarn).toHaveBeenCalledWith(AuditAction.API_KEY_AUTH_FAILED, expect.any(Object));
+  });
+
+  // A request with no key costs the caller nothing, and the throttler counts per route handler, so
+  // the unauthenticated audit rows are bounded per client IP. These tests use IPs no other test in
+  // this file uses: the budget is a module-level singleton shared with the Bull Board mount.
+  describe('unauthenticated audit rows are bounded per client IP', () => {
+    const settle = () => new Promise(resolve => setImmediate(resolve));
+
+    it('writes at most 10 rows a minute for one IP, while every request still gets its 401', async () => {
+      let rejected = 0;
+      for (let i = 0; i < 50; i++) {
+        await guard.canActivate(createMockContext({}, {}, '198.51.100.71')).catch(err => {
+          if (err instanceof UnauthorizedException) rejected++;
+        });
+      }
+      await settle();
+
+      expect(rejected).toBe(50);
+      expect(auditService.logWarn).toHaveBeenCalledTimes(10);
+
+      // A different client keeps its own budget.
+      await expect(guard.canActivate(createMockContext({}, {}, '198.51.100.72'))).rejects.toThrow(
+        UnauthorizedException,
+      );
+      await settle();
+      expect(auditService.logWarn).toHaveBeenCalledTimes(11);
+      expect(auditService.logWarn).toHaveBeenLastCalledWith(
+        AuditAction.API_KEY_AUTH_FAILED,
+        expect.objectContaining({ ipAddress: '198.51.100.72' }),
+      );
+    });
+
+    it('still records every 403 from an IP whose 401 budget is spent', async () => {
+      for (let i = 0; i < 11; i++) {
+        await guard.canActivate(createMockContext({}, {}, '198.51.100.73')).catch(() => undefined);
+      }
+      await settle();
+      expect(auditService.logWarn).toHaveBeenCalledTimes(10);
+
+      metadata[REQUIRED_ROLE_KEY] = ApiKeyRole.ADMIN;
+      (authService.validateApiKey as jest.Mock).mockResolvedValue(createMockApiKey({ role: ApiKeyRole.VIEWER }));
+      (authService.hasPermission as jest.Mock).mockReturnValue(false);
+      for (let i = 0; i < 3; i++) {
+        await expect(
+          guard.canActivate(createMockContext({ 'x-api-key': 'viewer-key' }, {}, '198.51.100.73')),
+        ).rejects.toThrow(ForbiddenException);
+      }
+      await settle();
+      expect(auditService.logWarn).toHaveBeenCalledTimes(13);
+    });
+
+    it('still records a rejected stored key from an IP whose budget is spent, but not an unknown one', async () => {
+      for (let i = 0; i < 11; i++) {
+        await guard.canActivate(createMockContext({}, {}, '198.51.100.74')).catch(() => undefined);
+      }
+      await settle();
+      expect(auditService.logWarn).toHaveBeenCalledTimes(10);
+
+      (authService.validateApiKey as jest.Mock).mockRejectedValue(new UnresolvedApiKeyException('Invalid API key'));
+      await expect(
+        guard.canActivate(createMockContext({ 'x-api-key': 'unknown' }, {}, '198.51.100.74')),
+      ).rejects.toThrow(UnauthorizedException);
+      await settle();
+      expect(auditService.logWarn).toHaveBeenCalledTimes(10);
+
+      for (const err of [
+        new UnauthorizedException('API key is revoked'),
+        new UnauthorizedException('API key has expired'),
+        new ForbiddenException('API key not authorized for this session'),
+      ]) {
+        (authService.validateApiKey as jest.Mock).mockRejectedValue(err);
+        await expect(guard.canActivate(createMockContext({ 'x-api-key': 'stored' }, {}, '198.51.100.74'))).rejects.toBe(
+          err,
+        );
+      }
+      await settle();
+      expect(auditService.logWarn).toHaveBeenCalledTimes(13);
+      expect(auditService.logWarn).toHaveBeenLastCalledWith(
+        AuditAction.API_KEY_AUTH_FAILED,
+        expect.objectContaining({
+          ipAddress: '198.51.100.74',
+          errorMessage: 'API key not authorized for this session',
+        }),
+      );
+    });
   });
 
   it('does not record an audit event on a successful authorization', async () => {

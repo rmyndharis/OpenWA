@@ -11,6 +11,9 @@ let webhooksStatus = 200;
 let webhookList: unknown[] = [];
 let sessionList: unknown[] = [];
 let createCalls = 0;
+let updateCalls = 0;
+let createBody: Record<string, unknown> | undefined;
+let updateBody: Record<string, unknown> | undefined;
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
@@ -24,6 +27,12 @@ function installFetchStub(): void {
     if (init?.method === 'POST' && path === '/api/sessions/sess-1/webhooks') {
       // Never answers: the create stays in flight, like one held up by the gateway's URL check.
       createCalls++;
+      createBody = JSON.parse(String(init.body));
+      return new Promise<Response>(() => {});
+    }
+    if (init?.method === 'PUT' && path === '/api/sessions/sess-1/webhooks/w1') {
+      updateCalls++;
+      updateBody = JSON.parse(String(init.body));
       return new Promise<Response>(() => {});
     }
     if (path === '/api/webhooks') {
@@ -63,6 +72,9 @@ afterEach(() => {
   webhookList = [];
   sessionList = [];
   createCalls = 0;
+  updateCalls = 0;
+  createBody = undefined;
+  updateBody = undefined;
   window.sessionStorage.setItem('openwa_user_role', 'viewer');
 });
 
@@ -186,4 +198,216 @@ test('Create stays disabled until both a session and a URL are filled in', async
 
   fireEvent.change(screen.getByLabelText('URL'), { target: { value: '' } });
   assert.equal(create.disabled, true, 'session without a URL');
+});
+
+test('Create stays disabled with a hint while no event is selected', async () => {
+  const { screen, fireEvent } = rtl;
+  webhooksStatus = 200;
+  sessionList = [{ id: 'sess-1', name: 'Main', status: 'ready', createdAt: '2026-01-01T00:00:00.000Z' }];
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderWebhooks();
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Add Webhook' }));
+  const sessionSelect = screen.getByLabelText<HTMLSelectElement>('Session');
+  await rtl.findByText(sessionSelect, 'Main');
+  fireEvent.change(sessionSelect, { target: { value: 'sess-1' } });
+  fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://example.test/hook' } });
+  const create = screen.getByRole<HTMLButtonElement>('button', { name: 'Create' });
+  assert.equal(create.disabled, false);
+  assert.equal(screen.queryByText('Select at least one event.'), null);
+
+  fireEvent.click(screen.getByRole('button', { name: 'message.received' }));
+  assert.equal(create.disabled, true, 'no event selected');
+  screen.getByText('Select at least one event.');
+  fireEvent.click(create);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(createCalls, 0);
+
+  fireEvent.click(screen.getByRole('button', { name: 'message.received' }));
+  assert.equal(create.disabled, false);
+});
+
+async function openEditModal(): Promise<HTMLButtonElement> {
+  webhooksStatus = 200;
+  webhookList = [
+    {
+      id: 'w1',
+      sessionId: 'sess-1',
+      url: 'https://example.test/hook',
+      events: ['message.received'],
+      active: true,
+      secret: 'stray-secret-from-a-payload',
+      headers: { 'X-Stray': 'value' },
+    },
+  ];
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderWebhooks();
+  rtl.fireEvent.click(await rtl.screen.findByTitle('Edit'));
+  return rtl.screen.getByRole<HTMLButtonElement>('button', { name: 'Save Changes' });
+}
+
+test('Save stays disabled with a hint while no event is selected', async () => {
+  const { screen, fireEvent } = rtl;
+  const save = await openEditModal();
+  assert.equal(save.disabled, false);
+
+  fireEvent.click(screen.getByRole('button', { name: 'message.received' }));
+  assert.equal(save.disabled, true, 'no event selected');
+  screen.getByText('Select at least one event.');
+  fireEvent.click(save);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(updateCalls, 0);
+});
+
+test('Save stays disabled while the URL is empty', async () => {
+  const { screen, fireEvent } = rtl;
+  const save = await openEditModal();
+  fireEvent.change(screen.getByLabelText('URL'), { target: { value: ' ' } });
+  assert.equal(save.disabled, true);
+  fireEvent.click(save);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(updateCalls, 0);
+});
+
+test('a second click on Save while the first update is in flight sends nothing', async () => {
+  const { fireEvent, waitFor } = rtl;
+  const save = await openEditModal();
+  fireEvent.click(save);
+  await waitFor(() => assert.equal(updateCalls, 1));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  fireEvent.click(save);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(updateCalls, 1);
+});
+
+async function openCreateModal(): Promise<HTMLButtonElement> {
+  const { screen, fireEvent } = rtl;
+  webhooksStatus = 200;
+  sessionList = [{ id: 'sess-1', name: 'Main', status: 'ready', createdAt: '2026-01-01T00:00:00.000Z' }];
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderWebhooks();
+  fireEvent.click(await screen.findByRole('button', { name: 'Add Webhook' }));
+  const sessionSelect = screen.getByLabelText<HTMLSelectElement>('Session');
+  await rtl.findByText(sessionSelect, 'Main');
+  fireEvent.change(sessionSelect, { target: { value: 'sess-1' } });
+  fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://example.test/hook' } });
+  return screen.getByRole<HTMLButtonElement>('button', { name: 'Create' });
+}
+
+function addHeaderRow(name: string, value: string): void {
+  const { screen, fireEvent } = rtl;
+  fireEvent.click(screen.getByRole('button', { name: 'Add header' }));
+  const names = screen.getAllByLabelText('Header name');
+  const values = screen.getAllByLabelText('Header value');
+  fireEvent.change(names[names.length - 1], { target: { value: name } });
+  fireEvent.change(values[values.length - 1], { target: { value: value } });
+}
+
+test('a create with the authentication section left empty sends neither a secret nor headers', async () => {
+  const create = await openCreateModal();
+  rtl.fireEvent.click(create);
+  await rtl.waitFor(() => assert.equal(createCalls, 1));
+  assert.deepEqual(Object.keys(createBody!).sort(), ['events', 'filters', 'url']);
+});
+
+test('a create sends the signing secret and custom headers exactly as typed', async () => {
+  const { screen, fireEvent } = rtl;
+  const create = await openCreateModal();
+  fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: ' a-secret-of-20-chars' } });
+  addHeaderRow('Authorization', 'Bearer abc');
+  addHeaderRow('', '');
+  fireEvent.click(create);
+  await rtl.waitFor(() => assert.equal(createCalls, 1));
+  assert.equal(createBody!.secret, ' a-secret-of-20-chars');
+  assert.deepEqual(createBody!.headers, { Authorization: 'Bearer abc' });
+});
+
+test('Generate fills a 64-hex secret, and that exact value is sent', async () => {
+  const { screen, fireEvent } = rtl;
+  const create = await openCreateModal();
+  const secret = screen.getByLabelText<HTMLInputElement>('Signing secret');
+  assert.equal(screen.getByRole<HTMLButtonElement>('button', { name: 'Copy' }).disabled, true, 'nothing to copy yet');
+  fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+  assert.match(secret.value, /^[0-9a-f]{64}$/);
+  assert.equal(screen.getByRole<HTMLButtonElement>('button', { name: 'Copy' }).disabled, false);
+  fireEvent.click(create);
+  await rtl.waitFor(() => assert.equal(createCalls, 1));
+  assert.equal(createBody!.secret, secret.value);
+});
+
+test('a short secret or a bad header keeps Create disabled and says why', async () => {
+  const { screen, fireEvent } = rtl;
+  const create = await openCreateModal();
+  fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: 'too-short' } });
+  assert.equal(create.disabled, true);
+  screen.getByText('The signing secret must be 16 to 255 characters long.');
+
+  fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: '' } });
+  addHeaderRow('X-OpenWA-Signature', 'forged');
+  assert.equal(create.disabled, true);
+  screen.getByText(
+    'Content-Type, User-Agent, X-OpenWA-* and connection headers are set by the gateway and cannot be used.',
+  );
+  fireEvent.click(create);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(createCalls, 0);
+});
+
+test('an edit that leaves the authentication section alone sends neither a secret nor headers', async () => {
+  const { screen, fireEvent } = rtl;
+  // A stray credential in the list payload must never reach the form or the update.
+  const save = await openEditModal();
+  fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://example.test/other' } });
+  fireEvent.click(save);
+  await rtl.waitFor(() => assert.equal(updateCalls, 1));
+  assert.equal(updateBody!.url, 'https://example.test/other');
+  assert.equal('secret' in updateBody!, false);
+  assert.equal('headers' in updateBody!, false);
+});
+
+test('an edit sends a replacement secret, or an empty one to stop signing', async () => {
+  const { screen, fireEvent } = rtl;
+  const save = await openEditModal();
+  const secret = screen.getByLabelText<HTMLInputElement>('Signing secret');
+  assert.equal(secret.value, '');
+  fireEvent.change(secret, { target: { value: 'too-short' } });
+  assert.equal(save.disabled, true);
+  fireEvent.click(screen.getByLabelText('Stop signing deliveries (remove the secret)'));
+  assert.equal(secret.disabled, true);
+  assert.equal(save.disabled, false);
+  fireEvent.click(save);
+  await rtl.waitFor(() => assert.equal(updateCalls, 1));
+  assert.equal(updateBody!.secret, '');
+  assert.equal('headers' in updateBody!, false);
+});
+
+test('an edit sends a typed secret', async () => {
+  const { screen, fireEvent } = rtl;
+  const save = await openEditModal();
+  fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: 'a-new-secret-value-1' } });
+  fireEvent.click(save);
+  await rtl.waitFor(() => assert.equal(updateCalls, 1));
+  assert.equal(updateBody!.secret, 'a-new-secret-value-1');
+});
+
+test('replacing headers sends the whole map, and no rows sends an empty map', async () => {
+  const { screen, fireEvent } = rtl;
+  let save = await openEditModal();
+  fireEvent.click(screen.getByLabelText('Replace custom headers'));
+  addHeaderRow('X-Token', '\u20ac5');
+  assert.equal(save.disabled, true, 'a value outside Latin-1 is refused');
+  fireEvent.change(screen.getByLabelText('Header value'), { target: { value: 'abc' } });
+  fireEvent.click(save);
+  await rtl.waitFor(() => assert.equal(updateCalls, 1));
+  assert.deepEqual(updateBody!.headers, { 'X-Token': 'abc' });
+  assert.equal('secret' in updateBody!, false);
+
+  rtl.cleanup();
+  queryClient?.clear();
+  updateCalls = 0;
+  save = await openEditModal();
+  fireEvent.click(screen.getByLabelText('Replace custom headers'));
+  fireEvent.click(save);
+  await rtl.waitFor(() => assert.equal(updateCalls, 1));
+  assert.deepEqual(updateBody!.headers, {});
 });

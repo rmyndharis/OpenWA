@@ -10,7 +10,10 @@ This module maps that to a typed, ergonomic error tree so callers can
 
 from __future__ import annotations
 
-from typing import Any
+import math
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from typing import Any, Mapping
 
 
 class OpenWAError(Exception):
@@ -24,16 +27,36 @@ class OpenWAApiError(OpenWAError):
         status: HTTP status code.
         body: Parsed JSON body if available, otherwise the raw text.
         error_kind: Value of the ``error`` field in the NestJS envelope.
+        code: The body's machine-readable ``code`` (e.g. ``SEND_PACING_LIMITED``), if any.
+        retry_after_seconds: Seconds to wait before retrying: the body's ``retryAfterSeconds``
+            when present, else the ``Retry-After`` header (seconds or an HTTP date), else None.
+        headers: The response headers, when the error came from a response.
     """
 
-    def __init__(self, message: str, status: int, body: Any = None, error_kind: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        status: int,
+        body: Any = None,
+        error_kind: str | None = None,
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.body = body
         self.error_kind = error_kind
+        self.headers = headers
+        fields = body if isinstance(body, dict) else {}
+        code = fields.get("code")
+        self.code: str | None = code if isinstance(code, str) else None
+        header = next((v for k, v in (headers or {}).items() if k.lower() == "retry-after"), None)
+        self.retry_after_seconds = _retry_after_seconds(fields.get("retryAfterSeconds"), header)
 
     @classmethod
-    def from_response(cls, status_code: int, text: str, context: str) -> "OpenWAApiError":
+    def from_response(
+        cls, status_code: int, text: str, context: str, *, headers: Mapping[str, str] | None = None
+    ) -> "OpenWAApiError":
         import json
 
         body: Any = None
@@ -51,7 +74,7 @@ class OpenWAApiError(OpenWAError):
         else:
             message_text = str(raw_message)
         message = f"OpenWA API {status_code} — {context}: {message_text}"
-        return classify(status_code, message, body, envelope.get("error") if envelope else None)
+        return classify(status_code, message, body, envelope.get("error") if envelope else None, headers=headers)
 
 
 class OpenWAAuthError(OpenWAApiError):
@@ -59,7 +82,7 @@ class OpenWAAuthError(OpenWAApiError):
 
 
 class OpenWAForbiddenError(OpenWAApiError):
-    """403 Forbidden — insufficient role."""
+    """403 Forbidden: the API key's role or scope (session, IP or chat allow-list) refuses the call."""
 
 
 class OpenWANotFoundError(OpenWAApiError):
@@ -74,10 +97,10 @@ class OpenWARateLimitError(OpenWAApiError):
     """429 Too Many Requests.
 
     The global rate limiter's 429 lifts when its window expires (seconds for the
-    per-second tier, up to an hour for the hourly tier by default); its delay is
-    only in the Retry-After response header, which this error does not carry. A
-    429 whose body has code "SEND_PACING_LIMITED" is not transient: do not retry
-    it before the body's retryAfterSeconds, which can be hours.
+    per-second tier, up to an hour for the hourly tier by default), and
+    ``retry_after_seconds`` carries its Retry-After header. A 429 with code
+    "SEND_PACING_LIMITED" is not transient: do not retry it before
+    ``retry_after_seconds``, which then comes from the body and can be hours.
     """
 
 
@@ -107,7 +130,9 @@ class OpenWATimeoutError(OpenWAError):
         self.timeout = timeout
 
 
-def classify(status: int, message: str, body: Any, error_kind: str | None) -> OpenWAApiError:
+def classify(
+    status: int, message: str, body: Any, error_kind: str | None, *, headers: Mapping[str, str] | None = None
+) -> OpenWAApiError:
     """Pick the most specific :class:`OpenWAApiError` subclass for a status."""
     cls = {
         401: OpenWAAuthError,
@@ -118,4 +143,26 @@ def classify(status: int, message: str, body: Any, error_kind: str | None) -> Op
         501: OpenWANotImplementedError,
         503: OpenWAServiceUnavailableError,
     }.get(status, OpenWAApiError)
-    return cls(message, status, body, error_kind)
+    return cls(message, status, body, error_kind, headers=headers)
+
+
+def _retry_after_seconds(from_body: Any, header: str | None) -> int | None:
+    """The body's ``retryAfterSeconds`` wins: send pacing puts its wait (possibly hours) only there,
+    and a header added by a proxy must not shorten it. Otherwise read ``Retry-After`` as seconds or
+    an HTTP date, clamped at 0."""
+    if isinstance(from_body, (int, float)) and not isinstance(from_body, bool) and 0 <= from_body < math.inf:
+        return math.ceil(from_body)
+    value = (header or "").strip()
+    if not value:
+        return None
+    if value.isascii() and value.isdigit():
+        return int(value)
+    try:
+        at = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if at is None:
+        return None
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return max(0, math.ceil((at - datetime.now(timezone.utc)).total_seconds()))

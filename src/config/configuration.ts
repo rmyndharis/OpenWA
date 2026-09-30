@@ -2,6 +2,7 @@ import * as path from 'path';
 import { computeFeatureFlags } from './feature-flags';
 import { computeSendPacingConfig } from '../modules/message/send-pacing.config';
 import { resolveInflightBodyBudgetBytes } from './inflight-body-budget';
+import { resolveRequestTimeoutMs } from './http-timeouts';
 import { readWsRateLimitConfig } from '../modules/events/ws-rate-limit';
 
 /**
@@ -72,6 +73,18 @@ export const MAX_TIMER_MS = 2147483647;
 export const PINNED_BROWSER_LOCALE = 'en-US';
 
 /**
+ * Chromium launch flags used when PUPPETEER_ARGS is unset, and the single fallback for every other
+ * path that has no configured args (the adapter, the Infrastructure save and status views).
+ * --disable-dev-shm-usage keeps tabs from crashing on Docker's 64 MB /dev/shm.
+ */
+export const DEFAULT_PUPPETEER_ARGS: readonly string[] = [
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
+  '--disable-gpu',
+];
+
+/**
  * Append the locale pin unless the operator already set one. Deliberately applied AFTER the
  * PUPPETEER_ARGS override rather than baked into the default string: that variable REPLACES the
  * defaults, so a deployment that customises args for an unrelated reason would otherwise silently
@@ -82,7 +95,7 @@ export const PINNED_BROWSER_LOCALE = 'en-US';
  * session, and pushing per-session flags onto a shared array leaked proxy settings across sessions
  * once already (#840).
  */
-export function withPinnedBrowserLocale(args: string[]): string[] {
+export function withPinnedBrowserLocale(args: readonly string[]): string[] {
   return args.some(arg => arg.startsWith('--lang')) ? [...args] : [...args, `--lang=${PINNED_BROWSER_LOCALE}`];
 }
 
@@ -99,7 +112,7 @@ export default () => ({
   // requires headers > keepAlive, and main.ts normalizes it anyway). Set any to 0 at your own risk;
   // env.validation rejects 0 so a bound is never silently disabled.
   http: {
-    requestTimeoutMs: parseInt(process.env.REQUEST_TIMEOUT_MS || '300000', 10),
+    requestTimeoutMs: resolveRequestTimeoutMs(process.env.REQUEST_TIMEOUT_MS),
     headersTimeoutMs: parseInt(process.env.HEADERS_TIMEOUT_MS || '65000', 10),
     keepAliveTimeoutMs: parseInt(process.env.KEEPALIVE_TIMEOUT_MS || '5000', 10),
     // Aggregate cap on request-body bytes buffered across ALL connections (the pre-body-parser
@@ -117,7 +130,6 @@ export default () => ({
   search: {
     enabled: process.env.SEARCH_ENABLED !== 'false',
     provider: process.env.SEARCH_PROVIDER || 'auto',
-    limitMax: Number(process.env.SEARCH_LIMIT_MAX) || 100,
   },
 
   // Dashboard statistics. The /stats aggregates run GROUP BY scans over the whole messages
@@ -161,13 +173,12 @@ export default () => ({
     // SQLite file for the auth/audit DB. Overridable (e.g. e2e points it at a temp file) so tests
     // never write api keys into the developer's ./data/main.sqlite.
     database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
-    // Schema management for the auth/audit DB. Default ON (zero-config first boot).
-    // Set MAIN_DATABASE_SYNCHRONIZE=false to manage schema via the main-owned migrations
-    // instead (migrationsRun then creates api_keys/audit_logs). When disabled, run the
-    // main-connection migrations explicitly with `npm run migration:run:main` (or
-    // `migration:run:main:prod` for the compiled image) — the plain `migration:run` only
-    // manages the data connection.
-    synchronize: process.env.MAIN_DATABASE_SYNCHRONIZE !== 'false',
+    // Schema management for the auth/audit DB. By default the main-owned migrations run at boot
+    // (they also adopt a file an earlier release built with synchronize); run them by hand with
+    // `npm run migration:run:main` (or `migration:run:main:prod` for the compiled image), since the
+    // plain `migration:run` only manages the data connection. MAIN_DATABASE_SYNCHRONIZE=true also
+    // synchronizes after the chain, which main.ts warns about in production.
+    synchronize: process.env.MAIN_DATABASE_SYNCHRONIZE === 'true',
     logging: process.env.DATABASE_LOGGING === 'true',
   },
 
@@ -216,7 +227,7 @@ export default () => ({
       // A comma only splits before the next flag, since flag values carry commas of their own
       // (--disable-features=A,B, --window-size=1280,720).
       args: withPinnedBrowserLocale(
-        (process.env.PUPPETEER_ARGS || '--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu')
+        (process.env.PUPPETEER_ARGS || DEFAULT_PUPPETEER_ARGS.join(','))
           .split(/\s+|,+(?=-)/)
           .map(arg => arg.replace(/^,+|,+$/g, ''))
           .filter(Boolean),
@@ -226,7 +237,7 @@ export default () => ({
       // is missing or incompatible (Alpine, ARM, custom base images).
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       // How long one CDP command may take. An account with thousands of chats can push a single
-      // `client.getChats()` past Puppeteer's own budget; raising this is the escape hatch. Left
+      // chat-list read past Puppeteer's own budget; raising this is the escape hatch. Left
       // UNDEFINED rather than defaulted to Puppeteer's number, so an unset or out-of-range value
       // means "whatever puppeteer-core's `timeout ?? 180_000` says" instead of pinning today's
       // figure here and silently outliving it. Out of range is not clamped either: see
@@ -261,6 +272,13 @@ export default () => ({
     // Bound parked inline deliveries as well as active sockets. Queue-full dispatches are recorded in
     // webhook_delivery_failures instead of retaining payload closures without limit.
     dispatchMaxQueued: parseInt(process.env.WEBHOOK_DISPATCH_MAX_QUEUED || '1000', 10),
+    // How many deliveries to failing receivers one session may run at once, per node, in direct and
+    // queued mode alike; healthy receivers are not limited. Unset or garbage leaves it undefined, and
+    // each path then uses a quarter of its own pool (at least 1).
+    degradedSessionConcurrency: (() => {
+      const n = parseInt(process.env.WEBHOOK_DEGRADED_SESSION_CONCURRENCY ?? '', 10);
+      return Number.isInteger(n) && n > 0 ? n : undefined;
+    })(),
     // Upper bound on the serialized webhook body after webhook:before hooks ran; oversize payloads
     // are recorded as undelivered instead of being sent/persisted. Default 1 MiB. Fail-safe like the
     // other byte caps: a non-numeric or non-positive value falls back to the default. 0 is NOT an
@@ -540,6 +558,7 @@ export default () => ({
       accessKeyId: process.env.S3_ACCESS_KEY_ID,
       secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
       endpoint: process.env.S3_ENDPOINT,
+      keyPrefix: process.env.S3_KEY_PREFIX,
     },
   },
 });

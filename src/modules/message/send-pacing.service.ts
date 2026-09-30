@@ -52,6 +52,18 @@ export function countsTowardSendBreaker(error: unknown): boolean {
   return true;
 }
 
+/**
+ * Cold reachouts `assertReachoutAllowed` set aside on the group tally for one request, and the UTC
+ * day they were taken from. Hand it back to `refundGroupReachouts` if the engine call fails.
+ */
+export interface GroupReachoutReservation {
+  coldCount: number;
+  dayStartMs: number;
+}
+
+/** Nothing reserved: the feature is off, no cold schedule, or no stranger in the batch. */
+const NO_RESERVATION: GroupReachoutReservation = { coldCount: 0, dayStartMs: 0 };
+
 /** Per-session breaker state. Deliberately in memory — see the class doc. */
 interface BreakerState {
   consecutiveFailures: number;
@@ -94,14 +106,15 @@ const MAX_REFUSAL_KEYS = 1000;
  * already the durable record of every chat send — bulk included, which persists through the same
  * `saveOutgoingMessage` — and it already carries the `(sessionId, createdAt)` index the count needs.
  * So the cap survives restarts with no table and no migration. The trade is that it counts only what
- * writes a row. Three kinds of path clear this check without ever adding to it: a status post
- * (status.service.ts), both Baileys catalog sends (catalog.service.ts `sendProduct` and
- * `sendCatalog`), and a message edit — which is gated here via applySendingGate but only UPDATEs the
- * existing row, never inserts. A bulk item the engine refuses is a fourth: bulk persists its row only
+ * writes a row. Two kinds of path clear this check without ever adding to it: a status post
+ * (status.service.ts) and a message edit, which is gated here via applySendingGate but only UPDATEs
+ * the existing row, never inserts. A bulk item the engine refuses is a third: bulk persists its row only
  * after the send succeeds, so a failed item is checked against the cap but never counted into it,
  * unlike a failed single send whose PENDING row is kept as FAILED. A session using
- * them can exceed its stated allowance. Deliberate, and documented in .env.example and docs/06 so
- * the number an operator reads is the number they get.
+ * them can exceed its stated allowance. A Baileys product send (catalog.service.ts `sendProduct`)
+ * writes no row itself but is counted through the OUTGOING row its own-send echo persists
+ * (MessageProjector.handleOwnSendEcho) shortly after the send returns. Deliberate, and documented in
+ * .env.example and docs/06 so the number an operator reads is the number they get.
  * The breaker, by contrast, is in memory on purpose: it describes live conditions, and a restart
  * clearing it is the correct behaviour.
  */
@@ -165,13 +178,17 @@ export class SendPacingService {
    * reporting success would leave the caller unable to tell who actually got added, and the engines
    * report per-participant outcomes for real failures already — a pacing refusal must not be
    * mistaken for one of those.
+   *
+   * An allowed batch is reserved on the group tally before this returns, in the same synchronous
+   * step as the comparison, so concurrent requests cannot all pass against the same unspent budget.
+   * The caller refunds the reservation if the engine call then throws.
    */
-  async assertReachoutAllowed(sessionId: string, contactIds: string[]): Promise<number> {
+  async assertReachoutAllowed(sessionId: string, contactIds: string[]): Promise<GroupReachoutReservation> {
     const config = resolveSendPacingConfig(this.configService);
-    if (!config.enabled) return 0;
+    if (!config.enabled) return NO_RESERVATION;
 
     this.assertBreakerClosed(sessionId, config);
-    if (config.coldSchedule.length === 0 || contactIds.length === 0) return 0;
+    if (config.coldSchedule.length === 0 || contactIds.length === 0) return NO_RESERVATION;
 
     // The same id twice in one request is one contact, and must cost one. Each contact is probed
     // under both user-id dialects (see dialectVariants) — a contact known under the other spelling
@@ -186,10 +203,10 @@ export class SendPacingService {
       .getRawMany<{ chatId: string }>();
     const knownIds = new Set(knownRows.map(row => row.chatId));
     const coldCount = unique.filter(id => !variantsByContact.get(id)!.some(v => knownIds.has(v))).length;
-    if (coldCount === 0) return 0;
+    if (coldCount === 0) return NO_RESERVATION;
 
     const session = await this.sessionRepository.findOne({ where: { id: sessionId } });
-    if (!session) return 0;
+    if (!session) return NO_RESERVATION;
 
     const dayStart = startOfUtcDay(new Date());
     const ageDays = Math.floor((dayStart.getTime() - startOfUtcDay(session.createdAt).getTime()) / DAY_MS);
@@ -199,11 +216,18 @@ export class SendPacingService {
     // against themselves and the cap would reset every request.
     const usedToday =
       (await this.countColdReachoutsToday(sessionId, dayStart)) + this.groupReachoutsToday(sessionId, dayStart);
+    // The UTC day rolled over while counting: check again against the new day, so the batch is
+    // reserved on (and judged by) the day it actually runs in.
+    if (startOfUtcDay(new Date()).getTime() !== dayStart.getTime()) {
+      return this.assertReachoutAllowed(sessionId, contactIds);
+    }
     if (usedToday + coldCount <= allowance) {
-      // Caller charges this AFTER the engine call resolves (chargeGroupReachouts): a createGroup
-      // that 501s on whatsapp-web.js (always) or an add the engine refuses must not burn the
-      // day's cold allowance for participants never contacted.
-      return coldCount;
+      // Reserved now, with no await between the check and the charge: a concurrent request must
+      // see this batch as spent. The caller refunds it (refundGroupReachouts) if the engine call
+      // throws, so a createGroup that 501s on whatsapp-web.js or an add the engine refuses does not
+      // burn the day's cold allowance for participants never contacted.
+      this.addGroupReachouts(sessionId, dayStart, coldCount);
+      return { coldCount, dayStartMs: dayStart.getTime() };
     }
 
     this.refuse('cold_daily_cap', sessionId, secondsUntilNextUtcDay(), {
@@ -217,12 +241,15 @@ export class SendPacingService {
   }
 
   /**
-   * Charge `coldCount` cold reachouts against the in-memory group tally. Split out of
-   * assertReachoutAllowed so the group callers charge only after the engine call resolves.
+   * Give back a reservation from assertReachoutAllowed after the engine call failed. Only the day it
+   * was taken from is credited: once the tally has rolled over to a new UTC day, the old day's
+   * reservation no longer counts against anything and the new day's tally is left alone.
    */
-  chargeGroupReachouts(sessionId: string, coldCount: number): void {
-    if (coldCount <= 0) return;
-    this.addGroupReachouts(sessionId, startOfUtcDay(new Date()), coldCount);
+  refundGroupReachouts(sessionId: string, reservation: GroupReachoutReservation): void {
+    if (reservation.coldCount <= 0) return;
+    const tally = this.groupReachoutTally.get(sessionId);
+    if (!tally || tally.dayStartMs !== reservation.dayStartMs) return;
+    tally.count = Math.max(0, tally.count - reservation.coldCount);
   }
 
   /** Cold group-add reachouts charged to this session today (0 once the stored day rolls over). */
@@ -419,8 +446,9 @@ export class SendPacingService {
    * Distinct chats this session started today: it sent to them today, nothing in the chat predates
    * today, and nobody wrote to it first — a chat whose counterpart messaged earlier the same day is
    * an answered conversation, not a reachout (the "cold" rule above), however new the chat is.
-   * Expressed as NOT EXISTS probes so the outer query stays on the `(sessionId, createdAt)` and
-   * `chatId` indexes; the only aggregate is a per-chat MIN over today's outgoing rows.
+   * Expressed as NOT EXISTS probes so the outer query stays on the `(sessionId, createdAt)` index
+   * and each probe seeks `(sessionId, chatId, createdAt)`; the only aggregate is a per-chat MIN over
+   * today's outgoing rows.
    */
   private countColdReachoutsToday(sessionId: string, dayStart: Date): Promise<number> {
     return (

@@ -197,12 +197,19 @@ func warnIfInsecure(cfg *config) {
 // body falls back to the raw text when out is a *string — mirroring the
 // JS/Python/PHP transports, which return the raw text instead of failing.
 // Any other out type still requires a JSON body.
+//
+// A "." or ".." segment (also written %2e) returns an error and nothing is
+// sent; empty segments, such as a trailing slash, are sent as written.
 func (c *Client) Do(ctx context.Context, method, path string, query url.Values, body, out any) error {
-	return c.do(ctx, method, path, query, body, out)
+	return c.call(ctx, method, path, query, body, out, true)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body, out any) error {
-	data, _, err := c.doRaw(ctx, method, path, query, body)
+	return c.call(ctx, method, path, query, body, out, false)
+}
+
+func (c *Client) call(ctx context.Context, method, path string, query url.Values, body, out any, rawPath bool) error {
+	data, _, err := c.doRaw(ctx, method, path, query, body, rawPath)
 	if err != nil {
 		return err
 	}
@@ -228,7 +235,15 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 // doRaw performs the request and returns the response body and Content-Type.
 // Any non-2xx status (including an unfollowed 3xx) is an error.
-func (c *Client) doRaw(ctx context.Context, method, path string, query url.Values, body any) ([]byte, string, error) {
+//
+// A path segment that is "." or ".." is refused before sending: a proxy that
+// resolves dot segments would route the request to the parent resource. A
+// typed service path (rawPath false) also refuses an empty segment, which
+// means a required id was blank; a hand-written Do path may keep one.
+func (c *Client) doRaw(ctx context.Context, method, path string, query url.Values, body any, rawPath bool) ([]byte, string, error) {
+	if err := checkPathSegments(path, rawPath); err != nil {
+		return nil, "", err
+	}
 	var bodyBytes []byte
 	var reader io.Reader
 	if body != nil {
@@ -274,7 +289,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 
 	// Any non-2xx (including an unfollowed 3xx) is an error.
 	if resp.StatusCode >= 300 {
-		return nil, "", parseAPIError(resp.StatusCode, data, method+" "+path)
+		return nil, "", parseAPIError(resp.StatusCode, data, method+" "+path, resp.Header)
 	}
 	return data, resp.Header.Get("Content-Type"), nil
 }
@@ -292,13 +307,36 @@ func isTimeout(err error) bool {
 
 // pathEscape percent-encodes a single path segment so a value containing "/",
 // "#", or "?" can't break out of its path position. WhatsApp-JID characters
-// that are already path-safe ("@", ":", "+") are kept readable.
+// that are already path-safe ("@", ":", "+") are kept readable. An empty, "."
+// or ".." id is left as is and refused by doRaw before anything is sent.
 func pathEscape(segment string) string {
 	escaped := url.PathEscape(segment)
 	return jidRestorer.Replace(escaped)
 }
 
 var jidRestorer = strings.NewReplacer("%40", "@", "%3A", ":", "%2B", "+")
+
+var dotFolder = strings.NewReplacer("%2e", ".", "%2E", ".")
+
+// checkPathSegments refuses a "." or ".." segment (also written %2e), and an
+// empty one unless allowEmpty. The query and fragment are not path segments.
+func checkPathSegments(path string, allowEmpty bool) error {
+	p := path
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	for _, seg := range strings.Split(p, "/")[1:] {
+		switch dotFolder.Replace(seg) {
+		case ".", "..":
+			return fmt.Errorf("openwa: dot path segment in %q", path)
+		case "":
+			if !allowEmpty {
+				return fmt.Errorf("openwa: empty path segment in %q", path)
+			}
+		}
+	}
+	return nil
+}
 
 // query helpers used by the typed *Query structs.
 

@@ -35,7 +35,11 @@ class ContactsResource
         return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}");
     }
 
-    /** @return array<string,mixed> */
+    /**
+     * Check whether a number is on WhatsApp. Requires an OPERATOR key.
+     *
+     * @return array<string,mixed>
+     */
     public function check(string $sessionId, string $number): array
     {
         return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/check/{$this->http->encodeSegment($number)}");

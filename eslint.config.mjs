@@ -4,6 +4,15 @@ import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended'
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
+// Nest's Logger prints through its own ConsoleLogger until main.ts installs the app logger, and passes
+// metadata objects on as the context name; createLogger() applies LOG_LEVEL, LOG_FORMAT, redaction and
+// the request id everywhere. Shared with the controller block below, because a later block's
+// no-restricted-syntax replaces this one's options instead of merging with them.
+const NO_NEST_LOGGER = {
+  selector: "NewExpression[callee.name='Logger']",
+  message: 'Use createLogger() from common/services/logger.service instead of new Logger().',
+};
+
 export default tseslint.config(
   {
     ignores: ['eslint.config.mjs'],
@@ -33,6 +42,13 @@ export default tseslint.config(
     },
   },
   {
+    files: ['src/**/*.ts'],
+    ignores: ['**/*.spec.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', NO_NEST_LOGGER],
+    },
+  },
+  {
     // Architecture guard: HTTP controllers must go through a per-capability service and
     // never reach for the raw WhatsApp engine. This keeps the "session not started" guard,
     // error mapping, and business rules behind the service boundary instead of leaking into
@@ -42,6 +58,7 @@ export default tseslint.config(
     rules: {
       'no-restricted-syntax': [
         'error',
+        NO_NEST_LOGGER,
         {
           selector: "CallExpression[callee.property.name='getEngine']",
           message:

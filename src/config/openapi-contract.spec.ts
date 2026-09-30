@@ -167,6 +167,26 @@ describe('openapi.json structural invariants', () => {
     expect(undeclared).toEqual([]);
   });
 
+  it('gives every API-key operation its auth refusals and an error body schema', () => {
+    const doc = snapshot();
+    type Op = { security?: unknown; responses?: Record<string, { content?: unknown; $ref?: string }> };
+    let checked = 0;
+    const gaps: string[] = [];
+    for (const [route, item] of Object.entries(doc.paths as unknown as Record<string, Record<string, Op>>)) {
+      for (const [method, op] of Object.entries(item)) {
+        if (!OPERATION_KEYS.has(method) || op.security !== undefined) continue;
+        checked++;
+        const responses = op.responses ?? {};
+        for (const status of ['401', '403']) if (!responses[status]) gaps.push(`${method} ${route} lacks ${status}`);
+        for (const [status, response] of Object.entries(responses)) {
+          if (Number(status) >= 400 && !response.$ref && !response.content) gaps.push(`${method} ${route} ${status}`);
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(150);
+    expect(gaps).toEqual([]);
+  });
+
   it('gives each route exactly one path key, whatever its parameters are named', () => {
     const doc = snapshot();
     // A path template variable is positional: `/x/{id}` and `/x/{sessionId}` are the same URL. Two
@@ -189,7 +209,7 @@ describe('openapi.json structural invariants', () => {
 // running gateway kept serving a document that fails validation while the artifact was clean. A
 // structural check, because neither producer is reachable from a unit test.
 describe('both OpenAPI producers apply the same passes', () => {
-  const PASSES = ['dropUnexpressibleOperations', 'exemptPublicOperations'];
+  const PASSES = ['dropUnexpressibleOperations', 'exemptPublicOperations', 'documentErrorResponses'];
   const producers = ['src/main.ts', 'scripts/export-openapi.ts'];
 
   it.each(PASSES)('%s runs in every producer', pass => {
@@ -206,9 +226,10 @@ describe('both OpenAPI producers apply the same passes', () => {
         text.indexOf(`${p}(document`) >= 0 ? text.indexOf(`${p}(document`) : text.indexOf(`${p}(doc`),
       );
       // drop must precede exempt: exempting an operation about to be deleted is wasted work, and the
-      // reverse order would leave a security exemption attached to nothing.
+      // reverse order would leave a security exemption attached to nothing. The error pass reads
+      // the exemption, so it runs last.
       expect(order[0]).toBeGreaterThan(-1);
-      expect(order[1]).toBeGreaterThan(order[0]);
+      for (let i = 1; i < order.length; i++) expect(order[i]).toBeGreaterThan(order[i - 1]);
     }
   });
 });

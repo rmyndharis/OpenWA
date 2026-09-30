@@ -278,7 +278,7 @@
 .chips-suggestion-id {
   font-size: 0.6875rem;
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', monospace;
 }
 
 .chips-suggestion-add {

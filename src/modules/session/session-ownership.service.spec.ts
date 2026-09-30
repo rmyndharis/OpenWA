@@ -536,4 +536,126 @@ describe('SessionOwnershipService', () => {
       expect(bare.nodeId).not.toContain(String(process.pid));
     });
   });
+
+  /**
+   * Two processes sharing a nodeId (two instances on one host with no NODE_ID) each treat the other's
+   * rows as their own and both keep renewing them, so no loss is ever seen. Only the lease values
+   * changing under this process give it away.
+   */
+  describe('duplicate NODE_ID detection', () => {
+    const errorSpy = (svc: SessionOwnershipService): jest.SpyInstance =>
+      jest
+        .spyOn((svc as unknown as { logger: { error: (...a: unknown[]) => void } }).logger, 'error')
+        .mockImplementation(() => undefined);
+    const duplicateLogs = (spy: jest.SpyInstance): unknown[][] =>
+      (spy.mock.calls as unknown[][]).filter(
+        c => (c[2] as { action?: string } | undefined)?.action === 'duplicate_node_id',
+      );
+    // Each tick lands a second later, so every renewal writes a distinct expiry.
+    const tick = async (svc: SessionOwnershipService): Promise<void> => {
+      jest.setSystemTime(Date.now() + 1_000);
+      await svc.renew();
+    };
+
+    beforeEach(() => {
+      jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    });
+    afterEach(() => {
+      jest.useRealTimers();
+      jest.restoreAllMocks();
+    });
+
+    it('reports twins that both claimed and renew the same row, once each', async () => {
+      const session = await seed();
+      const twinA = service('node-a');
+      const twinB = service('node-a');
+      const [logA, logB] = [errorSpy(twinA), errorSpy(twinB)];
+      await expect(twinA.claim(session.id)).resolves.toBe(true);
+      await expect(twinB.claim(session.id)).resolves.toBe(true);
+
+      for (let k = 0; k < 4; k++) {
+        await tick(twinA);
+        await tick(twinB);
+      }
+
+      expect(duplicateLogs(logA)).toHaveLength(1);
+      expect(duplicateLogs(logB)).toHaveLength(1);
+      expect(duplicateLogs(logA)[0][2]).toEqual({
+        action: 'duplicate_node_id',
+        nodeId: 'node-a',
+        sessionIds: [session.id],
+      });
+    });
+
+    it('reports a twin that holds nothing but sees its nodeId renewed by someone else', async () => {
+      const session = await seed();
+      const owner = service('node-a');
+      const idle = service('node-a');
+      const log = errorSpy(idle);
+      await owner.claim(session.id);
+
+      for (let k = 0; k < 4; k++) {
+        await tick(owner);
+        await tick(idle);
+      }
+
+      expect(duplicateLogs(log)).toHaveLength(1);
+    });
+
+    it('stays quiet for a single process renewing its own rows', async () => {
+      const session = await seed();
+      const node = service('node-a');
+      const log = errorSpy(node);
+      await node.claim(session.id);
+
+      for (let k = 0; k < 5; k++) await tick(node);
+
+      expect(duplicateLogs(log)).toHaveLength(0);
+    });
+
+    it('stays quiet after a one-off rewrite, like a data import carrying a lease forward', async () => {
+      const session = await seed();
+      const node = service('node-a');
+      const log = errorSpy(node);
+      await node.claim(session.id);
+      await tick(node);
+      await sessions.update({ id: session.id }, { leaseExpiresAt: new Date(Date.now() + 45_000) });
+
+      for (let k = 0; k < 4; k++) await tick(node);
+
+      expect(duplicateLogs(log)).toHaveLength(0);
+    });
+
+    it("stays quiet for a previous incarnation's lease that nobody renews", async () => {
+      await seed({ nodeId: 'node-a', leaseExpiresAt: new Date(Date.now() + 60_000) });
+      const fresh = service('node-a');
+      const log = errorSpy(fresh);
+
+      for (let k = 0; k < 4; k++) await tick(fresh);
+
+      expect(duplicateLogs(log)).toHaveLength(0);
+    });
+
+    it('does not count renewals seen while an import holds the suspension token', async () => {
+      const session = await seed();
+      const owner = service('node-a');
+      const idle = service('node-a');
+      const log = errorSpy(idle);
+      await owner.claim(session.id);
+      const release = idle.suspendLossDetection();
+
+      for (let k = 0; k < 4; k++) {
+        await tick(owner);
+        await tick(idle);
+      }
+      expect(duplicateLogs(log)).toHaveLength(0);
+
+      release();
+      await tick(owner);
+      await tick(idle); // baseline after the suspension
+      await tick(owner);
+      await tick(idle);
+      expect(duplicateLogs(log)).toHaveLength(0);
+    });
+  });
 });

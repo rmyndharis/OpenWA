@@ -19,24 +19,38 @@ export class ReKeyChatStatesBySessionId1786500000000 implements MigrationInterfa
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     if (!(await queryRunner.hasTable('chat_states'))) return;
-    await queryRunner.query(this.rekey('name', 'id'));
+    await queryRunner.query(ReKeyChatStatesBySessionId1786500000000.rekey('name', 'id'));
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     if (!(await queryRunner.hasTable('chat_states'))) return;
-    await queryRunner.query(this.rekey('id', 'name'));
+    await queryRunner.query(ReKeyChatStatesBySessionId1786500000000.rekey('id', 'name'));
   }
 
   /**
    * Correlated-subquery UPDATE rather than `UPDATE ... FROM`, which SQLite and PostgreSQL spell
    * differently.
+   *
+   * Static, not a module-level export: TypeORM loads every exported function in this directory as a
+   * migration class. Also run by import-data, whose archive may predate this re-key; that caller sets
+   * `skipAlreadyKeyed` so a row already keyed by an existing session's `to` value is left alone even
+   * when some other session's `from` value happens to equal it. That caller also casts the session
+   * columns to varchar: a PostgreSQL schema built by synchronize has a native uuid `sessions.id`, which
+   * has no `=` operator against the varchar `chat_states.sessionId`. The migration's own SQL is left
+   * unchanged, since the migration chain keeps `sessions.id` varchar.
    */
-  private rekey(from: 'name' | 'id', to: 'name' | 'id'): string {
-    const target = `(SELECT s."${to}" FROM sessions s WHERE s."${from}" = chat_states."sessionId")`;
+  static rekey(from: 'name' | 'id', to: 'name' | 'id', opts: { skipAlreadyKeyed?: boolean } = {}): string {
+    const col = (alias: string, name: string): string =>
+      opts.skipAlreadyKeyed ? `CAST(${alias}."${name}" AS varchar)` : `${alias}."${name}"`;
+    const target = `(SELECT ${col('s', to)} FROM sessions s WHERE ${col('s', from)} = chat_states."sessionId")`;
+    const alreadyKeyed = opts.skipAlreadyKeyed
+      ? `
+        AND NOT EXISTS (SELECT 1 FROM sessions s2 WHERE ${col('s2', to)} = chat_states."sessionId")`
+      : '';
     return `UPDATE chat_states SET "sessionId" = ${target}
-      WHERE EXISTS (SELECT 1 FROM sessions s WHERE s."${from}" = chat_states."sessionId")
+      WHERE EXISTS (SELECT 1 FROM sessions s WHERE ${col('s', from)} = chat_states."sessionId")
         AND NOT EXISTS (
           SELECT 1 FROM chat_states c WHERE c."chatId" = chat_states."chatId" AND c."sessionId" = ${target}
-        )`;
+        )${alreadyKeyed}`;
   }
 }

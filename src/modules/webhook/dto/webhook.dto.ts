@@ -49,15 +49,18 @@ class WebhookFilterConditionDto {
 class WebhookFiltersDto {
   @ApiProperty({
     type: [WebhookFilterConditionDto],
-    minItems: 1,
     maxItems: MAX_CONDITIONS,
-    description: 'Every condition must match (AND) for the webhook to fire.',
+    description:
+      'Every condition must match (AND) for the webhook to fire. An empty list means no filter: the webhook fires on every subscribed event.',
   })
   conditions!: WebhookFilterConditionDto[];
 }
 
 const FILTERS_API_DESCRIPTION =
   'Optional smart pre-filter. When set, every condition must match (AND) for the webhook to fire. Omit or null to fire on every subscribed event.';
+// An update applies `filters` only when the field is present, so omission keeps the stored filter.
+const UPDATE_FILTERS_API_DESCRIPTION =
+  'Optional smart pre-filter. When set, every condition must match (AND) for the webhook to fire. Omit to keep the stored filters; send null or { conditions: [] } to clear them, so the webhook fires on every subscribed event.';
 const FILTERS_API_EXAMPLE = {
   conditions: [
     { field: 'sender', operator: 'is', value: ['1234567890@c.us'] },
@@ -145,8 +148,9 @@ export class CreateWebhookDto {
 
   @ApiPropertyOptional({
     description:
-      'Custom headers to include in webhook requests. Never returned by any webhook route. At delivery, ' +
-      '`content-type` and `x-openwa-*` names are stripped so a custom header cannot shadow a system one, ' +
+      'Custom headers to include in webhook requests. Names must be unique ignoring case. Never returned by ' +
+      'any webhook route. At delivery, `content-type`, `user-agent` and `x-openwa-*` names are stripped so a ' +
+      'custom header cannot shadow a system one, ' +
       'and so are the connection-level names the HTTP client owns (`connection`, `content-length`, ' +
       '`expect`, `keep-alive`, `te`, `trailer`, `transfer-encoding`, `upgrade`).',
     example: { 'X-Custom-Header': 'value' },
@@ -245,7 +249,7 @@ export class UpdateWebhookDto {
   // sends and accepts.
   @ApiPropertyOptional({
     type: WebhookFiltersDto,
-    description: FILTERS_API_DESCRIPTION,
+    description: UPDATE_FILTERS_API_DESCRIPTION,
     example: FILTERS_API_EXAMPLE,
     nullable: true,
   })

@@ -1,5 +1,5 @@
-import { ConfigService } from '@nestjs/config';
 import Redis, { RedisOptions } from 'ioredis';
+import { redisConnectionOptions } from '../../config/redis-options';
 
 /**
  * Upper bound for one throttler command. The storage fails OPEN on command error, so a bounded
@@ -26,13 +26,9 @@ export const THROTTLER_REDIS_COMMAND_TIMEOUT_MS = 2000;
  *   offline queue disabled there is nothing to flush, and per-command latency is bounded by
  *   commandTimeout instead of a retry counter.
  */
-export function buildThrottlerRedisOptions(configService: ConfigService): RedisOptions {
+export function buildThrottlerRedisOptions(): RedisOptions {
   return {
-    host: configService.get<string>('redis.host', 'localhost'),
-    port: configService.get<number>('redis.port', 6379),
-    username: configService.get<string>('redis.username'),
-    password: configService.get<string>('redis.password'),
-    connectTimeout: configService.get<number>('redis.connectTimeoutMs', 5000),
+    ...redisConnectionOptions(),
     enableOfflineQueue: false,
     autoResendUnfulfilledCommands: false,
     commandTimeout: THROTTLER_REDIS_COMMAND_TIMEOUT_MS,
@@ -41,6 +37,6 @@ export function buildThrottlerRedisOptions(configService: ConfigService): RedisO
 }
 
 /** Dedicated client for throttler hit-count storage — separate from cache/queue clients. */
-export function createThrottlerRedisClient(configService: ConfigService): Redis {
-  return new Redis(buildThrottlerRedisOptions(configService));
+export function createThrottlerRedisClient(): Redis {
+  return new Redis(buildThrottlerRedisOptions());
 }

@@ -12,16 +12,37 @@ import java.util.StringJoiner;
 public final class Http {
     private Http() {}
 
-    /** Percent-encode a path segment, keeping WhatsApp-id chars {@code @ : +} readable. */
+    /**
+     * Percent-encode a path segment, keeping WhatsApp-id chars {@code @ : +} readable.
+     *
+     * @throws IllegalArgumentException for an empty, {@code .} or {@code ..} segment: a proxy that
+     *     resolves dot segments would send the request to the parent resource, and an empty one
+     *     means a required id was blank.
+     */
     public static String encodeSegment(String segment) {
+        if (segment.isEmpty() || segment.equals(".") || segment.equals("..")) {
+            throw new IllegalArgumentException("OpenWA: empty or dot path segment \"" + segment + "\"");
+        }
         // URLEncoder is form-encoding: it encodes space as '+'. Restore true
         // percent-encoding first, then keep already-path-safe WhatsApp-id chars readable.
         String enc = URLEncoder.encode(segment, StandardCharsets.UTF_8).replace("+", "%20");
         return enc.replace("%40", "@").replace("%3A", ":").replace("%2B", "+");
     }
 
-    /** Build an absolute URL, preserving a base path prefix and omitting null query values. */
+    /**
+     * Build an absolute URL, preserving a base path prefix and omitting null query values.
+     *
+     * @throws IllegalArgumentException if the path has a {@code .} or {@code ..} segment (also
+     *     written {@code %2e}); empty segments, such as a trailing slash, are kept as written.
+     */
     public static String buildUrl(String baseUrl, String path, Object query, Gson gson) {
+        String pathOnly = path.split("[?#]", 2)[0];
+        for (String segment : pathOnly.split("/", -1)) {
+            String dots = segment.replaceAll("(?i)%2e", ".");
+            if (dots.equals(".") || dots.equals("..")) {
+                throw new IllegalArgumentException("OpenWA: dot path segment in \"" + path + "\"");
+            }
+        }
         String base = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         String url = base + path;
         if (query == null) {

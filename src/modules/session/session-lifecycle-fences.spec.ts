@@ -170,5 +170,22 @@ describe('SessionLifecycleFences', () => {
       expect(forceDestroy).toHaveBeenCalledTimes(1);
       expect(destroy).not.toHaveBeenCalled();
     });
+
+    it('leaves a replacement engine registered and still force-destroys the stale one', async () => {
+      const { fences, engines } = makeFences();
+      const staleKill = jest.fn().mockResolvedValue(undefined);
+      const liveKill = jest.fn().mockResolvedValue(undefined);
+      const stale = engine({ forceDestroy: staleKill });
+      const live = engine({ forceDestroy: liveKill });
+      engines.set('s1', live);
+
+      fences.evictAndForceDestroy('s1', stale);
+
+      expect(engines.get('s1')).toBe(live);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(staleKill).toHaveBeenCalledTimes(1);
+      expect(liveKill).not.toHaveBeenCalled();
+    });
   });
 });

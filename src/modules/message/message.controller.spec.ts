@@ -6,6 +6,9 @@ import type { Server } from 'http';
 import { MessageController } from './message.controller';
 import { MessageService } from './message.service';
 import { BulkMessageService } from './bulk-message.service';
+import { ChatScopeService } from '../auth/chat-scope.service';
+import { CHAT_SCOPED_KEY } from '../auth/decorators/auth.decorators';
+import type { ApiKey } from '../auth/entities/api-key.entity';
 import type { SendBulkMessageDto } from './dto/bulk-message.dto';
 import type { Response } from 'express';
 
@@ -20,6 +23,7 @@ describe('MessageController — stored media download', () => {
   const controller = new MessageController(
     { getChatMedia } as unknown as MessageService,
     {} as unknown as BulkMessageService,
+    new ChatScopeService(),
   );
 
   /**
@@ -78,6 +82,7 @@ describe('MessageController - inlineMedia is opt-out', () => {
   const controller = new MessageController(
     { getMessages } as unknown as MessageService,
     {} as unknown as BulkMessageService,
+    new ChatScopeService(),
   );
 
   const inlineMediaFor = async (raw?: string): Promise<boolean> => {
@@ -118,6 +123,49 @@ describe('MessageController - inlineMedia is opt-out', () => {
 });
 
 /**
+ * A key restricted to selected chats reads stored history only for a chat it names: the guard fences
+ * the ?chatId= it sends, and the handler refuses the same key when it names none, which the service
+ * would otherwise read as every chat in the session.
+ */
+describe('MessageController - stored history for a chat-restricted key', () => {
+  const getMessages = jest.fn().mockResolvedValue({ messages: [], total: 0 });
+  const controller = new MessageController(
+    { getMessages } as unknown as MessageService,
+    {} as unknown as BulkMessageService,
+    new ChatScopeService(),
+  );
+  const restricted = { allowedChats: ['1@c.us'] } as ApiKey;
+  const list = (chatId: string | undefined, apiKey?: ApiKey) =>
+    controller.getMessages('s1', chatId, undefined, undefined, undefined, undefined, undefined, apiKey);
+
+  beforeEach(() => getMessages.mockClear());
+
+  it('is fenced', () => {
+    expect(
+      Reflect.getMetadata(
+        CHAT_SCOPED_KEY,
+        Object.getOwnPropertyDescriptor(MessageController.prototype, 'getMessages')!.value as object,
+      ),
+    ).toBe('fenced');
+  });
+
+  it.each([undefined, ''])('refuses a restricted key with chatId %p before reading', async chatId => {
+    await expect(list(chatId, restricted)).rejects.toThrow('chatId is required for a key restricted to selected chats');
+    expect(getMessages).not.toHaveBeenCalled();
+  });
+
+  it('reads the named chat for a restricted key, passing chatId through as sent', async () => {
+    await list('1@c.us', restricted);
+    expect(getMessages).toHaveBeenCalledWith('s1', expect.objectContaining({ chatId: '1@c.us' }));
+  });
+
+  it('leaves an unrestricted key free to list every chat', async () => {
+    await list(undefined, { allowedChats: null } as ApiKey);
+    expect(getMessages).toHaveBeenCalledWith('s1', expect.objectContaining({ chatId: undefined }));
+  });
+});
+
+/**
  * A caller may pick its own batchId. 'history' shares the two-segment shape of ':chatId/history',
  * and an id with a reserved character must survive the statusUrl handed back on creation.
  */
@@ -134,6 +182,7 @@ describe('MessageController - caller-supplied batch ids', () => {
       providers: [
         { provide: MessageService, useValue: messages },
         { provide: BulkMessageService, useValue: bulk },
+        ChatScopeService,
       ],
     }).compile();
     const app = moduleRef.createNestApplication();
@@ -153,6 +202,7 @@ describe('MessageController - caller-supplied batch ids', () => {
     const controller = new MessageController(
       messages as unknown as MessageService,
       bulk as unknown as BulkMessageService,
+      new ChatScopeService(),
     );
 
     const res = await controller.sendBulk('s1', {} as SendBulkMessageDto);

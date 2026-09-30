@@ -164,6 +164,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       contactCount: () => this.sessionStore.listContacts().length,
       findContact: contactId => this.sessionStore.findContact(contactId),
       resolvePhone: contactId => this.sessionStore.resolvePhone(contactId),
+      findPersistedLidPhone: lid => this.config.lidMappingStore?.findPhoneForLid?.(lid) ?? Promise.resolve(null),
       listChats: () => this.sessionStore.listChats(),
       lastMessage: chatId => this.sessionStore.lastMessage(chatId),
       lastInboundMessage: chatId => this.sessionStore.lastInboundMessage(chatId),

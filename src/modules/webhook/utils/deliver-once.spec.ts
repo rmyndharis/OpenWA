@@ -1,4 +1,11 @@
-import { postWebhookPayload, sanitizeCustomHeaders } from './deliver-once';
+import { Headers } from 'undici';
+import {
+  buildDeliveryHeaders,
+  generateSignature,
+  isDeliverableWebhook,
+  postWebhookPayload,
+  sanitizeCustomHeaders,
+} from './deliver-once';
 
 /**
  * Direct coverage for the shared delivery core both paths (direct and queued processor) now route
@@ -59,6 +66,23 @@ describe('sanitizeCustomHeaders', () => {
     ).toEqual({ 'X-Custom': 'v', Authorization: 'Bearer t' });
   });
 
+  it('drops a custom User-Agent in any spelling', () => {
+    expect(sanitizeCustomHeaders({ 'user-agent': 'x', 'USER-AGENT': 'y', 'User-Agent': 'z', 'X-Keep': 'v' })).toEqual({
+      'X-Keep': 'v',
+    });
+  });
+
+  it('keeps a custom header whose name only starts with User-Agent', () => {
+    expect(sanitizeCustomHeaders({ 'User-Agent-Version': '2' })).toEqual({ 'User-Agent-Version': '2' });
+  });
+
+  // Asserted through undici's Headers, which is what goes on the wire: a case-variant key there is
+  // joined with the system value rather than replaced by it.
+  it('sends only the system User-Agent when the custom map carries a lowercase one', () => {
+    const headers = buildDeliveryHeaders({ headers: { 'user-agent': 'custom' } }, 'message.received', 'k', 'd', '{}');
+    expect(new Headers(headers).get('user-agent')).toBe('OpenWA-Webhook/1.0.0');
+  });
+
   // undici throws on several of these (every delivery then fails with "fetch failed") and a wrong
   // Content-Length breaks the request framing; the HTTP client owns all of them.
   it('drops connection-level and framing headers the HTTP client owns', () => {
@@ -75,5 +99,32 @@ describe('sanitizeCustomHeaders', () => {
         'X-Keep': 'v',
       }),
     ).toEqual({ 'X-Keep': 'v' });
+  });
+});
+
+describe('isDeliverableWebhook', () => {
+  const row = { active: true, events: ['message.received'] };
+
+  it('accepts an active row subscribed to the event or to every event', () => {
+    expect(isDeliverableWebhook(row, 'message.received')).toBe(true);
+    expect(isDeliverableWebhook({ active: true, events: ['*'] }, 'message.ack')).toBe(true);
+  });
+
+  it('refuses a missing, disabled or unsubscribed row', () => {
+    expect(isDeliverableWebhook(null, 'message.received')).toBe(false);
+    expect(isDeliverableWebhook(undefined, 'message.received')).toBe(false);
+    expect(isDeliverableWebhook({ ...row, active: false }, 'message.received')).toBe(false);
+    expect(isDeliverableWebhook(row, 'message.ack')).toBe(false);
+  });
+});
+
+describe('generateSignature', () => {
+  it('matches the vector the SDK signature helpers are tested against', () => {
+    const body =
+      '{"event":"message.received","timestamp":"2026-02-02T10:00:00.000Z","sessionId":"s1","idempotencyKey":"k",' +
+      '"deliveryId":"dlv_1","data":{"text":"h\u00e9llo \u{1F44B}"}}';
+    expect(generateSignature(body, 'test-secret-0123456789')).toBe(
+      'sha256=d74a41bb687f31ed4c932f76f524116100ca4120d2cabb7a469ee5d928122f70',
+    );
   });
 });

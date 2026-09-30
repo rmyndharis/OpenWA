@@ -451,6 +451,7 @@
     "selectSession": "Seleziona sessione...",
     "session": "Sessione",
     "events": "Eventi",
+    "noEvents": "Seleziona almeno un evento.",
     "available": "Eventi Disponibili",
     "saveChanges": "Salva Modifiche",
     "filters": {
@@ -544,6 +545,33 @@
       "call.missed": "Quando una chiamata resta senza risposta",
       "status.received": "Quando un contatto pubblica uno stato",
       "all": "Tutti gli eventi"
+    },
+    "auth": {
+      "title": "Autenticazione delle consegne",
+      "hint": "Facoltativo. I valori salvati non vengono più mostrati.",
+      "editHint": "Il segreto e le intestazioni salvati non vengono mai mostrati. Lascia invariata questa sezione per mantenerli.",
+      "secret": "Segreto di firma",
+      "secretHint": "Da 16 a 255 caratteri. Ogni consegna include una firma HMAC-SHA256 nell'intestazione X-OpenWA-Signature.",
+      "secretKeepPlaceholder": "Lascia vuoto per mantenere il segreto attuale",
+      "generateSecret": "Genera",
+      "copySecret": "Copia",
+      "secretCopied": "Segreto di firma copiato",
+      "removeSecret": "Smetti di firmare le consegne (rimuovi il segreto)",
+      "headers": "Intestazioni personalizzate",
+      "headerName": "Nome intestazione",
+      "headerValue": "Valore intestazione",
+      "addHeader": "Aggiungi intestazione",
+      "removeHeader": "Rimuovi intestazione",
+      "replaceHeaders": "Sostituisci le intestazioni personalizzate",
+      "replaceHint": "Queste righe sostituiscono tutte le intestazioni salvate. Senza righe, le intestazioni salvate vengono rimosse.",
+      "errors": {
+        "headerName": "I nomi delle intestazioni possono contenere solo lettere, cifre e trattini.",
+        "headerValue": "I valori delle intestazioni sono limitati a 1024 caratteri, senza caratteri di controllo né caratteri al di fuori di Latin-1.",
+        "headerReserved": "Content-Type, User-Agent, X-OpenWA-* e le intestazioni di connessione sono impostate dal gateway e non possono essere usate.",
+        "headerDuplicate": "Ogni nome di intestazione può essere usato una sola volta.",
+        "tooMany": "Sono consentite al massimo 50 intestazioni personalizzate.",
+        "secretLength": "Il segreto di firma deve essere lungo da 16 a 255 caratteri."
+      }
     }
   },
   "templates": {
@@ -603,6 +631,7 @@
     "createdTitle": "Chiave API Creata",
     "createdHint": "Copia questa chiave ora. Non potrai più visualizzarla.",
     "namePlaceholder": "es., Chiave di Produzione",
+    "nameTooShort": "Usa almeno 3 caratteri.",
     "rolesTitle": "Riferimento Ruoli",
     "roles": {
       "admin": "Amministratore",
@@ -621,11 +650,13 @@
       "status": "Stato",
       "lastUsed": "Ultimo Utilizzo",
       "actions": "Azioni",
-      "sessions": "Sessioni"
+      "sessions": "Sessioni",
+      "restrictions": "Restrizioni"
     },
     "statuses": {
       "active": "Attiva",
-      "revoked": "Revocata"
+      "revoked": "Revocata",
+      "expired": "Scaduta"
     },
     "empty": {
       "title": "Nessuna chiave API creata",
@@ -646,7 +677,7 @@
       "copy": "Copia",
       "revoke": "Revoca",
       "delete": "Elimina",
-      "editSessions": "Modifica sessioni"
+      "edit": "Modifica accesso"
     },
     "sessions": {
       "label": "Accesso alle sessioni",
@@ -654,10 +685,36 @@
       "all": "Tutte le sessioni",
       "empty": "Non ci sono ancora sessioni. Questa chiave potrà accedere a tutte quando esisteranno.",
       "restricted": "{{count}} selezionate",
-      "editTitle": "Modifica accesso alle sessioni",
       "save": "Salva",
       "choose": "Scegli sessioni",
       "leaveAll": "Lascia per tutte le sessioni"
+    },
+    "edit": {
+      "title": "Modifica l'accesso della chiave",
+      "signedIn": "Questa dashboard ha effettuato l'accesso con questa chiave. Modificarne ruolo, indirizzi IP, chat o scadenza può disconnetterti."
+    },
+    "restrictions": {
+      "none": "Nessuna",
+      "ips": "IP: {{count}}",
+      "chats": "Chat: {{count}}",
+      "expires": "Scade il {{date}}",
+      "expired": "Scaduta il {{date}}"
+    },
+    "ips": {
+      "label": "Indirizzi IP consentiti (facoltativo)",
+      "hint": "Un indirizzo IP o un intervallo CIDR per riga. Lascia vuoto per accettare qualsiasi indirizzo.",
+      "invalid": "Non è un indirizzo IPv4 né un intervallo CIDR: {{value}}"
+    },
+    "chats": {
+      "label": "Accesso alle chat (facoltativo)",
+      "hint": "Una chat per riga: un ID di gruppo che termina con @g.us, un ID di contatto che termina con @c.us o @lid, oppure un numero di telefono. Lascia vuoto per tutte le chat. Una chiave limitata alle chat può usare solo le rotte aperte a questo tipo di chiave; il WebSocket degli eventi e MCP la rifiutano.",
+      "invalid": "Non è un ID chat né un numero di telefono: {{value}}"
+    },
+    "expiry": {
+      "label": "Scade il (facoltativo)",
+      "hint": "Nel fuso orario di questo browser. Lascia vuoto per una chiave che non scade mai.",
+      "clear": "Rimuovi scadenza",
+      "invalid": "Inserisci data e ora complete, non oltre l'anno 9999, oppure svuota il campo per una chiave che non scade mai."
     }
   },
   "logs": {
@@ -908,6 +965,7 @@
       "dontClose": "Si prega di non chiudere questa finestra",
       "successMsg": "Il server è di nuovo online! La pagina si ricaricherà automaticamente.",
       "errorMsg": "Il server non ha risposto dopo 30 secondi. Controlla i log di Docker e riavvia manualmente.",
+      "outcomeUnknown": "Il proxy ha restituito un errore prima che il server rispondesse, quindi non si sa se il riavvio sia in corso. Ricarica la pagina tra un minuto per verificare.",
       "reload": "Ricarica Pagina"
     },
     "toasts": {
@@ -921,7 +979,7 @@
       "storageWarning": "I file multimediali esistenti non vengono spostati automaticamente sul nuovo backend di archiviazione; rimarranno nella posizione precedente.",
       "downloadBackup": "Scarica prima il backup",
       "backupTitle": "Backup e ripristino dei dati",
-      "backupHint": "Esporta tutti i dati come JSON prima di cambiare database, poi importali dopo il cambio. Il backup contiene i segreti dei webhook e le credenziali del proxy in chiaro: conservalo in modo sicuro ed eliminalo dopo il ripristino.",
+      "backupHint": "Esporta tutti i dati come JSON prima di cambiare database, poi importali dopo il cambio. I segreti di firma dei webhook, le intestazioni personalizzate dei webhook e le credenziali del proxy non sono inclusi; reinseriscili dopo il ripristino. I segreti e le impostazioni delle istanze di integrazione sono inclusi in chiaro: conserva il file in modo sicuro ed eliminalo dopo il ripristino.",
       "export": "Esporta dati",
       "import": "Importa dati",
       "exportFailed": "Impossibile esportare i dati",

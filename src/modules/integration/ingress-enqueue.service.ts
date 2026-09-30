@@ -29,9 +29,8 @@ export type EnqueueOutcome = { outcome: 'queued' | 'dispatched' | 'failed'; erro
  * INGRESS_RETRY_DELAY_MS); an invalid value falls back to the default.
  */
 export function resolveIngressJobOptions(): { attempts: number; backoff: { type: 'exponential'; delay: number } } {
-  const attempts = Number(process.env.INGRESS_MAX_ATTEMPTS);
   return {
-    attempts: Number.isInteger(attempts) && attempts >= 1 ? attempts : 3,
+    attempts: resolveNonNegativeIntEnv(process.env.INGRESS_MAX_ATTEMPTS, 0) || 3,
     backoff: { type: 'exponential', delay: resolveNonNegativeIntEnv(process.env.INGRESS_RETRY_DELAY_MS, 5000) },
   };
 }

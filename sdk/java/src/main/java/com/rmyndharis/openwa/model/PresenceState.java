@@ -8,5 +8,7 @@ public enum PresenceState {
     @SerializedName("unavailable") UNAVAILABLE,
     @SerializedName("composing") COMPOSING,
     @SerializedName("recording") RECORDING,
-    @SerializedName("paused") PAUSED
+    @SerializedName("paused") PAUSED,
+    /** Decoded when the gateway sends a value newer than this SDK; not a wire value itself. */
+    UNKNOWN
 }

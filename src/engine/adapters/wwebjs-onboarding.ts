@@ -19,11 +19,17 @@ export const ONBOARDING_DEFAULT_CONTINUE_LABEL = 'Continue';
  * would reject a localised modal anyway, so requiring both would make the setting useless. That is a
  * deliberate, operator-opted-in loosening, bounded by requiring the button to sit inside a visible
  * dialog; see {@link probeOnboardingModal}.
+ *
+ * Copy a label exactly as the unrecognised-dialog warning prints it: both sides compare with control
+ * characters and whitespace runs collapsed to one space. The warning cuts a label at 40 characters,
+ * so a longer one does not match as printed; a real confirm label is far shorter.
  */
 export function resolveOnboardingContinueLabels(): string[] {
   const extra = (process.env.WWEBJS_ONBOARDING_CONTINUE_LABELS ?? '')
     .split(',')
-    .map(label => label.trim())
+    // Whitespace runs read as one space, the same as the probe and the printed label, so a label
+    // pasted from a log with a doubled space or an NBSP still matches.
+    .map(label => label.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
   return [ONBOARDING_DEFAULT_CONTINUE_LABEL, ...extra];
 }
@@ -69,7 +75,16 @@ export function probeOnboardingModal(options?: { labels?: string[]; headingOptio
   // older builds. Matching only the ASCII form means never recognising the real modal.
   const heading = /what[’']?s new/i;
   const candidates = Array.from(document.querySelectorAll('button, [role="button"]'))
-    .map(el => ({ el, label: (el.textContent || '').trim() }))
+    // Normalised exactly like collectDialogDiagnostics prints a label, so a label copied from the
+    // warning matches a button whose text spans elements or lines. Inline: this runs in the page.
+    .map(el => ({
+      el,
+      label: (el.textContent || '')
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\x00-\x1F\x7F]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    }))
     .filter(c => isVisible(c.el) && labels.includes(c.label));
   // An operator label carries no heading check, so it has to sit inside a dialog at least: matched
   // page-wide, the same word on any other button would be clicked, and every click counts toward the

@@ -1,9 +1,12 @@
 import { DataSource } from 'typeorm';
-import { SendPacingService } from './send-pacing.service';
+import { SEND_PACING_LIMITED, SendPacingService } from './send-pacing.service';
 import { Message, MessageDirection } from './entities/message.entity';
 import { Session } from '../session/entities/session.entity';
 import { computeSendPacingConfig } from './send-pacing.config';
 import type { ConfigService } from '@nestjs/config';
+import { GroupService } from '../group/group.service';
+import { EngineRegistry } from '../../engine/engine-registry.service';
+import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
 /**
  * The cold-reachout count is the one piece of this feature that cannot be proven with a mocked
@@ -221,10 +224,9 @@ describe('group reachouts against a real database', () => {
     await ds.destroy();
   });
 
-  // The group callers charge only after the engine call resolves; mirror that flow so the tally
-  // semantics below (accumulation, day reset, shared budget) are tested through the real seam.
+  // An allowed batch is reserved by the check itself; the group callers only refund on failure.
   const reachout = async (sessionId: string, ids: string[]): Promise<void> => {
-    service.chargeGroupReachouts(sessionId, await service.assertReachoutAllowed(sessionId, ids));
+    await service.assertReachoutAllowed(sessionId, ids);
   };
 
   it("allows a batch that fits inside the day's remaining allowance", async () => {
@@ -307,6 +309,116 @@ describe('group reachouts against a real database', () => {
     await addMessage('dm-2@c.us', TODAY);
     await addMessage('dm-3@c.us', TODAY);
 
-    await expect(service.assertReachoutAllowed('s1', [])).resolves.toBe(0);
+    await expect(service.assertReachoutAllowed('s1', [])).resolves.toMatchObject({ coldCount: 0 });
+  });
+
+  // The check and the charge are one synchronous step: two requests in flight at once must not both
+  // pass against the same unspent budget.
+  it('refuses the second of two concurrent batches that together exceed the allowance', async () => {
+    const results = await Promise.allSettled([
+      service.assertReachoutAllowed('s1', ['a@c.us', 'b@c.us']),
+      service.assertReachoutAllowed('s1', ['c@c.us', 'd@c.us']),
+    ]);
+
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { status: 429 } });
+  });
+
+  it('hands a refunded reservation back to the same day', async () => {
+    const reservation = await service.assertReachoutAllowed('s1', ['a@c.us', 'b@c.us', 'c@c.us']);
+    await expect(reachout('s1', ['d@c.us'])).rejects.toMatchObject({ status: 429 });
+
+    service.refundGroupReachouts('s1', reservation);
+    await expect(reachout('s1', ['e@c.us', 'f@c.us', 'g@c.us'])).resolves.toBeUndefined();
+  });
+
+  it("leaves the new day's tally alone when a reservation is refunded after UTC midnight", async () => {
+    const yesterdays = await service.assertReachoutAllowed('s1', ['a@c.us', 'b@c.us']);
+
+    jest.setSystemTime(new Date(NOW.getTime() + DAY_MS));
+    await reachout('s1', ['c@c.us', 'd@c.us', 'e@c.us']);
+    service.refundGroupReachouts('s1', yesterdays);
+
+    // Today's three are still spent; the refund belonged to a day that is over.
+    await expect(reachout('s1', ['f@c.us'])).rejects.toMatchObject({ status: 429 });
+  });
+
+  // A check whose count query spans UTC midnight is judged by, and charged to, the new day.
+  const rollOverDuringCount = (during: () => Promise<unknown> = () => Promise.resolve()): void => {
+    const internals = service as unknown as { countColdReachoutsToday: () => Promise<number> };
+    const realCount = internals.countColdReachoutsToday.bind(service);
+    jest
+      .spyOn(internals, 'countColdReachoutsToday')
+      .mockImplementationOnce(async () => {
+        jest.setSystemTime(new Date(NOW.getTime() + DAY_MS));
+        await during();
+        return 0;
+      })
+      .mockImplementation(realCount);
+  };
+
+  it('charges a check that straddled UTC midnight to the new day', async () => {
+    rollOverDuringCount();
+
+    await reachout('s1', ['a@c.us', 'b@c.us', 'c@c.us']);
+    await expect(reachout('s1', ['d@c.us'])).rejects.toMatchObject({ status: 429 });
+  });
+
+  it("refuses a straddling check once another request spent the new day's allowance", async () => {
+    // While the first check is suspended on its count query, another request spends the whole
+    // new day's allowance.
+    rollOverDuringCount(() => reachout('s1', ['b@c.us', 'c@c.us', 'd@c.us']));
+
+    await expect(reachout('s1', ['a@c.us'])).rejects.toMatchObject({ status: 429 });
+    await expect(reachout('s1', ['e@c.us'])).rejects.toMatchObject({ status: 429 });
+  });
+
+  describe('through GroupService', () => {
+    const tenStrangers = (prefix: string): string[] =>
+      Array.from({ length: 10 }, (_, i) => `62${prefix}${String(i).padStart(4, '0')}@c.us`);
+
+    const groupService = (engine: Partial<IWhatsAppEngine>): GroupService => {
+      const engines = new EngineRegistry();
+      engines.set('s1', engine as IWhatsAppEngine);
+      return new GroupService(engines, service);
+    };
+
+    beforeEach(() => {
+      service = new SendPacingService(ds.getRepository(Message), ds.getRepository(Session), {
+        get: (key: string) =>
+          key === 'sendPacing'
+            ? { ...computeSendPacingConfig({}), enabled: true, warmupSchedule: [10_000], coldSchedule: [10] }
+            : undefined,
+      } as unknown as ConfigService);
+    });
+
+    it('adds at most one of two concurrent batches that together exceed the allowance', async () => {
+      // The engine takes a while, as a real per-participant add does: the window the race lived in.
+      // Real timers, so the engine's setImmediate can fire.
+      const addParticipants = jest.fn(
+        () => new Promise(resolve => setImmediate(() => resolve([]))),
+      ) as unknown as IWhatsAppEngine['addParticipants'];
+      jest.useRealTimers();
+      const svc = groupService({ addParticipants });
+
+      const results = await Promise.allSettled([
+        svc.addParticipants('s1', 'g1@g.us', tenStrangers('811')),
+        svc.addParticipants('s1', 'g2@g.us', tenStrangers('822')),
+      ]);
+
+      expect(results.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+      expect(addParticipants).toHaveBeenCalledTimes(1);
+      expect(results.find(r => r.status === 'rejected')).toMatchObject({
+        reason: { status: 429, response: { code: SEND_PACING_LIMITED } },
+      });
+    });
+
+    it('refunds the batch when the engine refuses the add, so the next batch still fits', async () => {
+      const addParticipants = jest.fn().mockRejectedValueOnce(new Error('not an admin')).mockResolvedValueOnce([]);
+      const svc = groupService({ addParticipants });
+
+      await expect(svc.addParticipants('s1', 'g1@g.us', tenStrangers('811'))).rejects.toThrow('not an admin');
+      await expect(svc.addParticipants('s1', 'g1@g.us', tenStrangers('822'))).resolves.toEqual([]);
+    });
   });
 });

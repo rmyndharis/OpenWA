@@ -10,6 +10,7 @@ import { createThrottlerRedisClient } from './common/throttler/throttler-redis.c
 import configuration from './config/configuration';
 import { validateEnv } from './config/env.validation';
 import { createBootDataSource } from './database/pg-boot-migrations';
+import { createMainDataSource, mainConnectionOptions } from './database/main-connection';
 import { SessionModule } from './modules/session/session.module';
 import { MessageModule } from './modules/message/message.module';
 import { TemplateModule } from './modules/template/template.module';
@@ -129,27 +130,10 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
       name: 'main',
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        // Default ON for zero-config first boot. When disabled
-        // (MAIN_DATABASE_SYNCHRONIZE=false), the main-owned migrations create the
-        // api_keys/audit_logs schema instead — never both at once.
-        const synchronize = configService.get<boolean>('database.synchronize', true);
-        return {
-          name: 'main',
-          type: 'better-sqlite3' as const,
-          database: configService.get<string>('database.database', './data/main.sqlite'),
-          entities: [
-            __dirname + '/modules/auth/**/*.entity{.ts,.js}',
-            __dirname + '/modules/audit/**/*.entity{.ts,.js}',
-          ],
-          // Dedicated migrations dir for the main connection only (must NOT run the
-          // data-connection migrations, which target session/webhook/message tables).
-          migrations: [__dirname + '/database/migrations-main/*{.ts,.js}'],
-          synchronize,
-          migrationsRun: !synchronize,
-          logging: configService.get<boolean>('database.logging', false),
-        };
-      },
+      // Migrations always, then synchronize on MAIN_DATABASE_SYNCHRONIZE=true; the factory refuses a
+      // file whose schema does not match this release (see main-connection.ts).
+      useFactory: (configService: ConfigService) => mainConnectionOptions(configService),
+      dataSourceFactory: createMainDataSource,
     }),
 
     // Data Storage Database (pluggable - user data)
@@ -273,9 +257,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
         // API. The client is built fail-fast (see throttler-redis.client.ts) so that fail-open
         // engages immediately instead of after a queue/timeout stall per request.
         const redisStorage =
-          process.env.REDIS_ENABLED === 'true'
-            ? new RedisThrottlerStorage(createThrottlerRedisClient(configService))
-            : undefined;
+          process.env.REDIS_ENABLED === 'true' ? new RedisThrottlerStorage(createThrottlerRedisClient()) : undefined;
         return { throttlers, ...(redisStorage ? { storage: redisStorage } : {}) };
       },
     }),

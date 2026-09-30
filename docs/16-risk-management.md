@@ -34,13 +34,14 @@ quadrantChart
 | **Risk Level**  | Critical   |
 
 **Description:**  
-WhatsApp can change their Web protocol at any time, which can cause the `whatsapp-web.js` library to stop working.
+WhatsApp can change its Web and multi-device protocols at any time, which can stop either engine library (`whatsapp-web.js` or Baileys) from working. A step WhatsApp enforces server-side inside the linking handshake, such as the passkey prompt some accounts now get ([#560](https://github.com/rmyndharis/OpenWA/issues/560)), blocks new links on both engines at once.
 
 **Indicators:**
 
-- Spike in `whatsapp-web.js` issues
+- Spike in engine library issues (`whatsapp-web.js` or Baileys)
 - Sudden increase in error rates
 - Authentication failures
+- New links stall at `qr_ready` on both engines (see [docs/12](./12-troubleshooting-faq.md#issue-linking-asks-for-a-passkey-and-never-completes-both-engines))
 
 **Mitigation Strategies:**
 
@@ -53,13 +54,15 @@ flowchart TB
 
     M1 --> A1[Watch releases & issues]
     M2 --> A2[Engine interface pattern]
-    M3 --> A3[Baileys engine available - ENGINE_TYPE env]
+    M3 --> A3[Switch ENGINE_TYPE - only when one library breaks]
     M4 --> A4[< 24h patch capability]
 ```
 
+Switching `ENGINE_TYPE` (M3) helps only when one engine library breaks. A gate WhatsApp enforces inside the linking handshake, such as the passkey step ([#560](https://github.com/rmyndharis/OpenWA/issues/560), upstream [WhiskeySockets/Baileys#2672](https://github.com/WhiskeySockets/Baileys/issues/2672)), stops new links on both engines; the fix has to come from the engine libraries, and operators rely on their fallback channel until then (see [Plan A](#plan-a-whatsapp-protocol-change)).
+
 **Action Items:**
 
-1. Subscribe to `whatsapp-web.js` releases
+1. Subscribe to `whatsapp-web.js` and Baileys releases
 2. Engine abstraction layer — implemented (pluggable `ENGINE_TYPE`: `whatsapp-web.js` default, `baileys` alternative)
 3. Document fallback procedures
 4. Maintain relationships with library maintainers
@@ -97,7 +100,7 @@ flowchart TB
     M1 --> A1[Rate limiting defaults]
     M2 --> A2[Documentation & warnings]
     M3 --> A3[Human-like delays]
-    M4 --> A4[Terms of service]
+    M4 --> A4[README disclaimer]
 ```
 
 **Built-in Safeguards:**
@@ -126,8 +129,8 @@ Opt-in: `SEND_PACING_ENABLED=true` adds a per-UTC-day send cap whose allowance g
 session's age (`SEND_PACING_WARMUP_SCHEDULE`), a separate cap on new conversations
 (`SEND_PACING_COLD_DAILY_CAP`) and a consecutive-failure breaker — see
 [06 §Send pacing](./06-api-specification.md). It is **off by default**, and it counts only sends that
-write a `messages` row, so status posts, catalog sends and message edits are checked against the cap
-without counting into it.
+write a `messages` row, so status posts and message edits are checked against the cap without
+counting into it.
 
 Still not implemented: there are no per-minute or per-hour caps and no media-specific delay. With
 pacing off — the default — the guidelines below are operator discipline, not something the gateway
@@ -267,7 +270,7 @@ flowchart TB
     R --> M3[Automation]
     R --> M4[Contributor onboarding]
 
-    M1 --> A1[Active Discord/forum]
+    M1 --> A1[GitHub Discussions]
     M2 --> A2[Comprehensive docs]
     M3 --> A3[CI/CD automation]
     M4 --> A4[Contributing guide]
@@ -288,12 +291,12 @@ flowchart TB
 3. **Community Building**
    - Recognize contributors
    - Good first issues
-   - Mentorship program
+   - GitHub Discussions for questions and design talk
 
-4. **Multiple Maintainers**
-   - Bus factor > 1
-   - Clear ownership areas
-   - Succession planning
+4. **Bus Factor**
+   - One maintainer today; a bus factor of 1 is the open risk
+   - The docs, CI gates and tag-driven releases above are what let someone else pick the project up
+   - Additional maintainers, ownership areas and succession planning are not in place yet
 
 ---
 
@@ -312,7 +315,7 @@ Dependencies (`whatsapp-web.js`, Puppeteer, NestJS, etc.) may have vulnerabiliti
 
 **Mitigation Strategies:**
 
-> **Current state:** the real dependency check is a dedicated `audit` job in `ci.yml` running `npm run check:audit` over the root tree and `npm audit --audit-level=high` over `dashboard/` (on push and PR); it is deliberately split out of the `Lint` job so a newly published advisory cannot abort the other quality gates. `check:audit` keeps the `high` threshold but applies it per advisory, so one with no patched version can be excused by id in `scripts/check-audit.mjs` — with its reason and removal condition recorded, and a stale entry failing the job — instead of lowering the bar for everything. `release.yml` repeats both and additionally runs a Trivy image scan (`CRITICAL,HIGH`, `ignore-unfixed`) against an explicit `.trivyignore` before the release tags are promoted. Dependabot PRs cover npm for `/` and `/dashboard` (weekly), GitHub Actions (monthly) and Docker base/compose images (weekly), with version-pinned ignores (seven in the root tree, two in `/dashboard`) whose reasons and lift conditions are recorded in `.github/dependabot.yml`. Between releases, `.github/workflows/security-scan.yml` (Scheduled Security Scan) runs every Wednesday at 03:00 UTC and on demand: it repeats the `audit` job and the release Trivy scan against the published `latest` image on amd64 and arm64, so an advisory those gates would block fails a run within a week of being published; the amd64 Chrome for Testing binary stays outside what Trivy can see (see `.trivyignore`). There is **no** Snyk integration. The workflow below is a recommended enhancement to add Snyk; its scheduled `npm audit` is already covered by `security-scan.yml`.
+> **Current state:** the real dependency check is a dedicated `audit` job in `ci.yml` running `npm run check:audit` over the root tree and `npm audit --audit-level=high` over `dashboard/` (on push and PR); it is deliberately split out of the `Lint` job so a newly published advisory cannot abort the other quality gates. `check:audit` keeps the `high` threshold but applies it per advisory, so one with no patched version can be excused by id in `scripts/check-audit.mjs` (with its reason and removal condition recorded, and a stale entry failing the job) instead of lowering the bar for everything. `release.yml` repeats both and additionally runs a Trivy image scan (`CRITICAL,HIGH`, `ignore-unfixed`) against an explicit `.trivyignore` before the release tags are promoted. Dependabot PRs cover npm for `/` and `/dashboard` (weekly), GitHub Actions (monthly), the Dockerfile base image and the `docker-compose.yml` images (weekly; PostgreSQL and Redis majors ignored, and a postgres, redis or pgsty/silo bump fails `compose-parity.spec.ts` until `src/modules/docker/docker.service.ts` carries the same image reference), with version-pinned ignores (seven in the root tree, two in `/dashboard`) whose reasons and lift conditions are recorded in `.github/dependabot.yml`. Between releases, `.github/workflows/security-scan.yml` (Scheduled Security Scan) runs every Wednesday at 03:00 UTC and on demand: it repeats the `audit` job and the release Trivy scan against the published `latest` image on amd64 and arm64, so an advisory those gates would block fails a run within a week of being published; the amd64 Chrome for Testing binary stays outside what Trivy can see (see `.trivyignore`). Its `base-image-drift` job fails when the Dockerfile's two `node:22-slim` FROM digests disagree, or when the pin differs from what the tag serves today and either the tag has served that image for 7 or more days, or for 3 or more days with the pin last changed 28 or more days ago; it backstops a Dependabot digest refresh that is late or left unmerged. There is **no** Snyk integration. The workflow below is a recommended enhancement to add Snyk; its scheduled `npm audit` is already covered by `security-scan.yml`.
 
 ```yaml
 # .github/workflows/security.yml
@@ -345,9 +348,9 @@ jobs:
 | ----------------------------------------------------------------------------------------- | ---------------------------- |
 | npm audit (`high`, per-advisory allowlist via `check:audit`; dedicated `audit` job in CI) | Every push / PR              |
 | Trivy image scan (`CRITICAL,HIGH`, `.trivyignore`)                                        | Every release                |
-| Scheduled Security Scan (audit + Trivy on the published `latest` image, amd64 and arm64)  | Weekly (Wednesday 03:00 UTC) |
+| Scheduled Security Scan (audit, Trivy on `latest` amd64 and arm64, base-image drift)      | Weekly (Wednesday 03:00 UTC) |
 | Snyk scan                                                                                 | Not configured (planned)     |
-| Dependabot PRs (npm: `/` and `/dashboard`; docker)                                        | Weekly                       |
+| Dependabot PRs (npm: `/` and `/dashboard`; docker; docker-compose)                        | Weekly                       |
 | Dependabot PRs (github-actions)                                                           | Monthly                      |
 | Major updates                                                                             | Reviewed manually            |
 | Security patches                                                                          | Immediate                    |
@@ -369,26 +372,9 @@ WhatsApp/Meta may take legal action against unofficial APIs, or users may misuse
 
 **Mitigation Strategies:**
 
-1. **Clear Disclaimers**
-
-```markdown
-## Disclaimer
-
-This project is not affiliated with, authorized, maintained,
-sponsored or endorsed by WhatsApp or any of its affiliates.
-
-This is an independent and unofficial software. Use at your own risk.
-
-By using this software, you agree that:
-
-1. You will not use it for spam or illegal activities
-2. You are responsible for compliance with local laws
-3. The maintainers are not liable for any misuse
-```
-
-2. **Terms of Service for Users**
-3. **No support for spam/illegal use cases**
-4. **Built-in anti-abuse measures**
+1. **Published disclaimer**: the [README](../README.md#disclaimer), the project site (https://www.open-wa.org) and the SDK READMEs state that OpenWA is not affiliated with or endorsed by WhatsApp or Meta.
+2. **No support for spam/illegal use cases**
+3. **Built-in anti-abuse measures**
 
 ---
 
@@ -418,6 +404,8 @@ flowchart TB
 ```
 
 ### Weekly Risk Review
+
+Optional template: the project does not run this review on a schedule.
 
 ```markdown
 ## Weekly Risk Review Template
@@ -459,14 +447,19 @@ flowchart TB
 flowchart TB
     T[Trigger: Protocol Change] --> A1[Assess Impact]
     A1 --> |Minor| M1[Wait for library update]
-    A1 --> |Major| M2[Activate contingency]
+    A1 --> |Major| E{One engine or both?}
 
-    M2 --> C1[Notify users]
-    C1 --> C2[Switch to maintenance mode]
-    C2 --> C3[Evaluate alternatives]
-    C3 --> |Baileys viable| C4[Switch to Baileys engine - set ENGINE_TYPE=baileys]
-    C3 --> |No alternatives| C5[Project pause/EOL]
+    E --> |One engine| C1[Notify users]
+    C1 --> C2[Set ENGINE_TYPE to the unaffected engine]
+    C2 --> M1
+    E --> |Both engines or server-side gate| B1[Notify users and link the tracking issue]
+    B1 --> B2[Keep linked sessions running - no logout or restart churn]
+    B2 --> B3[Operators move critical traffic to their fallback channel]
+    B3 --> B4[Track the engine libraries upstream]
+    B4 --> |No path for a long period| C5[Project pause/EOL]
 ```
+
+During a both-engines event keep linked sessions running rather than logging them out or deleting them: linking again may hit the same gate.
 
 ### Plan B: Critical Security Vulnerability
 
@@ -509,7 +502,8 @@ Hour 8-24:
 ### Access
 
 - [ ] GitHub owner transfer
-- [ ] npm publish rights
+- [ ] Repository secrets: `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`, `RELEASE_PAT`, `MAVEN_CENTRAL_USERNAME`/`MAVEN_CENTRAL_PASSWORD`, `GPG_PRIVATE_KEY`/`GPG_PASSPHRASE`, `PHP_SDK_SPLIT_TOKEN`
+- [ ] Registries: Docker Hub `rmyndharis/openwa`, npm `@rmyndharis/openwa` and PyPI `rmyndharis-openwa` (trusted publishers bound to this repository), Maven Central `com.rmyndharis`, Packagist `rmyndharis/openwa` via the `rmyndharis/openwa-php` mirror; GHCR images and Go module tags follow the GitHub repository
 - [ ] Domain ownership
 - [ ] Cloud accounts
 
@@ -708,6 +702,8 @@ flowchart LR
 
 ### Weekly Risk Report Template
 
+Optional template: the project does not run this review on a schedule.
+
 ```markdown
 ## Weekly Risk Report - Week XX
 
@@ -759,17 +755,6 @@ flowchart LR
 | R006 | Legal Issues       | Low         | Critical | 🟡 Medium   | Mitigated           |
 | R007 | Rate Limiting      | High        | Medium   | 🟡 Medium   | Partially mitigated |
 | R008 | Data Loss          | Low         | High     | 🟡 Medium   | Mitigated           |
-
-### Risk Trend
-
-```mermaid
-xychart-beta
-    title "Risk Trend Over Time"
-    x-axis [Jan, Feb, Mar, Apr, May, Jun]
-    y-axis "Risk Score" 0 --> 100
-    bar [65, 55, 45, 40, 35, 30]
-    line [65, 55, 45, 40, 35, 30]
-```
 
 ---
 

@@ -194,6 +194,6 @@ export class WwebjsLabels {
     if (add && !(await this.getLabels()).some(label => label.id === labelId)) {
       throw new LabelNotFoundError(labelId);
     }
-    this.host.logger.log(`${add ? 'Added' : 'Removed'} label ${labelId} ${add ? 'to' : 'from'} chat ${chatId}`);
+    this.host.logger.debug(add ? 'Added label to chat' : 'Removed label from chat', { labelId, chatId });
   }
 }

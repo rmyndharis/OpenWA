@@ -16,6 +16,11 @@ export class AuthValidateController {
   @ApiHeader({ name: 'X-API-Key', description: 'API key to validate' })
   @ApiResponse({ status: 200, description: 'API key is valid', type: ValidateApiKeyResponseDto })
   @ApiResponse({ status: 401, description: 'Invalid or missing API key' })
+  @ApiResponse({
+    status: 403,
+    description:
+      'The key is valid but refused here: its allowedIps exclude this client, or it is restricted to selected chats',
+  })
   validate(@CurrentApiKey() apiKey?: ApiKey): { valid: boolean; role?: string; engineType?: string } {
     // This route is behind the global API-key guard, so only a validated key reaches this handler
     // (a missing/invalid key 401s first). The guard has already verified the key — including its

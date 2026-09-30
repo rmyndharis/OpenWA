@@ -1,3 +1,5 @@
+import { resolveNonNegativeIntEnv } from '../../config/configuration';
+
 /**
  * Host-side /search pagination bounds. Applied in SearchService BEFORE delegating to any provider,
  * so every backend (built-in DB full-text + plugin-backed) receives bounded pagination — a plugin
@@ -9,7 +11,7 @@
  * SEARCH_OFFSET_MAX is a fixed deep-pagination guard (an offset this large is almost always a scan
  * or abuse pattern), intentionally not env-driven to avoid expanding the config surface.
  */
-export const SEARCH_LIMIT_MAX = Number(process.env.SEARCH_LIMIT_MAX) || 100;
+export const SEARCH_LIMIT_MAX = resolveNonNegativeIntEnv(process.env.SEARCH_LIMIT_MAX, 100) || 100;
 
 /** Generous upper bound on offset across every provider. */
 export const SEARCH_OFFSET_MAX = 100_000;

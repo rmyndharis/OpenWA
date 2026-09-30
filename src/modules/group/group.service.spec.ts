@@ -9,8 +9,8 @@ import { SendPacingService } from '../message/send-pacing.service';
 /** Pacing is off by default; its own spec covers the governor, so here it must simply not refuse. */
 const inertPacing = (): SendPacingService =>
   ({
-    assertReachoutAllowed: jest.fn().mockResolvedValue(0),
-    chargeGroupReachouts: jest.fn(),
+    assertReachoutAllowed: jest.fn().mockResolvedValue({ coldCount: 0, dayStartMs: 0 }),
+    refundGroupReachouts: jest.fn(),
   }) as unknown as SendPacingService;
 
 describe('GroupService', () => {
@@ -117,43 +117,45 @@ describe('GroupService', () => {
     await expect(svc.getGroupInfo('s1', 'g1')).resolves.toEqual({ id: 'g1', name: 'G' });
   });
 
-  it('charges the cold-reachout budget only after the engine call resolves', async () => {
+  it('keeps the reserved cold-reachout budget when the engine call resolves', async () => {
     const addParticipants = jest.fn().mockResolvedValue(undefined);
     const { svc, pacing } = makeServiceWithPacing(
       { addParticipants },
       {
-        assertReachoutAllowed: jest.fn().mockResolvedValue(3),
-        chargeGroupReachouts: jest.fn(),
+        assertReachoutAllowed: jest.fn().mockResolvedValue({ coldCount: 3, dayStartMs: 1 }),
+        refundGroupReachouts: jest.fn(),
       },
     );
     await svc.addParticipants('s1', 'g1', ['628111111@c.us']);
-    expect(pacing.chargeGroupReachouts).toHaveBeenCalledWith('s1', 3);
+    expect(pacing.refundGroupReachouts).not.toHaveBeenCalled();
   });
 
-  it('does not charge the budget when the engine refuses the add (the participants were never contacted)', async () => {
+  it('refunds the reservation when the engine refuses the add (the participants were never contacted)', async () => {
     const addParticipants = jest.fn().mockRejectedValue(new Error('no admin rights'));
+    const reservation = { coldCount: 3, dayStartMs: 1 };
     const { svc, pacing } = makeServiceWithPacing(
       { addParticipants },
       {
-        assertReachoutAllowed: jest.fn().mockResolvedValue(3),
-        chargeGroupReachouts: jest.fn(),
+        assertReachoutAllowed: jest.fn().mockResolvedValue(reservation),
+        refundGroupReachouts: jest.fn(),
       },
     );
     await expect(svc.addParticipants('s1', 'g1', ['628111111@c.us'])).rejects.toThrow('no admin rights');
-    expect(pacing.chargeGroupReachouts).not.toHaveBeenCalled();
+    expect(pacing.refundGroupReachouts).toHaveBeenCalledWith('s1', reservation);
   });
 
-  it('does not charge the budget when createGroup fails (whatsapp-web.js always 501s)', async () => {
+  it('refunds the reservation when createGroup fails (whatsapp-web.js always 501s)', async () => {
     const createGroup = jest.fn().mockRejectedValue(new Error('EngineNotSupportedError'));
+    const reservation = { coldCount: 2, dayStartMs: 1 };
     const { svc, pacing } = makeServiceWithPacing(
       { createGroup },
       {
-        assertReachoutAllowed: jest.fn().mockResolvedValue(2),
-        chargeGroupReachouts: jest.fn(),
+        assertReachoutAllowed: jest.fn().mockResolvedValue(reservation),
+        refundGroupReachouts: jest.fn(),
       },
     );
     await expect(svc.createGroup('s1', 'G', ['628111111@c.us', '628222222@c.us'])).rejects.toThrow();
-    expect(pacing.chargeGroupReachouts).not.toHaveBeenCalled();
+    expect(pacing.refundGroupReachouts).toHaveBeenCalledWith('s1', reservation);
   });
 
   it('passes participant lists straight through to the engine', async () => {
@@ -311,6 +313,26 @@ describe('GroupService', () => {
         svc.updateGroupSettings('s1', 'g1', { announce: true, ephemeralSeconds: 86400 }),
       ).rejects.toBeInstanceOf(EngineRefusedError);
       expect(engine.setGroupMessagesAdminsOnly).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an Error', new Error('Protocol error (Runtime.callFunctionOn): Target closed at /srv/app/page.js')],
+      ['a non-Error value', 'raw-engine-text'],
+    ])('reports a partial apply after %s as an internal error without its text', async (_label, raw) => {
+      const engine = {
+        setGroupEphemeral: jest.fn().mockResolvedValue(undefined),
+        setGroupMessagesAdminsOnly: jest.fn().mockRejectedValue(raw),
+      };
+      const svc = makeService(engine);
+      const error = await svc
+        .updateGroupSettings('s1', 'g1', { announce: true, ephemeralSeconds: 86400 })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(HttpException);
+      const { message } = error as HttpException;
+      expect((error as HttpException).getStatus()).toBe(500);
+      expect(message).toContain("'announce' failed (internal error)");
+      expect(message).toContain('already applied: ephemeralSeconds');
+      expect(message).not.toMatch(/Protocol error|\/srv\/app|raw-engine-text/);
     });
   });
 });

@@ -242,6 +242,24 @@ test('parseJavaTypes: enum constants resolve to their wire values, annotated or 
   assert.equal(s.shades.token, 'array<enum(BLUE,RED)>');
 });
 
+test('parseJavaTypes: a bare UNKNOWN sentinel is not a wire member, an annotated "unknown" is', () => {
+  const src = [
+    'public enum Status {',
+    '    @SerializedName("ready") READY,',
+    '    /** Decoded when the gateway sends a newer value. */',
+    '    UNKNOWN',
+    '}',
+    'public enum Kind {',
+    '    @SerializedName("chat") CHAT,',
+    '    @SerializedName("unknown") UNKNOWN',
+    '}',
+    'public record Sample(Status status, Kind kind) {}',
+  ].join('\n');
+  const s = parseJavaTypes([src]).Sample;
+  assert.equal(s.status.token, 'enum(ready)');
+  assert.equal(s.kind.token, 'enum(chat,unknown)');
+});
+
 test('isSimpleToken-gated diffing reaches inside an array of enum members', () => {
   const hand = { events: { optional: false, token: 'array<enum(a,b)>' } };
   const schema = { type: 'object', required: ['events'], properties: { events: { type: 'array', items: { enum: ['a', 'c'] } } } };

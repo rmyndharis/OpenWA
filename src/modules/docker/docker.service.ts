@@ -1,4 +1,5 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
+import { createLogger } from '../../common/services/logger.service';
 import Docker from 'dockerode';
 import { isEnvPinned, isOsProvidedEnv } from '../../config/env-precedence';
 import { readGeneratedEnv } from '../infra/generated-env';
@@ -28,7 +29,7 @@ interface OrchestrationResult {
 
 @Injectable()
 export class DockerService implements OnModuleInit {
-  private readonly logger = new Logger(DockerService.name);
+  private readonly logger = createLogger(DockerService.name);
   private docker: Docker | null = null;
   private isAvailable = false;
   private reinitInFlight = false;
@@ -93,10 +94,9 @@ export class DockerService implements OnModuleInit {
       this.isAvailable = true;
       this.logger.log('Docker API connected successfully');
     } catch (error) {
-      this.logger.warn(
-        'Docker not available. Container orchestration disabled.',
-        error instanceof Error ? error.message : error,
-      );
+      this.logger.warn('Docker not available. Container orchestration disabled.', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       this.isAvailable = false;
     }
   }
@@ -222,7 +222,8 @@ export class DockerService implements OnModuleInit {
    *
    * Deliberate differences from the compose services — do not "fix" these:
    *  - Credentials: the compose services are the MANUAL operator path and deliberately ship no
-   *    default secret (empty POSTGRES_PASSWORD / MINIO_ROOT_* fail fast on boot). The specs below
+   *    default secret (an empty POSTGRES_PASSWORD fails when the volume is first initialized; a
+   *    MINIO_ROOT_PASSWORD left on its sub-minimum placeholder fails at every start). The specs below
    *    are the dashboard built-in path: they provision the fixed built-in credentials
    *    (openwa/openwa, minioadmin/minioadmin) that infra-config.controller writes to data/.env.generated
    *    and that the production boot guard (bootstrap-security.ts) exempts only while the
@@ -231,6 +232,10 @@ export class DockerService implements OnModuleInit {
    *    checkout to support a custom POSTGRES_SCHEMA. The Docker-API path cannot know a host path
    *    to mount, and the built-in flow always pins POSTGRES_SCHEMA=public, so no init script (or
    *    POSTGRES_SCHEMA env) is set here.
+   *  - Host ports: compose's minio (the manual path, operator-set credentials) publishes
+   *    127.0.0.1:9000/9001. The specs below publish nothing, like postgres and redis: they run the
+   *    fixed built-in credentials, which the boot guard exempts only because the container is
+   *    reachable on the internal network alone. The app reaches it by its `minio` alias.
    *  - Resource limits: neither path sets CPU/memory/PID limits on the datastore containers;
    *    only openwa-api carries mem_limit/pids_limit (in compose).
    */
@@ -243,7 +248,6 @@ export class DockerService implements OnModuleInit {
     volumes?: { name: string; path: string }[];
     healthcheck?: { test: string[]; interval: number; timeout: number; retries: number };
     labels: Record<string, string>;
-    ports?: { container: number; host: number }[];
     securityOpt: string[];
   } | null {
     // A container outlives the process that creates it, and after a dashboard save the restart that
@@ -296,8 +300,9 @@ export class DockerService implements OnModuleInit {
         securityOpt: ['no-new-privileges:true'],
       },
       minio: {
-        // Same pin as the compose minio service — never track the floating `latest` tag.
-        image: 'minio/minio:RELEASE.2025-09-07T16-13-09Z',
+        // Same pin (release tag and digest) as the compose minio service; never a floating tag.
+        image:
+          'pgsty/silo:RELEASE.2026-09-16T00-00-00Z@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46',
         name: 'openwa-minio',
         alias: 'minio',
         cmd: ['server', '/data', '--console-address', ':9001'],
@@ -308,10 +313,6 @@ export class DockerService implements OnModuleInit {
           `MINIO_ROOT_PASSWORD=${nextBoot('S3_SECRET_ACCESS_KEY') || nextBoot('S3_SECRET_KEY') || 'minioadmin'}`,
         ],
         volumes: [{ name: 'openwa_minio-data', path: '/data' }],
-        ports: [
-          { container: 9000, host: 9000 },
-          { container: 9001, host: 9001 },
-        ],
         healthcheck: {
           test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live'],
           interval: 10000000000,
@@ -350,6 +351,7 @@ export class DockerService implements OnModuleInit {
       const existing = await this.getContainerByService(profile);
       if (existing) {
         const info = await existing.inspect();
+        this.warnOnImageDrift(profile, spec.name, info);
         if (info.State.Running) {
           this.logger.log(`Container ${spec.name} already running`);
           return true;
@@ -360,17 +362,29 @@ export class DockerService implements OnModuleInit {
         return true;
       }
 
-      // Pull image first
-      this.logger.log(`Pulling image: ${spec.image}`);
-      await new Promise<void>((resolve, reject) => {
-        void this.docker!.pull(spec.image, (err: Error | null, stream: NodeJS.ReadableStream) => {
-          if (err) return reject(err);
-          this.docker!.modem.followProgress(stream, (err2: Error | null) => {
-            if (err2) return reject(err2);
-            resolve();
+      // Pull only when the image is not already on the host, as compose's default
+      // `pull_policy: missing` does: a host that has the image keeps working when the registry is
+      // unreachable or has withdrawn it. As with compose, a cached floating tag is not refreshed
+      // here. Any inspect failure falls back to pulling.
+      const cached = await this.docker
+        .getImage(spec.image)
+        .inspect()
+        .then(
+          () => true,
+          () => false,
+        );
+      if (!cached) {
+        this.logger.log(`Pulling image: ${spec.image}`);
+        await new Promise<void>((resolve, reject) => {
+          void this.docker!.pull(spec.image, (err: Error | null, stream: NodeJS.ReadableStream) => {
+            if (err) return reject(err);
+            this.docker!.modem.followProgress(stream, (err2: Error | null) => {
+              if (err2) return reject(err2);
+              resolve();
+            });
           });
         });
-      });
+      }
 
       // Create volume if needed
       if (spec.volumes) {
@@ -396,10 +410,6 @@ export class DockerService implements OnModuleInit {
           RestartPolicy: { Name: 'unless-stopped' },
           Binds: spec.volumes?.map(v => `${v.name}:${v.path}`),
           SecurityOpt: spec.securityOpt,
-          PortBindings: spec.ports?.reduce<Record<string, { HostIp: string; HostPort: string }[]>>((acc, p) => {
-            acc[`${p.container}/tcp`] = [{ HostIp: '127.0.0.1', HostPort: p.host.toString() }];
-            return acc;
-          }, {}),
         },
         Healthcheck: spec.healthcheck
           ? {
@@ -436,26 +446,26 @@ export class DockerService implements OnModuleInit {
   async startService(service: string): Promise<boolean> {
     const container = await this.getContainerByService(service);
 
+    // Map service names to docker-compose profiles
+    const serviceToProfile: Record<string, string> = {
+      database: 'postgres',
+      cache: 'redis',
+      storage: 'minio',
+      postgres: 'postgres',
+      redis: 'redis',
+      minio: 'minio',
+    };
+    const profile = serviceToProfile[service] || service;
+
     if (!container) {
       // Container doesn't exist - create it using docker-compose
       this.logger.log(`Container for service '${service}' not found, creating...`);
-
-      // Map service names to docker-compose profiles
-      const serviceToProfile: Record<string, string> = {
-        database: 'postgres',
-        cache: 'redis',
-        storage: 'minio',
-        postgres: 'postgres',
-        redis: 'redis',
-        minio: 'minio',
-      };
-
-      const profile = serviceToProfile[service] || service;
       return this.createService(profile);
     }
 
     try {
       const info = await container.inspect();
+      this.warnOnImageDrift(profile, info.Name?.replace(/^\//, '') || service, info);
       if (info.State.Running) {
         this.logger.log(`Service '${service}' is already running`);
         return true;
@@ -468,6 +478,23 @@ export class DockerService implements OnModuleInit {
       this.logger.error(`Failed to start service: ${service}`, error);
       return false;
     }
+  }
+
+  /**
+   * A retained container is only ever restarted, never recreated (see stopManagedService), so it
+   * keeps the image it was created from after the pin moves. Warn with the way out; start and stop
+   * behaviour stay as they are.
+   */
+  private warnOnImageDrift(profile: string, name: string, info: Docker.ContainerInspectInfo): void {
+    const pinned = this.getContainerSpec(profile)?.image;
+    const running = info.Config?.Image;
+    if (!pinned || !running || running === pinned) return;
+    this.logger.warn(
+      `Container ${name} runs image ${running}, but this release pins ${pinned}. Remove it with ` +
+        `\`docker rm -f ${name}\` (its named data volume is kept) and restart OpenWA or re-enable the ` +
+        `service so it is recreated from the pin.` +
+        (profile === 'postgres' ? ' A PostgreSQL major version change needs a data migration first.' : ''),
+    );
   }
 
   /**
@@ -640,7 +667,7 @@ export async function prestartBuiltinDatabase(
   timeoutMs = 15_000,
 ): Promise<void> {
   if (env.DATABASE_TYPE !== 'postgres' || env.POSTGRES_BUILTIN !== 'true') return;
-  const logger = new Logger('DockerService');
+  const logger = createLogger('DockerService');
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<void>(resolve => {
     timer = setTimeout(() => {

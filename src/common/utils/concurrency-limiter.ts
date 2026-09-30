@@ -7,6 +7,8 @@
 export class ConcurrencyLimiter {
   private active = 0;
   private readonly waiters: Array<(error?: Error) => void> = [];
+  /** Waiters taking back a slot they gave up in yieldSlot: already admitted, so outside `maxQueued`. */
+  private reacquiring = 0;
   private closed = false;
 
   /**
@@ -24,6 +26,11 @@ export class ConcurrencyLimiter {
     this.maxQueued = Math.max(0, Math.floor(maxQueued));
   }
 
+  /** Slots the limiter runs at once (after clamping). */
+  get maxCount(): number {
+    return this.max;
+  }
+
   /** Tasks currently holding a slot (running). */
   get activeCount(): number {
     return this.active;
@@ -32,6 +39,11 @@ export class ConcurrencyLimiter {
   /** Tasks parked waiting for a slot. */
   get queuedCount(): number {
     return this.waiters.length;
+  }
+
+  /** The part of {@link queuedCount} taking back a slot given up in yieldSlot (already admitted). */
+  get reacquiringCount(): number {
+    return this.reacquiring;
   }
 
   /**
@@ -48,31 +60,71 @@ export class ConcurrencyLimiter {
     }
   }
 
-  async run<T>(task: () => Promise<T>): Promise<T> {
+  /**
+   * Run `task` once a slot is free. The task receives `yieldSlot(fn)`, which gives the slot up for
+   * the duration of `fn` and takes one again before returning, so a task that has to wait (a retry
+   * backoff) does not hold a slot it is not using. Taking the slot back is exempt from `maxQueued`
+   * and does not count against it, since the task was already admitted, and rejects with
+   * 'ConcurrencyLimiter closed' once the limiter is closed. Callers that never wait can ignore the argument.
+   */
+  async run<T>(task: (yieldSlot: <R>(fn: () => Promise<R>) => Promise<R>) => Promise<T>): Promise<T> {
+    // Awaited only when parked: a free slot starts the task synchronously, as callers rely on.
+    const parked = this.acquire(true);
+    if (parked) await parked;
+    let held = true;
+    const yieldSlot = async <R>(fn: () => Promise<R>): Promise<R> => {
+      if (!held) return fn();
+      held = false;
+      this.release();
+      try {
+        return await fn();
+      } finally {
+        const reparked = this.acquire(false);
+        if (reparked) {
+          this.reacquiring++;
+          try {
+            await reparked;
+          } finally {
+            this.reacquiring--;
+          }
+        }
+        held = true;
+      }
+    };
+    try {
+      return await task(yieldSlot);
+    } finally {
+      // A failed re-acquire leaves nothing to release: releasing anyway would hand a waiter a slot
+      // this task no longer holds, or push the count below zero.
+      if (held) this.release();
+    }
+  }
+
+  /** Take a free slot (returns undefined) or park for one (returns the promise to await). */
+  private acquire(bounded: boolean): Promise<void> | undefined {
     if (this.closed) {
       throw new Error('ConcurrencyLimiter closed');
     }
     if (this.active < this.max) {
       this.active++;
-    } else {
-      if (this.waiters.length >= this.maxQueued) {
-        throw new Error('ConcurrencyLimiter queue full');
-      }
-      // Park until a finishing task HANDS us its slot (or close() rejects us). We must not increment
-      // on wake: the count was never released (it was transferred), so re-incrementing would
-      // over-admit when a fresh run() raced into the microtask gap and already took a (wrongly-freed)
-      // slot.
-      await new Promise<void>((resolve, reject) => this.waiters.push(error => (error ? reject(error) : resolve())));
+      return undefined;
     }
-    try {
-      return await task();
-    } finally {
-      const next = this.waiters.shift();
-      if (next) {
-        next(); // transfer this slot to the next waiter — active count stays the same (no free window)
-      } else {
-        this.active--; // no one waiting: actually release the slot
-      }
+    if (bounded && this.waiters.length - this.reacquiring >= this.maxQueued) {
+      throw new Error('ConcurrencyLimiter queue full');
+    }
+    // Park until a finishing task HANDS us its slot (or close() rejects us). We must not increment
+    // on wake: the count was never released (it was transferred), so re-incrementing would
+    // over-admit when a fresh run() raced into the microtask gap and already took a (wrongly-freed)
+    // slot.
+    return new Promise<void>((resolve, reject) => this.waiters.push(error => (error ? reject(error) : resolve())));
+  }
+
+  private release(): void {
+    const next = this.waiters.shift();
+    if (next) {
+      next(); // transfer this slot to the next waiter — active count stays the same (no free window)
+    } else {
+      this.active--; // no one waiting: actually release the slot
     }
   }
 }

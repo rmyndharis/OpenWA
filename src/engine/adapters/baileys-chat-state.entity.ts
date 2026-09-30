@@ -19,7 +19,12 @@ export class ChatState {
   @PrimaryColumn()
   sessionId!: string;
 
-  /** Chat id in the engine's stored (raw Baileys) dialect, the same key `upsertChats` uses. */
+  /**
+   * Chat id in the raw Baileys dialect, one row per conversation: `<phone>@s.whatsapp.net` for a person
+   * (also when WhatsApp synced the state under their lid, once the lid resolves), `<lid>@lid` while it
+   * does not, and a group's own id. A row filed under a lid twin is folded onto the phone JID on the
+   * chat's next change.
+   */
   @PrimaryColumn()
   chatId!: string;
 
@@ -36,6 +41,16 @@ export class ChatState {
 
   @Column({ type: 'boolean', default: false })
   pinned!: boolean;
+
+  /**
+   * The state fields this row has observed, comma-separated (`muteEndTime`, `archived`, `pinned`); the
+   * others hold their default only because the row was created by a patch that did not carry them.
+   * Null on a row written before this column existed, read as having observed its set fields. Lets two
+   * rows of one chat merge field by field without mistaking an explicit unpin, unarchive or unmute for
+   * "not seen".
+   */
+  @Column({ type: 'varchar', nullable: true })
+  observed!: string | null;
 
   @UpdateDateColumn()
   updatedAt!: Date;

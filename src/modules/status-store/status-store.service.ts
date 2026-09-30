@@ -18,6 +18,12 @@ import { createLogger } from '../../common/services/logger.service';
 export const STATUS_TTL_MS = 24 * 60 * 60 * 1000;
 /** How often the TTL purge sweeps expired rows. */
 const PURGE_INTERVAL_MS = 15 * 60 * 1000;
+/** Rows removed per purge statement. Keeps the id list far below the drivers' bind-parameter
+ *  ceilings (SQLite 32766, Postgres 65535) and bounds how much work one failure can undo. */
+const PURGE_BATCH_SIZE = 500;
+/** Cap on batches per run, so one tick cannot monopolise the process draining a huge backlog;
+ *  whatever is left is picked up by the next scheduled run. */
+const PURGE_MAX_BATCHES_PER_RUN = 200;
 /** Default per-file cap on persisted status media. Exported for the session service's seed, which
  * pre-gates history downloads at the same cap so over-cap blobs are never fetched. */
 export const DEFAULT_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
@@ -54,6 +60,10 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
   private orphanSweepTimer?: ReturnType<typeof setInterval>;
   /** First sweep sighting (epoch ms) of each unreferenced status media file, for the grace window. */
   private readonly orphanFirstSeenAt = new Map<string, number>();
+  /** Last row id the TTL purge walked past; the next run resumes after it. */
+  private purgeCursor?: string;
+  /** A purge is still running, so the next tick is skipped rather than stacked on top of it. */
+  private purging = false;
 
   constructor(
     @InjectRepository(StatusUpdate, 'data')
@@ -67,9 +77,11 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     const runPurge = (): void => {
-      this.purgeExpired(Date.now()).catch(err =>
-        this.logger.error('Status purge failed', err instanceof Error ? err.stack : String(err)),
-      );
+      if (this.purging) return;
+      this.purging = true;
+      this.purgeExpired(Date.now())
+        .catch(err => this.logger.error('Status purge failed', err instanceof Error ? err.stack : String(err)))
+        .finally(() => (this.purging = false));
     };
     runPurge(); // sweep once at startup
     this.purgeTimer = setInterval(runPurge, PURGE_INTERVAL_MS);
@@ -309,36 +321,55 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
    * file is only rediscovered by the orphan sweep after its grace window), so the row stays and the
    * next sweep retries the delete. A missing file is a successful delete (see StorageService), so an
    * already-gone file never wedges its row.
+   *
+   * Drained in bounded batches. The 24h TTL does not bound a backlog: a restart after downtime, or
+   * media deletes that keep failing, leave any number of expired rows, and a single
+   * `DELETE ... WHERE id IN (...)` past the driver's bind-parameter ceiling throws after the files are
+   * gone, then fails the same way on every later run. The batches walk the expired rows by id, resuming
+   * across runs, so rows whose delete keeps failing are stepped over instead of blocking newer ones. A
+   * batch in which every delete fails ends the run: that means the store is down, and walking on would
+   * only repeat the failure.
    */
   async purgeExpired(now: number): Promise<number> {
-    const expired = await this.repository.find({ where: { expiresAt: LessThan(now) } });
-    if (expired.length === 0) return 0;
+    let removed = 0;
+    let after = this.purgeCursor;
+    this.purgeCursor = undefined;
+    for (let batch = 0; batch < PURGE_MAX_BATCHES_PER_RUN; batch++) {
+      const expired = await this.repository.find({
+        where: { expiresAt: LessThan(now), ...(after ? { id: MoreThan(after) } : {}) },
+        select: { id: true, mediaPath: true },
+        order: { id: 'ASC' },
+        take: PURGE_BATCH_SIZE,
+      });
+      if (expired.length === 0) break;
+      after = expired[expired.length - 1].id;
 
-    const deletableIds: string[] = [];
-    await Promise.all(
-      expired.map(async row => {
-        if (!row.mediaPath) {
-          deletableIds.push(row.id);
-          return;
-        }
+      const deletableIds: string[] = [];
+      for (const row of expired) {
         try {
-          await this.storageService.deleteFile(row.mediaPath);
+          if (row.mediaPath) await this.storageService.deleteFile(row.mediaPath);
           deletableIds.push(row.id);
         } catch (err) {
           this.logger.warn(
             `Failed to delete expired status media ${row.mediaPath}; keeping the row for the next sweep`,
-            {
-              error: String(err),
-            },
+            { error: String(err) },
           );
         }
-      }),
-    );
+      }
 
-    // Every media delete may have failed — delete([]) throws TypeORM's empty-criteria error.
-    if (deletableIds.length === 0) return 0;
-    const result = await this.repository.delete(deletableIds);
-    return result.affected ?? deletableIds.length;
+      // Rows whose delete failed are kept; they are retried once the walk wraps around.
+      if (deletableIds.length === 0) {
+        this.purgeCursor = after;
+        break;
+      }
+      const result = await this.repository.delete(deletableIds);
+      removed += result.affected ?? deletableIds.length;
+      // A short batch means the backlog is drained and the next run starts over from the lowest id;
+      // a run that hits the batch cap resumes where it stopped.
+      if (expired.length < PURGE_BATCH_SIZE) break;
+      if (batch === PURGE_MAX_BATCHES_PER_RUN - 1) this.purgeCursor = after;
+    }
+    return removed;
   }
 
   /**

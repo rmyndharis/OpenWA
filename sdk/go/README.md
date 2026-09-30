@@ -4,6 +4,9 @@ Idiomatic Go client for the [OpenWA](https://github.com/rmyndharis/OpenWA) Whats
 API Gateway. Stdlib-only (no dependencies), context-first, with typed errors and
 an injectable transport pipeline.
 
+OpenWA is an independent project, not affiliated with or endorsed by WhatsApp or
+Meta.
+
 ```bash
 go get github.com/rmyndharis/OpenWA/sdk/go
 ```
@@ -105,13 +108,14 @@ Sentinels: `ErrUnauthorized` (401), `ErrForbidden` (403), `ErrNotFound` (404),
 `ErrServiceUnavailable` (503). 503 is transient, but a catalog 503 can persist
 because WhatsApp may never answer that query, so bound any retry. A 429 from
 the global rate limiter lifts when its window expires (seconds for the
-per-second tier, up to an hour for the hourly tier by default); its delay is
-only in the `Retry-After` response header, which `APIError` does not carry but
-`WithRetry` honors. A 429 whose body has `code: "SEND_PACING_LIMITED"` is not
-transient: do not retry it before the body's `retryAfterSeconds`, which can be
-hours. A timeout surfaces as `*openwa.TimeoutError`. In a routed deployment
-only 503 proves the request was never carried out: a forward that fails after
-the request reached the owner node answers 502 or 504.
+per-second tier, up to an hour for the hourly tier by default);
+`APIError.RetryAfter` carries its `Retry-After` header, which `WithRetry` also
+honors. A 429 whose `APIError.Code` is `"SEND_PACING_LIMITED"` is not transient:
+do not retry it before `RetryAfter`, which then comes from the body and can be
+hours. `APIError.Header` holds the response headers. A timeout surfaces as
+`*openwa.TimeoutError`. In a routed deployment only 503 proves the request was
+never carried out: a forward that fails after the request reached the owner node
+answers 502 or 504.
 
 ## Retries
 
@@ -182,6 +186,10 @@ err := client.Do(ctx, "GET", "/api/some/new/path", nil, nil, &out)
   than re-sending the API key to the redirect target.
 - Path segments (chat/message ids) are percent-encoded; a base-URL path prefix
   (e.g. behind a proxy at `/v1`) is preserved.
+- **Empty and dot ids are refused.** An empty, `.` or `..` id returns an error
+  and nothing is sent, so a proxy that resolves dot segments cannot turn the
+  call into one on the parent resource. `Client.Do` refuses a `.` or `..`
+  segment the same way but sends an empty one (a trailing slash) as written.
 
 ## Development
 

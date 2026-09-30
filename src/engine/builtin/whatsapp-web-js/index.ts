@@ -53,7 +53,9 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
     const puppeteer = engineConfig.puppeteer ?? {};
     const sessionDataPath = engineConfig.sessionDataPath ?? './data/sessions';
     const headless = puppeteer.headless ?? true;
-    const puppeteerArgs = puppeteer.args ?? ['--no-sandbox', '--disable-setuid-sandbox'];
+    // No default here: the adapter owns the fallback flag list (DEFAULT_PUPPETEER_ARGS), so a persisted
+    // plugin config whose `puppeteer` object has no `args` still launches with the documented flags.
+    const puppeteerArgs = puppeteer.args;
     const executablePath = puppeteer.executablePath;
     const protocolTimeoutMs = puppeteer.protocolTimeoutMs;
 

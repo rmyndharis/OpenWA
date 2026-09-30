@@ -1,6 +1,11 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { i18nReady } from './i18n';
+import '@fontsource-variable/plus-jakarta-sans';
+import '@fontsource-variable/plus-jakarta-sans/wght-italic.css';
+import '@fontsource-variable/jetbrains-mono';
+import '@fontsource-variable/heebo';
+import '@fontsource-variable/noto-sans-arabic';
 import './index.css';
 import App from './App.tsx';
 

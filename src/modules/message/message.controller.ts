@@ -46,8 +46,9 @@ import {
   ClickButtonDto,
   UnpinMessageDto,
 } from './dto/message-actions.dto';
-import { ChatQuotedAllowed, ChatScoped, RequireRole } from '../auth/decorators/auth.decorators';
-import { ApiKeyRole } from '../auth/entities/api-key.entity';
+import { ChatQuotedAllowed, ChatScoped, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
+import { ChatScopeService } from '../auth/chat-scope.service';
 import {
   CHANNEL_MEDIA_501,
   CUSTOM_LINK_PREVIEW_501,
@@ -73,12 +74,20 @@ export class MessageController {
   constructor(
     private readonly messageService: MessageService,
     private readonly bulkMessageService: BulkMessageService,
+    private readonly chatScope: ChatScopeService,
   ) {}
 
+  // Fenced on the optional ?chatId=: the guard checks it when present, and requireChat refuses a
+  // chat-restricted key that omits it, so such a key reads only its own chats' stored history.
+  @ChatScoped('fenced')
   @Get()
   @ApiOperation({ summary: 'Get message history for a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
-  @ApiQuery({ name: 'chatId', required: false, description: 'Filter by chat ID' })
+  @ApiQuery({
+    name: 'chatId',
+    required: false,
+    description: 'Filter by chat ID. Required for an API key restricted to selected chats.',
+  })
   @ApiQuery({
     name: 'from',
     required: false,
@@ -115,6 +124,12 @@ export class MessageController {
       'empty page, which reads exactly like the end of the history, so a walk resumed from a stale ' +
       'or foreign cursor would stop silently instead of reporting the cursor.',
   })
+  @ApiResponse({
+    status: 403,
+    description:
+      'The API key is restricted to selected chats and either sent no `chatId` or named a chat outside ' +
+      'its allowlist.',
+  })
   async getMessages(
     @Param('sessionId') sessionId: string,
     @Query('chatId') chatId?: string,
@@ -123,7 +138,9 @@ export class MessageController {
     @Query('offset') offset?: string,
     @Query('after') after?: string,
     @Query('inlineMedia') inlineMedia?: string,
+    @CurrentApiKey() apiKey?: ApiKey,
   ) {
+    this.chatScope.requireChat(apiKey, chatId);
     return this.messageService.getMessages(sessionId, {
       chatId,
       from,

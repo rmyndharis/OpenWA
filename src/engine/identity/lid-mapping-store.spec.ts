@@ -201,6 +201,23 @@ describe('LidMappingStoreService — LRU cap', () => {
     expect(store.lidsForPhone('620002')).toEqual(['lid-c']);
   });
 
+  it('drops a phone key from the reverse map once its last lid is evicted or re-mapped', async () => {
+    process.env.LID_MAPPING_CACHE_MAX = '2';
+    const repo = makeFakeRepo();
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+    await store.onModuleInit();
+    const phoneToLids = (store as unknown as { phoneToLids: Map<string, Set<string>> }).phoneToLids;
+
+    await store.remember('lid-a', '620001');
+    await store.remember('lid-b', '620002');
+    await store.remember('lid-c', '620003'); // evicts lid-a, the only lid under 620001
+    expect(phoneToLids.has('620001')).toBe(false);
+
+    await store.remember('lid-c', '620004'); // re-maps lid-c away from 620003
+    expect(phoneToLids.has('620003')).toBe(false);
+    expect([...phoneToLids.keys()].sort()).toEqual(['620002', '620004']);
+  });
+
   it('LID_MAPPING_CACHE_MAX=0 disables the cap (legacy unbounded behaviour)', async () => {
     process.env.LID_MAPPING_CACHE_MAX = '0';
     const repo = makeFakeRepo();

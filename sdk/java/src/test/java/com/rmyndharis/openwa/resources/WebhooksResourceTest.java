@@ -66,6 +66,18 @@ class WebhooksResourceTest {
     }
 
     @Test
+    void updateClearsFiltersWithAnEmptyListAndLeavesThemOnNull() {
+        // The documented way to remove every filter: null fields are omitted, so filters(null)
+        // cannot clear them.
+        tx.respond(200, WEBHOOK_JSON);
+        client.webhooks.update("s", "w1", UpdateWebhookRequest.builder().filters(new WebhookFilters(List.of())).build());
+        assertEquals("{\"filters\":{\"conditions\":[]}}", tx.lastRequest().body());
+        tx.respond(200, WEBHOOK_JSON);
+        client.webhooks.update("s", "w1", UpdateWebhookRequest.builder().filters(null).build());
+        assertEquals("{}", tx.lastRequest().body());
+    }
+
+    @Test
     void deleteHitsWebhookPath() {
         tx.respond(204, "");
         client.webhooks.delete("s", "w1");

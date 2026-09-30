@@ -41,13 +41,19 @@ export class ScopeBindingService implements OnApplicationBootstrap {
    * cannot abort the rest.
    */
   async onApplicationBootstrap(): Promise<void> {
-    let rows: PluginInstance[];
     try {
-      rows = await this.instances.listAll();
+      await this.reconcile();
     } catch (err) {
-      this.logger.error('Scope-binding reconciliation skipped (failed to list instances)', String(err));
-      return;
+      this.logger.error('Scope-binding reconciliation failed', String(err));
     }
+  }
+
+  /**
+   * The boot pass itself, shared with {@link resyncAfterImport}. Rejects only when the instance rows
+   * cannot be listed; a single binding failure is absorbed by applyScopeBinding.
+   */
+  async reconcile(): Promise<void> {
+    const rows = await this.instances.listAll();
 
     // Order-independent reconciliation: listAll() is repo.find() with no ORDER BY, so its row order
     // is DB/restart-dependent (differs between SQLite and Postgres). applyScopeBinding mutates the
@@ -80,6 +86,41 @@ export class ScopeBindingService implements OnApplicationBootstrap {
         count,
       });
     }
+  }
+
+  /**
+   * Bring the runtime bindings back in line after a restore replaced every `plugin_instances` row.
+   *
+   * The boot pass only adds, so on its own it can never retire a binding whose instance the restore
+   * dropped (or restored disabled): the plugin would keep firing on that session with the retired
+   * instance's config, across restarts. So first tear down every scope that was bound by an enabled
+   * row BEFORE the import and is bound by no enabled row now, then re-run the boot pass over the
+   * restored rows. The teardown set comes only from the pre-import rows, never from activeSessions,
+   * so a session an operator activated through PUT /api/plugins/:id/sessions is left alone. The
+   * teardown is additive for the same reason: a restore makes no new narrowing decision, so it drops
+   * the retired scope without also retiring an operator's '*'. A retired wildcard still loses its '*'
+   * unless a restored wildcard row keeps it. applyScopeBinding runs after the commit, so its sibling
+   * checks read the restored rows.
+   */
+  async resyncAfterImport(
+    previous: ReadonlyArray<{ pluginId: string; sessionScope: string | null; enabled: boolean }>,
+  ): Promise<void> {
+    const scopeKey = (scope: string | null): string => (!scope || scope === '*' ? '*' : scope);
+    const bound = new Set(
+      (await this.instances.listAll())
+        .filter(row => row.enabled)
+        .map(row => `${row.pluginId}\u0000${scopeKey(row.sessionScope)}`),
+    );
+    const retired = new Map<string, { pluginId: string; sessionScope: string | null }>();
+    for (const row of previous) {
+      const key = `${row.pluginId}\u0000${scopeKey(row.sessionScope)}`;
+      if (row.enabled && !bound.has(key)) retired.set(key, row);
+    }
+    for (const { pluginId, sessionScope } of retired.values()) {
+      if (!this.loader.getPlugin(pluginId)) continue;
+      await this.applyScopeBinding(pluginId, sessionScope, {}, false, { additive: true });
+    }
+    await this.reconcile();
   }
 
   /**

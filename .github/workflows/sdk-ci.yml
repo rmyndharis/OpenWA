@@ -6,7 +6,7 @@ name: SDK CI
 # dual-format packaging smoke test (require() + import() both consumable).
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     paths:
       [
         'sdk/**',
@@ -17,7 +17,7 @@ on:
         'src/engine/interfaces/whatsapp-engine.interface.ts',
       ]
   pull_request:
-    branches: [main, develop]
+    branches: [main]
     paths:
       [
         'sdk/**',
@@ -33,8 +33,13 @@ permissions:
 
 jobs:
   javascript:
-    name: JavaScript SDK
+    name: JavaScript SDK (${{ matrix.node }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '22'] # declared engines floor + current
     defaults:
       run:
         working-directory: sdk/javascript
@@ -42,7 +47,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node }}
           cache: 'npm'
           cache-dependency-path: sdk/javascript/package-lock.json
       - run: npm ci
@@ -56,6 +61,7 @@ jobs:
   python:
     name: Python SDK (${{ matrix.python }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -79,6 +85,7 @@ jobs:
   php:
     name: PHP SDK (${{ matrix.php }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -97,6 +104,7 @@ jobs:
   java:
     name: Java SDK
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: sdk/java
@@ -112,6 +120,7 @@ jobs:
   go:
     name: Go SDK
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: sdk/go

@@ -39,6 +39,15 @@ function redactSecrets(value: unknown, depth = 0): unknown {
   return out;
 }
 
+/** A non-string, non-Error message as one line of text (redacted like metadata, never throwing). */
+function stringifyMessage(message: unknown): string {
+  try {
+    return JSON.stringify(redactSecrets(message)) ?? String(message);
+  } catch {
+    return String(message);
+  }
+}
+
 // ANSI color codes — mirrors the palette NestJS's built-in ConsoleLogger uses so our
 // pretty output blends in with the framework's own `[Nest] … LOG [Context]` lines.
 const ANSI = {
@@ -91,28 +100,47 @@ export class LoggerService implements NestLoggerService {
     this.context = context;
   }
 
-  log(message: string, context?: string | LogContext): void {
+  // Messages and traces are `unknown` because this is also Nest's framework logger (main.ts), and Nest
+  // passes the thrown Error itself as the message of an unhandled-exception line; writeLog normalizes.
+  log(message: unknown, context?: string | LogContext): void {
     this.writeLog(LogLevel.INFO, message, context);
   }
 
-  error(message: string, trace?: string, context?: string | LogContext): void {
+  error(message: unknown, trace?: unknown, context?: string | LogContext): void {
     this.writeLog(LogLevel.ERROR, message, context, trace);
   }
 
-  warn(message: string, context?: string | LogContext): void {
+  fatal(message: unknown, context?: string | LogContext): void {
+    this.writeLog(LogLevel.ERROR, message, context);
+  }
+
+  warn(message: unknown, context?: string | LogContext): void {
     this.writeLog(LogLevel.WARN, message, context);
   }
 
-  debug(message: string, context?: string | LogContext): void {
+  debug(message: unknown, context?: string | LogContext): void {
     this.writeLog(LogLevel.DEBUG, message, context);
   }
 
-  verbose(message: string, context?: string | LogContext): void {
+  verbose(message: unknown, context?: string | LogContext): void {
     this.writeLog(LogLevel.VERBOSE, message, context);
   }
 
-  private writeLog(level: LogLevel, message: string, context?: string | LogContext, trace?: string): void {
+  private writeLog(level: LogLevel, rawMessage: unknown, context?: string | LogContext, rawTrace?: unknown): void {
     if (!this.shouldLog(level)) return;
+
+    // An Error serializes to `{}`, so take its message and stack apart instead of losing both.
+    if (rawMessage instanceof Error) {
+      rawTrace ??= rawMessage.stack;
+      rawMessage = rawMessage.message;
+    }
+    const message = typeof rawMessage === 'string' ? rawMessage : stringifyMessage(rawMessage);
+    const trace =
+      rawTrace === undefined || typeof rawTrace === 'string'
+        ? rawTrace
+        : rawTrace instanceof Error
+          ? (rawTrace.stack ?? rawTrace.message)
+          : stringifyMessage(rawTrace);
 
     const timestamp = new Date().toISOString();
     const contextName = typeof context === 'string' ? context : this.context;

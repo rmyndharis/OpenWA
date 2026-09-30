@@ -316,6 +316,16 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     const unknown = await gateway.handleMessage(asSocket(sock), { type: 'nonsense' } as unknown as WSClientMessage);
     expect((unknown as WSErrorResponse).code).toBe('INVALID_MESSAGE');
     expect(sock.emit).toHaveBeenCalledWith('message', unknown);
+
+    // A 'message' emitted with no payload, or with null, is answered like any unknown frame rather
+    // than throwing inside the handler.
+    for (const nil of [undefined, null]) {
+      sock.emit.mockClear();
+      const invalid = await gateway.handleMessage(asSocket(sock), nil);
+      expect((invalid as WSErrorResponse).code).toBe('INVALID_MESSAGE');
+      expect(sock.emit).toHaveBeenCalledTimes(1);
+      expect(sock.emit).toHaveBeenCalledWith('message', invalid);
+    }
   });
 
   it('forbids a session-scoped key from subscribing to the * wildcard', async () => {

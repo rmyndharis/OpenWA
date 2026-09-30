@@ -8,6 +8,7 @@ import {
   HttpStatus,
   OnApplicationBootstrap,
   Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
 import {
@@ -26,6 +27,9 @@ import { ImportStorageDto } from './dto/import-storage.dto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+
+const S3_UNAVAILABLE_DESCRIPTION =
+  'STORAGE_TYPE is s3 but the bucket is unreachable or its credentials are missing; nothing was read or written.';
 
 @ApiTags('infrastructure')
 @Controller('infra')
@@ -107,16 +111,33 @@ export class InfraStorageController implements OnApplicationBootstrap {
   // STORAGE MIGRATION API
   // ============================================================================
 
+  /**
+   * With STORAGE_TYPE=s3 and the bucket unusable (credentials missing, or unreachable since boot),
+   * every StorageService operation quietly uses the local fallback directory. A count, export or
+   * import run in that state reports on the wrong store: an import lands on local disk while answering
+   * storageType 's3', and an export archives only the fallback files. Refuse instead, so the operator
+   * retries once the bucket is back rather than trusting a migration that did not reach it.
+   */
+  private async assertStorageBackendReady(): Promise<void> {
+    if (this.storageService.getCurrentStorageType() !== 's3') return;
+    if (await this.storageService.refreshS3Availability()) return;
+    throw new ServiceUnavailableException(
+      'S3 storage is not available (bucket unreachable or credentials missing); retry once GET /api/infra/status reports s3Available: true',
+    );
+  }
+
   @Get('storage/files/count')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get file count in current storage' })
   @ApiResponse({ status: 200, description: 'File count and size', type: StorageFileCountResponseDto })
+  @ApiResponse({ status: 503, description: S3_UNAVAILABLE_DESCRIPTION })
   async getStorageFileCount(): Promise<{
     storageType: string;
     count: number;
     sizeBytes: number;
     sizeMB: string;
   }> {
+    await this.assertStorageBackendReady();
     const { count, sizeBytes } = await this.storageService.getFileCount();
     return {
       storageType: this.storageService.getCurrentStorageType(),
@@ -137,7 +158,9 @@ export class InfraStorageController implements OnApplicationBootstrap {
       'POST /api/infra/storage/import.',
     type: StorageExportResponseDto,
   })
+  @ApiResponse({ status: 503, description: S3_UNAVAILABLE_DESCRIPTION })
   async exportStorage(): Promise<{ message: string; download: string }> {
+    await this.assertStorageBackendReady();
     // Note: In production, this would return a StreamableFile
     // For simplicity, we'll save to a temp file and return the path
     const stream = await this.storageService.createExportStream();
@@ -202,9 +225,11 @@ export class InfraStorageController implements OnApplicationBootstrap {
   // string while the handler takes an object.
   @ApiBody({ type: ImportStorageDto, description: 'Path to tar.gz file to import' })
   @ApiResponse({ status: 200, description: 'Import result', type: StorageImportResponseDto })
+  @ApiResponse({ status: 503, description: S3_UNAVAILABLE_DESCRIPTION })
   async importStorage(
     @Body() body: ImportStorageDto,
-  ): Promise<{ imported: boolean; count: number; storageType: string }> {
+  ): Promise<{ imported: boolean; count: number; failed: number; storageType: string }> {
+    await this.assertStorageBackendReady();
     const { filePath } = body;
 
     // `filePath` is fully caller-controlled. Restrict it to the app's data
@@ -228,21 +253,31 @@ export class InfraStorageController implements OnApplicationBootstrap {
     // not a tar, unreadable, over the resource caps), so surface them as a 400 with the real reason
     // rather than an opaque 500.
     let count: number;
+    let failed: number;
     try {
-      count = await this.storageService.importFromStream(readStream);
+      ({ imported: count, failed } = await this.storageService.importFromStream(readStream));
     } catch (error) {
       throw new BadRequestException(`Storage import failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const storageType = this.storageService.getCurrentStorageType();
 
-    // Audit the bulk media-import (files written into the active storage backend).
-    await this.auditService?.logInfo(AuditAction.INFRA_STORAGE_IMPORTED, {
-      metadata: { count, storageType },
-    });
+    // A bad or traversing entry is skipped by design, so one refusal does not fail the import. An
+    // archive whose every entry was refused (the store rejects writes) wrote nothing and says so.
+    const imported = !(failed > 0 && count === 0);
+
+    // Audit the bulk media-import (files written into the active storage backend); one whose every
+    // entry was refused is recorded as a warning.
+    const audit = { metadata: { count, failed, storageType } };
+    if (imported) {
+      await this.auditService?.logInfo(AuditAction.INFRA_STORAGE_IMPORTED, audit);
+    } else {
+      await this.auditService?.logWarn(AuditAction.INFRA_STORAGE_IMPORTED, audit);
+    }
 
     return {
-      imported: true,
+      imported,
       count,
+      failed,
       storageType,
     };
   }

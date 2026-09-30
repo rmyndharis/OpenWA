@@ -226,8 +226,16 @@ export function MessageTester() {
         if (batchPollRef.current !== timer) return;
         setBatchStatus(status);
         if (TERMINAL_BATCH_STATUSES.includes(status.status)) stopBatchPolling();
-      } catch {
-        // A transient poll failure (network blip, backend restart) must not kill progress tracking.
+      } catch (err) {
+        if (batchPollRef.current !== timer) return;
+        // A 404 (the batch or its session was deleted) or 403 (the key lost access) is permanent: stop
+        // and say so. A transient failure (network blip, backend restart, 5xx, 408, 429) must not kill
+        // progress tracking.
+        const status = (err as { status?: number }).status;
+        if (status === 404 || status === 403) {
+          stopBatchPolling();
+          setBatchError(err instanceof Error ? err.message : t('messageTester.sendFailed'));
+        }
       }
     }, 2000);
     batchPollRef.current = timer;

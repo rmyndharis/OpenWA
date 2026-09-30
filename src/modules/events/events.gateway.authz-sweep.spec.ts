@@ -18,7 +18,8 @@ import type { WSErrorResponse, WSSubscribedResponse } from './dto/ws-messages.dt
  * authentication hot path rewrites on its own (lastUsedAt, usageCount, updatedAt), which would
  * disconnect every live client once a minute. Only a real table, written by the real tracker,
  * proves it does not. The changes that never reach this process, a key deleted, revoked, expired or
- * narrowed by another node or a direct write, are expressed the same way: straight to the table.
+ * narrowed by a direct write to this node's main database, are expressed the same way: straight to
+ * the table.
  */
 describe('EventsGateway API-key authorization sweep', () => {
   const CLIENT_IP = '203.0.113.5';

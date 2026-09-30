@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
+import { throttlerMessage } from '@nestjs/throttler';
 import { safeEqualStr, verifyIngressSignature } from './ingress-signature';
 import { PluginIngressRoute } from '../../core/plugins/plugin.interfaces';
 import { IngressJobData } from '../queue/processors/ingress.processor';
 import type { EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
 import { evaluatePreflight } from './ingress-preflight';
 import { renderAck } from './ingress-ack';
+import type { IngressAdmission } from './ingress-instance-limit';
 import { parseBodyLimitBytes } from '../../config/inflight-body-budget';
 import { resolveBodyLimit } from '../../config/bootstrap-security';
 import { createLogger } from '../../common/services/logger.service';
@@ -58,13 +60,17 @@ export interface IngressDeps {
   // Optional structured sink for preflight rejections, so operators can audit deliveries that were
   // rejected host-side (and therefore leave no dedup/DLQ row). Absent in pure unit tests.
   log?: (event: string, meta: Record<string, unknown>) => void;
+  // Optional per-instance rate bucket (admitIngressInstance), charged only for a verified delivery.
+  // Absent in pure unit tests: every delivery is admitted and no rate headers are added.
+  admitInstance?: (pluginId: string, instanceId: string) => Promise<IngressAdmission>;
   now: () => number;
 }
 
 /**
  * The fast-ack ingress pipeline. Pure orchestration over injected deps so it is unit-testable without
  * Nest DI: resolve the instance → answer a GET challenge host-side → size cap → verify over the RAW
- * body → dedup (persist-before-ack) → best-effort conversation id → enqueue (or inline) → 202.
+ * body → per-instance rate bucket → dedup (persist-before-ack) → best-effort conversation id →
+ * enqueue (or inline) → 202.
  */
 export class IngressService {
   private readonly logger = createLogger('IngressService');
@@ -142,6 +148,20 @@ export class IngressService {
     });
     if (!verdict.ok) return { status: 401, body: verdict.reason ?? 'signature verification failed' };
 
+    // The per-instance bucket is charged here, after verification; everything above is bounded by the
+    // guard's per-client-IP tier.
+    // Before the preflight, so a signed provider hammering a dead session is still bounded.
+    const admission = this.deps.admitInstance ? await this.deps.admitInstance(req.pluginId, req.instanceId) : undefined;
+    if (admission && !admission.ok) {
+      return {
+        status: 429,
+        // The body the global filter writes for a guard's ThrottlerException, so the wire shape is
+        // the same one this route answered with before the charge moved here.
+        body: JSON.stringify({ statusCode: 429, message: throttlerMessage }),
+        headers: { 'content-type': 'application/json', ...admission.headers },
+      };
+    }
+
     // Host-side preflight (e.g. session-alive). AFTER signature verify (so an unauthenticated caller
     // cannot probe liveness) and BEFORE the dedup persist (so a 5xx-rejected delivery never writes a
     // dedup row that would swallow the provider's retry as a 200 'duplicate' — the dedup trap). A
@@ -176,11 +196,14 @@ export class IngressService {
     const deliveryId = route.dedupOn === 'body' || !headerId ? deriveDeliveryId(req) : headerId;
     // Provider request headers persist with the event (redrive/debugging); credentials must not.
     // Signature headers are re-derivable, auth material is not — redact before the first write.
-    // A shared-secret route carries the instance secret itself in its declared header.
+    // A shared-secret route carries the instance secret itself in its declared header, and an hmac
+    // route's declared header carries a signature that is only useful to re-send the same body.
     const payload = {
       headers: redactSensitiveHeaders(
         req.headers,
-        route.signature.scheme === 'shared-secret' ? route.signature.header : undefined,
+        route.signature.scheme === 'shared-secret' || route.signature.scheme === 'hmac-sha256'
+          ? route.signature.header
+          : undefined,
       ),
       query: req.query,
       body: req.rawBody,
@@ -192,11 +215,12 @@ export class IngressService {
     // hand (rawBody, deliveryId, now), never stored state, which is what makes rendering it on a dedup
     // hit sound: an ack field that had to reflect the PERSISTED row would echo the retry's values as the
     // original's. Keep it that way.
-    const ack = renderAck(route.response?.ack, {
+    const rendered = renderAck(route.response?.ack, {
       rawBody: req.rawBody,
       timestamp: String(Math.floor(this.deps.now() / 1000)),
       id: deliveryId,
     });
+    const ack = admission ? { ...rendered, headers: { ...rendered.headers, ...admission.headers } } : rendered;
 
     const isNew = await this.deps.events.recordOrSkip({
       instanceId: req.instanceId,

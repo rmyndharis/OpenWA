@@ -51,23 +51,23 @@ Built on a **pluggable architecture**, OpenWA lets you select database engines (
 When you create or edit an **operator** or **viewer** API key in the dashboard, you can tick the WhatsApp sessions that key may use.
 
 - **No sessions selected** — the key can access every session, including ones created later.
-- **One or more sessions selected** — the key can only list, read, and (for operator) manage those sessions. A request naming any other session returns `401`; session-filtered lists (sessions, audit, webhook delivery failures) return that key's rows rather than an error; and the key-management routes and the queue dashboard, which name no session at all, return `403`.
+- **One or more sessions selected** — the key can only list, read, and (for operator) manage those sessions. A request naming any other session returns `403` ("API key not authorized for this session"); session-filtered lists (sessions, audit, webhook delivery failures) return that key's rows rather than an error; and the key-management routes and the queue dashboard, which name no session at all, return `403`.
 
 Admin keys stay unscoped in the dashboard so they can keep managing other API keys. The HTTP API still accepts `allowedSessions` on any role if you need that from a client.
 
 ### Chat-scoped operator & viewer tokens
 
-A session-scoped key still reaches every chat on the sessions it may use. A key can be narrowed further, to **chats** (a chosen set of groups and individual contacts), with `allowedChats` on `POST /auth/api-keys` or `PUT /auth/api-keys/{id}`. The dashboard does not set or show it yet, and editing a key there leaves its chats unchanged.
+A session-scoped key still reaches every chat on the sessions it may use. A key can be narrowed further, to **chats** (a chosen set of groups and individual contacts), with `allowedChats` on `POST /auth/api-keys` or `PUT /auth/api-keys/{id}`. The dashboard sets it on operator and viewer keys (one chat id or phone number per line) and shows each key's chat count in the list.
 
 - **No chats selected** — the key can reach every chat on its sessions.
-- **One or more selected** — the key reaches only those chats. Every authenticated REST route not explicitly marked as safe for a chat-scoped key refuses it with `403` (a request naming a session outside `allowedSessions` still answers `401` first), including routes added in later releases: the refusal is the default. Inside its chats an operator key can do what the marked routes allow, which is more than reading and sending: it can also delete or clear a chat, leave or rename a group, and block the contact. It cannot change who belongs to a group: adding, removing, promoting or demoting participants, answering join requests and reading or resetting the invite link all stay closed.
+- **One or more selected** — the key reaches only those chats. Every authenticated REST route not explicitly marked as safe for a chat-scoped key refuses it with `403` (a request naming a session outside `allowedSessions` is refused first, with `403 "API key not authorized for this session"`), including routes added in later releases: the refusal is the default. Inside its chats an operator key can do what the marked routes allow, which is more than reading and sending: it can also delete or clear a chat, leave or rename a group, and block the contact. It cannot change who belongs to a group: adding, removing, promoting or demoting participants, answering join requests and reading or resetting the invite link all stay closed.
 - **The two scopes are independent** — a key may be limited to sessions, to chats, to both, or to neither.
 
-This lets you point an **AI agent or third-party integration at a shared account** without handing it every chat. Give the agent a key scoped to the few groups (or DMs) it is meant to handle: it can send and reply there, but it cannot list your other chats, read any other DM, message a contact outside its set, or reach the queue dashboard. It reads its chats through `GET /sessions/{sessionId}/messages/{chatId}/history`, which works on whatsapp-web.js only; on Baileys it sees just each chat's last-message preview. It receives no pushed events, so it has to poll. It can still read the session's own status (`GET /sessions/{sessionId}`) so an integration can tell whether it is connected.
+This lets you point an **AI agent or third-party integration at a shared account** without handing it every chat. Give the agent a key scoped to the few groups (or DMs) it is meant to handle: it can send and reply there, but it cannot list your other chats, read any other DM, message a contact outside its set, or reach the queue dashboard. It reads its chats' stored messages on either engine through `GET /sessions/{sessionId}/messages?chatId=`, where `chatId` is required for such a key, and live history through `GET /sessions/{sessionId}/messages/{chatId}/history` on whatsapp-web.js only. It receives no pushed events, so it has to poll. It can still read the session's own status (`GET /sessions/{sessionId}`) so an integration can tell whether it is connected.
 
 Identity is matched through the lid mapping table: a contact allowlisted by phone number also matches the same person's `@lid` privacy id once the table maps the two, and an unmapped `@lid` is refused rather than guessed. A lid's digits are never mistaken for a phone number, so `555000111@lid` does not admit `555000111@c.us`.
 
-The default covers REST routes only. Surfaces that authenticate outside the REST guard do not inherit it, so each one that can return chat data refuses a chat-scoped key with its own check: the `/events` WebSocket, the MCP mount (per tool call), and the Bull Board queue dashboard. Of the list routes, only `GET /sessions/{sessionId}/chats` is usable, and it filters to the key's chats before paging.
+The default covers REST routes only. Surfaces that authenticate outside the REST guard do not inherit it, so each one that can return chat data refuses a chat-scoped key with its own check: the `/events` WebSocket, the MCP mount (per tool call), and the Bull Board queue dashboard. Four list routes are usable, each filtered to the key's chats before paging: `GET /sessions/{sessionId}/chats`, `GET /sessions/{sessionId}/groups` (id, name and community parent id only), `GET /sessions/{sessionId}/contacts` and `GET /sessions/{sessionId}/labels/{labelId}/chats`.
 
 The API also accepts `allowedChats` on an admin key, but no admin-only route is open to a chat-scoped key, and the last usable admin key cannot be scoped this way.
 
@@ -98,7 +98,7 @@ These are practical guardrails, not guarantees — but they materially reduce th
 
 1. **Warm up fresh numbers.** For the first several days, behave like a normal human user: scan the QR, exchange a handful of messages with saved contacts, join a group or two, set a profile photo. Don't blast on day one.
 2. **Don't cold-blast strangers.** Sending the first-ever message to a large batch of numbers that have never messaged you is the single most reliable way to get restricted — on either engine.
-3. **Rate-limit yourself.** OpenWA ships with a configurable rate limiter (`RATE_LIMIT_*` env vars). Use it. A few messages per minute per session is sustainable; "thousands in an hour" is not.
+3. **Pace sends per session.** Set `SEND_PACING_ENABLED=true` (off by default) for a per-session daily cap: an allowance that grows with the session's age (`SEND_PACING_WARMUP_SCHEDULE`), a separate cap on new conversations (`SEND_PACING_COLD_DAILY_CAP`) and a consecutive-failure breaker; [R002 in the risk guide](docs/16-risk-management.md#r002-user-account-banned) lists what it counts. No per-minute cap is enforced, so spacing within a day is up to the caller: bulk sends wait `delayBetweenMessages` between messages, and single text sends pause behind a typing indicator (`SIMULATE_TYPING`, on by default). A few messages per minute per session is sustainable; "thousands in an hour" is not. The `RATE_LIMIT_*` variables are API abuse protection per client IP, not a send cap: they throttle every request, including dashboard and read traffic.
 4. **Use opted-in recipients.** The safest workloads are replies and alerts to people who already expect to hear from you (OTP to your own users, order updates, support replies).
 5. **Keep a fallback.** For anything auth-critical or revenue-critical, keep an SMS / email / official-Cloud-API path. Do not bet a login flow solely on an unofficial client.
 6. **Mind the hosting IP.** Cheap datacenter IPs are flagged more aggressively than residential ones. A residential proxy (supported per-session via the proxy settings) can help; it is not a license to spam.
@@ -109,6 +109,7 @@ A few things that look like bugs but are actually server-side WhatsApp policy, n
 
 - **First message to a brand-new contact sometimes never arrives.** The API returns success because the message leaves OpenWA, but WhatsApp's server-side reach-out / trust policy drops it at delivery. This is independent of OpenWA. We track it in [#830](https://github.com/rmyndharis/OpenWA/issues/830).
 - **Accounts that get restricted cannot be "unrestricted" by us.** If WhatsApp disables a number, you need to appeal through their channels — OpenWA has no lever to pull.
+- **Some accounts cannot link a new device at all.** WhatsApp has added a passkey step to companion linking for some accounts: the phone asks to "Create a passkey" or "Continue on your other device" and the session stays at `qr_ready`. Neither engine implements that step, so switching engine or using a pairing code does not help, and no OpenWA setting changes it. Avoid logging out or re-linking a session that works, since linking it again may hit the same gate, and keep the fallback from rule 5 above. See [the FAQ entry](docs/12-troubleshooting-faq.md#issue-linking-asks-for-a-passkey-and-never-completes-both-engines); tracked in [#560](https://github.com/rmyndharis/OpenWA/issues/560).
 
 ### Compliance
 
@@ -187,6 +188,11 @@ docker compose -f docker-compose.dev.yml up -d
 # Swagger: http://localhost:2785/api/docs
 ```
 
+**Your API key.** The first boot generates an admin API key, prints it once in the log and stores it at
+`/app/data/.api-key` inside the container. Read it with `docker exec openwa-api cat /app/data/.api-key`,
+then use it to sign in to the dashboard and as the `X-API-Key` header wherever this README shows
+`YOUR_API_KEY`. Later boots log only a masked prefix. See [API Key](docs/README.md#api-key).
+
 > **Using Podman instead of Docker?**
 > Podman rootless mode requires the socket to be running and `DOCKER_HOST` to be set:
 >
@@ -216,6 +222,8 @@ npm run dev
 # API: http://localhost:2785/api
 # Swagger: http://localhost:2785/api/docs
 ```
+
+The first boot writes the admin API key to `data/.api-key` (read it with `cat data/.api-key`).
 
 Use `npm install` instead when intentionally changing dependencies. OpenWA's committed lockfile uses
 registry artifacts only, so npm 12 works with its secure default that blocks Git dependencies; do not
@@ -251,6 +259,8 @@ dumb-init (PID 1)
 
 Named volumes (e.g. `openwa-data`) get their ownership corrected automatically on every start, so no manual `chown` step is needed after volume creation.
 
+The image can also start as the `openwa` user directly (uid/gid 997: `--user 997:997`, or the Helm chart's `podSecurityContext`). The entrypoint then skips the `chown` and the `gosu` drop and needs no added capabilities, provided `/app/data` is writable by that uid.
+
 ---
 
 ## 🏭 Production Deployment
@@ -268,17 +278,23 @@ docker compose --profile postgres up -d
 docker compose --profile full up -d
 ```
 
-| Profile    | Services              |
-| ---------- | --------------------- |
-| `postgres` | PostgreSQL database   |
-| `redis`    | Redis cache           |
-| `minio`    | S3-compatible storage |
-| `full`     | All services above    |
+| Profile    | Services                                        |
+| ---------- | ----------------------------------------------- |
+| `postgres` | PostgreSQL database                             |
+| `redis`    | Redis cache                                     |
+| `minio`    | S3-compatible storage (MinIO fork `pgsty/silo`) |
+| `full`     | All services above                              |
 
 A profile only starts the container; OpenWA keeps using SQLite and local storage until it is told
 to use the new service. The simplest route is **Dashboard > Infrastructure**: pick the built-in
-option, save, and restart from there, and OpenWA starts the container itself. To use a profile
-directly, set these in the `.env` next to `docker-compose.yml` first:
+option, save, and restart from there, and OpenWA starts the container itself. The built-in storage
+option creates its own `openwa-minio` container, so do not also start the `minio` or `full` profile
+for it. The same goes for built-in PostgreSQL and Redis: each built-in option creates its own
+container, and the compose profiles are for the manual `.env` route below. The compose `minio`
+service starts only once `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are set in the `.env` next to
+`docker-compose.yml`; if it was already started without them, run `docker rm -f openwa-minio` before
+you enable built-in storage. To use a profile directly, set these in the `.env` next to
+`docker-compose.yml` first:
 
 - PostgreSQL: `DATABASE_TYPE=postgres`, `DATABASE_HOST=postgres`, `DATABASE_USERNAME=openwa`,
   `DATABASE_PASSWORD=<strong password>`
@@ -286,8 +302,8 @@ directly, set these in the `.env` next to `docker-compose.yml` first:
 - MinIO: `STORAGE_TYPE=s3`, `S3_ENDPOINT=http://minio:9000`, `S3_ACCESS_KEY_ID=<user>`,
   `S3_SECRET_ACCESS_KEY=<strong password>`
 
-PostgreSQL and MinIO refuse to initialize with an empty password, and a production boot rejects
-default credentials such as `openwa` or `minioadmin`.
+PostgreSQL refuses to initialize a new volume with an empty password, MinIO refuses to start
+without one, and a production boot rejects default credentials such as `openwa` or `minioadmin`.
 
 > The dashboard is bundled into the API image and served by NestJS on the API port, so it
 > needs no profile — it is always available wherever `openwa-api` runs. For TLS/public exposure,
@@ -304,6 +320,22 @@ default credentials such as `openwa` or `minioadmin`.
 > - `linux/amd64`
 > - `linux/arm64`
 
+To run a published image instead of building from source, add a `docker-compose.override.yml` next to
+`docker-compose.yml`:
+
+```yaml
+services:
+  openwa-api:
+    image: ghcr.io/rmyndharis/openwa:latest
+```
+
+Run `docker compose pull openwa-api && docker compose up -d --no-build`, and use the same command to
+upgrade. Pin a release by replacing `latest` with its version number. Once the image is pulled, Compose
+runs it and builds nothing. The service keeps its `build:` section, so if the pull fails (a mistyped tag,
+no registry access) Compose falls back to building from source and tags that build with the published
+name; `--no-build` makes that case fail instead. For the same reason, do not use `--build` or
+`docker compose build` with this override.
+
 ## 🔌 Ports
 
 | Service         | Port            | Description                                                                         |
@@ -315,6 +347,8 @@ default credentials such as `openwa` or `minioadmin`.
 ---
 
 ## 📡 API Examples
+
+Replace `YOUR_API_KEY` with your admin key (see [Quick Start](#-quick-start) for where to find it).
 
 ### Create a Session
 
@@ -477,12 +511,20 @@ Comprehensive documentation is available in the `docs/` folder:
 We welcome contributions! Here's how to get started:
 
 1. **Fork** the repository
-2. **Create** your feature branch (`git checkout -b feature/amazing-feature`)
+2. **Create** your feature branch (`git checkout -b feat/amazing-feature`)
 3. **Commit** your changes (`git commit -m 'Add amazing feature'`)
-4. **Push** to the branch (`git push origin feature/amazing-feature`)
+4. **Push** to the branch (`git push origin feat/amazing-feature`)
 5. **Open** a Pull Request
 
 Please read our [Development Guidelines](./docs/08-development-guidelines.md) for coding standards and best practices.
+
+---
+
+## Disclaimer
+
+OpenWA is an independent open-source project and is not affiliated, associated, authorized, endorsed by, or in any way officially connected with Meta Platforms, Inc., WhatsApp LLC, or any of their subsidiaries or affiliates. The official WhatsApp website can be found at [whatsapp.com](https://www.whatsapp.com). The name "WhatsApp" as well as related names, marks, emblems, and images are registered trademarks of their respective owners.
+
+Use it at your own risk; you are responsible for complying with WhatsApp's terms and the law where you operate.
 
 ---
 

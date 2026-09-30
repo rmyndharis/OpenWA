@@ -8,13 +8,12 @@ import { setTimeout } from 'node:timers/promises';
 import { Webhook } from './entities/webhook.entity';
 import { WebhookOutboxService } from './webhook-outbox.service';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
-import { recordWebhookDeliveryFailure } from './utils/record-delivery-failure';
+import { clearDeliveryFailureRows, recordWebhookDeliveryFailure } from './utils/record-delivery-failure';
 import {
   buildDeliveryHeaders,
-  generateSignature,
+  isDeliverableWebhook,
   postWebhookPayload,
   recordTerminalFailure,
-  sanitizeCustomHeaders,
 } from './utils/deliver-once';
 import { createLogger } from '../../common/services/logger.service';
 import { DEFAULT_WEBHOOK_MEDIA_INLINE_MAX_BYTES, shedInlineMedia } from '../../common/utils/inline-media';
@@ -42,7 +41,6 @@ export interface WebhookJobData {
   url: string;
   event: string;
   payload: WebhookPayload;
-  headers: Record<string, string>;
   attempt: number;
   maxRetries: number;
 }
@@ -67,10 +65,13 @@ const DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS = 5000;
 
 /** Per-event-occurrence context threaded through the dispatch pipeline stages (was closure state). */
 /**
- * The result of one delivery attempt. Reported, not thrown: every failure below is already handled
- * in place, so nothing reaches a caller as an exception and a try/catch cannot tell a delivered
- * event from a dead-lettered one. 'cancelled' is a plugin suppressing the dispatch on purpose: it
- * is terminal like 'delivered' and must never be replayed, but nothing left the process.
+ * The result of one delivery attempt. Reported, not thrown: every delivery failure below is already
+ * handled in place, so a try/catch cannot tell a delivered event from a dead-lettered one. The one
+ * exception that escapes is 'ConcurrencyLimiter closed' from a retry backoff woken after shutdown;
+ * only runLimited can see it, and it records the shutdown and keeps the outbox row pending.
+ * 'cancelled' is terminal like 'delivered' and must never be replayed: either a plugin suppressed the
+ * dispatch (nothing left the process), or a direct retry found the webhook removed, disabled or
+ * unsubscribed (an earlier attempt may already have been POSTed).
  */
 export type WebhookDeliveryOutcome = 'delivered' | 'enqueued' | 'cancelled' | 'failed';
 
@@ -78,13 +79,19 @@ interface DispatchEventContext {
   sessionId: string;
   event: string;
   baseData: Record<string, unknown>;
+  /** Gives the dispatch slot up while `fn` runs (a retry backoff). Absent outside the limiter. */
+  yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R>;
 }
+
+/** The limiter refused or dropped the task because shutdown closed it. */
+const isLimiterClosed = (error: unknown): boolean =>
+  error instanceof Error && error.message === 'ConcurrencyLimiter closed';
 
 /**
  * The webhook delivery engine: given an event occurrence, fan it out to the session's matching
  * webhooks — bounded by the dispatch limiter — through the BullMQ queue when enabled (with a
  * direct-delivery fallback when enqueue fails) or through direct inline delivery when not.
- * Records terminally failed deliveries in webhook_delivery_failures. Webhook registration/CRUD
+ * Records failed and unsent deliveries in webhook_delivery_failures. Webhook registration/CRUD
  * lives on WebhookService, which delegates dispatch here.
  */
 const isPlainObject = (value: unknown): boolean => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -94,10 +101,23 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('WebhookDelivery');
   private readonly queueEnabled: boolean;
   private readonly dispatchLimiter: ConcurrencyLimiter;
+  private readonly dispatchMaxQueued: number;
   /**
-   * Context of every delivery currently holding a dispatch-limiter slot (queued-path enqueue or a
-   * direct delivery with its retry loop). Used at shutdown to log, per delivery, what the bounded
-   * drain had to abandon — those deliveries were neither completed nor safely recorded.
+   * Webhooks whose last delivery attempt on this node failed, until one succeeds. In direct mode a
+   * delivery to one of them first passes its session's gate in `degradedSessionGates`, which admits
+   * at most `degradedSessionConcurrency` at a time, so one session's failing receivers cannot keep
+   * filling the dispatch pool while healthy receivers keep all of it. The gate is consulted once, at
+   * admission: a delivery admitted before its webhook's first failure runs its retries ungated.
+   */
+  private readonly failingWebhooks = new Set<string>();
+  private readonly degradedSessionGates = new Map<string, ConcurrencyLimiter>();
+  private readonly degradedSessionConcurrency: number;
+  /**
+   * Context of every delivery admitted to the dispatch limiter and not yet settled (queued-path
+   * enqueue, or a direct delivery with its retry loop, including a backoff spent without a slot).
+   * Counted against the dispatch budget in runLimited.
+   * Used at shutdown to log, per delivery, what the bounded drain had to abandon: those deliveries
+   * were neither completed nor safely recorded.
    */
   private readonly inFlightDeliveries = new Map<
     string,
@@ -131,10 +151,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     // Bound fan-out: cap how many matching webhooks are delivered CONCURRENTLY for one event. Without
     // it, an event matching N webhooks opens N outbound sockets at once. Default 16
     // (WEBHOOK_DISPATCH_CONCURRENCY).
-    this.dispatchLimiter = new ConcurrencyLimiter(
-      this.configService.get<number>('webhook.dispatchConcurrency', 16),
-      this.configService.get<number>('webhook.dispatchMaxQueued', 1000),
-    );
+    const dispatchConcurrency = this.configService.get<number>('webhook.dispatchConcurrency', 16);
+    this.dispatchMaxQueued = this.configService.get<number>('webhook.dispatchMaxQueued', 1000);
+    this.dispatchLimiter = new ConcurrencyLimiter(dispatchConcurrency, this.dispatchMaxQueued);
+    // WEBHOOK_DEGRADED_SESSION_CONCURRENCY, else a quarter of the pool.
+    this.degradedSessionConcurrency =
+      this.configService.get<number | undefined>('webhook.degradedSessionConcurrency') ??
+      Math.max(1, Math.floor(dispatchConcurrency / 4));
   }
 
   onModuleInit(): void {
@@ -162,6 +185,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * skips the close: a parked dispatch's whole job is webhookQueue.add() — durable in Redis the
    * moment it resolves — so rejecting it would dead-letter work Redis could have kept. A parked
    * waiter holds an activeCount slot via handoff, so the drain loop below covers it either way.
+   * A delivery waiting out a retry backoff holds no slot; if it wakes within the drain window, taking
+   * one back fails on the closed limiter and it is recorded the same way. One still asleep when the
+   * window ends is only logged below. Either way its outbox row stays pending for the next start.
    * In-flight deliveries (a direct delivery can outlive WEBHOOK_TIMEOUT via its backoff sleeps) get
    * up to WEBHOOK_SHUTDOWN_DRAIN_MS to finish; anything still running after that is about to be
    * dropped by process exit, so it is logged per delivery — a dead-letter row would be wrong there,
@@ -171,13 +197,18 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   async onModuleDestroy(): Promise<void> {
     if (!this.queueEnabled) {
       this.dispatchLimiter.close();
+      for (const gate of this.degradedSessionGates.values()) gate.close();
     }
     const drainMs = Math.max(
       0,
       this.configService.get<number>('webhook.shutdownDrainMs', DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS),
     );
     const deadline = Date.now() + drainMs;
-    while (this.dispatchLimiter.activeCount > 0 || this.pendingBookkeeping.size > 0) {
+    while (
+      this.dispatchLimiter.activeCount > 0 ||
+      this.inFlightDeliveries.size > 0 ||
+      this.pendingBookkeeping.size > 0
+    ) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
       await setTimeout(Math.min(50, remaining));
@@ -307,8 +338,8 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Build one webhook delivery: payload + webhook:before hooks + identity re-assertion + size gate +
-   * headers. Returns null when the delivery must not proceed — either cancelled by a plugin (a debug
+   * Build one webhook delivery: payload + webhook:before hooks + identity re-assertion + size gate.
+   * Returns null when the delivery must not proceed: either cancelled by a plugin (a debug
    * log, not a failure) or after a failure already recorded via recordUndelivered.
    */
   private async preflightDelivery(
@@ -316,7 +347,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     deliveryId: string,
     idempotencyKey: string,
     ctx: DispatchEventContext,
-  ): Promise<{ finalPayload: WebhookPayload; body: string; headers: Record<string, string> } | 'cancelled' | null> {
+  ): Promise<{ finalPayload: WebhookPayload; body: string } | 'cancelled' | null> {
     const { sessionId, event, baseData } = ctx;
     try {
       const payload: WebhookPayload = {
@@ -413,8 +444,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         return null;
       }
 
-      const headers = buildDeliveryHeaders(webhook, event, idempotencyKey, deliveryId, body);
-      return { finalPayload, body, headers };
+      return { finalPayload, body };
     } catch (error) {
       await this.recordUndelivered(
         webhook,
@@ -432,7 +462,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * What became of one delivery attempt, reported rather than thrown.
    *
    * Every failure path here is already handled in place (a dead-letter row, a hook, a log), so none
-   * of them reach the caller as an exception. The reconciler has to tell a delivered event from a
+   * of them reach the caller as an exception, except 'ConcurrencyLimiter closed' from a retry backoff
+   * woken after shutdown, which runLimited handles (redeliver passes no yieldSlot and never sees it).
+   * The reconciler has to tell a delivered event from a
    * dead-lettered one to know whether the outbox row may be retired, and a caught throw cannot tell
    * it: there is none. This mirrors the inbound twin, where `ingressEnqueue.enqueue` returns an
    * outcome and the caller retires the payload only when it is not 'failed'.
@@ -454,34 +486,35 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       // The remaining bail-outs record their own undelivered row before returning null.
       return 'failed';
     }
-    const { finalPayload, body, headers } = preflight;
+    const { finalPayload, body } = preflight;
     // Use queue if available, otherwise fallback to direct delivery
     if (this.queueEnabled && this.webhookQueue) {
-      return this.enqueueWithFallback(webhook, finalPayload, body, headers, deliveryId, idempotencyKey, ctx);
+      // A replay's attempts-0 row is not cleared here. It stays until the delivery resolves: a
+      // successful POST (the processor's, or the fallback's when the add fails) clears it, and a
+      // terminal failure replaces it right after filing its own row. A restart or a lost job at
+      // any point before that still leaves the event on record.
+      return this.enqueueWithFallback(webhook, finalPayload, body, deliveryId, idempotencyKey, ctx);
     }
-    return this.deliverDirect(webhook, finalPayload, body, headers, deliveryId, ctx);
+    return this.deliverDirect(webhook, finalPayload, body, deliveryId, ctx);
   }
 
   private async enqueueWithFallback(
     webhook: Webhook,
     finalPayload: WebhookPayload,
     body: string,
-    headers: Record<string, string>,
     deliveryId: string,
     idempotencyKey: string,
     ctx: DispatchEventContext,
   ): Promise<WebhookDeliveryOutcome> {
     const { sessionId, event } = ctx;
     try {
-      // The job's headers are the enqueue-time snapshot. The processor rebuilds them (and the
-      // signature) from the current webhook row on every attempt, so a secret or header rotated
-      // while the job waits is honoured.
+      // No headers are stored: the processor builds them and the signature from the current row on
+      // every attempt, so custom headers (which may carry receiver credentials) never reach Redis.
       const jobData: WebhookJobData = {
         webhookId: webhook.id,
         url: webhook.url,
         event,
         payload: finalPayload,
-        headers,
         attempt: 1,
         maxRetries: webhook.retryCount,
       };
@@ -531,7 +564,8 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       // Redis before rejecting, the queued job AND this fallback may both POST. Both paths carry the
       // same X-OpenWA-Idempotency-Key / X-OpenWA-Delivery-Id, so a conformant receiver dedupes.
       try {
-        await this.deliverWebhook(webhook, finalPayload, headers, body);
+        // Removed, disabled or unsubscribed before a retry: nothing to report, as on the queued path.
+        if (!(await this.deliverWebhook(webhook, finalPayload, body, ctx.yieldSlot))) return 'cancelled';
 
         await this.hookManager.execute(
           'webhook:delivered',
@@ -545,6 +579,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           { sessionId, source: 'WebhookService' },
         );
       } catch (fallbackError) {
+        // Shutdown closed the limiter during a retry backoff: not a delivery failure. runLimited
+        // records it and keeps the outbox row pending for the next start.
+        if (isLimiterClosed(fallbackError)) throw fallbackError;
         await this.hookManager.execute(
           'webhook:error',
           {
@@ -574,13 +611,13 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     webhook: Webhook,
     finalPayload: WebhookPayload,
     body: string,
-    headers: Record<string, string>,
     deliveryId: string,
     ctx: DispatchEventContext,
   ): Promise<WebhookDeliveryOutcome> {
     const { sessionId, event } = ctx;
     try {
-      await this.deliverWebhook(webhook, finalPayload, headers, body);
+      // Removed, disabled or unsubscribed before a retry: nothing to report, as on the queued path.
+      if (!(await this.deliverWebhook(webhook, finalPayload, body, ctx.yieldSlot))) return 'cancelled';
 
       // Execute hook after successful delivery
       await this.hookManager.execute(
@@ -596,6 +633,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         { sessionId, source: 'WebhookService' },
       );
     } catch (error) {
+      // Shutdown closed the limiter during a retry backoff: not a delivery failure. runLimited
+      // records it and keeps the outbox row pending for the next start.
+      if (isLimiterClosed(error)) throw error;
       // Execute hook on error
       await this.hookManager.execute(
         'webhook:error',
@@ -651,6 +691,57 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     return this.locallyPending.has(idempotencyKey);
   }
 
+  /**
+   * Direct mode: pass a delivery to a failing webhook through its session's gate before `run`, so
+   * the deliveries that session admits after a failure hold at most `degradedSessionConcurrency`
+   * dispatch slots however many of its receivers fail. Each gate parks at most a quarter of
+   * WEBHOOK_DISPATCH_MAX_QUEUED, so a failing session sheds its own excess before it can spend the
+   * park budget every session shares. Parking there also counts against WEBHOOK_DISPATCH_MAX_QUEUED
+   * like parking in the dispatch limiter, and a delivery over it is shed the same way. Queued mode
+   * holds a slot only for the enqueue, and the worker applies its own gate; the direct fallback for
+   * a rejected enqueue is not gated.
+   */
+  private gateFailingReceiver(
+    webhook: Webhook,
+    sessionId: string,
+    run: (gated: boolean) => Promise<void>,
+  ): Promise<void> {
+    if (this.queueEnabled || !this.failingWebhooks.has(webhook.id)) return run(false);
+    let gate = this.degradedSessionGates.get(sessionId);
+    if (!gate) {
+      gate = new ConcurrencyLimiter(
+        this.degradedSessionConcurrency,
+        Math.max(1, Math.floor(this.dispatchMaxQueued / 4)),
+      );
+      this.degradedSessionGates.set(sessionId, gate);
+    }
+    if (gate.activeCount >= this.degradedSessionConcurrency && this.parkedDeliveries() >= this.dispatchMaxQueued) {
+      return Promise.reject(new Error('ConcurrencyLimiter queue full'));
+    }
+    const current = gate;
+    return current
+      .run(() => run(true))
+      .finally(() => {
+        if (
+          current.activeCount === 0 &&
+          current.queuedCount === 0 &&
+          this.degradedSessionGates.get(sessionId) === current
+        ) {
+          this.degradedSessionGates.delete(sessionId);
+        }
+      });
+  }
+
+  /**
+   * Deliveries parked for a slot they were never given. One taking back the slot it gave up for a
+   * retry backoff is left out: it is already counted in inFlightDeliveries.
+   */
+  private parkedDeliveries(): number {
+    let parked = this.dispatchLimiter.queuedCount - this.dispatchLimiter.reacquiringCount;
+    for (const gate of this.degradedSessionGates.values()) parked += gate.queuedCount;
+    return parked;
+  }
+
   private async runLimited(
     webhook: Webhook,
     deliveryId: string,
@@ -658,62 +749,105 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     ctx: DispatchEventContext,
   ): Promise<void> {
     const { sessionId, event } = ctx;
-    await this.dispatchLimiter
-      .run(async () => {
-        this.inFlightDeliveries.set(deliveryId, {
-          webhookId: webhook.id,
-          sessionId,
-          event,
+    // One budget for every admitted, unsettled delivery: running, parked in either limiter, or
+    // asleep in a retry backoff that gave its slot up. The limiter's own maxQueued sees none of the
+    // session gates or the sleepers, so on its own it no longer bounds what sits in heap.
+    const overBudget =
+      this.inFlightDeliveries.size + this.parkedDeliveries() >= this.dispatchLimiter.maxCount + this.dispatchMaxQueued;
+    const admitted = overBudget
+      ? Promise.reject(new Error('ConcurrencyLimiter queue full'))
+      : this.gateFailingReceiver(webhook, sessionId, gated =>
+          this.dispatchLimiter.run(async yieldSlot => {
+            let target = webhook;
+            if (gated) {
+              // A delivery can sit behind the session gate far longer than the dispatch took, and the
+              // gated webhooks are the ones an operator disables or re-points. Re-read the row before
+              // the first attempt, as every retry does; healthy receivers never pay this read. If the
+              // read fails, deliver with the dispatch-time row rather than drop the delivery silently:
+              // every retry re-reads again, and a failed attempt is recorded as usual.
+              let row: Webhook | null = webhook;
+              try {
+                row = await this.webhookRepository.findOne({ where: { id: webhook.id } });
+              } catch (error) {
+                this.logger.warn('Could not re-read parked webhook; delivering with the dispatch-time row', {
+                  webhookId: webhook.id,
+                  event,
+                  deliveryId,
+                  idempotencyKey,
+                  error: error instanceof Error ? error.message : String(error),
+                  action: 'webhook_stale_check_failed',
+                });
+              }
+              if (!isDeliverableWebhook(row, event)) {
+                this.logger.warn('Skipping parked webhook delivery: webhook removed, disabled or unsubscribed', {
+                  webhookId: webhook.id,
+                  event,
+                  deliveryId,
+                  idempotencyKey,
+                  action: 'webhook_skipped_stale',
+                });
+                this.failingWebhooks.delete(webhook.id);
+                await this.outbox.close(webhook.id, idempotencyKey, 'dispatched');
+                return;
+              }
+              target = row;
+            }
+            this.inFlightDeliveries.set(deliveryId, {
+              webhookId: webhook.id,
+              sessionId,
+              event,
+              idempotencyKey,
+              url: target.url,
+            });
+            try {
+              await this.deliverOne(target, deliveryId, idempotencyKey, { ...ctx, yieldSlot });
+              // Reached a durable owner: handed to the queue, or completed inline. A failure inside
+              // either owner dead-letters through the failure row, so this is never replayed.
+              await this.outbox.close(webhook.id, idempotencyKey, 'dispatched');
+            } finally {
+              this.inFlightDeliveries.delete(deliveryId);
+            }
+          }),
+        );
+    await admitted.catch(async error => {
+      if (error instanceof Error && error.message === 'ConcurrencyLimiter queue full') {
+        // Shed before the task ran, so nothing was POSTed. The failure row reports the shed, but
+        // the outbox row stays 'pending' on purpose: retiring it would drop the only copy of an
+        // event the receiver provably never got. The sweep replays it once the backlog clears.
+        await this.recordUndelivered(
+          webhook,
+          deliveryId,
           idempotencyKey,
-          url: webhook.url,
-        });
+          error,
+          'webhook_dispatch_capacity_exceeded',
+          ctx,
+        );
+        return;
+      }
+      if (error instanceof Error && error.message === 'ConcurrencyLimiter closed') {
+        // Rejected by the shutdown drain before dispatching, or woken from a retry backoff after
+        // it: record it like any other undelivered delivery, and track the write so
+        // onModuleDestroy can await it (the limiter slot bookkeeping no longer covers this task).
+        // Its outbox row stays 'pending': no POST was accepted, so the next start's sweep is what
+        // finally delivers the event.
+        const record = this.recordUndelivered(
+          webhook,
+          deliveryId,
+          idempotencyKey,
+          error,
+          'webhook_dispatch_shutdown',
+          ctx,
+        );
+        this.pendingBookkeeping.add(record);
         try {
-          await this.deliverOne(webhook, deliveryId, idempotencyKey, ctx);
-          // Reached a durable owner: handed to the queue, or completed inline. A failure inside
-          // either owner dead-letters through the failure row, so this is never replayed.
-          await this.outbox.close(webhook.id, idempotencyKey, 'dispatched');
+          await record;
         } finally {
-          this.inFlightDeliveries.delete(deliveryId);
+          this.pendingBookkeeping.delete(record);
         }
-      })
-      .catch(async error => {
-        if (error instanceof Error && error.message === 'ConcurrencyLimiter queue full') {
-          // Shed before the task ran, so nothing was POSTed. The failure row reports the shed, but
-          // the outbox row stays 'pending' on purpose: retiring it would drop the only copy of an
-          // event the receiver provably never got. The sweep replays it once the backlog clears.
-          await this.recordUndelivered(
-            webhook,
-            deliveryId,
-            idempotencyKey,
-            error,
-            'webhook_dispatch_capacity_exceeded',
-            ctx,
-          );
-          return;
-        }
-        if (error instanceof Error && error.message === 'ConcurrencyLimiter closed') {
-          // Rejected by the shutdown drain before dispatching — record it like any other
-          // undelivered delivery, and track the write so onModuleDestroy can await it (the
-          // limiter slot bookkeeping no longer covers this task). Its outbox row stays 'pending':
-          // the POST never happened, so the next start's sweep is what finally delivers the event.
-          const record = this.recordUndelivered(
-            webhook,
-            deliveryId,
-            idempotencyKey,
-            error,
-            'webhook_dispatch_shutdown',
-            ctx,
-          );
-          this.pendingBookkeeping.add(record);
-          try {
-            await record;
-          } finally {
-            this.pendingBookkeeping.delete(record);
-          }
-          return;
-        }
-        throw error;
-      });
+        return;
+      }
+      throw error;
+    });
   }
 
   /**
@@ -735,87 +869,113 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @deprecated Use job queue dispatch instead. This is kept for fallback.
-   * `body` is the pre-serialized payload from preflight — the exact bytes the size gate checked and
-   * (when a secret is set) the signature covers — so it is never re-serialized here.
+   * Direct delivery with in-process retries, up to `webhook.retryCount` attempts: the path every
+   * delivery takes when the queue is disabled (the default), and the fallback when an enqueue fails.
+   * `body` is the pre-serialized payload from preflight, the exact bytes the size gate checked, so it
+   * is never re-serialized here.
+   *
+   * Like a queued job, every retry re-reads the webhook row: a webhook removed, disabled or
+   * unsubscribed since the dispatch gets nothing more and no failure row (resolves false), and a
+   * changed url, secret or header map applies from the next attempt. Retries back off exponentially
+   * (retryDelay, then twice that, and so on), the schedule BullMQ applies to a queued job.
    */
   private async deliverWebhook(
     webhook: Webhook,
     payload: WebhookPayload,
-    headers: Record<string, string>,
     body: string,
-    attempt = 1,
-  ): Promise<void> {
-    // Update retry count header
-    headers['X-OpenWA-Retry-Count'] = String(attempt - 1);
-
-    // Add signature if secret is configured and not already present
-    if (webhook.secret && !headers['X-OpenWA-Signature']) {
-      headers['X-OpenWA-Signature'] = this.generateSignature(body, webhook.secret);
-    }
-
-    try {
-      await postWebhookPayload(webhook.url, body, headers, this.configService.get<number>('webhook.timeout', 10000));
-
-      // The receiver already answered 2xx — the delivery SUCCEEDED. A bookkeeping failure here (e.g.
-      // the lastTriggeredAt update on a flaky DB) must not reach the catch below: it would retry an
-      // already-delivered webhook (duplicate POST) and, on the last attempt, file a false dead-letter
-      // row. Log it and keep the success outcome.
+    yieldSlot: <R>(fn: () => Promise<R>) => Promise<R> = fn => fn(),
+  ): Promise<boolean> {
+    const delay = this.configService.get<number>('webhook.retryDelay', 5000);
+    let current = webhook;
+    for (let attempt = 1; ; attempt++) {
       try {
-        await this.webhookRepository.update(webhook.id, {
-          lastTriggeredAt: new Date(),
-        });
-      } catch (bookkeepingError) {
-        this.logger.error(
-          `Webhook delivered to ${webhook.id} but lastTriggeredAt update failed`,
-          bookkeepingError instanceof Error ? bookkeepingError.message : String(bookkeepingError),
-          { webhookId: webhook.id, deliveryId: payload.deliveryId, action: 'webhook_bookkeeping_failed' },
+        if (attempt > 1) {
+          // Inside the try: a read error counts as a failed attempt, as it does for a queued job.
+          const row = await this.webhookRepository.findOne({ where: { id: webhook.id } });
+          if (!isDeliverableWebhook(row, payload.event)) {
+            this.logger.warn('Skipping webhook retry: webhook removed, disabled or unsubscribed', {
+              webhookId: webhook.id,
+              event: payload.event,
+              deliveryId: payload.deliveryId,
+              idempotencyKey: payload.idempotencyKey,
+              action: 'webhook_skipped_stale',
+            });
+            this.failingWebhooks.delete(webhook.id);
+            return false;
+          }
+          current = row;
+        }
+        const headers = buildDeliveryHeaders(
+          current,
+          payload.event,
+          payload.idempotencyKey,
+          payload.deliveryId,
+          body,
+          attempt - 1,
         );
-      }
+        await postWebhookPayload(current.url, body, headers, this.configService.get<number>('webhook.timeout', 10000));
+        this.failingWebhooks.delete(webhook.id);
 
-      this.logger.debug(`Webhook delivered to ${webhook.id}`, {
-        webhookId: webhook.id,
-        deliveryId: payload.deliveryId,
-        action: 'webhook_delivered',
-      });
-    } catch (error) {
-      this.logger.error(`Webhook delivery failed for ${webhook.id}`, String(error), {
-        webhookId: webhook.id,
-        attempt,
-        deliveryId: payload.deliveryId,
-        action: 'webhook_delivery_failed',
-      });
+        // The receiver already answered 2xx — the delivery SUCCEEDED. A bookkeeping failure here (e.g.
+        // the lastTriggeredAt update on a flaky DB) must not reach the catch below: it would retry an
+        // already-delivered webhook (duplicate POST) and, on the last attempt, file a false dead-letter
+        // row. Log it and keep the success outcome.
+        try {
+          await this.webhookRepository.update(webhook.id, {
+            lastTriggeredAt: new Date(),
+          });
+        } catch (bookkeepingError) {
+          this.logger.error(
+            `Webhook delivered to ${webhook.id} but lastTriggeredAt update failed`,
+            bookkeepingError instanceof Error ? bookkeepingError.message : String(bookkeepingError),
+            { webhookId: webhook.id, deliveryId: payload.deliveryId, action: 'webhook_bookkeeping_failed' },
+          );
+        }
+        // A delivered event must not stay listed as lost: a replay of a shed, refused or failed
+        // dispatch, or a re-emitted event, reuses the key an earlier failure row was filed under.
+        await clearDeliveryFailureRows(this.failureRepository, this.logger, webhook.id, payload.idempotencyKey);
 
-      if (attempt < webhook.retryCount) {
-        const delay = this.configService.get<number>('webhook.retryDelay', 5000);
-        await setTimeout(delay * attempt);
-        return this.deliverWebhook(webhook, payload, headers, body, attempt + 1);
+        this.logger.debug(`Webhook delivered to ${webhook.id}`, {
+          webhookId: webhook.id,
+          deliveryId: payload.deliveryId,
+          action: 'webhook_delivered',
+        });
+        return true;
+      } catch (error) {
+        this.failingWebhooks.add(webhook.id);
+        this.logger.error(`Webhook delivery failed for ${webhook.id}`, String(error), {
+          webhookId: webhook.id,
+          attempt,
+          deliveryId: payload.deliveryId,
+          action: 'webhook_delivery_failed',
+        });
+
+        if (attempt < current.retryCount) {
+          // Without the dispatch slot: a backoff sends nothing, and holding the slot through it let
+          // a few failing receivers stall every other delivery. Taking it back throws once shutdown
+          // closed the limiter, which skips the terminal record below: the event was not given up.
+          await yieldSlot(() => setTimeout(delay * 2 ** (attempt - 1)));
+          continue;
+        }
+        // All direct-path retries exhausted — persist a durable failure record before giving up, mirroring
+        // the queued processor's final-attempt path so the queue-disabled path isn't a blind spot.
+        // The recorder writes this row first and only then removes an attempts-0 row of the same
+        // delivery (a shed or refused dispatch), so a restart at any point keeps a record.
+        const recorded = await recordTerminalFailure(this.failureRepository, this.logger, {
+          webhookId: webhook.id,
+          sessionId: payload.sessionId,
+          event: payload.event,
+          url: current.url,
+          idempotencyKey: payload.idempotencyKey,
+          deliveryId: payload.deliveryId,
+          attempts: attempt,
+          error,
+        });
+        if (recorded) {
+          incrementWebhookDeliveryFailures();
+        }
+        throw error;
       }
-      // All direct-path retries exhausted — persist a durable failure record before giving up, mirroring
-      // the queued processor's final-attempt path so the queue-disabled path isn't a blind spot.
-      const recorded = await recordTerminalFailure(this.failureRepository, this.logger, {
-        webhookId: webhook.id,
-        sessionId: payload.sessionId,
-        event: payload.event,
-        url: webhook.url,
-        idempotencyKey: payload.idempotencyKey,
-        deliveryId: payload.deliveryId,
-        attempts: attempt,
-        error,
-      });
-      if (recorded) {
-        incrementWebhookDeliveryFailures();
-      }
-      throw error;
     }
-  }
-
-  /** Shared with WebhookService.test(), which must probe with headers identical to a real delivery's. */
-  sanitizeCustomHeaders(custom: Record<string, string> | null | undefined): Record<string, string> {
-    return sanitizeCustomHeaders(custom);
-  }
-
-  generateSignature(payload: string, secret: string): string {
-    return generateSignature(payload, secret);
   }
 }

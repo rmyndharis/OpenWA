@@ -206,7 +206,7 @@ export class WwebjsChannels {
     if (!ok) {
       throw new EngineRefusedError(`Failed to unsubscribe from channel ${channelId}`);
     }
-    this.host.logger.log(`Unsubscribed from channel: ${channelId}`);
+    this.host.logger.debug('Unsubscribed from channel', { channelId });
   }
 
   async getChannelMessages(channelId: string, limit: number = 50): Promise<ChannelMessage[]> {

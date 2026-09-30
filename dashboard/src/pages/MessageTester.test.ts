@@ -465,6 +465,135 @@ test('a progress poll that answers after Cancel does not undo the cancel', async
   }
 });
 
+// Sends one bulk batch 'b1' with its 2 s progress poll run by hand: `poll()` runs one tick inside act
+// (`tick()` runs it bare, for a poll left in flight), `stopped()` says whether the poll's timer was
+// cleared, and the progress route answers `answer()`.
+async function withManualBatchPoll(
+  answer: () => Promise<Response>,
+  body: (h: {
+    container: HTMLElement;
+    poll: () => Promise<void>;
+    tick: () => Promise<void>;
+    stopped: () => boolean;
+    badge: () => string | null | undefined;
+    error: () => string | null | undefined;
+  }) => Promise<void>,
+): Promise<void> {
+  globalThis.fetch = ((input: RequestInfo | URL): Promise<Response> => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (url.endsWith('/sessions')) {
+      return Promise.resolve(jsonResponse([{ id: 's1', name: 'Main', status: 'ready', phone: '15550000000' }]));
+    }
+    if (url.endsWith('/messages/send-bulk')) {
+      return Promise.resolve(jsonResponse({ batchId: 'b1', status: 'pending', totalMessages: 1 }, 202));
+    }
+    if (url.endsWith('/messages/batch/b1/cancel')) {
+      return Promise.resolve(
+        jsonResponse({
+          batchId: 'b1',
+          status: 'cancelled',
+          progress: { total: 1, sent: 0, failed: 0, pending: 0, cancelled: 1 },
+          results: [],
+        }),
+      );
+    }
+    if (url.endsWith('/messages/batch/b1')) return answer();
+    return Promise.resolve(jsonResponse([]));
+  }) as typeof fetch;
+
+  const polls: Array<() => Promise<void>> = [];
+  const pollTimers: ReturnType<typeof setInterval>[] = [];
+  const cleared: unknown[] = [];
+  const timers: ReturnType<typeof setInterval>[] = [];
+  const realSetInterval = globalThis.setInterval;
+  const realClearInterval = globalThis.clearInterval;
+  globalThis.setInterval = ((handler: () => Promise<void>, ms?: number) => {
+    const id = ms === 2000 ? realSetInterval(() => {}, 2 ** 30) : realSetInterval(handler, ms);
+    if (ms === 2000) {
+      polls.push(handler);
+      pollTimers.push(id);
+    }
+    timers.push(id);
+    return id;
+  }) as typeof setInterval;
+  globalThis.clearInterval = ((id: ReturnType<typeof setInterval>) => {
+    cleared.push(id);
+    realClearInterval(id);
+  }) as typeof clearInterval;
+  try {
+    const container = await renderBulkAsWriter();
+    type(container, '#mt-11', '15550000001');
+    rtl.fireEvent.change(rtl.screen.getByPlaceholderText('Enter your message here...'), { target: { value: 'hi' } });
+    await rtl.waitFor(() => assert.equal(sendButton().disabled, false));
+    rtl.fireEvent.click(sendButton());
+    await rtl.screen.findByRole('button', { name: 'Cancel Batch' });
+    await body({
+      container,
+      poll: () =>
+        rtl.act(async () => {
+          await polls[0]();
+        }),
+      tick: () => polls[0](),
+      stopped: () => cleared.includes(pollTimers[0]),
+      badge: () => container.querySelector('.batch-badge')?.textContent,
+      error: () => container.querySelector('.batch-error')?.textContent,
+    });
+  } finally {
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    timers.forEach(id => realClearInterval(id));
+  }
+}
+
+for (const status of [404, 403]) {
+  test(`a progress poll answered ${status} stops polling and shows the error`, async () => {
+    const answer = () =>
+      Promise.resolve(jsonResponse({ statusCode: status, message: `Batch 'b1' not found`, error: 'x' }, status));
+    await withManualBatchPoll(answer, async ({ poll, stopped, badge, error }) => {
+      await poll();
+      assert.equal(error(), `Batch 'b1' not found`);
+      assert.ok(stopped(), `a ${status} kept the progress poll running`);
+      assert.equal(badge(), 'Pending', 'the last known status was dropped');
+    });
+  });
+}
+
+test('a progress poll answered 503 keeps polling', async () => {
+  const progress = { total: 1, sent: 0, failed: 0, pending: 1, cancelled: 0 };
+  const answers = [
+    () => Promise.resolve(new Response('bad gateway', { status: 503 })),
+    () => Promise.resolve(jsonResponse({ batchId: 'b1', status: 'processing', progress, results: [] })),
+  ];
+  await withManualBatchPoll(
+    () => answers.shift()!(),
+    async ({ poll, stopped, badge, error }) => {
+      await poll();
+      assert.equal(error(), undefined);
+      assert.ok(!stopped(), 'a transient 503 stopped the progress poll');
+      await poll();
+      assert.equal(badge(), 'Processing');
+    },
+  );
+});
+
+test('a 404 from a poll that answers after Cancel shows no error', async () => {
+  let answerPoll: (response: Response) => void = () => {};
+  const answer = () =>
+    new Promise<Response>(resolve => {
+      answerPoll = resolve;
+    });
+  await withManualBatchPoll(answer, async ({ tick, badge, error }) => {
+    const pending = tick();
+    rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Cancel Batch' }));
+    await rtl.waitFor(() => assert.equal(badge(), 'Cancelled'));
+    await rtl.act(async () => {
+      answerPoll(jsonResponse({ statusCode: 404, message: `Batch 'b1' not found`, error: 'Not Found' }, 404));
+      await pending;
+    });
+    assert.equal(error(), undefined, 'a poll the cancel had already stopped raised an error');
+  });
+});
+
 test('an inline file too large for the recipient count keeps Send disabled', async () => {
   stubGateway();
   const container = await renderBulkAsWriter();

@@ -14,7 +14,9 @@ const CONDITIONS_DESCRIPTION =
   'Match conditions in the webhook filter format (message family: sender, recipient, chatId, body, ' +
   'type, isGroup, kind, fromMe, hasMedia, mentions). All conditions must match (AND). Omitted or ' +
   'empty means the rule matches every inbound message except channel, broadcast-list and status ' +
-  'messages, which a rule answers only when it has a `kind` condition that matches them.';
+  'messages, which a rule answers only when it has a `kind` condition that matches them. On Baileys ' +
+  "a message received through a contact's broadcast list is filed under the sender's chat (`kind` " +
+  'individual), so it matches.';
 
 const COOLDOWN_DESCRIPTION =
   'Quiet period per chat, in seconds: after the rule replies in a chat it stays silent there for ' +

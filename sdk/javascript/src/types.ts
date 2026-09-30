@@ -917,6 +917,19 @@ export type WebhookEvent =
   | 'status.received'
   | '*';
 
+/**
+ * The JSON body of a webhook delivery (docs/06 section 6.6). `event` is `'test'` for a delivery
+ * sent by the test endpoint. Verify the raw body with `verifyWebhookSignature` before parsing it.
+ */
+export interface WebhookDelivery<TData = Record<string, unknown>> {
+  event: Exclude<WebhookEvent, '*'> | 'test';
+  timestamp: string;
+  sessionId: string;
+  idempotencyKey: string;
+  deliveryId: string;
+  data: TData;
+}
+
 export interface WebhookFilterCondition {
   field: string;
   operator: 'contains' | 'equals' | 'is' | 'isNot';

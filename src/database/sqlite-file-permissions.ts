@@ -1,5 +1,6 @@
 import { chmodSync, existsSync } from 'fs';
-import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, OnApplicationBootstrap } from '@nestjs/common';
+import { createLogger } from '../common/services/logger.service';
 import { ConfigService } from '@nestjs/config';
 
 // better-sqlite3 creates its database files with 0666 & umask (0644 under the usual 022), so the
@@ -44,7 +45,7 @@ export function tightenSqliteFilePermissions(paths: string[], warn: (message: st
  */
 @Injectable()
 export class SqlitePermissionsBoot implements OnApplicationBootstrap {
-  private readonly logger = new Logger('SqlitePermissions');
+  private readonly logger = createLogger('SqlitePermissions');
 
   constructor(private readonly config: ConfigService) {}
 

@@ -16,15 +16,15 @@ import {
 import { PageHeader } from '../components/PageHeader';
 import './Dashboard.css';
 
-// recharts is heavy (~150kB gzip); load the analytics section on demand so it never bloats the
-// main/login bundle and only ships when the dashboard actually renders.
+// recharts is heavy (~116 kB gzip); load the analytics section on demand so it never bloats the
+// main/login bundle, and only for an admin key: /stats/messages refuses every other role.
 const DashboardCharts = lazy(() => import('../components/DashboardCharts').then(m => ({ default: m.DashboardCharts })));
 
 export function Dashboard() {
   const { t } = useTranslation();
   useDocumentTitle(t('dashboard.title'));
   const navigate = useNavigate();
-  const { canWrite } = useRole();
+  const { canWrite, isAdmin } = useRole();
   const toast = useToast();
   const {
     data: sessions = [],
@@ -136,9 +136,11 @@ export function Dashboard() {
         ))}
       </div>
 
-      <Suspense fallback={null}>
-        <DashboardCharts />
-      </Suspense>
+      {isAdmin && (
+        <Suspense fallback={null}>
+          <DashboardCharts />
+        </Suspense>
+      )}
 
       <section className="sessions-section">
         <div className="section-header">

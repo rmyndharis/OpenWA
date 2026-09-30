@@ -22,5 +22,7 @@ public enum SessionStatus {
     @SerializedName("action_required")
     ACTION_REQUIRED,
     @SerializedName("failed")
-    FAILED
+    FAILED,
+    /** Decoded when the gateway sends a value newer than this SDK; not a wire value itself. */
+    UNKNOWN
 }

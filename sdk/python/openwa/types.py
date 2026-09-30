@@ -937,6 +937,21 @@ class WebhookTestResult(TypedDict, total=False):
     error: str
 
 
+class WebhookDelivery(TypedDict):
+    """The JSON body of a webhook delivery (docs/06 section 6.6).
+
+    ``event`` is ``"test"`` for a delivery sent by the test endpoint. Check the raw body with
+    :func:`openwa.verify_webhook_signature` before parsing it.
+    """
+
+    event: WebhookEvent | Literal["test"]
+    timestamp: str
+    sessionId: str
+    idempotencyKey: str
+    deliveryId: str
+    data: dict[str, Any]
+
+
 class WebhookDeliveryFailure(TypedDict):
     """A webhook delivery abandoned after every retry, as listed by the delivery-failure log."""
 

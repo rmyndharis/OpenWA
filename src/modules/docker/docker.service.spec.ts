@@ -8,6 +8,11 @@ jest.mock('dockerode');
 // onModuleInit/isDockerAvailable tests steer the daemon by replacing its implementation.
 const DockerMock = Docker as unknown as jest.Mock;
 
+/** A daemon with no local copy of any image: inspect answers 404, so createService pulls. */
+const imageNotCached = () => ({
+  inspect: jest.fn().mockRejectedValue(Object.assign(new Error('no such image'), { statusCode: 404 })),
+});
+
 describe('DockerService.getRunningBuiltinServices', () => {
   const container = (name: string, service: string, state: string) => ({
     id: name,
@@ -186,6 +191,7 @@ describe('DockerService.onModuleInit', () => {
   const happyDocker = () => ({
     ping: jest.fn().mockResolvedValue(undefined),
     listContainers: jest.fn().mockResolvedValue([]),
+    getImage: imageNotCached,
     pull: (_image: string, cb: (err: Error | null, stream: null) => void) => cb(null, null),
     modem: { followProgress: (_stream: null, cb: (err: Error | null) => void) => cb(null) },
     createVolume: jest.fn().mockResolvedValue({}),
@@ -455,6 +461,7 @@ describe('DockerService.createService', () => {
   it('pulls, creates the volume and container, and starts it (a pre-existing volume is fine)', async () => {
     const start = jest.fn().mockResolvedValue(undefined);
     const docker = {
+      getImage: imageNotCached,
       pull: (_image: string, cb: (err: Error | null, stream: null) => void) => cb(null, null),
       modem: { followProgress: (_stream: null, cb: (err: Error | null) => void) => cb(null) },
       // EEXIST races are normal — the volume may survive from an earlier run.
@@ -475,6 +482,7 @@ describe('DockerService.createService', () => {
 
   it('returns false when the daemon rejects the image pull', async () => {
     const docker = {
+      getImage: imageNotCached,
       pull: (_image: string, cb: (err: Error | null, stream: null) => void) =>
         cb(new Error('pull access denied'), null),
     };
@@ -482,6 +490,42 @@ describe('DockerService.createService', () => {
     jest.spyOn(service, 'getContainerByService').mockResolvedValue(null);
 
     await expect(service.createService('redis')).resolves.toBe(false);
+  });
+
+  it('creates the container from a cached image without pulling it', async () => {
+    const start = jest.fn().mockResolvedValue(undefined);
+    const getImage = jest.fn(() => ({ inspect: jest.fn().mockResolvedValue({ Id: 'sha256:abc' }) }));
+    const docker = {
+      getImage,
+      pull: jest.fn(),
+      createVolume: jest.fn().mockResolvedValue({}),
+      createContainer: jest.fn().mockResolvedValue({ start }),
+    };
+    const service = withDocker(docker);
+    jest.spyOn(service, 'getContainerByService').mockResolvedValue(null);
+
+    await expect(service.createService('redis')).resolves.toBe(true);
+
+    expect(getImage).toHaveBeenCalledWith('redis:7-alpine');
+    expect(docker.pull).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it('pulls the pinned image once when it is not on the host', async () => {
+    const pull = jest.fn((_image: string, cb: (err: Error | null, stream: null) => void) => cb(null, null));
+    const docker = {
+      getImage: imageNotCached,
+      pull,
+      modem: { followProgress: (_stream: null, cb: (err: Error | null) => void) => cb(null) },
+      createVolume: jest.fn().mockResolvedValue({}),
+      createContainer: jest.fn().mockResolvedValue({ start: jest.fn().mockResolvedValue(undefined) }),
+    };
+    const service = withDocker(docker);
+    jest.spyOn(service, 'getContainerByService').mockResolvedValue(null);
+
+    await expect(service.createService('redis')).resolves.toBe(true);
+    expect(pull).toHaveBeenCalledTimes(1);
+    expect(pull).toHaveBeenCalledWith('redis:7-alpine', expect.any(Function));
   });
 });
 
@@ -534,6 +578,98 @@ describe('DockerService.startService', () => {
     jest.spyOn(service, 'getContainerByService').mockResolvedValue(container as never);
 
     await expect(service.startService('cache')).resolves.toBe(false);
+  });
+});
+
+describe('DockerService image drift warning', () => {
+  const OLD_IMAGE = 'minio/minio:RELEASE.2024-01-01T00-00-00Z';
+  const pinOf = (service: DockerService, profile: string): string =>
+    (service as unknown as { getContainerSpec(p: string): { image: string } }).getContainerSpec(profile).image;
+  const retained = (running: boolean, image?: string) => ({
+    inspect: jest.fn().mockResolvedValue({
+      Name: '/openwa-minio',
+      State: { Running: running },
+      ...(image ? { Config: { Image: image } } : {}),
+    }),
+    start: jest.fn().mockResolvedValue(undefined),
+  });
+  const setup = (container: unknown) => {
+    const service = new DockerService();
+    Object.assign(service as unknown as Record<string, unknown>, { docker: {}, isAvailable: true });
+    jest.spyOn(service, 'getContainerByService').mockResolvedValue(container as never);
+    const warn = jest.spyOn((service as unknown as { logger: { warn: () => void } }).logger, 'warn');
+    warn.mockImplementation(() => undefined);
+    return { service, warn };
+  };
+
+  it('warns when a stopped retained container runs an older image, and still starts it', async () => {
+    const container = retained(false, OLD_IMAGE);
+    const { service, warn } = setup(container);
+
+    await expect(service.startService('storage')).resolves.toBe(true);
+
+    expect(container.start).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = String((warn.mock.calls[0] as unknown[])[0]);
+    expect(message).toContain('openwa-minio');
+    expect(message).toContain(OLD_IMAGE);
+    expect(message).toContain(pinOf(service, 'minio'));
+    expect(message).toContain('docker rm -f openwa-minio');
+    expect(message).not.toContain('data migration');
+  });
+
+  it('adds the data-migration caveat for a drifted PostgreSQL container', async () => {
+    const container = {
+      inspect: jest.fn().mockResolvedValue({
+        Name: '/openwa-postgres',
+        State: { Running: false },
+        Config: { Image: 'postgres:15-alpine' },
+      }),
+      start: jest.fn().mockResolvedValue(undefined),
+    };
+    const { service, warn } = setup(container);
+
+    await expect(service.startService('database')).resolves.toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = String((warn.mock.calls[0] as unknown[])[0]);
+    expect(message).toContain('docker rm -f openwa-postgres');
+    expect(message).toContain('major version change needs a data migration');
+  });
+
+  it('warns for a running drifted container without starting it', async () => {
+    const container = retained(true, OLD_IMAGE);
+    const { service, warn } = setup(container);
+
+    await expect(service.startService('storage')).resolves.toBe(true);
+    expect(container.start).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays quiet when the container runs the pinned image or reports no image', async () => {
+    const pinned = setup(null);
+    const onPin = retained(false, pinOf(pinned.service, 'minio'));
+    jest.spyOn(pinned.service, 'getContainerByService').mockResolvedValue(onPin as never);
+    await expect(pinned.service.startService('storage')).resolves.toBe(true);
+    expect(pinned.warn).not.toHaveBeenCalled();
+
+    const bare = setup(retained(false));
+    await expect(bare.service.startService('storage')).resolves.toBe(true);
+    expect(bare.warn).not.toHaveBeenCalled();
+  });
+
+  it('warns on the createService name-fallback branch too', async () => {
+    const { service, warn } = setup(retained(false, OLD_IMAGE));
+
+    await expect(service.createService('minio')).resolves.toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(OLD_IMAGE));
+  });
+
+  it('does not turn a drifted retained container into an orchestration failure', async () => {
+    const { service } = setup(retained(false, OLD_IMAGE));
+
+    const result = await service.orchestrateProfiles(['minio']);
+    expect(result.success).toBe(true);
+    expect(result.containersStarted).toEqual(['minio']);
   });
 });
 

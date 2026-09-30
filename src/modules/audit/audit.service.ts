@@ -10,6 +10,18 @@ import { resolveSessionScope } from '../../common/security/session-scope';
 /** Upper bound on a single audit-log page, so a large `limit` can't load the whole table at once. */
 export const MAX_AUDIT_PAGE_SIZE = 200;
 
+/**
+ * Caller-supplied text is cut to these lengths before it is stored. The first three match the
+ * entity's varchar lengths, which SQLite does not enforce; errorMessage is a text column with no
+ * declared bound. Without the clamp one row could carry a request path of many kilobytes.
+ */
+const MAX_USER_AGENT_LENGTH = 500;
+const MAX_METHOD_LENGTH = 10;
+const MAX_PATH_LENGTH = 500;
+const MAX_ERROR_MESSAGE_LENGTH = 1000;
+
+const clampText = (value: string | undefined, max: number): string | null => (value ? value.slice(0, max) : null);
+
 interface AuditContext {
   apiKey?: ApiKey;
   sessionId?: string;
@@ -101,12 +113,12 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
       sessionId: context.sessionId || null,
       sessionName: context.sessionName || null,
       ipAddress: ipAddress || null,
-      userAgent: context.userAgent || null,
-      method: context.method || null,
-      path: context.path || null,
+      userAgent: clampText(context.userAgent, MAX_USER_AGENT_LENGTH),
+      method: clampText(context.method, MAX_METHOD_LENGTH),
+      path: clampText(context.path, MAX_PATH_LENGTH),
       statusCode: context.statusCode || null,
       metadata,
-      errorMessage: context.errorMessage || null,
+      errorMessage: clampText(context.errorMessage, MAX_ERROR_MESSAGE_LENGTH),
     });
 
     // Audit logging is best-effort: a failed insert must never turn a succeeded operation into a 500

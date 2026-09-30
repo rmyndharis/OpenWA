@@ -22,13 +22,15 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  # Everything that installs third-party code (pip, the test dependencies, the build backend that
+  # `python -m build` fetches) runs here, in a job that cannot mint a publish credential. Those
+  # packages resolve to whatever is newest at tag time, so they must never share a job with
+  # id-token: write. This is PyPA's documented layout for trusted publishing.
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
-      # Mints the OIDC token PyPI exchanges for its short-lived upload credential. Without this the
-      # publish has no credential at all — it is the whole mechanism.
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -88,6 +90,29 @@ jobs:
         run: |
           python -m pip install --upgrade build
           python -m build
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-sdk-dist
+          path: sdk/python/dist/
+          if-no-files-found: error
+
+  publish:
+    # Runs only after the guards, the tests and the build above all passed.
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # Mints the OIDC token PyPI exchanges for its short-lived upload credential. Without this the
+      # publish has no credential at all. No checkout and no install: this job only uploads the
+      # files the build job produced and tested.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: python-sdk-dist
+          path: sdk/python/dist/
 
       - name: Publish to PyPI (trusted publishing)
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

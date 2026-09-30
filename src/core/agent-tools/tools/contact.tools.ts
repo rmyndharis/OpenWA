@@ -33,8 +33,9 @@ export function contactTools(contact: ContactService): AnyToolDescriptor[] {
     defineTool({
       name: 'ContactCheckNumber',
       description:
-        'Check whether a phone number is registered on WhatsApp. Returns exists flag and the WhatsApp JID if found.',
+        'Check whether a phone number is registered on WhatsApp. Returns exists flag and the WhatsApp JID if found. Requires OPERATOR role.',
       tier: 'read',
+      requiredRole: ApiKeyRole.OPERATOR,
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,

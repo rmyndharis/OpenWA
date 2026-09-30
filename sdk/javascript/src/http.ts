@@ -44,14 +44,25 @@ export interface ClientConfig {
   fetch?: FetchLike;
 }
 
+/** Stands in for an empty or dot id; encodeURIComponent output never contains it. */
+const BLANK_SEGMENT = '\u0000';
+
 /**
  * Percent-encode a single path segment (e.g. a chat/message id) so a value
  * containing `/`, `#`, `?` or whitespace can't break out of its path position.
  * WhatsApp-id characters that are already path-safe (`@`, `:`, `+`) are kept
  * readable.
+ *
+ * An empty, `.` or `..` segment becomes {@link BLANK_SEGMENT}, which `send()`
+ * rejects: fetch resolves dot segments before sending, and an empty one means
+ * a required id was blank, so either would reach the parent resource instead
+ * of the intended one. Marking it here rather than throwing keeps the refusal
+ * a rejection of the returned promise, since resource methods are not async.
  */
 export function encodeSegment(segment: string | number): string {
-  return encodeURIComponent(String(segment)).replace(/%40/g, '@').replace(/%3A/g, ':').replace(/%2B/g, '+');
+  const text = String(segment);
+  if (text === '' || text === '.' || text === '..') return BLANK_SEGMENT;
+  return encodeURIComponent(text).replace(/%40/g, '@').replace(/%3A/g, ':').replace(/%2B/g, '+');
 }
 
 /** Build a URL with serialized query params, omitting `undefined`/`null` values. */
@@ -139,7 +150,25 @@ async function send<T>(
   options: RequestOptions,
   consume: (res: Response) => Promise<T>,
 ): Promise<T> {
+  if (options.path.includes(BLANK_SEGMENT)) {
+    throw new TypeError(`OpenWA: empty or dot path segment in ${JSON.stringify(options.path)}`);
+  }
   const url = buildUrl(config.baseUrl, options.path, options.query);
+  // fetch resolves `.` and `..` segments before sending, so such a segment would reach the parent
+  // resource instead of the intended one. Mirror the URL parser: it drops tab and newline, reads `\`
+  // as `/`, treats %2e as a dot, and trims trailing C0 controls and spaces, which end the path only
+  // when no query or fragment follows it. Empty segments, such as a trailing slash, are sent as
+  // written; a blank id is refused above.
+  const tail = url.slice(config.baseUrl.replace(/\/$/, '').length);
+  const rawPath = tail.split(/[?#]/, 1)[0];
+  let pathOnly = rawPath.replace(/[\t\n\r]/g, '');
+  if (rawPath.length === tail.length) pathOnly = pathOnly.replace(/[\x00-\x20]+$/, '');
+  for (const segment of pathOnly.split(/[/\\]/).slice(1)) {
+    const dots = segment.replace(/%2e/gi, '.');
+    if (dots === '.' || dots === '..') {
+      throw new TypeError(`OpenWA: dot path segment in ${JSON.stringify(options.path)}`);
+    }
+  }
   const timeoutMs = toTimeoutMs(options.timeoutMs ?? config.timeoutMs);
 
   const controller = new AbortController();
@@ -180,7 +209,7 @@ async function send<T>(
     if (!res.ok) {
       const context = `${options.method} ${options.path}`;
       const apiError = await OpenWAApiError.fromResponse(res, context);
-      throw classifyApiError(apiError.status, apiError.message, apiError.body, apiError.errorKind);
+      throw classifyApiError(apiError.status, apiError.message, apiError.body, apiError.errorKind, apiError.headers);
     }
 
     return await consume(res);

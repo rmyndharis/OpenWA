@@ -11,8 +11,9 @@
 //   @ChatScoped('fenced')    the handler names a chat the guard inspects — a `:chatId` / `:groupId` /
 //                            `:contactId` path param, or a REQUIRED guard-read body field
 //                            (`chatId` / `fromChatId` / `toChatId` / `messages[]`). An optional
-//                            `?chatId=` does NOT qualify: the guard would have nothing to check when
-//                            it is omitted.
+//                            `?chatId=` qualifies only when the handler also calls
+//                            `this.chatScope.requireChat(`, which refuses a restricted key that omits
+//                            it; on its own the guard would have nothing to check.
 //   @ChatScoped('filtered')  the handler lists chats and returns through ChatScopeService.filter.
 //   @ChatScoped('agnostic')  the handler cannot reach a chat at all. This is the one category the
 //                            spec cannot derive (a webhook with `events: ['*']` also names no chat),
@@ -77,8 +78,15 @@ export const MUST_STAY_UNMARKED: ReadonlyArray<readonly [string, string]> = [
 
 /** Handlers that must stay marked with the given category; a lost mark silently becomes a 403. */
 export const MUST_STAY_MARKED: ReadonlyArray<readonly [string, string, string]> = [
-  // The only chat-read route a restricted key has on whatsapp-web.js.
+  // Live history, whatsapp-web.js only.
   ['message.controller.ts', 'getChatHistory', 'fenced'],
+  // Stored history on both engines, for the chat named in ?chatId=.
+  ['message.controller.ts', 'getMessages', 'fenced'],
+  // List routes a restricted key may use, each filtered to its chats before paging.
+  ['session.controller.ts', 'getChats', 'filtered'],
+  ['session.controller.ts', 'getGroups', 'filtered'],
+  ['contact.controller.ts', 'findAll', 'filtered'],
+  ['label.controller.ts', 'getChatsByLabel', 'filtered'],
 ];
 
 const REQUIRED_GUARD_FIELD = new RegExp(`\\b(?:${GUARD_BODY_CHAT_FIELDS.join('|')})!\\s*:`);
@@ -168,7 +176,9 @@ export function chatScopeViolations(
     const hasPathChat = new RegExp(`@Param\\(\\s*['"](?:${GUARD_CHAT_ROUTE_PARAMS.join('|')})['"]\\s*\\)`).test(body);
     const bodyDto = /@Body\(\)\s*[A-Za-z0-9_]+\s*:\s*([A-Za-z0-9_]+)/.exec(body)?.[1];
     const hasRequiredBodyChat = bodyDto !== undefined && requiredDtos.has(bodyDto);
-    if (kind === 'fenced' && !(hasPathChat || hasRequiredBodyChat))
+    const hasRequiredQueryChat =
+      /@Query\(\s*['"]chatId['"]\s*\)/.test(body) && /this\.chatScope\.requireChat\(/.test(body);
+    if (kind === 'fenced' && !(hasPathChat || hasRequiredBodyChat || hasRequiredQueryChat))
       offenders.push(`${name} (fenced, no guard-read chat)`);
     else if (kind === 'filtered' && !/chatScope\.filter\(/.test(body)) offenders.push(`${name} (filtered, no filter)`);
     else if (kind === 'agnostic' && !agnosticGrants.some(([f, h]) => f === file && h === name))
@@ -223,6 +233,28 @@ describe('a chat-restricted key can only reach a handler fenced to its allowedCh
   }
 `;
     expect(chatScopeViolations(source, 'x.controller.ts', new Set())).toEqual(['list (fenced, no guard-read chat)']);
+  });
+
+  it("clears a 'fenced' optional query chat only when the handler requires it", () => {
+    const required = `
+  @ChatScoped('fenced')
+  @Get()
+  async list(@Query('chatId') chatId?: string, @CurrentApiKey() apiKey?: ApiKey): Promise<unknown> {
+    this.chatScope.requireChat(apiKey, chatId);
+    return this.svc.list(chatId);
+  }
+`;
+    expect(chatScopeViolations(required, 'x.controller.ts', new Set())).toEqual([]);
+
+    const noQuery = `
+  @ChatScoped('fenced')
+  @Get()
+  async list(@CurrentApiKey() apiKey?: ApiKey): Promise<unknown> {
+    this.chatScope.requireChat(apiKey, undefined);
+    return this.svc.list();
+  }
+`;
+    expect(chatScopeViolations(noQuery, 'x.controller.ts', new Set())).toEqual(['list (fenced, no guard-read chat)']);
   });
 
   it("flags a 'filtered' handler that does not filter and an unlisted 'agnostic'", () => {

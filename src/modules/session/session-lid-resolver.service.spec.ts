@@ -2,6 +2,7 @@ import { SessionLidResolver } from './session-lid-resolver.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import type { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { LidNotMappedError } from '../../common/errors/lid-not-mapped.error';
 
 describe('SessionLidResolver', () => {
   let engines: EngineRegistry;
@@ -53,12 +54,40 @@ describe('SessionLidResolver', () => {
     await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBeNull();
   });
 
-  it('does not cache a transient failure, so the sender resolves once the engine answers', async () => {
-    resolveContactPhone.mockRejectedValueOnce(new Error('Evaluation failed')).mockResolvedValueOnce('628111');
+  describe('a rejected lookup', () => {
+    let now: jest.SpyInstance<number, []>;
+    beforeEach(() => {
+      now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    });
+    afterEach(() => now.mockRestore());
 
-    await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBeNull();
-    await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBe('628111');
-    expect(resolveContactPhone).toHaveBeenCalledTimes(2);
+    it('does not cache a transient failure, so the sender resolves once the engine answers', async () => {
+      resolveContactPhone.mockRejectedValueOnce(new Error('Evaluation failed')).mockResolvedValueOnce('628111');
+
+      await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBeNull();
+      await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBe('628111');
+      expect(resolveContactPhone).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries an unmapped lid once the hold expires', async () => {
+      resolveContactPhone.mockRejectedValueOnce(new LidNotMappedError('111@lid')).mockResolvedValueOnce('628111');
+
+      await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBeNull();
+      now.mockReturnValue(1_000_000 + 60_001);
+      await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBe('628111');
+      expect(resolveContactPhone).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not retry an unmapped lid on every message from the same sender, and writes nothing', async () => {
+      resolveContactPhone.mockRejectedValue(new LidNotMappedError('404@lid'));
+
+      await expect(resolver.resolveSenderPhone('s1', '404@lid')).resolves.toBeNull();
+      now.mockReturnValue(1_000_000 + 59_000);
+      await expect(resolver.resolveSenderPhone('s1', '404@lid')).resolves.toBeNull();
+
+      expect(resolveContactPhone).toHaveBeenCalledTimes(1);
+      expect(remember).not.toHaveBeenCalled();
+    });
   });
 
   it('returns null when the session has no live engine', async () => {

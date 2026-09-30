@@ -1,5 +1,8 @@
 package com.rmyndharis.openwa.errors;
 
+import java.util.List;
+import java.util.Map;
+
 /**
  * 503 Service Unavailable — a transport failure, not a refusal.
  *
@@ -15,5 +18,10 @@ package com.rmyndharis.openwa.errors;
 public class OpenWAServiceUnavailableError extends OpenWAApiError {
     public OpenWAServiceUnavailableError(String message, int status, Object body, String errorKind) {
         super(message, status, body, errorKind);
+    }
+
+    public OpenWAServiceUnavailableError(
+            String message, int status, Object body, String errorKind, Map<String, List<String>> headers) {
+        super(message, status, body, errorKind, headers);
     }
 }

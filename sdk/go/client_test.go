@@ -111,6 +111,54 @@ func TestJIDPathIsReadable(t *testing.T) {
 	}
 }
 
+func TestEmptyAndDotSegmentsRefused(t *testing.T) {
+	var hits int32
+	rt := RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&hits, 1)
+		return &http.Response{StatusCode: 204, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}, Request: req}, nil
+	})
+	c := newTestClient(t, rt)
+	ctx := context.Background()
+
+	refused := map[string]error{
+		`Webhooks.Delete ".."`: c.Webhooks.Delete(ctx, "s1", ".."),
+		`Webhooks.Delete "."`:  c.Webhooks.Delete(ctx, "s1", "."),
+		`Webhooks.Delete ""`:   c.Webhooks.Delete(ctx, "s1", ""),
+		`Do %2E%2e`:            c.Do(ctx, "DELETE", "/api/sessions/s1/labels/%2E%2e", nil, nil, nil),
+		`Do ..`:                c.Do(ctx, "GET", "/api/sessions/s1/..?x=1", nil, nil, nil),
+	}
+	_, err := c.Sessions.Get(ctx, "")
+	refused[`Sessions.Get ""`] = err
+	_, err = c.Messages.Media(ctx, "s1", "..", "m1")
+	refused[`Messages.Media ".."`] = err
+	_, err = c.Status.Media(ctx, "s1", ".")
+	refused[`Status.Media "."`] = err
+	for name, err := range refused {
+		if err == nil || !strings.Contains(err.Error(), "path segment") {
+			t.Errorf("%s: err = %v, want a path segment error", name, err)
+		}
+	}
+	if n := atomic.LoadInt32(&hits); n != 0 {
+		t.Fatalf("%d requests sent, want 0", n)
+	}
+
+	// Dots inside an id, a dot-only query value, and a hand-written trailing or
+	// double slash are not refused.
+	for _, id := range []string{"a.b", "...", "628123@c.us"} {
+		if err := c.Webhooks.Delete(ctx, "s1", id); err != nil {
+			t.Errorf("Webhooks.Delete %q: %v", id, err)
+		}
+	}
+	for _, path := range []string{"/api/sessions/", "/api/sessions//x", "/", "/api/labels/a.b?x=/.."} {
+		if err := c.Do(ctx, "GET", path, nil, nil, nil); err != nil {
+			t.Errorf("Do %q: %v", path, err)
+		}
+	}
+	if n := atomic.LoadInt32(&hits); n != 7 {
+		t.Fatalf("%d requests sent, want 7", n)
+	}
+}
+
 func TestListSessionsQueryName(t *testing.T) {
 	rt := &recordTransport{status: 200, body: `[]`}
 	c := newTestClient(t, rt)
@@ -177,6 +225,53 @@ func TestTypedErrors(t *testing.T) {
 	}
 	if apiErr.StatusCode != 409 || apiErr.Kind != "Conflict" || apiErr.Message != "engine not ready" {
 		t.Fatalf("APIError = %+v", apiErr)
+	}
+}
+
+func TestAPIErrorCodeRetryAfterAndHeader(t *testing.T) {
+	fail := func(status int, body string, header http.Header) *APIError {
+		t.Helper()
+		c := newTestClient(t, &recordTransport{status: status, body: body, header: header})
+		_, err := c.Sessions.List(context.Background(), nil)
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("errors.As *APIError failed for %v", err)
+		}
+		return apiErr
+	}
+
+	throttled := fail(429, `{"statusCode":429,"message":"ThrottlerException: Too Many Requests"}`, http.Header{"Retry-After": {"7"}})
+	if !errors.Is(throttled, ErrRateLimited) || throttled.RetryAfter != 7*time.Second || throttled.Code != "" {
+		t.Fatalf("throttled = %+v", throttled)
+	}
+	if throttled.Header.Get("Retry-After") != "7" {
+		t.Fatalf("Header = %v", throttled.Header)
+	}
+
+	// Send pacing puts its wait in the body; a header must not shorten it.
+	pacing := `{"statusCode":429,"error":"Too Many Requests","message":"Daily send cap reached","code":"SEND_PACING_LIMITED","retryAfterSeconds":34521}`
+	for _, h := range []http.Header{nil, {"Retry-After": {"1"}}} {
+		e := fail(429, pacing, h)
+		if e.Code != "SEND_PACING_LIMITED" || e.RetryAfter != 34521*time.Second {
+			t.Fatalf("pacing with header %v = %+v", h, e)
+		}
+	}
+
+	dated := fail(503, "", http.Header{"Retry-After": {time.Now().Add(2 * time.Second).UTC().Format(http.TimeFormat)}})
+	if dated.RetryAfter <= 0 || dated.RetryAfter > 3*time.Second {
+		t.Fatalf("HTTP-date RetryAfter = %v", dated.RetryAfter)
+	}
+	for _, v := range []string{"soon", "-5"} {
+		if e := fail(503, "", http.Header{"Retry-After": {v}}); e.RetryAfter != 0 {
+			t.Fatalf("Retry-After %q gave %v", v, e.RetryAfter)
+		}
+	}
+
+	if e := fail(502, `{"statusCode":502,"message":"x","code":"SESSION_LOGOUT_INCOMPLETE"}`, nil); e.Code != "SESSION_LOGOUT_INCOMPLETE" {
+		t.Fatalf("Code = %q", e.Code)
+	}
+	if e := fail(500, "oops", nil); e.Code != "" || e.RetryAfter != 0 {
+		t.Fatalf("plain-text error = %+v", e)
 	}
 }
 

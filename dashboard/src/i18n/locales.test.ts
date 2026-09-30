@@ -37,11 +37,18 @@ const SESSION_SCOPE_KEYS = [
   'apiKeys.sessions.all',
   'apiKeys.sessions.empty',
   'apiKeys.sessions.restricted',
-  'apiKeys.sessions.editTitle',
   'apiKeys.sessions.save',
   'apiKeys.sessions.choose',
   'apiKeys.sessions.leaveAll',
-  'apiKeys.actions.editSessions',
+  'apiKeys.actions.edit',
+  'apiKeys.edit.title',
+  'apiKeys.edit.signedIn',
+  'apiKeys.columns.restrictions',
+  'apiKeys.restrictions.ips',
+  'apiKeys.restrictions.chats',
+  'apiKeys.ips.label',
+  'apiKeys.chats.label',
+  'apiKeys.expiry.label',
 ];
 
 const NEW_PLUGIN_KEYS = [
@@ -248,6 +255,18 @@ test('English unlink success/incomplete copy does not claim handset Linked-Devic
   // which is accurate — only the SUCCESS copy must not assert it as observed.
   const incomplete = i18n.t('sessions.unlink.incomplete', { lng: 'en' });
   assert.ok(/incomplete/i.test(incomplete), `incomplete copy lost the "incomplete" framing: "${incomplete}"`);
+});
+
+// The data export drops webhook secrets and headers and strips proxy userinfo, but carries
+// integration instance secrets as-is (src/modules/infra/export-tables.ts). The hint must say which.
+test('English backup hint says which credentials the export leaves out and which it carries', () => {
+  const hint = i18n.t('infrastructure.migration.backupHint', { lng: 'en' });
+  assert.ok(!/contains webhook secrets/i.test(hint), `hint claims webhook secrets are exported: "${hint}"`);
+  assert.ok(/webhook signing secrets[^.]*not included/i.test(hint), `hint lost the webhook omission: "${hint}"`);
+  assert.ok(
+    /integration instance secrets[^.]*included in plaintext/i.test(hint),
+    `hint lost the plaintext note: "${hint}"`,
+  );
 });
 
 test('English start teardown-pending copy is a retryable warning, not an error', () => {

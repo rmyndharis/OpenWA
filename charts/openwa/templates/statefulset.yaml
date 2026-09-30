@@ -28,6 +28,10 @@ spec:
       serviceAccountName: {{ include "openwa.serviceAccountName" . }}
       # The app never calls the Kubernetes API — don't mount a token it can't use.
       automountServiceAccountToken: false
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -48,16 +52,16 @@ spec:
           # connect retry (up to 10 attempts, 3s apart), plugin load and the backfills — so during
           # boot the endpoint is not unhealthy, it is closed, and every probe is a connection
           # refusal. Without a startupProbe the liveness block below governs that window and allows
-          # 30s + 10s x (3-1) = 50s before the kubelet restarts the container, which the connect
-          # retry alone can consume.
+          # 30s + 10s x (6-1) = 80s before the kubelet restarts the container, which the connect
+          # retry plus migrations can consume.
           #
           # Budget here is periodSeconds x (failureThreshold - 1) = 5s x (60-1) = 295s — the same
-          # arithmetic as the 50s above, because the first probe fires at initialDelaySeconds and the
+          # arithmetic as the 80s above, because the first probe fires at initialDelaySeconds and the
           # verdict lands on the Nth consecutive failure, not one period after it. The Kubernetes
           # docs' shorthand (period x threshold) would say 300s; it is one period long, and applying
-          # it to the liveness probe above would give 60s rather than the 50s stated there. Do not
+          # it to the liveness probe above would give 90s rather than the 80s stated there. Do not
           # "correct" this back without changing that one too. The point of either figure is that it
-          # converts "killed at 50s by default" into "killed at a budget we chose" — a large
+          # converts "killed at 80s by default" into "killed at a budget we chose": a large
           # improvement, and not a guarantee for a boot that is genuinely unbounded.
           #
           # initialDelaySeconds is deliberately left at its default of 0: the first probe fires
@@ -68,11 +72,17 @@ spec:
           # the values below keep their meaning for steady state and stop governing boot. (That
           # suspension is documented kubelet behaviour, not something this chart's tests observe —
           # rendering a manifest cannot demonstrate a runtime scheduling rule.)
+          #
+          # timeoutSeconds is explicit on every probe. The kubelet default of 1s is missed by a
+          # CPU-throttled pod (the limit is shared with every Chromium) even on the static /live route,
+          # and by /ready by design: it bounds each database probe at READINESS_PROBE_TIMEOUT_MS
+          # (3000 ms, src/modules/health/health.controller.ts) so it can answer its own 503 first.
           startupProbe:
             httpGet:
               path: /api/health/live
               port: http
             periodSeconds: 5
+            timeoutSeconds: 5
             failureThreshold: 60
           livenessProbe:
             httpGet:
@@ -80,12 +90,15 @@ spec:
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
           readinessProbe:
             httpGet:
               path: /api/health/ready
               port: http
             initialDelaySeconds: 10
             periodSeconds: 5
+            timeoutSeconds: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:

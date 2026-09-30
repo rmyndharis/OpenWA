@@ -1,5 +1,5 @@
-import { Job } from 'bullmq';
-import { Repository } from 'typeorm';
+import { DelayedError, Job } from 'bullmq';
+import { FindOperator, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { WebhookProcessor } from './webhook.processor';
 import { Webhook } from '../../webhook/entities/webhook.entity';
@@ -24,7 +24,8 @@ jest.mock('undici', () => {
 describe('WebhookProcessor', () => {
   let processor: WebhookProcessor;
   let repo: { update: jest.Mock; findOne: jest.Mock };
-  let failureRepo: { insert: jest.Mock; count: jest.Mock };
+  let failureRepo: { insert: jest.Mock; count: jest.Mock; delete: jest.Mock };
+  let failureRows: Array<{ webhookId?: string; idempotencyKey?: string | null; attempts?: number }>;
   let hookManager: { execute: jest.Mock };
   let configService: { get: jest.Mock };
   let mockFetch: jest.Mock;
@@ -46,7 +47,6 @@ describe('WebhookProcessor', () => {
           deliveryId: 'd',
           data: {},
         },
-        headers: { 'Content-Type': 'application/json' },
         attempt: 1,
         maxRetries: 3,
         ...overrides,
@@ -61,18 +61,38 @@ describe('WebhookProcessor', () => {
     };
     // Stateful like the real table: the recorder counts existing rows for the delivery before it
     // inserts, so a constant would leave that guard unexercised here and let a duplicated row pass.
-    const insertedFailures: Array<{ webhookId?: string; idempotencyKey?: string | null }> = [];
+    failureRows = [];
+    const insertedFailures = failureRows;
     failureRepo = {
       insert: jest.fn().mockImplementation((rowToInsert: { webhookId?: string; idempotencyKey?: string | null }) => {
         insertedFailures.push(rowToInsert);
         return Promise.resolve({});
       }),
+      delete: jest
+        .fn()
+        .mockImplementation((where: { webhookId?: string; idempotencyKey?: string; attempts?: number }) => {
+          const keep = failureRows.filter(
+            r =>
+              r.webhookId !== where.webhookId ||
+              r.idempotencyKey !== where.idempotencyKey ||
+              (where.attempts !== undefined && r.attempts !== where.attempts),
+          );
+          const affected = failureRows.length - keep.length;
+          failureRows.splice(0, failureRows.length, ...keep);
+          return Promise.resolve({ affected });
+        }),
       count: jest
         .fn()
-        .mockImplementation((opts: { where: { webhookId?: string; idempotencyKey?: string } }) =>
+        .mockImplementation((opts: { where: { webhookId?: string; idempotencyKey?: string; attempts?: unknown } }) =>
           Promise.resolve(
             insertedFailures.filter(
-              r => r.webhookId === opts.where.webhookId && r.idempotencyKey === opts.where.idempotencyKey,
+              r =>
+                r.webhookId === opts.where.webhookId &&
+                r.idempotencyKey === opts.where.idempotencyKey &&
+                (opts.where.attempts === undefined ||
+                  (opts.where.attempts instanceof FindOperator && opts.where.attempts.type === 'moreThan'
+                    ? ((r as { attempts?: number }).attempts ?? 0) > (opts.where.attempts.value as number)
+                    : (r as { attempts?: number }).attempts === opts.where.attempts)),
             ).length,
           ),
         ),
@@ -165,6 +185,54 @@ describe('WebhookProcessor', () => {
     );
   });
 
+  it("replaces a replayed delivery's attempts-0 shed row with its own final-attempt row", async () => {
+    // The shed row's dedup entry would otherwise suppress this row and keep only the capacity reason.
+    failureRows.push({ webhookId: 'wh-1', idempotencyKey: 'k', attempts: 0 });
+    mockFetch.mockResolvedValue({ ok: false, status: 503, statusText: 'Service Unavailable' });
+
+    await expect(processor.process(makeJob({ maxRetries: 3 }, 2))).rejects.toThrow();
+
+    expect(failureRepo.delete).toHaveBeenCalledWith({ webhookId: 'wh-1', idempotencyKey: 'k', attempts: 0 });
+    expect(failureRows).toEqual([expect.objectContaining({ idempotencyKey: 'k', attempts: 3, lastStatusCode: 503 })]);
+  });
+
+  it('keeps the delivery error and both rows when the shed-row delete fails', async () => {
+    // The final-attempt row is written before the shed row is removed, so a failed delete leaves
+    // the event recorded twice rather than not at all. It is logged, not thrown: process() still
+    // rejects with the HTTP error.
+    failureRows.push({ webhookId: 'wh-1', idempotencyKey: 'k', attempts: 0 });
+    failureRepo.delete.mockRejectedValueOnce(new Error('db down'));
+    mockFetch.mockResolvedValue({ ok: false, status: 503, statusText: 'Service Unavailable' });
+
+    await expect(processor.process(makeJob({ maxRetries: 3 }, 2))).rejects.toThrow('HTTP 503');
+
+    expect(failureRows).toEqual([
+      expect.objectContaining({ idempotencyKey: 'k', attempts: 0 }),
+      expect.objectContaining({ idempotencyKey: 'k', attempts: 3, lastStatusCode: 503 }),
+    ]);
+  });
+
+  it('deletes nothing for a job whose payload carries no idempotency key', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 503, statusText: 'Service Unavailable' });
+    const job = makeJob({ maxRetries: 3 }, 2);
+    (job.data.payload as { idempotencyKey?: string }).idempotencyKey = undefined;
+
+    await expect(processor.process(job)).rejects.toThrow();
+
+    expect(failureRepo.delete).not.toHaveBeenCalled();
+    expect(failureRepo.insert).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the shed row alone on an attempt that is not final', async () => {
+    failureRows.push({ webhookId: 'wh-1', idempotencyKey: 'k', attempts: 0 });
+    mockFetch.mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' });
+
+    await expect(processor.process(makeJob({ maxRetries: 3 }, 0))).rejects.toThrow();
+
+    expect(failureRepo.delete).not.toHaveBeenCalled();
+    expect(failureRows).toEqual([expect.objectContaining({ idempotencyKey: 'k', attempts: 0 })]);
+  });
+
   it('does NOT persist a delivery-failure record before the final attempt', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' });
 
@@ -202,6 +270,31 @@ describe('WebhookProcessor', () => {
     const inserted = (failureRepo.insert.mock.calls[0] as unknown[])[0] as { lastError: string };
     expect(inserted.lastError).toBe('Destination address is not allowed');
     expect(inserted.lastError).not.toMatch(/169\.254\.169\.254/);
+  });
+
+  it('clears every failure row of the delivery once the job delivers it', async () => {
+    // An earlier inline replay failed (attempts > 0) after a shed (attempts 0); this queued replay
+    // then delivered. Both rows would list a delivered event as lost. Another delivery's row stays.
+    failureRows.push(
+      { webhookId: 'wh-1', idempotencyKey: 'k', attempts: 0 },
+      { webhookId: 'wh-1', idempotencyKey: 'k', attempts: 3 },
+      { webhookId: 'wh-1', idempotencyKey: 'other', attempts: 3 },
+    );
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    await expect(processor.process(makeJob())).resolves.toMatchObject({ success: true });
+
+    expect(failureRows).toEqual([expect.objectContaining({ idempotencyKey: 'other' })]);
+  });
+
+  it('keeps the success outcome when clearing the failure rows fails', async () => {
+    failureRepo.delete.mockRejectedValueOnce(new Error('db down'));
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    await expect(processor.process(makeJob({ maxRetries: 3 }, 2))).resolves.toMatchObject({ success: true });
+
+    expect(failureRepo.delete).toHaveBeenCalledTimes(1);
+    expect(failureRepo.insert).not.toHaveBeenCalled();
   });
 
   it('keeps the success outcome when post-delivery bookkeeping fails after a 2xx (no retry, no DLQ row)', async () => {
@@ -262,13 +355,15 @@ describe('WebhookProcessor', () => {
         secret: 'rotated',
       });
       mockFetch.mockResolvedValue({ ok: true, status: 200 });
+      // Jobs no longer carry headers, but one enqueued by an earlier release still holds a snapshot
+      // in Redis; it must be ignored in favour of the current row.
       const job = makeJob({
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer old',
           'X-OpenWA-Signature': 'sha256=old',
         },
-      });
+      } as Partial<WebhookJobData>);
 
       const result = await processor.process(job);
 
@@ -330,6 +425,28 @@ describe('WebhookProcessor', () => {
       expect(hookManager.execute).not.toHaveBeenCalled();
     });
 
+    it("replaces a replayed delivery's attempts-0 shed row with the stall row", async () => {
+      failureRows.push({ webhookId: 'wh-1', idempotencyKey: 'k', attempts: 0 });
+
+      await processor.onWorkerFailed(makeJob({}, 1), new Error('job stalled more than allowable limit'));
+
+      expect(failureRows).toEqual([
+        expect.objectContaining({
+          idempotencyKey: 'k',
+          attempts: 1,
+          lastError: 'job stalled more than allowable limit',
+        }),
+      ]);
+    });
+
+    it('still files the stall row when the shed-row delete fails', async () => {
+      failureRepo.delete.mockRejectedValueOnce(new Error('db down'));
+
+      await processor.onWorkerFailed(makeJob({}, 1), new Error('job stalled more than allowable limit'));
+
+      expect(failureRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: 'k', attempts: 1 }));
+    });
+
     it('still records the stall against the enqueue-time URL when the webhook row cannot be read', async () => {
       repo.findOne.mockRejectedValue(new Error('db down'));
 
@@ -350,6 +467,133 @@ describe('WebhookProcessor', () => {
 
       expect(failureRepo.insert).not.toHaveBeenCalled();
       expect(hookManager.execute).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('failing-receiver gate', () => {
+    // One slot per session for failing receivers, so the arithmetic below stays small.
+    const gatedProcessor = (retryDelay = 1000): WebhookProcessor => {
+      configService.get.mockImplementation((key: string, def?: unknown) => {
+        if (key === 'webhook.degradedSessionConcurrency') return 1;
+        if (key === 'webhook.retryDelay') return retryDelay;
+        return key === 'webhook.timeout' ? 25000 : def;
+      });
+      return new WebhookProcessor(
+        repo as unknown as Repository<Webhook>,
+        failureRepo as unknown as Repository<WebhookDeliveryFailure>,
+        hookManager as unknown as HookManager,
+        configService as unknown as ConfigService,
+      );
+    };
+    const withMoveToDelayed = (job: Job<WebhookJobData>): jest.Mock => {
+      const move = jest.fn().mockResolvedValue(undefined);
+      (job as unknown as { moveToDelayed: jest.Mock }).moveToDelayed = move;
+      return move;
+    };
+    const hang = (): { release: () => void } => {
+      const handle = { release: () => undefined as void };
+      mockFetch.mockImplementationOnce(
+        () => new Promise(resolve => (handle.release = () => resolve({ ok: true, status: 200 }))),
+      );
+      return handle;
+    };
+
+    it('delays a job for a failing webhook past the session cap without spending an attempt or failing it', async () => {
+      const gp = gatedProcessor();
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Server Error' });
+      await expect(gp.process(makeJob())).rejects.toThrow('HTTP 500');
+      const first = hang();
+      mockFetch.mockClear();
+      const inFlight = gp.process(makeJob(), 'tok-1');
+      await new Promise(resolve => setImmediate(resolve));
+      repo.findOne.mockClear();
+      failureRepo.insert.mockClear();
+
+      // The last attempt of its job: a gate bounce must still not dead-letter it.
+      const job = makeJob({}, 2);
+      const move = withMoveToDelayed(job);
+      const before = Date.now();
+      await expect(gp.process(job, 'tok-2')).rejects.toBeInstanceOf(DelayedError);
+
+      expect(move).toHaveBeenCalledWith(expect.any(Number), 'tok-2');
+      expect((move.mock.calls[0] as [number])[0]).toBeGreaterThanOrEqual(before + 1000);
+      expect(repo.findOne).not.toHaveBeenCalled();
+      expect(mockFetch).toHaveBeenCalledTimes(1); // only the in-flight job's POST
+      expect(failureRepo.insert).not.toHaveBeenCalled();
+
+      first.release();
+      await inFlight;
+    });
+
+    // BullMQ promotes a job delayed to "now" straight back to wait, so a zero delay would spin it.
+    it('waits at least a second before a bounced job returns, even with WEBHOOK_RETRY_DELAY=0', async () => {
+      const gp = gatedProcessor(0);
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Server Error' });
+      await expect(gp.process(makeJob())).rejects.toThrow('HTTP 500');
+      const first = hang();
+      const inFlight = gp.process(makeJob(), 'tok-1');
+      await new Promise(resolve => setImmediate(resolve));
+
+      const job = makeJob();
+      const move = withMoveToDelayed(job);
+      const before = Date.now();
+      await expect(gp.process(job, 'tok-2')).rejects.toBeInstanceOf(DelayedError);
+
+      expect((move.mock.calls[0] as [number])[0]).toBeGreaterThanOrEqual(before + 1000);
+      first.release();
+      await inFlight;
+    });
+
+    it('never holds back a healthy webhook, however many of its jobs run at once', async () => {
+      const gp = gatedProcessor();
+      const a = hang();
+      const b = hang();
+      const jobs = [gp.process(makeJob()), gp.process(makeJob())];
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      a.release();
+      b.release();
+      await Promise.all(jobs);
+    });
+
+    it('lifts the gate when a job finds its failing webhook gone', async () => {
+      const gp = gatedProcessor();
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Server Error' });
+      await expect(gp.process(makeJob())).rejects.toThrow('HTTP 500');
+      repo.findOne.mockResolvedValueOnce(null);
+      await expect(gp.process(makeJob())).resolves.toMatchObject({ success: false });
+
+      // Re-created or re-enabled under the same id: its jobs are no longer held to one slot.
+      const a = hang();
+      const b = hang();
+      const jobs = [gp.process(makeJob()), gp.process(makeJob())];
+      await new Promise(resolve => setImmediate(resolve));
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      a.release();
+      b.release();
+      await Promise.all(jobs);
+    });
+
+    it('lifts the gate once the webhook answers 2xx again, and frees the slot on success and on failure', async () => {
+      const gp = gatedProcessor();
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Server Error' });
+      await expect(gp.process(makeJob())).rejects.toThrow('HTTP 500');
+      // Gated now, with a free slot: a failing job takes it and gives it back when it throws.
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Server Error' });
+      await expect(gp.process(makeJob())).rejects.toThrow('HTTP 500');
+      // ...and a succeeding job takes it, gives it back, and clears the failing mark.
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+      await expect(gp.process(makeJob())).resolves.toMatchObject({ success: true });
+
+      const a = hang();
+      const b = hang();
+      const jobs = [gp.process(makeJob()), gp.process(makeJob())];
+      await new Promise(resolve => setImmediate(resolve));
+      expect(mockFetch).toHaveBeenCalledTimes(5);
+      a.release();
+      b.release();
+      await Promise.all(jobs);
     });
   });
 });

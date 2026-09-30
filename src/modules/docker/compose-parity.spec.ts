@@ -86,6 +86,7 @@ async function capture(profile: string, Service: typeof DockerService = DockerSe
   jest.spyOn(service, 'getContainerByService').mockResolvedValue(null);
   let captured: CapturedConfig | undefined;
   const fakeDocker = {
+    getImage: () => ({ inspect: () => Promise.reject(Object.assign(new Error('no such image'), { statusCode: 404 })) }),
     pull: (_image: string, cb: (err: Error | null, stream: null) => void) => cb(null, null),
     modem: { followProgress: (_stream: null, cb: (err: Error | null) => void) => cb(null) },
     createVolume: jest.fn().mockResolvedValue({}),
@@ -142,7 +143,15 @@ describe('DockerService managed specs ↔ docker-compose.yml parity', () => {
     const cfg = await capture(profile);
     expect(cfg.Image).toBe(compose.services[profile].image);
     expect(cfg.Image).toContain(':'); // an explicit tag, never the floating default
+    expect(cfg.Image).not.toMatch(/:latest(@|$)/);
     expect(cfg.name).toBe(compose.services[profile].container_name);
+  });
+
+  it('minio: pins a release tag and an image digest, and not the withdrawn minio/minio image', async () => {
+    // The equality above keeps both sides the same; this keeps the digest from being dropped from both.
+    const cfg = await capture('minio');
+    expect(cfg.Image).toMatch(/:RELEASE\.[0-9T-]+Z@sha256:[0-9a-f]{64}$/);
+    expect(cfg.Image).not.toMatch(/^(quay\.io\/)?minio\/minio[:@]/);
   });
 
   it.each(PROFILES)('%s: attaches to the fixed openwa-network like the compose service', async profile => {
@@ -318,6 +327,7 @@ describe('DockerService managed specs ↔ docker-compose.yml parity', () => {
       POSTGRES_BUILTIN: 'dashboard-managed',
       REDIS_BUILTIN: 'dashboard-managed',
       MINIO_BUILTIN: 'dashboard-managed',
+      QUEUE_ENABLED: 'dashboard-managed (.env.example documents that a host value is not forwarded)',
       WEBHOOK_SSRF_PROTECT: 'fails safe (default on)',
       // The dev stack manages no built-in datastores; its daemon is the host's local socket, and a
       // stray DOCKER_HOST would point the app at an unrelated daemon.
@@ -372,6 +382,19 @@ describe('DockerService managed specs ↔ docker-compose.yml parity', () => {
     expect(api?.ports).toEqual([expect.stringMatching(/:\$\{API_PORT:-2785\}:2785$/)]);
   });
 
+  it('openwa-api uses the same readiness healthcheck in both compose files and the image', () => {
+    const root = join(__dirname, '../../..');
+    const apiHealthcheck = (file: string): string[] | undefined => {
+      const parsed = yaml.load(readFileSync(join(root, file), 'utf8')) as ComposeFile;
+      return Object.values(parsed.services).find(service => service.container_name === 'openwa-api')?.healthcheck?.test;
+    };
+    const url = 'http://localhost:2785/api/health/ready';
+    expect(apiHealthcheck('docker-compose.yml')).toEqual(['CMD', 'curl', '-f', url]);
+    expect(apiHealthcheck('docker-compose.dev.yml')).toEqual(apiHealthcheck('docker-compose.yml'));
+    const dockerfile = readFileSync(join(root, 'Dockerfile'), 'utf8');
+    expect(dockerfile).toContain(`CMD curl -f ${url} || exit 1`);
+  });
+
   it('redis: sets the noeviction maxmemory policy BullMQ requires, on both launch paths', async () => {
     const cfg = await capture('redis');
     // The parity assertion above only proves the two launch paths AGREE — dropping the flag from
@@ -398,11 +421,37 @@ describe('DockerService managed specs ↔ docker-compose.yml parity', () => {
     const cfg = await capture('minio');
     expect(cfg.Env).toEqual(['MINIO_ROOT_USER=minioadmin', 'MINIO_ROOT_PASSWORD=minioadmin']);
     const env = compose.services.minio.environment!;
-    // Compose (manual path) deliberately ships no default and fails fast on empty creds; the
-    // orchestrated path provisions the built-in default instead (see the getContainerSpec docblock).
+    // Compose (manual path) deliberately ships no default credentials; the orchestrated path
+    // provisions the built-in default instead (see the getContainerSpec docblock). The user default
+    // stays empty: a non-empty placeholder would be a valid access key paired with a real password.
     expect(env.MINIO_ROOT_USER).toBe('${S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-}}');
-    expect(env.MINIO_ROOT_PASSWORD).toBe('${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-}}');
+    expect(env.MINIO_ROOT_PASSWORD).toBe('${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-unset}}');
   });
+
+  it('minio: compose falls back to a password too short to be valid, so no secret means no start', () => {
+    // Both credentials empty would start the server on its built-in default pair. A placeholder
+    // under the 8-character minimum stops it instead; a longer one would become a working default.
+    const placeholder = /:-([^:}]*)}}$/.exec(compose.services.minio.environment!.MINIO_ROOT_PASSWORD)?.[1];
+    expect(placeholder).toBeTruthy();
+    expect(placeholder!.length).toBeLessThan(8);
+  });
+
+  it.each(['README.md', 'docs/08-development-guidelines.md'])(
+    '%s tells a fresh install not to pair the minio profile with the dashboard built-in storage',
+    file => {
+      // The dashboard route writes its credentials to data/.env.generated, which compose never reads,
+      // so a compose minio started next to it has no password and never comes up. startService then
+      // finds that container by its label and only restarts it, so the built-in option cannot recover.
+      const text = readFileSync(join(__dirname, '../../..', file), 'utf8').replace(/\s+/g, ' ');
+      expect(text).toContain('do not also start the `minio` or `full` profile');
+      expect(text).toContain('docker rm -f openwa-minio');
+      // Built-in PostgreSQL and Redis also create their own containers. The compose postgres service
+      // refuses to initialize without DATABASE_PASSWORD, and startService would only restart it, so
+      // the dashboard route must not be told to start any profile.
+      expect(text).toContain('each built-in option creates its own container');
+      expect(text).not.toContain('--profile postgres --profile redis');
+    },
+  );
 
   it('minio: prefers the canonical S3 credential env vars, then the legacy ones', async () => {
     process.env.S3_ACCESS_KEY = 'legacy-user';
@@ -448,13 +497,13 @@ describe('DockerService managed specs ↔ docker-compose.yml parity', () => {
     }
   });
 
-  it('minio: publishes the same localhost-only ports as compose', async () => {
+  it('minio: built-in publishes no host ports, compose keeps its loopback ports', async () => {
+    // The built-in container runs the fixed built-in credentials, which the boot guard exempts only
+    // because nothing outside the internal network can reach it. Compose is the manual path with
+    // operator-set credentials, so it keeps its loopback publish.
     const cfg = await capture('minio');
+    expect(cfg.HostConfig.PortBindings).toBeUndefined();
     expect(compose.services.minio.ports).toEqual(['127.0.0.1:9000:9000', '127.0.0.1:9001:9001']);
-    expect(cfg.HostConfig.PortBindings).toEqual({
-      '9000/tcp': [{ HostIp: '127.0.0.1', HostPort: '9000' }],
-      '9001/tcp': [{ HostIp: '127.0.0.1', HostPort: '9001' }],
-    });
   });
 });
 

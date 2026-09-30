@@ -28,8 +28,8 @@ export class WwebjsProfile {
     // here. It floors the Date to seconds itself, so the epoch-milliseconds the contract takes goes
     // straight into the Date.
     // Non-idempotent: each call mints a NEW server-side link, so a client replaying a 503 would
-    // create a second one. Report a dead page, keep the error as thrown (500). Same rule as
-    // createChannel; see reportPageDeath.
+    // create a second one. Report a dead page and keep the 500. Same rule as createChannel; see
+    // reportPageDeath.
     const link = await reportPageDeath(this.host, 'createCallLink', () =>
       this.client().createCallLink(new Date(startTime), type === 'video' ? 'video' : 'voice'),
     );

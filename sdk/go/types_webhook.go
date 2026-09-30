@@ -186,3 +186,15 @@ type WebhookDeliveryFailure struct {
 	// CreatedAt is the ISO timestamp of when the delivery was finally abandoned.
 	CreatedAt string `json:"createdAt"`
 }
+
+// WebhookDelivery is the JSON body of a webhook delivery (docs/06 section
+// 6.6). Event is "test" for a delivery sent by the test endpoint. Check the
+// raw body with VerifyWebhookSignature before decoding it.
+type WebhookDelivery struct {
+	Event          WebhookEvent    `json:"event"`
+	Timestamp      string          `json:"timestamp"`
+	SessionID      string          `json:"sessionId"`
+	IdempotencyKey string          `json:"idempotencyKey"`
+	DeliveryID     string          `json:"deliveryId"`
+	Data           json.RawMessage `json:"data"`
+}

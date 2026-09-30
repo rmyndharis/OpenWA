@@ -36,8 +36,8 @@ export class ProxyAwareThrottlerGuard extends ThrottlerGuard {
   /**
    * The shared-bucket condition is deployment-wide, so the warning fires once per guard instance.
    * In practice that is once per process: this guard runs as the singleton APP_GUARD. The only other
-   * instance is InstanceThrottlerGuard, whose defensive super.getTracker fallback (missing route
-   * params) is unreachable on the real ingress route, so at most one extra line could ever appear.
+   * instance is InstanceThrottlerGuard on the ingress route, which keys on this tracker too, so at
+   * most one extra line can appear.
    */
   private warnedSharedProxyBucket = false;
 
@@ -89,11 +89,12 @@ export class ProxyAwareThrottlerGuard extends ThrottlerGuard {
    * Emit a plain `Retry-After` alongside the library's `Retry-After-<window>`.
    *
    * The base guard suffixes the header with the tier name (`Retry-After-short` here, and
-   * `Retry-After-instance` / `Retry-After-ingress-ip` on the ingress route). That is useful for
-   * telling an operator which bucket shed a request and useless to every HTTP client, none of which
-   * look for those spellings. A shed request therefore advertised a retry hint nothing could read,
-   * and a caller that retries a 429 only when the response carries `Retry-After` gave up instead of
-   * coming back. Written BEFORE delegating, so the suffixed header and the exception are untouched.
+   * `Retry-After-ingress-ip` on the ingress route, where IngressService sets `Retry-After-instance`
+   * and the plain header itself). That is useful for telling an operator which bucket shed a
+   * request and useless to every HTTP client, none of which look for those spellings. A shed
+   * request therefore advertised a retry hint nothing could read, and a caller that retries a 429
+   * only when the response carries `Retry-After` gave up instead of coming back. Written BEFORE
+   * delegating, so the suffixed header and the exception are untouched.
    *
    * Known ceiling: the first blocked window wins. Tiers are evaluated in order, so the value is the
    * shortest blocked window rather than the longest. That can cost a caller one wasted retry, but it

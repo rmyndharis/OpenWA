@@ -71,7 +71,22 @@ describe('ffmpeg encoder arguments', () => {
  * every conversion would still succeed — which is exactly why it is pinned here.
  */
 describe('ffmpeg invocation shape', () => {
-  const args = buildFfmpegArgs('/tmp/openwa-convert-x/in.bin', '/tmp/openwa-convert-x/out.ogg', ['-c:a', 'libopus']);
+  const args = buildFfmpegArgs(
+    '/tmp/openwa-convert-x/in.bin',
+    '/tmp/openwa-convert-x/out.ogg',
+    ['-c:a', 'libopus'],
+    1000,
+  );
+
+  // Without it the size cap is only checked after ffmpeg exits, and until then the output can grow
+  // without bound in the temp directory. It must be an output option: before -i it would apply to the
+  // input, after the output path ffmpeg ignores it.
+  it('caps the output size one byte above the limit, as an output option', () => {
+    const at = args.indexOf('-fs');
+    expect(args[at + 1]).toBe('1001');
+    expect(at).toBeGreaterThan(args.indexOf('libopus'));
+    expect(at).toBe(args.length - 3);
+  });
 
   it('confines ffmpeg to the file protocol', () => {
     expect(args[args.indexOf('-protocol_whitelist') + 1]).toBe('file');

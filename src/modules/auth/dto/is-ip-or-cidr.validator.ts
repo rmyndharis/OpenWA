@@ -4,10 +4,8 @@ import { isIP } from 'net';
 /**
  * Whether a string is a valid IPv4 address or IPv4 CIDR range (/0-32).
  *
- * IPv4-only on purpose: the allowedIps matcher (auth.service `isIpAllowed`/`ipInCidr`) is IPv4-only,
- * so an IPv6 entry can't be enforced — a /128 host-lock would never match its own client, and an
- * IPv6 /<=32 CIDR would match EVERY IPv6 client (an over-broad grant). The validator must not bless
- * an entry the matcher can't honor, so it rejects IPv6 (`allowedIps` is documented as IPv4-only).
+ * IPv4-only on purpose: `allowedIps` is documented as IPv4-only (docs/04, IPv6 Support). The shared
+ * `ipMatches` helper also handles IPv6, so widening this validator is a separate, deliberate change.
  */
 export function isIpOrCidr(value: unknown): boolean {
   if (typeof value !== 'string') return false;

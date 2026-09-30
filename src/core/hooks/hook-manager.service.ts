@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { createLogger } from '../../common/services/logger.service';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { HookEvent, HookHandler, HookContext, HookRegistration } from './hook.interfaces';
 
@@ -21,7 +22,7 @@ export interface HookExecuteOptions<T> {
 
 @Injectable()
 export class HookManager {
-  private readonly logger = new Logger(HookManager.name);
+  private readonly logger = createLogger(HookManager.name);
   private readonly hooks = new Map<HookEvent, HookRegistration[]>();
   private readonly pluginHooks = new Map<string, Set<string>>(); // pluginId -> hookIds
   // Events in-flight on the active async context. A handler that re-fires the SAME event

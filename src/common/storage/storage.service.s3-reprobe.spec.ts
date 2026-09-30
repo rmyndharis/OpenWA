@@ -25,7 +25,13 @@ jest.mock('@aws-sdk/client-s3', () => {
   };
 });
 
-import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import {
+  CreateBucketCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadBucketCommand,
+  ListObjectsV2Command,
+} from '@aws-sdk/client-s3';
 import { DEFAULT_S3_REPROBE_INTERVAL_MS, StorageService } from './storage.service';
 
 const ENV_KEYS = [
@@ -125,6 +131,66 @@ describe('StorageService S3 re-probe and recovery', () => {
     await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS * 5);
     expect(mockSend).not.toHaveBeenCalled();
     expect(svc.isS3Available()).toBe(true);
+  });
+
+  it('creates the bucket on re-probe when the store was down at boot and came back empty', async () => {
+    mockSend.mockRejectedValueOnce(s3Error('NetworkingError')); // boot probe: store not up yet
+    const svc = new StorageService(makeConfig());
+    warnSpyOf(svc);
+    await flush();
+    expect(svc.isS3Available()).toBe(false);
+
+    // The store is up now, but on a fresh volume: HeadBucket answers NotFound, CreateBucket succeeds.
+    mockSend.mockImplementation((cmd: unknown) =>
+      cmd instanceof HeadBucketCommand ? Promise.reject(s3Error('NotFound')) : Promise.resolve({}),
+    );
+    await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
+
+    expect(mockSend.mock.calls.some(([cmd]) => cmd instanceof CreateBucketCommand)).toBe(true);
+    expect(svc.isS3Available()).toBe(true);
+  });
+
+  it('treats losing a concurrent CreateBucket race (BucketAlreadyOwnedByYou) as the bucket being ready', async () => {
+    mockSend.mockRejectedValueOnce(s3Error('NetworkingError'));
+    const svc = new StorageService(makeConfig());
+    warnSpyOf(svc);
+    await flush();
+
+    // Another replica created the bucket between this node's HeadBucket and its CreateBucket.
+    mockSend.mockImplementation((cmd: unknown) =>
+      Promise.reject(s3Error(cmd instanceof HeadBucketCommand ? 'NotFound' : 'BucketAlreadyOwnedByYou')),
+    );
+
+    await expect(svc.refreshS3Availability()).resolves.toBe(true);
+    expect(svc.isS3Available()).toBe(true);
+  });
+
+  it('stays on the local fallback when the bucket name is owned by another account', async () => {
+    mockSend.mockRejectedValueOnce(s3Error('NetworkingError'));
+    const svc = new StorageService(makeConfig());
+    warnSpyOf(svc);
+    await flush();
+
+    mockSend.mockImplementation((cmd: unknown) =>
+      Promise.reject(s3Error(cmd instanceof HeadBucketCommand ? 'NotFound' : 'BucketAlreadyExists')),
+    );
+
+    await expect(svc.refreshS3Availability()).resolves.toBe(false);
+    expect(svc.isS3Available()).toBe(false);
+  });
+
+  it('stays on the local fallback when the re-probe cannot create the missing bucket', async () => {
+    mockSend.mockRejectedValueOnce(s3Error('NetworkingError'));
+    const svc = new StorageService(makeConfig());
+    warnSpyOf(svc);
+    await flush();
+
+    mockSend.mockImplementation((cmd: unknown) =>
+      Promise.reject(s3Error(cmd instanceof HeadBucketCommand ? 'NoSuchBucket' : 'AccessDenied')),
+    );
+    await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
+
+    expect(svc.isS3Available()).toBe(false);
   });
 
   it('never transitions true→false: an S3-healthy boot ignores later transient probe failures', async () => {

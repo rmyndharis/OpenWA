@@ -1,8 +1,10 @@
+import { ForbiddenException } from '@nestjs/common';
 import { invokeTool } from '../tool-invoker';
 import { contactTools } from './contact.tools';
 import type { AnyToolDescriptor } from '../tool-descriptor';
 import type { ContactService } from '../../../modules/contact/contact.service';
 import type { AuthService } from '../../../modules/auth/auth.service';
+import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 
 // Covers every contactTools execute() handler via the real invokeTool path (auth → zod → handler).
 // agent-tools.module.ts is pure Nest wiring, stays at 0% coverage, and is intentionally not a target.
@@ -61,6 +63,23 @@ describe('contactTools', () => {
       number: '628123',
     });
     expect(out).toEqual({ number: '628123', exists: false, whatsappId: null });
+  });
+
+  it('ContactCheckNumber requires OPERATOR: a below-role key is refused before the lookup runs', async () => {
+    const getNumberId = jest.fn().mockResolvedValue('628123@c.us');
+    const tool = makeTools({ getNumberId } as unknown as ContactService).get('ContactCheckNumber')!;
+    expect(tool.requiredRole).toBe(ApiKeyRole.OPERATOR);
+
+    const auth = makeAuth();
+    (auth.hasPermission as jest.Mock).mockReturnValue(false);
+    await expect(
+      invokeTool(tool, { sessionId: 's1', number: '628123' }, 'key', auth as unknown as AuthService),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(getNumberId).not.toHaveBeenCalled();
+  });
+
+  it.each(['ContactResolvePhone', 'ContactGetProfilePicture'])('%s stays open to any valid key', name => {
+    expect(makeTools({} as ContactService).get(name)!.requiredRole).toBeUndefined();
   });
 
   it('ContactResolvePhone delegates to resolveContactPhone', async () => {

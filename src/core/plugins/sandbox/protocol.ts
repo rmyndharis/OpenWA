@@ -1,9 +1,10 @@
 /**
- * Wire protocol between the host (PluginWorkerHost) and an untrusted plugin worker.
+ * Wire protocol between the host (PluginWorkerHost) and a plugin worker.
  *
- * The worker has exactly one channel out — these messages — and no ambient access to the host. The
- * host validates every request before acting on it, so a hostile worker cannot escalate beyond what
- * its manifest declares.
+ * These messages are the worker's channel to the `ctx.*` capabilities, and the host validates every
+ * request against the manifest's permissions before acting on it. They are not the worker's only way
+ * out: the worker is a thread in the host process and can use Node built-ins directly, so this is
+ * fault containment, not a security boundary (see worker-bootstrap.ts and docs/30).
  *
  * Phase B1 scope: lifecycle only (load + onLoad/onEnable/onDisable/onUnload). The capability bridge
  * (B2) and hook bridge (B3) add more message kinds later.
@@ -73,7 +74,10 @@ export type HostToWorkerMessage =
   // runs the plugin's search handler and replies with `search-result` (same `id` correlation as
   // hook/health-check/webhook). No per-session config: search is a global query; session scoping travels
   // inside SearchQuery.sessionIds (scoped by SearchService from the caller's API-key).
-  | { kind: 'search'; id: number; query: SearchQuery };
+  | { kind: 'search'; id: number; query: SearchQuery }
+  // Liveness probe, sent after a dispatch times out. The worker bootstrap answers it before any plugin
+  // code runs, so a slow async handler still answers and only a blocked event loop stays silent.
+  | { kind: 'ping'; id: number };
 
 export type WorkerToHostMessage =
   | { kind: 'ready' }
@@ -111,6 +115,7 @@ export type WorkerToHostMessage =
   // carries the handler's error (handler threw / no handler / etc.).
   | { kind: 'search-result'; id: number; ok: true; results: SearchResults }
   | { kind: 'search-result'; id: number; ok: false; error: string }
+  | { kind: 'pong'; id: number }
   | { kind: 'error'; error: string };
 
 /**

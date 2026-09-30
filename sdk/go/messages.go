@@ -184,7 +184,7 @@ func (s *MessagesService) Unpin(ctx context.Context, sessionID string, body Unpi
 // size-only marker, or a URL-based send whose bytes were never stored).
 func (s *MessagesService) Media(ctx context.Context, sessionID, chatID, messageID string) (*MessageMedia, error) {
 	path := s.base(sessionID) + "/" + pathEscape(chatID) + "/" + pathEscape(messageID) + "/media"
-	data, contentType, err := s.client.doRaw(ctx, "GET", path, nil, nil)
+	data, contentType, err := s.client.doRaw(ctx, "GET", path, nil, nil, false)
 	if err != nil {
 		return nil, err
 	}

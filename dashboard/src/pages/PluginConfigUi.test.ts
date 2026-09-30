@@ -75,7 +75,7 @@ function renderPlugins(): void {
   );
 }
 
-test('PluginConfigUi replies to config:get with localized schema and locale', async () => {
+test('PluginConfigUi localizes its frame title and replies to config:get with localized schema and locale', async () => {
   // Set the dashboard language so we can verify the schema gets localized
   await i18next.changeLanguage('es');
 
@@ -94,6 +94,7 @@ test('PluginConfigUi replies to config:get with localized schema and locale', as
       },
       i18n: {
         es: {
+          name: 'Mi complemento',
           config: {
             field1: { title: 'Spanish Title' },
           },
@@ -116,6 +117,8 @@ test('PluginConfigUi replies to config:get with localized schema and locale', as
     assert.ok(el, 'ConfigUi iframe not found in DOM');
     return el;
   });
+  // The frame's accessible name follows the localized modal title, not the raw manifest name.
+  assert.equal(iframe.getAttribute('title'), 'Mi complemento', 'iframe title was not localized');
 
   // We spy on the iframe's contentWindow postMessage
   // JSDOM creates an empty contentWindow for the iframe

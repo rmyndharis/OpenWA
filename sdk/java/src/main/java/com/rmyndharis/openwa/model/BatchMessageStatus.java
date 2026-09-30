@@ -7,5 +7,7 @@ public enum BatchMessageStatus {
     @SerializedName("pending") PENDING,
     @SerializedName("sent") SENT,
     @SerializedName("failed") FAILED,
-    @SerializedName("cancelled") CANCELLED
+    @SerializedName("cancelled") CANCELLED,
+    /** Decoded when the gateway sends a value newer than this SDK; not a wire value itself. */
+    UNKNOWN
 }

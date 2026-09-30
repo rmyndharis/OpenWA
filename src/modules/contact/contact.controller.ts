@@ -1,8 +1,10 @@
 import { Body, Controller, Get, Post, Put, Delete, Param, Query, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { ContactService } from './contact.service';
-import { ChatScoped, RequireRole } from '../auth/decorators/auth.decorators';
-import { ApiKeyRole } from '../auth/entities/api-key.entity';
+import { ChatScoped, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
+import { ChatScopeService } from '../auth/chat-scope.service';
+import { paginate } from '../../common/utils/paginate';
 import { UpsertContactDto } from './dto/upsert-contact.dto';
 import {
   ContactAckResponseDto,
@@ -17,8 +19,12 @@ import { ENGINE_NOT_READY_409 } from '../../common/openapi/engine-status-respons
 @ApiTags('contacts')
 @Controller('sessions/:sessionId/contacts')
 export class ContactController {
-  constructor(private readonly contactService: ContactService) {}
+  constructor(
+    private readonly contactService: ContactService,
+    private readonly chatScope: ChatScopeService,
+  ) {}
 
+  @ChatScoped('filtered')
   @Get()
   @ApiOperation({ summary: 'Get all contacts for a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -28,7 +34,12 @@ export class ContactController {
     type: [ContactDto],
   })
   @ApiResponse({ status: 400, description: 'Session not ready' })
-  @ApiResponse({ status: 503, description: 'The WhatsApp page died while reading contacts, retry shortly' })
+  @ApiResponse({
+    status: 503,
+    description:
+      'The WhatsApp page died while reading contacts, or WhatsApp Web did not answer within the protocol ' +
+      'timeout. Retry shortly.',
+  })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiQuery({ name: 'limit', required: false, description: 'Max contacts to return (1–1000, default 1000)' })
   @ApiQuery({ name: 'offset', required: false, description: 'Number of contacts to skip (for paging)' })
@@ -36,11 +47,11 @@ export class ContactController {
     @Param('sessionId') sessionId: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
+    @CurrentApiKey() apiKey?: ApiKey,
   ) {
-    return this.contactService.getContacts(sessionId, {
-      limit: limit ? parseInt(limit, 10) : undefined,
-      offset: offset ? parseInt(offset, 10) : undefined,
-    });
+    // Filtered before paging so a chat-restricted key sees only its contacts, in full windows.
+    const visible = await this.chatScope.filter(apiKey, await this.contactService.listContacts(sessionId), c => c.id);
+    return paginate(visible, limit ? parseInt(limit, 10) : undefined, offset ? parseInt(offset, 10) : undefined);
   }
 
   @Get('profile-pictures')
@@ -106,14 +117,17 @@ export class ContactController {
     return this.contactService.getContactById(sessionId, contactId);
   }
 
+  // OPERATOR, unlike the other reads here: each call is an outbound WhatsApp query about a third
+  // party, and bulk number checks put the linked account's standing at risk.
   @Get('check/:number')
+  @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({
     summary: 'Check if a phone number exists on WhatsApp',
     description:
       'Returns whether the number is a registered WhatsApp account and its canonical id. Use this to ' +
       'pre-validate a recipient before sending: the send endpoints return 201 on accepting a message ' +
       'even for numbers that are not on WhatsApp, so this is the only way to confirm a new number is ' +
-      'reachable before you send to it.',
+      'reachable before you send to it. Requires an OPERATOR key.',
   })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'number', description: 'Phone number to check (e.g., 628123456789)' })
@@ -129,6 +143,7 @@ export class ContactController {
       'would be a claim about the number rather than about the query, and this route exists to be ' +
       'trusted before a send.',
   })
+  @ApiResponse({ status: 403, description: 'API key role below OPERATOR' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async checkNumber(@Param('sessionId') sessionId: string, @Param('number') number: string) {
     // The engine returns the canonical chat id in its native format; we don't build the JID here

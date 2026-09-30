@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, type RefObject } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import {
   useTable,
@@ -36,12 +36,151 @@ import { Modal } from '../components/Modal';
 import { SessionScopePicker } from '../components/SessionScopePicker';
 import { useToast } from '../hooks/useToast';
 import { copyToClipboard } from '../utils/clipboard';
-import { canScopeSessions, sameSessionScope, sessionScopeNames } from '../utils/sessionScope';
+import {
+  apiKeyDraft,
+  apiKeyPatch,
+  canScopeSessions,
+  invalidChatEntry,
+  invalidIpEntry,
+  isExpired,
+  normalizeChatScope,
+  parseScopeList,
+  sameSessionScope,
+  sessionScopeNames,
+  type ApiKeyDraft,
+} from '../utils/sessionScope';
 import './ApiKeys.css';
 
 const roleNames = ['admin', 'operator', 'viewer'] as const;
 
-const emptyKeyForm = { name: '', role: 'operator', allowedSessions: [] as string[] };
+const emptyKeyForm = { name: '', role: 'operator', allowedSessions: [] as string[], ips: '', chats: '', expires: '' };
+
+// The key this dashboard signed in with: the list only carries each key's prefix, which is the first
+// 12 characters of the raw key.
+function isSignedInKey(apiKey: ApiKey): boolean {
+  return !!apiKey.keyPrefix && !!sessionStorage.getItem('openwa_api_key')?.startsWith(apiKey.keyPrefix);
+}
+
+// The first IP or chat line the gateway would refuse, so the form can name it instead of the bare
+// "Bad Request" a production gateway answers with. On an edit, a list left as stored is not sent (see
+// apiKeyPatch), so an entry saved before the gateway checked it does not block an unrelated change.
+function limitErrors(
+  role: string,
+  ips: string,
+  chats: string,
+  stored?: Pick<ApiKey, 'allowedIps' | 'allowedChats'>,
+): { ip: string | null; chat: string | null } {
+  const ipList = parseScopeList(ips);
+  const chatList = normalizeChatScope(chats);
+  const unchanged = (list: string[], storedList: string[] | undefined) =>
+    !!stored && sameSessionScope(list, storedList ?? []);
+  return {
+    ip: unchanged(ipList, stored?.allowedIps) ? null : invalidIpEntry(ipList),
+    chat: !canScopeSessions(role) || unchanged(chatList, stored?.allowedChats) ? null : invalidChatEntry(chatList),
+  };
+}
+
+// IP, chat and expiry limits shared by the create and edit modals. Chats are offered only where
+// sessions are: admin keys stay unscoped in the dashboard.
+function KeyLimitFields({
+  idPrefix,
+  role,
+  ips,
+  chats,
+  expires,
+  errors,
+  onChange,
+  disabled,
+  expiresRef,
+}: {
+  idPrefix: string;
+  role: string;
+  ips: string;
+  chats: string;
+  expires: string;
+  errors: { ip: string | null; chat: string | null };
+  onChange: (patch: { ips?: string; chats?: string; expires?: string }) => void;
+  disabled?: boolean;
+  expiresRef: RefObject<HTMLInputElement | null>;
+}) {
+  const { t } = useTranslation();
+  // A datetime-local with a blank segment reports value '', like an empty field, so only badInput says
+  // there are leftover segments to clear.
+  const [partialExpiry, setPartialExpiry] = useState(false);
+  return (
+    <>
+      <label htmlFor={`${idPrefix}-ips`}>{t('apiKeys.ips.label')}</label>
+      <textarea
+        id={`${idPrefix}-ips`}
+        rows={2}
+        spellCheck={false}
+        value={ips}
+        disabled={disabled}
+        onChange={e => onChange({ ips: e.target.value })}
+      />
+      {errors.ip !== null && (
+        <span className="key-field-hint error" role="alert">
+          {t('apiKeys.ips.invalid', { value: errors.ip })}
+        </span>
+      )}
+      <span className="key-field-hint">{t('apiKeys.ips.hint')}</span>
+      {canScopeSessions(role) && (
+        <>
+          <label htmlFor={`${idPrefix}-chats`}>{t('apiKeys.chats.label')}</label>
+          <textarea
+            id={`${idPrefix}-chats`}
+            rows={2}
+            spellCheck={false}
+            value={chats}
+            disabled={disabled}
+            onChange={e => onChange({ chats: e.target.value })}
+          />
+          {errors.chat !== null && (
+            <span className="key-field-hint error" role="alert">
+              {t('apiKeys.chats.invalid', { value: errors.chat })}
+            </span>
+          )}
+          <span className="key-field-hint">{t('apiKeys.chats.hint')}</span>
+        </>
+      )}
+      <label htmlFor={`${idPrefix}-expires`}>{t('apiKeys.expiry.label')}</label>
+      <div className="key-expiry-row">
+        <input
+          id={`${idPrefix}-expires`}
+          ref={expiresRef}
+          type="datetime-local"
+          max="9999-12-31T23:59"
+          value={expires}
+          disabled={disabled}
+          onChange={e => {
+            setPartialExpiry(e.target.validity.badInput);
+            onChange({ expires: e.target.value });
+          }}
+          // A partial date typed into an empty field leaves the value at '' and fires no change, so
+          // badInput is read again when focus leaves the field (clicking Create or Save does that).
+          onBlur={e => setPartialExpiry(e.currentTarget.validity.badInput)}
+        />
+        {(expires || partialExpiry) && (
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={disabled}
+            onClick={() => {
+              // With the state already '', React writes nothing to the input, so the segments are
+              // wiped here.
+              if (expiresRef.current) expiresRef.current.value = '';
+              setPartialExpiry(false);
+              onChange({ expires: '' });
+            }}
+          >
+            {t('apiKeys.expiry.clear')}
+          </button>
+        )}
+      </div>
+      <span className="key-field-hint">{t('apiKeys.expiry.hint')}</span>
+    </>
+  );
+}
 
 function useWindowSize() {
   const [width, setWidth] = useState(window.innerWidth);
@@ -75,7 +214,7 @@ export function ApiKeys() {
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null);
-  const [editSessions, setEditSessions] = useState<string[]>([]);
+  const [editDraft, setEditDraft] = useState<ApiKeyDraft | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ type: 'delete' | 'revoke'; id: string; name: string } | null>(
     null,
   );
@@ -86,7 +225,7 @@ export function ApiKeys() {
   const [columnVisibility, setColumnVisibility] = useState<ColumnVisibilityState>({});
 
   useEffect(() => {
-    setColumnVisibility({ key: !isSmall, lastUsed: !isMobile });
+    setColumnVisibility({ key: !isSmall, lastUsed: !isMobile, restrictions: !isMobile });
   }, [isMobile, isSmall]);
 
   const closeCreateModal = () => {
@@ -95,13 +234,29 @@ export function ApiKeys() {
     setNewKey(emptyKeyForm);
   };
 
+  // A datetime-local with a blank segment reports an empty value, the same as no expiry at all, and
+  // fires no change while it stays incomplete. Only the input's own validity tells the two apart. It
+  // also flags a year past the max, which new Date() cannot parse.
+  const newExpiresRef = useRef<HTMLInputElement>(null);
+  const editExpiresRef = useRef<HTMLInputElement>(null);
+
   const handleCreate = async () => {
-    if (!newKey.name) return;
+    if (!canCreate) return;
+    if (newExpiresRef.current && !newExpiresRef.current.validity.valid) {
+      toast.error(t('apiKeys.createBtn'), t('apiKeys.expiry.invalid'));
+      return;
+    }
+    const scoped = canScopeSessions(newKey.role);
+    const allowedIps = parseScopeList(newKey.ips);
+    const allowedChats = scoped ? normalizeChatScope(newKey.chats) : [];
     try {
       const created = await createMutation.mutateAsync({
         name: newKey.name,
         role: newKey.role,
-        ...(canScopeSessions(newKey.role) ? { allowedSessions: newKey.allowedSessions } : {}),
+        ...(scoped ? { allowedSessions: newKey.allowedSessions } : {}),
+        ...(allowedIps.length > 0 ? { allowedIps } : {}),
+        ...(allowedChats.length > 0 ? { allowedChats } : {}),
+        ...(newKey.expires ? { expiresAt: new Date(newKey.expires).toISOString() } : {}),
       });
       setCreatedKey(created.apiKey || null);
       setNewKey(emptyKeyForm);
@@ -111,32 +266,44 @@ export function ApiKeys() {
     }
   };
 
-  const openEditSessions = (apiKey: ApiKey) => {
+  const openEdit = (apiKey: ApiKey) => {
     setEditingKey(apiKey);
-    setEditSessions(apiKey.allowedSessions ?? []);
+    setEditDraft(apiKeyDraft(apiKey));
   };
 
-  const handleSaveSessions = async () => {
-    if (!editingKey) return;
-    // An unchanged Save must not be sent. The server writes `allowedSessions` whenever the field is
-    // present, and storing [] over a key that was never scoped reads back as an authorization
-    // change: it drops every live /events socket holding that key and writes an audit row saying
-    // the scope moved when it did not.
-    if (sameSessionScope(editSessions, editingKey.allowedSessions ?? [])) {
-      setEditingKey(null);
+  const closeEdit = () => {
+    setEditingKey(null);
+    setEditDraft(null);
+  };
+
+  const handleSave = async () => {
+    if (!editingKey || !editDraft || !canSave) return;
+    if (editExpiresRef.current && !editExpiresRef.current.validity.valid) {
+      toast.error(t('apiKeys.edit.title'), t('apiKeys.expiry.invalid'));
       return;
     }
     try {
-      await updateMutation.mutateAsync({
-        id: editingKey.id,
-        data: { allowedSessions: editSessions },
-      });
-      setEditingKey(null);
+      // An unchanged Save is not sent at all (see apiKeyPatch).
+      const data = apiKeyPatch(editingKey, editDraft);
+      if (Object.keys(data).length === 0) {
+        closeEdit();
+        return;
+      }
+      await updateMutation.mutateAsync({ id: editingKey.id, data });
+      closeEdit();
     } catch (err) {
-      console.error('Failed to update sessions:', err);
-      toast.error(t('apiKeys.sessions.editTitle'), err instanceof Error ? err.message : t('common.unknownError'));
+      console.error('Failed to update key:', err);
+      toast.error(t('apiKeys.edit.title'), err instanceof Error ? err.message : t('common.unknownError'));
     }
   };
+
+  const newErrors = limitErrors(newKey.role, newKey.ips, newKey.chats);
+  const editErrors =
+    editDraft && editingKey ? limitErrors(editDraft.role, editDraft.ips, editDraft.chats, editingKey) : null;
+  // The gateway requires a name of at least 3 characters.
+  const canCreate =
+    !createMutation.isPending && newKey.name.trim().length >= 3 && newErrors.ip === null && newErrors.chat === null;
+  const canSave = !updateMutation.isPending && editErrors?.ip === null && editErrors.chat === null;
 
   const handleRevoke = async (id: string) => {
     try {
@@ -205,13 +372,54 @@ export function ApiKeys() {
             return <span className="sessions-cell">{t('apiKeys.sessions.restricted', { count: names.length })}</span>;
           },
         }),
+        columnHelper.display({
+          id: 'restrictions',
+          header: () => t('apiKeys.columns.restrictions'),
+          cell: info => {
+            const { allowedIps, allowedChats, expiresAt } = info.row.original;
+            const badges = [];
+            if (allowedIps?.length) {
+              badges.push(
+                <span key="ips" className="restriction-badge" title={allowedIps.join('\n')}>
+                  {t('apiKeys.restrictions.ips', { count: allowedIps.length })}
+                </span>,
+              );
+            }
+            if (allowedChats?.length) {
+              badges.push(
+                <span key="chats" className="restriction-badge" title={allowedChats.join('\n')}>
+                  {t('apiKeys.restrictions.chats', { count: allowedChats.length })}
+                </span>,
+              );
+            }
+            if (expiresAt) {
+              const date = new Date(expiresAt).toLocaleString();
+              badges.push(
+                <span key="expiry" className={`restriction-badge ${isExpired(expiresAt) ? 'expired' : ''}`}>
+                  {isExpired(expiresAt)
+                    ? t('apiKeys.restrictions.expired', { date })
+                    : t('apiKeys.restrictions.expires', { date })}
+                </span>,
+              );
+            }
+            return badges.length > 0 ? (
+              <span className="restrictions-cell">{badges}</span>
+            ) : (
+              <span className="restrictions-cell none">{t('apiKeys.restrictions.none')}</span>
+            );
+          },
+        }),
         columnHelper.accessor('isActive', {
           header: () => t('apiKeys.columns.status'),
-          cell: info => (
-            <span className={`status-badge ${info.getValue() ? 'active' : 'inactive'}`}>
-              {info.getValue() ? t('apiKeys.statuses.active') : t('apiKeys.statuses.revoked')}
-            </span>
-          ),
+          cell: info => {
+            // A revoked key reads as revoked; an active one past its expiry is refused just the same.
+            const status = !info.getValue() ? 'revoked' : isExpired(info.row.original.expiresAt) ? 'expired' : 'active';
+            return (
+              <span className={`status-badge ${status === 'active' ? 'active' : 'inactive'}`}>
+                {t(`apiKeys.statuses.${status}`)}
+              </span>
+            );
+          },
         }),
         columnHelper.accessor('lastUsedAt', {
           id: 'lastUsed',
@@ -231,12 +439,8 @@ export function ApiKeys() {
               <span className="actions-cell">
                 {/* No per-row copy: the full key only exists once (post-creation modal); the row
                     only has the prefix, so a copy button here could only copy a useless fragment. */}
-                {canScopeSessions(apiKey.role) && apiKey.isActive && (
-                  <button
-                    className="icon-btn"
-                    onClick={() => openEditSessions(apiKey)}
-                    title={t('apiKeys.actions.editSessions')}
-                  >
+                {apiKey.isActive && (
+                  <button className="icon-btn" onClick={() => openEdit(apiKey)} title={t('apiKeys.actions.edit')}>
                     <Pencil size={16} />
                   </button>
                 )}
@@ -315,11 +519,7 @@ export function ApiKeys() {
                 <button className="btn-secondary" onClick={closeCreateModal}>
                   {t('common.cancel')}
                 </button>
-                <button
-                  className="btn-primary"
-                  onClick={handleCreate}
-                  disabled={createMutation.isPending || !newKey.name}
-                >
+                <button className="btn-primary" onClick={handleCreate} disabled={!canCreate}>
                   {createMutation.isPending ? <Loader2 className="animate-spin" size={16} /> : t('common.create')}
                 </button>
               </>
@@ -356,6 +556,9 @@ export function ApiKeys() {
                 value={newKey.name}
                 onChange={e => setNewKey({ ...newKey, name: e.target.value })}
               />
+              {newKey.name.length > 0 && newKey.name.trim().length < 3 && (
+                <span className="key-field-hint">{t('apiKeys.nameTooShort')}</span>
+              )}
               <label htmlFor="ak-2">{t('common.role')}</label>
               <select
                 id="ak-2"
@@ -365,6 +568,7 @@ export function ApiKeys() {
                     ...newKey,
                     role: e.target.value,
                     allowedSessions: canScopeSessions(e.target.value) ? newKey.allowedSessions : [],
+                    chats: canScopeSessions(e.target.value) ? newKey.chats : '',
                   })
                 }
               >
@@ -382,27 +586,34 @@ export function ApiKeys() {
                   disabled={createMutation.isPending}
                 />
               )}
+              <KeyLimitFields
+                idPrefix="ak-new"
+                role={newKey.role}
+                ips={newKey.ips}
+                chats={newKey.chats}
+                expires={newKey.expires}
+                errors={newErrors}
+                onChange={patch => setNewKey(prev => ({ ...prev, ...patch }))}
+                disabled={createMutation.isPending}
+                expiresRef={newExpiresRef}
+              />
             </>
           )}
         </Modal>
       )}
 
-      {editingKey && (
+      {editingKey && editDraft && (
         <Modal
           open
-          onClose={() => setEditingKey(null)}
-          title={t('apiKeys.sessions.editTitle')}
+          onClose={closeEdit}
+          title={t('apiKeys.edit.title')}
           closeLabel={t('common.close')}
           footer={
             <>
-              <button className="btn-secondary" onClick={() => setEditingKey(null)}>
+              <button className="btn-secondary" onClick={closeEdit}>
                 {t('common.cancel')}
               </button>
-              <button
-                className="btn-primary"
-                onClick={() => void handleSaveSessions()}
-                disabled={updateMutation.isPending}
-              >
+              <button className="btn-primary" onClick={() => void handleSave()} disabled={!canSave}>
                 {updateMutation.isPending ? <Loader2 className="animate-spin" size={16} /> : t('apiKeys.sessions.save')}
               </button>
             </>
@@ -411,11 +622,43 @@ export function ApiKeys() {
           <p className="session-scope-edit-name">
             <strong>{editingKey.name}</strong>
           </p>
-          <SessionScopePicker
-            sessions={sessions}
-            selectedIds={editSessions}
-            onChange={setEditSessions}
+          {isSignedInKey(editingKey) && (
+            <p className="key-signed-in-warning" role="note">
+              <AlertTriangle size={16} />
+              {t('apiKeys.edit.signedIn')}
+            </p>
+          )}
+          <label htmlFor="ak-edit-role">{t('common.role')}</label>
+          <select
+            id="ak-edit-role"
+            value={editDraft.role}
             disabled={updateMutation.isPending}
+            onChange={e => setEditDraft({ ...editDraft, role: e.target.value })}
+          >
+            {roleNames.map(r => (
+              <option key={r} value={r}>
+                {t(`apiKeys.roles.${r}`)}
+              </option>
+            ))}
+          </select>
+          {canScopeSessions(editDraft.role) && (
+            <SessionScopePicker
+              sessions={sessions}
+              selectedIds={editDraft.sessions}
+              onChange={ids => setEditDraft({ ...editDraft, sessions: ids })}
+              disabled={updateMutation.isPending}
+            />
+          )}
+          <KeyLimitFields
+            idPrefix="ak-edit"
+            role={editDraft.role}
+            ips={editDraft.ips}
+            chats={editDraft.chats}
+            expires={editDraft.expires}
+            errors={editErrors ?? { ip: null, chat: null }}
+            onChange={patch => setEditDraft(prev => (prev ? { ...prev, ...patch } : prev))}
+            disabled={updateMutation.isPending}
+            expiresRef={editExpiresRef}
           />
         </Modal>
       )}

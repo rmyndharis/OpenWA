@@ -53,7 +53,10 @@ import java.util.Map;
  * }</pre>
  */
 public final class OpenWAClient {
-    private final Gson gson = new Gson();
+    // An unrecognised enum token decodes to that enum's UNKNOWN constant rather than null.
+    private final Gson gson = new GsonBuilder()
+            .registerTypeAdapterFactory(new LenientEnumTypeAdapterFactory())
+            .create();
 
     // Used for the two body types listed in bodySerializer(), never the shared default. Emitting an
     // explicit null needs two things that pull in opposite directions: a serializer that decides
@@ -222,7 +225,7 @@ public final class OpenWAClient {
             throw new OpenWAError("Invalid request — " + method + " " + path + ": " + e.getMessage());
         }
         if (res.status() < 200 || res.status() >= 300) {
-            throw OpenWAApiError.fromResponse(res.status(), "", utf8(res.body()), method + " " + path);
+            throw OpenWAApiError.fromResponse(res.status(), "", utf8(res.body()), method + " " + path, res.headers());
         }
         return res;
     }

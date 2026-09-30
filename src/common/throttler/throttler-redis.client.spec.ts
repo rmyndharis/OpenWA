@@ -1,42 +1,50 @@
-import { ConfigService } from '@nestjs/config';
 import {
   buildThrottlerRedisOptions,
   createThrottlerRedisClient,
   THROTTLER_REDIS_COMMAND_TIMEOUT_MS,
 } from './throttler-redis.client';
 
-const makeConfig = (values: Record<string, unknown>): ConfigService =>
-  ({
-    get: jest.fn((key: string, fallback?: unknown) => values[key] ?? fallback),
-  }) as unknown as ConfigService;
+const KEYS = ['REDIS_HOST', 'REDIS_PORT', 'REDIS_USERNAME', 'REDIS_PASSWORD', 'REDIS_CONNECT_TIMEOUT_MS', 'REDIS_TLS'];
+const saved: Record<string, string | undefined> = {};
+beforeEach(() => {
+  for (const key of KEYS) {
+    saved[key] = process.env[key];
+    delete process.env[key];
+  }
+});
+afterEach(() => {
+  for (const key of KEYS) {
+    if (saved[key] === undefined) delete process.env[key];
+    else process.env[key] = saved[key];
+  }
+});
 
 describe('buildThrottlerRedisOptions', () => {
-  it('maps the redis.* config keys onto the client', () => {
-    const options = buildThrottlerRedisOptions(
-      makeConfig({
-        'redis.host': 'redis.internal',
-        'redis.port': 6380,
-        'redis.username': 'throttler',
-        'redis.password': 'secret',
-        'redis.connectTimeoutMs': 3000,
-      }),
-    );
-    expect(options).toMatchObject({
+  it('maps the REDIS_* connection env onto the client', () => {
+    Object.assign(process.env, {
+      REDIS_HOST: 'redis.internal',
+      REDIS_PORT: '6380',
+      REDIS_USERNAME: 'throttler',
+      REDIS_PASSWORD: 'secret',
+      REDIS_CONNECT_TIMEOUT_MS: '3000',
+      REDIS_TLS: 'true',
+    });
+    expect(buildThrottlerRedisOptions()).toMatchObject({
       host: 'redis.internal',
       port: 6380,
       username: 'throttler',
       password: 'secret',
       connectTimeout: 3000,
+      tls: {},
     });
   });
 
   it('falls back to localhost defaults', () => {
-    const options = buildThrottlerRedisOptions(makeConfig({}));
-    expect(options).toMatchObject({ host: 'localhost', port: 6379, connectTimeout: 5000 });
+    expect(buildThrottlerRedisOptions()).toMatchObject({ host: 'localhost', port: 6379, connectTimeout: 5000 });
   });
 
   it('fails fast instead of queueing or replaying commands across an outage', () => {
-    const options = buildThrottlerRedisOptions(makeConfig({}));
+    const options = buildThrottlerRedisOptions();
     // Commands issued while disconnected reject immediately so the storage's fail-open path
     // engages per request — no offline-queue stall, no post-recovery replay of queued evals.
     expect(options.enableOfflineQueue).toBe(false);
@@ -52,7 +60,8 @@ describe('buildThrottlerRedisOptions', () => {
 
 describe('createThrottlerRedisClient', () => {
   it('passes the fail-fast options through to the ioredis constructor', () => {
-    const client = createThrottlerRedisClient(makeConfig({ 'redis.host': '127.0.0.1' }));
+    process.env.REDIS_HOST = '127.0.0.1';
+    const client = createThrottlerRedisClient();
     try {
       expect(client.options.enableOfflineQueue).toBe(false);
       expect(client.options.autoResendUnfulfilledCommands).toBe(false);

@@ -30,10 +30,15 @@ export interface IngressJobData {
 
 // The KeyedAsyncLock wrapping dispatch below guarantees no two dispatches for the SAME conversation
 // run concurrently (mutual exclusion + in-order START for events as they reach the worker), so the
-// worker no longer needs concurrency 1 — raising it parallelizes UNRELATED conversations instead of
-// head-of-line-blocking every inbound event behind the slowest one. Strict end-to-end order is NOT
-// preserved across a BullMQ retry: a retried job re-enters lock.run() after its backoff and chains at
-// the conversation's CURRENT tail, so it can overtake a same-conversation successor that dispatched
+// worker no longer needs concurrency 1: raising it parallelizes unrelated conversations. The lock is
+// taken inside the job, though, so a job waiting on a busy key still holds a worker slot. A burst on
+// one key larger than the concurrency fills every slot with waiters, and other keys queue behind it
+// until it drains. The key is per instance when the route declares no conversationId pointer, so
+// routes should declare one, and the concurrency should exceed the largest expected per-key burst.
+//
+// Strict end-to-end order is NOT preserved across a BullMQ retry: a retried job re-enters lock.run()
+// after its backoff and chains at the conversation's CURRENT tail, so it can overtake a
+// same-conversation successor that dispatched
 // during the backoff window. This is a deliberate tradeoff — BullMQ retries release the worker slot
 // during backoff (better throughput under transient failure), where retrying inside the lock would
 // hold it — and is acceptable because ingress order is best-effort regardless: the provider delivers

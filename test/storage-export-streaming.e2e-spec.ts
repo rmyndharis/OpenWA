@@ -69,7 +69,7 @@ describe('Storage export streams one file at a time (e2e, real archiver)', () =>
     const output = await createExportStream(() => Promise.resolve(files), openFile, logger as never);
 
     const imported = new Map<string, Buffer>();
-    const count = await importFromStream(
+    const { imported: count } = await importFromStream(
       output,
       (name, data) => {
         imported.set(name, data);

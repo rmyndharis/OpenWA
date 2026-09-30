@@ -19,7 +19,8 @@
  * and optionality only, so the literal sets themselves are ungated on the TS clients. Everywhere
  * else the vocabulary IS compared member by member: Python Literals, Go const blocks and Java
  * enum constants (by their `@SerializedName`, or the constant's own name when it has none, which
- * is what Gson emits), whether the field carries one member or a list of them.
+ * is what Gson emits; a bare `UNKNOWN` is the decode-only sentinel and is skipped), whether the
+ * field carries one member or a list of them.
  *
  * One exception, in Java only: Gson serializes an enum constant by name, i.e. as a JSON string, so
  * a NUMERIC enum cannot be modelled as a Java enum without a custom adapter: the wire would carry
@@ -1010,7 +1011,9 @@ export function parseJavaTypes(sources) {
           continue;
         }
         const bare = part.replace(/@\w+\([^)]*\)/g, '').trim().match(/^([A-Z][A-Z0-9_]*)$/);
-        if (bare) members.push(bare[1]);
+        // A bare UNKNOWN is the client-side sentinel the SDK decodes an unrecognised token to, not
+        // a wire member. An annotated @SerializedName("unknown") is a real member and counts above.
+        if (bare && bare[1] !== 'UNKNOWN') members.push(bare[1]);
       }
       if (members.length) enums[m[1]] = `enum(${sortEnumMembers([...new Set(members)]).join(',')})`;
     }

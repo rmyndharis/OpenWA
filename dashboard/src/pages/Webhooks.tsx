@@ -11,11 +11,14 @@ import {
   Check,
   AlertCircle,
   Filter,
+  X,
 } from 'lucide-react';
 import { webhookApi, type Webhook, type WebhookFilters, type WebhookFilterCondition } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { availableEventNames } from '../utils/webhookEvents';
 import { filterValueLabel } from '../utils/enumLabels';
+import { buildHeaderMap, generateSecret, secretError, type HeaderRow } from '../utils/webhookAuth';
+import { copyToClipboard } from '../utils/clipboard';
 import { useRole } from '../hooks/useRole';
 import { useToast } from '../hooks/useToast';
 import {
@@ -88,6 +91,103 @@ function FilterBadge({ filters }: { filters: WebhookFilters }) {
   );
 }
 
+// Name/value rows for the webhook's custom delivery headers. Values are plain text on purpose: a
+// password field could be autofilled with the dashboard's own API key and sent to the receiver.
+function HeaderRowsEditor({ rows, onChange }: { rows: HeaderRow[]; onChange: (rows: HeaderRow[]) => void }) {
+  const { t } = useTranslation();
+  const update = (index: number, patch: Partial<HeaderRow>) =>
+    onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  return (
+    <>
+      {rows.map((row, index) => (
+        <div key={index} className="filter-row header-row">
+          <input
+            type="text"
+            aria-label={t('webhooks.auth.headerName')}
+            placeholder={t('webhooks.auth.headerName')}
+            autoComplete="off"
+            spellCheck={false}
+            value={row.name}
+            onChange={e => update(index, { name: e.target.value })}
+          />
+          <input
+            type="text"
+            aria-label={t('webhooks.auth.headerValue')}
+            placeholder={t('webhooks.auth.headerValue')}
+            autoComplete="off"
+            spellCheck={false}
+            value={row.value}
+            onChange={e => update(index, { value: e.target.value })}
+          />
+          <button
+            type="button"
+            className="filter-remove"
+            title={t('webhooks.auth.removeHeader')}
+            aria-label={t('webhooks.auth.removeHeader')}
+            onClick={() => onChange(rows.filter((_, i) => i !== index))}
+          >
+            <X size={16} />
+          </button>
+        </div>
+      ))}
+      <button type="button" className="filter-add" onClick={() => onChange([...rows, { name: '', value: '' }])}>
+        <Plus size={14} />
+        {t('webhooks.auth.addHeader')}
+      </button>
+    </>
+  );
+}
+
+// The secret input with Generate and Copy. The field stays a password input, so Copy is how a generated
+// value reaches the receiver's configuration.
+function SecretField({
+  id,
+  value,
+  onChange,
+  placeholder,
+  disabled,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  return (
+    <div className="secret-row">
+      <input
+        id={id}
+        type="password"
+        autoComplete="new-password"
+        placeholder={placeholder}
+        disabled={disabled}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+      />
+      <button type="button" className="btn-secondary" disabled={disabled} onClick={() => onChange(generateSecret())}>
+        {t('webhooks.auth.generateSecret')}
+      </button>
+      <button
+        type="button"
+        className="btn-secondary"
+        disabled={disabled || !value}
+        onClick={async () => {
+          if (await copyToClipboard(value)) toast.success(t('webhooks.auth.secretCopied'));
+        }}
+      >
+        {t('webhooks.auth.copySecret')}
+      </button>
+    </div>
+  );
+}
+
+const emptyNewAuth = { secret: '', headers: [] as HeaderRow[] };
+// The stored secret and headers are never returned, so an edit starts blank and sends neither unless
+// the operator acts: leaving the section alone keeps whatever the webhook already has.
+const emptyEditAuth = { secret: '', removeSecret: false, replaceHeaders: false, headers: [] as HeaderRow[] };
+
 export function Webhooks() {
   const { t } = useTranslation();
   useDocumentTitle(t('webhooks.title'));
@@ -109,6 +209,8 @@ export function Webhooks() {
     sessionId: string;
     filters: WebhookFilters | null;
   }>({ url: '', events: ['message.received'], sessionId: '', filters: null });
+  const [newAuth, setNewAuth] = useState(emptyNewAuth);
+  const [editAuth, setEditAuth] = useState(emptyEditAuth);
   const [testingId, setTestingId] = useState<string | null>(null);
   const toast = useToast();
 
@@ -121,9 +223,30 @@ export function Webhooks() {
     return t(`webhooks.eventDescriptions.${name}`, { defaultValue: name });
   };
 
+  // The gateway requires a URL and at least one event, so the buttons stay disabled until both are set
+  // instead of surfacing the raw validation message in a toast.
+  const newHeaders = buildHeaderMap(newAuth.headers);
+  const newAuthError = secretError(newAuth.secret) ?? (newHeaders.ok ? null : newHeaders.error);
+  const editHeaders = buildHeaderMap(editAuth.headers);
+  const editAuthError =
+    (editAuth.removeSecret ? null : secretError(editAuth.secret)) ??
+    (editAuth.replaceHeaders && !editHeaders.ok ? editHeaders.error : null);
+  const canCreate =
+    !createMutation.isPending &&
+    !!newWebhook.url.trim() &&
+    !!newWebhook.sessionId &&
+    newWebhook.events.length > 0 &&
+    !newAuthError;
+  const canSave =
+    !!editWebhook &&
+    !updateMutation.isPending &&
+    !!editWebhook.url.trim() &&
+    editWebhook.events.length > 0 &&
+    !editAuthError;
+
   const handleCreate = async () => {
     // The gateway saves every create it receives, so a double click would register the webhook twice.
-    if (createMutation.isPending || !newWebhook.url || !newWebhook.sessionId) return;
+    if (!canCreate) return;
     try {
       await createMutation.mutateAsync({
         sessionId: newWebhook.sessionId,
@@ -131,9 +254,13 @@ export function Webhooks() {
         events: newWebhook.events,
         // Don't persist message-filters when no message events are selected (the filter UI is hidden).
         filters: supportsFilters(newWebhook.events) ? newWebhook.filters : null,
+        // Both are optional: an empty secret would be refused (minimum 16), and no rows means no headers.
+        ...(newAuth.secret ? { secret: newAuth.secret } : {}),
+        ...(newHeaders.ok && Object.keys(newHeaders.headers).length > 0 ? { headers: newHeaders.headers } : {}),
       });
       setShowCreateModal(false);
       setNewWebhook({ url: '', events: ['message.received'], sessionId: '', filters: null });
+      setNewAuth(emptyNewAuth);
       toast.success(t('webhooks.toasts.created'));
     } catch (err) {
       toast.error(
@@ -187,11 +314,12 @@ export function Webhooks() {
 
   const openEdit = (webhook: Webhook) => {
     setEditWebhook({ ...webhook });
+    setEditAuth(emptyEditAuth);
     setShowEditModal(true);
   };
 
   const handleEdit = async () => {
-    if (!editWebhook) return;
+    if (!editWebhook || !canSave) return;
     try {
       await updateMutation.mutateAsync({
         sessionId: editWebhook.sessionId,
@@ -202,10 +330,15 @@ export function Webhooks() {
           active: editWebhook.active,
           // Clear message-filters if the edit removed all message events (the filter UI is hidden then).
           filters: supportsFilters(editWebhook.events) ? (editWebhook.filters ?? null) : null,
+          // Only an explicit action touches the stored credentials: '' removes the secret, and
+          // `headers` replaces the whole stored map ({} clears it).
+          ...(editAuth.removeSecret ? { secret: '' } : editAuth.secret ? { secret: editAuth.secret } : {}),
+          ...(editAuth.replaceHeaders && editHeaders.ok ? { headers: editHeaders.headers } : {}),
         },
       });
       setShowEditModal(false);
       setEditWebhook(null);
+      setEditAuth(emptyEditAuth);
       toast.success(t('webhooks.toasts.updated'));
     } catch (err) {
       toast.error(
@@ -279,11 +412,7 @@ export function Webhooks() {
               <button className="btn-secondary" onClick={() => setShowCreateModal(false)}>
                 {t('common.cancel')}
               </button>
-              <button
-                className="btn-primary"
-                onClick={handleCreate}
-                disabled={createMutation.isPending || !newWebhook.url || !newWebhook.sessionId}
-              >
+              <button className="btn-primary" onClick={handleCreate} disabled={!canCreate}>
                 {t('common.create')}
               </button>
             </>
@@ -327,6 +456,11 @@ export function Webhooks() {
               );
             })}
           </div>
+          {newWebhook.events.length === 0 && (
+            <span className="hint error" role="status">
+              {t('webhooks.noEvents')}
+            </span>
+          )}
           {supportsFilters(newWebhook.events) && (
             <FilterBuilder
               filters={newWebhook.filters}
@@ -334,6 +468,26 @@ export function Webhooks() {
               chats={chats}
             />
           )}
+          <div className="filter-builder webhook-auth">
+            <div className="filter-builder-head">
+              <span className="filter-builder-title">{t('webhooks.auth.title')}</span>
+              <span className="filter-builder-hint">{t('webhooks.auth.hint')}</span>
+            </div>
+            <label htmlFor="wh-secret">{t('webhooks.auth.secret')}</label>
+            <SecretField
+              id="wh-secret"
+              value={newAuth.secret}
+              onChange={secret => setNewAuth(prev => ({ ...prev, secret }))}
+            />
+            <span className="filter-builder-hint">{t('webhooks.auth.secretHint')}</span>
+            <span className="filter-builder-title">{t('webhooks.auth.headers')}</span>
+            <HeaderRowsEditor rows={newAuth.headers} onChange={headers => setNewAuth(prev => ({ ...prev, headers }))} />
+            {newAuthError && (
+              <span className="hint error" role="status">
+                {t(newAuthError)}
+              </span>
+            )}
+          </div>
         </Modal>
       )}
 
@@ -348,7 +502,7 @@ export function Webhooks() {
               <button className="btn-secondary" onClick={() => setShowEditModal(false)}>
                 {t('common.cancel')}
               </button>
-              <button className="btn-primary" onClick={handleEdit}>
+              <button className="btn-primary" onClick={handleEdit} disabled={!canSave}>
                 {t('webhooks.saveChanges')}
               </button>
             </>
@@ -378,6 +532,11 @@ export function Webhooks() {
               );
             })}
           </div>
+          {editWebhook.events.length === 0 && (
+            <span className="hint error" role="status">
+              {t('webhooks.noEvents')}
+            </span>
+          )}
           {supportsFilters(editWebhook.events) && (
             <FilterBuilder
               filters={editWebhook.filters}
@@ -385,6 +544,50 @@ export function Webhooks() {
               chats={chats}
             />
           )}
+          <div className="filter-builder webhook-auth">
+            <div className="filter-builder-head">
+              <span className="filter-builder-title">{t('webhooks.auth.title')}</span>
+              <span className="filter-builder-hint">{t('webhooks.auth.editHint')}</span>
+            </div>
+            <label htmlFor="wh-edit-secret">{t('webhooks.auth.secret')}</label>
+            <SecretField
+              id="wh-edit-secret"
+              placeholder={t('webhooks.auth.secretKeepPlaceholder')}
+              disabled={editAuth.removeSecret}
+              value={editAuth.secret}
+              onChange={secret => setEditAuth(prev => ({ ...prev, secret }))}
+            />
+            <label className="webhook-auth-check">
+              <input
+                type="checkbox"
+                checked={editAuth.removeSecret}
+                onChange={e => setEditAuth(prev => ({ ...prev, removeSecret: e.target.checked, secret: '' }))}
+              />
+              {t('webhooks.auth.removeSecret')}
+            </label>
+            <label className="webhook-auth-check">
+              <input
+                type="checkbox"
+                checked={editAuth.replaceHeaders}
+                onChange={e => setEditAuth(prev => ({ ...prev, replaceHeaders: e.target.checked }))}
+              />
+              {t('webhooks.auth.replaceHeaders')}
+            </label>
+            {editAuth.replaceHeaders && (
+              <>
+                <span className="filter-builder-hint">{t('webhooks.auth.replaceHint')}</span>
+                <HeaderRowsEditor
+                  rows={editAuth.headers}
+                  onChange={headers => setEditAuth(prev => ({ ...prev, headers }))}
+                />
+              </>
+            )}
+            {editAuthError && (
+              <span className="hint error" role="status">
+                {t(editAuthError)}
+              </span>
+            )}
+          </div>
           <div className="toggle-group">
             <span className="toggle-label" id="webhook-active-label">
               {t('common.status')}

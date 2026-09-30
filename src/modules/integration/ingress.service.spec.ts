@@ -68,6 +68,36 @@ describe('redactSensitiveHeaders (persisted ingress payloads)', () => {
     expect(recorded.payload.headers['x-delivery']).toBe('d1');
   });
 
+  it("redacts an hmac route's declared signature header in the persisted and enqueued payload", async () => {
+    const d = deps({
+      manifestRoute: jest.fn().mockReturnValue({
+        route: 'shop',
+        mode: 'async',
+        verify: 'core',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'hmac-sha256', header: 'X-Custom-Sig' },
+        dedupHeader: 'x-delivery',
+      }),
+    });
+    const res = await new IngressService(d).handle({
+      pluginId: 'shop',
+      instanceId: 'acct1',
+      route: 'shop',
+      method: 'POST',
+      headers: { 'x-delivery': 'd1', 'x-custom-sig': createHmac('sha256', 's').update('{}').digest('hex') },
+      query: {},
+      rawBody: '{}',
+    });
+    expect(res.status).toBe(202);
+    const recorded = (
+      d.events.recordOrSkip.mock.calls as unknown as [[{ payload: { headers: Record<string, string> } }]]
+    )[0][0];
+    expect(recorded.payload.headers['x-custom-sig']).toBe('[redacted]');
+    expect(recorded.payload.headers['x-delivery']).toBe('d1');
+    const job = (d.enqueue.mock.calls as unknown as [[{ payload: { headers: Record<string, string> } }]])[0][0];
+    expect(job.payload.headers['x-custom-sig']).toBe('[redacted]');
+  });
+
   it("redacts a shared-secret route's declared credential header in the persisted and enqueued payload", async () => {
     const d = deps({
       manifestRoute: jest.fn().mockReturnValue({
@@ -758,5 +788,103 @@ describe('IngressService.handle — response contract', () => {
     expect(first).toEqual({ status: 204, headers: { 'content-type': 'application/json' } });
     expect(retry).toEqual(first);
     expect(dup.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('IngressService per-instance rate bucket', () => {
+  const post = (overrides: Record<string, unknown> = {}) => ({
+    pluginId: 'chatwoot',
+    instanceId: 'acct1',
+    route: 'chatwoot',
+    method: 'POST',
+    headers: { 'x-delivery': 'd1' } as Record<string, string>,
+    query: {} as Record<string, string>,
+    rawBody: '{}',
+    ...overrides,
+  });
+  const admitted = {
+    ok: true,
+    headers: { 'X-RateLimit-Limit-instance': '120', 'X-RateLimit-Remaining-instance': '119' },
+  };
+  const blocked = { ok: false, headers: { 'Retry-After-instance': '7', 'Retry-After': '7' } };
+
+  it.each([
+    ['an unknown instance', { instances: { resolve: jest.fn().mockResolvedValue(null) } }, post(), 404],
+    ['an unknown route', { manifestRoute: jest.fn().mockReturnValue(undefined) }, post(), 404],
+    ['an oversized body', {}, post({ rawBody: 'x'.repeat(2048) }), 413],
+    [
+      'a failed signature',
+      {
+        manifestRoute: jest.fn().mockReturnValue({
+          route: 'chatwoot',
+          maxBodyBytes: 1024,
+          signature: { scheme: 'hmac-sha256', header: 'x-sig' },
+        }),
+      },
+      post({ headers: { 'x-sig': 'sha256=bad' } }),
+      401,
+    ],
+    [
+      'a GET challenge',
+      {
+        manifestRoute: jest.fn().mockReturnValue({
+          route: 'chatwoot',
+          maxBodyBytes: 1024,
+          signature: { scheme: 'none' },
+          challenge: { tokenParam: 'hub.verify_token', echoParam: 'hub.challenge' },
+        }),
+      },
+      post({ method: 'GET', query: { 'hub.verify_token': 'wrong' } }),
+      403,
+    ],
+  ])('does not charge the bucket for %s', async (_label, overrides, req, status) => {
+    const admitInstance = jest.fn().mockResolvedValue(blocked);
+    const svc = new IngressService(deps({ ...overrides, admitInstance }));
+    const res = await svc.handle(req);
+    expect(res.status).toBe(status);
+    expect(admitInstance).not.toHaveBeenCalled();
+  });
+
+  it('charges a verified delivery once and sheds it with the throttler 429 when the bucket is full', async () => {
+    const admitInstance = jest.fn().mockResolvedValue(blocked);
+    const d = deps({ admitInstance });
+    const res = await new IngressService(d).handle(post());
+    expect(admitInstance).toHaveBeenCalledTimes(1);
+    expect(admitInstance).toHaveBeenCalledWith('chatwoot', 'acct1');
+    expect(res).toEqual({
+      status: 429,
+      body: JSON.stringify({ statusCode: 429, message: 'ThrottlerException: Too Many Requests' }),
+      headers: { 'content-type': 'application/json', 'Retry-After-instance': '7', 'Retry-After': '7' },
+    });
+    expect(d.events.recordOrSkip).not.toHaveBeenCalled();
+    expect(d.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('charges before the session-alive preflight, so a full bucket answers 429 rather than 503', async () => {
+    const admitInstance = jest.fn().mockResolvedValue(blocked);
+    const svc = new IngressService(
+      deps({
+        admitInstance,
+        sessionStatus: () => undefined,
+        manifestRoute: jest.fn().mockReturnValue({
+          route: 'chatwoot',
+          maxBodyBytes: 1024,
+          signature: { scheme: 'none' },
+          response: { preflight: ['session-alive'], ack: { status: 200 } },
+        }),
+      }),
+    );
+    await expect(svc.handle(post())).resolves.toMatchObject({ status: 429 });
+  });
+
+  it.each([
+    ['a new delivery', true],
+    ['a re-delivery', false],
+  ])('adds the rate headers to the ack of %s', async (_label, isNew) => {
+    const d = deps({ admitInstance: jest.fn().mockResolvedValue(admitted) });
+    d.events.recordOrSkip = jest.fn().mockResolvedValue(isNew);
+    const res = await new IngressService(d).handle(post());
+    expect(res.status).toBe(202);
+    expect(res.headers).toEqual(admitted.headers);
   });
 });

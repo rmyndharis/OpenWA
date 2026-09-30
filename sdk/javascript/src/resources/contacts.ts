@@ -42,7 +42,7 @@ export class ContactsResource {
     });
   }
 
-  /** Check whether a phone number is registered on WhatsApp. */
+  /** Check whether a phone number is registered on WhatsApp. Requires an OPERATOR-level key. */
   check(sessionId: string, number: string): Promise<CheckNumberResponse> {
     return this.client.request<CheckNumberResponse>({
       method: 'GET',

@@ -1,11 +1,77 @@
 import { BadRequestException } from '@nestjs/common';
-import { MessageTypes, type Client } from 'whatsapp-web.js';
+import * as wwebjs from 'whatsapp-web.js';
+import { MessageTypes, type Chat, type Client } from 'whatsapp-web.js';
 import { ChatSummary, ChatState } from '../interfaces/whatsapp-engine.interface';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { chatKind, isChannelJid } from '../identity/wa-id';
 import { WwebjsMessaging } from './wwebjs-messaging';
 import { type WwebjsEngineHost } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
+
+/**
+ * Build the chat list IN-PAGE with the same `window.WWebJS.getChatModel` whatsapp-web.js's own
+ * `client.getChats()` maps, yielding to the page event loop every 256 chats so the liveness probe's
+ * queued `getState()` evaluate can interleave. The library starts every getChatModel in one `map`,
+ * and a personal chat reaches no await at all (serialize() plus its last message), so on a large chat
+ * list that map is one uninterrupted synchronous stretch that starves the probe and lets the watchdog
+ * tear a healthy session down mid-read: the #1501 shape readLeanContacts fixed for contacts.
+ *
+ * The models and their order are unchanged, the group metadata updates still overlap, and one chat
+ * whose model rejects still rejects the whole read, as upstream does.
+ */
+export async function readChatModels(): Promise<unknown[]> {
+  const w = window as unknown as {
+    require: (m: string) => { Chat: { getModelsArray: () => unknown[] } };
+    WWebJS: { getChatModel: (chat: unknown) => Promise<unknown> };
+  };
+  // A copy: getModelsArray() is the collection's live array, which re-sorts on a new message and
+  // grows on a new chat, so indexing it across the yields below would read one chat twice and skip
+  // another. Upstream's single synchronous map never let it change underneath.
+  const chats = w.require('WAWebCollections').Chat.getModelsArray().slice();
+  const pending: Promise<unknown>[] = [];
+  for (let i = 0; i < chats.length; i++) {
+    const model = w.WWebJS.getChatModel(chats[i]);
+    // Handled here so a rejection that lands during a yield is not reported as unhandled; the
+    // Promise.all below still rejects with it.
+    model.catch(() => undefined);
+    pending.push(model);
+    if ((i & 0xff) === 0xff) await new Promise(resolve => setTimeout(resolve));
+  }
+  return Promise.all(pending);
+}
+
+/** The chat structures are classes at runtime; index.d.ts declares them as interfaces only. */
+type ChatConstructor = new (client: Client, data: unknown) => Chat;
+const { GroupChat, PrivateChat } = wwebjs as unknown as { GroupChat: ChatConstructor; PrivateChat: ChatConstructor };
+
+/**
+ * The whole chat list through {@link readChatModels}, rehydrated the way whatsapp-web.js's
+ * ChatFactory does for these entries, so every mapped field reads exactly as `client.getChats()`
+ * gave it. Shared by the chat and group lists. A dead page answers 503 with the death signal, a read
+ * that outran the protocol budget answers 503 without one, and anything else is rethrown.
+ */
+export async function listChats(host: WwebjsEngineHost, context: string): Promise<Chat[]> {
+  const client = host.getClient();
+  const page = (client as unknown as { pupPage: { evaluate: <T>(fn: () => Promise<T>) => Promise<T> } }).pupPage;
+  let models: unknown[];
+  try {
+    models = await page.evaluate(readChatModels);
+  } catch (error) {
+    // Same split every sibling read makes (see getChatsByLabel): a dead page is a 503 and an
+    // early death signal, not an opaque 500 under a status that still says READY (#1081).
+    if (host.isPageTransportError(error)) {
+      host.reportIfPageTransportError(error, context);
+      throw new EngineTransportError('Transport died while listing chats');
+    }
+    if (isProtocolTimeout(error)) {
+      throw new EngineTransportError('WhatsApp Web did not answer the chat list read in time');
+    }
+    throw error;
+  }
+  return models.map(data =>
+    (data as { isGroup?: boolean }).isGroup ? new GroupChat(client, data) : new PrivateChat(client, data),
+  );
+}
 
 /**
  * Chat-list operations extracted from WhatsAppWebJsAdapter. The adapter keeps the public methods as
@@ -26,18 +92,7 @@ export class WwebjsChats {
 
   async getChats(): Promise<ChatSummary[]> {
     this.host.ensureReady();
-    let chats: Awaited<ReturnType<Client['getChats']>>;
-    try {
-      chats = await this.client().getChats();
-    } catch (error) {
-      // Same split every sibling read makes (see getChatsByLabel): a dead page is a 503 and an
-      // early death signal, not an opaque 500 under a status that still says READY (#1081).
-      if (this.host.isPageTransportError(error)) {
-        this.host.reportIfPageTransportError(error, 'getChats');
-        throw new EngineTransportError('Transport died while listing chats');
-      }
-      throw error;
-    }
+    const chats = await listChats(this.host, 'getChats');
     const summaries: ChatSummary[] = [];
     let skipped = 0;
 

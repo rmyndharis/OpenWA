@@ -21,7 +21,10 @@ process.env.REDIS_PORT = String(REDIS_PORT);
 // Jest registers suites synchronously at file load and has no runtime skip, so the Redis
 // availability probe has to settle synchronously too: spawn a throwaway node one-liner that
 // TCP-connects with a hard deadline (spawnSync kills it past the timeout margin). Unreachable →
-// describe.skip below: an explicit green skip instead of a red boot.
+// describe.skip below on a developer box: an explicit green skip instead of a red boot. On GitHub
+// Actions every workflow that runs this suite provides Redis, so an unreachable one is drift (a
+// removed service, a renamed env var) and fails the suite instead of reporting green on tests it
+// never ran. Keyed on GITHUB_ACTIONS rather than CI, which a local shell may export without Redis.
 const probeRedis = (host: string, port: number, timeoutMs: number): boolean => {
   const script =
     `const s = require('net').connect(${port}, ${JSON.stringify(host)});` +
@@ -32,6 +35,12 @@ const probeRedis = (host: string, port: number, timeoutMs: number): boolean => {
 };
 
 const REDIS_AVAILABLE = probeRedis(REDIS_HOST, REDIS_PORT, 1000);
+if (!REDIS_AVAILABLE && process.env.GITHUB_ACTIONS === 'true') {
+  throw new Error(
+    `queue-on e2e: no Redis at ${REDIS_HOST}:${REDIS_PORT} under GitHub Actions (set REDIS_HOST/REDIS_PORT or ` +
+      'QUEUE_TEST_REDIS_HOST/QUEUE_TEST_REDIS_PORT); refusing to skip',
+  );
+}
 const describeQueueOn = REDIS_AVAILABLE ? describe : describe.skip;
 
 import { createHmac, randomBytes } from 'node:crypto';
@@ -82,7 +91,7 @@ import { WebhookService } from '../src/modules/webhook/webhook.service';
  * (or `docker compose --profile redis up -d redis`); point elsewhere with
  * QUEUE_TEST_REDIS_HOST/QUEUE_TEST_REDIS_PORT. CI runs it against the redis service of the Test job.
  * With no Redis reachable the whole suite self-skips (see REDIS_AVAILABLE above), so a bare
- * `npm run test:e2e` on a Redis-less box stays green.
+ * `npm run test:e2e` on a Redis-less box stays green; on GitHub Actions it fails instead.
  */
 describeQueueOn('Queued dispatch paths (e2e, QUEUE_ENABLED=true)', () => {
   let app: INestApplication<App>;

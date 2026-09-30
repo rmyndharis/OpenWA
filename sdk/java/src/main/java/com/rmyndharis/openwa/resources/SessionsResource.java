@@ -60,7 +60,7 @@ public final class SessionsResource {
 
     /**
      * Update per-session proxy settings. No restart is performed — changes apply on the next start.
-     * Send {@code proxyUrl: null} to clear the proxy. Requires an OPERATOR-level key.
+     * Send {@code proxyUrl: null} to clear the proxy. Requires an unscoped ADMIN key.
      */
     public SessionProxy updateProxy(String id, UpdateSessionProxyRequest body) {
         return client.request(
@@ -72,7 +72,7 @@ public final class SessionsResource {
         return client.request(HttpMethod.GET, "/api/sessions/" + encodeSegment(id), null, null, SessionResponse.class);
     }
 
-    /** Create a new session. Requires an OPERATOR-level key. */
+    /** Create a new session. Requires an OPERATOR-level key; setting proxyUrl requires an ADMIN key. */
     public SessionResponse create(CreateSessionRequest body) {
         return client.request(HttpMethod.POST, "/api/sessions", null, body, SessionResponse.class);
     }

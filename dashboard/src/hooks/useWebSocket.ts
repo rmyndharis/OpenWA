@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { warnIfInsecureHttpUrl } from '../utils/urlSecurity';
+import { API_ORIGIN } from '../services/api';
+import { resolveSocketUrl, warnIfInsecureHttpUrl } from '../utils/urlSecurity';
 
 interface SessionStatusEvent {
   sessionId: string;
@@ -137,11 +138,12 @@ interface ServerErrorFrame {
   message?: string;
 }
 
-// Use current origin for WebSocket (goes through nginx proxy in Docker)
-// Falls back to env var or localhost for development
-const SOCKET_URL = import.meta.env.VITE_WS_URL || window.location.origin;
-// Warn when the WebSocket origin is an insecure http:// URL on a non-localhost host.
-warnIfInsecureHttpUrl(SOCKET_URL, 'VITE_WS_URL');
+// The origin of VITE_WS_URL when set, else of VITE_API_URL (a split-origin build names the API there), else the
+// page's own origin (the single-container setup, or nginx proxying /socket.io in Docker).
+const SOCKET_URL = resolveSocketUrl(import.meta.env.VITE_WS_URL, API_ORIGIN, window.location.origin);
+// Warn when VITE_WS_URL is an insecure http:// URL on a non-localhost host; api.ts already warns
+// about VITE_API_URL under its own name.
+if (import.meta.env.VITE_WS_URL) warnIfInsecureHttpUrl(SOCKET_URL, 'VITE_WS_URL');
 
 export function useWebSocket(events: WebSocketEvents = {}) {
   const socketRef = useRef<Socket | null>(null);

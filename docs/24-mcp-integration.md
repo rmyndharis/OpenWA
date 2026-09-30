@@ -97,7 +97,13 @@ flowchart LR
     Invoker --> Services[Existing module services]
 ```
 
-A tool call flows through four steps, in this order:
+Every `POST /mcp`, including `initialize` and `tools/list`, first passes the pre-auth per-IP
+throttle and then a key gate: a missing, unknown, revoked or expired key, or one the gate
+otherwise refuses, gets an HTTP error with a JSON-RPC body (`401` carries
+`WWW-Authenticate: Bearer`) and an `API_KEY_AUTH_FAILED` audit row (a missing or unknown
+key's row is capped at 10 per client IP a minute, a budget shared with REST and the queue
+dashboard), and no MCP method runs.
+Past the gate, a tool call flows through four steps, in this order:
 
 1. **Key extraction.** The adapter reads the API key from the `X-API-Key` header or
    `Authorization: Bearer …`.
@@ -121,18 +127,19 @@ The surface is an **allowlist by construction** — a capability is exposed only
 declares a `tier` (`read` | `write`) and a `requiredRole` when the call warrants one: every
 write carries its privilege level, and a read carries the role its REST twin requires. The
 reads at OPERATOR are `WebhooksList`, `WebhookFindBySession` and `WebhookFindOne`,
-`AutomationRuleFindAll` and `AutomationRuleFindOne`, and `GroupGetInviteCode` (the invite
-code is a transferable join capability, so it sits at OPERATOR like the QR endpoint).
+`AutomationRuleFindAll` and `AutomationRuleFindOne`, `GroupGetInviteCode` (the invite
+code is a transferable join capability, so it sits at OPERATOR like the QR endpoint), and
+`ContactCheckNumber` (each call queries WhatsApp about a third party).
 
-| Domain         | Read tools                                              | Write tools                                                                                   |
-| -------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| **Session**    | list, get, chats, stats, presence                       | mark read/unread, typing, subscribe presence                                                  |
-| **Message**    | list, history, reactions                                | send text/image/video/audio/document/location/contact/sticker/template, reply, forward, react |
-| **Contact**    | list, get, check-number, resolve-phone, profile-picture | block, unblock                                                                                |
-| **Group**      | list, get, invite-code (OPERATOR)                       | create, add participants, set subject, set description                                        |
-| **Webhook**    | list, get (OPERATOR)                                    | —                                                                                             |
-| **Label**      | list, get, chats for a label, labels on a chat          | upsert, delete, add to chat, remove from chat                                                 |
-| **Automation** | rules list, get (OPERATOR)                              | —                                                                                             |
+| Domain         | Read tools                                                         | Write tools                                                                                   |
+| -------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| **Session**    | list, get, chats, stats, presence                                  | mark read/unread, typing, subscribe presence                                                  |
+| **Message**    | list, history, reactions                                           | send text/image/video/audio/document/location/contact/sticker/template, reply, forward, react |
+| **Contact**    | list, get, check-number (OPERATOR), resolve-phone, profile-picture | block, unblock                                                                                |
+| **Group**      | list, get, invite-code (OPERATOR)                                  | create, add participants, set subject, set description                                        |
+| **Webhook**    | list, get (OPERATOR)                                               | —                                                                                             |
+| **Label**      | list, get, chats for a label, labels on a chat                     | upsert, delete, add to chat, remove from chat                                                 |
+| **Automation** | rules list, get (OPERATOR)                                         | —                                                                                             |
 
 > **Labels split across the engines**, and each tool's description says which way. Every label
 > _read_ needs whatsapp-web.js — Baileys exposes no label query at all. Editing a label (upsert,
@@ -158,6 +165,9 @@ only when an agent genuinely needs to send messages / mutate state.
 
 ## 24.5 Authentication & Security
 
+- **Every request needs a key.** The mount refuses any `POST /mcp` without a valid key before
+  the transport answers, so the server version and tool catalogue are never served to an
+  unauthenticated caller. Role, session and chat scope are still checked per tool call.
 - **Same authorization as REST.** Tool calls are authorized by `AuthService` — role and
   per-session `allowedSessions` scoping are enforced identically to REST. A key scoped to
   one session cannot act on another.
@@ -165,8 +175,8 @@ only when an agent genuinely needs to send messages / mutate state.
   MCP client (`OPERATOR` role at most). The plaintext key is shown once on creation; to
   rotate, create a new key and delete the old one.
 - **No IP allow-list over MCP.** There is no genuine client IP on a tool call, so a key
-  that carries an `allowedIps` list will be rejected. Use a key without `allowedIps` for
-  MCP.
+  that carries an `allowedIps` list is refused at the mount. Use a key without `allowedIps`
+  for MCP.
 - **Rate limiting.** A per-key limiter (keyed by the _authenticated_ key id) bounds tool
   calls. The key map is capped (approximate-LRU eviction at 50,000 keys), so a
   distinct-key flood cannot grow process memory without limit. This is independent of
@@ -189,6 +199,33 @@ only when an agent genuinely needs to send messages / mutate state.
 - **Do not expose `/mcp` to the public internet** without a fronting authentication proxy.
   The static API key is appropriate for a self-hosted, locally/network-reached deployment;
   public exposure should wait for OAuth 2.1 support (planned).
+- **Chat-restricted keys are refused.** A key carrying `allowedChats` gets an `isError` tool
+  result naming `ForbiddenException` ("API key is restricted to selected chats") on every tool
+  call, the same default deny REST applies to routes with no chat dimension. Use a session-scoped
+  key for MCP instead.
+- **IP-restricted keys are refused.** The `/mcp` gate cannot check the client address, so a key
+  with `allowedIps` gets `403` on every request. Use a key without an IP allow-list for MCP.
+
+### Threat model: untrusted message content
+
+The read tools return what other WhatsApp users wrote, verbatim: message bodies and captions
+(`MessageList`, `MessageHistory`), last-message previews and chat names (`SessionGetChats`,
+`LabelListChats`), push names and contact names (`ContactFindAll`, `ContactFindOne`), and group
+subjects and descriptions (`GroupFindAll`, `GroupFindOne`). Treat any read tool that returns a name
+or message text the same way. Anyone who can message the account, or join or rename a group it is
+in, controls that text. An agent that reads it may treat instructions embedded in it as its own.
+
+- In the default read-only mode, injected text can at most steer what the agent reads and
+  reports back.
+- With `MCP_READONLY=false`, the same text can steer the agent into sends, replies, forwards
+  or group changes on the key's behalf.
+
+Keep the blast radius small:
+
+- Leave `MCP_READONLY` at its default unless the agent must write.
+- Give a read-only agent a `VIEWER` key, and scope every MCP key to the sessions it needs
+  (`allowedSessions`).
+- When write tools are on, have the MCP client ask a human to confirm each write call.
 
 ## 24.6 Enabling & Client Setup
 
@@ -243,8 +280,8 @@ Guidelines:
   `WebhookResponseDto.fromEntity`, `SessionResponseDto.fromEntity`). Returning a raw entity
   can leak fields the REST API deliberately strips.
 - Mark writes with `tier: 'write'` and the appropriate `requiredRole`. Give a read the same
-  `requiredRole` as the REST route it mirrors: the webhook and automation-rule reads and
-  `GroupGetInviteCode` sit at OPERATOR because their REST routes do.
+  `requiredRole` as the REST route it mirrors: the webhook and automation-rule reads,
+  `GroupGetInviteCode` and `ContactCheckNumber` sit at OPERATOR because their REST routes do.
 - Use `sessionScoped: true` and a non-empty `sessionId` field for any per-session tool so
   the scope check applies.
 - A snapshot test (`tool-registry.spec.ts`) locks the public tool-name set; update it

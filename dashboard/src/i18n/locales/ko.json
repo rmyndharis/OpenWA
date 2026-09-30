@@ -446,6 +446,7 @@
     "selectSession": "세션 선택...",
     "session": "세션",
     "events": "이벤트",
+    "noEvents": "이벤트를 하나 이상 선택하세요.",
     "available": "사용 가능한 이벤트",
     "saveChanges": "변경 사항 저장",
     "filters": {
@@ -538,6 +539,33 @@
       "call.missed": "통화에 응답하지 않았을 때",
       "status.received": "연락처가 상태를 게시했을 때",
       "all": "모든 이벤트"
+    },
+    "auth": {
+      "title": "전송 인증",
+      "hint": "선택 사항입니다. 저장된 값은 저장 후 다시 표시되지 않습니다.",
+      "editHint": "저장된 시크릿과 헤더는 표시되지 않습니다. 유지하려면 이 섹션을 변경하지 마세요.",
+      "secret": "서명 시크릿",
+      "secretHint": "16~255자. 모든 전송에는 X-OpenWA-Signature 헤더에 HMAC-SHA256 서명이 포함됩니다.",
+      "secretKeepPlaceholder": "현재 시크릿을 유지하려면 비워 두세요",
+      "generateSecret": "생성",
+      "copySecret": "복사",
+      "secretCopied": "서명 시크릿이 복사되었습니다",
+      "removeSecret": "전송 서명 중지 (시크릿 제거)",
+      "headers": "사용자 지정 헤더",
+      "headerName": "헤더 이름",
+      "headerValue": "헤더 값",
+      "addHeader": "헤더 추가",
+      "removeHeader": "헤더 제거",
+      "replaceHeaders": "사용자 지정 헤더 교체",
+      "replaceHint": "이 행들이 저장된 모든 헤더를 대체합니다. 행이 없으면 저장된 헤더가 제거됩니다.",
+      "errors": {
+        "headerName": "헤더 이름에는 문자, 숫자, 하이픈만 사용할 수 있습니다.",
+        "headerValue": "헤더 값은 최대 1024자이며 제어 문자나 Latin-1 범위 밖의 문자를 사용할 수 없습니다.",
+        "headerReserved": "Content-Type, User-Agent, X-OpenWA-* 및 연결 헤더는 게이트웨이가 설정하므로 사용할 수 없습니다.",
+        "headerDuplicate": "각 헤더 이름은 한 번만 사용할 수 있습니다.",
+        "tooMany": "사용자 지정 헤더는 최대 50개까지 허용됩니다.",
+        "secretLength": "서명 시크릿은 16~255자여야 합니다."
+      }
     }
   },
   "templates": {
@@ -597,6 +625,7 @@
     "createdTitle": "API 키 생성 완료",
     "createdHint": "지금 이 키를 복사해 두세요. 다시 확인할 수 없습니다.",
     "namePlaceholder": "예: Production Key",
+    "nameTooShort": "3자 이상 입력하세요.",
     "rolesTitle": "역할 안내",
     "roles": {
       "admin": "관리자",
@@ -615,11 +644,13 @@
       "status": "상태",
       "lastUsed": "마지막 사용",
       "actions": "작업",
-      "sessions": "세션"
+      "sessions": "세션",
+      "restrictions": "제한"
     },
     "statuses": {
       "active": "활성",
-      "revoked": "폐기됨"
+      "revoked": "폐기됨",
+      "expired": "만료됨"
     },
     "empty": {
       "title": "생성된 API 키가 없습니다",
@@ -640,7 +671,7 @@
       "copy": "복사",
       "revoke": "폐기",
       "delete": "삭제",
-      "editSessions": "세션 편집"
+      "edit": "접근 편집"
     },
     "sessions": {
       "label": "세션 접근",
@@ -648,10 +679,36 @@
       "all": "모든 세션",
       "empty": "아직 세션이 없습니다. 세션이 생기면 이 키는 모두에 접근할 수 있습니다.",
       "restricted": "{{count}}개 선택됨",
-      "editTitle": "세션 접근 편집",
       "save": "저장",
       "choose": "세션 선택",
       "leaveAll": "모든 세션에 두기"
+    },
+    "edit": {
+      "title": "키 접근 편집",
+      "signedIn": "이 대시보드는 이 키로 로그인되어 있습니다. 역할, IP 주소, 채팅 또는 만료를 변경하면 로그아웃될 수 있습니다."
+    },
+    "restrictions": {
+      "none": "없음",
+      "ips": "IP: {{count}}",
+      "chats": "채팅: {{count}}",
+      "expires": "{{date}}에 만료",
+      "expired": "{{date}}에 만료됨"
+    },
+    "ips": {
+      "label": "허용된 IP 주소 (선택)",
+      "hint": "한 줄에 IP 주소 또는 CIDR 범위 하나. 모든 주소를 허용하려면 비워 두세요.",
+      "invalid": "IPv4 주소 또는 CIDR 범위가 아닙니다: {{value}}"
+    },
+    "chats": {
+      "label": "채팅 접근 (선택)",
+      "hint": "한 줄에 채팅 하나: @g.us로 끝나는 그룹 ID, @c.us 또는 @lid로 끝나는 연락처 ID, 또는 전화번호. 모든 채팅을 허용하려면 비워 두세요. 채팅이 제한된 키는 해당 키에 열린 경로만 사용할 수 있으며, 이벤트 WebSocket과 MCP는 이를 거부합니다.",
+      "invalid": "채팅 ID 또는 전화번호가 아닙니다: {{value}}"
+    },
+    "expiry": {
+      "label": "만료 시각 (선택)",
+      "hint": "이 브라우저의 시간대 기준입니다. 만료되지 않는 키는 비워 두세요.",
+      "clear": "만료 제거",
+      "invalid": "9999년까지의 날짜와 시간을 모두 입력하거나, 만료되지 않는 키는 필드를 비우세요."
     }
   },
   "logs": {
@@ -896,7 +953,7 @@
       "storageWarning": "기존 미디어 파일은 새 스토리지 백엔드로 자동 이동되지 않으며 기존 위치에 그대로 남습니다.",
       "downloadBackup": "먼저 백업 다운로드",
       "backupTitle": "데이터 백업 및 복원",
-      "backupHint": "데이터베이스를 전환하기 전에 모든 데이터를 JSON으로 내보낸 후 전환이 끝나면 가져오세요. 백업에는 웹훅 시크릿과 프록시 자격 증명이 평문으로 포함되어 있으니 안전하게 보관하고 복원 후 삭제하세요.",
+      "backupHint": "데이터베이스를 전환하기 전에 모든 데이터를 JSON으로 내보낸 후 전환이 끝나면 가져오세요. 웹훅 서명 시크릿, 웹훅 사용자 지정 헤더, 프록시 자격 증명은 포함되지 않으므로 복원 후 다시 입력하세요. 통합 인스턴스의 시크릿과 설정은 평문으로 포함되니 파일을 안전하게 보관하고 복원 후 삭제하세요.",
       "export": "데이터 내보내기",
       "import": "데이터 가져오기",
       "exportFailed": "데이터를 내보내지 못했습니다",
@@ -922,6 +979,7 @@
       "dontClose": "이 창을 닫지 마세요",
       "successMsg": "서버가 다시 온라인 상태입니다! 페이지가 자동으로 새로고침됩니다.",
       "errorMsg": "서버가 30초 동안 응답하지 않았습니다. Docker 로그를 확인하고 수동으로 재시작하세요.",
+      "outcomeUnknown": "서버가 응답하기 전에 프록시가 오류를 반환하여 재시작이 진행 중인지 알 수 없습니다. 1분 후 페이지를 새로고침하여 확인하세요.",
       "reload": "페이지 새로고침"
     },
     "toasts": {

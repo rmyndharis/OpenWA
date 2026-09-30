@@ -2,6 +2,8 @@ import { BadRequestException, ConflictException, NotFoundException } from '@nest
 import { ContactService } from './contact.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 
 describe('ContactService', () => {
   const makeService = (engine: Partial<IWhatsAppEngine> | undefined) => {
@@ -22,6 +24,13 @@ describe('ContactService', () => {
 
   it('getBlockedContacts throws 400 when the session is not started', () => {
     expect(() => makeService(undefined).getBlockedContacts('s1')).toThrow(BadRequestException);
+  });
+
+  it('listContacts returns the whole set, unwindowed', async () => {
+    const big = Array.from({ length: 1500 }, (_, i) => ({ id: `${i}@c.us` }));
+    const getContacts = jest.fn().mockResolvedValue(big);
+    await expect(makeService({ getContacts }).listContacts('s1')).resolves.toHaveLength(1500);
+    expect(() => makeService(undefined).listContacts('s1')).toThrow(BadRequestException);
   });
 
   it('caps an unbounded contacts list at the default limit (1000)', async () => {
@@ -71,6 +80,26 @@ describe('ContactService', () => {
       .mockResolvedValueOnce('https://pps/3.jpg');
     const out = await makeService({ getProfilePicture }).getProfilePictures('s1', ['a@c.us', 'b@c.us', 'c@c.us']);
     expect(out).toEqual({ 'a@c.us': 'https://pps/1.jpg', 'b@c.us': null, 'c@c.us': 'https://pps/3.jpg' });
+  });
+
+  // Not ready is a fact about the session, not about one avatar: a 200 with every picture null would
+  // be cached by the dashboard as "nobody has a picture" for the whole stale window.
+  it('fails the whole batch with 409 when the engine is not ready, without starting further chunks', async () => {
+    const getProfilePicture = jest.fn().mockRejectedValue(new EngineNotReadyError());
+    const ids = Array.from({ length: 12 }, (_, i) => `${i}@c.us`);
+    const batch = makeService({ getProfilePicture }).getProfilePictures('s1', ids);
+    await expect(batch).rejects.toBeInstanceOf(EngineNotReadyError);
+    await expect(batch).rejects.toMatchObject({ status: 409 });
+    expect(getProfilePicture).toHaveBeenCalledTimes(5);
+  });
+
+  it('still nulls a single id whose lookup fails with a transport error', async () => {
+    const getProfilePicture = jest
+      .fn()
+      .mockRejectedValueOnce(new EngineTransportError('query stalled'))
+      .mockResolvedValueOnce('https://pps/2.jpg');
+    const out = await makeService({ getProfilePicture }).getProfilePictures('s1', ['a@c.us', 'b@c.us']);
+    expect(out).toEqual({ 'a@c.us': null, 'b@c.us': 'https://pps/2.jpg' });
   });
 
   it('ignores ids beyond the 50-id batch cap', async () => {

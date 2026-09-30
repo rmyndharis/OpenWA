@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, HttpException, PayloadTooLargeException } from '@nestjs/common';
+import { LoggerService } from '../../common/services/logger.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { In, Not } from 'typeorm';
 import {
@@ -18,6 +19,7 @@ import { SendPacingService, SEND_PACING_LIMITED } from './send-pacing.service';
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { HookManager } from '../../core/hooks';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+import { EnginePageError } from '../../common/errors/engine-page.error';
 
 /** Regression lock for the terminal-status decision (cancel-clobber + stopOnError overwrite bugs). */
 describe('resolveFinalBatchStatus', () => {
@@ -59,12 +61,17 @@ describe('resolveMaxConcurrentBatches', () => {
 /** Regression lock: orphaned (restart-interrupted) PROCESSING batches are transitioned. */
 describe('BulkMessageService.onApplicationBootstrap', () => {
   let service: BulkMessageService;
-  let repo: { find: jest.Mock; save: jest.Mock };
+  let repo: { find: jest.Mock; save: jest.Mock; update: jest.Mock };
+  const failedWrite = (id: string): [object, unknown] => [
+    { id, status: BatchStatus.PROCESSING },
+    expect.objectContaining({ status: BatchStatus.FAILED }) as unknown,
+  ];
 
   beforeEach(async () => {
     repo = {
       find: jest.fn().mockResolvedValue([]),
       save: jest.fn().mockImplementation(b => Promise.resolve(b)),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -102,14 +109,31 @@ describe('BulkMessageService.onApplicationBootstrap', () => {
     await service.onApplicationBootstrap();
 
     expect(repo.find).toHaveBeenCalledWith({ where: { status: BatchStatus.PROCESSING } });
-    expect(batch.status).toBe(BatchStatus.FAILED);
-    expect(repo.save).toHaveBeenCalledWith(batch);
+    expect(repo.update).toHaveBeenCalledWith(...failedWrite('b1'));
+    expect(repo.save).not.toHaveBeenCalled();
   });
 
   it('does nothing when there are no orphaned batches', async () => {
     repo.find.mockResolvedValue([]);
     await service.onApplicationBootstrap();
-    expect(repo.save).not.toHaveBeenCalled();
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('counts on startup only the batches the guarded update actually failed', async () => {
+    const stale = { id: 'b-done', status: BatchStatus.PROCESSING, messages: [] };
+    const orphan = { id: 'b-dead', status: BatchStatus.PROCESSING, messages: [] };
+    repo.find.mockResolvedValue([stale, orphan]);
+    repo.update.mockImplementation((where: { id: string }) =>
+      Promise.resolve({ affected: where.id === 'b-dead' ? 1 : 0 }),
+    );
+    const warn = jest.spyOn((service as unknown as { logger: LoggerService }).logger, 'warn').mockImplementation();
+
+    await service.onApplicationBootstrap();
+
+    expect(repo.update).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(
+      'Marked 1 orphaned PROCESSING batch(es) FAILED on startup (interrupted by a restart)',
+    );
   });
 
   /**
@@ -130,9 +154,41 @@ describe('BulkMessageService.onApplicationBootstrap', () => {
 
     expect(repo.find).toHaveBeenCalledWith({ where: { status: BatchStatus.PROCESSING, sessionId: 'sess-a' } });
     expect(reaped).toBe(1);
-    expect(mine.status).toBe(BatchStatus.FAILED);
-    expect(repo.save).toHaveBeenCalledWith(mine);
-    expect(JSON.stringify(mine.messages)).not.toContain('x'.repeat(64));
+    expect(repo.update).toHaveBeenCalledWith(...failedWrite('b1'));
+    const written = (repo.update.mock.calls[0] as [unknown, Partial<MessageBatch>])[1];
+    expect(JSON.stringify(written.messages)).not.toContain('x'.repeat(64));
+  });
+
+  // The row was read as PROCESSING, but a batch can finalize before the write lands. The guard in the
+  // UPDATE matches nothing then, and the reap must neither count it nor touch its terminal state.
+  it('reapProcessingBatches does not count a batch that completed after it was read', async () => {
+    const stale = { id: 'b-done', sessionId: 'sess-a', status: BatchStatus.PROCESSING, messages: [] };
+    const orphan = { id: 'b-dead', sessionId: 'sess-a', status: BatchStatus.PROCESSING, messages: [] };
+    repo.find.mockResolvedValue([stale, orphan]);
+    repo.update.mockImplementation((where: { id: string }) =>
+      Promise.resolve({ affected: where.id === 'b-dead' ? 1 : 0 }),
+    );
+
+    const reaped = await service.reapProcessingBatches('sess-a', 'session adopted from a lapsed node');
+
+    expect(reaped).toBe(1);
+    expect(repo.update).toHaveBeenCalledWith(...failedWrite('b-done'));
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it('reapProcessingBatches leaves alone a PROCESSING batch this process is still running', async () => {
+    // Adopted session: the claim moved here before the engine finished initializing, and a bulk
+    // request routed here in that window started a batch of its own before the reap ran.
+    const running = { id: 'b-live', sessionId: 'sess-a', status: BatchStatus.PROCESSING, messages: [] };
+    const orphan = { id: 'b-dead', sessionId: 'sess-a', status: BatchStatus.PROCESSING, messages: [] };
+    repo.find.mockResolvedValue([running, orphan]);
+    (service as unknown as { processingBatches: Map<string, boolean> }).processingBatches.set('b-live', true);
+
+    const reaped = await service.reapProcessingBatches('sess-a', 'session adopted from a lapsed node');
+
+    expect(reaped).toBe(1);
+    expect(repo.update).toHaveBeenCalledTimes(1);
+    expect(repo.update).toHaveBeenCalledWith(...failedWrite('b-dead'));
   });
 
   /**
@@ -182,8 +238,7 @@ describe('BulkMessageService.onApplicationBootstrap', () => {
 
       await (await withOwnership([])).onApplicationBootstrap();
 
-      expect(peers.status).toBe(BatchStatus.PROCESSING);
-      expect(repo.save).not.toHaveBeenCalled();
+      expect(repo.update).not.toHaveBeenCalled();
     });
 
     it('still reaps a batch whose session this node may claim', async () => {
@@ -192,8 +247,7 @@ describe('BulkMessageService.onApplicationBootstrap', () => {
 
       await (await withOwnership(['my-session'])).onApplicationBootstrap();
 
-      expect(mine.status).toBe(BatchStatus.FAILED);
-      expect(repo.save).toHaveBeenCalledWith(mine);
+      expect(repo.update).toHaveBeenCalledWith(...failedWrite('b2'));
     });
 
     it('reaps only its own when both are present', async () => {
@@ -203,9 +257,8 @@ describe('BulkMessageService.onApplicationBootstrap', () => {
 
       await (await withOwnership(['my-session'])).onApplicationBootstrap();
 
-      expect(mine.status).toBe(BatchStatus.FAILED);
-      expect(peers.status).toBe(BatchStatus.PROCESSING);
-      expect(repo.save).toHaveBeenCalledTimes(1);
+      expect(repo.update).toHaveBeenCalledTimes(1);
+      expect(repo.update).toHaveBeenCalledWith(...failedWrite('b2'));
     });
   });
 });
@@ -690,6 +743,43 @@ describe('BulkMessageService.processBatch', () => {
       expect.objectContaining({ type: 'text', error: 'boom', input: { text: 'hi', chatId: 'c0@c.us' } }),
       expect.objectContaining({ source: 'BulkMessageService' }),
     );
+  });
+
+  it('logs the in-page summary of a page error; the stored result and the hook keep only its reason and build', async () => {
+    const batch = makeBatch(1);
+    repo.findOne.mockResolvedValue(batch);
+    engine.sendTextMessage.mockRejectedValueOnce(
+      new EnginePageError(
+        { name: 'TypeError', message: 'x', build: '2.3000.1' },
+        new Error('page threw {"build":"2.3000.1","stack":"at y"}'),
+      ),
+    );
+    const warn = jest.spyOn((service as unknown as { logger: LoggerService }).logger, 'warn').mockImplementation();
+
+    await runProcessBatch();
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('page threw {"build":"2.3000.1"'));
+    const result = batch.results[0];
+    expect(result.status).toBe(BatchMessageStatus.FAILED);
+    expect(result.error?.message).toBe('WhatsApp Web rejected the operation: TypeError: x (build 2.3000.1)');
+    expect(hookManager.execute).toHaveBeenCalledWith(
+      'message:failed',
+      expect.objectContaining({ error: 'WhatsApp Web rejected the operation: TypeError: x (build 2.3000.1)' }),
+      expect.anything(),
+    );
+  });
+
+  it('never logs the cause of a blocked media URL', async () => {
+    repo.findOne.mockResolvedValue(makeBatch(1));
+    const blocked = new SsrfBlockedError('blocked');
+    blocked.cause = new Error('resolved to 10.0.0.1');
+    engine.sendTextMessage.mockRejectedValueOnce(blocked);
+    const warn = jest.spyOn((service as unknown as { logger: LoggerService }).logger, 'warn').mockImplementation();
+
+    await runProcessBatch();
+
+    expect(warn).toHaveBeenCalled();
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('10.0.0.1');
   });
 
   it('does NOT fire message:failed when the gate blocks a bulk item (a block is a moderation decision, not a delivery failure)', async () => {

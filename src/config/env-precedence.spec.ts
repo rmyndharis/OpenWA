@@ -266,11 +266,13 @@ describe.each(['docker-compose.yml', 'docker-compose.dev.yml'])('every blank for
  * past the compose-derived check and shipped uncommented, pinning the matching Infrastructure control
  * for anyone who ran the documented `cp .env.example .env`.
  *
- * Derived from the appliers that write data/.env.generated, so a key added to a section is covered
- * without anyone remembering this file exists.
+ * Derived from the appliers that write data/.env.generated, plus the controller's own queue write, so
+ * a key added to a section is covered without anyone remembering this file exists.
  */
 describe('every key the dashboard writes is commented out in .env.example', () => {
-  const sectionsSource = fs.readFileSync(path.join(__dirname, '../modules/infra/config-sections.ts'), 'utf8');
+  const sectionsSource = ['config-sections.ts', 'infra-config.controller.ts']
+    .map(file => fs.readFileSync(path.join(__dirname, '../modules/infra', file), 'utf8'))
+    .join('\n');
 
   /** `updates.KEY = …` */
   const directlyAssigned = (): string[] => [...sectionsSource.matchAll(/updates\.([A-Z0-9_]+)\s*=/g)].map(m => m[1]);
@@ -280,25 +282,54 @@ describe('every key the dashboard writes is commented out in .env.example', () =
 
   const dashboardOwned = (): string[] => [...new Set([...directlyAssigned(), ...viaSecretHelper()])].sort();
 
-  // Guard both extractors independently. The direct form alone finds 27 keys and silently misses
+  // Guard both extractors independently. The direct form alone finds 28 keys and silently misses
   // every key routed through setSecret, so a single combined count would look healthy while the
   // secret keys went unchecked.
   it('extracts keys from both write forms', () => {
     expect(directlyAssigned()).toContain('DATABASE_SSL');
+    expect(directlyAssigned()).toContain('QUEUE_ENABLED'); // written by the controller, not a section applier
     expect(viaSecretHelper()).toContain('REDIS_PASSWORD');
   });
 
-  const uncommentedKeys = (file: string): string[] =>
-    fs
-      .readFileSync(path.join(__dirname, '../..', file), 'utf8')
+  const assignedKeys = (text: string): string[] =>
+    text
       .split('\n')
       .map(line => /^([A-Z0-9_]+)=/.exec(line)?.[1])
       .filter((key): key is string => key !== undefined);
+  const uncommentedKeys = (file: string): string[] =>
+    assignedKeys(fs.readFileSync(path.join(__dirname, '../..', file), 'utf8'));
 
   it('ships none of them uncommented in .env.example', () => {
     const uncommented = uncommentedKeys('.env.example');
     expect(uncommented).toContain('NODE_ENV'); // the file really does ship some keys uncommented
     expect(uncommented.filter(key => dashboardOwned().includes(key))).toEqual([]);
+  });
+
+  // docs/10 section 10.5 presents its .env block as an excerpt of .env.example, so operators copy it
+  // the same way and it has to follow the same rule. A published pepper is no secret either.
+  it('ships none of them uncommented in the docs/10 environment excerpt', () => {
+    const docs = fs.readFileSync(path.join(__dirname, '../../docs/10-devops-infrastructure.md'), 'utf8');
+    const section = docs.slice(docs.indexOf('## 10.5 Environment Configuration'));
+    const uncommented = assignedKeys(/```bash\n([\s\S]*?)```/.exec(section)?.[1] ?? '');
+    expect(uncommented).toContain('NODE_ENV'); // the block was found and does ship some keys uncommented
+    expect(uncommented.filter(key => dashboardOwned().includes(key))).toEqual([]);
+    expect(uncommented).not.toContain('API_KEY_PEPPER');
+  });
+
+  // The docs/08 and docs/03 env profiles are pasted into .env the same way.
+  it.each([
+    ['docs/08-development-guidelines.md', '### Environment Variables', '## 8.9', 2],
+    ['docs/03-system-architecture.md', '### Configuration Examples', '### Choosing a Profile', 3],
+  ])('ships none of them uncommented in the %s profiles', (file, from, to, blocks) => {
+    const docs = fs.readFileSync(path.join(__dirname, '../..', file), 'utf8');
+    const start = docs.indexOf(from);
+    const section = docs.slice(start, docs.indexOf(to, start));
+    const bodies = [...section.matchAll(/```bash\n([\s\S]*?)```/g)].map(match => match[1]);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(bodies).toHaveLength(blocks); // the profiles were found
+    const uncommented = bodies.flatMap(assignedKeys);
+    expect(uncommented.filter(key => dashboardOwned().includes(key))).toEqual([]);
+    expect(uncommented).not.toContain('API_KEY_PEPPER');
   });
 
   /**
@@ -353,6 +384,7 @@ describe.each(['docker-compose.yml', 'docker-compose.dev.yml'])('%s forwards the
     'MEDIA_DOWNLOAD_MAX_BYTES',
     'MEDIA_DOWNLOAD_TIMEOUT_MS',
     'INBOUND_MEDIA_CONCURRENCY',
+    'INBOUND_MEDIA_GLOBAL_CONCURRENCY',
   ])('forwards %s', key => {
     expect(forwards(key)).toBe(true);
   });

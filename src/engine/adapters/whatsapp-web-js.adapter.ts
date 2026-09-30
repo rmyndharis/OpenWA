@@ -65,6 +65,7 @@ import {
   inboundMediaMaxBytes,
   inboundMediaTimeoutMs,
   isMediaDownloadEnabled,
+  runUnderGlobalMediaGate,
   withInboundDownloadTimeout,
 } from './inbound-media-cap';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
@@ -237,6 +238,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       setStatus: status => this.lifecycle.setStatus(status),
       getCallbacks: () => this.callbacks,
       markReadyFromClientInfo: () => this.lifecycle.markReadyFromClientInfo(),
+      wasFreshPairing: () => this.lifecycle.qrShown,
       recoverFromStuckAuth: () => this.recoverFromStuckAuth(),
     });
     this.stuckAuth = new WwebjsStuckAuth({
@@ -316,7 +318,16 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const boundedReady = new Promise<MessageMedia | null>(resolve => {
       resolveBounded = resolve;
     });
-    const slotHeld = this.inboundLimiter.run(() => {
+    // Set when the caller's wait below expires. A task still queued at that point has nobody left to
+    // read its result, so once admitted it gives the slot straight back instead of pulling a full
+    // base64 blob over CDP and holding the slot for it: after a burst, that backlog is what made
+    // later messages miss their own deadline. A download that already started is unaffected.
+    let abandoned = false;
+    const downloadInSlot = (): Promise<void> => {
+      if (abandoned) {
+        resolveBounded(null);
+        return Promise.resolve();
+      }
       // downloadMedia() is async, so a page-side throw (a detached target, a WA Web field rename) arrives
       // as a rejection, which boundedReady adopts and rethrows past the only exit that builds the marker,
       // leaving every call site to emit with no media field at all. It is the same "no usable media"
@@ -343,7 +354,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         () => undefined,
         () => undefined,
       );
-    });
+    };
+    // Per-session slot first, then the process-wide one, so a session parks at most its own
+    // INBOUND_MEDIA_CONCURRENCY waiters on the shared gate. Both are held until the download settles.
+    const slotHeld = this.inboundLimiter.run(() => runUnderGlobalMediaGate(downloadInSlot));
     // Defensive only, and deliberately kept. `run()` rejects on a full queue (gone — the queue is
     // unbounded) or on close(), which nothing calls on this limiter; the task itself swallows both
     // download outcomes. So nothing is expected here — but an unhandled rejection from a
@@ -362,14 +376,15 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // those messages are never emitted AT ALL — strictly worse than the media loss this change set
     // out to fix. The old queue cap provided that degradation by rejecting; this restores it without
     // shedding at a fixed batch size.
-    const media = await withInboundDownloadTimeout(boundedReady, inboundMediaTimeoutMs(), () =>
+    const media = await withInboundDownloadTimeout(boundedReady, inboundMediaTimeoutMs(), () => {
+      abandoned = true;
       this.logger.warn(
         'Inbound media did not arrive within MEDIA_DOWNLOAD_TIMEOUT_MS; emitting message without media',
         {
           msgId,
         },
-      ),
-    );
+      );
+    });
     if (!media) {
       return declaredOnlyMedia(msg);
     }

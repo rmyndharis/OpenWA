@@ -3,8 +3,9 @@
 Helm chart for [OpenWA](https://github.com/rmyndharis/OpenWA) — WhatsApp API.
 
 > **Single instance only.** A session lease stops two pods from launching the same session,
-> but API-key socket eviction, WS rate-limit buckets and in-flight bulk batches are still
-> process-local. Keep `replicaCount: 1`. See
+> but API keys and the audit log live in each pod's own `main.sqlite` (a key revoked or
+> narrowed on one pod stays valid on the others), and WS rate-limit buckets and in-flight
+> bulk batches are process-local. Keep `replicaCount: 1`. See
 > [docs/13-horizontal-scaling.md](../../docs/13-horizontal-scaling.md).
 
 ## Install

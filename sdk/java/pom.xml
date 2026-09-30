@@ -10,7 +10,7 @@
   <packaging>jar</packaging>
 
   <name>OpenWA Java SDK</name>
-  <description>Official Java SDK for the OpenWA WhatsApp API Gateway</description>
+  <description>Official Java SDK for OpenWA, the open-source WhatsApp API Gateway (not affiliated with WhatsApp or Meta)</description>
   <url>https://github.com/rmyndharis/OpenWA</url>
 
   <licenses>

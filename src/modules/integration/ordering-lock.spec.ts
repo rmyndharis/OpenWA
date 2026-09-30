@@ -56,8 +56,8 @@ describe('orderingKeyFor', () => {
     };
   }
 
-  it('keys on instanceId + providerConversationId when present', () => {
-    expect(orderingKeyFor(job({ providerConversationId: 'c1' }))).toBe('acct1:c1');
+  it('keys on pluginId + instanceId + providerConversationId when present', () => {
+    expect(orderingKeyFor(job({ providerConversationId: 'c1' }))).toBe('chatwoot\u0000acct1\u0000c1');
   });
 
   it('two jobs with the same providerConversationId share a key', () => {
@@ -73,13 +73,28 @@ describe('orderingKeyFor', () => {
   });
 
   it('falls back to a per-instance key when providerConversationId is absent', () => {
-    expect(orderingKeyFor(job())).toBe('instance:acct1');
+    expect(orderingKeyFor(job())).toBe('chatwoot\u0000acct1\u0000');
   });
 
   it('two jobs with no providerConversationId on the same instance share the fallback key', () => {
     const a = orderingKeyFor(job({ deliveryId: 'd1' }));
     const b = orderingKeyFor(job({ deliveryId: 'd2' }));
     expect(a).toBe(b);
+  });
+
+  it('two plugins sharing an instanceId do not share a key, with or without a conversation', () => {
+    expect(orderingKeyFor(job({ pluginId: 'chatwoot', instanceId: 'prod' }))).not.toBe(
+      orderingKeyFor(job({ pluginId: 'typebot', instanceId: 'prod' })),
+    );
+    expect(orderingKeyFor(job({ pluginId: 'chatwoot', instanceId: 'prod', providerConversationId: 'c1' }))).not.toBe(
+      orderingKeyFor(job({ pluginId: 'typebot', instanceId: 'prod', providerConversationId: 'c1' })),
+    );
+  });
+
+  it("a conversation key never equals another instance's per-instance key", () => {
+    expect(orderingKeyFor(job({ instanceId: 'instance', providerConversationId: 'prod' }))).not.toBe(
+      orderingKeyFor(job({ instanceId: 'prod' })),
+    );
   });
 
   it('never keys on deliveryId', () => {

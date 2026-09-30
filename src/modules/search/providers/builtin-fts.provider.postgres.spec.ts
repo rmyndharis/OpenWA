@@ -1,5 +1,6 @@
 import 'reflect-metadata';
-import { Logger, NotImplementedException } from '@nestjs/common';
+import { NotImplementedException } from '@nestjs/common';
+import { LoggerService } from '../../../common/services/logger.service';
 import { DataSource } from 'typeorm';
 import { BuiltInFtsProvider } from './builtin-fts.provider';
 
@@ -15,6 +16,8 @@ import { BuiltInFtsProvider } from './builtin-fts.provider';
 interface ProbeScript {
   /** Whether the active schema's `messages` carries the generated `body_ts` column. */
   bodyTsPresent?: boolean;
+  /** Whether that table carries the GIN index; defaults to bodyTsPresent. */
+  indexPresent?: boolean;
   /** When set, the probe query itself rejects (degraded pool / mid-recovery state). */
   probeError?: Error;
   /** When set, the boot-time ensure DDL rejects, leaving the availability cache unprimed. */
@@ -26,6 +29,10 @@ function makePostgresDataSource(script: ProbeScript) {
   const state: ProbeScript = { ...script };
   const query = jest.fn((sql: string) => {
     const s = String(sql);
+    // The boot-time ensure reads the column and the index in one catalog query.
+    if (/AS col,[\s\S]*AS idx/.test(s)) {
+      return Promise.resolve([{ col: !!state.bodyTsPresent, idx: state.indexPresent ?? !!state.bodyTsPresent }]);
+    }
     if (/to_regclass\('messages'\)/.test(s)) {
       if (state.probeError) return Promise.reject(state.probeError);
       return Promise.resolve(state.bodyTsPresent ? [{ attname: 'body_ts' }] : []);
@@ -43,12 +50,12 @@ function makePostgresDataSource(script: ProbeScript) {
 const sqlOf = (query: jest.Mock): string[] => query.mock.calls.map(call => String((call as unknown[])[0]));
 
 describe('BuiltInFtsProvider (postgres probe)', () => {
-  // The provider logs through Nest's Logger on the warn/error paths exercised here; keep the test
+  // The provider logs through LoggerService on the warn/error paths exercised here; keep the test
   // output quiet without touching the assertions.
   beforeEach(() => {
-    jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    jest.spyOn(LoggerService.prototype, 'log').mockImplementation(() => undefined);
+    jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
   });
   afterEach(() => jest.restoreAllMocks());
 
@@ -100,13 +107,40 @@ describe('BuiltInFtsProvider (postgres probe)', () => {
     // ensure can die on a transient error even though the column already exists (e.g. GIN index
     // build raced a statement timeout). The probe must read the active schema's real state and keep
     // search available — same decision a healthy boot would have cached.
-    const { ds } = makePostgresDataSource({ bodyTsPresent: true, failEnsure: true });
+    const { ds } = makePostgresDataSource({ bodyTsPresent: true, indexPresent: false, failEnsure: true });
     const provider = new BuiltInFtsProvider(ds);
     await provider.onModuleInit();
 
     const res = await provider.search({ q: 'hello' });
     expect(res.provider).toBe('builtin-fts');
     expect((await provider.health()).ok).toBe(true);
+  });
+
+  it('issues no DDL at boot when the column and the index already exist (no table lock on migrated databases)', async () => {
+    const { ds, query } = makePostgresDataSource({ bodyTsPresent: true });
+    const provider = new BuiltInFtsProvider(ds);
+    await provider.onModuleInit();
+
+    expect(sqlOf(query).some(q => /ALTER TABLE|CREATE INDEX/.test(q))).toBe(false);
+    expect((await provider.health()).ok).toBe(true);
+  });
+
+  it('creates only the index when the column exists but the index is missing', async () => {
+    const { ds, query } = makePostgresDataSource({ bodyTsPresent: true, indexPresent: false });
+    await new BuiltInFtsProvider(ds).onModuleInit();
+
+    const calls = sqlOf(query);
+    expect(calls.some(q => /ALTER TABLE/.test(q))).toBe(false);
+    expect(calls.filter(q => /CREATE INDEX IF NOT EXISTS "idx_messages_body_ts"/.test(q))).toHaveLength(1);
+  });
+
+  it('creates the column and the index when neither exists', async () => {
+    const { ds, query } = makePostgresDataSource({ bodyTsPresent: false });
+    await new BuiltInFtsProvider(ds).onModuleInit();
+
+    const calls = sqlOf(query);
+    expect(calls.filter(q => /ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "body_ts"/.test(q))).toHaveLength(1);
+    expect(calls.filter(q => /CREATE INDEX IF NOT EXISTS "idx_messages_body_ts"/.test(q))).toHaveLength(1);
   });
 
   it('a probe error fails closed (501/unhealthy, never a raw 500) and is NOT cached — a later probe recovers', async () => {

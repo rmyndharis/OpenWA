@@ -1,5 +1,5 @@
 import { Reflector } from '@nestjs/core';
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { RedriveController } from './redrive.controller';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { REQUIRED_ROLE_KEY } from '../auth/decorators/auth.decorators';
@@ -22,13 +22,13 @@ describe('RedriveController authz', () => {
 describe('RedriveController session-scope fence', () => {
   const scopedKey = { allowedSessions: ['sess-1'] } as ApiKey;
 
-  function build(sessionScope: string | null | undefined) {
+  function build(sessionScope: string | null | undefined, enabled?: boolean) {
     const redrive = { redriveInstance: jest.fn().mockResolvedValue({ redriven: 0, remaining: 0, batchSize: 100 }) };
     const instances = {
       resolve: jest
         .fn()
         .mockResolvedValue(
-          sessionScope === undefined ? null : { pluginId: 'chatwoot', instanceId: 'acct1', sessionScope },
+          sessionScope === undefined ? null : { pluginId: 'chatwoot', instanceId: 'acct1', sessionScope, enabled },
         ),
     };
     const audit = { logInfo: jest.fn() };
@@ -68,15 +68,32 @@ describe('RedriveController session-scope fence', () => {
     expect(redrive.redriveInstance).not.toHaveBeenCalled();
   });
 
-  it('lets an unrestricted key redrive a missing instance (drains retained DLQ rows for cleanup), passing null as an unrestricted provenance filter', async () => {
-    // An unrestricted key has no session fence, so it drains every retained row regardless of
-    // sessionId. null signals "caller-decided unrestricted" to the service — never undefined, which
-    // would silently fail open if a caller forgot the argument.
-    const { controller, redrive } = build(undefined);
+  it('answers 409 when an unrestricted key redrives a missing instance (dispatch would refuse every row)', async () => {
+    // Dispatch refuses a deleted instance, so a replay could only fail again, and a queued replay
+    // would still retire its DLQ row as redriven. Refused before the service is reached.
+    const { controller, redrive, audit } = build(undefined);
 
-    await controller.redriveInstance('chatwoot', 'acct1', { allowedSessions: null } as unknown as ApiKey);
+    await expect(
+      controller.redriveInstance('chatwoot', 'acct1', { allowedSessions: null } as unknown as ApiKey),
+    ).rejects.toThrow(ConflictException);
+    expect(redrive.redriveInstance).not.toHaveBeenCalled();
+    expect(audit.logInfo).not.toHaveBeenCalled();
+  });
 
-    expect(redrive.redriveInstance).toHaveBeenCalledWith('chatwoot', 'acct1', null);
+  it('answers 409 when redriving a disabled instance, for scoped and unrestricted keys alike', async () => {
+    for (const apiKey of [scopedKey, { allowedSessions: null } as unknown as ApiKey]) {
+      const { controller, redrive } = build('sess-1', false);
+
+      await expect(controller.redriveInstance('chatwoot', 'acct1', apiKey)).rejects.toThrow(ConflictException);
+      expect(redrive.redriveInstance).not.toHaveBeenCalled();
+    }
+  });
+
+  it('keeps answering 404, not 409, when a scoped key redrives an out-of-scope disabled instance', async () => {
+    // The scope fence runs first so a disabled instance in another session is not revealed.
+    const { controller } = build('sess-2', false);
+
+    await expect(controller.redriveInstance('chatwoot', 'acct1', scopedKey)).rejects.toThrow(NotFoundException);
   });
 
   it('answers 404 when a scoped key redrives an all-sessions (null scope) instance', async () => {

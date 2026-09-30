@@ -33,6 +33,18 @@ export class AuthController {
     };
   }
 
+  // The key's authorization scope as audited on create and update, so a key's scope can be read back
+  // from the audit log whether or not it was ever edited.
+  private authzSnapshot(key: ApiKey) {
+    return {
+      role: key.role,
+      allowedIps: key.allowedIps,
+      allowedSessions: key.allowedSessions,
+      allowedChats: key.allowedChats,
+      expiresAt: key.expiresAt,
+    };
+  }
+
   @Post()
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Create a new API key (admin only)' })
@@ -49,7 +61,12 @@ export class AuthController {
     const { apiKey, rawKey } = await this.authService.createApiKey(dto);
     await this.auditService.logInfo(AuditAction.API_KEY_CREATED, {
       ...this.auditContext(req, actor),
-      metadata: { targetKeyId: apiKey.id, targetKeyName: apiKey.name, role: apiKey.role },
+      metadata: {
+        targetKeyId: apiKey.id,
+        targetKeyName: apiKey.name,
+        role: apiKey.role,
+        scope: this.authzSnapshot(apiKey),
+      },
     });
     return {
       id: apiKey.id,
@@ -133,20 +150,13 @@ export class AuthController {
   ): Promise<ApiKeyResponseDto> {
     const before = await this.authService.findOne(id);
     const k = await this.authService.update(id, dto);
-    const authzSnapshot = (key: ApiKey) => ({
-      role: key.role,
-      allowedIps: key.allowedIps,
-      allowedSessions: key.allowedSessions,
-      allowedChats: key.allowedChats,
-      expiresAt: key.expiresAt,
-    });
     await this.auditService.logInfo(AuditAction.API_KEY_UPDATED, {
       ...this.auditContext(req, actor),
       metadata: {
         targetKeyId: k.id,
         targetKeyName: k.name,
-        before: authzSnapshot(before),
-        after: authzSnapshot(k),
+        before: this.authzSnapshot(before),
+        after: this.authzSnapshot(k),
       },
     });
     return {

@@ -241,7 +241,7 @@ as a delivery failure rather than retaining payloads without limit.
 
 **Prerequisites:**
 
-- API Key
+- API key, and an ADMIN key for step 2
 - Access to webhook endpoint
 
 **Steps:**
@@ -252,12 +252,18 @@ curl -H "X-API-Key: $API_KEY" \
   http://localhost:2785/api/sessions/{sessionId}/webhooks
 
 # 2. Check recent webhook deliveries — this admin-only endpoint lists abandoned deliveries
-#    most-recent-first: those that exhausted every retry, plus those never attempted at all
-#    (recorded with `attempts: 0` — payload over the cap or an unserializable payload
-#    (preflight), inline waiter-queue overflow, or rejection by the shutdown drain).
-#    A URL blocked by the SSRF guard never reaches delivery: it is rejected with a 400 when the
-#    webhook is registered, so it appears in no delivery-failure row.
-curl -H "X-API-Key: $API_KEY" \
+#    most-recent-first: those that exhausted every retry, plus those recorded with
+#    `attempts: 0` — never attempted (payload over the cap or an
+#    unserializable payload (preflight), inline waiter-queue overflow, or rejection by the
+#    shutdown drain), or, with the queue disabled, stopped by shutdown in a retry backoff that
+#    ended within WEBHOOK_SHUTDOWN_DRAIN_MS, after earlier attempts were sent.
+#    An overflow or shutdown row is replayed by the outbox sweep and removed once it delivers.
+#    The SSRF guard refuses a blocked URL with a 400 when the webhook is registered. A URL that
+#    passed then and is blocked at delivery (its host now resolves to a private address, or the
+#    guard was switched on later) is recorded as "Destination address is not allowed". With the
+#    guard on, the same text also stands for a host name that failed to resolve and for a
+#    redirect, which deliveries never follow. The server log for that delivery names the cause.
+curl -H "X-API-Key: $ADMIN_API_KEY" \
   "http://localhost:2785/api/webhooks/delivery-failures?sessionId={sessionId}&limit=20"
 
 # Attempts still in flight (not yet exhausted) only appear in the server logs:
@@ -319,7 +325,7 @@ curl -X POST -H "X-API-Key: $API_KEY" \
 # Expected: {"success": true, "statusCode": 200}
 
 # No new permanent delivery failures for this session
-curl -H "X-API-Key: $API_KEY" \
+curl -H "X-API-Key: $ADMIN_API_KEY" \
   "http://localhost:2785/api/webhooks/delivery-failures?sessionId={sessionId}&limit=5"
 ```
 
@@ -351,7 +357,8 @@ docker stats --no-stream
 
 # 3. Create a backup in the running container, where the data is mounted, and copy it off the
 #    volume (see Runbook: Database Backup). A host run of ./scripts/backup.sh archives ./data in the
-#    checkout, which only a bare-metal install or docker-compose.dev.yml reads
+#    checkout, which only a bare-metal install or docker-compose.dev.yml reads. Engine auth state is
+#    copied live; stop the sessions first if a restore must not need re-pairing
 docker exec -e BACKUP_DIR=/app/data/backups -e TMPDIR=/app/data/backups openwa-api ./scripts/backup.sh
 docker cp openwa-api:/app/data/backups/. ./backups/
 
@@ -430,7 +437,8 @@ curl -H "X-API-Key: $API_KEY" \
 #    files name the container openwa-api. Running ./scripts/backup.sh on the host instead archives
 #    ./data in the checkout, which the production compose never reads (see Runbook: Database Backup).
 #    An image older than 0.19.0 has no scripts/backup.sh, and on PostgreSQL one older than 0.22.0 has
-#    no pg_dump: see 14 - Known Upgrade Hazards
+#    no pg_dump: see 14 - Known Upgrade Hazards. Engine auth state is copied live; stop the sessions
+#    first if a rollback must not need re-pairing
 export BACKUP_DIR="/backups/openwa"
 mkdir -p "$BACKUP_DIR"
 docker exec -e BACKUP_DIR=/app/data/backups -e TMPDIR=/app/data/backups openwa-api ./scripts/backup.sh
@@ -483,8 +491,11 @@ curl -X POST http://localhost:2785/api/sessions/{sessionId}/messages/send-text \
 ```
 
 > If you deploy the published image instead of building from source — your own compose file with
-> `image: ghcr.io/rmyndharis/openwa:<tag>` — replace steps 5-6 with editing that tag and running
-> `docker compose pull`.
+> `image: ghcr.io/rmyndharis/openwa:<tag>` — replace steps 5-6 with editing that tag, running
+> `docker compose pull openwa-api`, and confirming the image landed with
+> `docker image inspect ghcr.io/rmyndharis/openwa:<tag>`. `docker compose run` in step 7 has no
+> `--no-build`, so when the service keeps a `build:` section a failed pull would otherwise build from
+> source under the published name. Run step 8 as `docker compose up -d --no-build`.
 
 > On Kubernetes with the chart in `charts/openwa`, take the step 2 backup with the Helm lines in
 > Runbook: Database Backup and the step 3 export first, then replace steps 4-8 with checking out the
@@ -578,13 +589,27 @@ curl -H "X-API-Key: $API_KEY" http://localhost:2785/api/health
 > start on 0.23.5. Restoring both directories from that backup returns every session to its previous
 > pairing.
 
+> Rolling back past 0.23.6 loses API key chat scopes: an older image does not enforce `allowedChats`.
+> The restore in step 2 returns every key to its state at backup time, so keys revoked since then work
+> again; revoke them again. Changing only the image tag, or `helm rollback`, keeps the current
+> `main.sqlite`, and the older image's schema sync then drops the `allowedChats` column. If 0.24.0 or
+> later last booted that file, the next upgrade refuses to boot, naming `api_keys.allowedChats`, until
+> `main.sqlite` is restored, which brings the scopes back, or the column's ledger row is deleted, after
+> which the column comes back empty (every chat). A file whose ledger lacks that migration (0.23.6 and
+> 0.23.7 on their default `MAIN_DATABASE_SYNCHRONIZE`) is not detected and boots with the column
+> empty. Revoke every chat-scoped key before such a rollback. See the warning in
+> [14 - Migration Guide: Rollback Procedures](./14-migration-guide.md#146-rollback-procedures).
+
 ---
 
 ### Runbook: Database Backup
 
 **Trigger:** Daily schedule, before maintenance, before upgrade
 
-**Impact:** None (online backup)
+**Impact:** None for the databases, which are snapshotted consistently online (`sqlite3 .backup`,
+`pg_dump`). Engine authentication state (`sessions/`, `baileys/`) is copied while the engines write
+it, so a restored session can need re-pairing; for a copy that is consistent by construction, stop
+the sessions first (`POST /api/sessions/:id/stop`), or stop the container and archive the volume.
 
 **Prerequisites:**
 
@@ -620,7 +645,9 @@ User-managed files outside that list (for example the project-level `.env`) must
 # are NOT derived from OPENWA_DATA_DIR. A missing source database fails the run (no silent empty
 # backup), the finished archive is checked to contain every configured database, and with the sqlite3
 # CLI present the databases are snapshotted online via .backup (otherwise plain-copied with a
-# CONSISTENCY-WARNING marker inside the archive).
+# CONSISTENCY-WARNING marker inside the archive). sessions/ and baileys/ are plain copies: when a
+# whatsapp-web.js profile is open or Baileys state is present, the archive carries an
+# ENGINE-STATE-NOTE naming them, which restore.sh prints and never refuses.
 
 # Run from the repo root (database defaults are ./data/...; state dirs follow OPENWA_DATA_DIR):
 ./scripts/backup.sh
@@ -707,7 +734,8 @@ docker compose down
 #    (databases land on MAIN_DATABASE_NAME / DATABASE_NAME, default ./data/... — the same paths
 #    the app reads, as the environment, ./.env or the archive's .env.generated set them; non-DB
 #    state follows OPENWA_DATA_DIR. Pass --strict to refuse an archive
-#    whose CONSISTENCY-WARNING marker reports plain-copied, possibly-torn database snapshots.
+#    whose CONSISTENCY-WARNING marker reports plain-copied, possibly-torn database snapshots;
+#    an ENGINE-STATE-NOTE (engine auth state that may have been copied while the app ran) is only printed.
 #    Restoring over an existing install's live databases requires --force; without it the script
 #    refuses to overwrite them)
 ./scripts/restore.sh ./backups/openwa-backup-<timestamp>.tar.gz
@@ -752,7 +780,9 @@ curl -s -X POST -H "X-API-Key: <an-existing-key>" http://localhost:2785/api/auth
 >
 > ```bash
 > # Compose: the entrypoint override runs the script as root, which can read the archive and write
-> # the volume; the next start hands the restored files back to the app user. The image sets
+> # the volume; on the default root start, the next start hands the restored files back to the app
+> # user. A service with `user:` set runs the script as that uid instead, which then needs to read
+> # the archive and write ./backups, and owns what it restores. The image sets
 > # HOME=/app/data, and the script refuses a data dir that is the home directory, so HOME is moved
 > # off it here for a compose file that does not already set it.
 > docker compose run --rm --no-deps --entrypoint /app/scripts/restore.sh \
@@ -770,10 +800,19 @@ curl -s -X POST -H "X-API-Key: <an-existing-key>" http://localhost:2785/api/auth
 >   name: openwa-restore
 > spec:
 >   restartPolicy: Never
+>   securityContext:
+>     runAsNonRoot: true
+>     runAsUser: 997
+>     runAsGroup: 997
+>     fsGroup: 997
+>     seccompProfile: { type: RuntimeDefault }
 >   containers:
 >     - name: restore
 >       image: ghcr.io/rmyndharis/openwa:<version>
 >       command: ['sleep', 'infinity']
+>       securityContext:
+>         allowPrivilegeEscalation: false
+>         capabilities: { drop: [ALL] }
 >       envFrom:
 >         - configMapRef:
 >             name: openwa
@@ -792,6 +831,8 @@ curl -s -X POST -H "X-API-Key: <an-existing-key>" http://localhost:2785/api/auth
 > # HOME is moved off the data dir here too, as in the compose command.
 > kubectl exec openwa-restore -- env HOME=/tmp OPENWA_RESTORE_SNAPSHOT_DIR=/restore TMPDIR=/restore \
 >   ./scripts/restore.sh /restore/backup.tar.gz --force
+> # The helper runs as the app user (uid 997), so what the script restores is already owned by it,
+> # and the pod meets Pod Security "restricted" for a release that runs non-root.
 > # The emptyDir goes away with the pod: copy off every snapshot the script named first.
 > kubectl cp openwa-restore:/restore/data.pre-restore-<ts> ./backups/data.pre-restore-<ts>
 > kubectl delete pod openwa-restore

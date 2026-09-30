@@ -136,6 +136,15 @@ export function isApiKeyPepperMissingInProduction(nodeEnv?: string, apiKeyPepper
 }
 
 /**
+ * Whether to warn that the main (auth/audit) DB schema is also managed by synchronize in production.
+ * After the migrations-main chain, synchronize alters api_keys/audit_logs to this release's entities
+ * without recording those changes in the migration ledger. Advisory only: the explicit opt-in keeps working.
+ */
+export function isMainDbSynchronizeInProduction(nodeEnv?: string, mainDbSynchronize?: string): boolean {
+  return nodeEnv === 'production' && mainDbSynchronize === 'true';
+}
+
+/**
  * Whether NODE_ENV is unset or blank. That is the deliberate local-dev default, but it silently
  * degrades four controls to their dev posture: the default-secret assert is skipped, a wildcard
  * CORS origin is allowed, Swagger UI is served, and validation error detail is exposed. Boot warns
@@ -208,7 +217,8 @@ export function assertNoDefaultSecretsInProduction(env: SecretCheckEnv): void {
   const isWeak = (value?: string): boolean => !value || FORBIDDEN_PROD_SECRETS.has(value.trim().toLowerCase());
   const problems: string[] = [];
 
-  // Built-in datastores run on the internal-only Docker network (not published), so their fixed
+  // Built-in datastores run on the internal-only Docker network (the managed container specs in
+  // docker.service.ts publish no host ports), so their fixed
   // 'openwa'/'minioadmin' credentials are not internet-reachable — exempt them so selecting the
   // built-in option doesn't crash-loop a production boot. The exemption requires BOTH the built-in
   // flag AND an internal host: a host-pinned EXTERNAL datastore (even with the built-in flag set) is

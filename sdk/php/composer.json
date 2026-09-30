@@ -1,6 +1,6 @@
 {
     "name": "rmyndharis/openwa",
-    "description": "Official PHP SDK for OpenWA WhatsApp API Gateway",
+    "description": "Official PHP SDK for OpenWA, the open-source WhatsApp API Gateway (not affiliated with WhatsApp or Meta)",
     "type": "library",
     "license": "MIT",
     "keywords": [

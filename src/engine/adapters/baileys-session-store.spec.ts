@@ -1,20 +1,42 @@
 import { BaileysSessionStore } from './baileys-session-store';
 import type { LidMappingStore } from '../identity/lid-mapping-store.service';
-import type { ChatStateStore, ChatStateValue } from './baileys-chat-state-store.service';
+import {
+  mergeTwinStates,
+  type ChatStateField,
+  type ChatStateStore,
+  type ChatStateValue,
+} from './baileys-chat-state-store.service';
 import { userPart } from '../identity/wa-id';
 
 /** In-memory ChatStateStore for tests: remember() applies synchronously so a following read sees it. */
 class FakeChatStateStore implements ChatStateStore {
   readonly rows = new Map<string, ChatStateValue>();
+  private clock = 1_000_000;
   private key(s: string, c: string): string {
     return `${s}\u0000${c}`;
   }
   get(s: string, c: string): ChatStateValue | undefined {
     return this.rows.get(this.key(s, c));
   }
-  remember(s: string, c: string, patch: Partial<ChatStateValue>): Promise<void> {
-    const existing = this.rows.get(this.key(s, c)) ?? { muteEndTime: null, archived: false, pinned: false };
-    this.rows.set(this.key(s, c), { ...existing, ...patch });
+  chatIds(s: string): string[] {
+    return [...this.rows.keys()].filter(k => k.startsWith(`${s}\u0000`)).map(k => k.slice(s.length + 1));
+  }
+  remember(s: string, c: string, patch: Partial<ChatStateValue>, create = true): Promise<void> {
+    // Same bookkeeping as the real store: a new row observes only what the patch carries, and a patch
+    // that may not create one writes nothing when it only restates defaults.
+    const defaults: Partial<ChatStateValue> = { muteEndTime: null, archived: false, pinned: false };
+    const restates = (Object.keys(patch) as ChatStateField[]).every(f => patch[f] === defaults[f]);
+    if (!create && restates && !this.rows.has(this.key(s, c))) return Promise.resolve();
+    const existing = this.rows.get(this.key(s, c)) ?? {
+      muteEndTime: null,
+      archived: false,
+      pinned: false,
+      observed: [],
+    };
+    const observed = existing.observed && [
+      ...new Set([...existing.observed, ...(Object.keys(patch) as ChatStateField[])]),
+    ];
+    this.rows.set(this.key(s, c), { ...existing, ...patch, observed, updatedAt: ++this.clock });
     return Promise.resolve();
   }
   reload(): Promise<void> {
@@ -22,6 +44,18 @@ class FakeChatStateStore implements ChatStateStore {
   }
   clearSession(): Promise<void> {
     return Promise.resolve();
+  }
+  /** Same contract as the real store: the rows merged field by field are the base, the twin rows go. */
+  fold(s: string, c: string, twins: string[], patch: Partial<ChatStateValue>, create = true): Promise<void> {
+    const found = twins.filter(t => this.rows.has(this.key(s, t)));
+    if (!found.length) return this.remember(s, c, patch, create);
+    const merged = mergeTwinStates([c, ...found].flatMap(t => this.get(s, t) ?? []));
+    const fields: ChatStateField[] = ['muteEndTime', 'archived', 'pinned'];
+    const base = merged
+      ? Object.fromEntries(fields.filter(f => !merged.observed || merged.observed.includes(f)).map(f => [f, merged[f]]))
+      : {};
+    for (const t of found) this.rows.delete(this.key(s, t));
+    return this.remember(s, c, { ...base, ...patch });
   }
   forget(s: string, chatIds: string[]): Promise<void> {
     for (const c of chatIds) this.rows.delete(this.key(s, c));
@@ -280,6 +314,35 @@ describe('BaileysSessionStore', () => {
       const s = newStore();
       chatOn(s, { muteEndTime: Date.now() + 3_600_000, archived: true });
       expect(chatOn(s, { name: 'Renamed' })).toMatchObject({ muted: true, archived: true });
+    });
+
+    // A decoded proto.Conversation (what history sync hands over) carries archived, pinned and
+    // muteEndTime as null defaults on its PROTOTYPE, and sets an own property only for a field that
+    // was on the wire. Modelled here without importing the ESM-only WAProto.
+    const historyChat = (own: Record<string, unknown>) =>
+      Object.assign(Object.create({ archived: null, pinned: null, muteEndTime: null }) as object, {
+        id: CHAT,
+        name: 'Alice',
+        ...own,
+      }) as Record<string, unknown>;
+
+    it('a history chat that omits the fields does not reset persisted pin, archive and mute', () => {
+      chatOn(newStore(), { muteEndTime: -1, archived: true, pinned: 2 });
+      for (const s of [newStore(), newStore()]) {
+        s.upsertChats([historyChat({})]);
+        expect(s.listChats()[0]).toMatchObject({ muted: true, archived: true, pinned: true });
+      }
+      expect(fake.get(SID, CHAT)).toMatchObject({ muteEndTime: -1, archived: true, pinned: true });
+    });
+
+    it('a history chat that omits the fields writes no row for a chat never seen', () => {
+      newStore().upsertChats([historyChat({})]);
+      expect(fake.rows.size).toBe(0);
+    });
+
+    it('a history chat that carries a field on the wire still persists it', () => {
+      newStore().upsertChats([historyChat({ pinned: 5 })]);
+      expect(fake.get(SID, CHAT)).toMatchObject({ muteEndTime: null, archived: false, pinned: true });
     });
 
     it('normalizes a seconds-scale muteEndTime to ms on persist', () => {
@@ -555,6 +618,39 @@ describe('BaileysSessionStore', () => {
       expect(store.toNeutralJid('111@lid')).toBe('628111@c.us');
     });
 
+    it('pairs the sender of a broadcast-list or status message with its alt, never the list id', () => {
+      store.recordKeyLidMappings({
+        remoteJid: '1700000000@broadcast',
+        remoteJidAlt: '111@lid',
+        participant: '628222@s.whatsapp.net',
+      });
+      store.recordKeyLidMappings({
+        remoteJid: 'status@broadcast',
+        remoteJidAlt: '333@lid',
+        participant: '628444@s.whatsapp.net',
+      });
+      expect(store.resolvePhone('111@lid')).toBe('628222');
+      expect(store.resolvePhone('333@lid')).toBe('628444');
+    });
+
+    it('ignores a pair whose phone side is not a user id', () => {
+      store.recordKeyLidMappings({ remoteJid: '120363@g.us', remoteJidAlt: '555@lid' });
+      expect(store.resolvePhone('555@lid')).toBeNull();
+    });
+
+    it("files a received list message's preview under the sender's chat", () => {
+      store.upsertChats([{ id: '628222@s.whatsapp.net' }]);
+      store.recordMessage({
+        key: { remoteJid: '1700000000@broadcast', participant: '628222@s.whatsapp.net', fromMe: false, id: 'L1' },
+        message: { conversation: 'offer' },
+        messageTimestamp: 100,
+      });
+      expect(store.listChats()).toEqual([
+        expect.objectContaining({ id: '628222@c.us', lastMessage: 'offer', timestamp: 100 }),
+      ]);
+      expect(store.lastInboundMessage('628222@c.us')?.key.id).toBe('L1');
+    });
+
     it('ignores a key with no lid/pn pair', () => {
       store.recordKeyLidMappings({});
       store.recordKeyLidMappings({ remoteJid: '333@lid' }); // lid without an Alt counterpart
@@ -720,6 +816,335 @@ describe('BaileysSessionStore', () => {
       store.recordMessage(msg(LID, 'IN', 200));
       store.addLidMappings([{ lid: LID, pn: PHONE }]);
       expect(store.lastMessage('628111@c.us')).toEqual(expect.objectContaining({ timestamp: 200, jid: PHONE }));
+    });
+  });
+
+  describe('one chat known under both its phone number and its lid', () => {
+    const SID = 'sess-1';
+    const PHONE = '628111@s.whatsapp.net';
+    const LID = '484848@lid';
+    const K = (c: string) => `${SID}\u0000${c}`;
+    let fake: FakeChatStateStore;
+    beforeEach(() => {
+      fake = new FakeChatStateStore();
+    });
+    const newStore = () => new BaileysSessionStore(undefined, SID, fake);
+    const flush = () => new Promise(resolve => setImmediate(resolve));
+    // A decoded proto.Conversation: the fields default to null on the prototype.
+    const historyChat = (id: string) =>
+      Object.assign(Object.create({ archived: null, pinned: null, muteEndTime: null }) as object, {
+        id,
+        name: 'Alice',
+      }) as Record<string, unknown>;
+
+    it('lists one row and keeps a state WhatsApp syncs under the lid, across a restart', () => {
+      const s = newStore();
+      s.upsertChats([historyChat(PHONE)]);
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      s.upsertChats([
+        { id: LID, pinned: 1700000000 },
+        { id: LID, archived: true },
+        { id: LID, muteEndTime: -1 },
+      ]);
+      const expected = { id: '628111@c.us', name: 'Alice', pinned: true, archived: true, muted: true };
+      expect(s.listChats()).toEqual([expect.objectContaining(expected)]);
+      expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
+
+      const restarted = newStore();
+      restarted.addLidMappings([{ lid: LID, pn: PHONE }]);
+      restarted.upsertChats([historyChat(PHONE)]);
+      expect(restarted.listChats()).toEqual([expect.objectContaining(expected)]);
+    });
+
+    it('reads a state filed under the lid before the mapping was known, and folds it on the next change', async () => {
+      const s = newStore();
+      s.upsertChats([{ id: LID, pinned: 3 }]);
+      expect([...fake.rows.keys()]).toEqual([K(LID)]);
+      s.upsertChats([{ id: PHONE, name: 'Alice' }]);
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', name: 'Alice', pinned: true })]);
+      await flush();
+      expect([...fake.rows.keys()]).toEqual([K(LID)]); // a listing writes nothing
+      // A later mute through either spelling folds the lid row onto the phone row.
+      s.upsertChats([{ id: LID, muteEndTime: -1 }]);
+      expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
+      expect(s.listChats()[0]).toMatchObject({ pinned: true, muted: true });
+    });
+
+    it('adds no row for the unarchive a message carries, and still clears an archived chat with it', () => {
+      const s = newStore();
+      const G = '120363000000000002@g.us';
+      s.upsertChats([{ id: G, archived: true }]);
+      const message = { archived: false, readOnly: false, conversationTimestamp: 60, unreadCount: 1 };
+      s.upsertChats([
+        { id: PHONE, ...message },
+        { id: G, ...message },
+      ]);
+      expect([...fake.rows.keys()]).toEqual([K(G)]);
+      expect(fake.get(SID, G)).toMatchObject({ archived: false });
+      s.upsertChats([{ id: LID, pinned: null }]);
+      expect(fake.get(SID, LID)).toMatchObject({ pinned: false, observed: ['pinned'] });
+    });
+
+    it('finds the lid twin of one state update without indexing every mapping', () => {
+      const s = newStore();
+      s.upsertChats([{ id: LID, pinned: 3 }]);
+      s.addLidMappings([
+        { lid: LID, pn: PHONE },
+        { lid: '515151@lid', pn: '628222@s.whatsapp.net' },
+      ]);
+      const index = jest.spyOn(s as unknown as { lidsByPhone(): Map<string, string[]> }, 'lidsByPhone');
+      s.upsertChats([
+        { id: '120363000000000001@g.us', archived: false },
+        { id: PHONE, muteEndTime: -1 },
+      ]);
+      expect(index).not.toHaveBeenCalled();
+      expect([...fake.rows.keys()].sort()).toEqual([K('120363000000000001@g.us'), K(PHONE)]);
+      expect(fake.get(SID, PHONE)).toMatchObject({ pinned: true, muteEndTime: -1 });
+    });
+
+    const HOUR = 3_600_000;
+    const soon = Date.now() + HOUR;
+    const later = Date.now() + 2 * HOUR;
+
+    it.each([
+      [1000, 2000, later],
+      [2000, 1000, soon],
+    ])('lets the newer of two rows already on disk win (phone at %i, lid at %i)', async (phoneAt, lidAt, end) => {
+      fake.rows.set(K(PHONE), { muteEndTime: soon, archived: false, pinned: false, updatedAt: phoneAt });
+      fake.rows.set(K(LID), { muteEndTime: later, archived: false, pinned: false, updatedAt: lidAt });
+      const s = newStore();
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      s.upsertChats([historyChat(PHONE)]);
+      expect(s.listChats()[0].muteExpiration).toBe(end);
+      await flush();
+      expect([...fake.rows.keys()]).toEqual([K(PHONE), K(LID)]);
+      s.upsertChats([{ id: PHONE, archived: true }]);
+      expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
+      expect(fake.get(SID, PHONE)).toMatchObject({ muteEndTime: end, archived: true });
+    });
+
+    it('keeps a pin on the older row when the newer row of the chat holds only a mute', () => {
+      const [mute, pin] = [['muteEndTime'], ['pinned']] as ChatStateField[][];
+      fake.rows.set(K(PHONE), { muteEndTime: later, archived: false, pinned: false, updatedAt: 2000, observed: mute });
+      fake.rows.set(K(LID), { muteEndTime: null, archived: false, pinned: true, updatedAt: 1000, observed: pin });
+      const s = newStore();
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      s.upsertChats([historyChat(PHONE)]);
+      expect(s.listChats()[0]).toMatchObject({ pinned: true, muted: true, muteExpiration: later });
+      s.upsertChats([{ id: PHONE, archived: true }]);
+      expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
+      expect(fake.get(SID, PHONE)).toMatchObject({ muteEndTime: later, pinned: true, archived: true });
+    });
+
+    it('lets a later unpin synced under the unresolved lid outweigh the pin on the phone row', () => {
+      const s = newStore();
+      s.upsertChats([{ id: PHONE, pinned: 2 }]);
+      s.upsertChats([{ id: LID, pinned: 0 }]);
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', pinned: false })]);
+      s.upsertChats([{ id: PHONE, muteEndTime: -1 }]);
+      expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
+      expect(s.listChats()[0]).toMatchObject({ pinned: false, muted: true });
+    });
+
+    it('keeps a pin on the older of two rows written before rows kept what they observed', () => {
+      fake.rows.set(K(PHONE), { muteEndTime: -1, archived: false, pinned: false, updatedAt: 2000 });
+      fake.rows.set(K(LID), { muteEndTime: null, archived: true, pinned: true, updatedAt: 1000 });
+      const s = newStore();
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      s.upsertChats([historyChat(PHONE)]);
+      expect(s.listChats()[0]).toMatchObject({ pinned: true, archived: true, muted: true });
+      s.upsertChats([{ id: PHONE, muteEndTime: -1 }]);
+      expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
+      expect(s.listChats()[0]).toMatchObject({ pinned: true, archived: true, muted: true });
+    });
+
+    it('writes nothing while listing a chat that still has a lid twin row', () => {
+      fake.rows.set(K(LID), { muteEndTime: null, archived: true, pinned: false });
+      const s = newStore();
+      s.upsertChats([{ id: PHONE }]);
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      const writes = ['remember', 'fold', 'forget'].map(m => jest.spyOn(fake, m as 'remember'));
+      expect(s.listChats()[0].archived).toBe(true);
+      for (const w of writes) expect(w).not.toHaveBeenCalled();
+    });
+
+    it('reads the own lid row of a lid-keyed chat whose phone only its contact record knows', () => {
+      fake.rows.set(K(LID), { muteEndTime: null, archived: true, pinned: true });
+      const s = newStore();
+      s.upsertContacts([{ id: LID, phoneNumber: PHONE }]);
+      s.upsertChats([{ id: LID }]);
+      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', archived: true, pinned: true })]);
+      s.upsertChats([{ id: LID, muteEndTime: -1 }]);
+      expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
+      expect(s.listChats()[0]).toMatchObject({ archived: true, pinned: true, muted: true });
+    });
+
+    it.each([
+      ['a phone-keyed chat record', [PHONE]],
+      ['both chat records, the phone one first', [PHONE, LID]],
+    ])('reads, folds and forgets a lid row that only a lid-keyed contact maps, with %s', (_label, ids) => {
+      fake.rows.set(K(LID), { muteEndTime: null, archived: true, pinned: true });
+      const s = newStore();
+      s.upsertContacts([{ id: LID, phoneNumber: PHONE }]);
+      s.upsertChats(ids.map(id => ({ id })));
+      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', archived: true, pinned: true })]);
+      s.upsertChats([{ id: PHONE, muteEndTime: -1 }]);
+      expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
+      expect(s.listChats()[0]).toMatchObject({ archived: true, pinned: true, muted: true });
+      fake.rows.set(K(LID), { muteEndTime: null, archived: true, pinned: true });
+      s.removeChats([PHONE]);
+      expect(fake.rows.size).toBe(0);
+      expect(s.listChats()).toEqual([]);
+    });
+
+    it('reads the lid record row of a merged chat once the lid mapping is evicted', () => {
+      const cap = process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES;
+      process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES = '2';
+      try {
+        fake.rows.set(K(LID), { muteEndTime: null, archived: false, pinned: true });
+        const s = newStore();
+        s.upsertContacts([{ id: LID, phoneNumber: PHONE, name: 'Alice' }]);
+        s.addLidMappings([
+          { lid: '1@lid', pn: '6201@s.whatsapp.net' },
+          { lid: '2@lid', pn: '6202@s.whatsapp.net' },
+        ]);
+        s.upsertChats([{ id: PHONE }, { id: LID }]);
+        expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', pinned: true })]);
+      } finally {
+        if (cap === undefined) delete process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES;
+        else process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES = cap;
+      }
+    });
+
+    it.each([
+      ['the lid, with the state under the phone', LID, PHONE],
+      ['the phone, with the state under the lid', PHONE, LID],
+    ])('forgets a deleted chat named by %s when only the mapping table pairs them', async (_label, deleted, row) => {
+      fake.rows.set(K(row), { muteEndTime: null, archived: false, pinned: true });
+      const lidStore = {
+        getCached: jest.fn(() => undefined),
+        resolveLid: jest.fn(() => null),
+        lidsForPhone: jest.fn(() => []),
+        findPhoneForLid: jest.fn((jid: string) => Promise.resolve(jid.startsWith('484848') ? '628111' : null)),
+        findLidsForPhone: jest.fn((phone: string) => Promise.resolve(phone === '628111' ? ['484848'] : [])),
+        remember: jest.fn(() => Promise.resolve()),
+      };
+      const s = new BaileysSessionStore(lidStore, SID, fake);
+      s.removeChats([deleted]);
+      await flush();
+      expect(fake.rows.size).toBe(0);
+      expect(s.listChats()).toEqual([]);
+    });
+
+    it('finds the lid through the persisted mapping table as well', () => {
+      fake.rows.set(K(LID), { muteEndTime: null, archived: true, pinned: false });
+      const lidStore = {
+        getCached: jest.fn((lid: string) => (lid === '484848' ? '628111' : undefined)),
+        resolveLid: jest.fn(() => null),
+        lidsForPhone: jest.fn((phone: string) => (phone === '628111' ? ['484848'] : [])),
+        remember: jest.fn(() => Promise.resolve()),
+      };
+      const s = new BaileysSessionStore(lidStore, SID, fake);
+      s.upsertChats([{ id: PHONE }]);
+      expect(s.listChats()[0].archived).toBe(true);
+    });
+
+    it('writes nothing while listing a chat that has no twin row', () => {
+      const s = newStore();
+      s.upsertChats([{ id: PHONE, pinned: 2 }]);
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      const remember = jest.spyOn(fake, 'remember');
+      const forget = jest.spyOn(fake, 'forget');
+      s.listChats();
+      expect(remember).not.toHaveBeenCalled();
+      expect(forget).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['phone first', [PHONE, LID]],
+      ['lid first', [LID, PHONE]],
+    ])('merges the two records into one row, whichever arrived first (%s)', (_order, ids) => {
+      const s = new BaileysSessionStore();
+      for (const id of ids) {
+        s.upsertChats([id === LID ? { id, name: 'Alice', unreadCount: 2, conversationTimestamp: 50 } : { id }]);
+      }
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      expect(s.listChats()).toEqual([
+        expect.objectContaining({ id: '628111@c.us', name: 'Alice', unreadCount: 2, timestamp: 50 }),
+      ]);
+    });
+
+    it('takes the unread count from the more recently active of the two records', () => {
+      const s = new BaileysSessionStore();
+      s.upsertChats([
+        { id: PHONE, name: 'Alice', unreadCount: 0, conversationTimestamp: 10 },
+        { id: LID, unreadCount: 2, conversationTimestamp: 50 },
+      ]);
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', unreadCount: 2, timestamp: 50 })]);
+    });
+
+    it('shows a preview filed under the lid before the mapping on the merged row, newest first', () => {
+      const s = new BaileysSessionStore();
+      const msg = (remoteJid: string, id: string, ts: number) => ({
+        key: { remoteJid, fromMe: false, id },
+        message: { conversation: id },
+        messageTimestamp: ts,
+      });
+      s.upsertChats([{ id: PHONE }]);
+      s.recordMessage(msg(LID, 'VIA_LID', 100));
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      expect(s.listChats()).toEqual([
+        expect.objectContaining({ id: '628111@c.us', timestamp: 100, lastMessage: 'VIA_LID' }),
+      ]);
+      s.recordMessage(msg(PHONE, 'VIA_PHONE', 50));
+      expect(s.listChats()[0]).toMatchObject({ timestamp: 100, lastMessage: 'VIA_LID' });
+    });
+
+    it('keeps distinct chats apart', () => {
+      const s = new BaileysSessionStore();
+      s.upsertChats([{ id: PHONE }, { id: '628222@s.whatsapp.net' }, { id: '999@lid' }, { id: '120363@g.us' }]);
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      expect(s.listChats().map(c => c.id)).toEqual(['628111@c.us', '628222@c.us', '999@lid', '120363@g.us']);
+    });
+
+    it('forgets the folded row when the chat is deleted under its lid', () => {
+      const s = newStore();
+      s.upsertChats([{ id: PHONE, pinned: 2 }]);
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      s.removeChats([LID]);
+      expect(fake.rows.size).toBe(0);
+    });
+
+    it('lists a chat with a persisted state after a restart, before its next message', () => {
+      fake.rows.set(K(PHONE), { muteEndTime: null, archived: false, pinned: true });
+      fake.rows.set(K('628222@s.whatsapp.net'), { muteEndTime: -1, archived: false, pinned: false });
+      fake.rows.set('other\u0000628333@s.whatsapp.net', { muteEndTime: -1, archived: false, pinned: false });
+      const s = newStore();
+      s.upsertContacts([{ id: PHONE, name: 'Alice' }]);
+      s.upsertChats([{ id: '628222@s.whatsapp.net', name: 'Bob', conversationTimestamp: 70 }]);
+      expect(s.listChats()).toEqual([
+        expect.objectContaining({ id: '628222@c.us', name: 'Bob', timestamp: 70, muted: true }),
+        expect.objectContaining({ id: '628111@c.us', name: 'Alice', timestamp: 0, pinned: true }),
+      ]);
+      s.removeChats([PHONE]);
+      expect(s.listChats().map(c => c.id)).toEqual(['628222@c.us']);
+    });
+
+    it('lists a persisted state filed under a lid once, under the phone', () => {
+      fake.rows.set(K(LID), { muteEndTime: null, archived: true, pinned: false });
+      const s = newStore();
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', archived: true })]);
+    });
+
+    it('finds the disappearing timer a lid-keyed chat record carries from the @c.us id', () => {
+      const s = new BaileysSessionStore();
+      s.upsertChats([{ id: LID, ephemeralExpiration: 86400 }]);
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      expect(s.getEphemeralExpiration('628111@c.us')).toBe(86400);
     });
   });
 

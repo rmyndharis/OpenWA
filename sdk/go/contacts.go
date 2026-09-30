@@ -31,7 +31,8 @@ func (s *ContactsService) Get(ctx context.Context, sessionID, contactID string) 
 	return &out, nil
 }
 
-// Check reports whether a number is on WhatsApp.
+// Check reports whether a number is on WhatsApp. Requires an OPERATOR-level
+// key.
 func (s *ContactsService) Check(ctx context.Context, sessionID, number string) (*CheckNumberResponse, error) {
 	var out CheckNumberResponse
 	err := s.client.do(ctx, "GET", s.base(sessionID)+"/check/"+pathEscape(number), nil, nil, &out)

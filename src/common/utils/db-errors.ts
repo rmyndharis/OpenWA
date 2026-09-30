@@ -66,3 +66,27 @@ export function isMissingTableError(err: unknown): boolean {
   // text happens to mention a missing table must still NOT classify.
   return isNamedError(err, 'SqliteError') && /no such table/i.test(err.message ?? '');
 }
+
+/**
+ * Driver codes meaning "not now", not "your query is wrong". better-sqlite3 reports lock contention
+ * as `code: 'SQLITE_BUSY'` with the message `database is locked`, and TypeORM's QueryFailedError
+ * copies the driver's properties onto itself while rewriting the message, so the code is the only
+ * reliable token for SQLite. The Postgres codes are admin_shutdown (57P01), cannot_connect_now
+ * (57P03) and too_many_connections (53300).
+ */
+const TRANSIENT_DB_CODES = new Set(['SQLITE_BUSY', 'SQLITE_LOCKED', '57P01', '57P03', '53300']);
+
+/**
+ * A database failure worth one retry: the database or its pool said "not now" (lock contention, a
+ * dropped connection, pg-pool's connection timeout), not a rejected statement. A unique violation is
+ * never transient: callers read it as the dedup oracle.
+ */
+export function isTransientDbError(err: unknown): boolean {
+  if (err == null || typeof err !== 'object' || isUniqueViolation(err)) return false;
+  const e = err as DriverErrorWrapperShape;
+  const code = e.driverError?.code ?? e.code;
+  if (typeof code === 'string' && TRANSIENT_DB_CODES.has(code)) return true;
+  return /connection|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|terminating connection|timeout exceeded when trying to connect/i.test(
+    typeof e.message === 'string' ? e.message : '',
+  );
+}

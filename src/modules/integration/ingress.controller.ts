@@ -16,8 +16,9 @@ import { InstanceThrottlerGuard } from './instance-throttler.guard';
 @Public()
 // The global per-IP throttle SKIPS this route (its medium tier, 100/min by default, sits below the
 // per-instance limit's 120/min, so a provider delivering every tenant's webhooks from one shared
-// egress IP was 429'd at the IP tier before the instance bound ever fired). Fairness here is the
-// InstanceThrottlerGuard's job: keyed on (pluginId, instanceId), a noisy tenant sheds alone.
+// egress IP was 429'd at the IP tier before the instance bound ever fired). InstanceThrottlerGuard
+// bounds each client instead, and IngressService charges a per-(pluginId, instanceId) bucket once a
+// delivery's signature verifies, so a noisy tenant sheds alone.
 @SkipThrottle()
 @Controller('ingress')
 export class IngressController {
@@ -26,17 +27,14 @@ export class IngressController {
   // Express 5 (path-to-regexp v8) has no bare `*` — Nest's route converter rewrites it to the named
   // wildcard `*path`, so the trailing segments land in req.params.path (an array), not req.params[0].
   //
-  // InstanceThrottlerGuard carries this route's rate bounds: the global per-IP guard skips this
-  // controller (@SkipThrottle above) because its medium tier (100/min) sits below this guard's
-  // per-instance default (120/min), which 429'd every tenant of a shared-egress-IP provider at
-  // the IP tier before the instance bound ever fired. This guard ignores the bare @SkipThrottle
-  // (see its shouldSkip) and enforces TWO buckets: one keyed on (pluginId, instanceId), so a noisy
-  // tenant sheds alone, and one keyed on the client IP, because the first key comes from the path
-  // the caller supplies and would otherwise leave this @Public route with no bound it cannot walk
-  // around. Their limits/ttl (INGRESS_INSTANCE_LIMIT / INGRESS_INSTANCE_TTL / INGRESS_IP_LIMIT) are
-  // read directly by the guard itself, NOT via @Throttle: @Throttle metadata is reflected on the
-  // route and read by every ThrottlerGuard subclass that walks a tier of that name. See
-  // InstanceThrottlerGuard's onModuleInit for how it keeps its tiers fully independent.
+  // Two rate bounds, neither from the global per-IP guard (skipped via @SkipThrottle above, because
+  // its medium tier of 100/min sits below the per-instance default of 120/min and 429'd every
+  // tenant of a shared-egress-IP provider). InstanceThrottlerGuard ignores the bare @SkipThrottle
+  // (see its shouldSkip) and bounds each client IP before anything else (INGRESS_IP_LIMIT). The
+  // per-(pluginId, instanceId) bucket (INGRESS_INSTANCE_LIMIT) is charged by IngressService only
+  // after the signature verifies. Both windows use INGRESS_INSTANCE_TTL. The limits are read from the
+  // environment, NOT via @Throttle: @Throttle metadata is reflected on the route and read by every
+  // ThrottlerGuard subclass that walks a tier of that name.
   @UseGuards(InstanceThrottlerGuard)
   @All(':pluginId/:instanceId/*path')
   // The wildcard segment is part of the published path template, so it needs a parameter of its own —

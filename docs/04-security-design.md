@@ -86,12 +86,19 @@ above that level (`AuthService.hasPermission`). A key below it is rejected with 
 | Scope     | Field             | Effect                                                                                                                                                             |
 | --------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Source IP | `allowedIps`      | Empty/absent = unrestricted; non-empty = fail-closed IP whitelist (see §4.3)                                                                                       |
-| Sessions  | `allowedSessions` | Empty/absent = every session; non-empty = a request carrying any other session id is rejected with `401`                                                           |
+| Sessions  | `allowedSessions` | Empty/absent = every session; non-empty = a request carrying any other session id is rejected with `403`                                                           |
 | Chats     | `allowedChats`    | Empty/absent = every chat; non-empty = default-deny: only chat-scoped routes, and only for a listed chat, else `403`; `/events`, MCP and Bull Board refuse the key |
 
 The key-lifecycle routes (`/api/auth/api-keys`) are additionally fenced with `@RequireUnscopedKey()`:
 a session-scoped key is refused there whatever its role, so it cannot mint or widen credentials
 beyond its own confinement.
+
+A session's egress proxy (`proxyUrl` on `POST /api/sessions`, `PATCH /api/sessions/:sessionId/proxy`)
+is set only by an unscoped `admin` key; any other key gets `403`. The proxy is trusted egress chosen by
+the administrator, so its host is deliberately not checked against internal addresses (a loopback or
+private-network proxy sidecar works). The destinations of caller-supplied URLs fetched through it are
+still vetted by the SSRF guard. Reading the proxy (`GET /api/sessions/:sessionId/proxy`) returns only
+the masked host, type and a `hasCredentials` flag.
 
 ## 4.3 IP Whitelisting
 
@@ -106,7 +113,7 @@ flowchart TB
     AUTH -->|Yes| WL{IP Whitelist Enabled?}
     WL -->|No| ALLOW[Allow Request]
     WL -->|Yes| CHECK{IP in Whitelist?}
-    CHECK -->|No| RIP[401 Unauthorized]
+    CHECK -->|No| RIP[403 Forbidden]
     CHECK -->|Yes| ALLOW
     ALLOW --> PROCESS[Process Request]
 ```
@@ -142,9 +149,10 @@ sub-resource, no per-entry `active` flag. Enforcement lives in two places:
 - **Matching** — `AuthService.validateApiKey` compares that IP against the key's `allowedIps` with
   the shared `ipMatches` helper, which accepts an exact address or CIDR notation and returns `false`
   on a malformed entry rather than coercing it into range. With a whitelist configured, an
-  undeterminable client IP throws `UnauthorizedException` (`401`) straight away, with no log line;
+  undeterminable client IP throws `ForbiddenException` (`403`) straight away, with no log line;
   an IP outside the list writes a `logger.warn` with `action: 'ip_rejected'` first, then throws the
-  same `401`.
+  same `403`. The key itself is valid, so the refusal is a `403` like the role and chat refusals, and
+  a client does not read it as a key to discard.
 
 ### Best Practices
 
@@ -158,9 +166,12 @@ sub-resource, no per-entry `active` flag. Enforcement lives in two places:
 
 ### IPv6 Support
 
-CIDR matching is IPv4-only: an IPv6 range in `allowedIps` never matches. An exact IPv6 address still
-works, by literal comparison — IPv4-mapped forms (`::ffff:203.0.113.50`) are normalized to their bare
-IPv4 address first.
+`allowedIps` accepts IPv4 addresses and IPv4 CIDR ranges only; the API rejects an IPv6 entry. An
+IPv6 address or range already stored on a key created before v0.4.3, when the API started rejecting
+them, is matched as written. An IPv4-mapped client address (`::ffff:203.0.113.50`) is normalized to its bare IPv4 address before
+matching. `TRUSTED_PROXIES` accepts IPv4 and IPv6 addresses and CIDR ranges (for example `fd00::/8`);
+an entry that is neither is ignored, with a warning at boot. A trusted proxy that appends a port to
+an `X-Forwarded-For` hop (`203.0.113.7:51000`, `[2001:db8::1]:443`) resolves to the bare address.
 
 ## 4.4 Data Encryption
 
@@ -251,7 +262,7 @@ flowchart LR
     RL -->|Under Limit| APP[Application]
     RL -->|Over Limit| ERR[429 Too Many Requests]
 
-    subgraph Limits["Global windows (per client IP)"]
+    subgraph Limits["Windows (per route, per client IP)"]
         T1[short: 10 / 1s]
         T2[medium: 100 / 60s]
         T3[long: 1000 / 1h]
@@ -260,7 +271,7 @@ flowchart LR
 
 ### Windows
 
-All limits are **global and per client IP** (resolved through `TRUSTED_PROXIES`), applied by a global `ThrottlerGuard`. There is **no per-endpoint limit table** — these three windows apply to every non-exempt route, and exceeding any one returns `429 Too Many Requests`:
+Each window is counted **per route handler per client IP** (the IP resolved through `TRUSTED_PROXIES`) by a global `ThrottlerGuard`, so a client gets the full budget on every endpoint; for an aggregate per-client cap, add a limiter at your reverse proxy. There is **no per-endpoint limit table**: these three windows apply to every non-exempt REST controller route, and exceeding any one returns `429 Too Many Requests`:
 
 | Window   | Default limit | Window length | Env overrides                                       |
 | -------- | ------------- | ------------- | --------------------------------------------------- |
@@ -268,9 +279,9 @@ All limits are **global and per client IP** (resolved through `TRUSTED_PROXIES`)
 | `medium` | 100 requests  | 60 s          | `RATE_LIMIT_MEDIUM_TTL` / `RATE_LIMIT_MEDIUM_LIMIT` |
 | `long`   | 1000 requests | 3600 s        | `RATE_LIMIT_LONG_TTL` / `RATE_LIMIT_LONG_LIMIT`     |
 
-TTL values are in milliseconds. The `/api/metrics` and `/api/health*` routes are exempt (`@SkipThrottle`). To enforce tighter per-route limits, lower the global windows or add a limiter at your reverse proxy.
+TTL values are in milliseconds. The `/api/metrics` and `/api/health*` routes are exempt (`@SkipThrottle`), and the ingress route has its own windows (below); `/api/health` still looks up at most 30 failed key presentations per client per minute, and past that answers without `version` and without a key lookup. The MCP endpoint (`/mcp`) and the Bull Board UI (`/api/admin/queues`) are raw Express mounts the guard never sees: RATE_LIMIT_* does not apply to them, and each is bounded by its own pre-auth per-IP throttle (`MCP_IP_RATE_LIMIT_MAX` / `MCP_IP_RATE_LIMIT_WINDOW_MS`). To enforce tighter per-route limits, lower the global windows or add a limiter at your reverse proxy.
 
-An IPv6 client is keyed on its /64, so rotating addresses inside one allocation does not mint fresh buckets. The same key is used by every other per-client limit: the MCP and Bull Board pre-auth throttles, the WebSocket limits below, the per-client share of the in-flight body budget, and the health route's auth-failure audit bound. `allowedIps` matching and audit rows still see the full address.
+An IPv6 client is keyed on its /64, so rotating addresses inside one allocation does not mint fresh buckets. The same key is used by every other per-client limit: the MCP and Bull Board pre-auth throttles, the WebSocket limits below, the per-client share of the in-flight body budget for requests without an API key, the health route's key-lookup budget and auth-failure audit bound, and the REST, queue-dashboard and MCP auth-failure audit bound. `allowedIps` matching and audit rows still see the full address.
 
 ### Response on limit
 
@@ -281,12 +292,23 @@ Exceeding a window returns `429 Too Many Requests`. Because the windows are **na
 
 The ingress route (`ALL /api/ingress/:pluginId/:instanceId/*path`) is exempt from the global per-IP tiers (their 100/min medium window sits below the per-instance limit, so a provider fanning every tenant's webhooks through one egress IP was shed before the per-instance bound could fire). It carries its own two windows instead, both on `INGRESS_INSTANCE_TTL` (default 60000 ms):
 
-- `instance`, keyed on `(pluginId, instanceId)`, env `INGRESS_INSTANCE_LIMIT`, default 120. Sheds one noisy tenant without touching its neighbours.
-- `ingress-ip`, keyed on the client (proxy-aware, see `TRUSTED_PROXIES`), env `INGRESS_IP_LIMIT`, default 1200. The `instance` key is built from path segments the caller supplies, so varying them mints a fresh bucket; this window is the bound an unauthenticated caller cannot walk around. It is sized 10x the per-instance default so it never binds first for legitimate traffic.
+- `instance`, keyed on `(pluginId, instanceId)`, env `INGRESS_INSTANCE_LIMIT`, default 120. Sheds one noisy tenant without touching its neighbours. Charged only once a delivery passes signature verification, so unknown-instance, failed-challenge and oversized requests never touch it. A route declaring signature scheme `none` (allowed only with `ALLOW_UNSIGNED_INGRESS=true`) passes every request, so there any caller can spend this bucket.
+- `ingress-ip`, keyed on the client (proxy-aware, see `TRUSTED_PROXIES`), env `INGRESS_IP_LIMIT`, default 1200. It is checked before anything else and is the only bound on traffic that fails verification. It is sized 10x the per-instance default so it never binds first for legitimate traffic.
 
-Responses therefore carry `X-RateLimit-*-instance` and `X-RateLimit-*-ingress-ip`, and on saturation the `Retry-After-*` of whichever window shed the request, mirrored into a plain `Retry-After`.
+Every response the per-IP window admits carries `X-RateLimit-*-ingress-ip`, an acknowledged delivery also carries `X-RateLimit-*-instance`, and a `429` carries the `Retry-After-*` of whichever window shed the request, mirrored into a plain `Retry-After`.
 
 The API exposes the rate-limit headers via CORS (`exposedHeaders`) so browser clients can read them, the plain `Retry-After` included. The simplest backpressure signal remains the `429` status itself, with `Retry-After` as the retry delay.
+
+### In-flight request bodies
+
+The windows above run at the routing layer, after a request body has been buffered, so they cannot bound memory held by slow uploads. A pre-routing middleware does: it caps the request-body bytes in flight across all connections at `INFLIGHT_BODY_BUDGET_BYTES` (default 4 x `BODY_SIZE_LIMIT`) and answers a request that would cross it with `503` and `Retry-After`, before reading its body.
+
+- Requests without an active API key (public ingress webhooks, unauthenticated callers) share a pool of a quarter of the budget, never less than twice `BODY_SIZE_LIMIT` (so half of the default budget), and are charged at most `BODY_SIZE_LIMIT` each. The rest is kept for requests that carry an active key. With `INFLIGHT_BODY_BUDGET_BYTES` below three times `BODY_SIZE_LIMIT` that reserve is smaller than one full-size body, and at twice `BODY_SIZE_LIMIT` or less there is none.
+- A request with an active key may hold at most half of the budget per key, wherever it connects from. An unkeyed client (IPv6 on its /64) may hold at most half of the unkeyed pool, or one `BODY_SIZE_LIMIT` if that is larger, so one full-size body from one address leaves room for other unkeyed senders once `INFLIGHT_BODY_BUDGET_BYTES` is at least twice `BODY_SIZE_LIMIT`; below that the room left is the budget minus one `BODY_SIZE_LIMIT`, and at a budget equal to `BODY_SIZE_LIMIT` a single full-size unkeyed body refuses every other body-carrying request, ingress deliveries included, with `503` until it finishes. Behind a reverse proxy without `TRUSTED_PROXIES`, every unkeyed request, ingress included, keys on the proxy address and draws on that one share, so at the defaults a single full-size unkeyed upload refuses ingress deliveries with `503` until it finishes.
+- Keys are recognised from an in-memory index of active keys, refreshed at once when this node changes a key and every 30 seconds for a direct write to this node's main database. Keys are per node, so a change made on another node never reaches it. The index only picks the tier; the API-key guard still authorises every request.
+- A request holds its declared `Content-Length` until it finishes. After a 15-second grace it must keep up the pace that lands the whole body within `REQUEST_TIMEOUT_MS` (by default 25 MiB in 300 seconds, about 85 KiB/s); a request that falls behind is dropped and its reservation released. A chunked body holds a 1 MiB placeholder, or the bytes that have arrived once they pass it, and must deliver the placeholder at the same pace (about 3.4 KiB/s by default). If that growth crosses the budget, its client's share, or (without a key) the unkeyed pool, that request is aborted.
+- A body that sends nothing for 15 seconds is dropped and its reservation released.
+- Requests without a body are never refused for lack of budget.
 
 ### WebSocket (`/events`) limits
 
@@ -409,15 +431,15 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      // The bundled dashboard pulls webfonts from Google Fonts.
-      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      // The dashboard bundles its fonts; Bull Board's Google Fonts link is blocked (system-font fallback).
+      styleSrc: ["'self'", "'unsafe-inline'"],
       // Per-response nonce; the served dashboard document carries the same value.
       scriptSrc: ["'self'", (_req, res) => `'nonce-${res.locals.cspNonce}'`],
       // blob: for the outgoing attachment preview, data: for chat media rendered inline.
       imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
       mediaSrc: ["'self'", 'data:', 'blob:', 'https:'],
       connectSrc: ["'self'"],
-      fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+      fontSrc: ["'self'"],
       objectSrc: ["'none'"],
       // On in production, unless CSP_UPGRADE_INSECURE_REQUESTS opts an HTTP-only
       // private-network deployment out (#611).
@@ -492,7 +514,7 @@ flowchart TB
 
 ### Security Alerts
 
-> **Not implemented.** There is no alerting or automatic temp-block subsystem; the table below is a design target, not shipped behavior. The signals do get recorded — rejected authentication and WebSocket rate-limit violations write persisted audit rows (the latter sampled), and an IP-restricted key used from a disallowed IP also emits a `logger.warn` — but nothing acts on them. Forward the audit log / application log to your SIEM to build these alerts.
+> **Not implemented.** There is no alerting or automatic temp-block subsystem; the table below is a design target, not shipped behavior. The signals do get recorded: rejected authentication and WebSocket rate-limit violations write persisted audit rows, and an IP-restricted key used from a disallowed IP also emits a `logger.warn`; but nothing acts on them. A REST, queue-dashboard or MCP rejection that names no stored key (missing or unknown) is capped at 10 rows per client IP per minute; a rejection of a stored key (revoked, expired, IP or session refused, insufficient role) is recorded every time there. The public `/api/health` route bounds every auth-failure row it writes, stored key or not, at 10 per client IP per minute. Rate-limit violations are sampled. Forward the audit log / application log to your SIEM to build these alerts.
 
 | Event                | Severity | Intended action (roadmap) |
 | -------------------- | -------- | ------------------------- |
@@ -520,6 +542,7 @@ flowchart TB
 - [ ] CORS properly configured
 - [ ] Firewall rules set
 - [ ] Regular security updates
+- [ ] Release image (releases after 0.23.7; earlier images carry no attestation) verified as built by the release workflow at its tag: `gh attestation verify oci://ghcr.io/rmyndharis/openwa:<version> --repo rmyndharis/OpenWA --signer-workflow rmyndharis/OpenWA/.github/workflows/release.yml --source-ref refs/tags/v<version>` (the same digest, and so the same check, applies to `docker.io/rmyndharis/openwa`)
 
 ### Operations
 
@@ -539,10 +562,12 @@ flowchart TB
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- |
 | Database credentials              | Environment variable                                                                                               | 90 days                                         |
 | Redis password                    | Environment variable                                                                                               | 90 days                                         |
-| API master key (`API_MASTER_KEY`) | Environment variable                                                                                               | 180 days                                        |
+| API master key (`API_MASTER_KEY`) | Environment variable (first-boot seed only)                                                                        | Not via the env var; see the note below         |
 | API key pepper (`API_KEY_PEPPER`) | Environment variable                                                                                               | Rotating it invalidates all existing key hashes |
 | Webhook secrets                   | Database — **plaintext**; not in the webhook read DTOs, and omitted from `GET /api/infra/export-data` webhook rows | Per webhook                                     |
 | Session auth state                | File system (data volume) — **not encrypted**                                                                      | Never (tied to the WA session)                  |
+
+> `API_MASTER_KEY` only seeds the first ADMIN key, and is read only while the key table is empty. Changing it later has no effect: the new value never authenticates and the seeded key stays valid. Rotate by minting a new ADMIN key with `POST /api/auth/api-keys` and revoking the seeded `Default Admin Key`.
 
 > There is no application `ENCRYPTION_KEY` — OpenWA does not encrypt data at rest (see §4.4). The rotation cadences above are operational recommendations, not enforced by the app.
 
@@ -612,7 +637,7 @@ const masterKey = getSecret('API_MASTER_KEY');
 
 ### Key Rotation Procedure
 
-> **Not applicable today.** OpenWA stores no encrypted-at-rest data (see §4.4), so there is no data-encryption key to rotate and no `rotateEncryptionKey()` in the codebase. The flow below is illustrative for if/when field-level encryption is added. To rotate the `API_MASTER_KEY` or `API_KEY_PEPPER`, use the API-key endpoints (§4.2) — rotating the pepper invalidates existing key hashes.
+> **Not applicable today.** OpenWA stores no encrypted-at-rest data (see §4.4), so there is no data-encryption key to rotate and no `rotateEncryptionKey()` in the codebase. The flow below is illustrative for if/when field-level encryption is added. To rotate the key seeded from `API_MASTER_KEY`, mint a new ADMIN key through the API-key endpoints (§4.2) and revoke the seeded one; editing the env var has no effect after first boot. Rotating `API_KEY_PEPPER` invalidates every existing key hash.
 
 ```mermaid
 flowchart TB
@@ -665,7 +690,7 @@ npm audit --json > audit-report.json
 
 ```yaml
 # .github/dependabot.yml, root npm ecosystem only (the file also covers /dashboard,
-# github-actions and docker). The comment above each ignore is omitted here.
+# github-actions, docker and docker-compose). The comment above each ignore is omitted here.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -709,7 +734,7 @@ tar-stream from 3.2.1). Each ignore's reason and lift condition is the comment a
 
 ### Security Scanning in CI
 
-> **Aspirational template — not in the repo.** There is no Snyk and no CodeQL workflow today. The actual dependency check is a dedicated `audit` job ("Security audit") in `ci.yml`, on push/PR. It is deliberately its own job rather than a step inside Lint: an advisory published against an unrelated dependency would otherwise abort the job before ESLint, the type-check and the drift gates ever ran. It runs `npm run check:audit` over the root tree and `npm audit --audit-level=high` over `dashboard/`. Both fence `high` rather than `critical`, because the `overrides` in `package.json` clear the root tree's existing HIGH advisories, so the threshold fences regressions. `check:audit` applies that threshold per advisory instead of all-or-nothing: an advisory with no patched version can be excused by id in `scripts/check-audit.mjs`, with its reason and its removal condition recorded beside it, rather than dropping the whole job to `critical` — and an allowlist entry whose advisory has since gone fails the job too, so an exception cannot outlive its cause. The dashboard keeps the plain form: it has nothing to excuse and stays the stricter of the two. Between releases, `.github/workflows/security-scan.yml` (Scheduled Security Scan) repeats that job every Wednesday at 03:00 UTC and on demand, together with the release Trivy scan against the published `latest` image on amd64 and arm64. The workflow below is a recommended setup to add if you want Snyk and SAST; its scheduled `npm audit` is already covered by `security-scan.yml`.
+> **Aspirational template — not in the repo.** There is no Snyk and no CodeQL workflow today. The actual dependency check is a dedicated `audit` job ("Security audit") in `ci.yml`, on push/PR. It is deliberately its own job rather than a step inside Lint: an advisory published against an unrelated dependency would otherwise abort the job before ESLint, the type-check and the drift gates ever ran. It runs `npm run check:audit` over the root tree and `npm audit --audit-level=high` over `dashboard/`. Both fence `high` rather than `critical`, because the `overrides` in `package.json` clear the root tree's existing HIGH advisories, so the threshold fences regressions. `check:audit` applies that threshold per advisory instead of all-or-nothing: an advisory with no patched version can be excused by id in `scripts/check-audit.mjs`, with its reason and its removal condition recorded beside it, rather than dropping the whole job to `critical` — and an allowlist entry whose advisory has since gone fails the job too, so an exception cannot outlive its cause. The dashboard keeps the plain form: it has nothing to excuse and stays the stricter of the two. Between releases, `.github/workflows/security-scan.yml` (Scheduled Security Scan) repeats that job every Wednesday at 03:00 UTC and on demand, together with the release Trivy scan against the published `latest` image on amd64 and arm64, and a `base-image-drift` job that fails when the Dockerfile's two `node:22-slim` FROM digests disagree, or when the pin differs from what the tag serves today and either the tag has served that image for 7 or more days, or for 3 or more days with the pin last changed 28 or more days ago. The workflow below is a recommended setup to add if you want Snyk and SAST; its scheduled `npm audit` is already covered by `security-scan.yml`.
 
 ```yaml
 # .github/workflows/security.yml
@@ -717,7 +742,7 @@ name: Security Scan
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   schedule:
     - cron: '0 0 * * 1' # Weekly on Monday
 

@@ -34,6 +34,11 @@ export enum MessageStatus {
 @Entity('messages')
 @Index(['sessionId', 'createdAt'])
 @Index(['chatId'])
+// One chat's thread, paged newest-first, and its total; the send-pacing history probes filter on the
+// same (sessionId, chatId, createdAt) prefix. The standalone chatId index stays for the search and
+// stats reads that filter on chatId without a session. The explicit name matches the migration that
+// creates it on synchronize-disabled deployments, so both schema paths converge on one index.
+@Index('IDX_messages_sessionId_chatId_createdAt', ['sessionId', 'chatId', 'createdAt'])
 // Composite index for the ack-driven status UPDATE (scoped by sessionId + waMessageId).
 // Without it every ack does a full table scan of a hot table.
 @Index('UQ_messages_sessionId_waMessageId', ['sessionId', 'waMessageId'], { unique: true })
@@ -42,7 +47,8 @@ export class Message {
   id!: string;
 
   // No standalone @Index here: sessionId-only lookups are already served by the composite indexes
-  // that lead with sessionId — (sessionId, createdAt) above and the unique (sessionId, waMessageId).
+  // that lead with sessionId: (sessionId, createdAt), (sessionId, chatId, createdAt) and the unique
+  // (sessionId, waMessageId).
   @Column()
   sessionId!: string;
 
@@ -58,9 +64,10 @@ export class Message {
   chatName?: string;
 
   /**
-   * Stable sender identity for a group message: the participant JID who actually posted (`from` is
-   * the group JID). Lets the chat view tell two same-named participants apart. Null on 1:1
-   * messages, outgoing echoes, and legacy rows.
+   * Stable sender identity for a group, status or broadcast-list message: the JID who actually
+   * posted (`from` is the group, `status@broadcast` or list id; on Baileys a list message the account
+   * received is filed under the sender, so `from` is the sender too). Lets the chat view tell two
+   * same-named participants apart. Null on 1:1 messages, outgoing echoes, and legacy rows.
    */
   @Column({ nullable: true })
   author?: string;

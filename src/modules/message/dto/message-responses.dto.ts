@@ -65,7 +65,8 @@ export class MessageListItemDto {
   @ApiPropertyOptional({
     type: String,
     nullable: true,
-    description: 'Group participant who posted the message (`from` is the group JID there).',
+    description:
+      'Sender of a group, status or broadcast-list message (`from` is the group, `status@broadcast` or list id there). On Baileys a list message the account received is filed under the sender, so `from` is the sender too.',
     example: '628123456789@c.us',
   })
   author?: string | null;
@@ -286,7 +287,8 @@ export class ChatHistoryMessageDto {
   ephemeralDuration?: number;
 
   @ApiPropertyOptional({
-    description: 'Group participant who actually sent it (`from` is the group JID there).',
+    description:
+      'Sender of a group, status or broadcast-list message (`from` is the group, `status@broadcast` or list id there). On Baileys a list message the account received is filed under the sender, so `from` is the sender too.',
     example: '628123456789@c.us',
   })
   author?: string;

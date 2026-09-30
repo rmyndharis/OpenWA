@@ -6,9 +6,10 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * `synchronize: true`, with no migrations — so turning synchronize off would leave a
  * fresh install with no `api_keys` table and total auth failure at boot.
  *
- * This migration is what the `main` connection runs when `MAIN_DATABASE_SYNCHRONIZE=false`
- * (`migrationsRun: !synchronize`). The main DB is always SQLite (boot config). `IF NOT EXISTS`
- * makes it idempotent so it is also safe to adopt on a DB previously created by synchronize.
+ * The `main` connection runs this chain at every boot (createMainDataSource, main-connection.ts;
+ * `MAIN_DATABASE_SYNCHRONIZE=true` only adds a synchronize after it). The main DB is always SQLite
+ * (boot config). `IF NOT EXISTS` makes it idempotent, so it adopts a DB an earlier release created
+ * by synchronize.
  */
 export class CreateAuthAuditTables1779900000000 implements MigrationInterface {
   name = 'CreateAuthAuditTables1779900000000';

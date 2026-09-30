@@ -47,13 +47,21 @@ export function ToastProvider({ children }: ToastProviderProps) {
 
   const error = useCallback(
     (title: string, message?: string) => {
+      // Browser fetch rejections: Chromium 'Failed to fetch', Firefox 'NetworkError ...', WebKit exactly
+      // 'Load failed' (compared whole, so 'download failed ...' keeps its own toast). A proxy answering
+      // 502/503 with a non-JSON body surfaces as exactly 'HTTP <status>' (see handleErrorResponse). A 504
+      // keeps its own toast: the proxy reached the backend and stopped waiting, so the request (an import,
+      // a restart) may still be running and the caller's title says which one.
+      const m = message?.toLowerCase().trim() ?? '';
+      const tl = title.toLowerCase().trim();
       const isConnectionError =
-        message?.toLowerCase().includes('failed to fetch') ||
-        message?.toLowerCase().includes('networkerror') ||
-        message?.toLowerCase().includes('http 502') ||
-        message?.toLowerCase().includes('http 503') ||
-        title.toLowerCase().includes('failed to fetch') ||
-        title.toLowerCase().includes('networkerror');
+        m.includes('failed to fetch') ||
+        m.includes('networkerror') ||
+        m === 'load failed' ||
+        /^http 50[23]$/.test(m) ||
+        tl.includes('failed to fetch') ||
+        tl.includes('networkerror') ||
+        tl === 'load failed';
 
       if (isConnectionError) {
         // De-dupe on the stable key (not the translated title) so a downed backend shows one toast.

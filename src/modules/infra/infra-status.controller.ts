@@ -23,6 +23,7 @@ import { StorageService } from '../../common/storage/storage.service';
 import { createLogger } from '../../common/services/logger.service';
 import { readGeneratedEnv } from './generated-env';
 import { isEnvPinned } from '../../config/env-precedence';
+import { DEFAULT_PUPPETEER_ARGS } from '../../config/configuration';
 import { checkForUpdate, type UpdateCheck } from './update-check';
 
 interface InfraStatus {
@@ -54,10 +55,21 @@ interface InfraStatus {
 }
 
 /**
- * The keys behind the Infrastructure page's four editable selections, in card order. Only these are
- * reported: the page has no control for anything else, so naming other variables would be noise.
+ * The keys behind the Infrastructure page's editable controls that a shipped compose file or an
+ * operator variable is known to pin. docker-compose.dev.yml pins the local storage path and the three
+ * whatsapp-web.js launch options with non-empty defaults. Only page controls are reported: naming
+ * variables the page cannot edit would be noise.
  */
-const DASHBOARD_SELECTION_ENV_KEYS = ['DATABASE_TYPE', 'REDIS_ENABLED', 'STORAGE_TYPE', 'ENGINE_TYPE'];
+const DASHBOARD_PINNABLE_ENV_KEYS = [
+  'DATABASE_TYPE',
+  'REDIS_ENABLED',
+  'STORAGE_TYPE',
+  'STORAGE_LOCAL_PATH',
+  'ENGINE_TYPE',
+  'PUPPETEER_HEADLESS',
+  'SESSION_DATA_PATH',
+  'PUPPETEER_ARGS',
+];
 
 @ApiTags('infrastructure')
 @Controller('infra')
@@ -164,7 +176,7 @@ export class InfraStatusController {
     const engineHeadless = this.configService.get<boolean>('engine.puppeteer.headless', true) ?? true;
     const sessionDataPath = this.configService.get<string>('engine.sessionDataPath', './data/sessions');
     const browserArgs =
-      this.configService.get<string[]>('engine.puppeteer.args')?.join(' ') || '--no-sandbox --disable-gpu';
+      this.configService.get<string[]>('engine.puppeteer.args')?.join(' ') || DEFAULT_PUPPETEER_ARGS.join(' ');
 
     // Built-in detection: prefer the actually-running bundled container as truth (so a stopped/missing
     // container, or a host-pinned external host, reads as NOT built-in), and require the app to be
@@ -224,7 +236,7 @@ export class InfraStatusController {
         browserArgs,
         ...(engineType === 'whatsapp-web.js' ? { webVersion, webVersionSource } : {}),
       },
-      envPinned: DASHBOARD_SELECTION_ENV_KEYS.filter(isEnvPinned),
+      envPinned: DASHBOARD_PINNABLE_ENV_KEYS.filter(isEnvPinned),
     };
   }
 

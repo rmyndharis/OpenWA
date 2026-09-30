@@ -8,7 +8,8 @@ export type PreflightRejection = { status: number; body: string; headers?: Recor
  * matter re-attempt a 503 only when the header is set and do not parse its value (supabase/auth checks
  * `Get("retry-after") != ""`). A session that is merely still coming up already passes through to the
  * normal 202 + enqueue path, so a rejection means no live engine or FAILED, and what bounds a provider
- * hammering a dead session is InstanceThrottlerGuard's per-instance bucket, not this number.
+ * hammering a dead session is the per-instance bucket IngressService charges after verification, not
+ * this number.
  */
 const PREFLIGHT_RETRY_AFTER_SECONDS = 5;
 

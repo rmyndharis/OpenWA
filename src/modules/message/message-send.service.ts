@@ -206,6 +206,8 @@ export class MessageSendService {
         chatId: message.chatId,
         messageId: message.id,
         error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        // An EnginePageError keeps the full in-page summary (stack, own properties) here only.
+        ...(error instanceof Error && error.cause instanceof Error ? { cause: error.cause.message } : {}),
       });
     }
     await this.saveFailedMessage(message);

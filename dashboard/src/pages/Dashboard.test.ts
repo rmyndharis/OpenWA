@@ -14,6 +14,7 @@ let webhookList: unknown[] = [];
 let sessionList: unknown[] = [];
 let stopStatus = 200;
 let sessionsStatus = 200;
+const requested: string[] = [];
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
@@ -32,6 +33,7 @@ function installFetchStub(): void {
   globalThis.fetch = ((input: RequestInfo | URL): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const path = url.replace(/^https?:\/\/[^/]+/, '');
+    requested.push(path);
     if (path === '/api/sessions') {
       return Promise.resolve(
         sessionsStatus === 200 ? jsonResponse(sessionList) : jsonResponse({ message: 'Bad Gateway' }, sessionsStatus),
@@ -77,6 +79,8 @@ before(async () => {
   ({ RoleProvider } = await import('../components/RoleProvider.tsx'));
   ({ ToastProvider } = await import('../components/Toast.tsx'));
   ({ Dashboard } = await import('./Dashboard.tsx'));
+  // Loaded up front so the lazy chart section resolves at once wherever it is rendered.
+  await import('../components/DashboardCharts.tsx');
 });
 
 afterEach(() => {
@@ -87,6 +91,7 @@ afterEach(() => {
   sessionList = [];
   stopStatus = 200;
   sessionsStatus = 200;
+  requested.length = 0;
   window.sessionStorage.setItem('openwa_user_role', 'viewer');
 });
 
@@ -183,4 +188,25 @@ test('a failed first read of the sessions still shows the error', async () => {
   sessionsStatus = 502;
   renderDashboard();
   await rtl.screen.findByText(/Bad Gateway/);
+});
+
+test('a non-admin key never loads the chart section', async () => {
+  for (const role of ['viewer', 'operator']) {
+    window.sessionStorage.setItem('openwa_user_role', role);
+    renderDashboard();
+    await rtl.waitFor(() => assert.ok(requested.includes('/api/stats/overview')));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.ok(
+      !requested.some(p => p.startsWith('/api/stats/messages')),
+      `${role}: the charts asked for /stats/messages`,
+    );
+    rtl.cleanup();
+    requested.length = 0;
+  }
+});
+
+test('an admin key loads the chart section', async () => {
+  window.sessionStorage.setItem('openwa_user_role', 'admin');
+  renderDashboard();
+  await rtl.waitFor(() => assert.ok(requested.some(p => p.startsWith('/api/stats/messages'))));
 });

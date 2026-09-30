@@ -1,3 +1,4 @@
+import { BlockList, isIP } from 'net';
 import { normalizeIp as maskIpv6Subnet } from '@nestjs/throttler';
 
 /**
@@ -45,7 +46,7 @@ export function resolveClientIp(req: RequestLike, trustedProxies: string[]): str
 
   const hops = (Array.isArray(forwarded) ? forwarded.join(',') : forwarded)
     .split(',')
-    .map(hop => normalizeIp(hop.trim()))
+    .map(hop => normalizeIp(stripHopPort(hop.trim())))
     .filter(Boolean);
 
   // Walk right-to-left and return the first hop that is not a trusted proxy:
@@ -60,6 +61,18 @@ export function resolveClientIp(req: RequestLike, trustedProxies: string[]): str
 }
 
 /**
+ * Drop a port some proxies append to an X-Forwarded-For hop: `203.0.113.7:51000` and
+ * `[2001:db8::1]:443` (or bracketed without a port). A bare IPv6 address is left alone, since its
+ * last group cannot be told apart from a port.
+ */
+function stripHopPort(hop: string): string {
+  const v4 = /^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/.exec(hop);
+  if (v4) return v4[1];
+  const v6 = /^\[([0-9a-f:.]+)\](?::\d+)?$/i.exec(hop);
+  return v6 ? v6[1] : hop;
+}
+
+/**
  * Key for a per-client limiter, budget or counter: an IPv6 address is masked to its /64 (the
  * `@nestjs/throttler` default the global guard uses), so a client holding a /64 cannot rotate
  * addresses into fresh buckets. IPv4 and loopback addresses come back unchanged, and an IPv4-mapped
@@ -71,41 +84,61 @@ export function limiterKeyForIp(ip: string): string {
   return maskIpv6Subnet(ip, 64);
 }
 
-function ipv4ToInt(ip: string): number | null {
-  const parts = ip.split('.');
-  if (parts.length !== 4) return null;
-  let result = 0;
-  for (const part of parts) {
-    if (!/^\d{1,3}$/.test(part)) return null;
-    const octet = Number(part);
-    if (octet > 255) return null;
-    result = result * 256 + octet;
-  }
-  return result >>> 0;
+interface IpTarget {
+  address: string;
+  type: 'ipv4' | 'ipv6';
+  /** Prefix length for a CIDR; absent for an exact address. */
+  bits?: number;
+}
+
+/** Parse an exact IPv4/IPv6 address or CIDR; null when `entry` is neither. */
+function parseIpTarget(entry: string): IpTarget | null {
+  const ref = (entry || '').trim();
+  const slash = ref.indexOf('/');
+  const address = normalizeIp(slash === -1 ? ref : ref.slice(0, slash));
+  const family = isIP(address);
+  if (family === 0) return null;
+  const type = family === 6 ? 'ipv6' : 'ipv4';
+  if (slash === -1) return { address, type };
+  const bitsRaw = ref.slice(slash + 1);
+  if (!/^\d{1,3}$/.test(bitsRaw)) return null;
+  const bits = Number(bitsRaw);
+  if (bits > (family === 6 ? 128 : 32)) return null;
+  return { address, type, bits };
+}
+
+/** True if `entry` is an exact IPv4/IPv6 address or a CIDR range. */
+export function isIpOrCidrEntry(entry: string): boolean {
+  return parseIpTarget(entry) !== null;
 }
 
 /**
- * True if `ip` equals or falls within `target`, where `target` is either an
- * exact IP or an IPv4 CIDR (e.g. `172.18.0.0/16`). IPv4-mapped IPv6 inputs are
- * normalized first. Malformed input yields `false` rather than throwing.
+ * The TRUSTED_PROXIES entries (comma-separated) that are neither an IP nor a CIDR. Such an entry
+ * never matches a peer, so the proxy it was meant to name is treated as a direct client.
+ */
+export function invalidTrustedProxies(raw: string | undefined): string[] {
+  return (raw || '')
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(entry => entry && !isIpOrCidrEntry(entry));
+}
+
+/**
+ * True if `ip` equals or falls within `target`, where `target` is an exact IP or a CIDR range, IPv4
+ * (`172.18.0.0/16`) or IPv6 (`fd00::/8`). IPv4-mapped IPv6 inputs are normalized first, an address
+ * never matches a target of the other family, and compressed and expanded IPv6 forms compare equal.
+ * Malformed input yields `false` rather than throwing.
  */
 export function ipMatches(ip: string, target: string): boolean {
   const candidate = normalizeIp((ip || '').trim());
-  const ref = (target || '').trim();
-
-  if (!ref.includes('/')) {
-    return normalizeIp(ref) === candidate;
+  const parsed = parseIpTarget(target);
+  if (!parsed || isIP(candidate) !== (parsed.type === 'ipv6' ? 6 : 4)) return false;
+  try {
+    const list = new BlockList();
+    if (parsed.bits === undefined) list.addAddress(parsed.address, parsed.type);
+    else list.addSubnet(parsed.address, parsed.bits, parsed.type);
+    return list.check(candidate, parsed.type);
+  } catch {
+    return false;
   }
-
-  const [range, bitsRaw] = ref.split('/');
-  const bits = Number(bitsRaw);
-  if (!Number.isInteger(bits) || bits < 0 || bits > 32) return false;
-
-  const ipInt = ipv4ToInt(candidate);
-  const rangeInt = ipv4ToInt(normalizeIp(range));
-  if (ipInt === null || rangeInt === null) return false;
-
-  if (bits === 0) return true;
-  const mask = (0xffffffff << (32 - bits)) >>> 0;
-  return (ipInt & mask) === (rangeInt & mask);
 }

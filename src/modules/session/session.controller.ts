@@ -12,6 +12,7 @@ import {
   HttpStatus,
   ParseUUIDPipe,
   BadRequestException,
+  ForbiddenException,
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
@@ -92,8 +93,19 @@ export class SessionController {
     description: 'Session created',
     type: SessionResponseDto,
   })
+  @ApiResponse({
+    status: 403,
+    description:
+      'Key lacks the OPERATOR role, is restricted to specific sessions, or set proxyUrl without the ADMIN role',
+  })
   @ApiResponse({ status: 409, description: 'Session name already exists' })
-  async create(@Body() dto: CreateSessionDto): Promise<SessionResponseDto> {
+  async create(@Body() dto: CreateSessionDto, @CurrentApiKey() apiKey?: ApiKey): Promise<SessionResponseDto> {
+    // A session proxy carries the session's egress, including the gateway's fetches of caller-supplied
+    // URLs, so choosing one is a deployment decision: ADMIN only, like PATCH :sessionId/proxy. The
+    // global guard always attaches the key, so a missing one is refused too.
+    if (dto.proxyUrl && apiKey?.role !== ApiKeyRole.ADMIN) {
+      throw new ForbiddenException('Setting proxyUrl requires an ADMIN key');
+    }
     const session = await this.sessionService.create(dto);
     await this.auditService.logInfo(AuditAction.SESSION_CREATED, {
       sessionId: session.id,
@@ -214,11 +226,11 @@ export class SessionController {
   }
 
   @Patch(':sessionId/proxy')
-  @RequireRole(ApiKeyRole.OPERATOR)
-  // Routing a session's whole egress through an attacker-chosen host is an instance-level decision,
-  // not a per-session one. Before this route existed, `proxyUrl` could only be set through POST
-  // /sessions, which is unscoped by the fence above, so a key restricted to specific sessions could
-  // never configure a proxy. Keep that reachability rather than widening it as a side effect.
+  // A session proxy carries all of the session's egress, including the gateway's fetches of
+  // caller-supplied URLs, and its host is not checked against internal addresses: it is trusted
+  // egress chosen by the deployment's administrator. Setting or clearing it is therefore ADMIN only,
+  // like proxyUrl on POST /sessions, and never open to a key restricted to specific sessions.
+  @RequireRole(ApiKeyRole.ADMIN)
   @RequireUnscopedKey()
   @ApiOperation({
     summary: 'Update the per-session egress proxy configuration',
@@ -233,6 +245,7 @@ export class SessionController {
     type: SessionProxyResponseDto,
   })
   @ApiResponse({ status: 400, description: 'Invalid proxyUrl' })
+  @ApiResponse({ status: 403, description: 'Key lacks the ADMIN role, or is restricted to specific sessions' })
   @ApiResponse({ status: 404, description: 'Session not found' })
   async updateProxy(
     @Param('sessionId', ParseUUIDPipe) id: string,
@@ -292,10 +305,12 @@ export class SessionController {
       'SESSION_NAME_TEARDOWN_PENDING`; wait for it to settle and retry. No destructive side ' +
       'effect runs before this refusal. Also returned when another node currently holds this ' +
       "session's engine: only the owner may start it, and the claim is refused before any engine " +
-      'is launched, so no second connection to the account is opened.',
+      'is launched, so no second connection to the account is opened. Also returned, with no `code`, ' +
+      'when a stop or force-kill of this session finished while the start was waiting: the stop ' +
+      'stands, and a new POST /start clears it and starts the session.',
   })
   async start(@Param('sessionId', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
-    const session = await this.sessionService.start(id);
+    const session = await this.sessionService.start(id, { explicit: true });
     await this.auditService.logInfo(AuditAction.SESSION_STARTED, {
       sessionId: session.id,
       sessionName: session.name,
@@ -466,6 +481,7 @@ export class SessionController {
 
   // Shares a Path Item with GroupController's POST on the same route — one parameter name for the
   // one positional segment, or the contract splits it into two entries.
+  @ChatScoped('filtered')
   @Get(':sessionId/groups')
   @ApiOperation({ summary: 'Get all groups for a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -488,13 +504,14 @@ export class SessionController {
   @ApiQuery({ name: 'offset', required: false, description: 'Number of groups to skip (for paging)' })
   async getGroups(
     @Param('sessionId', ParseUUIDPipe) id: string,
+    @CurrentApiKey() apiKey?: ApiKey,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ): Promise<{ id: string; name: string; linkedParentJID?: string | null }[]> {
-    return this.sessionService.getGroups(id, {
-      limit: limit ? parseInt(limit, 10) : undefined,
-      offset: offset ? parseInt(offset, 10) : undefined,
-    });
+    // Filtered before paging, as getChats is, so a chat-restricted key sees only its groups and
+    // never a short window while an allowed group sat just past it.
+    const visible = await this.chatScope.filter(apiKey, await this.sessionService.listGroups(id), g => g.id);
+    return paginate(visible, limit ? parseInt(limit, 10) : undefined, offset ? parseInt(offset, 10) : undefined);
   }
 
   @ChatScoped('filtered')
@@ -508,8 +525,9 @@ export class SessionController {
   @ApiResponse({
     status: 503,
     description:
-      'The whatsapp-web.js page connection died mid-read, so nothing could be read. Deliberately not ' +
-      'reported as an empty list — a page that went away says nothing about the chats.',
+      'The whatsapp-web.js page connection died mid-read, or WhatsApp Web did not answer within the ' +
+      'protocol timeout, so nothing could be read. Deliberately not reported as an empty list: a page ' +
+      'that went away says nothing about the chats.',
   })
   @ApiQuery({ name: 'limit', required: false, description: 'Max chats to return (1–1000, default 1000)' })
   @ApiQuery({ name: 'offset', required: false, description: 'Number of chats to skip (for paging)' })
@@ -688,7 +706,12 @@ export class SessionController {
   @Delete(':sessionId/chats/:chatId/messages')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Delete every message in a chat, keeping the chat itself' })
+  @ApiOperation({
+    summary: 'Delete every message in a chat, keeping the chat itself',
+    description:
+      "On success the gateway also removes its stored copies of the chat's messages (rows, inline and archived " +
+      'media, search entries) and emits `message:deleted` for each. Changes made on the phone are not mirrored.',
+  })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'chatId', description: "Chat JID, e.g. 1234567890-123@g.us (URL-encode the '@')" })
   @ApiResponse({
@@ -821,7 +844,12 @@ export class SessionController {
   @Post(':sessionId/chats/delete')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Delete a chat from the chat list (e.g. a group you have left)' })
+  @ApiOperation({
+    summary: 'Delete a chat from the chat list (e.g. a group you have left)',
+    description:
+      "On success the gateway also removes its stored copies of the chat's messages (rows, inline and archived " +
+      'media, search entries) and emits `message:deleted` for each. Changes made on the phone are not mirrored.',
+  })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({ status: 200, description: 'Chat deleted successfully', type: SessionActionResponseDto })
   @ApiResponse({ status: 400, description: 'Session not ready' })

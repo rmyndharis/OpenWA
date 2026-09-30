@@ -38,6 +38,7 @@ class ContactsResource:
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/contacts/{quote_segment(contact_id)}")
 
     def check(self, session_id: str, number: str) -> CheckNumberResponse:
+        """Check whether a number is on WhatsApp (OPERATOR)."""
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/contacts/check/{quote_segment(number)}")
 
     def profile_picture(self, session_id: str, contact_id: str) -> ProfilePictureResponse:

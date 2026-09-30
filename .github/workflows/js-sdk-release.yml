@@ -27,6 +27,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: sdk/javascript
@@ -76,9 +77,11 @@ jobs:
 
       - name: Use an npm that supports trusted publishing
         # The npm bundled with Node 22 predates OIDC publishing (needs >= 11.5.1), and it fails by
-        # looking for a token rather than by naming the missing support — so pin the requirement here.
+        # looking for a token rather than by naming the missing support. Pinned to the exact release
+        # the Dockerfile uses: this npm runs while the job can mint a publish credential, so it must
+        # not float to whatever version is current when the tag is pushed.
         run: |
-          npm install -g npm@latest
+          npm install -g npm@12.0.2
           npm --version
 
       - run: npm ci

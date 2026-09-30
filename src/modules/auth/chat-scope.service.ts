@@ -1,4 +1,4 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { ApiKey } from './entities/api-key.entity';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { ContactDirectory } from '../../engine/identity/jid-candidates';
@@ -33,6 +33,17 @@ export class ChatScopeService {
   /** True when the key carries a non-empty allowlist and is therefore fenced. */
   isRestricted(apiKey?: Pick<ApiKey, 'allowedChats'> | null): boolean {
     return isChatScopeRestricted(apiKey?.allowedChats);
+  }
+
+  /**
+   * Refuse a restricted key that names no chat on a route whose chat is an optional `?chatId=`. The
+   * guard fences the chat id when it is present; this closes the case where it is missing or blank,
+   * which the route would otherwise read as "every chat".
+   */
+  requireChat(apiKey: Pick<ApiKey, 'allowedChats'> | null | undefined, chatId: string | undefined): void {
+    if (this.isRestricted(apiKey) && !chatId?.trim()) {
+      throw new ForbiddenException('chatId is required for a key restricted to selected chats');
+    }
   }
 
   /** The literal scope for a key (no lookups), or `null` when unrestricted. */

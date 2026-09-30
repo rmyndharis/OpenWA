@@ -54,14 +54,24 @@ const SANDBOX_MAX_INFLIGHT_CAPS = 32;
 const SANDBOX_CAP_TIMEOUT_MS = 30000;
 
 /**
- * Host process.env keys an untrusted plugin worker is allowed to see. Everything else — secrets like
- * API_MASTER_KEY, API_KEY_PEPPER, the DATABASE_/REDIS_ vars, DOCKER_HOST — is withheld. The worker is
- * a thread, so it needs no PATH to start and require() resolves via module paths, not env.
+ * How long a worker has to answer the liveness ping the host sends after a dispatch times out. A worker
+ * stuck in a synchronous loop is terminated about 5 s after its first dispatch timeout (about 10 s after
+ * a stalled hook or ingress dispatch, 15 s after a stalled search); a slow async handler answers at once
+ * and is never affected.
+ */
+const SANDBOX_LIVENESS_TIMEOUT_MS = 5000;
+
+/**
+ * Host process.env keys an untrusted plugin worker is allowed to see. Everything else (secrets like
+ * API_MASTER_KEY, API_KEY_PEPPER, the DATABASE_/REDIS_ vars, DOCKER_HOST) is left out of the worker's
+ * process.env object. That keeps secrets from being handed over ambiently; it does not put them out of
+ * reach, since a thread in the same OS process can read /proc/self/environ and the data directory. The
+ * worker is a thread, so it needs no PATH to start and require() resolves via module paths, not env.
  */
 const SANDBOX_ENV_ALLOWLIST = ['NODE_ENV', 'NODE_EXTRA_CA_CERTS', 'TZ'] as const;
 
 /**
- * Build the minimal, allowlisted env for an untrusted plugin worker so it never inherits host secrets.
+ * Build the minimal, allowlisted env for a plugin worker so its process.env never carries host secrets.
  * Only {@link SANDBOX_ENV_ALLOWLIST} keys are forwarded (unset keys are omitted, not emitted as
  * `undefined`), and NODE_ENV defaults to 'production' when the host has none.
  */
@@ -172,6 +182,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
         runWithHookGuard,
         onSearchProviderRegister,
         onWorkerExit,
+        onUnresponsive,
       ) =>
         this.createSandboxHost(
           capDispatcher,
@@ -181,6 +192,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
           runWithHookGuard,
           onSearchProviderRegister,
           onWorkerExit,
+          onUnresponsive,
         ),
       // Exported from this module (specs import it here); passed so the bridge never imports back.
       resolvePluginMainPath,
@@ -370,6 +382,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
     onSearchProviderRegister?: () => void,
     onWorkerExit?: (code: number, intentional: boolean) => void,
+    onUnresponsive?: () => void,
   ): PluginWorkerHost {
     const workerEntry = path.join(__dirname, 'sandbox', 'worker-bootstrap.js');
     return new PluginWorkerHost(
@@ -388,6 +401,8 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       onSearchProviderRegister,
       onWorkerExit,
       this.configService.get<number>('plugins.capTimeoutMs') ?? SANDBOX_CAP_TIMEOUT_MS,
+      SANDBOX_LIVENESS_TIMEOUT_MS,
+      onUnresponsive,
     );
   }
 

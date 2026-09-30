@@ -446,6 +446,7 @@
     "selectSession": "Sitzung auswählen...",
     "session": "Sitzung",
     "events": "Ereignisse",
+    "noEvents": "Wähle mindestens ein Ereignis aus.",
     "available": "Verfügbare Ereignisse",
     "saveChanges": "Änderungen speichern",
     "filters": {
@@ -538,6 +539,33 @@
       "call.missed": "Wenn ein Anruf unbeantwortet bleibt",
       "status.received": "Wenn ein Kontakt einen Status veröffentlicht",
       "all": "Alle Ereignisse"
+    },
+    "auth": {
+      "title": "Zustellungsauthentifizierung",
+      "hint": "Optional. Gespeicherte Werte werden nach dem Speichern nie wieder angezeigt.",
+      "editHint": "Das gespeicherte Geheimnis und die Header werden nie angezeigt. Lass diesen Abschnitt unverändert, um sie zu behalten.",
+      "secret": "Signaturgeheimnis",
+      "secretHint": "16 bis 255 Zeichen. Jede Zustellung trägt eine HMAC-SHA256-Signatur im Header X-OpenWA-Signature.",
+      "secretKeepPlaceholder": "Leer lassen, um das aktuelle Geheimnis zu behalten",
+      "generateSecret": "Generieren",
+      "copySecret": "Kopieren",
+      "secretCopied": "Signaturgeheimnis kopiert",
+      "removeSecret": "Zustellungen nicht mehr signieren (Geheimnis entfernen)",
+      "headers": "Benutzerdefinierte Header",
+      "headerName": "Header-Name",
+      "headerValue": "Header-Wert",
+      "addHeader": "Header hinzufügen",
+      "removeHeader": "Header entfernen",
+      "replaceHeaders": "Benutzerdefinierte Header ersetzen",
+      "replaceHint": "Diese Zeilen ersetzen alle gespeicherten Header. Ohne Zeilen werden die gespeicherten Header entfernt.",
+      "errors": {
+        "headerName": "Header-Namen dürfen nur Buchstaben, Ziffern und Bindestriche enthalten.",
+        "headerValue": "Header-Werte sind auf 1024 Zeichen begrenzt, ohne Steuerzeichen und ohne Zeichen außerhalb von Latin-1.",
+        "headerReserved": "Content-Type, User-Agent, X-OpenWA-* und Verbindungs-Header setzt das Gateway selbst; sie können nicht verwendet werden.",
+        "headerDuplicate": "Jeder Header-Name darf nur einmal vorkommen.",
+        "tooMany": "Höchstens 50 benutzerdefinierte Header sind erlaubt.",
+        "secretLength": "Das Signaturgeheimnis muss 16 bis 255 Zeichen lang sein."
+      }
     }
   },
   "templates": {
@@ -597,6 +625,7 @@
     "createdTitle": "API-Schlüssel erstellt",
     "createdHint": "Kopiere diesen Schlüssel jetzt. Du kannst ihn später nicht erneut anzeigen.",
     "namePlaceholder": "z. B. Produktionsschlüssel",
+    "nameTooShort": "Verwende mindestens 3 Zeichen.",
     "rolesTitle": "Rollenübersicht",
     "roles": {
       "admin": "Administrator",
@@ -615,11 +644,13 @@
       "status": "Status",
       "lastUsed": "Zuletzt verwendet",
       "actions": "Aktionen",
-      "sessions": "Sitzungen"
+      "sessions": "Sitzungen",
+      "restrictions": "Einschränkungen"
     },
     "statuses": {
       "active": "Aktiv",
-      "revoked": "Widerrufen"
+      "revoked": "Widerrufen",
+      "expired": "Abgelaufen"
     },
     "empty": {
       "title": "Keine API-Schlüssel erstellt",
@@ -640,7 +671,7 @@
       "copy": "Kopieren",
       "revoke": "Widerrufen",
       "delete": "Löschen",
-      "editSessions": "Sitzungen bearbeiten"
+      "edit": "Zugriff bearbeiten"
     },
     "sessions": {
       "label": "Sitzungszugriff",
@@ -648,10 +679,36 @@
       "all": "Alle Sitzungen",
       "empty": "Noch keine Sitzungen. Dieser Schlüssel kann auf alle zugreifen, sobald welche existieren.",
       "restricted": "{{count}} ausgewählt",
-      "editTitle": "Sitzungszugriff bearbeiten",
       "save": "Speichern",
       "choose": "Sitzungen wählen",
       "leaveAll": "Für alle Sitzungen belassen"
+    },
+    "edit": {
+      "title": "Schlüsselzugriff bearbeiten",
+      "signedIn": "Dieses Dashboard ist mit diesem Schlüssel angemeldet. Wenn du Rolle, IP-Adressen, Chats oder Ablauf änderst, kannst du abgemeldet werden."
+    },
+    "restrictions": {
+      "none": "Keine",
+      "ips": "IPs: {{count}}",
+      "chats": "Chats: {{count}}",
+      "expires": "Läuft ab am {{date}}",
+      "expired": "Abgelaufen am {{date}}"
+    },
+    "ips": {
+      "label": "Erlaubte IP-Adressen (optional)",
+      "hint": "Eine IP-Adresse oder ein CIDR-Bereich pro Zeile. Leer lassen, um jede Adresse zuzulassen.",
+      "invalid": "Keine IPv4-Adresse und kein CIDR-Bereich: {{value}}"
+    },
+    "chats": {
+      "label": "Chat-Zugriff (optional)",
+      "hint": "Ein Chat pro Zeile: eine Gruppen-ID mit @g.us, eine Kontakt-ID mit @c.us oder @lid oder eine Telefonnummer. Leer lassen für alle Chats. Ein auf Chats beschränkter Schlüssel kann nur die für solche Schlüssel freigegebenen Routen nutzen; der Events-WebSocket und MCP lehnen ihn ab.",
+      "invalid": "Keine Chat-ID und keine Telefonnummer: {{value}}"
+    },
+    "expiry": {
+      "label": "Läuft ab am (optional)",
+      "hint": "In der Zeitzone dieses Browsers. Leer lassen für einen Schlüssel, der nie abläuft.",
+      "clear": "Ablauf entfernen",
+      "invalid": "Datum und Uhrzeit vollständig eingeben, höchstens bis zum Jahr 9999, oder das Feld leeren, damit der Schlüssel nie abläuft."
     }
   },
   "logs": {
@@ -896,7 +953,7 @@
       "storageWarning": "Vorhandene Mediendateien werden nicht automatisch in das neue Speicher-Backend verschoben; sie verbleiben am bisherigen Speicherort.",
       "downloadBackup": "Zuerst Sicherung herunterladen",
       "backupTitle": "Datensicherung und Wiederherstellung",
-      "backupHint": "Exportiere vor dem Datenbankwechsel alle Daten als JSON und importiere sie anschließend wieder. Die Sicherung enthält Webhook-Geheimnisse und Proxy-Zugangsdaten im Klartext — speichere sie sicher und lösche sie nach der Wiederherstellung.",
+      "backupHint": "Exportiere vor dem Datenbankwechsel alle Daten als JSON und importiere sie anschließend wieder. Webhook-Signaturgeheimnisse, benutzerdefinierte Webhook-Header und Proxy-Zugangsdaten sind nicht enthalten; gib sie nach der Wiederherstellung erneut ein. Geheimnisse und Einstellungen von Integrationsinstanzen sind im Klartext enthalten, also speichere die Datei sicher und lösche sie nach der Wiederherstellung.",
       "export": "Daten exportieren",
       "import": "Daten importieren",
       "exportFailed": "Daten konnten nicht exportiert werden",
@@ -922,6 +979,7 @@
       "dontClose": "Bitte schließe dieses Fenster nicht",
       "successMsg": "Der Server ist wieder online! Die Seite wird automatisch neu geladen.",
       "errorMsg": "Der Server hat nach 30 Sekunden nicht geantwortet. Prüfe die Docker-Protokolle und starte ihn manuell neu.",
+      "outcomeUnknown": "Der Proxy hat einen Fehler zurückgegeben, bevor der Server geantwortet hat. Ob der Neustart läuft, ist daher unklar; lade die Seite in einer Minute neu, um es zu prüfen.",
       "reload": "Seite neu laden"
     },
     "toasts": {

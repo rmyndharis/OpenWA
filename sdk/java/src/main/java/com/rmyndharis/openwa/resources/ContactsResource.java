@@ -43,7 +43,7 @@ public final class ContactsResource {
             ContactRecord.class);
     }
 
-    /** Check whether a phone number is registered on WhatsApp. */
+    /** Check whether a phone number is registered on WhatsApp. Requires an OPERATOR-level key. */
     public CheckNumberResponse check(String sessionId, String number) {
         return client.request(
             HttpMethod.GET,

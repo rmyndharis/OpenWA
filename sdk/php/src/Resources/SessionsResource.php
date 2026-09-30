@@ -65,7 +65,7 @@ class SessionsResource
 
     /**
      * Update per-session proxy settings. No restart — changes apply on the next start.
-     * Send proxyUrl: null to clear. OPERATOR role required.
+     * Send proxyUrl: null to clear. Unscoped ADMIN key required.
      *
      * @param array{proxyUrl?: ?string} $body
      * @return array{enabled: bool, proxyType: ?string, proxyHost: ?string, hasCredentials: bool}
@@ -82,11 +82,18 @@ class SessionsResource
     }
 
     /**
+     * Create a session. Requires an OPERATOR-level key; setting proxyUrl requires an ADMIN key.
+     *
      * @param array<string,mixed> $body
      * @return array<string,mixed>
      */
     public function create(array $body): array
     {
+        // config is a map: an empty PHP array would serialize as a JSON list [] and be rejected by the
+        // gateway's object validation. Cast the empty map to stdClass so it encodes as {}.
+        if (isset($body['config']) && $body['config'] === []) {
+            $body['config'] = new \stdClass();
+        }
         return $this->http->request('POST', '/api/sessions', [], $body);
     }
 

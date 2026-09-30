@@ -17,3 +17,11 @@ describe('collectFilterErrors (message-type enum)', () => {
     expect(collectFilterErrors(typeCondition('banana'))).toEqual(['conditions[0].value "banana" is not a valid type']);
   });
 });
+
+describe('collectFilterErrors (empty conditions)', () => {
+  it('accepts an empty conditions list, which the published contract documents as "no filter"', () => {
+    // A client that cannot send `filters: null` (the Java SDK omits null fields) clears a filter
+    // with `{ conditions: [] }`, so this must stay valid.
+    expect(collectFilterErrors({ conditions: [] })).toEqual([]);
+  });
+});

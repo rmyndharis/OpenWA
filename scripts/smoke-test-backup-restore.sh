@@ -39,6 +39,8 @@
 #   (y) plugin packages in the legacy ./plugins, which the archive does not carry, are reported
 #   (z) a leftover ./uploads that was never created, beside an existing ./data/media, resolves there in
 #       both scripts whatever the uid
+#   (aa) engine auth state copied from a running app (an open whatsapp-web.js profile, Baileys state)
+#       is noted in the archive and printed by restore, which does not refuse it even with --strict
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -1172,6 +1174,59 @@ if [ "$(cat "$Z/dst/data/media/a.jpg" 2>/dev/null || true)" != "zulu-media" ] ||
   fail "(z) restore did not put the media back under ./data/media: $OUT_Z"
 fi
 pass "(z) a never-created ./uploads beside ./data/media resolves to ./data/media without a uid check"
+
+echo ""
+echo "==> (aa) engine auth state copied from a running app is noted, and restore does not refuse it"
+# The databases are snapshotted consistently online, but sessions/ and baileys/ are plain copies of
+# directories the engines keep writing, and the runbook called the online backup impact-free. The
+# note has its own marker: --strict gates only the database one, or it would refuse every online backup.
+AA="$WORK/aa"
+mkdir -p "$AA/src/data/sessions/session-s1" "$AA/src/data/sessions/session-s2" "$AA/src/data/baileys/s1" \
+  "$AA/dst" "$AA/quiet/data/sessions/session-s1"
+make_fixture "$AA/src/data/main.sqlite" "alpha2-main"
+make_fixture "$AA/src/data/openwa.sqlite" "alpha2-data"
+printf 'profile\n' >"$AA/src/data/sessions/session-s1/Preferences"
+printf 'profile\n' >"$AA/src/data/sessions/session-s2/Preferences"
+ln -s host-123 "$AA/src/data/sessions/session-s1/SingletonLock"
+printf '{}' >"$AA/src/data/baileys/s1/creds.json"
+OUT_AA="$(cd "$AA/src" && BACKUP_DIR="$AA/out" "$BACKUP" 2>&1)"
+ARCHIVE_AA="$(ls "$AA"/out/openwa-backup-*.tar.gz)"
+NOTE_AA="$(tar -xOzf "$ARCHIVE_AA" ./ENGINE-STATE-NOTE 2>/dev/null || true)"
+if ! printf '%s\n' "$NOTE_AA" | grep -q 'open in a browser: session-s1)' ||
+  ! printf '%s\n' "$NOTE_AA" | grep -q '^baileys/'; then
+  fail "(aa) the archive does not note the open profile and the Baileys state: $NOTE_AA"
+fi
+# Without sqlite3 the same archive carries CONSISTENCY-WARNING, so the engine note must not vouch
+# for the databases.
+if printf '%s\n' "$NOTE_AA" | grep -qi 'consistent snapshot'; then
+  fail "(aa) the engine note claims the databases are consistent: $NOTE_AA"
+fi
+if ! printf '%s' "$OUT_AA" | grep -q 'may have been written during the copy'; then
+  fail "(aa) backup did not warn that engine auth state may have been written during the copy: $OUT_AA"
+fi
+if ! tar -tvzf "$ARCHIVE_AA" | grep -q '^l.*session-s1/SingletonLock'; then
+  fail "(aa) the profile lock was not archived as the symlink it is"
+fi
+# Without sqlite3 the databases are plain-copied and --strict rightly refuses on that marker.
+if [ "$HAS_SQLITE3" -eq 1 ]; then
+  OUT_AA="$(cd "$AA/dst" && "$RESTORE" "$ARCHIVE_AA" --strict 2>&1)" ||
+    fail "(aa) restore --strict refused an archive whose only note is the engine one: $OUT_AA"
+else
+  OUT_AA="$(cd "$AA/dst" && "$RESTORE" "$ARCHIVE_AA" 2>&1)" || fail "(aa) restore failed: $OUT_AA"
+fi
+if ! printf '%s' "$OUT_AA" | grep -q 'ENGINE-STATE-NOTE; engine auth state may have been copied' ||
+  ! printf '%s' "$OUT_AA" | grep -q 'session-s1'; then
+  fail "(aa) restore did not print the engine state note: $OUT_AA"
+fi
+# No open profile and no Baileys state: nothing to note.
+make_fixture "$AA/quiet/data/main.sqlite" "alpha2-quiet-main"
+make_fixture "$AA/quiet/data/openwa.sqlite" "alpha2-quiet-data"
+printf 'profile\n' >"$AA/quiet/data/sessions/session-s1/Preferences"
+(cd "$AA/quiet" && BACKUP_DIR="$AA/quiet-out" "$BACKUP" >/dev/null 2>&1)
+if tar -tzf "$(ls "$AA"/quiet-out/openwa-backup-*.tar.gz)" | grep -q 'ENGINE-STATE-NOTE'; then
+  fail "(aa) an archive with no open profile and no Baileys state carries the engine note"
+fi
+pass "(aa) live engine auth state is noted in the archive and printed, never refused"
 
 echo ""
 echo "All smoke tests passed!"

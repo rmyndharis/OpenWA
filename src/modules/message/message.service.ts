@@ -57,6 +57,9 @@ export interface GetMessagesOptions {
  * bounded upstream by `capInboundMedia` at MEDIA_DOWNLOAD_MAX_BYTES (50 MiB by default, ~68 MiB once
  * base64-encoded). That is well inside V8's string ceiling and is the point: the alternative is a
  * large photo no client can ever read back. Raising MEDIA_DOWNLOAD_MAX_BYTES raises this too.
+ *
+ * It bounds the read as well: getMessages loads a page in chunks and drops each omitted payload
+ * before reading the next chunk, so payloads past the budget are never all held at once.
  */
 export const DEFAULT_MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES = 8 * 1024 * 1024;
 
@@ -69,44 +72,72 @@ export function resolveMessageListInlineMediaBudgetBytes(): number {
 const MEDIA_URL_POINTER = /^https?:\/\//i;
 
 /**
- * Spend the budget over an already-ordered (newest-first) page, replacing each payload past it with
- * the engine's own `{ omitted: true, sizeBytes }` marker — the same shape `capInboundMedia` writes
- * when inbound media is skipped on the way in, so a trimmed row is not a new shape consumers must
- * learn. Mutates and returns the rows.
- *
- * A budget, not a blanket strip: the recent media a caller is most likely reading still arrives
- * inline, and anything dropped remains fetchable from GET /:chatId/:messageId/media.
+ * The engine's own `{ omitted: true, sizeBytes }` marker for a media object whose payload is dropped,
+ * the same shape `capInboundMedia` writes when inbound media is skipped on the way in, so a trimmed
+ * row is not a new shape consumers must learn. Every descriptive field except `data` survives.
  */
-export function spendInlineMediaBudget(messages: Message[], budgetBytes: number): Message[] {
+export function omitInlineMedia(media: { data: string; sizeBytes?: number }): Record<string, unknown> {
+  const { data, ...withoutPayload } = media;
+  return {
+    ...withoutPayload,
+    omitted: true,
+    // Decoded bytes, matching what capInboundMedia reports: the caller asked how big it WAS.
+    sizeBytes: media.sizeBytes ?? Buffer.byteLength(data, 'base64'),
+  };
+}
+
+/**
+ * Stateful form of spendInlineMediaBudget: feed it the rows of one page newest-first, one at a time,
+ * so a caller can drop each omitted payload before it reads the next row.
+ */
+export function createInlineMediaSpender(budgetBytes: number): (message: Message) => void {
   let spent = 0;
-  for (const message of messages) {
+  return message => {
     const metadata = message.metadata as Record<string, unknown> | null | undefined;
-    if (!metadata || typeof metadata !== 'object') continue;
+    if (!metadata || typeof metadata !== 'object') return;
+    // A revoked message has no media, even on a row restored or merged after its revoke was cleared.
+    if (message.type === 'revoked') {
+      delete metadata.media;
+      return;
+    }
     const media = metadata.media as { data?: unknown; sizeBytes?: number } | null | undefined;
-    if (!media || typeof media.data !== 'string' || MEDIA_URL_POINTER.test(media.data)) continue;
+    if (!media || typeof media.data !== 'string' || MEDIA_URL_POINTER.test(media.data)) return;
 
     const encoded = Buffer.byteLength(media.data, 'utf8');
     // The newest payload is always let through when inlining is enabled at all. Without this an
     // item larger than the whole budget was omitted even as the ONLY media on the page, so a single
-    // large photo or video — well inside the bytes the gateway stores inline — could never be read
+    // large photo or video (well inside the bytes the gateway stores inline) could never be read
     // back through this route: the dashboard thread has no other media source and caches with
     // staleTime: Infinity, leaving a permanent placeholder for media WhatsApp displays.
     // A budget of 0 means "do not inline", not "a very small budget", so it grants no allowance.
     const allowanceApplies = spent === 0 && budgetBytes > 0;
     if (spent + encoded <= budgetBytes || allowanceApplies) {
       spent += encoded;
-      continue;
+      return;
     }
-    const { data, ...withoutPayload } = media;
-    metadata.media = {
-      ...withoutPayload,
-      omitted: true,
-      // Decoded bytes, matching what capInboundMedia reports — the caller asked how big it WAS.
-      sizeBytes: media.sizeBytes ?? Buffer.byteLength(data, 'base64'),
-    };
-  }
+    metadata.media = omitInlineMedia({ ...media, data: media.data });
+  };
+}
+
+/**
+ * Spend the budget over an already-ordered (newest-first) page, replacing each payload past it with
+ * the omitted marker (see omitInlineMedia). Mutates and returns the rows.
+ *
+ * A budget, not a blanket strip: the recent media a caller is most likely reading still arrives
+ * inline, and anything dropped remains fetchable from GET /:chatId/:messageId/media.
+ */
+export function spendInlineMediaBudget(messages: Message[], budgetBytes: number): Message[] {
+  messages.forEach(createInlineMediaSpender(budgetBytes));
   return messages;
 }
+
+/**
+ * Floor for the bytes of stored metadata one message-list read loads at once. The page is read in
+ * chunks of at most `max(budget, this)` metadata bytes (at least one row each), and each chunk's
+ * omitted payloads are dropped before the next chunk is read, so the heap holds about one chunk plus
+ * what the budget keeps instead of every payload on the page.
+ */
+const MESSAGE_LIST_READ_CHUNK_MIN_BYTES = 1024 * 1024;
 
 /** Pin window applied when the caller does not choose one — WhatsApp's own default of 24h. */
 export const DEFAULT_PIN_DURATION_SECONDS = 86400;
@@ -272,11 +303,23 @@ export class MessageService implements PluginMessagePort {
     const offset = typeof rawOffset === 'number' && Number.isFinite(rawOffset) ? Math.max(Math.trunc(rawOffset), 0) : 0;
 
     const tiebreak = this.orderTiebreak;
+    // Match across dialects: a stored chatId may be `@s.whatsapp.net` (e.g. an outbound send addressed
+    // by a raw engine id) while the caller filters by the neutral `@c.us` from the chat list - same
+    // chat, different dialect. Resolving both sides through the table keeps them equal.
+    const chatIds = chatId ? await this.resolveJidCandidates(chatId) : undefined;
+    // SQLite has no planner statistics here (nothing runs ANALYZE), so with several chatId candidates
+    // it prefers the (sessionId, createdAt) index because it already yields the order, and walks the
+    // whole session filtering chatId row by row. The unary `+` takes createdAt out of index-order
+    // consideration, so it seeks (sessionId, chatId, createdAt) and sorts only that chat's rows, the
+    // plan ANALYZE would pick. A single candidate already uses that index in order, and PostgreSQL
+    // (no unary `+` on timestamps) has statistics, so both keep the plain key.
+    const createdAtKey =
+      tiebreak === 'rowid' && chatIds !== undefined && chatIds.length > 1 ? '+message.createdAt' : 'message.createdAt';
 
     const query = this.messageRepository
       .createQueryBuilder('message')
       .where('message.sessionId = :sessionId', { sessionId })
-      .orderBy('message.createdAt', 'DESC')
+      .orderBy(createdAtKey, 'DESC')
       // `createdAt` is not unique: SQLite stores whole seconds, Postgres NOW() is transaction-scoped
       // so a bulk write ties every row, and a history backfill stamps WhatsApp's own second-resolution
       // timestamp. Without a tiebreaker the tie group's order is whatever the plan produces, and
@@ -292,11 +335,8 @@ export class MessageService implements PluginMessagePort {
       query.skip(offset);
     }
 
-    if (chatId) {
-      // Match across dialects: a stored chatId may be `@s.whatsapp.net` (e.g. an outbound send addressed
-      // by a raw engine id) while the caller filters by the neutral `@c.us` from the chat list - same
-      // chat, different dialect. Resolving both sides through the table keeps them equal.
-      query.andWhere('message.chatId IN (:...chatIds)', { chatIds: await this.resolveJidCandidates(chatId) });
+    if (chatIds) {
+      query.andWhere('message.chatId IN (:...chatIds)', { chatIds });
     }
 
     if (from) {
@@ -320,9 +360,10 @@ export class MessageService implements PluginMessagePort {
     // what an opted-out caller asks for, so the flag picks the budget rather than a second code path.
     const inlineMediaBudget = inlineMedia === false ? 0 : resolveMessageListInlineMediaBudgetBytes();
 
+    // `total` keeps its documented meaning, rows matching the filters, so count before narrowing.
+    const total = await query.clone().getCount();
+
     if (after !== undefined) {
-      // `total` keeps its documented meaning, rows matching the filters, so count before narrowing.
-      const total = await query.clone().getCount();
       // The anchor's sort key is resolved INSIDE the statement. Carrying it in the cursor instead
       // would mean round-tripping a timestamp through JSON, and neither dialect survives that:
       // SQLite holds two text shapes for one instant (`datetime('now')` writes 19 chars, a stamped
@@ -335,21 +376,91 @@ export class MessageService implements PluginMessagePort {
           'WHERE anchor."id" = :after AND anchor."sessionId" = :sessionId)',
         { after, sessionId },
       );
-      const messages = await query.getMany();
-      // An anchor that does not exist (or belongs to another session) makes the row comparison NULL,
-      // which returns zero rows and reads exactly like the end of the history. Only pay for the
-      // lookup on an empty page, and turn that silent truncation into a loud 400.
-      if (messages.length === 0 && !(await this.messageRepository.exists({ where: { id: after, sessionId } }))) {
-        throw new BadRequestException(`Unknown cursor '${after}' for this session`);
-      }
-      return { messages: spendInlineMediaBudget(messages, inlineMediaBudget), total };
     }
 
-    const [messages, total] = await query.getManyAndCount();
+    // The page is picked by id only. Each row's metadata can hold a whole base64 payload, so the
+    // rows themselves are read in bounded chunks below, sized from a second, id-keyed statement.
+    // The size stays out of the ordered one: a sort evaluates its result columns for every matching
+    // row, so a size there would be computed across the whole chat, not just this page.
+    const pageIds = (await query.select('message.id', 'id').getRawMany<{ id: string }>()).map(r => r.id);
+    const page = await this.readMetadataSizes(sessionId, pageIds);
+
+    // An anchor that does not exist (or belongs to another session) makes the row comparison NULL,
+    // which returns zero rows and reads exactly like the end of the history. Only pay for the
+    // lookup on an empty page, and turn that silent truncation into a loud 400.
+    if (
+      after !== undefined &&
+      page.length === 0 &&
+      !(await this.messageRepository.exists({ where: { id: after, sessionId } }))
+    ) {
+      throw new BadRequestException(`Unknown cursor '${after}' for this session`);
+    }
+
     // The 1..100 clamp above bounds the ROW COUNT, not the response: each row carries its inline
     // base64 in metadata.media.data. Spent newest-first (the query orders createdAt DESC), so the
     // most recently viewed media still arrives inline and the rest keeps its omitted marker.
-    return { messages: spendInlineMediaBudget(messages, inlineMediaBudget), total };
+    return { messages: await this.readPageSpendingBudget(sessionId, page, inlineMediaBudget), total };
+  }
+
+  /**
+   * The stored metadata size of each page row, in page order. OCTET_LENGTH, not LENGTH: both
+   * SQLite and PostgreSQL answer it from the stored header, while a character count has to read
+   * (and on PostgreSQL detoast) every payload in full, which the chunked read then does again.
+   */
+  private async readMetadataSizes(
+    sessionId: string,
+    pageIds: string[],
+  ): Promise<Array<{ id: string; metadataLength: number | string | null }>> {
+    if (pageIds.length === 0) return [];
+    const sizes = await this.messageRepository
+      .createQueryBuilder('message')
+      .select('message.id', 'id')
+      .addSelect('OCTET_LENGTH(message.metadata)', 'metadataLength')
+      .where('message.id IN (:...pageIds)', { pageIds })
+      .andWhere('message.sessionId = :sessionId', { sessionId })
+      .getRawMany<{ id: string; metadataLength: number | string | null }>();
+    const sizeById = new Map(sizes.map(r => [r.id, r.metadataLength]));
+    return pageIds.map(id => ({ id, metadataLength: sizeById.get(id) ?? null }));
+  }
+
+  /**
+   * Load the rows of a page in its order, in chunks of at most `max(budget, 1 MiB)` stored metadata
+   * bytes (at least one row per chunk), spending the inline media budget on each chunk before the
+   * next is read. Loading the whole page at once put every payload on the heap before the budget
+   * dropped most of them. A row deleted since the page was picked is left out.
+   */
+  private async readPageSpendingBudget(
+    sessionId: string,
+    page: Array<{ id: string; metadataLength: number | string | null }>,
+    budgetBytes: number,
+  ): Promise<Message[]> {
+    const spend = createInlineMediaSpender(budgetBytes);
+    const chunkLimit = Math.max(budgetBytes, MESSAGE_LIST_READ_CHUNK_MIN_BYTES);
+    const messages: Message[] = [];
+    let chunk: string[] = [];
+    let chunkBytes = 0;
+
+    const flush = async (): Promise<void> => {
+      const rows = await this.messageRepository.find({ where: { id: In(chunk), sessionId } });
+      const byId = new Map(rows.map(row => [row.id, row]));
+      for (const id of chunk) {
+        const row = byId.get(id);
+        if (!row) continue;
+        spend(row);
+        messages.push(row);
+      }
+      chunk = [];
+      chunkBytes = 0;
+    };
+
+    for (const { id, metadataLength } of page) {
+      const bytes = Number(metadataLength) || 0;
+      if (chunk.length > 0 && chunkBytes + bytes > chunkLimit) await flush();
+      chunk.push(id);
+      chunkBytes += bytes;
+    }
+    if (chunk.length > 0) await flush();
+    return messages;
   }
 
   /**
@@ -440,6 +551,8 @@ export class MessageService implements PluginMessagePort {
     });
     const inline = (row?.metadata as { media?: { data?: unknown; mimetype?: unknown; omitted?: unknown } })?.media;
     if (
+      // A revoked message's media is gone, even on a row cleared before revokes dropped it.
+      row?.type === 'revoked' ||
       !inline ||
       inline.omitted ||
       typeof inline.data !== 'string' ||
@@ -542,13 +655,10 @@ export class MessageService implements PluginMessagePort {
     const engine = this.getEngine(sessionId);
     await engine.deleteMessage(dto.chatId, dto.messageId, dto.forEveryone ?? true);
 
-    // Flag the stored message as revoked. No localized display string is persisted here;
-    // the dashboard renders the localized "message deleted" text.
-    try {
-      await this.messageRepository.update({ sessionId, waMessageId: dto.messageId }, { body: '', type: 'revoked' });
-    } catch (err) {
-      this.logger.warn(`Failed to flag deleted message ${dto.messageId} as revoked`, { error: String(err) });
-    }
+    // Clear the stored message the same way an engine revoke does (body, media and metadata), on
+    // its mutation chain. Best-effort: never rejects. No localized display string is persisted
+    // here; the dashboard renders the localized "message deleted" text.
+    await this.messageProjector.recordRevoke(sessionId, dto.messageId);
   }
 
   // ========== Edit Message ==========

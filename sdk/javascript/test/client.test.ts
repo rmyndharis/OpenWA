@@ -12,7 +12,7 @@ import {
   OpenWATimeoutError,
 } from '../src';
 import type { FetchLike } from '../src';
-import { MockTransport } from './helpers';
+import { MockTransport, type MockResponseSpec } from './helpers';
 
 function client(transport: MockTransport): OpenWAClient {
   return new OpenWAClient({
@@ -82,6 +82,41 @@ describe('OpenWAClient', () => {
     const t2 = new MockTransport().on('GET', /\/history$/, { body: [] });
     await client(t2).messages.history('s', 'weird/id#x');
     expect(t2.lastCall!.url).toContain('weird%2Fid%23x'); // path-breaking chars encoded
+  });
+
+  it('refuses an empty or dot id instead of letting fetch collapse the path to the parent resource', async () => {
+    const t = new MockTransport().passthrough({ status: 204 });
+    const c = client(t);
+    await expect(c.webhooks.delete('s1', '..')).rejects.toThrow(TypeError);
+    await expect(c.contacts.delete('s1', '.')).rejects.toThrow(TypeError);
+    await expect(c.templates.delete('s1', '')).rejects.toThrow(TypeError);
+    await expect(c.request({ method: 'DELETE', path: '/api/sessions/s1/labels/%2E%2e' })).rejects.toThrow(TypeError);
+    // The URL parser also reads `\` as `/`, drops tab and newline, and trims trailing controls and spaces.
+    for (const tail of ['labels\\..', 'labels/\t..', 'labels/.\n.', 'labels/.. ']) {
+      const path = `/api/sessions/s1/${tail}`;
+      await expect(c.request({ method: 'DELETE', path })).rejects.toThrow(TypeError);
+    }
+    expect(t.calls).toHaveLength(0);
+
+    // Dots inside an id, and a dot-only query value, are not path segments and still go out.
+    await c.webhooks.delete('s1', '628123@c.us');
+    expect(t.lastCall!.url).toBe('http://localhost:2785/api/sessions/s1/webhooks/628123@c.us');
+    await c.request({ method: 'GET', path: '/api/sessions/s1/labels/a.b?x=/..' });
+    expect(t.calls).toHaveLength(2);
+  });
+
+  it('sends a raw path with a trailing slash, a double slash or only a slash as written', async () => {
+    const t = new MockTransport().passthrough({ status: 200, body: [] });
+    const c = client(t);
+    for (const path of ['/api/sessions/', '/api/sessions//x', '/']) {
+      await c.request({ method: 'GET', path });
+      expect(t.lastCall!.url).toBe(`http://localhost:2785${path}`);
+    }
+    await c.requestBytes({ method: 'GET', path: '/api/search/', query: { q: 'x' } });
+    expect(t.lastCall!.url).toBe('http://localhost:2785/api/search/?q=x');
+    // A space before an appended query is not trailing, so `.. ` is sent as `..%20`, not as a dot segment.
+    await c.request({ method: 'GET', path: '/api/labels/.. ', query: { q: 'x' } });
+    expect(t.calls).toHaveLength(5);
   });
 
   it('serializes query params and skips null/undefined', async () => {
@@ -216,6 +251,54 @@ describe('OpenWAClient', () => {
       });
       await expect(client(t).sessions.list()).rejects.toBeInstanceOf(cls);
     }
+  });
+
+  it('exposes the body code, the retry delay and the response headers on an API error', async () => {
+    const fail = async (spec: MockResponseSpec): Promise<OpenWAApiError> =>
+      (await client(new MockTransport().passthrough(spec))
+        .sessions.list()
+        .catch((e: unknown) => e)) as OpenWAApiError;
+
+    const throttled = await fail({
+      status: 429,
+      headers: { 'Retry-After': '7' },
+      body: { statusCode: 429, message: 'ThrottlerException: Too Many Requests' },
+    });
+    expect(throttled).toBeInstanceOf(OpenWARateLimitError);
+    expect(throttled.retryAfterSeconds).toBe(7);
+    expect(throttled.code).toBeUndefined();
+    expect(throttled.headers?.get('retry-after')).toBe('7');
+
+    // Send pacing puts its wait in the body; a header must not shorten it.
+    const pacing = {
+      statusCode: 429,
+      error: 'Too Many Requests',
+      message: 'Daily send cap reached',
+      code: 'SEND_PACING_LIMITED',
+      retryAfterSeconds: 34521,
+    };
+    for (const headers of [undefined, { 'Retry-After': '1' }]) {
+      const err = await fail({ status: 429, headers, body: pacing });
+      expect(err.code).toBe('SEND_PACING_LIMITED');
+      expect(err.retryAfterSeconds).toBe(34521);
+    }
+
+    const dated = await fail({ status: 503, headers: { 'Retry-After': new Date(Date.now() + 2000).toUTCString() } });
+    expect(dated.retryAfterSeconds).toBeGreaterThanOrEqual(0);
+    expect(dated.retryAfterSeconds).toBeLessThanOrEqual(3);
+    // Only whole seconds or an HTTP date count; Date.parse would read '-5' or '1.5' as a past date.
+    for (const bad of ['soon', '-5', '1.5', 'Tue 5']) {
+      expect((await fail({ status: 503, headers: { 'Retry-After': bad } })).retryAfterSeconds).toBeUndefined();
+    }
+
+    const logout = await fail({
+      status: 502,
+      body: { statusCode: 502, message: 'x', code: 'SESSION_LOGOUT_INCOMPLETE' },
+    });
+    expect(logout.code).toBe('SESSION_LOGOUT_INCOMPLETE');
+    const plain = await fail({ status: 500, text: 'oops', contentType: 'text/plain' });
+    expect(plain.code).toBeUndefined();
+    expect(plain.retryAfterSeconds).toBeUndefined();
   });
 
   it('falls back to the generic OpenWAApiError (with .status) for an unmapped status', async () => {

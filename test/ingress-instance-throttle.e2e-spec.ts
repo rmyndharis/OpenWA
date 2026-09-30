@@ -2,9 +2,8 @@
 // AppModule boots; stub it so ts-jest (CommonJS) can load the module graph.
 jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
 
-// Set BEFORE AppModule is imported: InstanceThrottlerGuard reads these directly in its onModuleInit
-// (a lifecycle hook that runs once at boot), not per-request, so they must be in place before the
-// Nest testing module is compiled below.
+// IngressService reads these per delivery; set them before AppModule is imported anyway, since the
+// ingress guard sizes its own tier from INGRESS_INSTANCE_TTL once at boot.
 process.env.INGRESS_INSTANCE_LIMIT = '3';
 process.env.INGRESS_INSTANCE_TTL = '60000';
 
@@ -24,11 +23,11 @@ import { PluginLoaderService } from './../src/core/plugins/plugin-loader.service
 import { PluginInstance } from './../src/modules/integration/entities/plugin-instance.entity';
 
 /**
- * Deterministic proof that InstanceThrottlerGuard actually enforces its per-route limit, and that two
- * different instances get independent buckets (a noisy tenant doesn't starve its neighbor). Uses its
- * own low INGRESS_INSTANCE_LIMIT (3) set before AppModule boots, rather than the shared e2e app in
- * integration-fabric.e2e-spec.ts, so hammering past the limit is fast and doesn't perturb the golden
- * 202/401 coverage there (which relies on the default limit of 120 never being hit).
+ * Deterministic proof that the per-instance limit is enforced, that two different instances get
+ * independent buckets (a noisy tenant doesn't starve its neighbor), and that only verified deliveries
+ * are counted. Uses its own low INGRESS_INSTANCE_LIMIT (3) set before AppModule boots, rather than the
+ * shared e2e app in integration-fabric.e2e-spec.ts, so hammering past the limit is fast and doesn't
+ * perturb the golden 202/401 coverage there (which relies on the default limit of 120 never being hit).
  */
 describe('Ingress per-instance fairness throttle (e2e)', () => {
   let app: INestApplication<App>;
@@ -92,7 +91,7 @@ describe('Ingress per-instance fairness throttle (e2e)', () => {
     });
     jest.spyOn(loader, 'dispatchWebhookForInstance').mockResolvedValue(undefined);
 
-    for (const instanceId of ['acct1', 'acct2']) {
+    for (const instanceId of ['acct1', 'acct2', 'acct3']) {
       await instanceRepo.save(
         instanceRepo.create({
           id: `chatwoot:${instanceId}`,
@@ -133,10 +132,8 @@ describe('Ingress per-instance fairness throttle (e2e)', () => {
 
     const blocked = await send('acct1', 'acct1-overflow');
     expect(blocked.status).toBe(429);
-    // ThrottlerGuard runs as a guard, before the handler, so it throws ThrottlerException before the
-    // controller's @Res() is ever reached — the header is set on the real response object directly
-    // from the guard layer and the global exception filter formats the 429 body. Confirm both survive
-    // the @Res() route (not just the status code).
+    // IngressService answers the 429 itself, through the controller's @Res(): confirm the headers and
+    // the throttler's JSON body both reach the wire, not just the status code.
     expect(blocked.headers['retry-after-instance']).toBeDefined();
     // The suffixed name says WHICH bucket shed it; the plain one is the only spelling a client reads.
     expect(blocked.headers['retry-after']).toBe(blocked.headers['retry-after-instance']);
@@ -146,5 +143,20 @@ describe('Ingress per-instance fairness throttle (e2e)', () => {
     // bucket — it must NOT be affected by acct1 having just been throttled.
     const other = await send('acct2', 'acct2-0');
     expect(other.status).toBe(202);
+  });
+
+  it('does not count unsigned requests against the instance limit', async () => {
+    // More unsigned requests than INGRESS_INSTANCE_LIMIT: each is rejected on its signature, never shed.
+    for (let i = 0; i < 5; i++) {
+      const res = await request(app.getHttpServer())
+        .post('/api/ingress/chatwoot/acct3/chatwoot')
+        .set('X-Chatwoot-Delivery', `acct3-unsigned-${i}`)
+        .set('Content-Type', 'application/json')
+        .send(raw);
+      expect(res.status).toBe(401);
+    }
+    const signed = await send('acct3', 'acct3-0');
+    expect(signed.status).toBe(202);
+    expect(signed.headers['x-ratelimit-remaining-instance']).toBe('2');
   });
 });

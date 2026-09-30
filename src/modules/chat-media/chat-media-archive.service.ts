@@ -1,7 +1,7 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { In, IsNull, LessThan, Not, Repository } from 'typeorm';
+import { In, IsNull, LessThan, MoreThan, Not, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { Message } from '../message/entities/message.entity';
 import { StorageService } from '../../common/storage/storage.service';
@@ -71,6 +71,10 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
   private orphanSweepTimer?: ReturnType<typeof setInterval>;
   /** First sweep sighting (epoch ms) of each unreferenced archive file, for the grace window. */
   private readonly orphanFirstSeenAt = new Map<string, number>();
+  /** Last row id the retention purge walked past; the next run resumes after it. */
+  private purgeCursor?: string;
+  /** A purge is still running, so the next tick is skipped rather than stacked on top of it. */
+  private purging = false;
 
   constructor(
     @InjectRepository(Message, 'data')
@@ -85,9 +89,11 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     const runPurge = (): void => {
-      this.purgeExpired(Date.now()).catch(err =>
-        this.logger.error('Chat media purge failed', err instanceof Error ? err.stack : String(err)),
-      );
+      if (this.purging) return;
+      this.purging = true;
+      this.purgeExpired(Date.now())
+        .catch(err => this.logger.error('Chat media purge failed', err instanceof Error ? err.stack : String(err)))
+        .finally(() => (this.purging = false));
     };
     runPurge(); // sweep once at startup
     this.purgeTimer = setInterval(runPurge, PURGE_INTERVAL_MS);
@@ -158,7 +164,16 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      await this.repository.update({ id: row.id }, { mediaPath: key, mediaMimetype: media.mimetype });
+      // Conditional on the row not being revoked: a revoke that landed while the file was written
+      // cleared the row, and pointing it at the file would bring the deleted media back.
+      const result = await this.repository.update(
+        { id: row.id, type: Not('revoked') },
+        { mediaPath: key, mediaMimetype: media.mimetype },
+      );
+      if (result.affected === 0) {
+        await this.storageService.deleteFile(key).catch(() => undefined); // else the orphan sweep reaps it
+        return null;
+      }
     } catch (error) {
       // The file exists but no row references it — an orphan the sweep reaps after its grace
       // window. The row itself stays consistent (mediaPath still null), so nothing else to undo.
@@ -183,7 +198,8 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
     // engine-neutral form depending on which writer won the persist race. The caller owns the
     // dialect resolution (it holds the lid table), so this only has to match any of them.
     const row = await this.repository.findOne({ where: { sessionId, chatId: In(chatIds), waMessageId } });
-    if (!row?.mediaPath || !row.mediaMimetype) return null;
+    // A revoked row serves nothing, whatever pointer it still holds.
+    if (!row?.mediaPath || !row.mediaMimetype || row.type === 'revoked') return null;
     return { path: row.mediaPath, mimetype: row.mediaMimetype };
   }
 
@@ -204,20 +220,30 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
     let cleared = 0;
 
     // Batched, not one pass. The archive's default TTL is 0 (keep forever), so the first run after
-    // an operator sets a retention can face an arbitrarily large backlog — unlike the status store,
-    // whose 24h TTL bounds every batch by construction. Unbatched that backlog broke three ways at
-    // once: tens of thousands of concurrent deletes, and a single `UPDATE ... WHERE id IN (...)`
-    // past the driver's bind-parameter ceiling (SQLite 32766, Postgres 65535) that throws AFTER the
-    // files are already gone — leaving rows pointing at deleted files, and every later tick
-    // repeating the same failure. Draining in bounded batches keeps each statement small and makes
-    // partial progress durable.
+    // an operator sets a retention can face an arbitrarily large backlog. Unbatched that backlog
+    // broke three ways at once: tens of thousands of concurrent deletes, and a single
+    // `UPDATE ... WHERE id IN (...)` past the driver's bind-parameter ceiling (SQLite 32766, Postgres
+    // 65535) that throws AFTER the files are already gone, leaving rows pointing at deleted files and
+    // every later tick repeating the same failure. Draining in bounded batches keeps each statement
+    // small and makes partial progress durable. The batches walk the rows by id, resuming across runs,
+    // so rows whose delete keeps failing are stepped over instead of being re-selected ahead of every
+    // newer row. A batch in which every delete fails ends the run: a missing file already counts as
+    // deleted, so that means the store is down, and walking on would only repeat the failure.
+    let after = this.purgeCursor;
+    this.purgeCursor = undefined;
     for (let batch = 0; batch < PURGE_MAX_BATCHES_PER_RUN; batch++) {
       const expired = await this.repository.find({
-        where: { mediaPath: Not(IsNull()), createdAt: LessThan(cutoff) },
+        where: {
+          mediaPath: Not(IsNull()),
+          createdAt: LessThan(cutoff),
+          ...(after ? { id: MoreThan(after) } : {}),
+        },
         select: { id: true, mediaPath: true },
+        order: { id: 'ASC' },
         take: PURGE_BATCH_SIZE,
       });
       if (expired.length === 0) break;
+      after = expired[expired.length - 1].id;
 
       const clearableIds: string[] = [];
       for (const row of expired) {
@@ -231,18 +257,21 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      // Every delete in the batch failed: the same rows would be re-selected forever, so stop
-      // rather than spin. The next scheduled run retries them.
-      if (clearableIds.length === 0) break;
-
+      if (clearableIds.length === 0) {
+        this.purgeCursor = after;
+        break;
+      }
+      // Rows whose delete failed keep their columns; they are retried once the walk wraps around.
       await this.repository.update(clearableIds, {
         mediaPath: null as unknown as undefined,
         mediaMimetype: null as unknown as undefined,
       });
       cleared += clearableIds.length;
 
-      // A short batch means the backlog is drained; anything else costs an extra empty query.
+      // A short batch means the backlog is drained and the next run starts over from the lowest id;
+      // a run that hits the batch cap resumes where it stopped.
       if (expired.length < PURGE_BATCH_SIZE) break;
+      if (batch === PURGE_MAX_BATCHES_PER_RUN - 1) this.purgeCursor = after;
     }
 
     if (cleared > 0) this.logger.log(`Chat media retention purge cleared ${cleared} file(s)`);

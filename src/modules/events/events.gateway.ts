@@ -9,7 +9,8 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger, OnModuleDestroy } from '@nestjs/common';
+import { OnModuleDestroy } from '@nestjs/common';
+import { createLogger } from '../../common/services/logger.service';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from '../auth/auth.service';
 import { AuditService } from '../audit/audit.service';
@@ -117,7 +118,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   @WebSocketServer()
   server!: Server;
 
-  private logger = new Logger('EventsGateway');
+  private logger = createLogger('EventsGateway');
 
   /**
    * Active sockets keyed by their validating API-key id, so a key revoked/disabled
@@ -182,8 +183,8 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
    * Re-validate the keys behind the live sockets against the database, once per tick.
    *
    * A socket carries the key snapshot taken at connect and never refreshes it, so every later change
-   * to the row is invisible to it: a key deleted, revoked, expired or narrowed by another node, by a
-   * direct database write, or by an operator change that committed in the window between this
+   * to the row is invisible to it: a key deleted, revoked, expired or narrowed by a direct write to
+   * this node's main database, or by an operator change that committed in the window between this
    * socket's validation and its registration here. The operator path still evicts synchronously in
    * the same request (see AuthService.update/revoke/delete); this is the backstop for the changes
    * that never reached this process.
@@ -454,7 +455,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   @SubscribeMessage('message')
-  async handleMessage(@ConnectedSocket() client: Socket, @MessageBody() message: WSClientMessage) {
+  // A client may emit 'message' with no payload or with null, so the body is typed as possibly nil and
+  // every read is guarded: such a frame answers INVALID_MESSAGE instead of throwing in the handler.
+  async handleMessage(@ConnectedSocket() client: Socket, @MessageBody() message: WSClientMessage | null | undefined) {
     // Per-key token bucket on every inbound frame. Keyed by the validated key id; a socket
     // whose handshake validation is still in flight has no key yet and is metered by IP.
     // Over-budget frames get an error frame back and are NOT dispatched to a handler — in
@@ -463,7 +466,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       (client.data as { apiKey?: Pick<ApiKey, 'id'> } | undefined)?.apiKey?.id ??
       limiterKeyForIp(this.resolveClientIp(client));
     if (!this.frameLimiter.allow(frameSubject)) {
-      const requestId = (message as { requestId?: string } | undefined)?.requestId;
+      const requestId = (message as { requestId?: string } | null | undefined)?.requestId;
       this.noteRateLimitViolation('frame', {
         apiKeyId: (client.data as { apiKey?: Pick<ApiKey, 'id'> } | undefined)?.apiKey?.id,
         ipAddress: this.resolveClientIp(client),
@@ -471,7 +474,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       return this.reply(client, this.createError('RATE_LIMITED', 'Frame rate limit exceeded, slow down', requestId));
     }
 
-    switch (message.type) {
+    switch (message?.type) {
       case 'subscribe':
         return this.reply(client, await this.handleSubscribe(client, message));
       case 'unsubscribe':
@@ -481,7 +484,11 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       default:
         return this.reply(
           client,
-          this.createError('INVALID_MESSAGE', `Unknown message type`, (message as { requestId?: string }).requestId),
+          this.createError(
+            'INVALID_MESSAGE',
+            `Unknown message type`,
+            (message as { requestId?: string } | null | undefined)?.requestId,
+          ),
         );
     }
   }
@@ -526,7 +533,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     }
 
     // The connect handshake refuses a chat-restricted key, but the key can gain allowedChats after
-    // connect (an update on another node), so the fresh key is held to the same rule here.
+    // connect (a direct write to this node's main database, or an operator update that committed
+    // between this socket's validation and its registration), so the fresh key is held to the same
+    // rule here.
     if ((subscriberKey.allowedChats?.length ?? 0) > 0) {
       const refusal = this.createError(
         'UNAUTHORIZED',

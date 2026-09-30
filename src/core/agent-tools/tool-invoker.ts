@@ -55,9 +55,9 @@ export async function invokeTool(
       throw new ForbiddenException('API key lacks the required role');
     }
 
-    // A chat-restricted key cannot be filtered on the tool surface yet (chat-scoped tool arguments
-    // are handled in the follow-up slice), so refuse it outright rather than let a tool act on any
-    // chat. Mirrors the REST guard's default-deny for unmarked routes.
+    // Tools carry no chat-scope marks, so a chat-restricted key cannot be confined to its chats here:
+    // refuse it outright rather than let a tool act on any chat. Mirrors the REST guard's
+    // default-deny for routes with no chat dimension.
     if ((apiKey.allowedChats?.length ?? 0) > 0) {
       throw new ForbiddenException('API key is restricted to selected chats');
     }
