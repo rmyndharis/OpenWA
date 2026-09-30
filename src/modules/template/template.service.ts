@@ -30,6 +30,8 @@ export class TemplateService {
       body: dto.body,
       header: dto.header ?? null,
       footer: dto.footer ?? null,
+      type: dto.type ?? 'text',
+      mediaUrl: dto.mediaUrl ?? null,
     });
 
     try {
@@ -93,6 +95,8 @@ export class TemplateService {
     if (dto.body !== undefined) template.body = dto.body;
     if (dto.header !== undefined) template.header = dto.header;
     if (dto.footer !== undefined) template.footer = dto.footer;
+    if (dto.type !== undefined) template.type = dto.type;
+    if (dto.mediaUrl !== undefined) template.mediaUrl = dto.mediaUrl;
 
     try {
       return await this.templateRepository.save(template);

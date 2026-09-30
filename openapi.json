@@ -19927,6 +19927,21 @@
             "description": "Optional footer text, appended to the rendered body",
             "example": "Reply STOP to unsubscribe.",
             "maxLength": 1024
+          },
+          "type": {
+            "type": "string",
+            "description": "Template message type",
+            "enum": [
+              "text",
+              "image"
+            ],
+            "default": "text"
+          },
+          "mediaUrl": {
+            "type": "string",
+            "description": "Image URL for image templates. Supports {{variable}} placeholders.",
+            "example": "{{imageUrl}}",
+            "maxLength": 4096
           }
         },
         "required": [
@@ -19964,6 +19979,22 @@
           "updatedAt": {
             "format": "date-time",
             "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "Template message type",
+            "enum": [
+              "text",
+              "image"
+            ],
+            "default": "text"
+          },
+          "mediaUrl": {
+            "type": "string",
+            "description": "Image URL for image templates. Supports {{variable}} placeholders.",
+            "example": "{{imageUrl}}",
+            "maxLength": 4096,
+            "nullable": true
           }
         },
         "required": [
@@ -19997,6 +20028,21 @@
             "type": "string",
             "description": "Optional footer text",
             "maxLength": 1024
+          },
+          "type": {
+            "type": "string",
+            "description": "Template message type",
+            "enum": [
+              "text",
+              "image"
+            ],
+            "default": "text"
+          },
+          "mediaUrl": {
+            "type": "string",
+            "description": "Image URL for image templates. Supports {{variable}} placeholders.",
+            "example": "{{imageUrl}}",
+            "maxLength": 4096
           }
         }
       },

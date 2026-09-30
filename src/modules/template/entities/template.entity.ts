@@ -39,6 +39,12 @@ export class Template {
   @Column({ type: 'text', nullable: true })
   footer!: string | null;
 
+  @Column({ type: 'varchar', length: 20, default: 'text' })
+  type!: 'text' | 'image';
+
+  @Column({ type: 'text', nullable: true })
+  mediaUrl!: string | null;
+
   @CreateDateColumn()
   createdAt!: Date;
 

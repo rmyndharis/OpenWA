@@ -1,9 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, MaxLength, ValidateIf } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, MaxLength, ValidateIf, IsIn } from 'class-validator';
 
 const NAME_MAX_LENGTH = 100;
 const BODY_MAX_LENGTH = 4096;
 const HEADER_FOOTER_MAX_LENGTH = 1024;
+const MEDIA_URL_MAX_LENGTH = 4096;
+export const TEMPLATE_TYPES = ['text', 'image'] as const;
 
 export class CreateTemplateDto {
   @ApiProperty({
@@ -45,6 +47,23 @@ export class CreateTemplateDto {
   @IsString()
   @MaxLength(HEADER_FOOTER_MAX_LENGTH)
   footer?: string;
+
+  @ApiPropertyOptional({ description: 'Template message type', enum: TEMPLATE_TYPES, default: 'text' })
+  @IsOptional()
+  @IsString()
+  @IsIn(TEMPLATE_TYPES)
+  type?: 'text' | 'image';
+
+  @ApiPropertyOptional({
+    description: 'Image URL for image templates. Supports {{variable}} placeholders.',
+    example: '{{imageUrl}}',
+    maxLength: MEDIA_URL_MAX_LENGTH,
+  })
+  @ValidateIf((o: CreateTemplateDto) => o.type === 'image' || o.mediaUrl !== undefined)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(MEDIA_URL_MAX_LENGTH)
+  mediaUrl?: string;
 }
 
 export class UpdateTemplateDto {
@@ -74,6 +93,22 @@ export class UpdateTemplateDto {
   @IsString()
   @MaxLength(HEADER_FOOTER_MAX_LENGTH)
   footer?: string;
+
+  @ApiPropertyOptional({ description: 'Template message type', enum: TEMPLATE_TYPES })
+  @ValidateIf((o: UpdateTemplateDto) => o.type !== undefined)
+  @IsString()
+  @IsIn(TEMPLATE_TYPES)
+  type?: 'text' | 'image';
+
+  @ApiPropertyOptional({
+    description: 'Image URL for image templates. Supports {{variable}} placeholders.',
+    maxLength: MEDIA_URL_MAX_LENGTH,
+  })
+  @ValidateIf((o: UpdateTemplateDto) => o.mediaUrl !== undefined)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(MEDIA_URL_MAX_LENGTH)
+  mediaUrl?: string;
 }
 
 export class TemplateResponseDto {
@@ -94,6 +129,12 @@ export class TemplateResponseDto {
 
   @ApiPropertyOptional({ type: String, nullable: true })
   footer?: string | null;
+
+  @ApiProperty({ enum: TEMPLATE_TYPES })
+  type!: 'text' | 'image';
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  mediaUrl?: string | null;
 
   @ApiProperty()
   createdAt!: Date;
