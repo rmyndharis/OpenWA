@@ -19930,7 +19930,6 @@
           },
           "type": {
             "type": "string",
-            "description": "Template message type",
             "enum": [
               "text",
               "image"
@@ -19982,18 +19981,13 @@
           },
           "type": {
             "type": "string",
-            "description": "Template message type",
             "enum": [
               "text",
               "image"
-            ],
-            "default": "text"
+            ]
           },
           "mediaUrl": {
             "type": "string",
-            "description": "Image URL for image templates. Supports {{variable}} placeholders.",
-            "example": "{{imageUrl}}",
-            "maxLength": 4096,
             "nullable": true
           }
         },
@@ -20031,7 +20025,6 @@
           },
           "type": {
             "type": "string",
-            "description": "Template message type",
             "enum": [
               "text",
               "image"

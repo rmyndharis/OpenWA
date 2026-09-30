@@ -1,15 +1,31 @@
-import { MigrationInterface, QueryRunner } from 'typeorm';
+import { MigrationInterface, QueryRunner, TableColumn } from 'typeorm';
 
 export class AddMediaTemplateFields1790770000000 implements MigrationInterface {
   name = 'AddMediaTemplateFields1790770000000';
 
   async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "templates" ADD COLUMN "type" varchar(20) NOT NULL DEFAULT 'text'`);
-    await queryRunner.query(`ALTER TABLE "templates" ADD COLUMN "mediaUrl" text`);
+    await queryRunner.addColumn(
+      'templates',
+      new TableColumn({
+        name: 'type',
+        type: 'varchar',
+        length: '20',
+        isNullable: false,
+        default: "'text'",
+      }),
+    );
+    await queryRunner.addColumn(
+      'templates',
+      new TableColumn({
+        name: 'mediaUrl',
+        type: 'text',
+        isNullable: true,
+      }),
+    );
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "templates" DROP COLUMN "mediaUrl"`);
-    await queryRunner.query(`ALTER TABLE "templates" DROP COLUMN "type"`);
+    await queryRunner.dropColumn('templates', 'mediaUrl');
+    await queryRunner.dropColumn('templates', 'type');
   }
 }

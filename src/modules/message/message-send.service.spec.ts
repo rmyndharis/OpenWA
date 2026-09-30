@@ -418,6 +418,8 @@ describe('MessageSendService', () => {
         body: 'Hi {{customer}}, your order {{orderId}} shipped.',
         header: null,
         footer: null,
+        type: 'text',
+        mediaUrl: null,
         createdAt: new Date(),
         updatedAt: new Date(),
         session: undefined as unknown as Template['session'],

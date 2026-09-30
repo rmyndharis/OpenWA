@@ -15,6 +15,8 @@ function createMockTemplate(overrides: Partial<Template> = {}): Template {
     body: 'Hi {{customer}}, order {{orderId}} shipped.',
     header: null,
     footer: null,
+    type: 'text',
+    mediaUrl: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     session: undefined as unknown as Session,

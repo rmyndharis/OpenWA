@@ -891,7 +891,8 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1786700000000-AddMessagesSessionChatCreatedAtIndex.ts   # (sessionId, chatId, createdAt): chat thread pages
 ├── 1786800000000-AddBaileysStoredMessagesSessionCreatedIdIndex.ts   # (sessionId, createdAt, id) index for the Baileys store cap trim
 ├── 1786900000000-ScrubRevokedMessageContent.ts   # clears content kept on rows revoked by earlier releases
-└── 1786950000000-ScrubNonPhoneLidMappings.ts   # drops lid_mappings rows where earlier releases stored a broadcast id as the phone
+├── 1786950000000-ScrubNonPhoneLidMappings.ts   # drops lid_mappings rows where earlier releases stored a broadcast id as the phone
+└── 1790770000000-AddMediaTemplateFields.ts   # templates.type + templates.mediaUrl for image templates
 ```
 
 > [!NOTE]
