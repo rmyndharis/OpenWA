@@ -100,7 +100,10 @@ export class UpdateTemplateDto {
   @IsIn(TEMPLATE_TYPES)
   type?: 'text' | 'image';
 
-  @ApiPropertyOptional({ description: 'Image URL for image templates. Supports {{variable}} placeholders.', maxLength: MEDIA_URL_MAX_LENGTH })
+  @ApiPropertyOptional({
+    description: 'Image URL for image templates. Supports {{variable}} placeholders.',
+    maxLength: MEDIA_URL_MAX_LENGTH,
+  })
   @ValidateIf((o: UpdateTemplateDto) => o.mediaUrl !== undefined)
   @IsString()
   @IsNotEmpty()
