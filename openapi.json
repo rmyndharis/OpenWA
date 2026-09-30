@@ -19940,8 +19940,8 @@
           "mediaUrl": {
             "type": "string",
             "description": "Image URL for image templates. Supports {{variable}} placeholders.",
-            "maxLength": 4096,
-            "example": "{{imageUrl}}"
+            "example": "{{imageUrl}}",
+            "maxLength": 4096
           }
         },
         "required": [
