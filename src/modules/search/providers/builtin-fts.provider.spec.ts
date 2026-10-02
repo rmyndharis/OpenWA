@@ -145,4 +145,23 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     const newTerm = await provider.search({ q: 'goodbye' });
     expect(newTerm.hits.map(h => h.body)).toContain('goodbye updated');
   });
+
+  it('excludes imported stories before search pagination and totals while retaining their rows', async () => {
+    const repo = ds.getRepository(Message);
+    await repo.insert(
+      Array.from({ length: 12 }, () => ({
+        sessionId: 's1',
+        chatId: 'status@broadcast',
+        from: 'status@broadcast',
+        to: 'me',
+        body: 'hello world',
+        timestamp: 100,
+        direction: MessageDirection.INCOMING,
+      })),
+    );
+    const result = await provider.search({ q: 'hello', sessionId: 's1', limit: 1 });
+    expect(result.total).toBe(1);
+    expect(result.hits.every(h => h.chatId !== 'status@broadcast')).toBe(true);
+    expect(await repo.countBy({ chatId: 'status@broadcast' })).toBe(12);
+  });
 });

@@ -4080,6 +4080,67 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "since",
+            "required": false,
+            "in": "query",
+            "description": "Inclusive message-time lower bound, Unix epoch milliseconds (not ingestion time).",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "until",
+            "required": false,
+            "in": "query",
+            "description": "Exclusive message-time upper bound, Unix epoch milliseconds.",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "direction",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "incoming",
+                "outgoing"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "orderBy",
+            "required": false,
+            "in": "query",
+            "description": "Newest first. Default createdAt preserves existing ordering; timestamp uses message time and excludes rows without a known timestamp.",
+            "schema": {
+              "enum": [
+                "createdAt",
+                "timestamp"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "description": "Exact stored message type token, e.g. text, image, voice.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "messageId",
+            "required": false,
+            "in": "query",
+            "description": "Exact WhatsApp message reference; remains scoped to the session and chat.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -18810,6 +18871,10 @@
       "MessageListResponseDto": {
         "type": "object",
         "properties": {
+          "unknownTimestampTotal": {
+            "type": "number",
+            "description": "Rows with unknown message time in the selected session/chat/sender/direction, before time bounds. Present only for time selections; excluded from their messages and total. Stored history is not proof of complete remote history."
+          },
           "messages": {
             "description": "Newest first.",
             "type": "array",

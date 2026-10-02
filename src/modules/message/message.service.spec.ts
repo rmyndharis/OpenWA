@@ -247,7 +247,9 @@ describe('MessageService', () => {
       const result = await service.getMessages('sess-1', { after: 'm-1', offset: 500 });
 
       expect(qb.skip).not.toHaveBeenCalled();
-      const [clause, params] = qb.andWhere.mock.calls[0] as [string, Record<string, unknown>];
+      const [clause, params] = qb.andWhere.mock.calls.find(([clause]: [string]) =>
+        clause.includes('FROM messages anchor'),
+      ) as [string, Record<string, unknown>];
       // rowid, not id: the stub repository carries no manager, which reads as "not postgres".
       expect(clause).toContain('(message.createdAt, message.rowid) <');
       // The anchor's sort key is resolved in SQL; only the id crosses the JS boundary.
@@ -271,7 +273,9 @@ describe('MessageService', () => {
 
       await service.getMessages('sess-1', { after: 'm-1' });
 
-      const [clause] = qb.andWhere.mock.calls[0] as [string];
+      const [clause] = qb.andWhere.mock.calls.find(([clause]: [string]) => clause.includes('FROM messages anchor')) as [
+        string,
+      ];
       expect(clause).toContain('(message.createdAt, message.id) <');
       expect(clause).toContain('anchor."id"');
       expect(clause).not.toContain('rowid');

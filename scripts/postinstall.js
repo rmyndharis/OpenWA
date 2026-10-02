@@ -1,7 +1,7 @@
 /**
  * Post-install hook (npm `postinstall`).
  *
- * Thirteen conditional steps, each skipped when its target is absent so the hook is a no-op where the
+ * Fourteen conditional steps, each skipped when its target is absent so the hook is a no-op where the
  * piece is missing (the Docker builder stage copies package*.json long before any source):
  *
  *   1. `npm ci` inside dashboard/ when dashboard/ exists — the dashboard carries its own lockfile and
@@ -40,6 +40,8 @@
  *  13. `node scripts/patch-baileys-newsletter-create.js --best-effort` when present, the
  *      newsletter-create parse fix. Steps 12-13 are the Baileys patches. Every patcher runs whenever
  *      its script is present, whatever ENGINE_TYPE is set to.
+ *  14. `node scripts/patch-baileys-pairing.js` when present. Unlike optional repairs,
+ *      pre-login ACK/registration refresh is fatal on unknown or partial shapes.
  *
  * Structured like scripts/patch-wwebjs-201832.js: pure planning + injectable spawn, so the spec
  * (scripts/postinstall.spec.js, node:test) exercises every branch without a real npm run.
@@ -193,6 +195,14 @@ function planSteps(root, env = process.env) {
       options: { stdio: 'inherit', cwd: root, env: cleanEnv },
     });
   }
+  const pairingPatcher = path.join(root, 'scripts', 'patch-baileys-pairing.js');
+  if (fs.existsSync(pairingPatcher))
+    steps.push({
+      name: 'Baileys pre-login ACK and registration refresh',
+      command: process.execPath,
+      args: [pairingPatcher],
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
+    });
   return steps;
 }
 

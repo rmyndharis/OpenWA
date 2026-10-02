@@ -39,6 +39,10 @@ export enum MessageStatus {
 // stats reads that filter on chatId without a session. The explicit name matches the migration that
 // creates it on synchronize-disabled deployments, so both schema paths converge on one index.
 @Index('IDX_messages_sessionId_chatId_createdAt', ['sessionId', 'chatId', 'createdAt'])
+// Explicit id tiebreaking keeps a message-time walk stable across SQLite and PostgreSQL.
+@Index('IDX_messages_session_timestamp_id', ['sessionId', 'timestamp', 'id'])
+@Index('IDX_messages_session_chat_timestamp_id', ['sessionId', 'chatId', 'timestamp', 'id'])
+@Index('IDX_messages_session_direction_timestamp_id', ['sessionId', 'direction', 'timestamp', 'id'])
 // Composite index for the ack-driven status UPDATE (scoped by sessionId + waMessageId).
 // Without it every ack does a full table scan of a hot table.
 @Index('UQ_messages_sessionId_waMessageId', ['sessionId', 'waMessageId'], { unique: true })

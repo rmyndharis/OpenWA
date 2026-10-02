@@ -37,6 +37,7 @@ const EXPECTED_PATCHER_ORDER = [
   'patch-wwebjs-download-mimetype.js',
   'patch-baileys-appstate.js',
   'patch-baileys-newsletter-create.js',
+  'patch-baileys-pairing.js',
 ];
 
 /** Bare temp dir optionally holding a dashboard/ and/or the patch scripts. */
@@ -185,7 +186,10 @@ test('planSteps: dashboard and all patchers run in stable order', () => {
   );
   for (const step of steps.slice(1)) {
     assert.equal(step.command, process.execPath);
-    assert.deepEqual(step.args.slice(1), ['--best-effort']);
+    assert.deepEqual(
+      step.args.slice(1),
+      path.basename(step.args[0]) === 'patch-baileys-pairing.js' ? [] : ['--best-effort'],
+    );
   }
 });
 

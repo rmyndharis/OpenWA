@@ -18,11 +18,12 @@ import { MessageSendService, SaveOutgoingMessageData } from './message-send.serv
 // Type-only: the module binds this class to PLUGIN_MESSAGE_PORT with a `useExisting` alias, which
 // TypeScript does not check, so `implements` is what keeps the two in step.
 import type { PluginMessagePort } from '../../core/plugins/plugin-host-ports';
+import { MessageWindow, validateMessageWindow } from './message-window';
 
 // Re-exported for existing importers (bulk send shares the rendered-template cap with the send path).
 export { DEFAULT_TEMPLATE_RENDER_MAX_CHARS } from './message-send.service';
 
-export interface GetMessagesOptions {
+export interface GetMessagesOptions extends MessageWindow {
   chatId?: string;
   /** Filter by sender. A phone matches stored `@c.us`/`@s.whatsapp.net` ids AND any lid resolving to it. Group messages match on `author` (the real sender) as well as `from` (which holds the group JID). */
   from?: string;
@@ -297,8 +298,10 @@ export class MessageService implements PluginMessagePort {
   async getMessages(
     sessionId: string,
     options: GetMessagesOptions = {},
-  ): Promise<{ messages: Message[]; total: number }> {
+  ): Promise<{ messages: Message[]; total: number; unknownTimestampTotal?: number }> {
     const { chatId, from, after, inlineMedia } = options;
+    validateMessageWindow(options);
+    const messageTimeOrder = options.orderBy === 'timestamp';
     // Sanitize pagination: a non-finite limit/offset — e.g. `?limit=abc` -> NaN —
     // must never reach TypeORM's take()/skip(). Clamp to sane bounds; fall back to defaults.
     const rawLimit = options.limit;
@@ -307,7 +310,7 @@ export class MessageService implements PluginMessagePort {
       typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 100) : 50;
     const offset = typeof rawOffset === 'number' && Number.isFinite(rawOffset) ? Math.max(Math.trunc(rawOffset), 0) : 0;
 
-    const tiebreak = this.orderTiebreak;
+    const tiebreak = messageTimeOrder ? 'id' : this.orderTiebreak;
     // Match across dialects: a stored chatId may be `@s.whatsapp.net` (e.g. an outbound send addressed
     // by a raw engine id) while the caller filters by the neutral `@c.us` from the chat list - same
     // chat, different dialect. Resolving both sides through the table keeps them equal.
@@ -318,12 +321,18 @@ export class MessageService implements PluginMessagePort {
     // consideration, so it seeks (sessionId, chatId, createdAt) and sorts only that chat's rows, the
     // plan ANALYZE would pick. A single candidate already uses that index in order, and PostgreSQL
     // (no unary `+` on timestamps) has statistics, so both keep the plain key.
+    const orderColumn = messageTimeOrder ? 'timestamp' : 'createdAt';
     const createdAtKey =
-      tiebreak === 'rowid' && chatIds !== undefined && chatIds.length > 1 ? '+message.createdAt' : 'message.createdAt';
+      this.orderTiebreak === 'rowid' && chatIds !== undefined && chatIds.length > 1
+        ? `+message.${orderColumn}`
+        : `message.${orderColumn}`;
 
     const query = this.messageRepository
       .createQueryBuilder('message')
       .where('message.sessionId = :sessionId', { sessionId })
+      // Stories belong to the status store. Legacy imports can still contain
+      // their rows here; exclude them before totals, time gaps and pagination.
+      .andWhere('message.chatId <> :statusBroadcast', { statusBroadcast: 'status@broadcast' })
       .orderBy(createdAtKey, 'DESC')
       // `createdAt` is not unique: SQLite stores whole seconds, Postgres NOW() is transaction-scoped
       // so a bulk write ties every row, and a history backfill stamps WhatsApp's own second-resolution
@@ -343,6 +352,10 @@ export class MessageService implements PluginMessagePort {
     if (chatIds) {
       query.andWhere('message.chatId IN (:...chatIds)', { chatIds });
     }
+    if (options.direction !== undefined) {
+      query.andWhere('message.direction = :direction', { direction: options.direction });
+    }
+    if (options.type !== undefined) query.andWhere('message.type = :messageType', { messageType: options.type });
 
     if (from) {
       // Resolve the filter through the lid->phone table so a phone matches not just the stored
@@ -361,6 +374,23 @@ export class MessageService implements PluginMessagePort {
       });
     }
 
+    if (options.messageId !== undefined) {
+      query.andWhere('message.waMessageId = :messageId', { messageId: options.messageId });
+    }
+    const hasTimeSelection = messageTimeOrder || options.since !== undefined || options.until !== undefined;
+    // Unknown times cannot belong to a verified time window. Count the gap within the same
+    // session/chat/sender/direction, before applying time bounds, without loading message bodies.
+    const unknownTimestampTotal = hasTimeSelection
+      ? await query.clone().andWhere('message.timestamp IS NULL').getCount()
+      : undefined;
+    if (messageTimeOrder) query.andWhere('message.timestamp IS NOT NULL');
+    if (options.since !== undefined) {
+      query.andWhere('message.timestamp >= :since', { since: options.since / 1000 });
+    }
+    if (options.until !== undefined) {
+      query.andWhere('message.timestamp < :until', { until: options.until / 1000 });
+    }
+
     // A budget of 0 means "never inline" and grants no single-payload allowance, which is exactly
     // what an opted-out caller asks for, so the flag picks the budget rather than a second code path.
     const inlineMediaBudget = inlineMedia === false ? 0 : resolveMessageListInlineMediaBudgetBytes();
@@ -369,6 +399,18 @@ export class MessageService implements PluginMessagePort {
     const total = await query.clone().getCount();
 
     if (after !== undefined) {
+      // A selection cursor must name a row inside this same selection, not merely a row from the
+      // session. Otherwise an unrelated chat/time/direction could silently truncate a valid walk.
+      if (
+        (messageTimeOrder ||
+          options.since !== undefined ||
+          options.until !== undefined ||
+          options.direction !== undefined ||
+          options.type !== undefined) &&
+        !(await query.clone().andWhere('message.id = :cursorId', { cursorId: after }).getCount())
+      ) {
+        throw new BadRequestException('Unknown cursor for this message selection');
+      }
       // The anchor's sort key is resolved INSIDE the statement. Carrying it in the cursor instead
       // would mean round-tripping a timestamp through JSON, and neither dialect survives that:
       // SQLite holds two text shapes for one instant (`datetime('now')` writes 19 chars, a stamped
@@ -376,8 +418,8 @@ export class MessageService implements PluginMessagePort {
       // microseconds to a millisecond Date. Both mis-seek silently, which is the very failure this
       // cursor exists to remove.
       query.andWhere(
-        `(message.createdAt, message.${tiebreak}) < ` +
-          `(SELECT anchor."createdAt", anchor."${tiebreak}" FROM messages anchor ` +
+        `(message.${orderColumn}, message.${tiebreak}) < ` +
+          `(SELECT anchor."${orderColumn}", anchor."${tiebreak}" FROM messages anchor ` +
           'WHERE anchor."id" = :after AND anchor."sessionId" = :sessionId)',
         { after, sessionId },
       );
@@ -404,7 +446,11 @@ export class MessageService implements PluginMessagePort {
     // The 1..100 clamp above bounds the ROW COUNT, not the response: each row carries its inline
     // base64 in metadata.media.data. Spent newest-first (the query orders createdAt DESC), so the
     // most recently viewed media still arrives inline and the rest keeps its omitted marker.
-    return { messages: await this.readPageSpendingBudget(sessionId, page, inlineMediaBudget), total };
+    return {
+      messages: await this.readPageSpendingBudget(sessionId, page, inlineMediaBudget),
+      total,
+      ...(unknownTimestampTotal !== undefined ? { unknownTimestampTotal } : {}),
+    };
   }
 
   /**

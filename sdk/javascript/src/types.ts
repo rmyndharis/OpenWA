@@ -482,6 +482,16 @@ export interface SendPollRequest {
 }
 
 export interface ListMessagesQuery {
+  type?: MessageType;
+  /** Inclusive message-time lower bound, Unix epoch milliseconds. */
+  since?: number;
+  /** Exclusive message-time upper bound, Unix epoch milliseconds. */
+  until?: number;
+  direction?: MessageDirection;
+  /** Newest first; timestamp excludes rows without known message time. Default createdAt. */
+  orderBy?: 'createdAt' | 'timestamp';
+  /** Exact WhatsApp message reference within the selection. */
+  messageId?: string;
   chatId?: Jid;
   from?: Jid;
   limit?: number;
@@ -621,6 +631,8 @@ export interface ChatHistoryMessage {
 
 /** Paginated payload returned by `GET /sessions/:id/messages`. */
 export interface MessageListResponse {
+  /** Unknown message-time rows in the selected scope; present for time selections only. */
+  unknownTimestampTotal?: number;
   messages: MessageRecord[];
   total: number;
 }

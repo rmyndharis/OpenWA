@@ -1290,14 +1290,41 @@ Get persisted message history for a session from the local DB (paginated, filter
 
 **Query parameters**
 
-| Name        | Type    | Required | Default | Description                                                                                                                                                                                                                             |
-| ----------- | ------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| chatId      | string  | No       | —       | Filter by chat ID. Matched across `@c.us` / `@s.whatsapp.net` dialects via the lid-mapping table. Required for a key restricted to selected chats.                                                                                      |
-| from        | string  | No       | —       | Filter by sender; matches `from` or a group message's `author`. A phone also matches any lid that resolves to it.                                                                                                                       |
-| limit       | integer | No       | 50      | Clamped to `[1,100]`; a non-finite value falls back to 50.                                                                                                                                                                              |
-| offset      | integer | No       | 0       | Clamped to `>=0`; a non-finite value falls back to 0.                                                                                                                                                                                   |
-| after       | string  | No       | —       | Keyset cursor: the `id` of the last message of the previous page. Anchors the window to a row rather than a count, so a message arriving mid-walk cannot shift it. Takes precedence over `offset`. Unknown in this session gives `400`. |
-| inlineMedia | boolean | No       | true    | Set `false` (or `0`) to omit every inline media payload, leaving each row's `{ omitted, sizeBytes }` marker and the media endpoint. The budget below is per response, so a paged walk pulls it afresh on every page.                    |
+| Name        | Type    | Required | Default   | Description                                                                                                                                                                                                                             |
+| ----------- | ------- | -------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| chatId      | string  | No       | —         | Filter by chat ID. Matched across `@c.us` / `@s.whatsapp.net` dialects via the lid-mapping table. Required for a key restricted to selected chats.                                                                                      |
+| from        | string  | No       | —         | Filter by sender; matches `from` or a group message's `author`. A phone also matches any lid that resolves to it.                                                                                                                       |
+| limit       | integer | No       | 50        | Clamped to `[1,100]`; a non-finite value falls back to 50.                                                                                                                                                                              |
+| offset      | integer | No       | 0         | Clamped to `>=0`; a non-finite value falls back to 0.                                                                                                                                                                                   |
+| after       | string  | No       | —         | Keyset cursor: the `id` of the last message of the previous page. Anchors the window to a row rather than a count, so a message arriving mid-walk cannot shift it. Takes precedence over `offset`. Unknown in this session gives `400`. |
+| messageId   | string  | No       | —         | Exact WhatsApp message reference. Scoped to the selected session and chat; no match returns an empty result.                                                                                                                            |
+| inlineMedia | boolean | No       | true      | Set `false` (or `0`) to omit every inline media payload, leaving each row's `{ omitted, sizeBytes }` marker and the media endpoint. The budget below is per response, so a paged walk pulls it afresh on every page.                    |
+| since       | number  | No       | —         | Inclusive message-time lower bound, Unix epoch **milliseconds**. Uses `timestamp`, not `createdAt`.                                                                                                                                     |
+| until       | number  | No       | —         | Exclusive message-time upper bound, Unix epoch **milliseconds**. Must be later than `since` when both are given.                                                                                                                        |
+| direction   | string  | No       | —         | `incoming` or `outgoing`; omit for both directions.                                                                                                                                                                                     |
+| orderBy     | string  | No       | createdAt | `createdAt` preserves ingestion-time order; `timestamp` orders by message time DESC, then UUID DESC, and excludes unknown message times.                                                                                                |
+
+`type` optionally filters the exact stored message type (for example `image` or `voice`). It accepts
+a non-empty lowercase type token, including future types, and requires no search text.
+
+Time bounds are finite, non-negative decimal numbers; blank, malformed and reversed bounds give
+`400`. Millisecond bounds are compared without rounding against stored epoch seconds. With time
+bounds or `orderBy=timestamp`, the response also includes `unknownTimestampTotal`: stored rows
+with no message time in the selected session/chat/sender/direction, before applying time bounds.
+They are excluded from the time-selected `messages` and `total`. A locally exhausted selection
+does not prove complete remote WhatsApp history. Unlike search's inclusive `dateTo`, `until` here
+is **exclusive**, so adjacent day windows do not overlap.
+
+Keep the same filters and order when continuing with `after`. In a time/direction selection an
+anchor must belong to that selection; a foreign chat, changed window, deleted or unknown anchor
+gives `400` instead of silently indicating exhaustion. A newly inserted older message can still
+enter a subsequent page; keyset pagination does not claim to be a snapshot of a changing archive.
+
+Example (stored messages for 2026-09-20 in Europe/Vienna, both directions):
+
+```http
+GET /api/sessions/:sessionId/messages?since=1789855200000&until=1789941600000&orderBy=timestamp&inlineMedia=false&limit=100
+```
 
 **Response** `200`
 

@@ -189,6 +189,7 @@ export class BaileysLifecycle {
   sock: WASocket | null = null;
   private status: EngineStatus = EngineStatus.DISCONNECTED;
   private qrCode: string | null = null;
+  private qrRenderSequence = 0;
   private phoneNumber: string | null = null;
   private pushName: string | null = null;
   private intentionalClose = false;
@@ -814,12 +815,20 @@ export class BaileysLifecycle {
   /** Render the raw Baileys QR ref to a PNG data URL, then publish it (mirrors the whatsapp-web.js engine). */
   private async handleQrCode(qr: string): Promise<void> {
     const sock = this.sock;
+    const sequence = ++this.qrRenderSequence;
+    // A server refresh retires the old secret immediately, before PNG rendering finishes.
+    this.qrCode = null;
     try {
       const rendered = await qrcode.toDataURL(qr);
       // The socket can drop, or the link be accepted, while the QR renders. The handler has already
       // moved the status on, and publishing now would stamp QR_READY on a dead socket until the
       // backoff reconnect, or reopen the pairing guard on a socket that is committed to a restart.
-      if (this.sock !== sock || !sock?.ws.isOpen || this.status === EngineStatus.AUTHENTICATING) {
+      if (
+        sequence !== this.qrRenderSequence ||
+        this.sock !== sock ||
+        !sock?.ws.isOpen ||
+        this.status === EngineStatus.AUTHENTICATING
+      ) {
         return;
       }
       this.qrCode = rendered;

@@ -12,6 +12,79 @@ import type { ApiKey } from '../auth/entities/api-key.entity';
 import type { SendBulkMessageDto } from './dto/bulk-message.dto';
 import type { Response } from 'express';
 
+describe('MessageController - message-time selection', () => {
+  const getMessages = jest.fn().mockResolvedValue({ messages: [], total: 0, unknownTimestampTotal: 0 });
+  const controller = new MessageController(
+    { getMessages } as unknown as MessageService,
+    {} as unknown as BulkMessageService,
+    new ChatScopeService(),
+  );
+  beforeEach(() => getMessages.mockClear());
+
+  it('passes new HTTP options into the existing bounded list', async () => {
+    await controller.getMessages(
+      's1',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'false',
+      undefined,
+      '1000000.5',
+      '2000000',
+      'incoming',
+      'timestamp',
+    );
+    expect(getMessages).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        since: 1000000.5,
+        until: 2000000,
+        direction: 'incoming',
+        orderBy: 'timestamp',
+        inlineMedia: false,
+      }),
+    );
+  });
+  it('rejects invalid selection before accessing storage', async () => {
+    await expect(
+      controller.getMessages(
+        's1',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        '2000',
+        '1000',
+      ),
+    ).rejects.toThrow('since');
+    expect(getMessages).not.toHaveBeenCalled();
+  });
+  it('keeps chat-restricted reads fenced even for new filters', async () => {
+    await expect(
+      controller.getMessages(
+        's1',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { allowedChats: ['1@c.us'] } as ApiKey,
+        '1000',
+        '2000',
+        'incoming',
+        'timestamp',
+      ),
+    ).rejects.toThrow();
+    expect(getMessages).not.toHaveBeenCalled();
+  });
+});
+
 /**
  * `getChatMedia` serves third-party bytes from the API origin. The route shape, the roles and the
  * status codes are already held by the OpenAPI snapshot and the route-fence gates; the two headers

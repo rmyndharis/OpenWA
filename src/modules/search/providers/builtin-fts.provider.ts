@@ -346,6 +346,9 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
 
   /** Emits dialect-correct placeholders. For PG, MUST be called in SQL-appearance order. */
   private applyFilters(where: string[], params: unknown[], q: SearchQuery, prefix: string, ph: PlaceholderFn): void {
+    // Stories have their own domain/store; legacy message-table imports must
+    // not contaminate message searches or their totals in either SQL dialect.
+    where.push(`${prefix}"chatId" <> 'status@broadcast'`);
     if (q.sessionIds && q.sessionIds.length) {
       const placeholders = q.sessionIds.map(() => ph()).join(',');
       where.push(`${prefix}"sessionId" IN (${placeholders})`);
