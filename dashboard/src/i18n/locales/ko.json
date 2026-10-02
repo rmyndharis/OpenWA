@@ -1,4 +1,4 @@
-{
+﻿{
   "toast": {
     "connectionLost": {
       "title": "서버 연결 끊김",
@@ -6,7 +6,7 @@
     }
   },
   "common": {
-    "appName": "OpenWA",
+    "appName": "XenAI",
     "updateAvailable": "v{{version}} 사용 가능",
     "loading": "로딩 중...",
     "cancel": "취소",
@@ -216,7 +216,7 @@
     "connectionError": "서버에 연결할 수 없습니다. 다시 시도해 주세요.",
     "help": "도움이 필요하신가요?",
     "viewDocs": "문서 보기",
-    "footer": "Yudhi Armyndharis와 OpenWA 커뮤니티가 ❤️로 만들었습니다",
+    "footer": "Yudhi Armyndharis와 XenAI 커뮤니티가 ❤️로 만들었습니다",
     "version": "v{{version}} · {{date}}"
   },
   "dashboard": {
@@ -547,7 +547,7 @@
       "hint": "선택 사항입니다. 저장된 값은 저장 후 다시 표시되지 않습니다.",
       "editHint": "저장된 시크릿과 헤더는 표시되지 않습니다. 유지하려면 이 섹션을 변경하지 마세요.",
       "secret": "서명 시크릿",
-      "secretHint": "16~255자. 모든 전송에는 X-OpenWA-Signature 헤더에 HMAC-SHA256 서명이 포함됩니다.",
+      "secretHint": "16~255자. 모든 전송에는 X-XenAI-Signature 헤더에 HMAC-SHA256 서명이 포함됩니다.",
       "secretKeepPlaceholder": "현재 시크릿을 유지하려면 비워 두세요",
       "generateSecret": "생성",
       "copySecret": "복사",
@@ -563,7 +563,7 @@
       "errors": {
         "headerName": "헤더 이름에는 문자, 숫자, 하이픈만 사용할 수 있습니다.",
         "headerValue": "헤더 값은 최대 1024자이며 제어 문자나 Latin-1 범위 밖의 문자를 사용할 수 없습니다.",
-        "headerReserved": "Content-Type, User-Agent, X-OpenWA-* 및 연결 헤더는 게이트웨이가 설정하므로 사용할 수 없습니다.",
+        "headerReserved": "Content-Type, User-Agent, X-XenAI-* 및 연결 헤더는 게이트웨이가 설정하므로 사용할 수 없습니다.",
         "headerDuplicate": "각 헤더 이름은 한 번만 사용할 수 있습니다.",
         "tooMany": "사용자 지정 헤더는 최대 50개까지 허용됩니다.",
         "secretLength": "서명 시크릿은 16~255자여야 합니다."
@@ -876,7 +876,7 @@
       "postgres": "PostgreSQL",
       "postgresDesc": "프로덕션에 적합한 데이터베이스",
       "useBuiltIn": "내장 PostgreSQL 컨테이너 사용",
-      "builtInDesc": "OpenWA가 PostgreSQL 컨테이너를 관리합니다",
+      "builtInDesc": "XenAI가 PostgreSQL 컨테이너를 관리합니다",
       "dbName": "데이터베이스 이름",
       "schema": "스키마",
       "schemaDesc": "PostgreSQL 스키마(SQLite에서는 무시됨). 기본값 'public'. 스키마가 이미 존재해야 합니다.",
@@ -911,7 +911,7 @@
       "enable": "Redis 사용",
       "enableDesc": "캐싱, 세션 저장, BullMQ 큐에 필요합니다",
       "useBuiltIn": "내장 Redis 컨테이너 사용",
-      "builtInDesc": "OpenWA가 Redis 컨테이너를 관리합니다",
+      "builtInDesc": "XenAI가 Redis 컨테이너를 관리합니다",
       "queueTitle": "BullMQ 큐 시스템 사용",
       "queueDesc": "안정적인 메시지 및 웹훅 전달을 위해 메시지 큐를 사용합니다",
       "statsTitle": "큐 통계",
@@ -934,7 +934,7 @@
       "s3": "Amazon S3",
       "s3Desc": "클라우드 스토리지 (S3 호환)",
       "useBuiltIn": "내장 MinIO 컨테이너 사용",
-      "builtInDesc": "OpenWA가 MinIO(S3 호환) 컨테이너를 관리합니다",
+      "builtInDesc": "XenAI가 MinIO(S3 호환) 컨테이너를 관리합니다",
       "storagePath": "스토리지 경로",
       "bucket": "버킷 이름",
       "region": "리전",
@@ -965,7 +965,7 @@
       "importFailed": "데이터를 가져오지 못했습니다",
       "importOk": "데이터를 가져왔습니다",
       "importConfirm": "가져오기를 실행하면 현재 데이터가 백업본({{rows}}행)으로 완전히 대체됩니다. 되돌릴 수 없습니다. 계속할까요?",
-      "invalidFile": "올바른 OpenWA 데이터 백업 파일이 아닙니다.",
+      "invalidFile": "올바른 XenAI 데이터 백업 파일이 아닙니다.",
       "importTooLarge": "백업 파일이 요청 크기 제한을 초과합니다. 서버의 BODY_SIZE_LIMIT을 늘린 후 다시 시도하세요."
     },
     "restart": {
@@ -1019,7 +1019,7 @@
     "uninstallConfirm": "\"{{name}}\"을(를) 제거할까요? 관련 파일이 모두 삭제됩니다.",
     "empty": {
       "title": "설치된 플러그인이 없습니다",
-      "description": "OpenWA의 기능을 확장하려면 플러그인을 설치하세요."
+      "description": "XenAI의 기능을 확장하려면 플러그인을 설치하세요."
     },
     "config": {
       "title": "{{name}} 구성",
@@ -1042,7 +1042,7 @@
       "trustWarning": "플러그인은 게이트웨이의 전체 프로세스 권한으로 실행됩니다. 샌드박스는 충돌만 격리할 뿐 악성 코드는 막지 못합니다. 신뢰할 수 있는 플러그인만 설치하세요.",
       "choose": ".zip 파일 선택…",
       "tooLarge": "파일이 5MB 제한을 초과합니다.",
-      "catalogHint": "OpenWA 플러그인 카탈로그에서 직접 설치하세요. .zip 파일은 SSRF 가드를 통해 서버에서 가져온 후 검증되고 샌드박스에서 실행됩니다.",
+      "catalogHint": "XenAI 플러그인 카탈로그에서 직접 설치하세요. .zip 파일은 SSRF 가드를 통해 서버에서 가져온 후 검증되고 샌드박스에서 실행됩니다.",
       "catalogTeaser": "플러그인을 찾고 계신가요?",
       "catalogTeaserSuffix": "공식 마켓플레이스를 둘러봅니다.",
       "tabCatalog": "카탈로그",

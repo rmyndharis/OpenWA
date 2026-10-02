@@ -1,4 +1,4 @@
-{
+﻿{
   "toast": {
     "connectionLost": {
       "title": "Conexão com o servidor perdida",
@@ -6,7 +6,7 @@
     }
   },
   "common": {
-    "appName": "OpenWA",
+    "appName": "XenAI",
     "updateAvailable": "v{{version}} disponível",
     "loading": "Carregando...",
     "cancel": "Cancelar",
@@ -221,7 +221,7 @@
     "connectionError": "Não foi possível conectar ao servidor. Por favor, tente novamente.",
     "help": "Precisa de ajuda?",
     "viewDocs": "Ver documentação",
-    "footer": "Feito com ❤️ por Yudhi Armyndharis e a comunidade OpenWA",
+    "footer": "Feito com ❤️ por Yudhi Armyndharis e a comunidade XenAI",
     "version": "v{{version}} · {{date}}"
   },
   "dashboard": {
@@ -553,7 +553,7 @@
       "hint": "Opcional. Os valores salvos nunca mais são exibidos.",
       "editHint": "O segredo e os cabeçalhos salvos nunca são exibidos. Deixe esta seção inalterada para mantê-los.",
       "secret": "Segredo de assinatura",
-      "secretHint": "De 16 a 255 caracteres. Cada entrega leva uma assinatura HMAC-SHA256 no cabeçalho X-OpenWA-Signature.",
+      "secretHint": "De 16 a 255 caracteres. Cada entrega leva uma assinatura HMAC-SHA256 no cabeçalho X-XenAI-Signature.",
       "secretKeepPlaceholder": "Deixe em branco para manter o segredo atual",
       "generateSecret": "Gerar",
       "copySecret": "Copiar",
@@ -569,7 +569,7 @@
       "errors": {
         "headerName": "Nomes de cabeçalho podem conter apenas letras, dígitos e hifens.",
         "headerValue": "Valores de cabeçalho são limitados a 1024 caracteres, sem caracteres de controle nem caracteres fora do Latin-1.",
-        "headerReserved": "Content-Type, User-Agent, X-OpenWA-* e cabeçalhos de conexão são definidos pelo gateway e não podem ser usados.",
+        "headerReserved": "Content-Type, User-Agent, X-XenAI-* e cabeçalhos de conexão são definidos pelo gateway e não podem ser usados.",
         "headerDuplicate": "Cada nome de cabeçalho pode ser usado apenas uma vez.",
         "tooMany": "São permitidos no máximo 50 cabeçalhos personalizados.",
         "secretLength": "O segredo de assinatura deve ter de 16 a 255 caracteres."
@@ -882,7 +882,7 @@
       "postgres": "PostgreSQL",
       "postgresDesc": "Banco de dados para produção",
       "useBuiltIn": "Usar contêiner PostgreSQL integrado",
-      "builtInDesc": "OpenWA gerenciará um contêiner PostgreSQL para você",
+      "builtInDesc": "XenAI gerenciará um contêiner PostgreSQL para você",
       "dbName": "Nome do banco de dados",
       "schema": "Esquema",
       "schemaDesc": "Esquema do PostgreSQL (ignorado para SQLite). Padrão 'public'. O esquema já deve existir.",
@@ -917,7 +917,7 @@
       "enable": "Habilitar Redis",
       "enableDesc": "Necessário para cache, armazenamento de sessões e filas BullMQ",
       "useBuiltIn": "Usar contêiner Redis integrado",
-      "builtInDesc": "OpenWA gerenciará um contêiner Redis para você",
+      "builtInDesc": "XenAI gerenciará um contêiner Redis para você",
       "queueTitle": "Habilitar sistema de filas BullMQ",
       "queueDesc": "Use filas de mensagens para entrega confiável de mensagens e webhooks",
       "statsTitle": "Estatísticas das filas",
@@ -939,7 +939,7 @@
       "s3": "Amazon S3",
       "s3Desc": "Armazenamento em nuvem (compatível com S3)",
       "useBuiltIn": "Usar contêiner MinIO integrado",
-      "builtInDesc": "OpenWA gerenciará um contêiner MinIO (compatível com S3) para você",
+      "builtInDesc": "XenAI gerenciará um contêiner MinIO (compatível com S3) para você",
       "storagePath": "Caminho de armazenamento",
       "bucket": "Nome do bucket",
       "region": "Região",
@@ -991,7 +991,7 @@
       "importFailed": "Não foi possível importar os dados",
       "importOk": "Dados importados",
       "importConfirm": "A importação IRÁ SUBSTITUIR todos os dados atuais pelo backup ({{rows}} linhas). Isso não pode ser desfeito. Continuar?",
-      "invalidFile": "Esse arquivo não é um backup de dados válido do OpenWA.",
+      "invalidFile": "Esse arquivo não é um backup de dados válido do XenAI.",
       "importTooLarge": "O backup excede o limite da requisição. Aumente BODY_SIZE_LIMIT no servidor e tente novamente."
     },
     "statusLoadError": "Não foi possível carregar o status atual da infraestrutura. Atualize para tentar novamente.",
@@ -1025,7 +1025,7 @@
     "uninstallConfirm": "Desinstalar \"{{name}}\"? Isso remove seus arquivos.",
     "empty": {
       "title": "Nenhum plugin encontrado",
-      "description": "Instale plugins para ampliar a funcionalidade do OpenWA"
+      "description": "Instale plugins para ampliar a funcionalidade do XenAI"
     },
     "config": {
       "title": "Configurar {{name}}",
@@ -1048,7 +1048,7 @@
       "trustWarning": "Plugins são executados com todos os privilégios do processo do gateway — o modo isolado contém falhas, não código malicioso. Instale apenas plugins em que você confia.",
       "choose": "Escolha um arquivo .zip…",
       "tooLarge": "O arquivo excede o limite de 5 MB.",
-      "catalogHint": "Instale diretamente do catálogo de plugins do OpenWA. O .zip é baixado no servidor através da proteção SSRF, depois validado e executado em sandbox.",
+      "catalogHint": "Instale diretamente do catálogo de plugins do XenAI. O .zip é baixado no servidor através da proteção SSRF, depois validado e executado em sandbox.",
       "catalogTeaser": "Procurando plugins?",
       "catalogTeaserSuffix": "navega no marketplace oficial.",
       "tabCatalog": "Catálogo",
