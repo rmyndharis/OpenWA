@@ -1,4 +1,4 @@
-{
+﻿{
   "toast": {
     "connectionLost": {
       "title": "Sunucu Bağlantısı Kesildi",
@@ -6,7 +6,7 @@
     }
   },
   "common": {
-    "appName": "OpenWA",
+    "appName": "XenAI",
     "updateAvailable": "v{{version}} mevcut",
     "loading": "Yükleniyor...",
     "cancel": "İptal",
@@ -216,7 +216,7 @@
     "connectionError": "Sunucuya bağlanılamadı. Lütfen tekrar deneyin.",
     "help": "Yardıma mı ihtiyacınız var?",
     "viewDocs": "Dokümantasyonu Görüntüle",
-    "footer": "Yudhi Armyndharis ve OpenWA Topluluğu tarafından ❤️ ile yapılmıştır",
+    "footer": "Yudhi Armyndharis ve XenAI Topluluğu tarafından ❤️ ile yapılmıştır",
     "version": "v{{version}} · {{date}}"
   },
   "dashboard": {
@@ -547,7 +547,7 @@
       "hint": "İsteğe bağlı. Kaydedilen değerler bir daha gösterilmez.",
       "editHint": "Kayıtlı gizli anahtar ve başlıklar hiçbir zaman gösterilmez. Korumak için bu bölüme dokunmayın.",
       "secret": "İmzalama gizli anahtarı",
-      "secretHint": "16 ile 255 karakter arası. Her teslimat, X-OpenWA-Signature başlığında bir HMAC-SHA256 imzası taşır.",
+      "secretHint": "16 ile 255 karakter arası. Her teslimat, X-XenAI-Signature başlığında bir HMAC-SHA256 imzası taşır.",
       "secretKeepPlaceholder": "Mevcut gizli anahtarı korumak için boş bırakın",
       "generateSecret": "Oluştur",
       "copySecret": "Kopyala",
@@ -563,7 +563,7 @@
       "errors": {
         "headerName": "Başlık adları yalnızca harf, rakam ve kısa çizgi içerebilir.",
         "headerValue": "Başlık değerleri en fazla 1024 karakter olabilir; kontrol karakterleri ve Latin-1 dışındaki karakterler kullanılamaz.",
-        "headerReserved": "Content-Type, User-Agent, X-OpenWA-* ve bağlantı başlıkları ağ geçidi tarafından ayarlanır ve kullanılamaz.",
+        "headerReserved": "Content-Type, User-Agent, X-XenAI-* ve bağlantı başlıkları ağ geçidi tarafından ayarlanır ve kullanılamaz.",
         "headerDuplicate": "Her başlık adı yalnızca bir kez kullanılabilir.",
         "tooMany": "En fazla 50 özel başlığa izin verilir.",
         "secretLength": "İmzalama gizli anahtarı 16 ile 255 karakter arasında olmalıdır."
@@ -876,7 +876,7 @@
       "postgres": "PostgreSQL",
       "postgresDesc": "Prodüksiyona hazır veritabanı",
       "useBuiltIn": "Dahili PostgreSQL Konteynerini Kullan",
-      "builtInDesc": "OpenWA sizin için bir PostgreSQL konteynerini yönetecektir",
+      "builtInDesc": "XenAI sizin için bir PostgreSQL konteynerini yönetecektir",
       "dbName": "Veritabanı Adı",
       "schema": "Şema (Schema)",
       "schemaDesc": "PostgreSQL şeması (SQLite için yok sayılır). Varsayılan 'public'. Şema zaten mevcut olmalıdır.",
@@ -911,7 +911,7 @@
       "enable": "Redis'i Etkinleştir",
       "enableDesc": "Önbelleğe alma, oturum depolama ve BullMQ kuyrukları için gereklidir",
       "useBuiltIn": "Dahili Redis Konteynerini Kullan",
-      "builtInDesc": "OpenWA sizin için bir Redis konteynerini yönetecektir",
+      "builtInDesc": "XenAI sizin için bir Redis konteynerini yönetecektir",
       "queueTitle": "BullMQ Kuyruk Sistemini Etkinleştir",
       "queueDesc": "Güvenilir mesaj ve webhook iletimi için mesaj kuyruklarını kullanın",
       "statsTitle": "Kuyruk İstatistikleri",
@@ -934,7 +934,7 @@
       "s3": "Amazon S3",
       "s3Desc": "Bulut depolama (S3 uyumlu)",
       "useBuiltIn": "Dahili MinIO Konteynerini Kullan",
-      "builtInDesc": "OpenWA sizin için bir MinIO (S3 uyumlu) konteynerini yönetecektir",
+      "builtInDesc": "XenAI sizin için bir MinIO (S3 uyumlu) konteynerini yönetecektir",
       "storagePath": "Depolama Yolu",
       "bucket": "Kova (Bucket) Adı",
       "region": "Bölge (Region)",
@@ -965,7 +965,7 @@
       "importFailed": "Veriler içe aktarılamadı",
       "importOk": "Veriler içe aktarıldı",
       "importConfirm": "İçe aktarma işlemi mevcut tüm verileri yedekle ({{rows}} satır) DEĞİŞTİRECEKTİR. Bu işlem geri alınamaz. Devam edilsin mi?",
-      "invalidFile": "Bu dosya geçerli bir OpenWA veri yedeği değil.",
+      "invalidFile": "Bu dosya geçerli bir XenAI veri yedeği değil.",
       "importTooLarge": "Yedekleme, istek sınırı için çok büyük. Sunucudaki BODY_SIZE_LIMIT değerini artırın ve tekrar deneyin."
     },
     "restart": {
@@ -1019,7 +1019,7 @@
     "uninstallConfirm": "\"{{name}}\" kaldırılsın mı? Bu işlem dosyalarını silecektir.",
     "empty": {
       "title": "Yüklü eklenti yok",
-      "description": "OpenWA'nın yapabileceklerini genişletmek için bir eklenti yükleyin."
+      "description": "XenAI'nın yapabileceklerini genişletmek için bir eklenti yükleyin."
     },
     "config": {
       "title": "{{name}} Yapılandır",
@@ -1042,7 +1042,7 @@
       "trustWarning": "Eklentiler, ağ geçidinin tüm süreç yetkileriyle çalışır — yalıtılmış alan (sandbox) çökmeleri kontrol altına alır, kötü amaçlı kodu değil. Yalnızca güvendiğiniz eklentileri yükleyin.",
       "choose": "Bir .zip dosyası seçin…",
       "tooLarge": "Dosya 5 MB sınırını aşıyor.",
-      "catalogHint": "Doğrudan OpenWA eklenti kataloğundan yükleyin. .zip dosyası SSRF koruması üzerinden sunucu tarafında çekilir, ardından doğrulanır ve korumalı alana alınır.",
+      "catalogHint": "Doğrudan XenAI eklenti kataloğundan yükleyin. .zip dosyası SSRF koruması üzerinden sunucu tarafında çekilir, ardından doğrulanır ve korumalı alana alınır.",
       "catalogTeaser": "Eklenti mi arıyorsunuz?",
       "catalogTeaserSuffix": "resmi pazar yerine göz atın.",
       "tabCatalog": "Katalog",

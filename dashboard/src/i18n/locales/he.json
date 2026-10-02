@@ -1,4 +1,4 @@
-{
+﻿{
   "toast": {
     "connectionLost": {
       "title": "החיבור לשרת אבד",
@@ -6,7 +6,7 @@
     }
   },
   "common": {
-    "appName": "OpenWA",
+    "appName": "XenAI",
     "updateAvailable": "גרסה v{{version}} זמינה",
     "loading": "טוען...",
     "cancel": "ביטול",
@@ -227,7 +227,7 @@
     "connectionError": "לא ניתן להתחבר לשרת. יש לנסות שוב.",
     "help": "צריך עזרה?",
     "viewDocs": "לצפייה בתיעוד",
-    "footer": "נבנה באהבה על ידי Yudhi Armyndharis וקהילת OpenWA",
+    "footer": "נבנה באהבה על ידי Yudhi Armyndharis וקהילת XenAI",
     "version": "v{{version}} · {{date}}"
   },
   "dashboard": {
@@ -560,7 +560,7 @@
       "hint": "אופציונלי. ערכים שמורים לא מוצגים שוב לאחר השמירה.",
       "editHint": "הסוד והכותרות השמורים לעולם אינם מוצגים. השאירו את החלק הזה ללא שינוי כדי לשמור אותם.",
       "secret": "סוד חתימה",
-      "secretHint": "16 עד 255 תווים. כל משלוח נושא חתימת HMAC-SHA256 בכותרת X-OpenWA-Signature.",
+      "secretHint": "16 עד 255 תווים. כל משלוח נושא חתימת HMAC-SHA256 בכותרת X-XenAI-Signature.",
       "secretKeepPlaceholder": "השאירו ריק כדי לשמור את הסוד הנוכחי",
       "generateSecret": "יצירה",
       "copySecret": "העתקה",
@@ -576,7 +576,7 @@
       "errors": {
         "headerName": "שמות כותרות יכולים להכיל רק אותיות, ספרות ומקפים.",
         "headerValue": "ערכי כותרות מוגבלים ל-1024 תווים, ללא תווי בקרה או תווים מחוץ ל-Latin-1.",
-        "headerReserved": "Content-Type, User-Agent, X-OpenWA-* וכותרות חיבור נקבעות על ידי השער ואי אפשר להשתמש בהן.",
+        "headerReserved": "Content-Type, User-Agent, X-XenAI-* וכותרות חיבור נקבעות על ידי השער ואי אפשר להשתמש בהן.",
         "headerDuplicate": "ניתן להשתמש בכל שם כותרת פעם אחת בלבד.",
         "tooMany": "מותרות לכל היותר 50 כותרות מותאמות.",
         "secretLength": "אורך סוד החתימה חייב להיות בין 16 ל-255 תווים."
@@ -889,7 +889,7 @@
       "postgres": "PostgreSQL",
       "postgresDesc": "מסד נתונים מוכן לייצור",
       "useBuiltIn": "שימוש בקונטיינר PostgreSQL מובנה",
-      "builtInDesc": "OpenWA ינהל עבורך קונטיינר PostgreSQL",
+      "builtInDesc": "XenAI ינהל עבורך קונטיינר PostgreSQL",
       "dbName": "שם מסד הנתונים",
       "schema": "סכמה",
       "schemaDesc": "סכמת PostgreSQL (לא חלה על SQLite). ברירת מחדל 'public'. הסכמה חייבת להיות קיימת מראש.",
@@ -924,7 +924,7 @@
       "enable": "הפעלת Redis",
       "enableDesc": "נדרש למטמון, אחסון Sessions ותורי BullMQ",
       "useBuiltIn": "שימוש בקונטיינר Redis מובנה",
-      "builtInDesc": "OpenWA ינהל עבורך קונטיינר Redis",
+      "builtInDesc": "XenAI ינהל עבורך קונטיינר Redis",
       "queueTitle": "הפעלת מערכת התורים BullMQ",
       "queueDesc": "שימוש בתורי הודעות לאספקה אמינה של הודעות ו-Webhooks",
       "statsTitle": "סטטיסטיקות תור",
@@ -946,7 +946,7 @@
       "s3": "Amazon S3",
       "s3Desc": "אחסון ענן (תואם S3)",
       "useBuiltIn": "שימוש בקונטיינר MinIO מובנה",
-      "builtInDesc": "OpenWA ינהל עבורך קונטיינר MinIO (תואם S3)",
+      "builtInDesc": "XenAI ינהל עבורך קונטיינר MinIO (תואם S3)",
       "storagePath": "נתיב אחסון",
       "bucket": "שם Bucket",
       "region": "אזור (Region)",
@@ -998,7 +998,7 @@
       "importFailed": "לא ניתן לייבא את הנתונים",
       "importOk": "הנתונים יובאו",
       "importConfirm": "הייבוא יחליף את כל הנתונים הנוכחיים בגיבוי ({{rows}} שורות). לא ניתן לבטל פעולה זו. להמשיך?",
-      "invalidFile": "הקובץ הזה אינו גיבוי נתונים תקין של OpenWA.",
+      "invalidFile": "הקובץ הזה אינו גיבוי נתונים תקין של XenAI.",
       "importTooLarge": "הגיבוי גדול מדי עבור מגבלת הבקשה. הגדילו את BODY_SIZE_LIMIT בשרת ונסו שוב."
     },
     "statusLoadError": "לא ניתן לטעון את מצב התשתית הנוכחי. רעננו כדי לנסות שוב.",
@@ -1032,7 +1032,7 @@
     "uninstallConfirm": "להסיר את \"{{name}}\"? פעולה זו תמחק את הקבצים שלו.",
     "empty": {
       "title": "לא נמצאו תוספים",
-      "description": "ניתן להתקין תוספים כדי להרחיב את היכולות של OpenWA"
+      "description": "ניתן להתקין תוספים כדי להרחיב את היכולות של XenAI"
     },
     "config": {
       "title": "הגדרת {{name}}",
@@ -1055,7 +1055,7 @@
       "trustWarning": "תוספים רצים עם הרשאות התהליך המלאות של השער — ארגז החול מכיל קריסות, לא קוד זדוני. התקינו רק תוספים שאתם סומכים עליהם.",
       "choose": "בחירת קובץ ‎.zip‎…",
       "tooLarge": "הקובץ חורג מהמגבלה של ‎5 MB‎.",
-      "catalogHint": "התקינו ישירות מקטלוג התוספים של OpenWA. קובץ ה-.zip נשלף מהשרת דרך מגן ה-SSRF, מאומת ומורץ בארגז חול.",
+      "catalogHint": "התקינו ישירות מקטלוג התוספים של XenAI. קובץ ה-.zip נשלף מהשרת דרך מגן ה-SSRF, מאומת ומורץ בארגז חול.",
       "catalogTeaser": "מחפשים תוספים?",
       "catalogTeaserSuffix": "סוקר את החנות הרשמית.",
       "tabCatalog": "קטלוג",

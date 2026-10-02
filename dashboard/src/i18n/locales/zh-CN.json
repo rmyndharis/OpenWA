@@ -1,4 +1,4 @@
-{
+﻿{
   "toast": {
     "connectionLost": {
       "title": "服务器连接已断开",
@@ -6,7 +6,7 @@
     }
   },
   "common": {
-    "appName": "OpenWA",
+    "appName": "XenAI",
     "updateAvailable": "v{{version}} 已发布",
     "loading": "正在加载...",
     "cancel": "取消",
@@ -216,7 +216,7 @@
     "connectionError": "无法连接到服务器。请重试。",
     "help": "需要帮助？",
     "viewDocs": "查看文档",
-    "footer": "由 Yudhi Armyndharis 和 OpenWA 社区用 ❤️ 打造",
+    "footer": "由 Yudhi Armyndharis 和 XenAI 社区用 ❤️ 打造",
     "version": "v{{version}} · {{date}}"
   },
   "dashboard": {
@@ -547,7 +547,7 @@
       "hint": "可选。保存后，已存储的值不会再次显示。",
       "editHint": "已存储的密钥和请求头永远不会显示。保持此部分不变即可保留它们。",
       "secret": "签名密钥",
-      "secretHint": "16 到 255 个字符。每次投递都会在 X-OpenWA-Signature 请求头中携带 HMAC-SHA256 签名。",
+      "secretHint": "16 到 255 个字符。每次投递都会在 X-XenAI-Signature 请求头中携带 HMAC-SHA256 签名。",
       "secretKeepPlaceholder": "留空以保留当前密钥",
       "generateSecret": "生成",
       "copySecret": "复制",
@@ -563,7 +563,7 @@
       "errors": {
         "headerName": "请求头名称只能包含字母、数字和连字符。",
         "headerValue": "请求头值最多 1024 个字符，不能包含控制字符或 Latin-1 以外的字符。",
-        "headerReserved": "Content-Type、User-Agent、X-OpenWA-* 和连接类请求头由网关设置，不能使用。",
+        "headerReserved": "Content-Type、User-Agent、X-XenAI-* 和连接类请求头由网关设置，不能使用。",
         "headerDuplicate": "每个请求头名称只能使用一次。",
         "tooMany": "最多允许 50 个自定义请求头。",
         "secretLength": "签名密钥长度必须为 16 到 255 个字符。"
@@ -876,7 +876,7 @@
       "postgres": "PostgreSQL",
       "postgresDesc": "适用于生产的数据库",
       "useBuiltIn": "使用内置 PostgreSQL 容器",
-      "builtInDesc": "OpenWA 将为你管理 PostgreSQL 容器",
+      "builtInDesc": "XenAI 将为你管理 PostgreSQL 容器",
       "dbName": "数据库名称",
       "schema": "模式",
       "schemaDesc": "PostgreSQL 模式（SQLite 忽略）。默认为 'public'。该模式必须已存在。",
@@ -911,7 +911,7 @@
       "enable": "启用 Redis",
       "enableDesc": "缓存、会话存储和 BullMQ 队列需要 Redis",
       "useBuiltIn": "使用内置 Redis 容器",
-      "builtInDesc": "OpenWA 将为你管理 Redis 容器",
+      "builtInDesc": "XenAI 将为你管理 Redis 容器",
       "queueTitle": "启用 BullMQ 队列系统",
       "queueDesc": "使用消息队列可靠地投递消息和 Webhook",
       "statsTitle": "队列统计",
@@ -933,7 +933,7 @@
       "s3": "Amazon S3",
       "s3Desc": "云存储（兼容 S3）",
       "useBuiltIn": "使用内置 MinIO 容器",
-      "builtInDesc": "OpenWA 将为你管理 MinIO（兼容 S3）容器",
+      "builtInDesc": "XenAI 将为你管理 MinIO（兼容 S3）容器",
       "storagePath": "存储路径",
       "bucket": "存储桶名称",
       "region": "区域",
@@ -985,7 +985,7 @@
       "importFailed": "无法导入数据",
       "importOk": "数据已导入",
       "importConfirm": "导入操作将用备份数据替换（REPLACE）当前所有数据（{{rows}} 行）。此操作无法撤销。是否继续？",
-      "invalidFile": "该文件不是有效的 OpenWA 数据备份。",
+      "invalidFile": "该文件不是有效的 XenAI 数据备份。",
       "importTooLarge": "备份超出请求大小限制。请在服务器上调高 BODY_SIZE_LIMIT 后重试。"
     },
     "statusLoadError": "无法加载当前基础设施状态。请刷新重试。",
@@ -1019,7 +1019,7 @@
     "uninstallConfirm": "卸载“{{name}}”？这将删除其文件。",
     "empty": {
       "title": "未找到插件",
-      "description": "安装插件以扩展 OpenWA 功能"
+      "description": "安装插件以扩展 XenAI 功能"
     },
     "config": {
       "title": "配置 {{name}}",
@@ -1042,7 +1042,7 @@
       "trustWarning": "插件以网关进程的完整权限运行——沙箱只能隔离崩溃，无法防御恶意代码。请只安装你信任的插件。",
       "choose": "选择 .zip 文件…",
       "tooLarge": "文件超过 5 MB 限制。",
-      "catalogHint": "直接从 OpenWA 插件目录安装。.zip 文件由服务器通过 SSRF 防护获取，然后经过验证并在沙箱中运行。",
+      "catalogHint": "直接从 XenAI 插件目录安装。.zip 文件由服务器通过 SSRF 防护获取，然后经过验证并在沙箱中运行。",
       "catalogTeaser": "在找插件吗？",
       "catalogTeaserSuffix": "浏览官方市场。",
       "tabCatalog": "目录",

@@ -1,4 +1,4 @@
-{
+﻿{
   "toast": {
     "connectionLost": {
       "title": "伺服器連線已中斷",
@@ -6,7 +6,7 @@
     }
   },
   "common": {
-    "appName": "OpenWA",
+    "appName": "XenAI",
     "updateAvailable": "v{{version}} 已發佈",
     "loading": "正在載入...",
     "cancel": "取消",
@@ -216,7 +216,7 @@
     "connectionError": "無法連線到伺服器。請再試一次。",
     "help": "需要協助？",
     "viewDocs": "查看文件",
-    "footer": "由 Yudhi Armyndharis 及 OpenWA 社群用 ❤️ 打造",
+    "footer": "由 Yudhi Armyndharis 及 XenAI 社群用 ❤️ 打造",
     "version": "v{{version}} · {{date}}"
   },
   "dashboard": {
@@ -547,7 +547,7 @@
       "hint": "選填。儲存後，已儲存的值不會再次顯示。",
       "editHint": "已儲存的密鑰及標頭永遠不會顯示。保持此部分不變即可保留它們。",
       "secret": "簽署密鑰",
-      "secretHint": "16 至 255 個字元。每次傳送都會在 X-OpenWA-Signature 標頭中附上 HMAC-SHA256 簽署。",
+      "secretHint": "16 至 255 個字元。每次傳送都會在 X-XenAI-Signature 標頭中附上 HMAC-SHA256 簽署。",
       "secretKeepPlaceholder": "留空以保留目前的密鑰",
       "generateSecret": "產生",
       "copySecret": "複製",
@@ -563,7 +563,7 @@
       "errors": {
         "headerName": "標頭名稱只可包含字母、數字及連字號。",
         "headerValue": "標頭值最多 1024 個字元，不可包含控制字元或 Latin-1 以外的字元。",
-        "headerReserved": "Content-Type、User-Agent、X-OpenWA-* 及連線類標頭由閘道設定，不可使用。",
+        "headerReserved": "Content-Type、User-Agent、X-XenAI-* 及連線類標頭由閘道設定，不可使用。",
         "headerDuplicate": "每個標頭名稱只可使用一次。",
         "tooMany": "最多允許 50 個自訂標頭。",
         "secretLength": "簽署密鑰長度必須為 16 至 255 個字元。"
@@ -876,7 +876,7 @@
       "postgres": "PostgreSQL",
       "postgresDesc": "適用於生產環境的資料庫",
       "useBuiltIn": "使用內置 PostgreSQL 容器",
-      "builtInDesc": "OpenWA 會為你管理 PostgreSQL 容器",
+      "builtInDesc": "XenAI 會為你管理 PostgreSQL 容器",
       "dbName": "資料庫名稱",
       "schema": "結構描述",
       "schemaDesc": "PostgreSQL 結構描述（SQLite 會忽略）。預設為 'public'。該結構描述必須已存在。",
@@ -911,7 +911,7 @@
       "enable": "啟用 Redis",
       "enableDesc": "快取、工作階段儲存及 BullMQ 佇列需要 Redis",
       "useBuiltIn": "使用內置 Redis 容器",
-      "builtInDesc": "OpenWA 會為你管理 Redis 容器",
+      "builtInDesc": "XenAI 會為你管理 Redis 容器",
       "queueTitle": "啟用 BullMQ 佇列系統",
       "queueDesc": "使用訊息佇列可靠地傳遞訊息和 Webhook",
       "statsTitle": "佇列統計",
@@ -933,7 +933,7 @@
       "s3": "Amazon S3",
       "s3Desc": "雲端儲存空間（兼容 S3）",
       "useBuiltIn": "使用內置 MinIO 容器",
-      "builtInDesc": "OpenWA 會為你管理 MinIO（兼容 S3）容器",
+      "builtInDesc": "XenAI 會為你管理 MinIO（兼容 S3）容器",
       "storagePath": "儲存路徑",
       "bucket": "儲存桶名稱",
       "region": "區域",
@@ -985,7 +985,7 @@
       "importFailed": "無法匯入資料",
       "importOk": "資料已匯入",
       "importConfirm": "匯入將以備份（{{rows}} 列）取代所有目前資料。此操作無法復原。是否繼續？",
-      "invalidFile": "該檔案並非有效的 OpenWA 資料備份。",
+      "invalidFile": "該檔案並非有效的 XenAI 資料備份。",
       "importTooLarge": "備份超出請求大小限制。請在伺服器上調高 BODY_SIZE_LIMIT 後重試。"
     },
     "statusLoadError": "無法載入目前的基礎設施狀態。請重新整理以重試。",
@@ -1019,7 +1019,7 @@
     "uninstallConfirm": "解除安裝「{{name}}」？此操作會刪除其檔案。",
     "empty": {
       "title": "找不到外掛",
-      "description": "安裝外掛以擴展 OpenWA 功能"
+      "description": "安裝外掛以擴展 XenAI 功能"
     },
     "config": {
       "title": "設定 {{name}}",
@@ -1042,7 +1042,7 @@
       "trustWarning": "外掛會以閘道處理程序的完整權限執行——沙盒只能隔離當機，不能阻擋惡意程式碼。請只安裝你信任的外掛。",
       "choose": "選擇 .zip 檔案…",
       "tooLarge": "檔案超出 5 MB 上限。",
-      "catalogHint": "直接從 OpenWA 外掛目錄安裝。.zip 檔案由伺服器透過 SSRF 防護取得，然後經過驗證並在沙箱中執行。",
+      "catalogHint": "直接從 XenAI 外掛目錄安裝。.zip 檔案由伺服器透過 SSRF 防護取得，然後經過驗證並在沙箱中執行。",
       "catalogTeaser": "在找外掛嗎？",
       "catalogTeaserSuffix": "瀏覽官方市場。",
       "tabCatalog": "目錄",
