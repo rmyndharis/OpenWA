@@ -280,6 +280,14 @@ services:
       # knob without a line here is inert no matter what the operator's .env says; compose-parity
       # .spec.ts derives the required set from .env.example so a new knob cannot ship unreachable.
       - API_KEY_PEPPER=${API_KEY_PEPPER:-}
+      # XenWA: XenAI Tech SSO, team access and per-number credit billing (see .env.example).
+      - XENWA_SSO_SECRET=${XENWA_SSO_SECRET:-}
+      - XENWA_SSO_AUDIENCE=${XENWA_SSO_AUDIENCE:-}
+      - XENWA_PLATFORM_URL=${XENWA_PLATFORM_URL:-}
+      - XENWA_SSO_ADMIN_ROLES=${XENWA_SSO_ADMIN_ROLES:-}
+      - XENWA_MAX_SESSIONS_PER_USER=${XENWA_MAX_SESSIONS_PER_USER:-}
+      - XENWA_BILLING_SECRET=${XENWA_BILLING_SECRET:-}
+      - XENWA_BILLING_URL=${XENWA_BILLING_URL:-}
       - BOOTSTRAP_KEY_FILE=${BOOTSTRAP_KEY_FILE:-}
       - ENABLE_SWAGGER=${ENABLE_SWAGGER:-}
       - VALIDATION_ERROR_DETAIL=${VALIDATION_ERROR_DETAIL:-}

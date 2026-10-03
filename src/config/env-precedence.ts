@@ -23,6 +23,14 @@
  */
 export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'ENGINE_TYPE',
+  // XenWA (XenAI Tech integration), blank-forwarded by compose.
+  'XENWA_SSO_SECRET',
+  'XENWA_SSO_AUDIENCE',
+  'XENWA_PLATFORM_URL',
+  'XENWA_SSO_ADMIN_ROLES',
+  'XENWA_MAX_SESSIONS_PER_USER',
+  'XENWA_BILLING_SECRET',
+  'XENWA_BILLING_URL',
   // Inbound-media knobs. Not dashboard-managed, but every blank compose forward must be cleared or
   // the empty value shadows .env / data/.env.generated — which is why the gate above requires an
   // entry for each one.
