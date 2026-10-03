@@ -46,6 +46,7 @@ import { PluginsApiModule } from './modules/plugins/plugins.module';
 import { AgentToolsModule } from './core/agent-tools/agent-tools.module';
 import { IntegrationModule } from './modules/integration/integration.module';
 import { SearchModule } from './modules/search/search.module';
+import { XenwaModule } from './modules/xenwa/xenwa.module';
 import { SqlitePermissionsBoot } from './database/sqlite-file-permissions';
 
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors
@@ -272,6 +273,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     EventsModule, // WebSocket real-time events
     ...queueModules,
     AuthModule,
+    XenwaModule, // XenAI Tech SSO + per-account team access (inert without XENWA_SSO_SECRET)
     EngineModule,
     SessionModule,
     MessageModule,

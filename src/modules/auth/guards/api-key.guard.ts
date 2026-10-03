@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
   ForbiddenException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
@@ -28,6 +29,7 @@ import { setRequestActor } from '../../../common/services/request-context';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/entities/audit-log.entity';
 import { allowUnauthenticatedAuditRow } from '../../audit/auth-failure-audit-limiter';
+import { XenwaAccessService } from '../../xenwa/xenwa-access.service';
 
 @Injectable()
 export class ApiKeyGuard implements CanActivate {
@@ -37,6 +39,9 @@ export class ApiKeyGuard implements CanActivate {
     private readonly configService: ConfigService,
     private readonly auditService: AuditService,
     private readonly chatScope: ChatScopeService,
+    // XenWA per-account permissions for keys owned by an XenAI Tech SSO user. Optional so every
+    // existing construction (specs, deployments without the module) keeps working unchanged.
+    @Optional() private readonly xenwaAccess?: XenwaAccessService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -143,6 +148,14 @@ export class ApiKeyGuard implements CanActivate {
     ]);
     if (requireUnscoped && (apiKey.allowedSessions?.length ?? 0) > 0) {
       throw new ForbiddenException('Session-scoped API keys are not permitted on this route');
+    }
+
+    // XenWA team access: a key belonging to an SSO user is confined by allowedSessions above to the
+    // accounts it may SEE; this decides what it may DO on each one (send, campaigns, contacts,
+    // settings, owner-only actions) and refuses deployment-global surfaces it has no business on.
+    // A no-op for every key that is not an SSO user's.
+    if (this.xenwaAccess) {
+      await this.xenwaAccess.authorize(request, apiKey, sessionId);
     }
 
     // Attach API key to request for use in controllers

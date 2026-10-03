@@ -39,6 +39,7 @@ export function mainConnectionOptions(
     entities: [
       join(__dirname, '..', 'modules/auth/**/*.entity{.ts,.js}'),
       join(__dirname, '..', 'modules/audit/**/*.entity{.ts,.js}'),
+      join(__dirname, '..', 'modules/xenwa/**/*.entity{.ts,.js}'),
     ],
     // Dedicated migrations dir for the main connection only (must NOT run the data-connection
     // migrations, which target session/webhook/message tables).

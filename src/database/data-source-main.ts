@@ -33,7 +33,11 @@ const mainDataSource = new DataSource({
   // ./data/main.sqlite (e.g. e2e points it at a temp file), so the CLI and the app never target
   // different main databases.
   database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
-  entities: [__dirname + '/../modules/auth/**/*.entity{.ts,.js}', __dirname + '/../modules/audit/**/*.entity{.ts,.js}'],
+  entities: [
+    __dirname + '/../modules/auth/**/*.entity{.ts,.js}',
+    __dirname + '/../modules/audit/**/*.entity{.ts,.js}',
+    __dirname + '/../modules/xenwa/**/*.entity{.ts,.js}',
+  ],
   migrations: [__dirname + '/migrations-main/*{.ts,.js}'],
   synchronize: false,
   logging: process.env.DATABASE_LOGGING === 'true',

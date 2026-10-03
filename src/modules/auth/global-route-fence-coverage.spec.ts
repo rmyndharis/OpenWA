@@ -36,6 +36,13 @@ const ALLOWLIST = new Map<string, string>([
   // Self-validation only: the route returns {valid, role} for the calling key and reads/writes no
   // resource, so a session-restricted key validating itself is harmless (it cannot broaden scope).
   ['auth-validate.controller.ts :: validate', 'self-validation of the calling key; no resource access'],
+  // XenWA (XenAI Tech SSO + team access). Identity-scoped: each handler resolves the calling key's
+  // own XenWA user and returns or creates only what that user owns or was granted; an unscoped ADMIN
+  // key sees everything, exactly as on /sessions.
+  ['xenwa.controller.ts :: me', "returns the calling key's own XenWA user and its granted accounts"],
+  ['xenwa.controller.ts :: listAccounts', 'lists only accounts the calling user owns or was granted'],
+  ['xenwa.controller.ts :: createAccount', 'creates an account owned by the calling SSO user; refuses non-SSO keys'],
+  // The SSO endpoints are @Public: the signed single-use token is the credential.
 ]);
 
 /**

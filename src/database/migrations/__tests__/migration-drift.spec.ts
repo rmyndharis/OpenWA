@@ -133,6 +133,7 @@ const mainConnection = (): DataSource =>
     entities: [
       join(repoRoot, 'src/modules/auth/**/*.entity{.ts,.js}'),
       join(repoRoot, 'src/modules/audit/**/*.entity{.ts,.js}'),
+      join(repoRoot, 'src/modules/xenwa/**/*.entity{.ts,.js}'),
     ],
     migrations: importMigrations(join(repoRoot, 'src/database/migrations-main')) as never,
   });
