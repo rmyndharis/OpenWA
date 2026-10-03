@@ -26,11 +26,15 @@ describe('XenWA SSO token', () => {
   });
 
   it('rejects a wrong signature', () => {
-    expect(() => verifyXenwaSsoToken(signXenwaSsoToken(claims(), 'y'.repeat(48)), SECRET, AUD, now)).toThrow(/signature/);
+    expect(() => verifyXenwaSsoToken(signXenwaSsoToken(claims(), 'y'.repeat(48)), SECRET, AUD, now)).toThrow(
+      /signature/,
+    );
   });
 
   it('rejects a wrong audience', () => {
-    expect(() => verifyXenwaSsoToken(signXenwaSsoToken(claims({ aud: 'evil' }), SECRET), SECRET, AUD, now)).toThrow(/audience/);
+    expect(() => verifyXenwaSsoToken(signXenwaSsoToken(claims({ aud: 'evil' }), SECRET), SECRET, AUD, now)).toThrow(
+      /audience/,
+    );
   });
 
   it('rejects an expired token', () => {
@@ -38,9 +42,9 @@ describe('XenWA SSO token', () => {
   });
 
   it('rejects an over-long lifetime', () => {
-    expect(() =>
-      verifyXenwaSsoToken(signXenwaSsoToken(claims({ exp: now + 3600 }), SECRET), SECRET, AUD, now),
-    ).toThrow(/lifetime/);
+    expect(() => verifyXenwaSsoToken(signXenwaSsoToken(claims({ exp: now + 3600 }), SECRET), SECRET, AUD, now)).toThrow(
+      /lifetime/,
+    );
   });
 
   it('rejects alg tampering', () => {

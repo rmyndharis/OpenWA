@@ -1,0 +1,102 @@
+/* XenWA: premium dark login + XenAI Tech SSO (scoped under the login root). */
+.login-container {
+  background:
+    radial-gradient(60rem 40rem at 85% -10%, rgba(129, 140, 248, 0.22), transparent 60%),
+    radial-gradient(50rem 35rem at -10% 110%, rgba(16, 185, 129, 0.18), transparent 60%), var(--bg-light);
+  overflow-y: auto;
+}
+
+.login-container .login-card {
+  background: color-mix(in srgb, var(--bg-card) 78%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
+  border-radius: 24px;
+  box-shadow: var(--shadow-lg), var(--shadow-glow);
+}
+
+@media (max-width: 480px) {
+  .login-container {
+    padding: 1rem;
+  }
+  .login-container .login-card {
+    padding: 2rem 1.25rem;
+  }
+}
+
+.login-container .login-intro {
+  margin-bottom: 1.5rem;
+}
+
+.login-container .login-title {
+  font-size: 1.6rem;
+  line-height: 1.25;
+}
+
+.login-container .gradient-text {
+  background: linear-gradient(135deg, #34d399 0%, var(--primary) 55%, var(--secondary) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.login-container .login-subtitle {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.login-container .sso-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.login-container .sso-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 0.9rem 1.25rem;
+  border-radius: 14px;
+  background: var(--gradient);
+  color: #fff;
+  font-weight: 700;
+  text-decoration: none;
+  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.35);
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
+}
+
+.login-container .sso-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(99, 102, 241, 0.5);
+  text-decoration: none;
+}
+
+.login-container .sso-alt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  padding: 0.4rem;
+}
+
+.login-container .sso-alt:hover {
+  color: var(--primary-text);
+}
+
+.login-container .sso-error {
+  padding: 0.65rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--error) 45%, transparent);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  color: var(--error-text);
+  font-size: 0.85rem;
+  text-align: left;
+}

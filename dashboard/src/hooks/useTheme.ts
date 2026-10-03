@@ -14,7 +14,7 @@ function isTheme(value: string | null): value is Theme {
 export function useTheme() {
   const [theme, setThemeState] = useState<Theme>(() => {
     const saved = localStorage.getItem(THEME_KEY);
-    return isTheme(saved) ? saved : 'system';
+    return isTheme(saved) ? saved : 'dark'; // XenWA defaults to the dark XenAI look
   });
 
   const applyTheme = useCallback((newTheme: Theme) => {

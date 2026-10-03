@@ -1,22 +1,36 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, Languages } from 'lucide-react';
+import { Eye, EyeOff, Languages, KeyRound, ArrowRight, ShieldCheck } from 'lucide-react';
 import { CustomSelect } from '../components/CustomSelect';
 import { languageOptions, resolveSupportedLanguage, type SupportedLanguage } from '../i18n';
 import { API_BASE_URL } from '../services/api';
+import { xenwaApi, type XenwaPublicConfig } from '../services/xenwa';
 import './Login.css';
+import './LoginXenwa.css';
 
 interface LoginProps {
   onLogin: (apiKey: string, role?: string, engineType?: string) => void;
+  /** Reason a XenAI Tech sign-in failed, shown above the button. */
+  ssoError?: string | null;
 }
 
-export function Login({ onLogin }: LoginProps) {
+export function Login({ onLogin, ssoError }: LoginProps) {
   const { t, i18n } = useTranslation();
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const currentLang = resolveSupportedLanguage(i18n.resolvedLanguage || i18n.language);
+  const [sso, setSso] = useState<XenwaPublicConfig | null>(null);
+  const [showKeyLogin, setShowKeyLogin] = useState(false);
+
+  useEffect(() => {
+    xenwaApi
+      .config()
+      .then(setSso)
+      .catch(() => setSso(null));
+  }, []);
+  const keyFormVisible = showKeyLogin || !sso?.ssoEnabled;
 
   const changeLanguage = (language: SupportedLanguage) => {
     void i18n.changeLanguage(language);
@@ -62,7 +76,7 @@ export function Login({ onLogin }: LoginProps) {
     <div className="login-container">
       <div className="login-card">
         <div className="login-logo">
-          <img src="/openwa_logo.webp" alt="XenWA" className="logo-icon" />
+          <img src="/xenwa_logo.png" alt="XenWA" className="logo-icon" />
           <span className="version-info">
             {t('login.version', {
               version: __APP_VERSION__,
@@ -83,40 +97,65 @@ export function Login({ onLogin }: LoginProps) {
           />
         </div>
 
-        <form onSubmit={handleSubmit} className="login-form">
-          <div className="input-group">
-            <label htmlFor="apiKey">{t('login.apiKey')}</label>
-            <div className="input-wrapper">
-              <input
-                id="apiKey"
-                type={showKey ? 'text' : 'password'}
-                value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-                placeholder={t('login.apiKeyPlaceholder')}
-                className={error ? 'error' : ''}
-              />
-              <button
-                type="button"
-                className="toggle-visibility"
-                onClick={() => setShowKey(!showKey)}
-                aria-label={showKey ? t('common.hideApiKey') : t('common.showApiKey')}
-              >
-                {showKey ? <EyeOff size={20} /> : <Eye size={20} />}
-              </button>
-            </div>
-            {error && <span className="error-message">{error}</span>}
-          </div>
+        <div className="login-intro">
+          <h1 className="login-title">
+            Welcome to <span className="gradient-text">XenWA</span>
+          </h1>
+          <p className="login-subtitle">WhatsApp management &amp; marketing for teams</p>
+        </div>
 
-          <button type="submit" className="connect-btn" disabled={isLoading}>
-            {isLoading ? t('login.connecting') : t('login.connect')}
-          </button>
-        </form>
+        {sso?.ssoEnabled && (
+          <div className="sso-block">
+            {ssoError && <div className="sso-error">{ssoError}</div>}
+            <a className="sso-btn" href={sso.ssoStartUrl}>
+              <ShieldCheck size={18} />
+              <span>Continue with XenAI Tech</span>
+              <ArrowRight size={16} />
+            </a>
+            {!showKeyLogin && (
+              <button type="button" className="sso-alt" onClick={() => setShowKeyLogin(true)}>
+                <KeyRound size={14} /> Use an API key instead
+              </button>
+            )}
+          </div>
+        )}
+
+        {keyFormVisible && (
+          <form onSubmit={handleSubmit} className="login-form">
+            <div className="input-group">
+              <label htmlFor="apiKey">{t('login.apiKey')}</label>
+              <div className="input-wrapper">
+                <input
+                  id="apiKey"
+                  type={showKey ? 'text' : 'password'}
+                  value={apiKey}
+                  onChange={e => setApiKey(e.target.value)}
+                  placeholder={t('login.apiKeyPlaceholder')}
+                  className={error ? 'error' : ''}
+                />
+                <button
+                  type="button"
+                  className="toggle-visibility"
+                  onClick={() => setShowKey(!showKey)}
+                  aria-label={showKey ? t('common.hideApiKey') : t('common.showApiKey')}
+                >
+                  {showKey ? <EyeOff size={20} /> : <Eye size={20} />}
+                </button>
+              </div>
+              {error && <span className="error-message">{error}</span>}
+            </div>
+
+            <button type="submit" className="connect-btn" disabled={isLoading}>
+              {isLoading ? t('login.connecting') : t('login.connect')}
+            </button>
+          </form>
+        )}
       </div>
 
       <footer className="login-footer">
         <span>{t('login.footer')}</span>
         <a
-          href="https://xenaitech.com"
+          href={sso?.platformUrl ?? 'https://xenaitech.com'}
           target="_blank"
           rel="noopener noreferrer"
           className="github-link"

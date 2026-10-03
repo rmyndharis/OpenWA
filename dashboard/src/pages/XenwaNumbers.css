@@ -1,0 +1,469 @@
+.xenwa-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding-bottom: 3rem;
+}
+
+.xenwa-page.xenwa-center,
+.xenwa-page .xenwa-center {
+  display: flex;
+  justify-content: center;
+  padding: 3rem 0;
+}
+
+.xenwa-page .glass-card {
+  background: color-mix(in srgb, var(--bg-card) 80%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: var(--shadow-md);
+}
+
+.xenwa-page .xenwa-hero {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  padding: 1.25rem 1.5rem;
+  background:
+    linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(129, 140, 248, 0.14)),
+    color-mix(in srgb, var(--bg-card) 80%, transparent);
+}
+
+.xenwa-page .xenwa-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.xenwa-page .xenwa-avatar--sm {
+  width: 34px;
+  height: 34px;
+}
+
+.xenwa-page .xenwa-avatar--initial {
+  display: grid;
+  place-items: center;
+  background: var(--gradient);
+  color: #fff;
+  font-weight: 700;
+}
+
+.xenwa-page .xenwa-hero__who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.xenwa-page .xenwa-hero__who span {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.xenwa-page .xenwa-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-inline-start: auto;
+}
+
+.xenwa-page .xenwa-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-white);
+  color: var(--primary-text);
+}
+
+.xenwa-page .xenwa-stat div {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.xenwa-page .xenwa-stat__value {
+  font-weight: 800;
+  font-size: 1.05rem;
+  color: var(--text-primary);
+}
+
+.xenwa-page .xenwa-stat__label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.xenwa-page .xenwa-buy {
+  text-decoration: none;
+}
+
+.xenwa-page .xenwa-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+}
+
+.xenwa-page .xenwa-add__text p {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.xenwa-page .xenwa-add__row,
+.xenwa-page .xenwa-invite__row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex: 1 1 320px;
+}
+
+.xenwa-page .xenwa-add__row input,
+.xenwa-page .xenwa-invite__row input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.7rem 0.9rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.xenwa-page .xenwa-muted {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.xenwa-page .xenwa-note,
+.xenwa-page .xenwa-empty {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.25rem 1.5rem;
+  color: var(--text-secondary);
+}
+
+.xenwa-page .xenwa-empty {
+  flex-direction: column;
+  text-align: center;
+  padding: 2.5rem 1.5rem;
+}
+
+.xenwa-page .xenwa-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.xenwa-page .xenwa-group__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.05rem;
+}
+
+.xenwa-page .xenwa-count {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary-text);
+}
+
+.xenwa-page .xenwa-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 1rem;
+}
+
+.xenwa-page .xenwa-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 1.15rem;
+  transition:
+    transform 0.2s,
+    border-color 0.2s;
+}
+
+.xenwa-page .xenwa-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+
+.xenwa-page .xenwa-card.is-paused {
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
+}
+
+.xenwa-page .xenwa-card__head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.xenwa-page .xenwa-card__icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #10b981, #16a34a);
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.xenwa-page .xenwa-card__title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.xenwa-page .xenwa-card__title strong,
+.xenwa-page .xenwa-card__title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.xenwa-page .xenwa-card__title span {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.xenwa-page .xenwa-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.xenwa-page .xenwa-dot--ok {
+  background: var(--success);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 25%, transparent);
+}
+
+.xenwa-page .xenwa-dot--warn {
+  background: var(--warning);
+}
+
+.xenwa-page .xenwa-dot--off {
+  background: var(--text-muted);
+}
+
+.xenwa-page .xenwa-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.xenwa-page .xenwa-chip {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary-text);
+}
+
+.xenwa-page .xenwa-chip--owner,
+.xenwa-page .xenwa-chip--admin {
+  background: var(--gradient);
+  color: #fff;
+}
+
+.xenwa-page .xenwa-chip--muted {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.xenwa-page .xenwa-billing {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  padding: 0.5rem 0.7rem;
+  border-radius: 12px;
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+}
+
+.xenwa-page .xenwa-billing.is-overdue {
+  border-color: color-mix(in srgb, var(--warning) 60%, var(--border));
+}
+
+.xenwa-page .xenwa-billing.is-paused {
+  border-color: color-mix(in srgb, var(--error) 60%, var(--border));
+}
+
+.xenwa-page .xenwa-billing__cost {
+  margin-inline-start: auto;
+  font-weight: 700;
+  color: var(--primary-text);
+}
+
+.xenwa-page .xenwa-warn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--warning-text);
+}
+
+.xenwa-page .xenwa-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: auto;
+}
+
+.xenwa-page .xenwa-card__actions .btn-secondary,
+.xenwa-page .xenwa-card__actions .btn-primary {
+  padding: 0.5rem 0.85rem;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+@media (max-width: 640px) {
+  .xenwa-page .xenwa-stats {
+    margin-inline-start: 0;
+    width: 100%;
+  }
+  .xenwa-page .xenwa-add__row,
+  .xenwa-page .xenwa-invite__row {
+    flex-wrap: wrap;
+  }
+  .xenwa-page .xenwa-add__row .btn-primary {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+.xenwa-page .xenwa-team {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.xenwa-page .xenwa-invite {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 1rem;
+  border-radius: 16px;
+  border: 1px dashed color-mix(in srgb, var(--primary) 40%, var(--border));
+  background: var(--primary-soft);
+}
+
+.xenwa-page .xenwa-perms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.xenwa-page .xenwa-perm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-white);
+  cursor: pointer;
+  user-select: none;
+}
+
+.xenwa-page .xenwa-perm.is-on {
+  border-color: var(--primary);
+  color: var(--primary-text);
+}
+
+.xenwa-page .xenwa-perm input {
+  accent-color: var(--primary);
+  margin: 0;
+}
+
+.xenwa-page .xenwa-members {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.xenwa-page .xenwa-member {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.8rem;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-white);
+}
+
+.xenwa-page .xenwa-member__who {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.xenwa-page .xenwa-member__who > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.xenwa-page .xenwa-member__who span {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.xenwa-page .xenwa-pending {
+  color: var(--warning-text);
+}
+
+.xenwa-page .btn-icon-danger {
+  display: grid;
+  place-items: center;
+  padding: 0.45rem;
+  background: transparent;
+  color: var(--error-text);
+  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
+  border-radius: 10px;
+}
+
+.xenwa-page .btn-icon-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+
+.xenwa-page .xenwa-owner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
+.xenwa-page .xenwa-owner h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.9rem;
+}

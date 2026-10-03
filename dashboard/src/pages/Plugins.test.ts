@@ -199,7 +199,7 @@ test('a catalog prefetch that fails after the Catalog tab opened shows the error
   await screen.findByTitle('Configure');
   fireEvent.click(screen.getByRole('button', { name: 'Install plugin' }));
   fireEvent.click(document.querySelectorAll<HTMLButtonElement>('.install-tab')[1]);
-  await screen.findByText(/Install directly from the OpenWA plugin catalog/);
+  await screen.findByText(/Install directly from the XenAI plugin catalog/);
 
   failCatalog();
   const message = await screen.findByText(/catalog unreachable/);

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { sessionApi, type Session } from '../services/api';
+import { xenwaApi, isXenwaManaged } from '../services/xenwa';
 import { isValidProxyUrl } from '../utils/sessionForm';
 import { useToast } from './useToast';
 
@@ -57,10 +58,14 @@ export function useSessionCreateForm({ onCreated, onFailed }: UseSessionCreateFo
     if (useProxy && !isValidProxyUrl(proxyUrl.trim())) return;
     try {
       setCreating(true);
-      const newSession = await sessionApi.create(
-        newSessionName,
-        useProxy && proxyUrl.trim() ? { proxyUrl: proxyUrl.trim() } : undefined,
-      );
+      // XenAI Tech SSO users create numbers through XenWA, which records them as the owner and
+      // charges the first month from their credits; plain API keys keep the classic route.
+      const newSession = isXenwaManaged()
+        ? await xenwaApi.createAccount(newSessionName).then(created => sessionApi.get(created.id))
+        : await sessionApi.create(
+            newSessionName,
+            useProxy && proxyUrl.trim() ? { proxyUrl: proxyUrl.trim() } : undefined,
+          );
       setNewSessionName('');
       resetProxyFields();
       setShowCreateModal(false);

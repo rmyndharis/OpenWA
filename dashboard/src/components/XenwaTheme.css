@@ -1,0 +1,62 @@
+/* XenWA — XenAI Tech premium shell: gradient backdrop, glass sidebar, gradient active states.
+   Loaded after Layout.css so it layers on top without touching the base rules. */
+
+.layout {
+  background:
+    radial-gradient(70rem 45rem at 100% -10%, rgba(129, 140, 248, 0.12), transparent 60%),
+    radial-gradient(55rem 40rem at -10% 110%, rgba(16, 185, 129, 0.1), transparent 60%), var(--bg-light);
+}
+
+.layout .sidebar {
+  background: color-mix(in srgb, var(--bg-white) 82%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-right-color: color-mix(in srgb, var(--primary) 14%, var(--border));
+}
+
+.layout .brand-name {
+  background: linear-gradient(135deg, #34d399 0%, var(--primary) 55%, var(--secondary) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.layout .nav-item {
+  border-radius: 12px;
+}
+
+.layout .nav-item.active {
+  background: var(--gradient-subtle);
+  color: var(--primary-text);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.layout .nav-item.active svg {
+  color: var(--primary-text);
+}
+
+.layout .back-to-platform {
+  text-decoration: none;
+  color: var(--primary-text);
+}
+
+.layout .back-to-platform:hover {
+  background: var(--primary-soft);
+  text-decoration: none;
+}
+
+.layout .mobile-header {
+  background: color-mix(in srgb, var(--bg-white) 85%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Cards across pages pick up the glass look through the shared tokens. */
+.layout .main-content .card,
+.layout .main-content .stat-card,
+.layout .main-content .session-card {
+  background: color-mix(in srgb, var(--bg-card) 82%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 18px;
+}

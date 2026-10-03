@@ -189,7 +189,7 @@ export function createSwaggerConfig(): Omit<OpenAPIObject, 'paths'> {
   const { version } = require('../../package.json') as { version: string };
   return (
     new DocumentBuilder()
-      .setTitle('OpenWA API')
+      .setTitle('XenWA API')
       // Three refusals are issued by middleware BEFORE routing, so they apply to every operation
       // below and cannot be expressed as a per-operation @ApiResponse without repeating them 187
       // times. Documenting them here keeps the contract honest for clients that would otherwise
@@ -229,7 +229,7 @@ export function createSwaggerConfig(): Omit<OpenAPIObject, 'paths'> {
       // Apply the scheme globally so Swagger UI sends the key with every request
       // (mirrors the global ApiKeyGuard). Without this, "Authorize" is cosmetic.
       .addSecurityRequirements(API_KEY_SECURITY_SCHEME)
-      .setContact('OpenWA', 'https://github.com/rmyndharis/OpenWA', 'yudhi@rmyndharis.com')
+      .setContact('XenAI Tech', 'https://xenaitech.com', 'support@xenaitech.com')
       .addTag('sessions', 'WhatsApp session management')
       .addTag('messages', 'Send and manage messages')
       .addTag('webhooks', 'Webhook configuration')

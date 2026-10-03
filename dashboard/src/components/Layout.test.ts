@@ -45,6 +45,7 @@ test('the theme button can return to following the system', () => {
     // The label names the state the click selects.
     assert.equal(announced, `Switch to ${button.textContent}`);
   }
-  assert.deepEqual(seen, ['System', 'Light', 'Dark', 'System']);
-  assert.equal(localStorage.getItem('openwa_theme'), 'system');
+  // XenWA starts dark (the XenAI look); the cycle still reaches System.
+  assert.deepEqual(seen, ['Dark', 'System', 'Light', 'Dark']);
+  assert.equal(localStorage.getItem('openwa_theme'), 'dark');
 });

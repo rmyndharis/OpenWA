@@ -199,6 +199,8 @@ describe('PUBLIC_PATHS drift guard', () => {
     'src/modules/infra/infra-status.controller.ts',
     'src/modules/integration/ingress.controller.ts',
     'src/modules/metrics/metrics.controller.ts',
+    // XenWA SSO: @ApiExcludeController, so it needs no PUBLIC_PATHS entry (the token is the credential).
+    'src/modules/xenwa/xenwa-sso.controller.ts',
   ];
 
   function listTsFiles(dir: string, out: string[] = []): string[] {

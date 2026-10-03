@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 
 /**
  * Custom hook to set document title dynamically.
- * Automatically appends " | OpenWA" suffix.
+ * Automatically appends the " | XenWA" suffix.
  */
 export function useDocumentTitle(title: string) {
   useEffect(() => {

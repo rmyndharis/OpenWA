@@ -21,24 +21,38 @@ import {
   ChevronLeft,
   ChevronRight,
   Languages,
+  Users,
+  Megaphone,
+  ArrowUpLeft,
 } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { type UserRole } from '../hooks/useRole';
 import { languageOptions, resolveSupportedLanguage, rtlLanguages, type SupportedLanguage } from '../i18n';
 import { healthApi, infraApi } from '../services/api';
+import { useXenwa } from './XenwaProvider';
 import './Layout.css';
+import './XenwaTheme.css';
 
 interface LayoutProps {
   onLogout: () => void;
   userRole: UserRole | null;
 }
 
-const allNavItems = [
+const allNavItems: Array<{
+  to: string;
+  icon: typeof LayoutDashboard;
+  key: string;
+  adminOnly: boolean;
+  label?: string;
+}> = [
   { to: '/', icon: LayoutDashboard, key: 'dashboard' as const, adminOnly: false },
+  // XenWA: the signed-in user's numbers, team access and billing.
+  { to: '/numbers', icon: Users, key: 'numbers', adminOnly: false, label: 'Numbers & Team' },
   { to: '/sessions', icon: Smartphone, key: 'sessions' as const, adminOnly: false },
   { to: '/chats', icon: MessageSquare, key: 'chats' as const, adminOnly: false },
   { to: '/webhooks', icon: Webhook, key: 'webhooks' as const, adminOnly: false },
   { to: '/templates', icon: ClipboardList, key: 'templates' as const, adminOnly: false },
+  { to: '/campaigns', icon: Megaphone, key: 'campaigns', adminOnly: false, label: 'Campaigns' },
   { to: '/api-keys', icon: Key, key: 'apiKeys' as const, adminOnly: true },
   { to: '/message-tester', icon: Send, key: 'messageTester' as const, adminOnly: false },
   // Backend /infra/* is ADMIN-only; hide the nav item from non-admins (UX + defense-in-depth).
@@ -61,6 +75,16 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   });
 
   const navItems = allNavItems.filter(item => !item.adminOnly || userRole === 'admin');
+  const { me } = useXenwa();
+  const platformUrl = me?.platformUrl ?? 'https://xenaitech.com';
+  const handleLogout = () => {
+    const managed = !!me?.managed;
+    onLogout();
+    // SSO users came from XenAI Tech: offer the way back instead of the API-key screen.
+    if (managed && window.confirm('Signed out of XenWA. Go back to XenAI Tech?')) {
+      window.location.assign(`${platformUrl}/dashboard/tools`);
+    }
+  };
 
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
@@ -167,7 +191,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
             {isMobileOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
           <div className="mobile-brand">
-            <img src="/openwa_logo.webp" alt="XenWA" className="sidebar-logo" />
+            <img src="/xenwa_logo.png" alt="XenWA" className="sidebar-logo" />
             <span className="brand-name">{t('common.appName')}</span>
           </div>
           <div style={{ width: 40 }} />
@@ -180,7 +204,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
         className={`sidebar ${isCollapsed ? 'collapsed' : ''} ${isMobile ? 'mobile' : ''} ${isMobileOpen ? 'open' : ''}`}
       >
         <div className="sidebar-header">
-          <img src="/openwa_logo.webp" alt="XenWA" className="sidebar-logo" />
+          <img src="/xenwa_logo.png" alt="XenWA" className="sidebar-logo" />
           {!isCollapsed && (
             <div className="sidebar-brand">
               <span className="brand-name">{t('common.appName')}</span>
@@ -216,8 +240,8 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
         )}
 
         <nav className="sidebar-nav">
-          {navItems.map(({ to, icon: Icon, key }) => {
-            const label = t(`nav.${key}`);
+          {navItems.map(({ to, icon: Icon, key, label: fixedLabel }) => {
+            const label = fixedLabel ?? t(`nav.${key}`);
             return (
               <NavLink
                 key={to}
@@ -235,6 +259,14 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
         </nav>
 
         <div className="sidebar-footer">
+          <a
+            className="theme-toggle-btn back-to-platform"
+            href={`${platformUrl}/dashboard/tools`}
+            title={isCollapsed ? 'Back to XenAI Tech' : undefined}
+          >
+            <ArrowUpLeft size={18} />
+            {!isCollapsed && <span>Back to XenAI Tech</span>}
+          </a>
           <div className="language-menu" ref={languageMenuRef}>
             <button
               className="theme-toggle-btn"
@@ -276,7 +308,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
               {!isCollapsed && <span>{themeLabel}</span>}
             </button>
           </div>
-          <button className="logout-btn" onClick={onLogout} title={isCollapsed ? t('common.logout') : undefined}>
+          <button className="logout-btn" onClick={handleLogout} title={isCollapsed ? t('common.logout') : undefined}>
             <LogOut size={20} />
             {!isCollapsed && <span>{t('common.logout')}</span>}
           </button>
