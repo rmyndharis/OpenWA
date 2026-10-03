@@ -95,6 +95,10 @@ export function classifySessionRoute(method: string, rest: string[]): XenwaRequi
   // DELETE /sessions/:id — removing the WhatsApp account itself.
   if (first === '') return 'owner';
 
+  // Side effects of simply LOOKING at a chat (blue ticks, presence) belong to read-only viewers too,
+  // otherwise opening the inbox with only "View" would fail on every chat.
+  if ((first === 'chats' && second === 'read') || (first === 'presence' && second === 'subscribe')) return 'read';
+
   // Campaigns: bulk sends and batch control.
   if (first === 'messages' && (second === 'send-bulk' || second === 'batch')) return 'campaigns';
 
