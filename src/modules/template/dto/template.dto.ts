@@ -1,5 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, MaxLength, ValidateIf, IsIn } from 'class-validator';
+import { MaxCodePoints } from '../../../common/validation/max-code-points';
+import { NoNulCharacter } from '../../../common/validation/no-nul-character';
 
 const NAME_MAX_LENGTH = 100;
 const BODY_MAX_LENGTH = 4096;
@@ -15,7 +17,8 @@ export class CreateTemplateDto {
   })
   @IsString()
   @IsNotEmpty()
-  @MaxLength(NAME_MAX_LENGTH)
+  @MaxCodePoints(NAME_MAX_LENGTH)
+  @NoNulCharacter()
   name!: string;
 
   @ApiProperty({
@@ -26,6 +29,7 @@ export class CreateTemplateDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(BODY_MAX_LENGTH)
+  @NoNulCharacter()
   body!: string;
 
   @ApiPropertyOptional({
@@ -36,6 +40,7 @@ export class CreateTemplateDto {
   @IsOptional()
   @IsString()
   @MaxLength(HEADER_FOOTER_MAX_LENGTH)
+  @NoNulCharacter()
   header?: string;
 
   @ApiPropertyOptional({
@@ -46,6 +51,7 @@ export class CreateTemplateDto {
   @IsOptional()
   @IsString()
   @MaxLength(HEADER_FOOTER_MAX_LENGTH)
+  @NoNulCharacter()
   footer?: string;
 
   @ApiPropertyOptional({ description: 'Template message type', enum: TEMPLATE_TYPES, default: 'text' })
@@ -63,6 +69,7 @@ export class CreateTemplateDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(MEDIA_URL_MAX_LENGTH)
+  @NoNulCharacter()
   mediaUrl?: string;
 }
 
@@ -72,7 +79,8 @@ export class UpdateTemplateDto {
   @ValidateIf((o: UpdateTemplateDto) => o.name !== undefined)
   @IsString()
   @IsNotEmpty()
-  @MaxLength(NAME_MAX_LENGTH)
+  @MaxCodePoints(NAME_MAX_LENGTH)
+  @NoNulCharacter()
   name?: string;
 
   @ApiPropertyOptional({ description: 'Template body with {{variable}} placeholders', maxLength: BODY_MAX_LENGTH })
@@ -80,6 +88,7 @@ export class UpdateTemplateDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(BODY_MAX_LENGTH)
+  @NoNulCharacter()
   body?: string;
 
   @ApiPropertyOptional({
@@ -91,6 +100,7 @@ export class UpdateTemplateDto {
   @IsOptional()
   @IsString()
   @MaxLength(HEADER_FOOTER_MAX_LENGTH)
+  @NoNulCharacter()
   header?: string | null;
 
   @ApiPropertyOptional({
@@ -102,6 +112,7 @@ export class UpdateTemplateDto {
   @IsOptional()
   @IsString()
   @MaxLength(HEADER_FOOTER_MAX_LENGTH)
+  @NoNulCharacter()
   footer?: string | null;
 
   @ApiPropertyOptional({ description: 'Template message type', enum: TEMPLATE_TYPES })
@@ -120,6 +131,7 @@ export class UpdateTemplateDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(MEDIA_URL_MAX_LENGTH)
+  @NoNulCharacter()
   mediaUrl?: string | null;
 }
 

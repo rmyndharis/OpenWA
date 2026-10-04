@@ -19,7 +19,10 @@ describe('UpdateTemplateDto', () => {
 
   // Nullable template fields skip validation for null so an explicit null reaches update() and
   // clears the stored value. Pin this here so the DTO and persistence behavior cannot drift apart.
-  it.each(['header', 'footer', 'mediaUrl'])('accepts an explicit null %s, which clears the stored value', async field => {
-    await expect(through({ [field]: null })).resolves.toEqual({ [field]: null });
-  });
+  it.each(['header', 'footer', 'mediaUrl'])(
+    'accepts an explicit null %s, which clears the stored value',
+    async field => {
+      await expect(through({ [field]: null })).resolves.toEqual({ [field]: null });
+    },
+  );
 });
