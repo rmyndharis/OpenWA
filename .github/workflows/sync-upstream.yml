@@ -68,10 +68,36 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
           git checkout -B "$SYNC_BRANCH"
+
+          # Reuse conflict resolutions recorded by Git. This is intentionally enabled before the
+          # merge so recurring upstream conflicts can be resolved automatically on later syncs.
+          git config rerere.enabled true
+          git config rerere.autoupdate true
+
           if ! git merge --no-ff --no-edit upstream/main; then
-            git merge --abort || true
-            echo "::error::upstream/main conflicts with this fork's main. Resolve it by hand (git merge upstream/main on a local main) and push — the workflow will not attempt to resolve conflicts for you."
-            exit 1
+            echo "::warning::Merge has conflicts; trying safe automatic resolution rules."
+
+            # package-lock.json is generated data. Regenerate it from the merged package.json
+            # instead of choosing either side wholesale.
+            if git diff --name-only --diff-filter=U | grep -qx 'package-lock.json'; then
+              git checkout --ours package-lock.json
+              npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+              git add package-lock.json
+            fi
+
+            # Let rerere apply any resolution Git has learned previously.
+            git rerere || true
+
+            unresolved="$(git diff --name-only --diff-filter=U)"
+            if [ -n "$unresolved" ]; then
+              echo "::error::Unsafe conflicts remain after automatic resolution:"
+              echo "$unresolved"
+              git status --short
+              git merge --abort || true
+              exit 1
+            fi
+
+            git commit --no-edit
           fi
 
           # Force-push: the branch exists only to carry this PR, and upstream is the sole writer of
