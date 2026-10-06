@@ -135,20 +135,13 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     expect(sock.data.rawApiKey).toBe('good');
   });
 
-  it('refuses a chat-restricted key at the handshake (event filtering is a later slice)', async () => {
+  it('accepts a chat-restricted key without granting global event rooms at the handshake', async () => {
     authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: null, allowedChats: ['123@g.us'] });
     const sock = makeSocket({ apiKey: 'good' });
     await gateway.handleConnection(asSocket(sock));
-    expect(sock.disconnect).toHaveBeenCalled();
-    expect(sock.emit).toHaveBeenCalled();
-    expect(auditService.logWarn).toHaveBeenCalledWith(
-      AuditAction.API_KEY_AUTH_FAILED,
-      expect.objectContaining({
-        apiKey: expect.objectContaining({ allowedChats: ['123@g.us'] }) as unknown,
-        ipAddress: '203.0.113.5',
-        metadata: { surface: 'websocket' },
-      }),
-    );
+    expect(sock.disconnect).not.toHaveBeenCalled();
+    expect(sessionRoomJoins(sock)).toEqual([]);
+    expect(auditService.logWarn).not.toHaveBeenCalled();
   });
 
   it('refuses a subscribe once the key has gained allowedChats after connect', async () => {
