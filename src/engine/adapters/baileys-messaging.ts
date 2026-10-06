@@ -830,8 +830,8 @@ export class BaileysMessaging {
   }
 
   /**
-   * Every message this delegate sends goes through here so its id is recorded before the library
-   * echoes it back. Baileys re-emits each own send through `messages.upsert` tagged `append`, the
+   * Every send goes through here. Content message ids are recorded before the library echoes
+   * them back. Baileys re-emits each own send through `messages.upsert` tagged `append`, the
    * same tag WhatsApp uses to replay what the account typed on its phone while the gateway was
    * down, and the id is the only thing that tells the two apart (see handleMessagesUpsert). The
    * record is synchronous on the send's own continuation, ahead of the library's buffered echo.
@@ -866,7 +866,8 @@ export class BaileysMessaging {
       if (this.host.getSocketOrNull() !== sock) throw new EngineNotReadyError();
       throw error;
     }
-    this.host.rememberOwnSend(sent?.key?.id);
+    // Reactions are announced by their library echo; no local message.sent callback replaces it.
+    if (!('react' in content)) this.host.rememberOwnSend(sent?.key?.id);
     return sent;
   }
 

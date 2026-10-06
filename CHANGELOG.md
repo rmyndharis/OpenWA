@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Emit Baileys API reaction updates, including reaction removal.
 - Restore legacy webhook failures and normalize terminal duplicates before SQLite schema synchronization.
 - Exclude retained webhook replay payloads from database backup reads.
 - Advance webhook recovery scans past live queued deliveries.
