@@ -79,6 +79,20 @@ describe('BuiltInFtsProvider (postgres probe)', () => {
     expect((await provider.health()).ok).toBe(true);
   });
 
+  it.each([['111@c.us', '111@lid'], []])('applies chat scope to PostgreSQL rows and count (%j)', async (...chatIds) => {
+    const { ds, query } = makePostgresDataSource({ bodyTsPresent: true });
+    await new BuiltInFtsProvider(ds).search({ q: 'hello', chatIds, limit: 1, offset: 1 });
+    const calls = query.mock.calls
+      .map(call => call as unknown[])
+      .filter(call => /websearch_to_tsquery/.test(String(call[0])));
+    expect(calls).toHaveLength(2);
+    for (const [sql] of calls) {
+      expect(String(sql)).toContain(chatIds.length ? 'm."chatId" IN ($2,$3)' : '1 = 0');
+    }
+    expect(calls[0][1]).toEqual(['hello', ...chatIds, 1, 1]);
+    expect(calls[1][1]).toEqual(['hello', ...chatIds]);
+  });
+
   it('does not credit a namesake in another schema: an empty active-schema probe means 501, not "available"', async () => {
     // A public.messages.body_ts must not make FTS look available when the table the search queries
     // resolve (active schema) lacks the column. The scripted probe answers for the resolved table

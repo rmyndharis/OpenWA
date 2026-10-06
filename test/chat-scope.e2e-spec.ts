@@ -12,6 +12,10 @@ import { applyGlobalValidation } from './../src/config/app-validation';
 import { AuthService } from './../src/modules/auth/auth.service';
 import { ApiKeyRole } from './../src/modules/auth/entities/api-key.entity';
 import { Session } from './../src/modules/session/entities/session.entity';
+import { Message, MessageDirection } from './../src/modules/message/entities/message.entity';
+import { SearchProviderRegistry } from './../src/modules/search/search-provider.registry';
+import { PluginSearchProvider } from './../src/modules/search/providers/plugin-search-provider';
+import type { SearchHit, SearchResults } from './../src/modules/search/search.types';
 
 /**
  * End-to-end proof of the chat fence through the real HTTP stack (guard + reflector metadata + DI +
@@ -26,6 +30,7 @@ describe('Chat-restricted API keys (e2e)', () => {
   let sessionId: string;
   let chatKey: string; // OPERATOR, allowedChats: [ALLOWED]
   let openKey: string; // OPERATOR, unrestricted
+  let groupKey: string;
 
   const get = (path: string, key: string) => request(app.getHttpServer()).get(path).set('X-API-Key', key);
 
@@ -42,6 +47,23 @@ describe('Chat-restricted API keys (e2e)', () => {
     chatKey = (await authService.createApiKey({ name: 'e2e-chat', role: ApiKeyRole.OPERATOR, allowedChats: [ALLOWED] }))
       .rawKey;
     openKey = (await authService.createApiKey({ name: 'e2e-open', role: ApiKeyRole.OPERATOR })).rawKey;
+    groupKey = (
+      await authService.createApiKey({ name: 'e2e-group', role: ApiKeyRole.OPERATOR, allowedChats: ['111@g.us'] })
+    ).rawKey;
+    app.get(SearchProviderRegistry).setActive('builtin-fts');
+    const messageRepo: Repository<Message> = app.get(getRepositoryToken(Message, 'data'));
+    await messageRepo.insert(
+      [ALLOWED, OTHER, ALLOWED].map((chatId, index) => ({
+        sessionId,
+        chatId,
+        from: chatId,
+        to: '333@c.us',
+        body: 'scopingprobe',
+        type: 'text' as const,
+        direction: MessageDirection.INCOMING,
+        timestamp: index + 1,
+      })),
+    );
   });
 
   afterAll(async () => {
@@ -91,17 +113,55 @@ describe('Chat-restricted API keys (e2e)', () => {
   it('admits search for a restricted key and fences its optional ?chatId=', async () => {
     const outside = await get(`/api/search?q=hi&chatId=${OTHER}`, chatKey).expect(403);
     expect((outside.body as { message: string }).message).toBe('API key not authorized for this chat');
-    // No provider guarantee in this suite, so an admitted call is asserted only as past the fence;
-    // the hit-level filtering to the key's chats is pinned in the provider specs.
-    expect((await get('/api/search?q=hi', chatKey)).status).not.toBe(403);
-    expect((await get('/api/search?q=hi', openKey)).status).not.toBe(403);
+    const path = `/api/search?q=scopingprobe&sessionId=${sessionId}`;
+    const pages: SearchHit[] = [];
+    for (const offset of [0, 1, 2]) {
+      const page = await get(`${path}&limit=1&offset=${offset}`, chatKey).expect(200);
+      const body = page.body as SearchResults;
+      expect(body.total).toBe(2);
+      pages.push(...body.hits);
+    }
+    expect(pages.map(hit => hit.chatId)).toEqual([ALLOWED, ALLOWED]);
+    expect(new Set(pages.map(hit => hit.messageId)).size).toBe(2);
+    expect(((await get(path, openKey).expect(200)).body as SearchResults).total).toBe(3);
+  });
+
+  it('refuses plugin search for a chat-restricted key before invoking the worker', async () => {
+    const registry = app.get(SearchProviderRegistry);
+    const dispatchSearch = jest
+      .fn()
+      .mockResolvedValue({ ok: true, results: { hits: [], total: 731, tookMs: 1, provider: 'plugin:e2e' } });
+    registry.register(new PluginSearchProvider('e2e', 'E2E', { dispatchSearch, healthCheck: jest.fn() }, 1000));
+    registry.setActive('plugin:e2e');
+    try {
+      const refused = await get('/api/search?q=scopingprobe', chatKey).expect(403);
+      expect((refused.body as { message: string }).message).toBe(
+        'Chat-restricted search requires the built-in search provider',
+      );
+      expect(dispatchSearch).not.toHaveBeenCalled();
+      expect(((await get('/api/search?q=scopingprobe', openKey).expect(200)).body as SearchResults).total).toBe(731);
+      expect(dispatchSearch).toHaveBeenCalledTimes(1);
+    } finally {
+      registry.unregister('plugin:e2e');
+      registry.setActive('builtin-fts');
+    }
   });
 
   it('admits group detail and settings for the allowed group, refuses any other', async () => {
-    const detail = await get(`/api/sessions/${sessionId}/groups/${OTHER}`, chatKey).expect(403);
+    const detail = await get(`/api/sessions/${sessionId}/groups/222@g.us`, groupKey).expect(403);
     expect((detail.body as { message: string }).message).toBe('API key not authorized for this chat');
-    await get(`/api/sessions/${sessionId}/groups/${OTHER}/settings`, chatKey).expect(403);
-    expect((await get(`/api/sessions/${sessionId}/groups/${ALLOWED}`, chatKey)).status).not.toBe(403);
-    expect((await get(`/api/sessions/${sessionId}/groups/${ALLOWED}/settings`, chatKey)).status).not.toBe(403);
+    await get(`/api/sessions/${sessionId}/groups/222@g.us/settings`, groupKey).expect(403);
+    expect((await get(`/api/sessions/${sessionId}/groups/111@g.us`, groupKey)).status).not.toBe(403);
+    expect((await get(`/api/sessions/${sessionId}/groups/111@g.us/settings`, groupKey)).status).not.toBe(403);
+    await request(app.getHttpServer())
+      .put(`/api/sessions/${sessionId}/groups/222@g.us/settings`)
+      .set('X-API-Key', groupKey)
+      .send({ announce: true })
+      .expect(403);
+    const allowed = await request(app.getHttpServer())
+      .put(`/api/sessions/${sessionId}/groups/111@g.us/settings`)
+      .set('X-API-Key', groupKey)
+      .send({ announce: true });
+    expect(allowed.status).not.toBe(403);
   });
 });

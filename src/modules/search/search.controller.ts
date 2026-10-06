@@ -23,6 +23,7 @@ export class SearchController {
   @ApiOperation({ summary: 'Search messages across sessions (active search provider)' })
   @ApiResponse({ status: 200, description: 'Search results from the active provider', type: SearchResultsResponseDto })
   @ApiResponse({ status: 400, description: 'Empty or whitespace-only "q"' })
+  @ApiResponse({ status: 403, description: 'Chat scope denied or chat-restricted search uses a plugin provider' })
   @ApiResponse({ status: 501, description: 'No search provider configured' })
   @ApiResponse({
     status: 502,

@@ -1,4 +1,4 @@
-import { BadGatewayException, ServiceUnavailableException } from '@nestjs/common';
+import { BadGatewayException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
 import { MessageDirection } from '../../message/entities/message.entity';
 import { PluginSearchProvider } from './plugin-search-provider';
 import type { PluginSearchTransport } from './plugin-search-provider';
@@ -85,18 +85,29 @@ describe('PluginSearchProvider', () => {
     expect(res.provider).toBe('plugin:p');
   });
 
-  it('strips hits whose chatId is outside query.chatIds (chat-restricted key)', async () => {
-    // Same defense for the chat fence: the allowlist arrives lid-expanded from the controller, and a
-    // hit stored under any dialect not in it never reaches the caller.
-    const inScope = mkHit({ messageId: 'm1', chatId: '111@c.us' });
-    const leaked = mkHit({ messageId: 'm2', chatId: '999@g.us' });
-    const results: SearchResults = { hits: [inScope, leaked], total: 2, tookMs: 3, provider: 'plugin:p' };
+  it.each(['empty', 'allowed', 'outside'])('refuses chat-restricted searches before RPC (%s page)', async page => {
+    const hits = page === 'empty' ? [] : [mkHit({ chatId: page === 'allowed' ? '111@c.us' : '999@g.us' })];
+    const results: SearchResults = { hits, total: 731, tookMs: 3, provider: 'plugin:p' };
     const dispatchSearch = jest.fn().mockResolvedValue({ ok: true, results });
     const p = new PluginSearchProvider('p', 'P', fakeTransport({ dispatchSearch }), 1000);
 
-    const res = await p.search({ q: 'hi', chatIds: ['111@c.us', '111@s.whatsapp.net'] });
-    expect(res.hits.map(h => h.messageId)).toEqual(['m1']);
-    expect(res.total).toBe(1);
+    await expect(p.search({ q: 'hi', chatIds: ['111@c.us', '111@s.whatsapp.net'] })).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(dispatchSearch).not.toHaveBeenCalled();
+  });
+
+  it('returns no hits for an empty compiled chat scope without dispatching to the plugin', async () => {
+    const dispatchSearch = jest.fn();
+    const transport = fakeTransport({ dispatchSearch });
+    const p = new PluginSearchProvider('p', 'P', transport, 1000);
+    await expect(p.search({ q: 'hi', chatIds: [], offset: 5 })).resolves.toEqual({
+      hits: [],
+      total: 0,
+      tookMs: 0,
+      provider: 'plugin:p',
+    });
+    expect(dispatchSearch).not.toHaveBeenCalled();
   });
 
   it('preserves the plugin total when all hits are in-scope (pagination must still work)', async () => {

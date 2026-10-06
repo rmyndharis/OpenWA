@@ -142,6 +142,30 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     const none = await provider.search({ q: 'hello', chatIds: ['cX'] });
     expect(none.hits).toEqual([]);
     expect(none.total).toBe(0);
+    await ds.getRepository(Message).insert({
+      sessionId: 's2',
+      chatId: 'c2',
+      from: 'b@c.us',
+      to: 'dest@c.us',
+      body: 'hello there',
+      type: 'text',
+      direction: MessageDirection.INCOMING,
+      timestamp: 4,
+    });
+    const pages = await Promise.all(
+      [0, 1, 2].map(offset => provider.search({ q: 'hello', chatIds: ['c2'], limit: 1, offset })),
+    );
+    expect(pages.map(page => page.total)).toEqual([2, 2, 2]);
+    expect(pages.flatMap(page => page.hits).map(hit => hit.chatId)).toEqual(['c2', 'c2']);
+    expect(new Set(pages.flatMap(page => page.hits).map(hit => hit.messageId)).size).toBe(2);
+    expect((await provider.search({ q: 'hello', chatIds: ['c2'], chatId: 'c1' })).total).toBe(0);
+    expect((await provider.search({ q: 'hello', chatIds: ['c2'], sessionIds: ['s1'] })).total).toBe(0);
+  });
+
+  it.each([0, 1])('returns no hits or count for an empty compiled chat scope at offset %s', async offset => {
+    const result = await provider.search({ q: 'hello', chatIds: [], limit: 1, offset });
+    expect(result.hits).toEqual([]);
+    expect(result.total).toBe(0);
   });
 
   it('returns empty (not error) for no matches', async () => {

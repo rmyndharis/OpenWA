@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Scope `GET /api/search` hits and group detail/settings to a chat-restricted key's allowed chats.
+- Scope built-in message search and group detail/settings to a chat-restricted key's allowed chats; reject plugin search for these keys.
 - Filter stored messages by time, direction, type or message reference, with stable message-time pagination.
 - Expose poll choices and selection mode in message events, stored messages, history, and dashboard chats.
 - Expose optional last-message types in chat lists and SDKs.

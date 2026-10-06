@@ -67,6 +67,8 @@ describe('ChatScopeService', () => {
     const ids = await svc.idsForFilter({ allowedChats: [`${PHONE}@c.us`, '120@g.us'] });
     expect(ids).toEqual(expect.arrayContaining([`${PHONE}@c.us`, `${PHONE}@s.whatsapp.net`, `${LID}@lid`, '120@g.us']));
     expect(await svc.idsForFilter({ allowedChats: null })).toBeUndefined();
+    expect(await svc.idsForFilter({ allowedChats: [] })).toBeUndefined();
+    expect(await svc.idsForFilter({ allowedChats: ['not-a-chat'] })).toEqual([]);
     expect(await svc.idsForFilter(undefined)).toBeUndefined();
   });
 

@@ -1,4 +1,4 @@
-import { BadGatewayException, ServiceUnavailableException } from '@nestjs/common';
+import { BadGatewayException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
 import type { SearchProvider, SearchQuery, SearchResults, SearchHealth } from '../search.types';
 
 /**
@@ -81,6 +81,11 @@ export class PluginSearchProvider implements SearchProvider {
   }
 
   async search(query: SearchQuery): Promise<SearchResults> {
+    if (query.chatIds !== undefined) {
+      if (query.chatIds.length === 0) return { hits: [], total: 0, tookMs: 0, provider: this.id };
+      // Filtering an already paginated plugin response cannot enforce scoped offsets or counts.
+      throw new ForbiddenException('Chat-restricted search requires the built-in search provider');
+    }
     const reply = await this.transport.dispatchSearch({ query, timeoutMs: this.timeoutMs });
     if (!reply.ok) throw new ServiceUnavailableException(reply.error);
     // The result shape is untrusted wire data: reject an invalid payload with an honest 502 (bad
@@ -96,22 +101,11 @@ export class PluginSearchProvider implements SearchProvider {
       tookMs: Math.round(reply.results.tookMs),
       hits: reply.results.hits.map(h => ({ ...h, timestamp: Math.trunc(h.timestamp) })),
     };
-    // Defense-in-depth: the plugin is expected to honor sessionIds and chatIds, but re-filter
-    // host-side so a plugin bug or leak can never surface a hit outside the caller's allowed
-    // session or chat scope — mirroring the SQL-enforced scoping the built-in provider gets for
-    // free. The guard mirrors the built-in provider's applyFilters conditions (`sessionIds &&
-    // sessionIds.length`, likewise chatIds) so the two providers never diverge for the same query
-    // (an empty array is a no-op on both paths). When no filtering is needed, return the normalized
-    // results as they are. Preserve the plugin's total when no hits were out of scope (the normal,
-    // well-behaved case) so pagination ("Load More" = hits.length < total) still works; fall back
-    // to the filtered page count only when a leak was actually stripped (the plugin's claimed total
-    // is then also suspect). tookMs/provider are metadata unrelated to scope.
+    // Keep the existing session defense: plugins must apply sessionIds before paging and counting.
+    // Preserve total for compliant pages; discard it when an out-of-scope hit is returned.
     const sessionFilter = query.sessionIds?.length ? new Set(query.sessionIds) : null;
-    const chatFilter = query.chatIds?.length ? new Set(query.chatIds) : null;
-    if (!sessionFilter && !chatFilter) return results;
-    const scoped = results.hits.filter(
-      h => (!sessionFilter || sessionFilter.has(h.sessionId)) && (!chatFilter || chatFilter.has(h.chatId)),
-    );
+    if (!sessionFilter) return results;
+    const scoped = results.hits.filter(h => sessionFilter.has(h.sessionId));
     const leaked = results.hits.length - scoped.length;
     return {
       hits: scoped,
