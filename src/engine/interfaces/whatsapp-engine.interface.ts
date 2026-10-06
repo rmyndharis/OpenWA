@@ -808,8 +808,11 @@ export interface EngineEventCallbacks {
   /**
    * Fired when the delivery status of an outgoing message advances. The adapter maps its native
    * delivery signal to the neutral `DeliveryStatus`, so consumers never see engine-specific codes.
+   * `chatId` is the conversation the acked message belongs to, canonicalized the same way the
+   * inbound mappers canonicalize `IncomingMessage.chatId`; undefined when the engine's update
+   * carries no chat, and the emitted payload then omits the field rather than guess.
    */
-  onMessageAck?: (messageId: string, status: DeliveryStatus) => void;
+  onMessageAck?: (messageId: string, status: DeliveryStatus, chatId?: string) => void;
   onMessageRevoked?: (message: RevokedMessage) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;

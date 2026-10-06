@@ -5747,7 +5747,23 @@ describe('WhatsAppWebJsAdapter message_ack (unreadable id)', () => {
 
     client.emit('message_ack', { id: { _serialized: 'ACKED_MSG' } }, 3);
 
-    expect(onMessageAck).toHaveBeenCalledWith('ACKED_MSG', expect.any(String));
+    expect(onMessageAck).toHaveBeenCalledWith('ACKED_MSG', expect.any(String), undefined);
+  });
+
+  it('derives the acked message chat as Message._getChatId does', () => {
+    // Acks ride outbound messages, so the chat is the recipient; the direction flag keeps an
+    // inbound-shaped payload on its sender, the same derivation the revoked handler uses.
+    const { onMessageAck, client } = wireAckHandler();
+
+    client.emit(
+      'message_ack',
+      { id: { _serialized: 'ACKED_OUT' }, fromMe: true, from: 'me@c.us', to: '120363000@g.us' },
+      3,
+    );
+    client.emit('message_ack', { id: { _serialized: 'ACKED_IN' }, fromMe: false, from: '621@c.us', to: 'me@c.us' }, 2);
+
+    expect(onMessageAck).toHaveBeenCalledWith('ACKED_OUT', expect.any(String), '120363000@g.us');
+    expect(onMessageAck).toHaveBeenCalledWith('ACKED_IN', expect.any(String), '621@c.us');
   });
 
   it('reads a renamed `$1` id when the dependency has not normalized it', () => {
@@ -5757,7 +5773,7 @@ describe('WhatsAppWebJsAdapter message_ack (unreadable id)', () => {
 
     client.emit('message_ack', { id: { $1: 'ACKED_RENAMED' } }, 3);
 
-    expect(onMessageAck).toHaveBeenCalledWith('ACKED_RENAMED', expect.any(String));
+    expect(onMessageAck).toHaveBeenCalledWith('ACKED_RENAMED', expect.any(String), undefined);
   });
 
   it('drops an ack whose id cannot be read instead of passing undefined on', () => {

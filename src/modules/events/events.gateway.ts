@@ -863,10 +863,14 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
   /**
    * Emit a live delivery-status update. The payload mirrors the `message.ack` webhook exactly
-   * (`id`, `messageId`, neutral `status`, and the deprecated legacy numeric `ack`) so a socket
-   * client and a webhook consumer see the same shape.
+   * (`id`, `messageId`, neutral `status`, the deprecated legacy numeric `ack`, and `chatId` when
+   * the engine's update named the chat) so a socket client and a webhook consumer see the same
+   * shape.
    */
-  emitMessageAck(sessionId: string, data: { id: string; messageId: string; status: DeliveryStatus; ack: number }) {
+  emitMessageAck(
+    sessionId: string,
+    data: { id: string; messageId: string; status: DeliveryStatus; ack: number; chatId?: string },
+  ) {
     this.emitToRooms(sessionId, 'message.ack', data);
   }
 

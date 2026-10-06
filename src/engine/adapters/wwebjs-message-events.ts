@@ -137,8 +137,11 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       return;
     }
     // Map the whatsapp-web.js MessageAck integer to the neutral DeliveryStatus here, at the
-    // adapter boundary, so no downstream consumer ever sees engine-specific ack codes.
-    host.getCallbacks().onMessageAck?.(ackId, wwebjsAckToDeliveryStatus(ack));
+    // adapter boundary, so no downstream consumer ever sees engine-specific ack codes. The chat is
+    // derived as Message._getChatId derives it (the same direction flag the revoked handler uses),
+    // so the ack's chatId matches the chatId of the message it belongs to.
+    const ackChatId = msg.fromMe ? msg.to : msg.from;
+    host.getCallbacks().onMessageAck?.(ackId, wwebjsAckToDeliveryStatus(ack), ackChatId || undefined);
   });
 
   client.on('message_revoke_everyone', (after, before) => {

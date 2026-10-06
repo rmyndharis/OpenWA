@@ -1325,4 +1325,37 @@ describe('MessageProjector (inbound projection)', () => {
       expect(eventsGateway.emitMessageSent).toHaveBeenCalledWith(SESSION_ID, sent);
     });
   });
+
+  describe('handleMessageAck payload', () => {
+    it('carries the chat the engine named, on the socket and on both webhook events', () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+
+      projector.handleMessageAck(SESSION_ID, engine, 'M1', 'delivered', '120363000@g.us');
+      projector.handleMessageAck(SESSION_ID, engine, 'M2', 'failed', '120363000@g.us');
+
+      const expected = { id: 'M1', messageId: 'M1', status: 'delivered', ack: 2, chatId: '120363000@g.us' };
+      expect(eventsGateway.emitMessageAck).toHaveBeenCalledWith(SESSION_ID, expected);
+      expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.ack', expected);
+      expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.failed', {
+        id: 'M2',
+        messageId: 'M2',
+        status: 'failed',
+        ack: -1,
+        chatId: '120363000@g.us',
+      });
+    });
+
+    it('omits chatId when the engine update carried no chat', () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+
+      projector.handleMessageAck(SESSION_ID, engine, 'M1', 'delivered');
+
+      // Exact equality: the payload has no chatId key at all, not an undefined one.
+      const bare = { id: 'M1', messageId: 'M1', status: 'delivered', ack: 2 };
+      expect(eventsGateway.emitMessageAck).toHaveBeenCalledWith(SESSION_ID, bare);
+      expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.ack', bare);
+    });
+  });
 });

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Carry `chatId` in `message.ack` and `message.failed` payloads so a webhook `chatId` filter scopes delivery events per chat.
 - Filter stored messages by time, direction, type or message reference, with stable message-time pagination.
 - Expose poll choices and selection mode in message events, stored messages, history, and dashboard chats.
 - Expose optional last-message types in chat lists and SDKs.

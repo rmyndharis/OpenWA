@@ -2761,7 +2761,19 @@ describe('BaileysAdapter inbound fan-out', () => {
     const adapter = newAdapter();
     await adapter.initialize({ onMessageAck });
     fakeSock.fire('messages.update', [{ key: { id: 'OUT1' }, update: { status: 3 } }]);
-    expect(onMessageAck).toHaveBeenCalledWith('OUT1', 'delivered');
+    expect(onMessageAck).toHaveBeenCalledWith('OUT1', 'delivered', undefined);
+  });
+
+  it('carries the update key chat on onMessageAck, canonicalized', async () => {
+    const onMessageAck = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessageAck });
+    fakeSock.fire('messages.update', [
+      { key: { id: 'OUT2', remoteJid: '6281111111111@s.whatsapp.net' }, update: { status: 2 } },
+      { key: { id: 'OUT3', remoteJid: '120363000000000000@g.us' }, update: { status: 3 } },
+    ]);
+    expect(onMessageAck).toHaveBeenCalledWith('OUT2', 'sent', '6281111111111@c.us');
+    expect(onMessageAck).toHaveBeenCalledWith('OUT3', 'delivered', '120363000000000000@g.us');
   });
 
   it('inbound image: downloads media and exposes base64 + caption as body', async () => {

@@ -769,11 +769,16 @@ export class BaileysEvents {
     return (isDelete && inGroup) || overlap(author(target), author(envelope));
   }
 
-  handleMessagesUpdate(updates: Array<{ key?: { id?: string | null }; update?: { status?: number | null } }>): void {
+  handleMessagesUpdate(
+    updates: Array<{ key?: { id?: string | null; remoteJid?: string | null }; update?: { status?: number | null } }>,
+  ): void {
     for (const u of updates) {
       const status = mapBaileysStatus(u.update?.status);
       if (status && u.key?.id) {
-        this.host.getOnMessageAck()?.(u.key.id, status);
+        // Canonicalize the update's chat exactly as the inbound mapper does, so an ack's chatId
+        // matches the chatId of the message events it accompanies.
+        const chatId = u.key.remoteJid ? this.host.toNeutralJid(u.key.remoteJid) : undefined;
+        this.host.getOnMessageAck()?.(u.key.id, status, chatId);
       }
     }
   }

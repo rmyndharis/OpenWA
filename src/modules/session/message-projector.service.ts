@@ -766,7 +766,13 @@ export class MessageProjector {
   }
 
   /** Engine callback body, lifted out of initializeEngine so the wiring table stays readable. */
-  handleMessageAck(id: string, engine: IWhatsAppEngine, messageId: string, status: DeliveryStatus): void {
+  handleMessageAck(
+    id: string,
+    engine: IWhatsAppEngine,
+    messageId: string,
+    status: DeliveryStatus,
+    chatId?: string,
+  ): void {
     if (!this.engines.isLive(id, engine)) return;
     this.logger.debug(`Message ack: ${messageId} -> ${status}`, {
       sessionId: id,
@@ -822,8 +828,16 @@ export class MessageProjector {
     // One ack payload, emitted identically over the socket and the webhook so a client coded
     // against either channel sees the same shape. `id` mirrors the field every other message.*
     // event carries (and the idempotency-key resolver reads). `ack` is a deprecated legacy field
-    // kept for backward compatibility — new consumers should read the neutral `status`.
-    const ackPayload = { id: messageId, messageId, status, ack: deliveryStatusToAck(status) };
+    // kept for backward compatibility — new consumers should read the neutral `status`. `chatId`
+    // rides along when the engine's update names the chat, so a webhook `chatId` condition scopes
+    // ack and failure events to that chat instead of suppressing them outright.
+    const ackPayload = {
+      id: messageId,
+      messageId,
+      status,
+      ack: deliveryStatusToAck(status),
+      ...(chatId ? { chatId } : {}),
+    };
 
     // Push the live delivery/read tick to the dashboard over the websocket.
     this.eventsGateway.emitMessageAck(id, ackPayload);
