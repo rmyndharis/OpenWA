@@ -198,6 +198,7 @@ Two consequences worth knowing:
 
 1. **A number reported as unregistered is refused before sending.** Baileys checks a phone destination when it has no LID mapping: a negative answer returns `400`, and an unanswered lookup returns `503`. Known LIDs skip that query. whatsapp-web.js also returns `400` when it cannot resolve the recipient, which can include its first-contact limitation. Neither result guarantees that a registered recipient will receive the message.
 2. **There is no synchronous delivery confirmation on either engine** (whatsapp-web.js or Baileys), so the `201` cannot be made to mean "delivered."
+3. **Baileys can attach a privacy token before the first 1:1 handoff.** When the session says 1:1 sends require one and the auth store has none that is still valid, the gateway issues it and writes it back before `sendMessage`, so the stanza can carry `<tctoken>`. That is a partial mitigation for a first message to a registered recipient the server dropped with ack 463 ([#830](https://github.com/rmyndharis/OpenWA/issues/830)). An unanswered token query returns `503` and sends nothing. The `201` still confirms handoff. Delivery is the later ack.
 
 **Before sending to a new number**, you can confirm it is a registered WhatsApp account with `GET /api/sessions/:sessionId/contacts/check/:number` (returns `{ exists, whatsappId }`; needs an `OPERATOR` key, like the send itself; see the Contacts reference).
 

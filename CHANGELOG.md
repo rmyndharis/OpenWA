@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Prepare a Baileys privacy token before the first 1:1 send so the stanza can carry it. Partial mitigation for a dropped first message ([#830](https://github.com/rmyndharis/OpenWA/issues/830)); HTTP 201 still confirms handoff, and delivery stays on the later ack.
 - Restore legacy webhook failures and normalize terminal duplicates before SQLite schema synchronization.
 - Exclude retained webhook replay payloads from database backup reads.
 - Advance webhook recovery scans past live queued deliveries.

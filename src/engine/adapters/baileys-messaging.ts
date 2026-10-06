@@ -205,6 +205,89 @@ export async function resolveMediaBuffer(
   return { data: Buffer.from(media.data, 'base64'), mimetype: media.mimetype };
 }
 
+/** Same window Baileys uses (`isTcTokenExpired`): four 7-day buckets, about 28 days. */
+const TC_TOKEN_BUCKET_SECONDS = 604800;
+const TC_TOKEN_BUCKETS = 4;
+
+type TcTokenEntry = {
+  token: Buffer;
+  timestamp?: string;
+  senderTimestamp?: number;
+};
+
+type PrivacyServerProps = {
+  privacyTokenOn1to1?: boolean;
+  lidTrustedTokenIssueToLid?: boolean;
+};
+
+function privacyServerProps(sock: WASocket): PrivacyServerProps | undefined {
+  return (sock as WASocket & { serverProps?: PrivacyServerProps }).serverProps;
+}
+
+function isStoredTcTokenExpired(timestamp: number | string | null | undefined): boolean {
+  if (timestamp === null || timestamp === undefined) return true;
+  const ts = typeof timestamp === 'string' ? parseInt(timestamp, 10) : timestamp;
+  if (Number.isNaN(ts)) return true;
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = (Math.floor(now / TC_TOKEN_BUCKET_SECONDS) - (TC_TOKEN_BUCKETS - 1)) * TC_TOKEN_BUCKET_SECONDS;
+  return ts < cutoff;
+}
+
+function usableTcToken(entry: TcTokenEntry | undefined): boolean {
+  return !!entry?.token?.length && !isStoredTcTokenExpired(entry.timestamp);
+}
+
+type TokenNode = { tag?: string; attrs?: Record<string, string>; content?: unknown };
+
+function asTokenNode(node: unknown): TokenNode | undefined {
+  if (!node || typeof node !== 'object') return undefined;
+  return node;
+}
+
+function tokenNodes(result: unknown): TokenNode[] {
+  const top = asTokenNode(result)?.content;
+  if (!Array.isArray(top)) return [];
+  const tokens = top.map(asTokenNode).find(node => node?.tag === 'tokens');
+  const children = tokens?.content;
+  if (!Array.isArray(children)) return [];
+  return children.map(asTokenNode).filter((node): node is TokenNode => node?.tag === 'token');
+}
+
+/**
+ * Persist `trusted_contact` tokens from an `issuePrivacyTokens` IQ the way Baileys'
+ * `storeTcTokensFromIqResult` does. A replacement of `{ token, timestamp }` alone drops
+ * `senderTimestamp`, which is the issuance bookkeeping `shouldSendNewTcToken` reads, and a late
+ * IQ must not overwrite a newer token that landed while the request was in flight.
+ */
+async function storeIssuedPrivacyTokens(
+  result: unknown,
+  storageJid: string,
+  keys: WASocket['authState']['keys'],
+): Promise<boolean> {
+  let wrote = false;
+  for (const tokenNode of tokenNodes(result)) {
+    if (tokenNode.tag !== 'token' || tokenNode.attrs?.type !== 'trusted_contact') continue;
+    if (!(tokenNode.content instanceof Uint8Array)) continue;
+    const incomingTs = tokenNode.attrs.t ? Number(tokenNode.attrs.t) : 0;
+    if (!incomingTs) continue;
+    const existingData = await keys.get('tctoken', [storageJid]);
+    const existingEntry = existingData?.[storageJid];
+    const existingTs = existingEntry?.timestamp ? Number(existingEntry.timestamp) : 0;
+    if (existingTs > 0 && existingTs > incomingTs) continue;
+    await keys.set({
+      tctoken: {
+        [storageJid]: {
+          ...existingEntry,
+          token: Buffer.from(tokenNode.content),
+          timestamp: tokenNode.attrs.t,
+        },
+      },
+    });
+    wrote = true;
+  }
+  return wrote;
+}
+
 export class BaileysMessaging {
   constructor(
     private readonly host: BaileysMessagingHost,
@@ -830,6 +913,58 @@ export class BaileysMessaging {
   }
 
   /**
+   * Put a privacy token in the auth store before a 1:1 send that does not already have a usable one.
+   *
+   * Baileys attaches `<tctoken>` only from the store, then issues a token after the stanza is written.
+   * The first message to a recipient with no stored token therefore goes out without one. WhatsApp
+   * nacks that stanza (463) after `sendMessage` has already resolved, and the API has answered 201.
+   * Issuing first lets that stanza carry the token. Groups, status and channels are not gated this
+   * way. A session that has not reported `privacyTokenOn1to1` is left unchanged.
+   *
+   * `sock` is the socket captured before the awaits in `send`. A replacement connection must not
+   * receive this request, and a failure here is before dispatch.
+   */
+  private async preparePrivacyToken(sock: WASocket, jid: string): Promise<void> {
+    const { kind } = parseWaId(jid);
+    if (kind !== 'user' && kind !== 'lid') return;
+    const props = privacyServerProps(sock);
+    if (!props?.privacyTokenOn1to1 || typeof sock.issuePrivacyTokens !== 'function') return;
+    const assertCurrent = (): void => {
+      if (this.host.getSocketOrNull() !== sock) throw new EngineNotReadyError();
+    };
+    const getLIDForPN = async (pn: string): Promise<string | null> => {
+      try {
+        return (await sock.signalRepository?.lidMapping?.getLIDForPN(pn)) ?? null;
+      } catch {
+        return null;
+      }
+    };
+    const storageJid = kind === 'lid' ? jid : ((await getLIDForPN(jid)) ?? jid);
+    assertCurrent();
+    const read = async (): Promise<TcTokenEntry | undefined> => {
+      const stored = await sock.authState.keys.get('tctoken', [storageJid]);
+      return stored?.[storageJid];
+    };
+    if (usableTcToken(await read())) return;
+    let issueJid = jid;
+    if (props.lidTrustedTokenIssueToLid) {
+      issueJid = kind === 'lid' ? jid : ((await getLIDForPN(jid)) ?? jid);
+    } else if (kind === 'lid') {
+      try {
+        issueJid = (await sock.signalRepository?.lidMapping?.getPNForLID(jid)) ?? jid;
+      } catch {
+        issueJid = jid;
+      }
+    }
+    assertCurrent();
+    const issued: unknown = await sock.issuePrivacyTokens([issueJid]);
+    assertCurrent();
+    if (await storeIssuedPrivacyTokens(issued, storageJid, sock.authState.keys)) return;
+    if (usableTcToken(await read())) return;
+    throw new EngineTransportError('WhatsApp did not return a privacy token');
+  }
+
+  /**
    * Every message this delegate sends goes through here so its id is recorded before the library
    * echoes it back. Baileys re-emits each own send through `messages.upsert` tagged `append`, the
    * same tag WhatsApp uses to replay what the account typed on its phone while the gateway was
@@ -857,6 +992,21 @@ export class BaileysMessaging {
       if (!numberId) throw new BadRequestException(`WhatsApp reports recipient ${jid} is not registered`);
       const canonical = this.host.toEngineJid(numberId);
       if (canonical !== jid) jid = await this.toDeliverableJid(numberId);
+    }
+    if (this.host.getSocketOrNull() !== sock) throw new EngineNotReadyError();
+    // The socket above is the one lookup already used. Token preparation is another await; dispatch
+    // has to stay on that same socket, not on whatever `getSocket()` returns after it.
+    try {
+      await withQueryDeadline(
+        this.preparePrivacyToken(sock, jid),
+        this.queryBudgetMs,
+        'WhatsApp did not answer the privacy-token query in time',
+      );
+    } catch (error) {
+      if (this.host.getSocketOrNull() !== sock || error instanceof EngineNotReadyError) throw new EngineNotReadyError();
+      if (error instanceof EngineNotSentError) throw error;
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new EngineNotSentError(`WhatsApp could not prepare the privacy token before send: ${detail}`);
     }
     if (this.host.getSocketOrNull() !== sock) throw new EngineNotReadyError();
     let sent: WAMessage | undefined;

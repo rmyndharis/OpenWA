@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import * as lib from '@whiskeysockets/baileys';
 import { LIDMappingStore } from '@whiskeysockets/baileys/lib/Signal/lid-mapping.js';
+import {
+  buildTcTokenFromJid,
+  isTcTokenExpired,
+  resolveTcTokenJid,
+} from '@whiskeysockets/baileys/lib/Utils/tc-token-utils.js';
 
 const require = createRequire(import.meta.url);
 const { BaileysMessaging } = require('../../dist/engine/adapters/baileys-messaging.js');
@@ -207,4 +212,163 @@ test('a failed LID query still uses a canonical phone destination', async t => {
   sock.signalRepository.lidMapping.getLIDForPN.mock.mockImplementation(() => Promise.reject(new Error('no mapping')));
   await messaging.sendTextMessage(PN.replace('@s.whatsapp.net', '@c.us'), 'hello');
   assert.equal(sock.sendMessage.mock.calls[0].arguments[0], PN);
+});
+
+/**
+ * The `<tctoken>` node `relayMessage` pushes onto a 1:1 stanza (messages-send.js): the stored
+ * bytes, when they are still inside Baileys' expiry window and the session asked for them.
+ * `buildTcTokenFromJid` is the library's other reader of that same store entry.
+ */
+async function stanzaToken(sock, jid) {
+  const getLIDForPN = pn => sock.signalRepository.lidMapping.getLIDForPN(pn);
+  const storageJid = await resolveTcTokenJid(jid, getLIDForPN);
+  const stored = await sock.authState.keys.get('tctoken', [storageJid]);
+  const entry = stored[storageJid];
+  let token = entry?.token;
+  if (token?.length && isTcTokenExpired(entry.timestamp)) token = undefined;
+  if (!token?.length || !sock.serverProps?.privacyTokenOn1to1) return null;
+  const fromStore = await buildTcTokenFromJid({ authState: sock.authState, jid, getLIDForPN });
+  const libNode = fromStore?.find(node => node.tag === 'tctoken');
+  assert.ok(libNode, 'buildTcTokenFromJid did not emit the stored token');
+  assert.deepEqual(Buffer.from(libNode.content), Buffer.from(token));
+  return { tag: 'tctoken', attrs: {}, content: Buffer.from(token) };
+}
+
+function memoryKeys(initial = {}) {
+  const tctoken = { ...initial };
+  return {
+    tctoken,
+    get(_type, ids) {
+      return Promise.resolve(Object.fromEntries(ids.map(id => [id, tctoken[id]])));
+    },
+    set(update) {
+      Object.assign(tctoken, update.tctoken);
+      return Promise.resolve();
+    },
+  };
+}
+
+function privacyIq(bytes, timestamp, jid = PN) {
+  return {
+    tag: 'iq',
+    attrs: { type: 'result', xmlns: 'privacy' },
+    content: [
+      {
+        tag: 'tokens',
+        attrs: {},
+        content: [
+          {
+            tag: 'token',
+            attrs: { jid, t: String(timestamp), type: 'trusted_contact' },
+            content: Buffer.from(bytes),
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function armPrivacy(t, sock, keys, issue) {
+  sock.serverProps = { privacyTokenOn1to1: true, lidTrustedTokenIssueToLid: false };
+  sock.authState = { keys };
+  sock.issuePrivacyTokens = t.mock.fn(issue);
+  const stanzas = [];
+  sock.sendMessage.mock.mockImplementation(async jid => {
+    stanzas.push(await stanzaToken(sock, jid));
+    return { key: { id: 'M1', remoteJid: jid }, messageTimestamp: 1 };
+  });
+  return stanzas;
+}
+
+test('a privacy-token IQ is stored with its bookkeeping and the stanza carries those bytes', async t => {
+  const now = Math.floor(Date.now() / 1000);
+  const issued = Buffer.from('issued-privacy-token');
+  const keys = memoryKeys({ [PN]: { token: Buffer.alloc(0), senderTimestamp: 4242 } });
+  const { messaging, sock } = build(t);
+  const order = [];
+  const stanzas = armPrivacy(t, sock, keys, () => {
+    order.push('issue');
+    return Promise.resolve(privacyIq(issued, now));
+  });
+  sock.sendMessage.mock.mockImplementation(async jid => {
+    order.push('send');
+    stanzas.push(await stanzaToken(sock, jid));
+    return { key: { id: 'M1', remoteJid: jid }, messageTimestamp: 1 };
+  });
+  await messaging.sendTextMessage(PN, 'hello');
+  assert.deepEqual(order, ['issue', 'send']);
+  assert.deepEqual(sock.issuePrivacyTokens.mock.calls[0].arguments[0], [PN]);
+  assert.deepEqual(keys.tctoken[PN].token, issued);
+  assert.equal(keys.tctoken[PN].timestamp, String(now));
+  assert.equal(keys.tctoken[PN].senderTimestamp, 4242);
+  assert.equal(stanzas[0].tag, 'tctoken');
+  assert.deepEqual(stanzas[0].content, issued);
+});
+
+test('a stale privacy-token IQ does not replace a newer token or its senderTimestamp', async t => {
+  const now = Math.floor(Date.now() / 1000);
+  const newer = Buffer.from('newer-privacy-token');
+  const keys = memoryKeys();
+  const { messaging, sock } = build(t);
+  const stanzas = armPrivacy(t, sock, keys, () => {
+    keys.tctoken[PN] = { token: newer, timestamp: String(now), senderTimestamp: 99 };
+    return Promise.resolve(privacyIq('older-privacy-token', now - 30));
+  });
+  await messaging.sendTextMessage(PN, 'hello');
+  assert.deepEqual(keys.tctoken[PN].token, newer);
+  assert.equal(keys.tctoken[PN].timestamp, String(now));
+  assert.equal(keys.tctoken[PN].senderTimestamp, 99);
+  assert.deepEqual(stanzas[0].content, newer);
+});
+
+test('a stored privacy token is reused and still carried on the stanza', async t => {
+  const now = Math.floor(Date.now() / 1000);
+  const stored = Buffer.from('stored-privacy-token');
+  const keys = memoryKeys({ [PN]: { token: stored, timestamp: String(now), senderTimestamp: 7 } });
+  const { messaging, sock } = build(t);
+  const stanzas = armPrivacy(t, sock, keys, () => Promise.reject(new Error('should not issue')));
+  await messaging.sendTextMessage(PN, 'hello');
+  assert.equal(sock.issuePrivacyTokens.mock.callCount(), 0);
+  assert.deepEqual(stanzas[0].content, stored);
+  assert.equal(keys.tctoken[PN].senderTimestamp, 7);
+});
+
+test('a stalled privacy-token query stops at the OpenWA deadline and sends nothing', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { messaging, sock } = build(t, { budget: 20 });
+  armPrivacy(t, sock, memoryKeys(), () => new Promise(noop));
+  const sent = messaging.sendTextMessage(PN, 'hello');
+  await new Promise(setImmediate);
+  t.mock.timers.tick(21);
+  await assert.rejects(sent, error => error instanceof EngineNotSentError);
+  assert.equal(sock.sendMessage.mock.callCount(), 0);
+});
+
+test('a socket replaced during privacy-token preparation cannot send', async t => {
+  const keys = memoryKeys();
+  const { messaging, sock, stop } = build(t);
+  armPrivacy(t, sock, keys, () => {
+    stop();
+    return Promise.resolve(privacyIq('late', Math.floor(Date.now() / 1000)));
+  });
+  await assert.rejects(messaging.sendTextMessage(PN, 'hello'), error => error.getStatus() === 409);
+  assert.equal(sock.sendMessage.mock.callCount(), 0);
+  assert.equal(keys.tctoken[PN], undefined);
+});
+
+test('a phone lookup failure stays not-sent and does not issue a privacy token', async t => {
+  const { messaging, sock } = build(t);
+  armPrivacy(t, sock, memoryKeys(), () => Promise.resolve(privacyIq('x', Math.floor(Date.now() / 1000))));
+  sock.onWhatsApp.mock.mockImplementation(() => Promise.reject(new Error('disconnected')));
+  await assert.rejects(messaging.sendTextMessage(PN, 'hello'), error => error instanceof EngineNotSentError);
+  assert.equal(sock.issuePrivacyTokens.mock.callCount(), 0);
+  assert.equal(sock.sendMessage.mock.callCount(), 0);
+});
+
+test('groups do not issue a privacy token', async t => {
+  const { messaging, sock } = build(t);
+  armPrivacy(t, sock, memoryKeys(), () => Promise.reject(new Error('should not issue')));
+  await messaging.sendTextMessage('123@g.us', 'hello');
+  assert.equal(sock.issuePrivacyTokens.mock.callCount(), 0);
+  assert.equal(sock.sendMessage.mock.calls[0].arguments[0], '123@g.us');
 });
