@@ -14,7 +14,10 @@
 //                            `?chatId=` qualifies only when the handler also calls
 //                            `this.chatScope.requireChat(`, which refuses a restricted key that omits
 //                            it; on its own the guard would have nothing to check.
-//   @ChatScoped('filtered')  the handler lists chats and returns through ChatScopeService.filter.
+//   @ChatScoped('filtered')  the handler narrows a chat-typed result set to the key's chats: a list
+//                            route returns through ChatScopeService.filter, and a query surface
+//                            (search) passes ChatScopeService.idsForFilter into the provider so the
+//                            filter applies before limit/offset/total.
 //   @ChatScoped('agnostic')  the handler cannot reach a chat at all. This is the one category the
 //                            spec cannot derive (a webhook with `events: ['*']` also names no chat),
 //                            so every grant must also appear in AGNOSTIC_GRANTS.
@@ -87,6 +90,14 @@ export const MUST_STAY_MARKED: ReadonlyArray<readonly [string, string, string]> 
   ['session.controller.ts', 'getGroups', 'filtered'],
   ['contact.controller.ts', 'findAll', 'filtered'],
   ['label.controller.ts', 'getChatsByLabel', 'filtered'],
+  // Search narrows hits to the key's chats inside the providers, before limit/offset/total; the
+  // optional ?chatId= is fenced by the guard on top of that.
+  ['search.controller.ts', 'search', 'filtered'],
+  // Group detail and settings for a group the key may already read and write into: the roster is
+  // member-visible data, largely inferable from the group's own messages.
+  ['group.controller.ts', 'findOne', 'fenced'],
+  ['group.controller.ts', 'getSettings', 'fenced'],
+  ['group.controller.ts', 'updateSettings', 'fenced'],
 ];
 
 const REQUIRED_GUARD_FIELD = new RegExp(`\\b(?:${GUARD_BODY_CHAT_FIELDS.join('|')})!\\s*:`);
@@ -180,7 +191,8 @@ export function chatScopeViolations(
       /@Query\(\s*['"]chatId['"]\s*\)/.test(body) && /this\.chatScope\.requireChat\(/.test(body);
     if (kind === 'fenced' && !(hasPathChat || hasRequiredBodyChat || hasRequiredQueryChat))
       offenders.push(`${name} (fenced, no guard-read chat)`);
-    else if (kind === 'filtered' && !/chatScope\.filter\(/.test(body)) offenders.push(`${name} (filtered, no filter)`);
+    else if (kind === 'filtered' && !/chatScope\.(filter|idsForFilter)\(/.test(body))
+      offenders.push(`${name} (filtered, no filter)`);
     else if (kind === 'agnostic' && !agnosticGrants.some(([f, h]) => f === file && h === name))
       offenders.push(`${name} (agnostic, not on AGNOSTIC_GRANTS)`);
     else if (!['fenced', 'filtered', 'agnostic'].includes(kind)) offenders.push(`${name} (unknown kind '${kind}')`);

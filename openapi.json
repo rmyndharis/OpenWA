@@ -9730,7 +9730,7 @@
             }
           },
           "403": {
-            "description": "The API key's role, session or chat scope, or IP allow-list does not allow this operation",
+            "description": "The API key is restricted to selected chats and this group is outside its allowlist. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9923,7 +9923,7 @@
             }
           },
           "403": {
-            "description": "The API key's role, session or chat scope, or IP allow-list does not allow this operation",
+            "description": "The API key is restricted to selected chats and this group is outside its allowlist. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {

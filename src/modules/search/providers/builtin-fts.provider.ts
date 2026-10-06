@@ -375,6 +375,11 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
       where.push(`${prefix}"chatId" = ${ph()}`);
       params.push(q.chatId);
     }
+    if (q.chatIds && q.chatIds.length) {
+      const placeholders = q.chatIds.map(() => ph()).join(',');
+      where.push(`${prefix}"chatId" IN (${placeholders})`);
+      params.push(...q.chatIds);
+    }
     if (q.from) {
       where.push(`${prefix}"from" = ${ph()}`);
       params.push(q.from);

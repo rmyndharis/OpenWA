@@ -40,6 +40,17 @@ describe('SearchService', () => {
     expect(search).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: ['s1'] }));
   });
 
+  it('injects the caller chat scope and does not let a caller override chatIds either', async () => {
+    const reg = new SearchProviderRegistry();
+    const search = jest.fn().mockResolvedValue(emptyResults);
+    reg.register(mkProvider('builtin-fts', search));
+    const svc = new SearchService(reg);
+    // The lid-expanded allowlist arrives from ChatScopeService via the controller; a smuggled
+    // `chatIds` must be overwritten exactly like sessionIds.
+    await svc.search({ q: 'x', chatIds: ['sneaky'] }, undefined, ['111@c.us', '111@lid']);
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ chatIds: ['111@c.us', '111@lid'] }));
+  });
+
   it('clamps an excessive limit to SEARCH_LIMIT_MAX before it reaches any provider', async () => {
     // Without the host-side clamp a plugin provider would receive the raw caller value (9999) and
     // could pressure host heap by returning an oversized page. The built-in already rejected this in

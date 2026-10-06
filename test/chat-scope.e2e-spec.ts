@@ -87,4 +87,21 @@ describe('Chat-restricted API keys (e2e)', () => {
   it.each(['chats', 'groups', 'contacts', 'labels/1/chats'])('admits the filtered list route %s', async route => {
     expect((await get(`/api/sessions/${sessionId}/${route}`, chatKey)).status).not.toBe(403);
   });
+
+  it('admits search for a restricted key and fences its optional ?chatId=', async () => {
+    const outside = await get(`/api/search?q=hi&chatId=${OTHER}`, chatKey).expect(403);
+    expect((outside.body as { message: string }).message).toBe('API key not authorized for this chat');
+    // No provider guarantee in this suite, so an admitted call is asserted only as past the fence;
+    // the hit-level filtering to the key's chats is pinned in the provider specs.
+    expect((await get('/api/search?q=hi', chatKey)).status).not.toBe(403);
+    expect((await get('/api/search?q=hi', openKey)).status).not.toBe(403);
+  });
+
+  it('admits group detail and settings for the allowed group, refuses any other', async () => {
+    const detail = await get(`/api/sessions/${sessionId}/groups/${OTHER}`, chatKey).expect(403);
+    expect((detail.body as { message: string }).message).toBe('API key not authorized for this chat');
+    await get(`/api/sessions/${sessionId}/groups/${OTHER}/settings`, chatKey).expect(403);
+    expect((await get(`/api/sessions/${sessionId}/groups/${ALLOWED}`, chatKey)).status).not.toBe(403);
+    expect((await get(`/api/sessions/${sessionId}/groups/${ALLOWED}/settings`, chatKey)).status).not.toBe(403);
+  });
 });

@@ -60,8 +60,18 @@ export class ChatScopeService {
   }
 
   /** The allowlist expanded once with the lid table (batched), for filtering a whole list. */
-  scopeForFilter(apiKey: Pick<ApiKey, 'allowedChats'> | null | undefined): Promise<ChatScope | null> {
+  scopeForFilter(apiKey?: Pick<ApiKey, 'allowedChats'> | null): Promise<ChatScope | null> {
     return buildExpandedChatScope(apiKey?.allowedChats ?? null, this.batchDirectory());
+  }
+
+  /**
+   * The expanded allowlist as a plain id array, for surfaces that filter at the query level
+   * (search's SQL `IN`), or `undefined` when the key is unrestricted. Same expansion as
+   * {@link scopeForFilter}: both stored dialects of every entry, lid twins included.
+   */
+  async idsForFilter(apiKey?: Pick<ApiKey, 'allowedChats'> | null): Promise<string[] | undefined> {
+    const scope = await this.scopeForFilter(apiKey);
+    return scope ? [...scope.allowed] : undefined;
   }
 
   /** The subset of `items` whose chat id is inside the key's fence (unrestricted ⇒ unchanged). */

@@ -96,18 +96,22 @@ export class PluginSearchProvider implements SearchProvider {
       tookMs: Math.round(reply.results.tookMs),
       hits: reply.results.hits.map(h => ({ ...h, timestamp: Math.trunc(h.timestamp) })),
     };
-    // Defense-in-depth: the plugin is expected to honor sessionIds, but re-filter host-side so a plugin
-    // bug or leak can never surface a hit outside the caller's allowed session scope — mirroring the
-    // SQL-enforced scoping the built-in provider gets for free. The guard mirrors the built-in
-    // provider's applyFilters condition (`sessionIds && sessionIds.length`) so the two providers never
-    // diverge for the same query (an empty array is a no-op on both paths). When no filtering is
-    // needed, return the normalized results as they are. Preserve the plugin's total when no hits were
-    // out of scope (the normal, well-behaved case) so pagination ("Load More" = hits.length < total)
-    // still works; fall back to the filtered page count only when a leak was actually stripped (the
-    // plugin's claimed total is then also suspect). tookMs/provider are metadata unrelated to scope.
-    if (!query.sessionIds || !query.sessionIds.length) return results;
-    const allowed = new Set(query.sessionIds);
-    const scoped = results.hits.filter(h => allowed.has(h.sessionId));
+    // Defense-in-depth: the plugin is expected to honor sessionIds and chatIds, but re-filter
+    // host-side so a plugin bug or leak can never surface a hit outside the caller's allowed
+    // session or chat scope — mirroring the SQL-enforced scoping the built-in provider gets for
+    // free. The guard mirrors the built-in provider's applyFilters conditions (`sessionIds &&
+    // sessionIds.length`, likewise chatIds) so the two providers never diverge for the same query
+    // (an empty array is a no-op on both paths). When no filtering is needed, return the normalized
+    // results as they are. Preserve the plugin's total when no hits were out of scope (the normal,
+    // well-behaved case) so pagination ("Load More" = hits.length < total) still works; fall back
+    // to the filtered page count only when a leak was actually stripped (the plugin's claimed total
+    // is then also suspect). tookMs/provider are metadata unrelated to scope.
+    const sessionFilter = query.sessionIds?.length ? new Set(query.sessionIds) : null;
+    const chatFilter = query.chatIds?.length ? new Set(query.chatIds) : null;
+    if (!sessionFilter && !chatFilter) return results;
+    const scoped = results.hits.filter(
+      h => (!sessionFilter || sessionFilter.has(h.sessionId)) && (!chatFilter || chatFilter.has(h.chatId)),
+    );
     const leaked = results.hits.length - scoped.length;
     return {
       hits: scoped,

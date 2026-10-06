@@ -62,6 +62,14 @@ describe('ChatScopeService', () => {
     expect(await svc.filter({ allowedChats: null }, rows, r => r.id)).toEqual(rows);
   });
 
+  it('idsForFilter returns the expanded id array, or undefined when unrestricted', async () => {
+    const svc = new ChatScopeService(fakeStore());
+    const ids = await svc.idsForFilter({ allowedChats: [`${PHONE}@c.us`, '120@g.us'] });
+    expect(ids).toEqual(expect.arrayContaining([`${PHONE}@c.us`, `${PHONE}@s.whatsapp.net`, `${LID}@lid`, '120@g.us']));
+    expect(await svc.idsForFilter({ allowedChats: null })).toBeUndefined();
+    expect(await svc.idsForFilter(undefined)).toBeUndefined();
+  });
+
   it('does not admit a phone whose lid another node has re-mapped', async () => {
     const rows = [{ lid: LID, phone: PHONE as string | null }];
     const hit = (value: string | null, cond?: string | FindOperator<unknown>) =>

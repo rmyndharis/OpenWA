@@ -1,7 +1,8 @@
 import { Controller, Get, Query, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { SearchResultsResponseDto } from './dto/search-response.dto';
-import { RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
+import { ChatScoped, CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { ChatScopeService } from '../auth/chat-scope.service';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { SearchService } from './search.service';
 import { SearchQueryDto } from './dto/search-query.dto';
@@ -11,8 +12,12 @@ import type { SearchResults } from './search.types';
 @ApiTags('search')
 @Controller('search')
 export class SearchController {
-  constructor(private readonly searchService: SearchService) {}
+  constructor(
+    private readonly searchService: SearchService,
+    private readonly chatScope: ChatScopeService,
+  ) {}
 
+  @ChatScoped('filtered')
   @Get()
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Search messages across sessions (active search provider)' })
@@ -51,10 +56,14 @@ export class SearchController {
       throw new BadRequestException('Query parameter "q" is required and must be non-empty.');
     }
     // callerSessionIds comes ONLY from the authenticated key's allowedSessions — never from the
-    // query/body — so a scoped key cannot broaden its reach. A null/empty allowlist (e.g. ADMIN)
-    // resolves to undefined → searches all sessions, mirroring GET /webhooks. The DTO carries no
-    // `sessionIds` field (the global ValidationPipe's forbidNonWhitelisted would reject it anyway),
-    // and SearchService makes scope authoritative by overwriting sessionIds at the provider boundary.
-    return this.searchService.search(dto, apiKey?.allowedSessions ?? undefined);
+    // query/body — so a scoped key cannot broaden its reach; the same holds for the chat scope,
+    // expanded lid-aware here and applied inside the providers BEFORE limit/offset/total. A null/empty
+    // session allowlist (e.g. ADMIN) resolves to undefined → searches all sessions, mirroring GET
+    // /webhooks. The DTO carries no `sessionIds` or `chatIds` field (the global ValidationPipe's
+    // forbidNonWhitelisted would reject it anyway), and SearchService makes both scopes authoritative
+    // by overwriting them at the provider boundary. An optional `?chatId=` is additionally fenced by
+    // the guard against the key's allowlist, so a restricted key cannot name another chat either.
+    const chatIds = await this.chatScope.idsForFilter(apiKey);
+    return this.searchService.search(dto, apiKey?.allowedSessions ?? undefined, chatIds);
   }
 }

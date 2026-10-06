@@ -85,6 +85,20 @@ describe('PluginSearchProvider', () => {
     expect(res.provider).toBe('plugin:p');
   });
 
+  it('strips hits whose chatId is outside query.chatIds (chat-restricted key)', async () => {
+    // Same defense for the chat fence: the allowlist arrives lid-expanded from the controller, and a
+    // hit stored under any dialect not in it never reaches the caller.
+    const inScope = mkHit({ messageId: 'm1', chatId: '111@c.us' });
+    const leaked = mkHit({ messageId: 'm2', chatId: '999@g.us' });
+    const results: SearchResults = { hits: [inScope, leaked], total: 2, tookMs: 3, provider: 'plugin:p' };
+    const dispatchSearch = jest.fn().mockResolvedValue({ ok: true, results });
+    const p = new PluginSearchProvider('p', 'P', fakeTransport({ dispatchSearch }), 1000);
+
+    const res = await p.search({ q: 'hi', chatIds: ['111@c.us', '111@s.whatsapp.net'] });
+    expect(res.hits.map(h => h.messageId)).toEqual(['m1']);
+    expect(res.total).toBe(1);
+  });
+
   it('preserves the plugin total when all hits are in-scope (pagination must still work)', async () => {
     // A well-behaved plugin returns a full page of in-scope hits with the true total spanning more pages.
     // Overwriting total with the page hit count would make "Load More" (hits.length < total) never fire,

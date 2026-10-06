@@ -47,7 +47,7 @@ API keys carry one of three roles, ordered by privilege:
 
 A key may additionally be scoped to specific sessions (`allowedSessions`) and/or source IPs (`allowedIps`). The scope/IP check runs in the guard **before** any role check, so a request outside that scope is rejected with `403` even if the role would otherwise allow it. `401` is kept for a missing, unknown, revoked or expired key.
 
-A key may also be restricted to selected chats (`allowedChats`: group `<id>@g.us`, contact `<phone>@c.us` or `<lid>@lid`, or a bare phone number, which is stored as `<phone>@c.us`). An empty or absent list leaves the key unrestricted. A chat-restricted key is **denied by default**: it may call only routes marked as chat-scoped, and every other route (webhooks, automation, status, channels, key management, and any route added later) answers `403 "API key is restricted to selected chats"` after the role check. On a chat-scoped route, every chat id the request names (a `:chatId` / `:groupId` / `:contactId` path param, `?chatId=`, a body `chatId` / `fromChatId` / `toChatId`, and each `messages[].chatId` of a bulk send) must be inside the allowlist, or the request answers `403 "API key not authorized for this chat"`; a contact entry also matches its mapped `@lid` form, and the reverse. The chat, group, contact and label-chat list routes (`GET /api/sessions/:sessionId/chats`, `/groups`, `/contacts` and `/labels/:labelId/chats`) return only the allowed entries, filtered before paging. On `GET /api/sessions/:sessionId/messages` such a key must pass `?chatId=`; omitting it answers `403`. A `quotedMessageId` is refused with `403` everywhere except the reply route, which binds the quote to the chat it sends into. The surfaces outside the REST guard refuse a chat-restricted key outright: the `/events` WebSocket at the handshake and on every subscribe, every MCP tool call (`403`), and the Bull Board queue dashboard (`403`).
+A key may also be restricted to selected chats (`allowedChats`: group `<id>@g.us`, contact `<phone>@c.us` or `<lid>@lid`, or a bare phone number, which is stored as `<phone>@c.us`). An empty or absent list leaves the key unrestricted. A chat-restricted key is **denied by default**: it may call only routes marked as chat-scoped, and every other route (webhooks, automation, status, channels, key management, and any route added later) answers `403 "API key is restricted to selected chats"` after the role check. On a chat-scoped route, every chat id the request names (a `:chatId` / `:groupId` / `:contactId` path param, `?chatId=`, a body `chatId` / `fromChatId` / `toChatId`, and each `messages[].chatId` of a bulk send) must be inside the allowlist, or the request answers `403 "API key not authorized for this chat"`; a contact entry also matches its mapped `@lid` form, and the reverse. The chat, group, contact and label-chat list routes (`GET /api/sessions/:sessionId/chats`, `/groups`, `/contacts` and `/labels/:labelId/chats`) return only the allowed entries, filtered before paging. `GET /api/search` narrows its hits to the allowed chats inside the active provider, before `limit`/`offset`/`total` apply, and an optional `?chatId=` must name an allowed chat. `GET /api/sessions/:sessionId/groups/:groupId` and its `GET`/`PUT .../settings` admit a group inside the allowlist and answer `403` for any other. On `GET /api/sessions/:sessionId/messages` such a key must pass `?chatId=`; omitting it answers `403`. A `quotedMessageId` is refused with `403` everywhere except the reply route, which binds the quote to the chat it sends into. The surfaces outside the REST guard refuse a chat-restricted key outright: the `/events` WebSocket at the handshake and on every subscribe, every MCP tool call (`403`), and the Bull Board queue dashboard (`403`).
 
 ### API-Key Lifecycle
 
@@ -2861,7 +2861,7 @@ Raw object (no envelope). `engine.getGroupInfo()` returns `GroupInfo | null`; th
 }
 ```
 
-**Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `404` `Group <groupId> not found` · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `403` a key restricted to selected chats names a group outside its allowlist · `404` `Group <groupId> not found` · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### GET /api/sessions/:sessionId/groups/:groupId/picture
 
@@ -3328,7 +3328,7 @@ accept it, but they encode it differently underneath — Baileys as a boolean wh
 _everyone_, whatsapp-web.js as WhatsApp's own `all_member_add`/`admin_add` strings (its typings claim
 a boolean with the opposite sense). The adapters normalise both to these two values.
 
-**Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `404` group not found · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `403` a key restricted to selected chats names a group outside its allowlist · `404` group not found · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### PUT /api/sessions/:sessionId/groups/:groupId/settings
 
@@ -3367,7 +3367,7 @@ Update group settings. Each present field maps to one engine call; absent fields
 { "success": true, "message": "Group settings updated" }
 ```
 
-**Errors:** `400` session is not started / empty patch / unknown body field · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the account is not a group admin (`memberAddMode` on whatsapp-web.js) · `501` `ephemeralSeconds` on the whatsapp-web.js engine (library limitation) · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` session is not started / empty patch / unknown body field · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, the account is not a group admin (`memberAddMode` on whatsapp-web.js), or a key restricted to selected chats names a group outside its allowlist · `501` `ephemeralSeconds` on the whatsapp-web.js engine (library limitation) · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### GET /api/sessions/:sessionId/groups/:groupId/membership-requests
 
@@ -6501,7 +6501,7 @@ Search messages across sessions (active search provider).
 | ----------- | ------------------------------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `q`         | string                          | **Yes**  | —       | Search term. Must be non-empty after trim; whitespace-only is rejected with `400`. Passed to the active provider's native full-text matcher.                                                  |
 | `sessionId` | string                          | No       | —       | Restrict to a single session id (intersected with the key's `allowedSessions` scope).                                                                                                         |
-| `chatId`    | string                          | No       | —       | Restrict to a single chat id.                                                                                                                                                                 |
+| `chatId`    | string                          | No       | —       | Restrict to a single chat id. For a key restricted to selected chats this must name an allowed chat (`403` otherwise), and its hits are additionally narrowed to the allowlist. |
 | `direction` | enum (`incoming` \| `outgoing`) | No       | —       | Filter by message direction.                                                                                                                                                                  |
 | `type`      | string                          | No       | —       | Filter by stored message `type` (e.g. `text`, `image`, `video`). Compared against `messages.type`; not an enum validation, any string is accepted and unmatched values simply return no hits. |
 | `from`      | string                          | No       | —       | Filter by sender.                                                                                                                                                                             |
@@ -6546,7 +6546,8 @@ Search messages across sessions (active search provider).
 
 **Errors:** `400` empty/whitespace `q`, a non-numeric `dateFrom`/`dateTo`/`limit`/`offset`, an `offset` above `100000`, or a malformed
 SQLite FTS5 query (unbalanced quote/paren, bare operator) — Postgres's `websearch_to_tsquery` is
-tolerant and has no equivalent · `401` missing/invalid `X-API-Key` · `403` key role below `OPERATOR` ·
+tolerant and has no equivalent · `401` missing/invalid `X-API-Key` · `403` key role below `OPERATOR`, or a chat-restricted key
+that names a `chatId` outside its allowlist ·
 `501` no search provider configured (including a non-FTS5 SQLite build, where the provider is absent) ·
 `502` the active plugin provider returned an invalid result shape (not retryable until the plugin is fixed) ·
 `503` the active plugin provider did not answer (worker not running, timed out, or reported a failure;
@@ -6554,7 +6555,10 @@ retryable). The built-in provider returns neither `502` nor `503`.
 
 > Scoping is authoritative: a scoped API key's `allowedSessions` is applied server-side and cannot be
 > overridden via the query — there is no `sessionIds` query parameter, and `SearchService` overwrites
-> any session scope at the provider boundary.
+> any session scope at the provider boundary. The same holds for the chat scope: a key restricted to
+> selected chats sees only hits inside its allowlist (expanded lid-aware before the providers apply
+> it, so `limit`/`offset`/`total` all describe the scoped result set), and there is no `chatIds`
+> query parameter.
 
 ### 6.4.13 Profile (own account)
 

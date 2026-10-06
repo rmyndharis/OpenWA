@@ -132,6 +132,18 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     expect(one.hits.map(h => h.sessionId)).toEqual(['s2']);
   });
 
+  it('scopes by chatIds (auth allowlist) before limit/offset/total', async () => {
+    // The chat fence arrives as the stored-dialect forms of the key's allowlist (lid expansion is
+    // ChatScopeService's job); hits in any other chat disappear from the page AND from the count,
+    // so pagination windows stay honest.
+    const scoped = await provider.search({ q: 'hello', chatIds: ['c2'] });
+    expect(scoped.hits.map(h => h.chatId)).toEqual(['c2']);
+    expect(scoped.total).toBe(1);
+    const none = await provider.search({ q: 'hello', chatIds: ['cX'] });
+    expect(none.hits).toEqual([]);
+    expect(none.total).toBe(0);
+  });
+
   it('returns empty (not error) for no matches', async () => {
     const res = await provider.search({ q: 'zzzznomatch' });
     expect(res.hits).toEqual([]);

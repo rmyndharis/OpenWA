@@ -48,7 +48,7 @@ returns a `SearchResults`:
 
 ```ts
 ctx.registerSearchProvider(async (query) => {
-  // query: SearchQuery — { q, sessionIds?, sessionId?, chatId?, direction?, type?, from?, dateFrom?, dateTo?, limit?, offset? }
+  // query: SearchQuery — { q, sessionIds?, chatIds?, sessionId?, chatId?, direction?, type?, from?, dateFrom?, dateTo?, limit?, offset? }
   // Run your backend's query here (e.g. a Meilisearch /search call).
   return {
     hits: [...],   // SearchHit[] — see below
@@ -292,6 +292,9 @@ ctx interface is planned; for now the search contract types above are the stable
   `query.sessionIds` — the plugin should honor it (filter by `sessionIds` in the backend query) for
   correct results + performance. The host re-filters as defense-in-depth, but a plugin that ignores
   `sessionIds` returns more rows than needed (wasteful) and relies on the host to strip them.
+  The same holds for the chat scope: a key restricted to selected chats gets its lid-expanded
+  allowlist in `query.chatIds`, the plugin should filter by it, and the host strips out-of-scope
+  hits the same way.
 - **`message:persisted` is fire-and-forget.** An error in the indexing handler is swallowed (it must not
   break the send/receive pipeline). Log errors via `ctx.logger` and retry/mirror in your backend's own
   retry queue if you need stronger delivery guarantees.
