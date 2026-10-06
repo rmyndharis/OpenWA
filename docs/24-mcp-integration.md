@@ -201,10 +201,7 @@ only when an agent genuinely needs to send messages / mutate state.
 - **Do not expose `/mcp` to the public internet** without a fronting authentication proxy.
   The static API key is appropriate for a self-hosted, locally/network-reached deployment;
   public exposure should wait for OAuth 2.1 support (planned).
-- **Chat-restricted keys are refused.** A key carrying `allowedChats` gets an `isError` tool
-  result naming `ForbiddenException` ("API key is restricted to selected chats") on every tool
-  call, the same default deny REST applies to routes with no chat dimension. Use a session-scoped
-  key for MCP instead.
+- **Chat-restricted keys use the REST chat fence.** Message, contact, presence, label membership, and group detail/settings tools authorize their chat arguments against `allowedChats`, including persisted phone/LID aliases. Forwarding requires both chats to be allowed. Message listing requires an explicit chat; chat, contact, group, and label chat lists filter the complete result before pagination. Ordinary send quotes are refused; `MessageReply` resolves its quote inside the authorized chat. Account-wide tools without a chat fence remain refused, including session discovery/statistics, webhook management, and group creation/invites. `SessionFindOne` remains available within `allowedSessions`. Rejections return an `isError` tool result with `ForbiddenException`; role and session restrictions still apply.
 - **IP-restricted keys are refused.** The `/mcp` gate cannot check the client address, so a key
   with `allowedIps` gets `403` on every request. Use a key without an IP allow-list for MCP.
 
@@ -227,6 +224,7 @@ Keep the blast radius small:
 - Leave `MCP_READONLY` at its default unless the agent must write.
 - Give a read-only agent a `VIEWER` key, and scope every MCP key to the sessions it needs
   (`allowedSessions`).
+- Set `allowedChats` when the client should read or send only selected conversations.
 - When write tools are on, have the MCP client ask a human to confirm each write call.
 
 ## 24.6 Enabling & Client Setup

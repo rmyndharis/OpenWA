@@ -5,6 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AnySchema } from '@modelcontextprotocol/sdk/server/zod-compat.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { ChatScopeService } from '../auth/chat-scope.service';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import type { ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
 import express, { type Request, type RequestHandler, type Response } from 'express';
@@ -104,6 +105,7 @@ function buildServer(
   serverInfo: { name: string; version: string },
   auditService: AuditService | undefined,
   reqContext: McpRequestContext,
+  chatScope?: ChatScopeService,
 ): McpServer {
   const server = new McpServer(
     { name: serverInfo.name, version: serverInfo.version },
@@ -137,9 +139,10 @@ function buildServer(
             id => rateLimiter.check(id),
             // onAuthFailure: mirror the REST ApiKeyGuard — record rejected/denied auth attempts (401/403
             // only) at the auth boundary so the audit trail covers MCP credential probing. Fires inside
-            // invokeTool's auth phase (before the tool handler), so handler-thrown 403s are NOT mislabeled
+            // invokeTool's authorization checks (before the tool handler), so handler-thrown 403s are NOT mislabeled
             // as auth failures. Best-effort; success and non-auth errors skip this.
             error => auditMcpAuthFailure(auditService, error, reqContext),
+            chatScope,
           );
           return tool.resultDisposition === 'json'
             ? jsonToolResult(result as object)
@@ -252,6 +255,7 @@ export function mountMcpServer(
   ipRateLimiter: KeyRateLimiter,
   options: MountMcpServerOptions = {},
   auditService?: AuditService,
+  chatScope?: ChatScopeService,
 ): void {
   const basePath = (options.basePath ?? '/mcp').replace(/\/$/, '') || '/mcp';
   const serverInfo = options.serverInfo ?? { name: 'openwa', version: '0.0.0' };
@@ -272,6 +276,7 @@ export function mountMcpServer(
       serverInfo,
       auditService,
       resolveReqContext(req),
+      chatScope,
     );
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     try {

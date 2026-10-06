@@ -65,12 +65,15 @@ export class GroupService {
     }
   }
 
+  /** Every group before a caller applies authorization and pagination. */
+  listGroups(sessionId: string) {
+    return this.getEngine(sessionId).getGroups();
+  }
+
   getGroups(sessionId: string, opts: ListOptions = {}) {
     // getEngine throws synchronously (sync 400 guard); the engine returns the full set and we
     // bound the HTTP response window via paginate().
-    return this.getEngine(sessionId)
-      .getGroups()
-      .then(groups => paginate(groups, opts.limit, opts.offset));
+    return this.listGroups(sessionId).then(groups => paginate(groups, opts.limit, opts.offset));
   }
 
   async getGroupInfo(sessionId: string, groupId: string) {

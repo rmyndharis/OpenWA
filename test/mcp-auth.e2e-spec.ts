@@ -12,6 +12,7 @@ import { AppModule } from '../src/app.module';
 import { applyGlobalValidation } from '../src/config/app-validation';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { ApiKeyRole } from '../src/modules/auth/entities/api-key.entity';
+import { SessionService } from '../src/modules/session/session.service';
 
 // --- MCP protocol helpers ---
 
@@ -57,6 +58,7 @@ describe('MCP server (e2e)', () => {
   let viewerKey: string;
   let chatKey: string;
   let ipKey: string;
+  const scopedSession = '11111111-1111-4111-8111-111111111111';
   const initialize = () =>
     jsonRpcRequest('initialize', {
       protocolVersion: '2025-11-25',
@@ -76,7 +78,12 @@ describe('MCP server (e2e)', () => {
     const authService = app.get(AuthService);
     viewerKey = (await authService.createApiKey({ name: 'e2e-mcp-viewer', role: ApiKeyRole.VIEWER })).rawKey;
     chatKey = (
-      await authService.createApiKey({ name: 'e2e-mcp-chat', role: ApiKeyRole.VIEWER, allowedChats: ['628123@c.us'] })
+      await authService.createApiKey({
+        name: 'e2e-mcp-chat',
+        role: ApiKeyRole.VIEWER,
+        allowedSessions: [scopedSession],
+        allowedChats: ['628123@c.us'],
+      })
     ).rawKey;
     ipKey = (await authService.createApiKey({ name: 'e2e-mcp-ip', role: ApiKeyRole.VIEWER, allowedIps: ['127.0.0.1'] }))
       .rawKey;
@@ -181,6 +188,69 @@ describe('MCP server (e2e)', () => {
     expect(result?.isError).toBe(true);
     const content = result?.content as Array<{ type: string; text?: string }> | undefined;
     expect(content?.find(c => c.type === 'text')?.text ?? '').toMatch(/restricted to selected chats/i);
+  });
+
+  it('a chat-restricted key receives only allowed chats before pagination', async () => {
+    const list = jest
+      .spyOn(app.get(SessionService), 'listChats')
+      .mockResolvedValue([{ id: 'other@c.us' }, { id: '628123@c.us' }] as Awaited<
+        ReturnType<SessionService['listChats']>
+      >);
+    try {
+      const res = await request(app.getHttpServer())
+        .post('/mcp')
+        .set(MCP_HEADERS)
+        .set('X-API-Key', chatKey)
+        .send(
+          jsonRpcRequest('tools/call', { name: 'SessionGetChats', arguments: { sessionId: scopedSession, limit: 1 } }),
+        );
+      expect(res.status).toBe(200);
+      const result = parseMcpResponse(res).result as { isError?: boolean; content: Array<{ text: string }> };
+      expect(result.isError).not.toBe(true);
+      expect(JSON.parse(result.content[0].text)).toEqual([{ id: '628123@c.us' }]);
+      expect(list).toHaveBeenCalledWith(scopedSession);
+    } finally {
+      list.mockRestore();
+    }
+  });
+
+  it('a chat-restricted key cannot read history from another chat', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/mcp')
+      .set(MCP_HEADERS)
+      .set('X-API-Key', chatKey)
+      .send(
+        jsonRpcRequest('tools/call', {
+          name: 'MessageHistory',
+          arguments: { sessionId: scopedSession, chatId: 'other@c.us' },
+        }),
+      );
+    expect(res.status).toBe(200);
+    const result = parseMcpResponse(res).result as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('API key not authorized for this chat');
+  });
+
+  it('chat filtering retains the session fence', async () => {
+    const list = jest.spyOn(app.get(SessionService), 'listChats');
+    try {
+      const res = await request(app.getHttpServer())
+        .post('/mcp')
+        .set(MCP_HEADERS)
+        .set('X-API-Key', chatKey)
+        .send(
+          jsonRpcRequest('tools/call', {
+            name: 'SessionGetChats',
+            arguments: { sessionId: '22222222-2222-4222-8222-222222222222' },
+          }),
+        );
+      expect(res.status).toBe(200);
+      const result = parseMcpResponse(res).result as { isError?: boolean };
+      expect(result.isError).toBe(true);
+      expect(list).not.toHaveBeenCalled();
+    } finally {
+      list.mockRestore();
+    }
   });
 
   // ---------------------------------------------------------------------------

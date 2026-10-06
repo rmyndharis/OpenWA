@@ -8,6 +8,7 @@ import {
   MARK_READ_MESSAGE_ID_PATTERN,
 } from '../../../modules/session/dto/mark-chat-read.dto';
 import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
+import { paginate } from '../../../common/utils/paginate';
 
 const sessionId = z.string().min(1).describe('Session UUID (the session id, not the name)');
 
@@ -30,6 +31,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
     }),
     defineTool({
       name: 'SessionFindOne',
+      chatScope: 'agnostic',
       description: 'Get one session by its UUID, including connection status and phone number.',
       tier: 'read',
       sessionScoped: true,
@@ -39,6 +41,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
     }),
     defineTool({
       name: 'SessionGetChats',
+      chatScope: 'filtered',
       description: 'List recent chats for a session (most recent first). Use limit/offset to page through large lists.',
       tier: 'read',
       sessionScoped: true,
@@ -47,7 +50,13 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
         limit: z.number().int().min(1).max(1000).optional(),
         offset: z.number().int().min(0).optional(),
       }),
-      handler: input => session.getChats(input.sessionId, { limit: input.limit, offset: input.offset }),
+      handler: async (input, apiKey, chatScope) => {
+        if (!chatScope?.isRestricted(apiKey)) {
+          return session.getChats(input.sessionId, { limit: input.limit, offset: input.offset });
+        }
+        const visible = await chatScope.filter(apiKey, await session.listChats(input.sessionId), chat => chat.id);
+        return paginate(visible, input.limit, input.offset);
+      },
     }),
     defineTool({
       name: 'SessionGetStats',
@@ -58,6 +67,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
     }),
     defineTool({
       name: 'SessionSubscribePresence',
+      chatScope: ['chatId'],
       description:
         "Subscribe to a chat's presence (online / typing / recording). Updates then arrive as " +
         'presence.update events; read the latest with SessionGetPresence. The subscription is lost on ' +
@@ -74,6 +84,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
     }),
     defineTool({
       name: 'SessionGetPresence',
+      chatScope: ['chatId'],
       description:
         'The last presence reported for a chat, or null when none has been — the chat was never ' +
         'subscribed, or nothing has changed since. Subscribe first with SessionSubscribePresence.',
@@ -88,6 +99,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
     }),
     defineTool({
       name: 'SessionMarkChatRead',
+      chatScope: ['chatId'],
       description: 'Mark a chat as read (clears unread count). Requires OPERATOR role.',
       tier: 'write',
       requiredRole: ApiKeyRole.OPERATOR,
@@ -112,6 +124,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
     }),
     defineTool({
       name: 'SessionMarkChatUnread',
+      chatScope: ['chatId'],
       description: 'Mark a chat as unread. Requires OPERATOR role.',
       tier: 'write',
       requiredRole: ApiKeyRole.OPERATOR,
@@ -124,6 +137,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
     }),
     defineTool({
       name: 'SessionSendChatState',
+      chatScope: ['chatId'],
       description: "Show a typing/recording indicator in a chat, or clear it with 'paused'. Requires OPERATOR role.",
       tier: 'write',
       requiredRole: ApiKeyRole.OPERATOR,
