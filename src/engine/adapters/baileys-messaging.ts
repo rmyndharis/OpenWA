@@ -601,18 +601,15 @@ export class BaileysMessaging {
     // revoke, yet the send resolves, so it would report a deletion that never happened. WhatsApp Web
     // deletes such a message for the account alone instead, and so does this. A group whose member
     // list shows no row for the account proves nothing either way, so the revoke still goes out there.
-    // Whichever branch runs, the text leaves this account's view, so it must not stay the chat
-    // preview. The echo of an own revoke is skipped as an own send, so the inbound path never clears it.
+    // Whichever branch runs, the text leaves this account's view, so clear the preview immediately.
     const chatJid = target.key.remoteJid ?? chatId;
     // The preview of a received broadcast-list message is kept in its sender's chat.
     const previewJid = baileysChatJid(chatJid, target.key.participant, target.key.fromMe === true);
     if (forEveryone && (target.key.fromMe === true || (await this.selfIsGroupAdmin(target.key.remoteJid)) !== false)) {
       await this.send(await this.toDeliverableJid(chatId), { delete: target.key });
       this.host.recordMessageEdit(previewJid, messageId, '', 'revoked');
-      // The echo of this delete is skipped as an own send, so the stored copy is emptied here, as
-      // processInboundMessage does for a delete made from the phone or by the other side. Recorded
-      // first, so the message stays deleted even if the store write fails or a repeat delivery of the
-      // original is stored after it.
+      // Clear the stored copy before the buffered echo arrives. Record the deletion first so it
+      // survives a failed store write or a repeat delivery of the original.
       this.host.markDeletedForEveryone(messageId);
       await this.changeStored(messageId, stored => ({ ...stored, message: null }));
       return;
@@ -678,10 +675,9 @@ export class BaileysMessaging {
     const editContent = { text: body, ...this.withMentions(mentions), edit: target.key };
     const b = await this.host.loadLib();
     await this.send(jid, this.previewSafe(editContent), this.previewSafeOptions(editContent));
-    // The edit's echo is skipped as an own send, so the chat preview follows it from here.
+    // Update the preview and raw copy immediately, ahead of the buffered echo.
     this.host.recordMessageEdit(target.key.remoteJid ?? chatId, messageId, body);
-    // Same reason as deleteMessage: the stored copy is what a later quote carries, and this edit's
-    // echo never reaches processInboundMessage.
+    // A later quote must carry the updated text even before the edit's echo arrives.
     await this.changeStored(messageId, stored => {
       const content = b.normalizeMessageContent(stored.message ?? undefined);
       return content && setBaileysText(content, body) ? stored : null;
@@ -866,8 +862,8 @@ export class BaileysMessaging {
       if (this.host.getSocketOrNull() !== sock) throw new EngineNotReadyError();
       throw error;
     }
-    // Reactions are announced by their library echo; no local message.sent callback replaces it.
-    if (!('react' in content)) this.host.rememberOwnSend(sent?.key?.id);
+    // Mutations are announced by their library echo; no local callback replaces it.
+    if (!('react' in content || 'delete' in content || 'edit' in content)) this.host.rememberOwnSend(sent?.key?.id);
     return sent;
   }
 
