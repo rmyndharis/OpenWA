@@ -24,12 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve chat-scoped WebSocket event order while resolving chat identities.
+- Preserve poll choices across dashboard echoes and keep revoked messages cleared.
+- Serialize explicitly selected empty Go redrive slices as empty arrays.
 - Emit Baileys API reaction updates, including reaction removal.
 - Restore legacy webhook failures and normalize terminal duplicates before SQLite schema synchronization.
 - Exclude retained webhook replay payloads from database backup reads.
 - Advance webhook recovery scans past live queued deliveries.
 - Apply current receiver configuration and session ownership to every webhook delivery attempt.
-- Clear revoked Baileys history messages from chat previews.
+- Clear revoked Baileys history messages from storage, previews, quoted replies, and plugin indexes.
 - Preserve pending message mutations when REST storage wins an own-send echo.
 - Cancel archived media preview downloads when their components unmount.
 - Refresh Baileys pairing secrets and prevent stale QR renders during linking.
