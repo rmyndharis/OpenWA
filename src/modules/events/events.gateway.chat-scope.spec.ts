@@ -46,7 +46,10 @@ describe('chat-scoped WebSocket rooms', () => {
     gateway.handleMessage(client as unknown as Socket, { type: 'subscribe', sessionId, events });
   const events = (client: ReturnType<typeof socket>) =>
     client.emit.mock.calls
-      .map(([, frame]) => frame as { type: string; payload: { event: string } })
+      .map(
+        ([, frame]) =>
+          frame as { type: string; payload: { event: string; sessionId: string; data: Record<string, unknown> } },
+      )
       .filter(frame => frame.type === 'event');
   const flush = () => new Promise<void>(resolve => setImmediate(resolve));
   const connect = async (id: string, chats: string[] | null, sessions: string[] | null = ['s1'], sessionId = 's1') => {
@@ -167,6 +170,45 @@ describe('chat-scoped WebSocket rooms', () => {
     await flush();
     expect(events(allowed)).toHaveLength(0);
     expect(events(unrestricted)).toHaveLength(1);
+  });
+
+  it.each([false, true])('preserves session event order across slow lookups (failed edit: %s)', async failed => {
+    const allowed = await connect('allowed', [PHONE], null, '*');
+    const unrestricted = await connect('unrestricted', null, null, '*');
+    let finishFirst!: (ids: string[]) => void;
+    resolveIds
+      .mockImplementationOnce(() => new Promise<string[]>(resolve => (finishFirst = resolve)))
+      .mockImplementationOnce(() =>
+        failed ? Promise.reject(new Error('Mapping lookup unavailable')) : Promise.resolve([PHONE]),
+      );
+
+    gateway.emitMessage('s1', { chatId: PHONE, id: 'm1', body: 'original' });
+    gateway.emitMessageEdited('s1', { chatId: '123456@lid', messageId: 'm1', body: 'edited' });
+    gateway.emitMessageReaction('s1', { chatId: PHONE, messageId: 'm1', reaction: 'ok' });
+    gateway.emitMessage('s2', { chatId: PHONE, id: 'm2' });
+    await flush();
+    expect(events(allowed).map(frame => frame.payload.sessionId)).toEqual(['s2']);
+    expect(events(unrestricted).map(frame => frame.payload.event)).toEqual([
+      'message.received',
+      'message.edited',
+      'message.reaction',
+      'message.received',
+    ]);
+
+    finishFirst([PHONE]);
+    await flush();
+    expect(
+      events(allowed)
+        .filter(frame => frame.payload.sessionId === 's1')
+        .map(frame => frame.payload.event),
+    ).toEqual(
+      failed ? ['message.received', 'message.reaction'] : ['message.received', 'message.edited', 'message.reaction'],
+    );
+
+    lidPhone = '628111000111';
+    gateway.emitMessage('s1', { chatId: '123456@lid', id: 'm3' });
+    await flush();
+    expect(events(allowed).at(-1)?.payload.data.id).toBe('m3');
   });
 
   it('deduplicates chat rooms across wildcard and specific sessions', async () => {

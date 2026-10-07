@@ -146,6 +146,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
    * an already-subscribed socket keeps receiving events until it happens to disconnect).
    */
   private readonly socketsByKeyId = new Map<string, Set<Socket>>();
+  private readonly chatDeliveries = new Map<string, Promise<void>>();
   private authzSweepTimer?: ReturnType<typeof setInterval>;
 
   /**
@@ -793,9 +794,15 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     }
     // Expand the emitted identity using current persisted mappings, so new LID mappings work
     // without rejoining rooms. Literal allowlist rooms also enforce the fence across Redis nodes.
-    void this.chatScope
-      .idsForFilter({ allowedChats: [chatId] })
-      .then(ids => {
+    // Resolve identities concurrently, but retain event order within each session, including
+    // after a failed lookup. Other sessions and unrestricted broadcasts remain independent.
+    const delivery = Promise.allSettled([
+      this.chatDeliveries.get(sessionId),
+      this.chatScope.idsForFilter({ allowedChats: [chatId] }),
+    ])
+      .then(([, resolved]) => {
+        if (resolved.status === 'rejected') throw resolved.reason;
+        const ids = resolved.value;
         if (!ids?.length) return;
         const rooms = ids.flatMap(id => [
           chatRoom(sessionId, event, id),
@@ -809,7 +816,11 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         this.logger.warn('Could not resolve chat identity for WebSocket delivery', {
           error: error instanceof Error ? error.message : String(error),
         }),
-      );
+      )
+      .finally(() => {
+        if (this.chatDeliveries.get(sessionId) === delivery) this.chatDeliveries.delete(sessionId);
+      });
+    this.chatDeliveries.set(sessionId, delivery);
   }
 
   /**
