@@ -1,4 +1,15 @@
 import type { IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
+import type { QueryDeepPartialEntity } from 'typeorm';
+import type { Message } from '../message/entities/message.entity';
+
+/** Clear content and archive pointers while retaining the revoked message's identity. */
+export const REVOKED_ROW_PATCH = {
+  body: '',
+  type: 'revoked',
+  metadata: null,
+  mediaPath: null,
+  mediaMimetype: null,
+} as unknown as QueryDeepPartialEntity<Message>;
 
 /**
  * Message types whose rows must show a media placeholder even when the payload carried none.

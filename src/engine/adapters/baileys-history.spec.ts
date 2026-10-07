@@ -34,6 +34,8 @@ describe('history chat previews', () => {
       recordMessageEdit: (...args: Parameters<typeof store.recordMessageEdit>) => store.recordMessageEdit(...args),
       upsertContacts: () => undefined,
       getOnHistoryMessages: () => () => undefined,
+      applyHistoryRevoke: (key: WAMessage['key']) => Promise.resolve(key),
+      wasDeletedForEveryone: () => false,
     } as unknown as BaileysHistoryHost;
     const history = new BaileysHistory(host);
     await history.captureHistoryMessages(reversed ? [...messages].reverse() : messages);

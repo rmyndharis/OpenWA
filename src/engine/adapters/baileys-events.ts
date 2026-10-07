@@ -304,6 +304,21 @@ export class BaileysEvents {
     }
   }
 
+  /** Apply a history delete to the raw cache without announcing a live message event. */
+  async applyHistoryRevoke(target: WAMessageKey, envelope: WAMessageKey): Promise<WAMessageKey | undefined> {
+    if (!target.id) return undefined;
+    const generation = this.storeGeneration;
+    const stored = await this.readStoredMessage(target.id, 'checking what a history revoke targets');
+    if (generation !== this.storeGeneration) return undefined;
+    const original = stored?.key ?? this.inboundInFlight.get(target.id)?.key ?? target;
+    if (!this.mayChange(original, envelope, true)) return undefined;
+    if (stored || this.inboundInFlight.has(target.id)) this.markDeletedForEveryone(target.id);
+    this.changeStoredMessage(target.id, copy =>
+      this.mayChange(copy.key, envelope, true) ? { ...copy, message: null } : null,
+    );
+    return original;
+  }
+
   handleMessagesUpsert(event: { messages: WAMessage[]; type: string }): void {
     for (const msg of event.messages) {
       if (!msg.message || !msg.key?.remoteJid) {

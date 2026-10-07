@@ -2170,6 +2170,26 @@ describe('BaileysAdapter inbound fan-out', () => {
     });
   });
 
+  it('handles a rejected async history consumer without an unhandled rejection', async () => {
+    const onHistoryMessages = jest.fn().mockRejectedValue(new Error('history unavailable'));
+    const adapter = newAdapter();
+    await adapter.initialize({ onHistoryMessages });
+    fakeSock.fire('messaging-history.set', {
+      contacts: [],
+      chats: [],
+      messages: [
+        {
+          key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'H_FAIL' },
+          message: { conversation: 'history' },
+          messageTimestamp: 1700000000,
+        },
+      ],
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(onHistoryMessages).toHaveBeenCalledTimes(1);
+  });
+
   it('maps an ephemeral-wrapped history message to its real type and body (not unknown/empty)', async () => {
     const onHistoryMessages = jest.fn();
     const adapter = newAdapter();

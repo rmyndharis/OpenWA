@@ -52,6 +52,7 @@ describe('MessageProjector', () => {
     emitMessageReaction: jest.Mock;
   };
   let webhookService: { dispatch: jest.Mock };
+  let hookManager: { execute: jest.Mock };
   let engines: EngineRegistry;
   let engine: IWhatsAppEngine;
   let projector: MessageProjector;
@@ -70,6 +71,7 @@ describe('MessageProjector', () => {
       emitMessageReaction: jest.fn(),
     };
     webhookService = { dispatch: jest.fn().mockResolvedValue(undefined) };
+    hookManager = { execute: jest.fn().mockResolvedValue(undefined) };
     engines = new EngineRegistry();
     engine = {} as IWhatsAppEngine;
     engines.set('s1', engine);
@@ -79,7 +81,7 @@ describe('MessageProjector', () => {
       engines,
       eventsGateway as unknown as EventsGateway,
       webhookService as unknown as WebhookService,
-      { execute: jest.fn().mockResolvedValue(undefined) } as unknown as HookManager,
+      hookManager as unknown as HookManager,
       {} as unknown as StatusStoreService,
       { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
     );
@@ -249,6 +251,40 @@ describe('MessageProjector', () => {
   });
 
   describe('persistHistoryMessages', () => {
+    it('updates plugin indexes after a history revoke without dispatching live events', async () => {
+      const row = {
+        id: 'db-id',
+        waMessageId: 'WA1',
+        chatId: 'c1@c.us',
+        direction: MessageDirection.INCOMING,
+        type: 'revoked',
+        body: '',
+        metadata: null,
+        timestamp: 1_700_000_000,
+      };
+      messageRepository.find.mockResolvedValueOnce([{ waMessageId: 'WA1', type: 'text' }]).mockResolvedValueOnce([row]);
+      const builder = {
+        insert: jest.fn().mockReturnThis(),
+        values: jest.fn().mockReturnThis(),
+        orIgnore: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({}),
+      };
+      Object.assign(messageRepository, { createQueryBuilder: jest.fn().mockReturnValue(builder) });
+      hookManager.execute.mockRejectedValueOnce(new Error('index unavailable'));
+      const result = await projector.persistHistoryMessages('s1', engine, [
+        historyMessage({ type: 'revoked', fromMe: false, body: '' }),
+      ]);
+      await settle();
+      expect(result).toEqual([expect.objectContaining({ id: 'WA1', type: 'revoked', body: '' })]);
+      expect(hookManager.execute).toHaveBeenCalledWith(
+        'message:persisted',
+        { sessionId: 's1', message: row },
+        { sessionId: 's1', source: 'SessionService' },
+      );
+      expect(webhookService.dispatch).not.toHaveBeenCalled();
+      expect(eventsGateway.emitMessage).not.toHaveBeenCalled();
+    });
+
     it('skips rows that cannot become a valid message row, and queries nothing when none survive', async () => {
       await projector.persistHistoryMessages('s1', engine, [
         historyMessage({ id: '' }), // no id -> cannot de-dup
@@ -286,7 +322,7 @@ describe('MessageProjector', () => {
       expect(dedupIds(messageRepository.find)).toEqual(['DUP']);
     });
 
-    it('skips history older than the MESSAGE_RETENTION_DAYS window', async () => {
+    it('checks old history for revocation without reinserting content outside retention', async () => {
       const prev = process.env.MESSAGE_RETENTION_DAYS;
       process.env.MESSAGE_RETENTION_DAYS = '30';
       try {
@@ -298,7 +334,8 @@ describe('MessageProjector', () => {
           historyMessage({ id: 'NEW', timestamp: nowSec - 29 * 86_400 }),
         ]);
 
-        expect(dedupIds(messageRepository.find)).toEqual(['NEW']);
+        expect(dedupIds(messageRepository.find)).toEqual(['OLD', 'NEW']);
+        expect(messageRepository.create).not.toHaveBeenCalled();
       } finally {
         if (prev === undefined) delete process.env.MESSAGE_RETENTION_DAYS;
         else process.env.MESSAGE_RETENTION_DAYS = prev;

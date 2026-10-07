@@ -8,7 +8,7 @@ import { Message, MessageDirection, MessageStatus } from '../message/entities/me
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { SessionLidResolver } from './session-lid-resolver.service';
-import { buildMessageMetadata, storableWaMessageId } from './message-row.mapper';
+import { buildMessageMetadata, REVOKED_ROW_PATCH, storableWaMessageId } from './message-row.mapper';
 import { MessageMutationProjector } from './message-mutation-projector';
 import { updateMessageMetadata } from '../message/message-metadata';
 import { persistHistoryMessages } from './message-history-projector';
@@ -58,20 +58,6 @@ import { isMessagePayload } from '../../core/hooks/hook-results';
  * retry after this delay closes that race; the forward-only transition guard keeps it idempotent.
  */
 export const ACK_RECONCILE_DELAY_MS = 750;
-
-/**
- * What a revoke leaves of a stored message: the placeholder WhatsApp itself shows. Body, archived-media
- * pointers and metadata (inline media, quote, reactions, buttons) are all cleared, so the row carries
- * nothing of what the sender took back. The archived file, now unreferenced, is reaped by the chat-media
- * orphan sweep.
- */
-const REVOKED_ROW_PATCH = {
-  body: '',
-  type: 'revoked',
-  metadata: null,
-  mediaPath: null,
-  mediaMimetype: null,
-} as unknown as QueryDeepPartialEntity<Message>;
 
 /**
  * Delay before the single retry of a message insert that failed transiently (lock contention, a
@@ -909,9 +895,20 @@ export class MessageProjector {
   }
 
   /** History backfill persist, extracted to message-history-projector.ts (stateless function). */
-  persistHistoryMessages(id: string, engine: IWhatsAppEngine, messages: IncomingMessage[]): Promise<void> {
-    return persistHistoryMessages(this.messageRepository, this.configService, id, messages, this.logger, () =>
-      this.engines.isLive(id, engine),
+  persistHistoryMessages(id: string, engine: IWhatsAppEngine, messages: IncomingMessage[]): Promise<IncomingMessage[]> {
+    return persistHistoryMessages(
+      this.messageRepository,
+      this.configService,
+      id,
+      messages,
+      this.logger,
+      () => this.engines.isLive(id, engine),
+      row => {
+        if (!this.engines.isLive(id, engine)) return;
+        void this.hookManager
+          .execute('message:persisted', { sessionId: id, message: row }, { sessionId: id, source: 'SessionService' })
+          .catch(() => undefined);
+      },
     );
   }
 

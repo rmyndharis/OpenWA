@@ -831,8 +831,9 @@ export interface EngineEventCallbacks {
   /**
    * Bulk historical messages from an engine's initial sync (e.g. Baileys `messaging-history.set`).
    * They predate the live session, so consumers persist them for the chat view but must not dispatch.
+   * An async consumer may return stored revocations to keep previews cleared across resyncs.
    */
-  onHistoryMessages?: (messages: IncomingMessage[]) => void;
+  onHistoryMessages?: (messages: IncomingMessage[]) => void | Promise<IncomingMessage[] | void>;
   onDisconnected?: (reason: string) => void;
   /**
    * Fired each time the engine schedules an INTERNAL reconnect attempt: a drop it retries on its own
