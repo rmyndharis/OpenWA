@@ -1794,18 +1794,31 @@ func TestSendIdempotencyKey(t *testing.T) {
 func TestRedrivePreservesAnEmptyIDsFilter(t *testing.T) {
 	rt := &recordTransport{status: 200, body: `{}`}
 	c := newTestClient(t, rt)
+	var zero []string
 	empty := []string{}
-	for _, ids := range []*[]string{nil, &empty} {
-		if _, err := c.Webhooks.RedriveDeliveryFailures(context.Background(), &RedriveWebhookDeliveriesRequest{IDs: ids}); err != nil {
-			t.Fatal(err)
-		}
-		want := `{}`
-		if ids != nil {
-			want = `{"ids":[]}`
-		}
-		if string(rt.lastRaw) != want {
-			t.Fatalf("body = %s, want %s", rt.lastRaw, want)
-		}
+	selected := []string{"f1"}
+	for _, tc := range []struct {
+		name string
+		ids  *[]string
+		want string
+	}{
+		{"omitted", nil, `{}`},
+		{"nil slice", &zero, `{"ids":[]}`},
+		{"empty slice", &empty, `{"ids":[]}`},
+		{"selected rows", &selected, `{"ids":["f1"]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := &RedriveWebhookDeliveriesRequest{IDs: tc.ids}
+			if _, err := c.Webhooks.RedriveDeliveryFailures(context.Background(), body); err != nil {
+				t.Fatal(err)
+			}
+			if string(rt.lastRaw) != tc.want {
+				t.Fatalf("body = %s, want %s", rt.lastRaw, tc.want)
+			}
+			if body.IDs != tc.ids || zero != nil {
+				t.Fatal("request IDs mutated")
+			}
+		})
 	}
 }
 

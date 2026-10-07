@@ -42,6 +42,12 @@ func (s *WebhooksService) RedriveDeliveryFailures(ctx context.Context, body *Red
 	if body == nil {
 		body = &RedriveWebhookDeliveriesRequest{}
 	}
+	if body.IDs != nil && *body.IDs == nil {
+		copy := *body
+		empty := []string{}
+		copy.IDs = &empty
+		body = &copy
+	}
 	var out WebhookRedriveResult
 	if err := s.client.do(ctx, "POST", "/api/webhooks/delivery-failures/redrive", nil, body, &out); err != nil {
 		return nil, err
