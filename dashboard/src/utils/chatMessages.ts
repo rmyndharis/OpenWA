@@ -50,8 +50,7 @@ const msgTime = (m: ChatMessage): number =>
 // real delivery status survives. Deduped by the wweb.js serialized id (engine `id` == DB `waMessageId`).
 export function mergeChatMessages(db: ChatMessage[], history: ChatMessage[]): ChatMessage[] {
   const byId = new Map<string, ChatMessage>();
-  for (const m of history) byId.set(msgKey(m), m);
-  for (const m of db) {
+  for (const m of [...history, ...db]) {
     const key = msgKey(m);
     const hist = byId.get(key);
     // The DB copy wins (authoritative status) — but a legacy row has no stable sender id, so
@@ -60,6 +59,9 @@ export function mergeChatMessages(db: ChatMessage[], history: ChatMessage[]): Ch
     let merged = hist?.author && !m.author ? { ...m, author: hist.author } : m;
     if (m.type === 'poll' && !m.metadata?.poll && hist?.metadata?.poll) {
       merged = { ...merged, metadata: { ...merged.metadata, poll: hist.metadata.poll } };
+    }
+    if (m.type === 'revoked' || hist?.type === 'revoked') {
+      merged = { ...merged, type: 'revoked', body: '', metadata: undefined };
     }
     byId.set(key, merged);
   }
@@ -343,6 +345,8 @@ function mergeMessageMetadata(
   if (call) merged.call = call;
   const buttons = incoming.buttons ?? existing.buttons;
   if (buttons?.length) merged.buttons = buttons;
+  const poll = incoming.poll ?? existing.poll;
+  if (poll) merged.poll = poll;
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
@@ -361,7 +365,10 @@ function mergeMessageMetadata(
  */
 export function mergeOrAppend(list: ChatMessageView[], incoming: ChatMessageView): ChatMessageView[] {
   const idx = list.findIndex(m => msgKey(m) === msgKey(incoming));
-  if (idx === -1) return capMediaPayloads([...list, incoming]);
+  if (idx === -1) {
+    const message = incoming.type === 'revoked' ? { ...incoming, body: '', metadata: undefined } : incoming;
+    return capMediaPayloads([...list, message]);
+  }
   const existing = list[idx];
   const next = list.slice();
   next[idx] = {
@@ -371,6 +378,9 @@ export function mergeOrAppend(list: ChatMessageView[], incoming: ChatMessageView
     status: mergeDeliveryStatus(existing.status, incoming.status) ?? incoming.status,
     metadata: mergeMessageMetadata(existing.metadata, incoming.metadata),
   };
+  if (existing.type === 'revoked' || incoming.type === 'revoked') {
+    next[idx] = { ...next[idx], type: 'revoked', body: '', metadata: undefined };
+  }
   return capMediaPayloads(next);
 }
 
@@ -458,7 +468,7 @@ export function applyMessageEdit(
 ): ChatMessageView[] {
   if (!event.messageId) return list;
   const idx = list.findIndex(byMessageId(event.messageId));
-  if (idx === -1) return list;
+  if (idx === -1 || list[idx].type === 'revoked') return list;
   const next = list.slice();
   next[idx] = { ...next[idx], body: event.body };
   return next;

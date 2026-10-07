@@ -442,6 +442,15 @@ export function Chats() {
       if (event.sessionId !== selectedSessionId) return;
 
       const newMsg = event.message as unknown as IncomingWsMessage;
+      if (
+        cachedSessionThreads(
+          queryClient,
+          event.sessionId,
+          m => m.chatId === newMsg.chatId && byMessageId(newMsg.id)(m) && m.type === 'revoked',
+        ).length
+      ) {
+        return;
+      }
 
       const mappedMessage: ChatMessageView = {
         id: newMsg.id,
@@ -490,7 +499,17 @@ export function Chats() {
         void loadChats(selectedSessionId, { background: true });
       }
     },
-    [selectedSessionId, activeChat, canWrite, loadChats, markChatRead, appendMessage, onMessageAppended, t],
+    [
+      selectedSessionId,
+      activeChat,
+      canWrite,
+      loadChats,
+      markChatRead,
+      appendMessage,
+      onMessageAppended,
+      queryClient,
+      t,
+    ],
   );
 
   const handleIncomingMessageAck = useCallback(
@@ -525,13 +544,17 @@ export function Chats() {
       // function so the behaviour is covered by a test, because nothing here is.
       for (const [key] of cachedSessionThreads(queryClient, event.sessionId, byMessageId(event.messageId))) {
         updateCachedMessages(queryClient, key, list =>
-          patchMatchingMessage(list, event.messageId, m => ({
-            ...m,
-            metadata: {
-              ...(m.metadata || {}),
-              reactions: mergeReactionSnapshot(m.metadata?.reactions, event.reactions),
-            },
-          })),
+          patchMatchingMessage(list, event.messageId, m =>
+            m.type === 'revoked'
+              ? m
+              : {
+                  ...m,
+                  metadata: {
+                    ...(m.metadata || {}),
+                    reactions: mergeReactionSnapshot(m.metadata?.reactions, event.reactions),
+                  },
+                },
+          ),
         );
       }
     },
@@ -558,7 +581,7 @@ export function Chats() {
           const idx = findRevokedIndex(list, event);
           if (idx === -1) return list;
           const next = list.slice();
-          next[idx] = { ...next[idx], body: '', type: asMessageType(event.type) };
+          next[idx] = { ...next[idx], body: '', type: asMessageType(event.type), metadata: undefined };
           return next;
         });
       }
@@ -587,7 +610,7 @@ export function Chats() {
         // Position is asked of the merged thread, never of a page: pages carry only a fraction of
         // the chat each, so "is this the last message" is only ever answerable from the whole thing.
         const editedIndex = thread.findIndex(byMessageId(event.messageId));
-        if (editedIndex === -1) continue;
+        if (editedIndex === -1 || thread[editedIndex].type === 'revoked') continue;
         matchedCachedMessage = true;
         updateCachedMessages(queryClient, key, list => applyMessageEdit(list, event));
 
@@ -739,7 +762,7 @@ export function Chats() {
       const key = messagesQueryKey(selectedSessionId, activeChat.id);
       updateCachedMessages(queryClient, key, old =>
         old.map(m => {
-          if (m.id === msg.id || m.waMessageId === msg.id) {
+          if (m.type !== 'revoked' && (m.id === msg.id || m.waMessageId === msg.id)) {
             const metadata = m.metadata || {};
             const reactions = { ...(metadata.reactions || {}) };
             if (emojiToSend === '') {
@@ -770,7 +793,7 @@ export function Chats() {
         forEveryone: true,
       });
 
-      updateMessage(selectedSessionId, activeChat.id, msg.id, { body: '', type: 'revoked' });
+      updateMessage(selectedSessionId, activeChat.id, msg.id, { body: '', type: 'revoked', metadata: undefined });
     } catch (err) {
       showErrorToast(t('chats.errors.delete'), err instanceof Error ? err.message : undefined);
     }

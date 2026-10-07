@@ -1875,6 +1875,46 @@ test('a message deleted for everyone in a chat never opened refetches the chat l
   await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`), 1));
 });
 
+test('a delayed poll echo cannot restore a revoked message or its sidebar preview', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  const room = container.querySelector('.room-messages') as HTMLElement;
+  await within(room).findByText('hello from alice');
+  const id = OMITTED_MEDIA_MESSAGE_2.waMessageId as string;
+  revoke(CHAT.id, id);
+  const sidebar = container.querySelector('.chats-sidebar') as HTMLElement;
+  await waitFor(() => assert.ok(!within(sidebar).queryByText('hello from alice')));
+  resetFetchCalls();
+  lastSocket()!.receive('message', {
+    type: 'event',
+    timestamp: new Date().toISOString(),
+    payload: {
+      event: 'message.received',
+      sessionId: SESSION.id,
+      data: {
+        id,
+        chatId: CHAT.id,
+        from: CHAT.id,
+        to: 'me',
+        body: 'withdrawn question',
+        type: 'poll',
+        fromMe: false,
+        timestamp: 1_700_003_000,
+        poll: { name: 'withdrawn question', options: ['private choice'], allowMultipleAnswers: false },
+      },
+    },
+  });
+  await flush();
+  assert.ok(!within(container).queryByText('withdrawn question'));
+  assert.ok(!within(room).queryByText('private choice'));
+  assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`), 0);
+  const cached = queryClient!.getQueryData<{ pages: Array<{ db: ChatMessage[] }> }>(['messages', SESSION.id, CHAT.id]);
+  const row = cached!.pages.flatMap(page => page.db).find(m => m.waMessageId === id)!;
+  assert.equal(row.type, 'revoked');
+  assert.equal(row.metadata, undefined);
+});
+
 // A global-search hit in the third session, on Alice's chat.
 const THIRD_SESSION_HIT: SearchHit = {
   messageId: 'db-9',

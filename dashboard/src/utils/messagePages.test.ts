@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { dbRowsFetched, nextMessagePageParam, upsertIntoPages, type MessagePage } from './messagePages.ts';
-import { MEDIA_PAYLOAD_CACHE_LIMIT, type ChatMessageView } from './chatMessages.ts';
+import { MEDIA_PAYLOAD_CACHE_LIMIT, mergeChatMessages, type ChatMessageView } from './chatMessages.ts';
 
 const PAGE_SIZE = 100;
 
@@ -31,6 +31,24 @@ const rows = (count: number, prefix: string): ChatMessageView[] =>
 
 const mediaMsg = (id: string, data: string): ChatMessageView =>
   msg(id, { type: 'image', metadata: { media: { mimetype: 'image/jpeg', filename: `${id}.jpg`, data } } });
+
+test('a delayed live echo cannot restore a revoked history-only message', () => {
+  const pages = [page([], 0, [msg('old', { type: 'revoked', body: '' })])];
+  const result = upsertIntoPages(
+    pages,
+    msg('old', {
+      type: 'poll',
+      metadata: { poll: { name: 'Q', options: ['A'], allowMultipleAnswers: false } },
+    }),
+  );
+  const [merged] = mergeChatMessages(
+    result.flatMap(p => p.db),
+    result.flatMap(p => p.history),
+  );
+  assert.equal(merged.type, 'revoked');
+  assert.equal(merged.body, '');
+  assert.equal(merged.metadata, undefined);
+});
 
 test('the cursor counts DB rows, not the rendered merge', () => {
   // The regression this guards: engine history inflates the rendered list, so paging by its length

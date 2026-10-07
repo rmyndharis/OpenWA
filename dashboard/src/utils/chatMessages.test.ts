@@ -218,6 +218,75 @@ test('mergeOrAppend: DB-persisted prompt buttons survive a button-less echo', ()
   assert.deepEqual(after[0].metadata?.buttons, buttons);
 });
 
+test('mergeOrAppend preserves poll choices across duplicate and partial echoes', () => {
+  const poll = { name: 'Lunch?', options: ['Rice', 'Soup'], allowMultipleAnswers: false };
+  const before = msg({ type: 'poll', metadata: { poll } });
+  for (const metadata of [{ poll }, { media: undefined }]) {
+    const after = mergeOrAppend([before], msg({ type: 'poll', metadata }));
+    assert.deepEqual(after[0].metadata?.poll, poll);
+    assert.deepEqual(before.metadata, { poll });
+  }
+  const updated = { ...poll, options: ['Rice', 'Soup', 'Salad'] };
+  assert.deepEqual(
+    mergeOrAppend([before], msg({ type: 'poll', metadata: { poll: updated } }))[0].metadata?.poll,
+    updated,
+  );
+});
+
+test('mergeOrAppend keeps revocation terminal and removes content metadata', () => {
+  const original = msg({
+    type: 'poll',
+    metadata: {
+      poll: { name: 'Lunch?', options: ['Rice', 'Soup'], allowMultipleAnswers: false },
+      media: { mimetype: 'image/png', data: 'BASE64', archived: true },
+      quotedMessage: { id: 'q', body: 'quote' },
+      reactions: { me: 'yes' },
+    },
+  });
+  const revoked = msg({ type: 'revoked', body: '', metadata: undefined });
+  for (const [existing, incoming] of [
+    [original, revoked],
+    [revoked, original],
+  ]) {
+    const [result] = mergeOrAppend([existing], incoming);
+    assert.equal(result.type, 'revoked');
+    assert.equal(result.body, '');
+    assert.equal(result.metadata, undefined);
+  }
+  const [newRevoked] = mergeOrAppend([], { ...original, type: 'revoked' });
+  assert.equal(newRevoked.body, '');
+  assert.equal(newRevoked.metadata, undefined);
+  assert.equal(original.body, 'hello');
+  assert.ok(original.metadata?.poll);
+});
+
+test('mergeChatMessages keeps every revoked copy terminal regardless of source or duplicate order', () => {
+  const original = msg({
+    type: 'poll',
+    metadata: { poll: { name: 'Q', options: ['A'], allowMultipleAnswers: false } },
+  });
+  const revoked = { ...original, type: 'revoked' as const, body: '' };
+  for (const [rows, history] of [
+    [[original], [revoked]],
+    [[revoked], [original]],
+    [[revoked, original], []],
+    [[original, revoked], []],
+    [[], [revoked, original]],
+    [[], [original, revoked]],
+  ]) {
+    const [result] = mergeChatMessages(rows, history);
+    assert.equal(result.type, 'revoked');
+    assert.equal(result.body, '');
+    assert.equal(result.metadata, undefined);
+  }
+  assert.ok(original.metadata?.poll);
+});
+
+test('applyMessageEdit ignores a delayed edit for a revoked message', () => {
+  const before = [msg({ type: 'revoked', body: '' })];
+  assert.equal(applyMessageEdit(before, { messageId: before[0].waMessageId!, body: 'late' }), before);
+});
+
 test('mergeOrAppend dedupes a live WS message against its DB copy (id != id but same waMessageId)', () => {
   // DB-persisted copy: id = UUID, waMessageId = WA serialized id.
   const dbCopy = msg({ id: 'uuid-1', waMessageId: 'true_g@g.us_WA1', body: 'persisted' });
