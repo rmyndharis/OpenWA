@@ -11,6 +11,7 @@ export class ShutdownService {
   private destroyCallback: (() => Promise<void>) | null = null;
   private shuttingDown = false;
   private shutdownScheduled = false;
+  private tearingDown = false;
 
   /**
    * Set the shutdown callback (called from main.ts after app creation)
@@ -25,6 +26,15 @@ export class ShutdownService {
    */
   isShuttingDown(): boolean {
     return this.shuttingDown;
+  }
+
+  /**
+   * True once the grace has elapsed and teardown has started. Nest keeps the HTTP listener open
+   * until every destroy hook has finished, so the request gate in configure-app.ts refuses new
+   * requests from this point on.
+   */
+  isTearingDown(): boolean {
+    return this.tearingDown;
   }
 
   /** Flip the draining flag (idempotent). Safe to call synchronously from a signal handler. */
@@ -52,6 +62,7 @@ export class ShutdownService {
 
     setTimeout(() => {
       this.logger.log('Initiating shutdown...');
+      this.tearingDown = true;
       const doShutdown = async () => {
         // The exit status mirrors the teardown outcome: 0 when teardown completed, 1 when it
         // failed — an orchestrator (k8s, systemd, docker restart policies) must not read a
