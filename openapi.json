@@ -1278,6 +1278,16 @@
               }
             }
           },
+          "503": {
+            "description": "The gateway is shutting down, or the engine's browser or socket connection died during launch and the one automatic retry failed too; no engine is left running, so the start can be retried.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "504": {
             "description": "The engine did not finish starting within its timeout (WhatsApp Web or the network unreachable, a stalled browser or resource limit, or, on whatsapp-web.js, an unreachable proxyUrl or the auth timeout); the engine is torn down and the start can be retried.",
             "content": {

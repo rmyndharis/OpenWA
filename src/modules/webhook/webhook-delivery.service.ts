@@ -941,13 +941,17 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     options: { singleAttempt?: boolean; signal?: AbortSignal } = {},
   ): Promise<WebhookDeliveryOutcome> {
     const deliveryId = generateDeliveryId();
-    return this.deliverOne(webhook, deliveryId, idempotencyKey, {
+    const outcome = await this.deliverOne(webhook, deliveryId, idempotencyKey, {
       sessionId,
       event,
       baseData: data,
       singleAttempt: options.singleAttempt,
       signal: options.signal,
     });
+    // The receiver has the event. An operator redrive of a failure row can find the same delivery
+    // still pending in the outbox, which the next sweep would otherwise POST again.
+    if (outcome === 'delivered') await this.outbox.close(webhook.id, idempotencyKey, 'dispatched');
+    return outcome;
   }
 
   /** A live or unreadable job still owns its queued delivery; never replay alongside it. */
