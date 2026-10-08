@@ -62,7 +62,7 @@ describe('webhook recovery across live ownership and configuration changes', () 
       redeliver: jest.fn().mockResolvedValue('delivered'),
       recordReplayExhaustion: jest.fn().mockResolvedValue(true),
     };
-    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery as never);
+    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery as never, new ConfigService());
     const options = { intervalMs: 1000, graceMs: 0, batchSize: 2, maxAttempts: 5 };
     for (let i = 0; i < 3; i++) expect((await reconciler.sweep(options)).scanned).toBeLessThanOrEqual(2);
     expect(delivery.redeliver.mock.calls.map((call: unknown[]) => call[3])).toEqual(['key3', 'key4']);
@@ -148,7 +148,7 @@ describe('webhook recovery across live ownership and configuration changes', () 
     const repository = ds.getRepository(WebhookOutboxEvent);
     const outbox = new WebhookOutboxService(repository);
     const delivery = new WebhookDeliveryService(webhooks, failures, config, new HookManager(), outbox);
-    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery);
+    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery, config);
     const redrive = new WebhookRedriveService(webhooks, failures, delivery, config);
     const options = { intervalMs: 1000, graceMs: 0, batchSize: 50, maxAttempts: 5 };
     // A dispatch interrupted before it settled leaves its row pending for the sweep.
@@ -239,7 +239,7 @@ describe('webhook recovery across live ownership and configuration changes', () 
     const hooks = new HookManager();
     const execute = jest.spyOn(hooks, 'execute');
     const delivery = new WebhookDeliveryService(webhooks, failures, config, hooks, outbox);
-    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery);
+    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery, config);
     let posted!: () => void;
     const firstPost = new Promise<void>(resolve => (posted = resolve));
     const post = jest.spyOn(ssrf, 'withSafeFetch').mockImplementation((_url, _init, use) => {
@@ -269,6 +269,55 @@ describe('webhook recovery across live ownership and configuration changes', () 
     expect(execute.mock.calls.filter(([name]) => name === 'webhook:error')).toHaveLength(0);
   });
 
+  it('stops the direct fallback of a replay the queue refused in its backoff on destroy', async () => {
+    await webhooks.update(primary.id, { retryCount: 3 });
+    const repository = ds.getRepository(WebhookOutboxEvent);
+    const outbox = new WebhookOutboxService(repository);
+    await outbox.open({
+      webhookId: primary.id,
+      sessionId: primary.sessionId,
+      event: 'message.received',
+      idempotencyKey: 'key-a',
+      deliveryId: randomUUID(),
+      payload: { id: 1 },
+    });
+    await repository.update({ idempotencyKey: 'key-a' }, { createdAt: new Date(Date.now() - 600_000) });
+    const config = new ConfigService({ queue: { enabled: true }, webhook: { retryDelay: 600_000, timeout: 1000 } });
+    const hooks = new HookManager();
+    const execute = jest.spyOn(hooks, 'execute');
+    const queue = {
+      add: jest.fn().mockRejectedValue(new Error('Connection is closed')),
+      getJob: jest.fn().mockResolvedValue(undefined),
+    };
+    const delivery = new WebhookDeliveryService(webhooks, failures, config, hooks, outbox, undefined, queue as never);
+    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery, config);
+    let posted!: () => void;
+    const firstPost = new Promise<void>(resolve => (posted = resolve));
+    const post = jest.spyOn(ssrf, 'withSafeFetch').mockImplementation((_url, _init, use) => {
+      posted();
+      return Promise.resolve(use(new Response(null, { status: 503 })));
+    });
+
+    const sweep = reconciler.sweep({ intervalMs: 1000, graceMs: 0, batchSize: 10, maxAttempts: 5 });
+    await firstPost;
+    // Let the 503 settle so the retry backoff timer is already running when the stop lands.
+    await new Promise(resolve => setImmediate(resolve));
+    await reconciler.onModuleDestroy();
+    const stats = await sweep;
+
+    expect(queue.add).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(stats).toMatchObject({ replayed: 0, failed: 0, skipped: 1 });
+    expect(await failures.count()).toBe(0);
+    const errors = execute.mock.calls.filter(([name]) => name === 'webhook:error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0][1]).toMatchObject({ error: expect.stringContaining('Queue failed') as string });
+    expect(await repository.findOneByOrFail({ idempotencyKey: 'key-a' })).toMatchObject({
+      state: 'pending',
+      attempts: 1,
+    });
+  });
+
   it('does not replay a row whose pre-checks were under way when destroy began', async () => {
     const repository = ds.getRepository(WebhookOutboxEvent);
     const outbox = new WebhookOutboxService(repository);
@@ -285,7 +334,7 @@ describe('webhook recovery across live ownership and configuration changes', () 
     }
     const config = new ConfigService({ webhook: { retryDelay: 300, timeout: 1000 } });
     const delivery = new WebhookDeliveryService(webhooks, failures, config, new HookManager(), outbox);
-    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery);
+    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery, config);
     const post = jest
       .spyOn(ssrf, 'withSafeFetch')
       .mockImplementation((_url, _init, use) => Promise.resolve(use(new Response(null, { status: 200 }))));
@@ -333,7 +382,7 @@ describe('webhook recovery across live ownership and configuration changes', () 
     const execute = jest.spyOn(hooks, 'execute');
     const config = new ConfigService({ webhook: { retryDelay: 1, timeout: 1000 } });
     const delivery = new WebhookDeliveryService(webhooks, failures, config, hooks, outbox);
-    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery);
+    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery, config);
     const post = jest
       .spyOn(ssrf, 'withSafeFetch')
       .mockImplementation((_url, _init, use) => Promise.resolve(use(new Response(null, { status: 503 }))));
@@ -375,7 +424,7 @@ describe('webhook recovery across live ownership and configuration changes', () 
     const execute = jest.spyOn(hooks, 'execute');
     const config = new ConfigService({ webhook: { retryDelay: 300, timeout: 1000 } });
     const delivery = new WebhookDeliveryService(webhooks, failures, config, hooks, outbox);
-    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery);
+    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery, config);
     let posted!: () => void;
     const firstPost = new Promise<void>(resolve => (posted = resolve));
     let fail!: () => void;

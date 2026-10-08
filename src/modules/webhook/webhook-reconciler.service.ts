@@ -1,12 +1,17 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Webhook } from './entities/webhook.entity';
 import { WebhookOutboxService } from './webhook-outbox.service';
-import { isAbortedBackoff, WebhookDeliveryService } from './webhook-delivery.service';
+import {
+  DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS,
+  isAbortedBackoff,
+  WebhookDeliveryService,
+} from './webhook-delivery.service';
 import { isDeliverableWebhook } from './utils/deliver-once';
 import { createLogger } from '../../common/services/logger.service';
-import { resolveNonNegativeIntEnv } from '../../config/configuration';
+import { MAX_TIMER_MS, resolveNonNegativeIntEnv } from '../../config/configuration';
 
 export interface WebhookReconcilerOptions {
   /** 0 disables the sweep entirely. */
@@ -71,6 +76,7 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(Webhook, 'data') private readonly webhooks: Repository<Webhook>,
     private readonly outbox: WebhookOutboxService,
     private readonly delivery: WebhookDeliveryService,
+    private readonly configService: ConfigService,
   ) {}
 
   onModuleInit(): void {
@@ -91,12 +97,32 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
    * Clearing the interval only stops the NEXT pass. A replay holds no dispatch slot, so the delivery
    * drain neither waits for nor stops a pass already running: it would go on POSTing after the drain,
    * and after PluginLoaderService has unregistered the `webhook:before` hooks. Stop it at the next row,
-   * stop the replay in hand without a further retry, and wait for it.
+   * stop the replay in hand without a further retry, and wait for it, at most WEBHOOK_SHUTDOWN_DRAIN_MS
+   * like the delivery drain beside it: the replay's hooks are not capped, and a queue lookup or add made
+   * while Redis has never been reachable does not return. A row given up on stays 'pending' unless the
+   * replay in hand completes before the process exits.
    */
   async onModuleDestroy(): Promise<void> {
     this.stop.abort();
     if (this.timer) clearInterval(this.timer);
-    await this.inFlight;
+    if (!this.inFlight) return;
+    // Above MAX_TIMER_MS a Node timer fires after 1 ms; the delivery drain honours such a value in full.
+    const waitMs = Math.min(
+      this.configService.get<number>('webhook.shutdownDrainMs', DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS),
+      MAX_TIMER_MS,
+    );
+    let timer: NodeJS.Timeout | undefined;
+    const settled = await Promise.race([
+      this.inFlight.then(() => true),
+      new Promise<false>(resolve => (timer = setTimeout(resolve, waitMs, false))),
+    ]);
+    clearTimeout(timer);
+    if (!settled) {
+      this.logger.warn('Webhook reconcile pass still running at shutdown; continuing without it', {
+        waitMs,
+        action: 'webhook_reconcile_shutdown_timeout',
+      });
+    }
   }
 
   /** One bounded pass over the stranded backlog. Overlap-guarded. */

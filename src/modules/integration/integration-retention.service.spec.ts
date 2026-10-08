@@ -4,6 +4,7 @@ import { IntegrationDeliveryFailure } from './entities/integration-delivery-fail
 import { IntegrationRetentionService } from './integration-retention.service';
 import { IngressReconcilerService } from './ingress-reconciler.service';
 import { IngressEnqueueService } from './ingress-enqueue.service';
+import { INGRESS_DISPATCH_TIMEOUT_MS } from './integration.constants';
 import { PluginInstanceService } from './plugin-instance.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { Session } from '../session/entities/session.entity';
@@ -660,18 +661,71 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
     const realSave = failures.save.bind(failures) as (
       row: IntegrationDeliveryFailure,
     ) => Promise<IntegrationDeliveryFailure>;
-    let destroyed: Promise<void> | undefined;
+    let saving!: () => void;
+    const entered = new Promise<void>(resolve => (saving = resolve));
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
     jest.spyOn(failures, 'save').mockImplementationOnce(async row => {
-      destroyed = reconciler.onModuleDestroy();
+      saving();
+      await held;
       return realSave(row as IntegrationDeliveryFailure);
     });
 
-    await service.pruneOlderThan(7, 90);
-    await destroyed;
+    const pruned = service.pruneOlderThan(7, 90);
+    await entered;
+    let destroyed = false;
+    const destroy = reconciler.onModuleDestroy().then(() => (destroyed = true));
+    await new Promise(setImmediate);
+    const destroyedWhileHeld = destroyed;
+    release();
+    await destroy;
+    const firstAtDestroy = (await events.findOneByOrFail({ id: 'first' })).dispatchState;
+    await pruned;
 
+    expect(destroyedWhileHeld).toBe(false);
+    expect(firstAtDestroy).toBe('failed');
     expect(await failures.count()).toBe(1);
     const rows = await events.find({ order: { createdAt: 'ASC' } });
     expect(rows.map(r => r.dispatchState)).toEqual(['failed', 'pending']);
     expect(rows[1].payload).not.toBeNull();
+  });
+
+  it('stops waiting on destroy for a hand-off lookup that does not return, and keeps its row', async () => {
+    await insertEvent('stranded', {});
+    let answer!: (state: undefined) => void;
+    const lookedUp = new Promise<void>(resolve =>
+      existingJobState.mockImplementation(() => {
+        resolve();
+        return new Promise(settle => (answer = settle));
+      }),
+    );
+
+    const pruned = service.pruneOlderThan(7, 90);
+    await lookedUp;
+    let destroyed = false;
+    let destroyedBeforeDeadline: boolean;
+    let destroyedAtDeadline: boolean;
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    try {
+      void reconciler.onModuleDestroy().then(() => (destroyed = true));
+      await jest.advanceTimersByTimeAsync(INGRESS_DISPATCH_TIMEOUT_MS - 1);
+      await new Promise(setImmediate);
+      destroyedBeforeDeadline = destroyed;
+      await jest.advanceTimersByTimeAsync(1);
+      await new Promise(setImmediate);
+      destroyedAtDeadline = destroyed;
+    } finally {
+      jest.useRealTimers();
+    }
+    // The lookup returns once the queue connection closes later in shutdown; the row is left as it was.
+    answer(undefined);
+    await pruned;
+
+    expect(destroyedBeforeDeadline).toBe(false);
+    expect(destroyedAtDeadline).toBe(true);
+    expect(await failures.count()).toBe(0);
+    const row = await events.findOneByOrFail({ id: 'stranded' });
+    expect(row.dispatchState).toBe('pending');
+    expect(row.payload).not.toBeNull();
   });
 });

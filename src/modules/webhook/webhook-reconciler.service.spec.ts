@@ -1,5 +1,7 @@
+import { ConfigService } from '@nestjs/config';
 import { WebhookReconcilerService, resolveWebhookReconcilerOptions } from './webhook-reconciler.service';
 import { ReplayableDelivery } from './webhook-outbox.service';
+import { MAX_TIMER_MS } from '../../config/configuration';
 
 const OPTS = { intervalMs: 60_000, graceMs: 60_000, batchSize: 50, maxAttempts: 3 };
 
@@ -61,7 +63,7 @@ describe('WebhookReconcilerService', () => {
     webhooks = {
       findOne: jest.fn().mockResolvedValue({ id: 'wh-1', sessionId: 'sess-1', active: true, events: ['*'] }),
     };
-    service = new WebhookReconcilerService(webhooks as never, outbox as never, delivery as never);
+    service = new WebhookReconcilerService(webhooks as never, outbox as never, delivery as never, new ConfigService());
   });
 
   it('replays a stranded delivery with the STORED idempotency key', async () => {
@@ -225,6 +227,89 @@ describe('WebhookReconcilerService', () => {
 
     expect(second).toEqual({ scanned: 0, replayed: 0, failed: 0, skipped: 0 });
     expect(outbox.findStale).toHaveBeenCalledTimes(1);
+  });
+
+  // A queue lookup made while Redis has never been reachable does not return, and the destroy hooks
+  // after this one (engines, session leases, plugins) must not wait on it for ever.
+  it('stops waiting on destroy after WEBHOOK_SHUTDOWN_DRAIN_MS and replays nothing once the lookup returns', async () => {
+    outbox.findStale.mockResolvedValue([row({ deliveryId: 'job-1' })]);
+    let reached!: () => void;
+    const lookedUp = new Promise<void>(resolve => (reached = resolve));
+    let answer!: (pending: boolean) => void;
+    delivery.isQueueJobPending.mockImplementation(() => {
+      reached();
+      return new Promise<boolean>(resolve => (answer = resolve));
+    });
+    service = new WebhookReconcilerService(
+      webhooks as never,
+      outbox as never,
+      delivery as never,
+      new ConfigService({ webhook: { shutdownDrainMs: 2000 } }),
+    );
+
+    const sweep = service.sweep(OPTS);
+    await lookedUp;
+    let destroyed = false;
+    let destroyedBeforeDeadline: boolean;
+    let destroyedAtDeadline: boolean;
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    try {
+      void service.onModuleDestroy().then(() => (destroyed = true));
+      await jest.advanceTimersByTimeAsync(1999);
+      await new Promise(setImmediate);
+      destroyedBeforeDeadline = destroyed;
+      await jest.advanceTimersByTimeAsync(1);
+      await new Promise(setImmediate);
+      destroyedAtDeadline = destroyed;
+    } finally {
+      jest.useRealTimers();
+    }
+    answer(false);
+    const stats = await sweep;
+
+    expect(destroyedBeforeDeadline).toBe(false);
+    expect(destroyedAtDeadline).toBe(true);
+    expect(stats).toMatchObject({ replayed: 0, failed: 0 });
+    expect(outbox.countAttempt).not.toHaveBeenCalled();
+    expect(delivery.redeliver).not.toHaveBeenCalled();
+    expect(outbox.close).not.toHaveBeenCalled();
+  });
+
+  it('keeps waiting on destroy when WEBHOOK_SHUTDOWN_DRAIN_MS is above the Node timer ceiling', async () => {
+    outbox.findStale.mockResolvedValue([row({ deliveryId: 'job-1' })]);
+    let reached!: () => void;
+    const lookedUp = new Promise<void>(resolve => (reached = resolve));
+    let answer!: (pending: boolean) => void;
+    delivery.isQueueJobPending.mockImplementation(() => {
+      reached();
+      return new Promise<boolean>(resolve => (answer = resolve));
+    });
+    service = new WebhookReconcilerService(
+      webhooks as never,
+      outbox as never,
+      delivery as never,
+      new ConfigService({ webhook: { shutdownDrainMs: MAX_TIMER_MS + 1 } }),
+    );
+
+    const sweep = service.sweep(OPTS);
+    await lookedUp;
+    let destroyed = false;
+    let destroyedEarly: boolean;
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    try {
+      void service.onModuleDestroy().then(() => (destroyed = true));
+      await jest.advanceTimersByTimeAsync(60_000);
+      await new Promise(setImmediate);
+      destroyedEarly = destroyed;
+    } finally {
+      jest.useRealTimers();
+    }
+    answer(false);
+    await sweep;
+    await new Promise(setImmediate);
+
+    expect(destroyedEarly).toBe(false);
+    expect(destroyed).toBe(true);
   });
 
   it('does not start a timer when the interval disables it', () => {

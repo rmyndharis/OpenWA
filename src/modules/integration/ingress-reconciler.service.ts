@@ -13,6 +13,7 @@ import {
   resolveIngressJobOptions,
 } from './ingress-enqueue.service';
 import { extractConversationId } from './ingress.service';
+import { INGRESS_DISPATCH_TIMEOUT_MS } from './integration.constants';
 import { PluginInstanceService } from './plugin-instance.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { IngressJobData } from '../queue/processors/ingress.processor';
@@ -68,9 +69,9 @@ export interface IngressReconcileStats {
  * 'failed'/'dispatched' rows are never re-queued: a terminal failure lives in the DLQ
  * (RedriveService), a dispatched event is the dispatch tier's concern.
  *
- * Mirrors IntegrationRetentionService's lifecycle: a raw unref'd setInterval started on module init
- * (first sweep after one interval, so plugin sandboxes have time to boot), cleared on destroy, which
- * also stops a pass in flight and waits for it.
+ * Same timer lifecycle as IntegrationRetentionService: a raw unref'd setInterval started on module
+ * init (first sweep after one interval, so plugin sandboxes have time to boot) and cleared on destroy.
+ * Unlike it, destroy also stops a pass in flight and waits a bounded time for it.
  */
 @Injectable()
 export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
@@ -107,12 +108,27 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
    * Clearing the interval only stops the NEXT pass. A pass already running would go on replaying
    * rows after PluginLoaderService has stopped the plugin sandboxes, so each remaining row fails,
    * spends an attempt and, at its last one, is dead-lettered. Stop it at the next row and wait for
-   * the row in hand, while its plugin is still running.
+   * the row in hand, while its plugin is still running. The wait is bounded by the inline dispatch
+   * timeout: a queue lookup made while Redis has never been reachable does not return, and waiting on it
+   * would keep every later destroy hook (engines, session leases, plugins) from running.
+   * A row given up on stays 'pending': once its lookup returns, the row sees the stop and writes nothing.
    */
   async onModuleDestroy(): Promise<void> {
     this.stopping = true;
     if (this.timer) clearInterval(this.timer);
-    await this.inFlight;
+    if (!this.inFlight) return;
+    let timer: NodeJS.Timeout | undefined;
+    const settled = await Promise.race([
+      this.inFlight.then(() => true),
+      new Promise<false>(resolve => (timer = setTimeout(resolve, INGRESS_DISPATCH_TIMEOUT_MS, false))),
+    ]);
+    clearTimeout(timer);
+    if (!settled) {
+      this.logger.warn('Ingress reconcile pass still running at shutdown; continuing without it', {
+        waitMs: INGRESS_DISPATCH_TIMEOUT_MS,
+        action: 'ingress_reconcile_shutdown_timeout',
+      });
+    }
   }
 
   /**
@@ -185,7 +201,8 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
           stats.scanned++;
           const outcome = await this.reconcileRow(row, opts.maxAttempts, now);
           if (outcome === 'replayed') stats.replayed++;
-          else stats.failed++;
+          else if (outcome === 'failed') stats.failed++;
+          else stats.skipped++;
         } catch (err) {
           // A bookkeeping failure (repo update/DLQ write) must not abort the batch; the row stays
           // 'pending' and is retried next sweep.
@@ -252,6 +269,8 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
             // A job still in the queue (or completed) owns the delivery, as in reconcileRow: no dead
             // letter while a copy can still deliver. A failed one falls through to its existing DLQ row.
             const existing = await this.ingressEnqueue.existingJobState(jobData, row.providerDeliveryId);
+            // Shutdown began while the lookup was out (destroy may have stopped waiting for it).
+            if (this.stopping) return retired;
             if (existing && existing !== 'failed') {
               const settled = await this.events.update(
                 { id: row.id, dispatchState: 'pending' },
@@ -348,12 +367,15 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     row: IngressEvent & { payload: NonNullable<IngressEvent['payload']> },
     maxAttempts: number,
     now: Date,
-  ): Promise<'replayed' | 'failed'> {
+  ): Promise<'replayed' | 'failed' | 'interrupted'> {
     const jobData = this.jobDataFor(row);
     // jobId = the ORIGINAL deliveryId, so the replay lands on any job the live path did enqueue before
     // its outcome mark was lost. BullMQ resolves a duplicate add() whatever that job's state, so look
     // first: a live job already owns the delivery, and a failed one would swallow the replay.
     const existing = await this.ingressEnqueue.existingJobState(jobData, row.providerDeliveryId);
+    // Shutdown began while the lookup was out, and destroy may have stopped waiting for it: a dispatch
+    // now could land after plugin teardown and spend an attempt. Leave the row for the next start.
+    if (this.stopping) return 'interrupted';
     if (existing === 'failed') {
       // Every queue attempt already ran and IngressProcessor dead-lettered the delivery, or re-queued it
       // and every copy failed too: a live or completed copy answers for the job (see existingJobState).
@@ -408,6 +430,10 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       });
       return 'replayed';
     }
+    // A failure once shutdown began says nothing about the event: the add may have been refused by a
+    // queue connection closing under it, or the inline fallback met a plugin being torn down. Spend no
+    // attempt and leave the row for the next start.
+    if (this.stopping) return 'interrupted';
 
     const attempts = (row.dispatchAttempts ?? 0) + 1;
     const terminal = attempts >= maxAttempts;

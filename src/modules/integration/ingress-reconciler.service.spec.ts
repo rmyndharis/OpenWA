@@ -7,6 +7,7 @@ import { IngressEnqueueService, sanitizeIngressJobId } from './ingress-enqueue.s
 import { PluginInstanceService } from './plugin-instance.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { RedriveService } from './redrive.service';
+import { INGRESS_DISPATCH_TIMEOUT_MS } from './integration.constants';
 import { IngressJobData } from '../queue/processors/ingress.processor';
 import { ConfigService } from '@nestjs/config';
 
@@ -672,6 +673,87 @@ describe('IngressReconcilerService.sweep', () => {
       expect(event.dispatchState).toBe('pending');
       expect(event.dispatchAttempts).toBe([0, 4][i]);
     }
+    expect(await failures.count()).toBe(0);
+  });
+
+  // The queue add in hand can be refused once teardown closes its connection, and the inline fallback
+  // then runs against plugins being stopped: neither failure may spend the row's last attempt.
+  it('spends no attempt on a replay that fails after destroy began', async () => {
+    const id = await insertEvent({ dispatchAttempts: 4 });
+    let dispatching!: () => void;
+    const started = new Promise<void>(resolve => (dispatching = resolve));
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    enqueue.mockImplementationOnce(async () => {
+      dispatching();
+      await held;
+      return { outcome: 'failed', error: 'no live sandbox host' };
+    });
+
+    const sweep = service.sweep(OPTS);
+    await started;
+    const destroyed = service.onModuleDestroy();
+    release();
+    await destroyed;
+    const stats = await sweep;
+
+    expect(stats).toMatchObject({ scanned: 1, replayed: 0, failed: 0, skipped: 1 });
+    expect(await stored(id)).toMatchObject({ dispatchState: 'pending', dispatchAttempts: 4 });
+    expect((await stored(id)).payload).not.toBeNull();
+    expect(await failures.count()).toBe(0);
+  });
+
+  // A job-state lookup made while Redis has never been reachable only returns once the queue connection
+  // is closed later in shutdown. Waiting for it kept every later destroy hook from running; dispatching
+  // once it returns would land after plugin teardown and dead-letter a row on its last attempt.
+  it('stops waiting for a job-state lookup that does not return, and leaves its row pending', async () => {
+    const id = await insertEvent({ dispatchAttempts: 4 });
+    let lookedUp!: () => void;
+    const reached = new Promise<void>(resolve => (lookedUp = resolve));
+    let closeConnection!: (error: Error) => void;
+    const getJobState = jest.fn(() => {
+      lookedUp();
+      return new Promise<never>((_resolve, reject) => (closeConnection = reject));
+    });
+    const dispatchWebhookForInstance = jest.fn().mockRejectedValue(new Error('no live sandbox host'));
+    service = new IngressReconcilerService(
+      events,
+      failures,
+      new IngressEnqueueService(
+        { dispatchWebhookForInstance } as unknown as PluginLoaderService,
+        { get: jest.fn().mockReturnValue(true) } as unknown as ConfigService,
+        { getJobState, add: jest.fn().mockRejectedValue(new Error('Connection is closed')) } as never,
+      ),
+      { getPlugin } as unknown as PluginLoaderService,
+      { resolve: resolveInstance } as unknown as PluginInstanceService,
+    );
+
+    const sweep = service.sweep(OPTS);
+    await reached;
+    let destroyed = false;
+    let destroyedBeforeDeadline: boolean;
+    let destroyedAtDeadline: boolean;
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    try {
+      void service.onModuleDestroy().then(() => (destroyed = true));
+      await jest.advanceTimersByTimeAsync(INGRESS_DISPATCH_TIMEOUT_MS - 1);
+      await new Promise(setImmediate);
+      destroyedBeforeDeadline = destroyed;
+      await jest.advanceTimersByTimeAsync(1);
+      await new Promise(setImmediate);
+      destroyedAtDeadline = destroyed;
+    } finally {
+      jest.useRealTimers();
+    }
+    closeConnection(new Error('Connection is closed'));
+    const stats = await sweep;
+
+    expect(destroyedBeforeDeadline).toBe(false);
+    expect(destroyedAtDeadline).toBe(true);
+    expect(stats).toMatchObject({ replayed: 0, failed: 0, skipped: 1 });
+    expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
+    expect(await stored(id)).toMatchObject({ dispatchState: 'pending', dispatchAttempts: 4 });
+    expect((await stored(id)).payload).not.toBeNull();
     expect(await failures.count()).toBe(0);
   });
 });

@@ -20,6 +20,7 @@ import configuration from '../../config/configuration';
 import { ApiKeyUsageTracker } from '../auth/api-key-usage-tracker.service';
 import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
 import { IngressEvent } from '../integration/entities/ingress-event.entity';
+import { INGRESS_DISPATCH_TIMEOUT_MS } from '../integration/integration.constants';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
 import { WebhookOutboxService } from '../webhook/webhook-outbox.service';
@@ -156,8 +157,9 @@ describe('queue workers at shutdown', () => {
 
   // The global destroy hooks run after the capped wait, so the cap must leave them room inside the
   // shipped kill deadline after what shutdown spends before QueueModule is destroyed: SHUTDOWN_DELAY_MS,
-  // the per-engine destroy deadline (engines torn down in parallel) and WEBHOOK_SHUTDOWN_DRAIN_MS; then
-  // the bounded API-key usage flush. The defaults come from their sources, so raising one fails here.
+  // the ingress reconciler wait (INGRESS_DISPATCH_TIMEOUT_MS), the per-engine destroy deadline (engines
+  // torn down in parallel) and WEBHOOK_SHUTDOWN_DRAIN_MS; then the bounded API-key usage flush. The
+  // defaults come from their sources, so raising one fails here.
   it('leaves the global destroy hooks room inside the shipped kill deadline', () => {
     const root = join(__dirname, '../../..');
     const compose = readFileSync(join(root, 'docker-compose.yml'), 'utf8');
@@ -169,7 +171,11 @@ describe('queue workers at shutdown', () => {
 
     // Hard-coded: an inline literal in SessionLifecycleFences.teardownEngineSafely, not exported.
     const engineTeardown = 10_000;
-    const beforeQueueClose = DEFAULT_SHUTDOWN_DELAY_MS + engineTeardown + configuration().webhook.shutdownDrainMs;
+    const beforeQueueClose =
+      DEFAULT_SHUTDOWN_DELAY_MS +
+      INGRESS_DISPATCH_TIMEOUT_MS +
+      engineTeardown +
+      configuration().webhook.shutdownDrainMs;
     const usageFlush = ApiKeyUsageTracker.SHUTDOWN_FLUSH_TIMEOUT_MS;
     expect(beforeQueueClose + MAX_WORKER_CLOSE_WAIT_MS + usageFlush).toBeLessThan(Math.min(...graceMs));
   });

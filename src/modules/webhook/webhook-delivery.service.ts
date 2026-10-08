@@ -66,15 +66,18 @@ const DEFAULT_WEBHOOK_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 /**
  * How long shutdown waits for in-flight direct deliveries (and their dead-letter bookkeeping) to
- * finish before abandoning them. Default 5s; override with WEBHOOK_SHUTDOWN_DRAIN_MS.
+ * finish before abandoning them, and for an outbox replay in flight. Default 5s; override with
+ * WEBHOOK_SHUTDOWN_DRAIN_MS.
  */
-const DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS = 5000;
+export const DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS = 5000;
 
 /**
  * The result of one delivery attempt. Reported, not thrown: every delivery failure below is already
- * handled in place, so a try/catch cannot tell a delivered event from a dead-lettered one. The one
- * exception that escapes is 'ConcurrencyLimiter closed' from a retry backoff woken after shutdown;
- * only runLimited can see it, and it records the shutdown and keeps the outbox row pending.
+ * handled in place, so a try/catch cannot tell a delivered event from a dead-lettered one. Two
+ * exceptions escape, both from shutdown, and both keep the outbox row pending: 'ConcurrencyLimiter
+ * closed' from a retry backoff woken after it, which only runLimited sees and records, and the
+ * AbortError of a replay whose signal stopped its retries, which reaches WebhookReconcilerService
+ * through redeliver.
  * 'cancelled' is terminal like 'delivered' and must never be replayed: either a plugin suppressed the
  * dispatch (nothing left the process), or a direct retry found the webhook removed, disabled or
  * unsubscribed (an earlier attempt may already have been POSTed).

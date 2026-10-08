@@ -6,9 +6,10 @@ import { createLogger } from '../../../common/services/logger.service';
  * Upper bound on a processor's early close. Worker.close() can stay pending while Redis is unreachable,
  * and the global destroy hooks (API-key usage flush, plugin onDisable) wait behind it. The shipped kill
  * deadline is 45s (docker-compose stop_grace_period, Helm terminationGracePeriodSeconds), and before
- * QueueModule is destroyed shutdown has already spent SHUTDOWN_DELAY_MS (3s), the engine teardown
- * (10s per-engine deadline, engines in parallel) and WEBHOOK_SHUTDOWN_DRAIN_MS (5s). 15s here leaves
- * 12s for the 5s-bounded usage flush, plugin onDisable and the rest of the teardown.
+ * QueueModule is destroyed shutdown has already spent SHUTDOWN_DELAY_MS (3s), the ingress reconciler
+ * wait (INGRESS_DISPATCH_TIMEOUT_MS, 5s), the engine teardown (10s per-engine deadline, engines in
+ * parallel) and WEBHOOK_SHUTDOWN_DRAIN_MS (5s). 15s here leaves 7s for the 5s-bounded usage flush,
+ * plugin onDisable and the rest of the teardown.
  */
 export const MAX_WORKER_CLOSE_WAIT_MS = 15_000;
 
