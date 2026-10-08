@@ -1,7 +1,7 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, LessThan, Not, Repository, UpdateResult } from 'typeorm';
+import { In, IsNull, LessThan, Not, Repository, UpdateResult } from 'typeorm';
 import { IngressDispatchState, IngressEvent } from './entities/ingress-event.entity';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
 import { PluginInstance } from './entities/plugin-instance.entity';
@@ -229,28 +229,43 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
    * retire the payload with a 'failed' mark, so the dedup-window prune never deletes an acknowledged
    * delivery that was never dispatched: one stranded across downtime longer than the window, one of an
    * instance disabled for that long, or any stranded row while the sweep is disabled. Same
-   * DLQ-before-retire order as the replay budget path. A row whose writes fail stays 'pending' with its
-   * payload, which the prune keeps, and is retried on the next run. Skipped while a sweep is running,
-   * and stopped at the next row once shutdown begins, like a sweep.
+   * DLQ-before-retire order as the replay budget path. A row the run could not settle, because its
+   * hand-off threw or its stored payload reads back as null, is not fetched again in this run, so every
+   * row is fetched at most once per run; one still 'pending' keeps its payload, which the prune keeps,
+   * and the next run retries it. Once 10 batches' worth of rows could not be settled, the run stops with
+   * one warning, which bounds a run against a store that rejects every write. A row whose payload reads
+   * back as null never settles on its own: ten batches of them ahead of healthy rows hold those rows
+   * back on every run until an operator removes them. Waits for a running sweep rather than skipping
+   * the day's run; once shutdown begins, the wait ends with the sweep and the hand-off does nothing,
+   * and a running hand-off stops at the next row, like a sweep.
    * A row whose instance or session was deleted, or whose queue job still owns the delivery, gets no
    * dead letter. Returns the number of rows dead-lettered.
    */
   async deadLetterAgedPending(cutoff: Date, batchSize = 100): Promise<number> {
-    if (this.inFlight || this.stop.signal.aborted) return 0;
+    while (this.inFlight && !this.stop.signal.aborted) await this.inFlight;
+    if (this.stop.signal.aborted) return 0;
     let settle!: () => void;
     this.inFlight = new Promise(resolve => (settle = resolve));
     let retired = 0;
+    const kept: string[] = [];
     try {
       for (;;) {
         const rows = await this.events.find({
-          where: { dispatchState: 'pending', createdAt: LessThan(cutoff), payload: Not(IsNull()) },
+          where: {
+            dispatchState: 'pending',
+            createdAt: LessThan(cutoff),
+            payload: Not(IsNull()),
+            ...(kept.length ? { id: Not(In(kept)) } : {}),
+          },
           order: { createdAt: 'ASC' },
           take: batchSize,
         });
-        let progressed = 0;
         for (const row of rows) {
           if (this.stop.signal.aborted) return retired;
-          if (!hasPayload(row)) continue;
+          if (!hasPayload(row)) {
+            kept.push(row.id);
+            continue;
+          }
           const meta = { pluginId: row.pluginId, instanceId: row.instanceId, deliveryId: row.providerDeliveryId };
           try {
             if (await this.ownerDeleted(row)) {
@@ -260,7 +275,6 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
                 { id: row.id, dispatchState: 'pending' },
                 { dispatchState: 'failed', payload: null },
               );
-              progressed++;
               this.logger.warn('Undispatched ingress event of a deleted instance or session dropped', {
                 ...meta,
                 action: 'ingress_event_retention_dropped',
@@ -280,7 +294,6 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
               );
               // As in reconcileRow: the job delivers it, so an inline-failure dead letter must close.
               if (settled.affected) await this.retireOpenDeadLetters(row);
-              progressed++;
               continue;
             }
             const written = await this.ensureDeadLetterRow(
@@ -292,7 +305,6 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
               { id: row.id, dispatchState: 'pending' },
               { dispatchState: 'failed', payload: null },
             );
-            progressed++;
             if (written) await this.settleDeadLetter(row, written, marked);
             if (!marked.affected) continue;
             retired++;
@@ -301,6 +313,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
               action: 'ingress_event_retention_dead_lettered',
             });
           } catch (err) {
+            kept.push(row.id);
             this.logger.error(
               'Failed to dead-letter an undispatched ingress event; kept for the next run',
               err instanceof Error ? err.message : String(err),
@@ -308,7 +321,14 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
             );
           }
         }
-        if (rows.length < batchSize || progressed === 0) return retired;
+        if (rows.length < batchSize) return retired;
+        if (kept.length >= 10 * batchSize) {
+          this.logger.warn('Ingress retention hand-off stopped early; the remaining events wait for the next run', {
+            kept: kept.length,
+            action: 'ingress_event_retention_handoff_stopped',
+          });
+          return retired;
+        }
       }
     } finally {
       this.inFlight = undefined;

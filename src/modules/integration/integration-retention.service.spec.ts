@@ -274,6 +274,7 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
   let resolveInstance: jest.Mock;
   let existingJobState: jest.Mock;
   let logError: jest.SpyInstance;
+  let logWarn: jest.SpyInstance;
   const SESSION_ID = '11111111-1111-4111-8111-111111111111';
 
   beforeEach(async () => {
@@ -299,7 +300,7 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
       { resolve: resolveInstance } as unknown as PluginInstanceService,
     );
     service = new IntegrationRetentionService(events, failures, reconciler);
-    jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    logWarn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
     logError = jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
   });
 
@@ -628,7 +629,7 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
     expect((await events.find()).map(e => e.id)).toEqual(['stranded']);
   });
 
-  it('stops and keeps every row when no dead-letter write succeeds', async () => {
+  it('keeps every row when no dead-letter write succeeds', async () => {
     for (let i = 0; i < 100; i++) await insertEvent(`f${i}`, {});
     jest.spyOn(failures, 'save').mockRejectedValue(new Error('disk full'));
 
@@ -644,13 +645,114 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
     );
   });
 
-  it('keeps aged pending rows while a reconcile sweep holds the guard', async () => {
+  it('tries a row whose dead-letter write keeps failing once per run and hands off the rows behind it', async () => {
+    // A full batch of older rows whose write always fails, ahead of rows that hand off normally.
+    for (let i = 0; i < 100; i++) await insertEvent(`bad${i}`, { createdAt: daysAgo(9) });
+    for (let i = 0; i < 20; i++) await insertEvent(`ok${i}`, {});
+    const realSave = failures.save.bind(failures) as (
+      row: IntegrationDeliveryFailure,
+    ) => Promise<IntegrationDeliveryFailure>;
+    jest.spyOn(failures, 'save').mockImplementation(async row => {
+      const dlq = row as IntegrationDeliveryFailure;
+      if (dlq.deliveryId?.startsWith('d-bad')) throw new Error('row rejected');
+      return realSave(dlq);
+    });
+
+    await service.pruneOlderThan(7, 90);
+
+    expect(logError).toHaveBeenCalledTimes(100);
+    expect(await events.count({ where: { dispatchState: 'pending' } })).toBe(100);
+    expect(await events.count({ where: { dispatchState: 'failed' } })).toBe(20);
+    expect(await failures.count()).toBe(20);
+  });
+
+  it('stops a run once ten batches of rows could not be handed off', async () => {
+    for (let i = 0; i < 25; i++) await insertEvent(`f${i}`, {});
+    jest.spyOn(failures, 'save').mockRejectedValue(new Error('disk full'));
+
+    expect(await reconciler.deadLetterAgedPending(daysAgo(7), 2)).toBe(0);
+
+    expect(logError).toHaveBeenCalledTimes(20);
+    expect(await events.count({ where: { dispatchState: 'pending' } })).toBe(25);
+    expect(logWarn).toHaveBeenCalledWith(
+      'Ingress retention hand-off stopped early; the remaining events wait for the next run',
+      expect.objectContaining({ kept: 20, action: 'ingress_event_retention_handoff_stopped' }),
+    );
+  });
+
+  it('passes over pending rows whose payload is unreadable and hands off the rows behind them', async () => {
+    await insertEvent('unreadable1', { createdAt: daysAgo(9) });
+    await insertEvent('unreadable2', { createdAt: daysAgo(9) });
     await insertEvent('stranded', {});
-    (reconciler as unknown as { inFlight?: Promise<void> }).inFlight = new Promise(() => undefined);
+    // A JSON null passes the payload IS NOT NULL filter but reads back as no payload.
+    await events.query(`UPDATE ingress_events SET payload = 'null' WHERE id LIKE 'unreadable%'`);
+    const find = events.find.bind(events);
+    let fetches = 0;
+    jest.spyOn(events, 'find').mockImplementation(opts => {
+      if (++fetches > 5) throw new Error('the hand-off keeps fetching the same rows');
+      return find(opts);
+    });
 
-    const result = await service.pruneOlderThan(7, 90);
+    expect(await reconciler.deadLetterAgedPending(daysAgo(7), 2)).toBe(1);
 
-    expect(result.events).toBe(0);
+    expect(await events.findOneByOrFail({ id: 'stranded' })).toMatchObject({ dispatchState: 'failed', payload: null });
+    expect(await events.count({ where: { dispatchState: 'pending' } })).toBe(2);
+  });
+
+  // Stands in for a reconcile sweep holding the guard the hand-off shares with it.
+  const holdSweep = () => {
+    const guarded = reconciler as unknown as { inFlight?: Promise<void> };
+    let settle!: () => void;
+    guarded.inFlight = new Promise(resolve => (settle = resolve));
+    return () => {
+      guarded.inFlight = undefined;
+      settle();
+    };
+  };
+
+  // Resolves once the retention run has called the hand-off, with the hand-off's own promise.
+  const handOffCalled = () =>
+    new Promise<{ running: Promise<number> }>(resolve => {
+      const handOff = reconciler.deadLetterAgedPending.bind(reconciler);
+      jest.spyOn(reconciler, 'deadLetterAgedPending').mockImplementation((...args) => {
+        const running = handOff(...args);
+        resolve({ running });
+        return running;
+      });
+    });
+
+  it('waits for a running reconcile sweep, then hands off the aged pending rows', async () => {
+    await insertEvent('stranded', {});
+    const finishSweep = holdSweep();
+
+    const called = handOffCalled();
+    const pruned = service.pruneOlderThan(7, 90);
+    const { running } = await called;
+    const stateDuringSweep = await Promise.race([
+      running.then(() => 'returned'),
+      new Promise(resolve => setImmediate(resolve, 'waiting')),
+    ]);
+    const duringSweep = await events.findOneByOrFail({ id: 'stranded' });
+    finishSweep();
+    await pruned;
+
+    expect(stateDuringSweep).toBe('waiting');
+    expect(duringSweep.payload).not.toBeNull();
+    expect(await events.findOneByOrFail({ id: 'stranded' })).toMatchObject({ dispatchState: 'failed', payload: null });
+    expect(await failures.count()).toBe(1);
+  });
+
+  it('stops waiting for a running sweep once shutdown begins, and keeps the rows', async () => {
+    await insertEvent('stranded', {});
+    const finishSweep = holdSweep();
+
+    const called = handOffCalled();
+    const pruned = service.pruneOlderThan(7, 90);
+    await called;
+    const destroyed = reconciler.onModuleDestroy();
+    finishSweep();
+    await Promise.all([pruned, destroyed]);
+
     expect((await events.findOneByOrFail({ id: 'stranded' })).payload).not.toBeNull();
     expect(await failures.count()).toBe(0);
   });
