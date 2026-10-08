@@ -18,6 +18,7 @@ import { EngineNotSupportedError } from '../../common/errors/engine-not-supporte
 import { ConfigService } from '@nestjs/config';
 import { SessionService, AUTOSTART_SHUTDOWN_WAIT_MS, AUTOSTART_THROTTLE_MS } from './session.service';
 import { SessionOwnershipService } from './session-ownership.service';
+import { ShutdownService } from '../../common/services/shutdown.service';
 import { ServerShuttingDownException, SessionStoppedException } from './session-engine-controls';
 import { decideReconnect, STABLE_READY_MS } from './reconnect-policy';
 import { ACK_RECONCILE_DELAY_MS } from './message-projector.service';
@@ -109,6 +110,7 @@ describe('SessionService', () => {
   let lifecycle: SessionEngineLifecycle;
   /** The real registry the service writes to, read directly for the live-engine proxy snapshot. */
   let registry: EngineRegistry;
+  let shutdown: ShutdownService;
   let repository: jest.Mocked<Partial<Repository<Session>>>;
   let messageRepository: jest.Mocked<Partial<Repository<Message>>>;
   let dataSource: jest.Mocked<Partial<DataSource>>;
@@ -282,12 +284,14 @@ describe('SessionService', () => {
         { provide: ConfigService, useValue: configService },
         { provide: LidMappingStoreService, useValue: lidMappingStore },
         { provide: StatusStoreService, useValue: statusStore },
+        ShutdownService,
       ],
     }).compile();
 
     service = module.get<SessionService>(SessionService);
     lifecycle = module.get<SessionEngineLifecycle>(SessionEngineLifecycle);
     registry = module.get<EngineRegistry>(EngineRegistry);
+    shutdown = module.get(ShutdownService);
   });
 
   // ── shutdown ──────────────────────────────────────────────────────
@@ -8763,6 +8767,20 @@ describe('SessionService', () => {
       expect(engineFactory.create).not.toHaveBeenCalled();
     });
 
+    // The drain (readiness 503) starts SHUTDOWN_DELAY_MS before onModuleDestroy, which would tear down
+    // an engine launched in between.
+    it('refuses a start from the start of the shutdown drain, before teardown', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ desiredState: 'stopped' }));
+      shutdown.markShuttingDown();
+
+      await expect(service.start('sess-uuid-1', { explicit: true })).rejects.toBeInstanceOf(
+        ServerShuttingDownException,
+      );
+      expect(hookManager.execute).not.toHaveBeenCalled();
+      expect(repository.update as jest.Mock).not.toHaveBeenCalled();
+      expect(engineFactory.create).not.toHaveBeenCalled();
+    });
+
     it('does not initialize an engine whose first status write settles while shutdown destroys it', async () => {
       const flush = async (): Promise<void> => {
         for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
@@ -9755,6 +9773,29 @@ describe('SessionService', () => {
       ]);
       const startSpy = jest.spyOn(service, 'start').mockImplementation(() => {
         (service as unknown as { shuttingDown: boolean }).shuttingDown = true;
+        return Promise.resolve(undefined as never);
+      });
+
+      jest.useFakeTimers();
+      try {
+        service.onApplicationBootstrap();
+        await jest.advanceTimersByTimeAsync(AUTOSTART_THROTTLE_MS); // the inter-launch throttle
+        await autoStartRun();
+
+        expect(startSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('stops launching the rest once the shutdown drain begins mid-run', async () => {
+      process.env.AUTO_START_SESSIONS = 'true';
+      (repository.find as jest.Mock).mockResolvedValue([
+        { id: 'a', name: 'A' },
+        { id: 'b', name: 'B' },
+      ]);
+      const startSpy = jest.spyOn(service, 'start').mockImplementation(() => {
+        shutdown.markShuttingDown();
         return Promise.resolve(undefined as never);
       });
 

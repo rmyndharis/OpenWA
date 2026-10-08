@@ -53,6 +53,7 @@ import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-err
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { IWhatsAppEngine, ChatSummary, ChatState } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
+import { ShutdownService } from '../../common/services/shutdown.service';
 import { HookManager } from '../../core/hooks';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
@@ -171,7 +172,19 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // behaves as unowned there, which is what a single-process deployment is anyway.
     @Optional()
     private readonly ownership?: SessionOwnershipService,
+    // The drain signal, set when shutdown begins and SHUTDOWN_DELAY_MS before onModuleDestroy. Same
+    // source the reconnect scheduler and the takeover sweep consult.
+    @Optional()
+    private readonly shutdownService?: ShutdownService,
   ) {}
+
+  /**
+   * True from the start of the shutdown drain. An engine launched during the drain would be torn
+   * down seconds later by onModuleDestroy, so starts are refused from here, not from teardown.
+   */
+  private get stopping(): boolean {
+    return this.shuttingDown || this.shutdownService?.isShuttingDown() === true;
+  }
 
   /**
    * On startup, mark as disconnected the sessions whose engines this process was running, since no
@@ -278,7 +291,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     for (let i = 0; i < sessions.length; i++) {
       // A shutdown landing mid-run must not launch anything further: onModuleDestroy tears down what
       // exists, and a browser launched after that point is never destroyed.
-      if (this.shuttingDown) {
+      if (this.stopping) {
         this.logger.log(`Auto-start stopped at ${i} of ${sessions.length} session(s): shutting down`, {
           action: 'auto_start_aborted',
         });
@@ -336,7 +349,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       }
       // Throttle between sequential Chromium launches; no need to wait after the last one.
       // Skipped once shutdown began: onModuleDestroy awaits this loop, and the check above ends it.
-      if (i < sessions.length - 1 && !this.shuttingDown) {
+      if (i < sessions.length - 1 && !this.stopping) {
         await setTimeout(AUTOSTART_THROTTLE_MS);
       }
     }
@@ -676,7 +689,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   private refuseIfShuttingDown(): void {
-    if (this.shuttingDown) throw new ServerShuttingDownException();
+    if (this.stopping) throw new ServerShuttingDownException();
   }
 
   private async claimAndStart(id: string, explicit: boolean): Promise<Session> {

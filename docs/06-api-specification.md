@@ -2434,7 +2434,7 @@ The rendered text is bounded the same way, by `TEMPLATE_RENDER_MAX_CHARS` (defau
 }
 ```
 
-**Errors:** `400` session not active, duplicate `batchId`, a `batchId` of `.` or `..`, or DTO/nested validation failure (unknown nested field rejected) · `401` missing/invalid API key · `403` key role below OPERATOR · `413` base64 media over the media cap (see §6.3) · `429` too many bulk batches already in progress on this node (`BULK_MAX_CONCURRENT_BATCHES`, default 50); retry shortly · `500` engine error · `503` the server is shutting down; retry the batch shortly
+**Errors:** `400` session not active, duplicate `batchId`, a `batchId` of `.` or `..`, or DTO/nested validation failure (unknown nested field rejected) · `401` missing/invalid API key · `403` key role below OPERATOR · `413` base64 media over the media cap (see §6.3) · `429` too many bulk batches already in progress on this node (`BULK_MAX_CONCURRENT_BATCHES`, default 50); retry shortly · `500` engine error · `503` the server is shutting down; nothing was sent, so retry the batch shortly
 
 #### POST /api/sessions/:sessionId/messages/batch/:batchId/cancel
 
