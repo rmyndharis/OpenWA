@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, Copy, FileText, Loader2, Plus, Search, Trash2 } from 'lucide-react';
 import { type MessageTemplate, type TemplatePayload } from '../services/api';
@@ -62,6 +62,13 @@ export function Templates() {
   const sessionsFailed = !!sessionsError && sessions.length === 0;
   const [selectedSessionId, setSelectedSessionId] = useState('');
   const [form, setForm] = useState<TemplateForm>(emptyForm);
+  // The draft on screen now, read by a save that resolves after the operator may have moved on.
+  const formRef = useRef(form);
+  useEffect(() => {
+    formRef.current = form;
+  }, [form]);
+  // Bumped whenever the editor starts another draft (new, opened or session switched), unlike edits to the same one.
+  const draftRef = useRef(0);
   const [editingTemplate, setEditingTemplate] = useState<MessageTemplate | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MessageTemplate | null>(null);
   const toast = useToast();
@@ -99,6 +106,7 @@ export function Templates() {
     const next = sessions[0]?.id ?? '';
     if (next === selectedSessionId) return;
     setSelectedSessionId(next);
+    draftRef.current += 1;
     setForm(emptyForm);
     setEditingTemplate(null);
     setPreviewValues({});
@@ -115,12 +123,14 @@ export function Templates() {
   }, [placeholders]);
 
   const resetForm = () => {
+    draftRef.current += 1;
     setForm(emptyForm);
     setEditingTemplate(null);
     setPreviewValues({});
   };
 
   const openEdit = (template: MessageTemplate) => {
+    draftRef.current += 1;
     setEditingTemplate(template);
     setForm({
       name: template.name,
@@ -133,23 +143,32 @@ export function Templates() {
 
   const handleSave = async () => {
     if (!selectedSessionId || !form.name.trim() || !form.body.trim()) return;
+    const savedForm = form;
+    const draft = draftRef.current;
 
     try {
+      let saved: MessageTemplate;
       if (editingTemplate) {
-        await updateMutation.mutateAsync({
+        saved = await updateMutation.mutateAsync({
           sessionId: selectedSessionId,
           id: editingTemplate.id,
           data: toPayload(form),
         });
         toast.success(t('templates.toasts.updated'));
       } else {
-        await createMutation.mutateAsync({
+        saved = await createMutation.mutateAsync({
           sessionId: selectedSessionId,
           data: toPayload(form),
         });
         toast.success(t('templates.toasts.created'));
       }
-      resetForm();
+      // Edits typed into this draft while the save was in flight stay on screen; point them at the saved
+      // row so the next save updates it (a second create would fail the unique name check) and the
+      // editor header reflects the stored name.
+      if (draftRef.current === draft && formRef.current !== savedForm) setEditingTemplate(saved);
+      // Every edit, template switch and session switch replaces the form object, so a save that
+      // resolves after any of them must leave the newer draft alone.
+      if (formRef.current === savedForm) resetForm();
     } catch (err) {
       toast.error(
         t(editingTemplate ? 'templates.toasts.updateFailed' : 'templates.toasts.createFailed', {
