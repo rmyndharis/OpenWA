@@ -198,6 +198,15 @@ describe('governance docs match the repository', () => {
     expect(risks).toMatch(/\[README disclaimer\]/);
   });
 
+  // Status media lives only in the storage backend, and backup.sh never copies an S3 bucket.
+  it('describes the storage backend as the live media store, not a backup target', () => {
+    expect(read('scripts/backup.sh')).toMatch(/the bucket's contents are not archived/);
+    for (const file of ['README.md', 'docs/03-system-architecture.md']) {
+      expect(read(file)).not.toMatch(/backup\s*\/\s*migration|media backup/i);
+      expect(read(file)).toMatch(/live media store/i);
+    }
+  });
+
   it('keeps the README non-affiliation disclaimer', () => {
     const section = between(read('README.md'), '## Disclaimer', '\n## ');
     expect(section).toMatch(/not affiliated/);
