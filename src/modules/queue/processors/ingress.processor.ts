@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { QUEUE_NAMES } from '../queue-names';
 import { workerConnectionOptions, ingressWorkerConcurrency } from '../redis-connection';
+import { closeWorkerIfStarted, MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
 import { IntegrationDeliveryFailure } from '../../integration/entities/integration-delivery-failure.entity';
 import { IngressEvent } from '../../integration/entities/ingress-event.entity';
 import { PluginLoaderService } from '../../../core/plugins/plugin-loader.service';
@@ -67,6 +68,18 @@ export class IngressProcessor extends WorkerHost {
     private readonly events: Repository<IngressEvent>,
   ) {
     super();
+  }
+
+  /**
+   * BullModule closes the worker only in onApplicationShutdown, after every destroy hook, so it would
+   * keep taking jobs while PluginLoaderService (a global module, destroyed last) disables the plugins:
+   * each one would fail against a terminated sandbox, spending an attempt or landing in the DLQ.
+   * Closing here, before the global modules, lets the jobs already running finish against live plugins
+   * and leaves the rest in Redis for the next start. Running jobs that share an ordering key dispatch
+   * one after another, so a full worker of them can outlast any wait; this one takes the whole cap.
+   */
+  async onModuleDestroy(): Promise<void> {
+    await closeWorkerIfStarted(this, MAX_WORKER_CLOSE_WAIT_MS);
   }
 
   async process(job: Job<IngressJobData>): Promise<void> {

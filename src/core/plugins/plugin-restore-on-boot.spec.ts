@@ -142,6 +142,42 @@ describe('PluginLoaderService — restoring the operator enable decision across 
     expect(enable).toHaveBeenCalledWith(second.id);
   });
 
+  it('stops restoring plugins once shutdown teardown begins', async () => {
+    const second: PluginManifest = { ...manifest, id: 'ext-two', name: 'Ext Two' };
+    const secondDir = path.join(tmpDir, 'plugins', second.id);
+    fs.mkdirSync(secondDir, { recursive: true });
+    fs.writeFileSync(path.join(secondDir, 'manifest.json'), JSON.stringify(second));
+    fs.writeFileSync(path.join(secondDir, 'index.js'), 'module.exports = class {};');
+
+    const storage2 = new PluginStorageService(config);
+    const loader2 = makeLoader(storage2);
+    loader2.loadPlugin(pluginDir);
+    loader2.loadPlugin(secondDir);
+    storage2.setPluginEnabledByOperator(manifest.id, true);
+    storage2.setPluginEnabledByOperator(second.id, true);
+
+    const log = jest
+      .spyOn((loader2 as unknown as { logger: { log: (...args: unknown[]) => void } }).logger, 'log')
+      .mockImplementation(() => undefined);
+    // The gateway starts shutting down while the first plugin is being restored.
+    let destroying: Promise<void> | undefined;
+    const enable = jest.spyOn(loader2, 'enablePlugin').mockImplementation(() => {
+      destroying = loader2.onModuleDestroy();
+      return Promise.resolve();
+    });
+
+    await loader2.onApplicationBootstrap();
+    await destroying;
+
+    expect(enable).toHaveBeenCalledTimes(1);
+    expect(enable).not.toHaveBeenCalledWith(second.id);
+    // The skipped plugins are reported, so an operator can tell the restore was cut short.
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('stopped at 1 of 2'),
+      expect.objectContaining({ action: 'plugin_restore_aborted' }),
+    );
+  });
+
   it('does not treat the shutdown teardown as the operator disabling the plugin', async () => {
     // The regression that makes this whole design fragile: onModuleDestroy disables every enabled
     // plugin on the way out. If teardown cleared the intent, one graceful restart would erase it and

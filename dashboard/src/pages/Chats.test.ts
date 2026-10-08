@@ -1074,6 +1074,33 @@ test('a reconnect refetch that settles after the page was left sends no mark-as-
   );
 });
 
+async function leaveWithPendingRead(loggedOut: boolean): Promise<number> {
+  const { screen, fireEvent, within } = rtl;
+  const { container, unmount } = renderChats();
+  await screen.findByText('Main (15551234567)');
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  // Opening the chat queued its read behind the quiet window; the page goes away inside it.
+  resetFetchCalls();
+  // Logout removes the key before the authenticated tree unmounts.
+  if (loggedOut) window.sessionStorage.removeItem('openwa_api_key');
+  try {
+    unmount();
+    await new Promise(resolve => setTimeout(resolve, 1_000));
+  } finally {
+    window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  }
+  return countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`);
+}
+
+test('leaving the page sends the pending mark-as-read', async () => {
+  assert.equal(await leaveWithPendingRead(false), 1, 'the pending mark-as-read was dropped');
+});
+
+test('logging out sends no pending mark-as-read without a key', async () => {
+  assert.equal(await leaveWithPendingRead(true), 0, 'a keyless mark-as-read went out after logout');
+});
+
 test('a reconnect refetch overtaken by a newer list still marks the open chat read', async () => {
   const { screen, fireEvent, within, act, waitFor } = rtl;
   const { container } = renderChats();
