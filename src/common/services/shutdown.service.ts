@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { createLogger } from './logger.service';
 
 /** Default grace before teardown; capped so a misconfigured value can't exceed a typical SIGKILL window. */
-const DEFAULT_SHUTDOWN_DELAY_MS = 3000;
+export const DEFAULT_SHUTDOWN_DELAY_MS = 3000;
 const MAX_SHUTDOWN_DELAY_MS = 30_000;
 
 @Injectable()
