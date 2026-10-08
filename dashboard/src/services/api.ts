@@ -740,15 +740,21 @@ export interface SearchResults {
 // fails; the never-settling promise halts this request's chain so callers neither flash a generic
 // error toast nor receive an undefined payload while the page navigates away. Otherwise throw an
 // Error carrying the HTTP status and, when the gateway supplied one, its machine code.
-async function handleErrorResponse<T>(response: Response): Promise<T> {
+// `sentKey` is the key the request carried (null when none). Logout aborts nothing in flight, so an
+// answer can arrive after the stored key changed. With a key sent but none stored, a sign-out is
+// already under way (an earlier failure of the same burst, or the user on the login form): stay
+// silent and do not navigate again. With another key stored, the answer speaks for a key no longer
+// in use and must not sign out the current one, so it fails like any other error.
+async function handleErrorResponse<T>(response: Response, sentKey: string | null): Promise<T> {
   // On a non-JSON body (e.g. a reverse-proxy 502/503/504 HTML page) fall through to `HTTP <status>`
   // rather than statusText: the toast folds an exact `HTTP 502`/`HTTP 503` into its connection-lost
   // toast (a 504 keeps its own), and statusText is empty over HTTP/2 anyway.
   const error = await response.json().catch(() => ({}));
-  if (isKeyUnusable(response.status, error.message)) {
+  const storedKey = sessionStorage.getItem('openwa_api_key');
+  if (isKeyUnusable(response.status, error.message) && (storedKey === sentKey || storedKey === null)) {
     sessionStorage.removeItem('openwa_api_key');
     if (typeof window !== 'undefined') {
-      window.location.assign('/');
+      if (storedKey === sentKey) window.location.assign('/');
       return new Promise<T>(() => {});
     }
   }
@@ -784,7 +790,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   const response = await fetch(url, { ...options, headers });
 
   if (!response.ok) {
-    return handleErrorResponse<T>(response);
+    return handleErrorResponse<T>(response, apiKey);
   }
 
   if (response.status === 204) {
@@ -802,7 +808,7 @@ async function requestText(endpoint: string): Promise<string> {
   });
 
   if (!response.ok) {
-    return handleErrorResponse<string>(response);
+    return handleErrorResponse<string>(response, apiKey);
   }
 
   return response.text();
@@ -822,7 +828,7 @@ async function requestBlob(endpoint: string, signal?: AbortSignal): Promise<Blob
   const response = await fetch(url, { headers, signal });
 
   if (!response.ok) {
-    return handleErrorResponse<Blob>(response);
+    return handleErrorResponse<Blob>(response, apiKey);
   }
 
   return response.blob();

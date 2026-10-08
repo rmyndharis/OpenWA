@@ -1,6 +1,15 @@
-import { test } from 'node:test';
+import { test, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { fetchAllPages } from './fetchAllPages.ts';
+
+before(async () => {
+  const { installJsdomGlobals } = await import('../test-helpers/jsdom.ts');
+  await installJsdomGlobals();
+});
+
+beforeEach(() => {
+  sessionStorage.setItem('openwa_api_key', 'key-a');
+});
 
 /** Fake page source: holds `total` rows, but never returns more than `serverMax` per call. */
 function fakeSource(total: number, serverMax: number) {
@@ -149,4 +158,54 @@ test('a page still throttled past the one-second tier ends the walk with the row
   assert.equal(throttled, true, 'the throttle was reported as the row cap');
   assert.equal(rows.length, 1_000);
   assert.equal(attempts, calls.length + 3, 'the refused page was tried more than three times');
+});
+
+test('a walk stops once the key it started with is signed out or replaced', async () => {
+  // Each page request reads the stored key as it goes out, as the API client does.
+  const { fetchPage } = fakeSource(1_000, 200);
+  const sentWith: Array<string | null> = [];
+  const keyedPage = async (limit: number, offset: number) => {
+    sentWith.push(sessionStorage.getItem('openwa_api_key'));
+    return fetchPage(limit, offset);
+  };
+
+  // Signed out while a throttled page waits for its retry: the retry is never sent keyless.
+  let throttled = false;
+  await assert.rejects(
+    fetchAllPages(
+      async (limit, offset) => {
+        const page = await keyedPage(limit, offset);
+        if (offset === 200 && !throttled) {
+          throttled = true;
+          sessionStorage.removeItem('openwa_api_key');
+          throw httpError(429);
+        }
+        return page;
+      },
+      { retryDelayMs: 0 },
+    ),
+  );
+  assert.deepEqual(sentWith, ['key-a', 'key-a']);
+
+  // Signed in again with another key while a page was out: no page goes out as the new key.
+  sentWith.length = 0;
+  sessionStorage.setItem('openwa_api_key', 'key-a');
+  await assert.rejects(
+    fetchAllPages(async (limit, offset) => {
+      const page = await keyedPage(limit, offset);
+      if (offset === 200) sessionStorage.setItem('openwa_api_key', 'key-b');
+      return page;
+    }),
+  );
+  assert.deepEqual(sentWith, ['key-a', 'key-a']);
+
+  // Signed out while the last page was out: its rows do not come back as a finished walk.
+  sessionStorage.setItem('openwa_api_key', 'key-a');
+  await assert.rejects(
+    fetchAllPages(async (limit, offset) => {
+      const page = await fetchPage(limit, offset);
+      if (offset === 800) sessionStorage.removeItem('openwa_api_key');
+      return page;
+    }),
+  );
 });
