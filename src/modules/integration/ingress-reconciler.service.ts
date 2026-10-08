@@ -1,8 +1,8 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, LessThan, Not, Repository } from 'typeorm';
-import { IngressEvent } from './entities/ingress-event.entity';
+import { IsNull, LessThan, Not, Repository, UpdateResult } from 'typeorm';
+import { IngressDispatchState, IngressEvent } from './entities/ingress-event.entity';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
 import { PluginInstance } from './entities/plugin-instance.entity';
 import { Session } from '../session/entities/session.entity';
@@ -293,21 +293,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
               { dispatchState: 'failed', payload: null },
             );
             progressed++;
-            if (written) {
-              // A delivery the dispatch tier made concurrently must not stay redrivable. For a failed
-              // event, another node's hand-off may have written a dead letter too, or skipped its own
-              // because of this one, so a writer retires its row only when an open one with a lower id
-              // exists: the lowest-id open row is never retired, and normally it is the only one left.
-              // Ids are random UUIDs, so a writer whose check runs before a lower-id row is visible
-              // keeps its own as well, and two open rows can remain.
-              const state = marked.affected
-                ? 'failed'
-                : (await this.events.findOne({ where: { id: row.id }, select: { dispatchState: true } }))
-                    ?.dispatchState;
-              if (state === 'dispatched' || (state === 'failed' && (await this.hasLowerOpenDeadLetter(row, written)))) {
-                await this.failures.update({ id: written, redriven: false }, { redriven: true });
-              }
-            }
+            if (written) await this.settleDeadLetter(row, written, marked);
             if (!marked.affected) continue;
             retired++;
             this.logger.warn('Ingress event was never dispatched within the dedup retention window; dead-lettered', {
@@ -338,18 +324,43 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     return !!sessionId && isUUID(sessionId) && !(await this.events.manager.existsBy(Session, { id: sessionId }));
   }
 
-  private async hasLowerOpenDeadLetter(row: IngressEvent, written: string): Promise<boolean> {
-    const lower = await this.failures.count({
+  /**
+   * Called after a dead letter was ensured and the event marked 'failed' only while still 'pending'.
+   * Returns the event's state, re-read when the mark missed because another writer settled it first.
+   * `written` (the row this call wrote, if any) must not stay redrivable for a delivery the dispatch
+   * tier made concurrently. For a failed event, another writer (a hand-off or a sweep, here or on
+   * another node) may have written a dead letter too, or skipped its own because of this one, so a
+   * writer retires its row only when an open one with a lower id exists: the lowest-id open row is
+   * never retired, and normally it is the only one left. Ids are random UUIDs, so a writer whose check
+   * runs before a lower-id row is visible keeps its own as well, and two open rows can remain.
+   */
+  private async settleDeadLetter(
+    row: IngressEvent,
+    written: string | undefined,
+    marked: UpdateResult,
+  ): Promise<IngressDispatchState | null | undefined> {
+    const state = marked.affected
+      ? 'failed'
+      : (await this.events.findOne({ where: { id: row.id }, select: { dispatchState: true } }))?.dispatchState;
+    if (written && (state === 'dispatched' || (state === 'failed' && (await this.hasOpenDeadLetter(row, written))))) {
+      await this.failures.update({ id: written, redriven: false }, { redriven: true });
+    }
+    return state;
+  }
+
+  // An open dead letter for the row's delivery, or only one with an id below `below` when given.
+  private async hasOpenDeadLetter(row: IngressEvent, below?: string): Promise<boolean> {
+    const open = await this.failures.count({
       where: {
         direction: 'inbound',
         pluginId: row.pluginId,
         instanceId: row.instanceId,
         deliveryId: row.providerDeliveryId,
         redriven: false,
-        id: LessThan(written),
+        ...(below !== undefined && { id: LessThan(below) }),
       },
     });
-    return lower > 0;
+    return open > 0;
   }
 
   private async retireOpenDeadLetters(row: IngressEvent): Promise<void> {
@@ -383,11 +394,11 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       // and every copy failed too: a live or completed copy answers for the job (see existingJobState).
       // Nothing is dispatched: the DLQ row stays redrivable (written here if the processor's write was
       // lost, and before the payload is retired, since it becomes the payload's only home). A copy the
-      // lookup missed (one pruned once completed) has already marked the event 'dispatched', so the mark
-      // only lands on a still-'pending' event, and the row this sweep wrote for an event a copy already
-      // dispatched is retired again. Only that row: 'dispatched' is also the mark for a job that was
-      // still live, and a row written before this sweep can be the dead letter of a delivery that never
-      // arrived.
+      // lookup missed (one pruned once completed), or a redrive of the open row, has already marked the
+      // event 'dispatched', so the mark only lands on a still-'pending' event, and the row this sweep
+      // wrote is settled as in the hand-off. Only that row: 'dispatched' is also the mark for a job that
+      // was still live, and a row written before this sweep can be the dead letter of a delivery that
+      // never arrived, so the event counts as replayed only once no open row is left.
       const written = await this.ensureDeadLetterRow(
         jobData,
         resolveIngressJobOptions().attempts,
@@ -397,13 +408,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
         { id: row.id, dispatchState: 'pending' },
         { lastDispatchAt: now, dispatchState: 'failed', payload: null },
       );
-      if (!marked.affected && written) {
-        const current = await this.events.findOne({ where: { id: row.id }, select: { dispatchState: true } });
-        if (current?.dispatchState === 'dispatched') {
-          await this.failures.update({ id: written, redriven: false }, { redriven: true });
-          return 'replayed';
-        }
-      }
+      if (await this.settledElsewhere(row, written, marked)) return 'replayed';
       this.logger.warn('Stranded ingress event already failed in the queue; left for redrive', {
         pluginId: row.pluginId,
         instanceId: row.instanceId,
@@ -451,20 +456,14 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       // home, so it must exist first. ensureDeadLetterRow is idempotent (count-guarded), so a crash
       // between the two writes just makes the next sweep re-take this path and finish the mark. A
       // redrive of the live-path row during this replay closes the event and that row, so, as in the
-      // failed-job branch, the mark only lands on a still-'pending' event and the row written for an
-      // event the redrive already dispatched is retired.
+      // failed-job branch, the mark only lands on a still-'pending' event and the row this sweep wrote
+      // is settled as in the hand-off.
       const written = await this.ensureDeadLetterRow(jobData, attempts, error);
       const marked = await this.events.update(
         { id: row.id, dispatchState: 'pending' },
         { dispatchAttempts: attempts, lastDispatchAt: now, dispatchState: 'failed', payload: null },
       );
-      if (!marked.affected && written) {
-        const current = await this.events.findOne({ where: { id: row.id }, select: { dispatchState: true } });
-        if (current?.dispatchState === 'dispatched') {
-          await this.failures.update({ id: written, redriven: false }, { redriven: true });
-          return 'replayed';
-        }
-      }
+      if (await this.settledElsewhere(row, written, marked)) return 'replayed';
       this.logger.warn('Ingress event replay budget exhausted; event is dead-lettered', {
         pluginId: row.pluginId,
         instanceId: row.instanceId,
@@ -477,6 +476,17 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     // Non-terminal: keep the payload — the next sweep replays from it.
     await this.events.update({ id: row.id }, { dispatchAttempts: attempts, lastDispatchAt: now });
     return 'failed';
+  }
+
+  // Settles the sweep's dead letter, then tells whether another writer dispatched the event and left
+  // nothing to redrive, so the sweep neither logs nor counts it as dead-lettered.
+  private async settledElsewhere(
+    row: IngressEvent,
+    written: string | undefined,
+    marked: UpdateResult,
+  ): Promise<boolean> {
+    const state = await this.settleDeadLetter(row, written, marked);
+    return state === 'dispatched' && !(await this.hasOpenDeadLetter(row));
   }
 
   /**

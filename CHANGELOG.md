@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Retire the ingress replay sweep's duplicate dead letter when it races another dead-letter write, and stop logging an event a redrive delivered meanwhile as dead-lettered.
 - Fall back instead of hanging when an ingress, webhook or infra status queue call runs before Redis has ever connected.
 - Drop whatsapp-web.js inbound media over `MEDIA_DOWNLOAD_MAX_BYTES` in the page when the sender understates its size.
 - Probe the configured `PORT` in the Docker image healthcheck instead of a fixed 2785.

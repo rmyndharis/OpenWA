@@ -497,7 +497,7 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
 
       await service.pruneOlderThan(7, 90);
 
-      // The other node retires its own row once its check sees this one; this node's row stays.
+      // The other writer, a hand-off or a sweep, retires its own row once its check sees this one.
       const open = await openIds();
       expect(open).toHaveLength(2);
       expect(open).toContain(HIGH_ID);

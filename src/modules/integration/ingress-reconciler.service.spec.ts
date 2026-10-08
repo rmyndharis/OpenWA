@@ -324,6 +324,87 @@ describe('IngressReconcilerService.sweep', () => {
     expect(await failures.count({ where: { deliveryId: 'd-1', redriven: false } })).toBe(0);
   });
 
+  it('counts the event as replayed when a redrive delivers it between the dead-letter check and the mark', async () => {
+    const id = await insertEvent({ dispatchAttempts: 4 });
+    const live = await failures.save(
+      failures.create({
+        direction: 'inbound',
+        pluginId: 'plug',
+        instanceId: 'inst',
+        sessionId: 'sess-1',
+        deliveryId: 'd-1',
+        attempts: 1,
+        lastError: 'inline dispatch failed',
+        payload: null,
+        redriven: false,
+      }),
+    );
+    enqueue.mockResolvedValue({ outcome: 'failed', error: 'still down' });
+    // The check sees the live-path row open, so the sweep writes none; the redrive then lands.
+    const count = failures.count.bind(failures);
+    jest.spyOn(failures, 'count').mockImplementationOnce(async options => {
+      const open = await count(options);
+      await events.update({ id, dispatchState: 'pending' }, { dispatchState: 'dispatched', payload: null });
+      await failures.update({ id: live.id }, { redriven: true });
+      return open;
+    });
+
+    const stats = await service.sweep(OPTS);
+
+    expect(stats).toMatchObject({ scanned: 1, replayed: 1, failed: 0 });
+    expect((await stored(id)).dispatchState).toBe('dispatched');
+    expect(await failures.count({ where: { deliveryId: 'd-1', redriven: false } })).toBe(0);
+  });
+
+  describe('when another writer dead-letters the same event concurrently', () => {
+    // Below any random UUID, so the sweep's own row always holds the higher id.
+    const LOW_ID = '00000000-0000-4000-8000-000000000000';
+    const otherDeadLetter = () =>
+      failures.insert({
+        id: LOW_ID,
+        direction: 'inbound',
+        pluginId: 'plug',
+        instanceId: 'inst',
+        deliveryId: 'd-1',
+        attempts: 0,
+        lastError: 'not dispatched within the ingress dedup retention window',
+        payload: null,
+        redriven: false,
+      });
+    const openIds = async () => (await failures.find({ where: { deliveryId: 'd-1', redriven: false } })).map(f => f.id);
+
+    beforeEach(() => enqueue.mockResolvedValue({ outcome: 'failed', error: 'still down' }));
+
+    it('retires its own dead letter when it loses the failure mark to a writer with a lower-id row', async () => {
+      const id = await insertEvent({ dispatchAttempts: 4 });
+      jest.spyOn(events, 'update').mockImplementationOnce(async () => {
+        await otherDeadLetter();
+        await events.query(`UPDATE ingress_events SET "dispatchState" = 'failed', payload = NULL WHERE id = '${id}'`);
+        return { affected: 0, raw: [], generatedMaps: [] };
+      });
+
+      const stats = await service.sweep(OPTS);
+
+      expect(stats).toMatchObject({ replayed: 0, failed: 1 });
+      expect(await openIds()).toEqual([LOW_ID]);
+      expect(await failures.count()).toBe(2);
+    });
+
+    it('retires its own dead letter when it wins the failure mark but a lower-id row exists', async () => {
+      const id = await insertEvent({ dispatchAttempts: 4 });
+      const update = events.update.bind(events);
+      jest.spyOn(events, 'update').mockImplementationOnce(async (criteria, partial) => {
+        await otherDeadLetter();
+        return update(criteria, partial);
+      });
+
+      await service.sweep(OPTS);
+
+      expect(await openIds()).toEqual([LOW_ID]);
+      expect(await stored(id)).toMatchObject({ dispatchState: 'failed', payload: null });
+    });
+  });
+
   it('writes a redrivable DLQ row on terminal failure when the only row for the id was already redriven', async () => {
     // An earlier delivery under the same id was dead-lettered and redriven; its event row aged out of
     // the dedup window, so the id was accepted again and this new event exhausted its replay budget.
@@ -482,6 +563,25 @@ describe('IngressReconcilerService.sweep', () => {
 
       await service.sweep(OPTS);
 
+      expect((await stored(id)).dispatchState).toBe('dispatched');
+      expect(await failures.count({ where: { deliveryId: 'd-1', redriven: false } })).toBe(0);
+    });
+
+    it('counts the event as replayed when a redrive delivers it between the dead-letter check and the mark', async () => {
+      const id = await insertEvent();
+      const dlq = await processorDeadLetter();
+      queue.getJobState.mockResolvedValue('failed');
+      const count = failures.count.bind(failures);
+      jest.spyOn(failures, 'count').mockImplementationOnce(async options => {
+        const open = await count(options);
+        await events.update({ id, dispatchState: 'pending' }, { dispatchState: 'dispatched', payload: null });
+        await failures.update({ id: dlq.id }, { redriven: true });
+        return open;
+      });
+
+      const stats = await service.sweep(OPTS);
+
+      expect(stats).toMatchObject({ scanned: 1, replayed: 1, failed: 0 });
       expect((await stored(id)).dispatchState).toBe('dispatched');
       expect(await failures.count({ where: { deliveryId: 'd-1', redriven: false } })).toBe(0);
     });
