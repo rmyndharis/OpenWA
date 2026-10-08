@@ -129,8 +129,9 @@ export { READY_RECONCILE_TIMEOUT_MS, READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS } fr
 
 export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngine {
   private readonly logger = createLogger('WhatsAppWebJsAdapter');
-  // Bound concurrent inbound media downloads: downloadCappedMedia() materialises the decrypted payload
-  // (and its base64 when within the cap), so an unbounded burst could stack many multi-MB allocations.
+  // Bound concurrent inbound media downloads: each one holds the whole decrypted file in the browser
+  // page and, when within the cap, its base64 in Node, so an unbounded burst could stack many multi-MB
+  // allocations.
   // The queue is UNBOUNDED. A cap equal to the active slots made admission a constant
   // (active + queued) whatever the batch size, so a burst lost the media of everything past the
   // eighth — the same defect repaired on the Baileys side. Parking costs one held Message per

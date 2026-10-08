@@ -163,6 +163,12 @@ describe('docs/29 counts match the capability matrix', () => {
     else if (WORDS[spelled[1]] !== expected.total) {
       wrongProse.push(`29.3 opening: says ${spelled[1]}, scripts/ has ${expected.total}`);
     }
+    // docs/12's missing-patch entry restates the same total in words.
+    const faq = read('docs', '12-troubleshooting-faq.md').match(/OpenWA applies (\w+) exact source transforms/);
+    if (!faq) wrongProse.push('docs/12 missing-patch cause: phrasing no longer found in the document');
+    else if (WORDS[faq[1]] !== expected.total) {
+      wrongProse.push(`docs/12 missing-patch cause: says ${faq[1]}, scripts/ has ${expected.total}`);
+    }
 
     const claims: { label: string; re: RegExp; want: number }[] = [
       { label: 'intro total', re: /(\d+) install-time patches \(29\.3\)/, want: expected.total },

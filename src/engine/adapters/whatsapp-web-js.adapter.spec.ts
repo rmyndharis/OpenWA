@@ -24,6 +24,7 @@ import { resolveOnboardingContinueLabels } from './wwebjs-onboarding';
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import { resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import * as fs from 'fs';
+import { createHash } from 'crypto';
 import * as path from 'path';
 import * as qrcode from 'qrcode';
 import { InternalServerErrorException, UnprocessableEntityException, BadRequestException } from '@nestjs/common';
@@ -5840,23 +5841,45 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
     await expect(downloadMediaInPage({ msgId: 'M1', maxBytes: 1000 })).rejects.toBe(failure);
   });
 
-  // downloadMediaInPage copies the page side of Message#downloadMedia, so a whatsapp-web.js bump that
-  // changes it must fail here rather than leave the copy quietly behind.
+  // downloadMediaInPage copies the page side of Message#downloadMedia. The fingerprint pins the whole
+  // upstream method, comments and formatting aside, so any whatsapp-web.js release that changes it fails
+  // here; the other checks hold the copy to upstream's modules, accessors, literals and call arguments.
+  // A tree an older OpenWA install patched carries the copy's `mimetype` option and is read without it.
   it('matches the page download of the installed whatsapp-web.js', () => {
+    const squash = (src: string) =>
+      src
+        .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
+        .replace(/\s+/g, ' ')
+        .replace(/ ?([^\w$ ]) ?/g, '$1')
+        .replace(/,(?=[)}\]])/g, '');
     const upstreamFile = fs.readFileSync(require.resolve('whatsapp-web.js/src/structures/Message.js'), 'utf8');
     const start = upstreamFile.indexOf('async downloadMedia()');
-    const upstream = upstreamFile.slice(start, upstreamFile.indexOf('\n    /**', start));
+    const method = squash(upstreamFile.slice(start, upstreamFile.indexOf('\n    /**', start))).replace(
+      'type:msg.type,mimetype:msg.mimetype,signal:',
+      'type:msg.type,signal:',
+    );
+    const upstream = method.slice(method.indexOf('async(msgId)=>'), method.indexOf('},this.id._serialized'));
     const ours = fs.readFileSync(path.join(__dirname, 'wwebjs-messaging.ts'), 'utf8');
-    const own = ours.slice(ours.indexOf('export async function downloadMediaInPage'));
-    const decryptOptions = (src: string) =>
-      [...(/downloadAndMaybeDecrypt\(\{([^}]*)\}\)/.exec(src)?.[1] ?? '').matchAll(/(\w+):/g)].map(m => m[1]).sort();
-    const stages = (src: string) => [...new Set([...src.matchAll(/mediaStage[^'\n]*'(\w+)'/g)].map(m => m[1]))].sort();
+    const fn = ours.slice(ours.indexOf('export async function downloadMediaInPage'));
+    const own = squash(fn.slice(0, fn.indexOf('\n}\n'))).split('const collection=')[1] ?? '';
+    const members = (src: string) => [...new Set([...src.matchAll(/(?<!\.)\.([A-Za-z_]\w*)/g)].map(m => m[1]))].sort();
+    const literals = (src: string) => [...new Set([...src.matchAll(/'(\w+)'/g)].map(m => m[1]))].sort();
+    const call = (src: string, name: string) =>
+      (new RegExp(`\\.${name}\\(\\{[^}]*\\}\\)`).exec(src)?.[0] ?? '').replace(/downloadQpl:\w+/, 'downloadQpl:qpl');
 
     expect(start).toBeGreaterThan(-1);
-    // 1.34.7 omits `mimetype`, which the copy adds; a tree an older OpenWA install patched has it.
-    expect(decryptOptions(own)).toEqual([...new Set([...decryptOptions(upstream), 'mimetype'])].sort());
-    expect(stages(own)).toEqual(stages(upstream));
-    expect(stages(upstream)).toEqual(['ERROR', 'FETCHING', 'RESOLVED', 'REUPLOADING']);
+    expect(createHash('sha256').update(method).digest('hex')).toBe(
+      'f70f7cd8393bc60149745b7901bb96eece28a2940eaee4725e71ce615cf9ec73',
+    );
+    expect(literals(own)).toEqual(literals(upstream));
+    // The copy measures the decrypted length instead of reporting the declared `size`.
+    expect(members(own)).toEqual(
+      [...members(upstream).filter(m => m !== 'size'), 'byteLength', 'maxBytes', 'msgId', 'sizeBytes'].sort(),
+    );
+    expect(call(own, 'downloadMedia')).toBe(call(upstream, 'downloadMedia'));
+    expect(call(own, 'downloadAndMaybeDecrypt')).toBe(
+      call(upstream, 'downloadAndMaybeDecrypt').replace('type:msg.type,', 'type:msg.type,mimetype:msg.mimetype,'),
+    );
   });
 });
 
