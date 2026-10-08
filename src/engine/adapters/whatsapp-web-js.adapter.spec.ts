@@ -18,6 +18,8 @@ import {
   NAVIGATION_REINJECT_GRACE_MS,
   NAVIGATION_EPISODE_CAP_MS,
 } from './whatsapp-web-js.adapter';
+import { downloadMediaInPage } from './wwebjs-messaging';
+import { LoggerService } from '../../common/services/logger.service';
 import { resolveOnboardingContinueLabels } from './wwebjs-onboarding';
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import { resolveEngineInitTimeoutMs } from '../engine-init-timeout';
@@ -73,6 +75,15 @@ jest.mock('qrcode', () => ({
 // namespace wrapper that `import * as childProcess` yields has non-configurable members, so
 // jest.spyOn cannot redefine execFile on it. The adapter reads execFile live off this same object.
 const childProcess = jest.requireActual<typeof import('child_process')>('child_process');
+
+/**
+ * Serve a message's media download from `download`: production reads it through the page
+ * (downloadCappedMedia), and the same mock stays reachable as `downloadMedia` for assertions.
+ */
+const onPage = <T extends jest.Mock>(download: T) => ({
+  downloadMedia: download,
+  client: { pupPage: { evaluate: download } },
+});
 
 describe('wwebjsAckToDeliveryStatus (engine ack-int -> neutral DeliveryStatus boundary, #265)', () => {
   // Regression-locks the integer boundary the decoupling moved behaviour into, incl. the
@@ -948,7 +959,7 @@ describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live p
       hasMedia: true,
       hasQuotedMsg: false,
       _data: { size: 12 * 1024 * 1024, mimetype: 'image/jpeg' },
-      downloadMedia: jest.fn(),
+      ...onPage(jest.fn()),
     };
     const chat = { fetchMessages: jest.fn().mockResolvedValue([mediaMsg]) };
     const client = { getChatById: jest.fn().mockResolvedValue(chat) };
@@ -978,7 +989,7 @@ describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live p
       hasMedia: true,
       hasQuotedMsg: false,
       _data: { size: data.length, mimetype: 'image/jpeg' },
-      downloadMedia: jest.fn().mockResolvedValue({ data, mimetype: 'image/jpeg' }),
+      ...onPage(jest.fn().mockResolvedValue({ data, mimetype: 'image/jpeg' })),
     });
     const clientFor = (...msgs: unknown[]) => ({
       getChatById: jest.fn().mockResolvedValue({ fetchMessages: jest.fn().mockResolvedValue(msgs) }),
@@ -3298,7 +3309,7 @@ describe('WhatsAppWebJsAdapter status methods', () => {
           timestamp: 1700000030,
           hasMedia: true,
           _data: { mimetype: 'image/png', size: 3 },
-          downloadMedia,
+          ...onPage(downloadMedia),
         },
       ],
     };
@@ -3623,7 +3634,7 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
       fromMe: true,
       hasMedia: true,
       _data: { mimetype: 'image/png', size: 3 },
-      downloadMedia: jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD', filename: 'a.png' }),
+      ...onPage(jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD', filename: 'a.png' })),
       getContact: jest.fn().mockResolvedValue(null),
       hasQuotedMsg: false,
     };
@@ -3672,7 +3683,7 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
       fromMe: true,
       hasMedia: true,
       _data: { mimetype: 'image/png', size: 3 },
-      downloadMedia: jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD', filename: 'a.png' }),
+      ...onPage(jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD', filename: 'a.png' })),
       hasQuotedMsg: false,
     };
 
@@ -3716,7 +3727,7 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
       fromMe: true,
       hasMedia: true,
       _data: { mimetype: 'image/png', size: 3 },
-      downloadMedia: jest.fn().mockRejectedValue(new Error('media gone')),
+      ...onPage(jest.fn().mockRejectedValue(new Error('media gone'))),
       getContact: jest.fn().mockResolvedValue(null),
       hasQuotedMsg: false,
     };
@@ -3765,7 +3776,7 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
       hasMedia: true,
       _data: { mimetype: 'image/jpeg', size: 2048 },
       // The minified page-side throw a WhatsApp Web build surfaces through Puppeteer.
-      downloadMedia: jest.fn().mockRejectedValue(new Error('t: t')),
+      ...onPage(jest.fn().mockRejectedValue(new Error('t: t'))),
       getContact: jest.fn().mockResolvedValue(null),
       hasQuotedMsg: false,
     };
@@ -5508,15 +5519,17 @@ describe('WhatsAppWebJsAdapter inbound media concurrency (slot held until the re
     const makeMsg = (id: string): unknown => ({
       id: { _serialized: id },
       _data: { size: 100, mimetype: 'image/png' },
-      downloadMedia: jest.fn(() => {
-        inFlight++;
-        maxInFlight = Math.max(maxInFlight, inFlight);
-        const d = defer<{ mimetype: string; data: string }>();
-        downloads.push(d);
-        return d.promise.finally(() => {
-          inFlight--;
-        });
-      }),
+      ...onPage(
+        jest.fn(() => {
+          inFlight++;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          const d = defer<{ mimetype: string; data: string }>();
+          downloads.push(d);
+          return d.promise.finally(() => {
+            inFlight--;
+          });
+        }),
+      ),
     });
     const cap = (m: unknown): Promise<unknown> =>
       (adapter as unknown as { capInboundMediaFor: (msg: unknown) => Promise<unknown> }).capInboundMediaFor(m);
@@ -5561,13 +5574,15 @@ describe('WhatsAppWebJsAdapter inbound media concurrency (slot held until the re
     const makeMsg = (id: string): unknown => ({
       id: { _serialized: id },
       _data: { size: 100, mimetype: 'image/png' },
-      downloadMedia: jest.fn(() => {
-        started.push(id);
-        // Every download takes 60 ms, inside the 100 ms deadline on its own.
-        return new Promise(resolve =>
-          setTimeout(() => resolve({ mimetype: 'image/png', data: Buffer.from(id).toString('base64') }), 60),
-        );
-      }),
+      ...onPage(
+        jest.fn(() => {
+          started.push(id);
+          // Every download takes 60 ms, inside the 100 ms deadline on its own.
+          return new Promise(resolve =>
+            setTimeout(() => resolve({ mimetype: 'image/png', data: Buffer.from(id).toString('base64') }), 60),
+          );
+        }),
+      ),
     });
     const cap = (m: unknown): Promise<{ data?: string; omitted?: boolean }> =>
       (
@@ -5602,12 +5617,14 @@ describe('WhatsAppWebJsAdapter inbound media concurrency (slot held until the re
     const makeMsg = (id: string, behavior: 'reject' | 'resolve'): unknown => ({
       id: { _serialized: id },
       _data: { size: 100, mimetype: 'image/png' },
-      downloadMedia: jest.fn(() => {
-        calls.push(id);
-        return behavior === 'reject'
-          ? Promise.reject(new Error('download blew up'))
-          : Promise.resolve({ mimetype: 'image/png', data: Buffer.from('ok').toString('base64') });
-      }),
+      ...onPage(
+        jest.fn(() => {
+          calls.push(id);
+          return behavior === 'reject'
+            ? Promise.reject(new Error('download blew up'))
+            : Promise.resolve({ mimetype: 'image/png', data: Buffer.from('ok').toString('base64') });
+        }),
+      ),
     });
     const cap = (m: unknown): Promise<unknown> =>
       (adapter as unknown as { capInboundMediaFor: (msg: unknown) => Promise<unknown> }).capInboundMediaFor(m);
@@ -5630,7 +5647,7 @@ describe('WhatsAppWebJsAdapter inbound media concurrency (slot held until the re
 
     const adapter = newAdapter();
     const downloadMedia = jest.fn(() => Promise.resolve({ mimetype: 'video/mp4', data: 'x'.repeat(2000) }));
-    const msg = { id: { _serialized: 'big' }, _data: { size: 1500, mimetype: 'video/mp4' }, downloadMedia };
+    const msg = { id: { _serialized: 'big' }, _data: { size: 1500, mimetype: 'video/mp4' }, ...onPage(downloadMedia) };
     const cap = (m: unknown, override: number): Promise<unknown> =>
       (adapter as unknown as { capInboundMediaFor: (msg: unknown, o: number) => Promise<unknown> }).capInboundMediaFor(
         m,
@@ -5651,7 +5668,7 @@ describe('WhatsAppWebJsAdapter inbound media concurrency (slot held until the re
     const adapter = newAdapter();
     const data = Buffer.alloc(300).toString('base64');
     const downloadMedia = jest.fn(() => Promise.resolve({ mimetype: 'image/jpeg', data }));
-    const msg = { id: { _serialized: 'undeclared' }, _data: {}, downloadMedia };
+    const msg = { id: { _serialized: 'undeclared' }, _data: {}, ...onPage(downloadMedia) };
     const cap = (m: unknown, override: number): Promise<unknown> =>
       (adapter as unknown as { capInboundMediaFor: (msg: unknown, o: number) => Promise<unknown> }).capInboundMediaFor(
         m,
@@ -5663,6 +5680,183 @@ describe('WhatsAppWebJsAdapter inbound media concurrency (slot held until the re
       expect.objectContaining({ mimetype: 'image/jpeg', omitted: true, sizeBytes: 300 }),
     );
     expect(downloadMedia).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The cap on what the page actually decrypted. The pre-gate only sees the size the sender declares,
+ * so a message that understates it passes; downloadMediaInPage runs here against a stand-in `window`
+ * whose download returns more than that.
+ */
+describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
+  const g = globalThis as unknown as { window?: unknown };
+  const ENV_KEYS = ['MEDIA_DOWNLOAD_MAX_BYTES', 'MEDIA_DOWNLOAD_ENABLED'];
+  let saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    saved = {};
+    ENV_KEYS.forEach(k => (saved[k] = process.env[k]));
+    process.env.MEDIA_DOWNLOAD_MAX_BYTES = '1000';
+    process.env.MEDIA_DOWNLOAD_ENABLED = 'true';
+    runInPage.mockClear();
+  });
+  afterEach(() => {
+    ENV_KEYS.forEach(k => {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    });
+    delete g.window;
+    jest.restoreAllMocks();
+  });
+
+  /**
+   * A page holding message `M1`, whose decrypted media is `bytes` long; returns the encoder spy. `stage` is
+   * the media stage before the download, `resolvedStage` the one the page's own resolve step leaves.
+   */
+  function pageServing(
+    bytes: number,
+    page: { stage?: string; resolvedStage?: string; decrypt?: () => Promise<ArrayBuffer> } = {},
+  ): jest.Mock {
+    const toBase64 = jest.fn((buffer: ArrayBuffer) => Promise.resolve(Buffer.from(buffer).toString('base64')));
+    const pageMsg = {
+      mimetype: 'video/mp4',
+      filename: 'clip.mp4',
+      mediaData: { mediaStage: page.stage ?? 'RESOLVED' },
+      downloadMedia: () => {
+        pageMsg.mediaData.mediaStage = page.resolvedStage ?? 'RESOLVED';
+        return Promise.resolve();
+      },
+    };
+    const decrypt = page.decrypt ?? (() => Promise.resolve(new ArrayBuffer(bytes)));
+    g.window = {
+      require: (name: string) =>
+        name === 'WAWebCollections'
+          ? {
+              Msg: {
+                get: (id: string) => (id === 'M1' ? pageMsg : undefined),
+                getMessagesById: () => Promise.resolve({ messages: [] }),
+              },
+            }
+          : { downloadManager: { downloadAndMaybeDecrypt: decrypt } },
+      WWebJS: { arrayBufferToBase64Async: toBase64 },
+    };
+    return toBase64;
+  }
+
+  // The sender declares 10 bytes, well under the 1000-byte cap, so the pre-gate lets every case through.
+  const understated = (evaluate: jest.Mock) => ({
+    id: { _serialized: 'M1' },
+    _data: { size: 10, mimetype: 'video/mp4' },
+    ...onPage(evaluate),
+  });
+  const runInPage = jest.fn((fn: (arg: unknown) => Promise<unknown>, arg: unknown) => fn(arg));
+  const cap = (msg: unknown, override?: number): Promise<unknown> =>
+    (
+      new WhatsAppWebJsAdapter({
+        sessionId: 'media-2',
+        sessionDataPath: './data/sessions',
+        puppeteer: {},
+      }) as unknown as {
+        capInboundMediaFor: (m: unknown, o?: number) => Promise<unknown>;
+      }
+    ).capInboundMediaFor(msg, override);
+
+  it('drops a payload the page decrypted over the cap before encoding it, despite a small declared size', async () => {
+    const toBase64 = pageServing(5000);
+    const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+
+    await expect(cap(understated(runInPage))).resolves.toEqual({
+      mimetype: 'video/mp4',
+      filename: 'clip.mp4',
+      omitted: true,
+      sizeBytes: 5000,
+    });
+    expect(toBase64).not.toHaveBeenCalled();
+    expect(runInPage).toHaveBeenCalledWith(downloadMediaInPage, { msgId: 'M1', maxBytes: 1000 });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      'Inbound media exceeds MEDIA_DOWNLOAD_MAX_BYTES; dropped payload, kept envelope',
+      expect.objectContaining({ msgId: 'M1', sizeBytes: 5000 }),
+    );
+  });
+
+  it('checks the payload in the page against a per-call override below the global cap', async () => {
+    const toBase64 = pageServing(700);
+
+    await expect(cap(understated(runInPage), 500)).resolves.toEqual(
+      expect.objectContaining({ omitted: true, sizeBytes: 700 }),
+    );
+    expect(runInPage).toHaveBeenCalledWith(downloadMediaInPage, { msgId: 'M1', maxBytes: 500 });
+    expect(toBase64).not.toHaveBeenCalled();
+  });
+
+  it('still inlines a payload within the cap', async () => {
+    pageServing(3);
+
+    await expect(cap(understated(runInPage))).resolves.toEqual({
+      mimetype: 'video/mp4',
+      filename: 'clip.mp4',
+      data: Buffer.alloc(3).toString('base64'),
+    });
+  });
+
+  it('drops a payload over the cap by its received length even when the page reports it small', async () => {
+    const data = Buffer.alloc(2000).toString('base64');
+    const page = jest.fn().mockResolvedValue({ mimetype: 'video/mp4', data, sizeBytes: 10 });
+
+    await expect(cap(understated(page))).resolves.toEqual(expect.objectContaining({ omitted: true, sizeBytes: 2000 }));
+  });
+
+  // The rest of the page function is whatsapp-web.js's own download; these keep its outcomes intact.
+  type PageCase = { msgId?: string; stage?: string; resolvedStage?: string; decrypt?: () => Promise<ArrayBuffer> };
+  const notFound = () => Promise.reject(Object.assign(new Error('gone'), { status: 404 }));
+  it.each<[string, PageCase, null | undefined]>([
+    ['a message the page does not hold', { msgId: 'M2' }, null],
+    ['media the phone is re-uploading', { stage: 'REUPLOADING' }, null],
+    ['media whose resolve step fails', { stage: 'INIT', resolvedStage: 'ERROR_MISSING' }, undefined],
+    ['media still fetching after the resolve step', { stage: 'INIT', resolvedStage: 'FETCHING' }, undefined],
+    ['media the server no longer has', { decrypt: notFound }, undefined],
+  ])('returns %s as upstream does', async (_case, page, expected) => {
+    const toBase64 = pageServing(5, page);
+
+    await expect(downloadMediaInPage({ msgId: page.msgId ?? 'M1', maxBytes: 1000 })).resolves.toBe(expected);
+    expect(toBase64).not.toHaveBeenCalled();
+  });
+
+  it('resolves unresolved media in the page before downloading it', async () => {
+    pageServing(5, { stage: 'INIT' });
+
+    await expect(downloadMediaInPage({ msgId: 'M1', maxBytes: 1000 })).resolves.toEqual({
+      mimetype: 'video/mp4',
+      filename: 'clip.mp4',
+      sizeBytes: 5,
+      data: Buffer.alloc(5).toString('base64'),
+    });
+  });
+
+  it('rethrows any other download error', async () => {
+    const failure = Object.assign(new Error('boom'), { status: 500 });
+    pageServing(5, { decrypt: () => Promise.reject(failure) });
+
+    await expect(downloadMediaInPage({ msgId: 'M1', maxBytes: 1000 })).rejects.toBe(failure);
+  });
+
+  // downloadMediaInPage copies the page side of Message#downloadMedia, so a whatsapp-web.js bump that
+  // changes it must fail here rather than leave the copy quietly behind.
+  it('matches the page download of the installed whatsapp-web.js', () => {
+    const upstreamFile = fs.readFileSync(require.resolve('whatsapp-web.js/src/structures/Message.js'), 'utf8');
+    const start = upstreamFile.indexOf('async downloadMedia()');
+    const upstream = upstreamFile.slice(start, upstreamFile.indexOf('\n    /**', start));
+    const ours = fs.readFileSync(path.join(__dirname, 'wwebjs-messaging.ts'), 'utf8');
+    const own = ours.slice(ours.indexOf('export async function downloadMediaInPage'));
+    const decryptOptions = (src: string) =>
+      [...(/downloadAndMaybeDecrypt\(\{([^}]*)\}\)/.exec(src)?.[1] ?? '').matchAll(/(\w+):/g)].map(m => m[1]).sort();
+    const stages = (src: string) => [...new Set([...src.matchAll(/mediaStage[^'\n]*'(\w+)'/g)].map(m => m[1]))].sort();
+
+    expect(start).toBeGreaterThan(-1);
+    // 1.34.7 omits `mimetype`, which the copy adds; a tree an older OpenWA install patched has it.
+    expect(decryptOptions(own)).toEqual([...new Set([...decryptOptions(upstream), 'mimetype'])].sort());
+    expect(stages(own)).toEqual(stages(upstream));
+    expect(stages(upstream)).toEqual(['ERROR', 'FETCHING', 'RESOLVED', 'REUPLOADING']);
   });
 });
 

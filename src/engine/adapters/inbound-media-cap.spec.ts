@@ -19,6 +19,15 @@ import {
   ingestMediaBudgetBytes,
 } from './inbound-media-cap';
 
+/**
+ * Serve a message's media download from `download`: production reads it through the page
+ * (downloadCappedMedia), and the same mock stays reachable as `downloadMedia` for assertions.
+ */
+const onPage = <T extends jest.Mock>(download: T) => ({
+  downloadMedia: download,
+  client: { pupPage: { evaluate: download } },
+});
+
 describe('inbound media cap', () => {
   const ENV = 'MEDIA_DOWNLOAD_MAX_BYTES';
   const CONC = 'INBOUND_MEDIA_CONCURRENCY';
@@ -343,13 +352,15 @@ describe('process-wide inbound media gate (INBOUND_MEDIA_GLOBAL_CONCURRENCY)', (
       const makeMsg = (id: string): unknown => ({
         id: { _serialized: id },
         _data: { size: 100, mimetype: 'image/png' },
-        downloadMedia: jest.fn(() => {
-          inFlight++;
-          maxInFlight = Math.max(maxInFlight, inFlight);
-          const d = defer<{ mimetype: string; data: string }>();
-          downloads.push(d);
-          return d.promise.finally(() => inFlight--);
-        }),
+        ...onPage(
+          jest.fn(() => {
+            inFlight++;
+            maxInFlight = Math.max(maxInFlight, inFlight);
+            const d = defer<{ mimetype: string; data: string }>();
+            downloads.push(d);
+            return d.promise.finally(() => inFlight--);
+          }),
+        ),
       });
       const a = newAdapter('gate-a');
       const b = newAdapter('gate-b');
@@ -377,12 +388,12 @@ describe('process-wide inbound media gate (INBOUND_MEDIA_GLOBAL_CONCURRENCY)', (
       const first = {
         id: { _serialized: 'x1' },
         _data: { size: 100, mimetype: 'image/png' },
-        downloadMedia: jest.fn(() => held.promise),
+        ...onPage(jest.fn(() => held.promise)),
       };
       const second = {
         id: { _serialized: 'y1' },
         _data: { size: 100, mimetype: 'image/png' },
-        downloadMedia: jest.fn(),
+        ...onPage(jest.fn()),
       };
 
       const r1 = cap(newAdapter('gate-x'), first);

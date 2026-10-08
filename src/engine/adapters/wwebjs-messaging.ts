@@ -12,7 +12,7 @@ import {
   PollInput,
   Quotable,
 } from '../interfaces/whatsapp-engine.interface';
-import { MessageWithReactions, SerializedWid } from '../types/whatsapp-web-js.types';
+import { MessageWithReactions, SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 import { BadRequestException, NotImplementedException } from '@nestjs/common';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
@@ -70,6 +70,96 @@ export function declaredOnlyMedia(msg: Message): IncomingMessage['media'] {
     omitted: true,
     sizeBytes: coerceDeclaredSize(data?.size),
   };
+}
+
+/** A media download as {@link downloadMediaInPage} returns it: `data` is empty when the payload was over the cap. */
+export interface PageMediaDownload {
+  mimetype: string;
+  filename?: string;
+  data: string;
+  /** Decrypted byte length, measured in the page. */
+  sizeBytes: number;
+}
+
+/**
+ * Page-side `Message#downloadMedia()` (whatsapp-web.js 1.34.7) with two changes. It passes `mimetype`
+ * to `downloadAndMaybeDecrypt()`, which current WhatsApp Web builds require (upstream issue #201908),
+ * and it checks the decrypted length against `maxBytes`. The size the sender declares is not the size
+ * WhatsApp serves, and upstream base64-encodes and ships whatever it decrypts, so an understated
+ * `fileLength` brought an arbitrarily large string over the protocol into Node. An over-cap payload
+ * comes back with its size and no data. `undefined` and `null` keep upstream's meaning: no usable
+ * media.
+ */
+export async function downloadMediaInPage(args: {
+  msgId: string;
+  maxBytes: number;
+}): Promise<PageMediaDownload | null | undefined> {
+  type PageMsg = Record<string, unknown> & {
+    mimetype: string;
+    filename?: string;
+    mediaData?: { mediaStage: string };
+    downloadMedia: (opts: object) => Promise<unknown>;
+  };
+  const w = window as unknown as {
+    require(m: 'WAWebCollections'): {
+      Msg: {
+        get: (id: string) => PageMsg | undefined;
+        getMessagesById: (ids: string[]) => Promise<{ messages?: PageMsg[] } | undefined>;
+      };
+    };
+    require(m: 'WAWebDownloadManager'): {
+      downloadManager: { downloadAndMaybeDecrypt: (opts: object) => Promise<ArrayBuffer> };
+    };
+    WWebJS: { arrayBufferToBase64Async: (buffer: ArrayBuffer) => Promise<string> };
+  };
+  const collection = w.require('WAWebCollections').Msg;
+  const msg = collection.get(args.msgId) || (await collection.getMessagesById([args.msgId]))?.messages?.[0];
+  // REUPLOADING: the media expired and the phone is re-uploading it; it cannot be downloaded now.
+  if (!msg || !msg.mediaData || msg.mediaData.mediaStage === 'REUPLOADING') return null;
+  if (msg.mediaData.mediaStage !== 'RESOLVED') {
+    await msg.downloadMedia({ downloadEvenIfExpensive: true, rmrReason: 1 });
+  }
+  if (msg.mediaData.mediaStage.includes('ERROR') || msg.mediaData.mediaStage === 'FETCHING') return undefined;
+  try {
+    const noopQpl = {
+      addAnnotations() {
+        return this;
+      },
+      addPoint() {
+        return this;
+      },
+    };
+    const decrypted = await w.require('WAWebDownloadManager').downloadManager.downloadAndMaybeDecrypt({
+      directPath: msg.directPath,
+      encFilehash: msg.encFilehash,
+      filehash: msg.filehash,
+      mediaKey: msg.mediaKey,
+      mediaKeyTimestamp: msg.mediaKeyTimestamp,
+      type: msg.type,
+      mimetype: msg.mimetype,
+      signal: new AbortController().signal,
+      downloadQpl: noopQpl,
+    });
+    const meta = { mimetype: msg.mimetype, filename: msg.filename, sizeBytes: decrypted.byteLength };
+    if (meta.sizeBytes > args.maxBytes) return { ...meta, data: '' };
+    return { ...meta, data: await w.WWebJS.arrayBufferToBase64Async(decrypted) };
+  } catch (e) {
+    if ((e as { status?: number } | null)?.status === 404) return undefined;
+    throw e;
+  }
+}
+
+/** Download a message's media through {@link downloadMediaInPage}, on the page that delivered it. */
+export async function downloadCappedMedia(
+  msg: Message,
+  maxBytes: number,
+): Promise<PageMediaDownload | null | undefined> {
+  const { pupPage } = (
+    msg as unknown as {
+      client: { pupPage: { evaluate: <T, A>(fn: (arg: A) => Promise<T>, arg: A) => Promise<T> } };
+    }
+  ).client;
+  return pupPage.evaluate(downloadMediaInPage, { msgId: readWid(msg.id) ?? '', maxBytes });
 }
 
 /**
