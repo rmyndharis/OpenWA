@@ -399,10 +399,12 @@ OPENWA_GENERATED_ENV="${DATA_DIR:-./data}/.env.generated"
 
 # openwa_resolve <key> <default> [path] - the application's precedence: environment, then ./.env,
 # then $OPENWA_GENERATED_ENV, then the built-in default. Requires DATA_DIR to be set before sourcing.
-# With a third argument of `path`, the value names a filesystem path: the app reads .env.generated as
-# ./data/.env.generated, so a ./data or ./data/... value there names a path in the data dir and is
-# taken under DATA_DIR, which on the host is the volume's mountpoint rather than the working
-# directory's ./data. Other keys (a PostgreSQL name, user or password) are returned as written.
+# With a third argument of `path`, the value names a filesystem path: a ./data or ./data/... value
+# from either file is relative to the app's working directory, so it names a path in the data dir and
+# is taken under DATA_DIR, which on the host is the volume's mountpoint rather than the working
+# directory's ./data (compose hands ./.env's paths to the container, where ./data is the volume). A
+# value from the environment is the caller's own and is read as written, as are other keys (a
+# PostgreSQL name, user or password).
 # Fails, printing nothing, when a layer sets the key in a form openwa_env_file_value rejects. Callers
 # must act on that status: set -e does for a top-level assignment, but not inside a function called
 # from a command substitution or for a substitution in a command's arguments.
@@ -421,7 +423,7 @@ openwa_resolve() {
     value="$(openwa_env_file_value "$layer" "$key")" || rc=$?
     case "$rc" in
       0)
-        if [ "$kind" = path ] && [ "$layer" = "$OPENWA_GENERATED_ENV" ]; then
+        if [ "$kind" = path ]; then
           case "$value" in
             ./data | data) value="$DATA_DIR" ;;
             ./data/* | data/*) value="${DATA_DIR%/}/${value#*data/}" ;;

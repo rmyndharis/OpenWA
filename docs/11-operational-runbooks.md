@@ -720,16 +720,16 @@ User-managed files outside that list (for example the project-level `.env`) must
 #                                  (.api-key from BOOTSTRAP_KEY_FILE when that is set)
 #
 # The database paths resolve exactly like the app: MAIN_DATABASE_NAME / DATABASE_NAME from the
-# environment, then ./.env, then <data dir>/.env.generated, otherwise the fixed ./data defaults, which
-# are NOT derived from OPENWA_DATA_DIR. A missing source database fails the run (no silent empty
-# backup), the finished archive is checked to contain every configured database, and with the sqlite3
-# CLI present the databases are snapshotted online via .backup (otherwise plain-copied with a
-# CONSISTENCY-WARNING marker inside the archive). sessions/ and baileys/ are plain copies: when a
-# whatsapp-web.js profile is open or Baileys state is present, the archive carries an
-# ENGINE-STATE-NOTE naming them, which restore.sh prints and never refuses.
+# environment, then ./.env, then <data dir>/.env.generated, otherwise the app's ./data defaults,
+# read under OPENWA_DATA_DIR like every other ./data path. A missing source database fails the run
+# (no silent empty backup), the finished archive is checked to contain every configured database,
+# and with the sqlite3 CLI present the databases are snapshotted online via .backup (otherwise
+# plain-copied with a CONSISTENCY-WARNING marker inside the archive). sessions/ and baileys/ are
+# plain copies: when a whatsapp-web.js profile is open or Baileys state is present, the archive
+# carries an ENGINE-STATE-NOTE naming them, which restore.sh prints and never refuses.
 
-# Run from the repo root (database defaults are ./data/... there; other state defaults to
-# OPENWA_DATA_DIR; a ./data/... path from .env.generated, database paths included, is read under it):
+# Run from the repo root (OPENWA_DATA_DIR defaults to ./data; the ./data defaults and a ./data/...
+# path from ./.env or .env.generated are read under it):
 ./scripts/backup.sh
 
 # Customize via environment. Keep the password out of DATABASE_URL: the URL is passed to pg_dump as
@@ -776,15 +776,12 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 > Infrastructure therefore apply without being restated on the command line. A restore reads that
 > third layer from the archive's `.env.generated` when the archive carries one, because that copy
 > replaces the target's and is the one the restored app reads. A relative `./data/...` path in
-> `.env.generated`, such as the `STORAGE_LOCAL_PATH=./data/media` the app writes on first run, names a
-> path in the data directory and is read under `OPENWA_DATA_DIR`; one from the environment or `./.env`
-> is read against the current directory. When operating directly on the host mount, a path recorded
-> inside the container (`/app/data/...`) is not host-visible, so override it in the environment. The
-> database defaults are relative to the current directory too, so pass `MAIN_DATABASE_NAME` and, for
-> SQLite, `DATABASE_NAME` with their paths on the mount. A `./data/...` path in `./.env` needs the same
-> override, such as the `PLUGINS_DIR=./data/plugins` that `.env.example` sets: compose passes it to
-> the container, where it names a path in the volume, while the scripts read it against the current
-> directory.
+> `./.env` or `.env.generated`, such as the `PLUGINS_DIR=./data/plugins` that `.env.example` sets or
+> the `STORAGE_LOCAL_PATH=./data/media` the app writes on first run, names a path in the app's data
+> directory and is read under `OPENWA_DATA_DIR`, as are the `./data` database and state defaults; a
+> path from the environment is read against the current directory. When operating directly on the
+> host mount, a path recorded inside the container (`/app/data/...`) is not host-visible, so override
+> it in the environment.
 >
 > On every install, inside a container or not, the scripts stop with an error naming the key, before
 > anything is archived or restored, when the last line setting it in `./.env` or `.env.generated`,
@@ -873,9 +870,9 @@ docker compose down
 
 # 2. Restore from an archive produced by scripts/backup.sh
 #    (databases land on MAIN_DATABASE_NAME / DATABASE_NAME, default ./data/... — the same paths
-#    the app reads, as the environment, ./.env or the archive's .env.generated set them; non-DB
-#    state defaults to OPENWA_DATA_DIR; a ./data/... path from .env.generated, database paths
-#    included, is read under it. Pass --strict to refuse an archive whose CONSISTENCY-WARNING
+#    the app reads, as the environment, ./.env or the archive's .env.generated set them; the ./data
+#    defaults and a ./data/... path from ./.env or .env.generated are read under OPENWA_DATA_DIR,
+#    as for the backup. Pass --strict to refuse an archive whose CONSISTENCY-WARNING
 #    marker reports plain-copied, possibly-torn database snapshots;
 #    an ENGINE-STATE-NOTE (engine auth state that may have been copied while the app ran) is only printed.
 #    Restoring over an existing install's live databases requires --force; without it the script

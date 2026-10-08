@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Drop whatsapp-web.js inbound media over `MEDIA_DOWNLOAD_MAX_BYTES` in the page when the sender understates its size.
+- Read the `./data` database defaults and `./data/...` paths in `./.env` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs, instead of the working directory's `./data`.
 - Probe the configured `PORT` in the Docker image healthcheck instead of a fixed 2785.
 - Cap the total bytes one storage import writes at `STORAGE_IMPORT_MAX_TOTAL_BYTES`.
 - Close the Baileys session proxy's fetch dispatcher when the session disconnects, logs out or is destroyed.
@@ -100,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Aged undispatched ingress events are dead-lettered instead of deleted; some may already have been delivered, so check before redriving them.
 - Java SDK (next SDK release after 0.5.1): the request timeout (default 30 s) also bounds the response body; raise it for large media downloads.
+- With `OPENWA_DATA_DIR` set, `backup.sh` and `restore.sh` read the default SQLite databases and `./data/...` paths in `./.env` under it; pass a path in the environment to keep it in the working directory.
 - A storage import stops at `STORAGE_IMPORT_MAX_TOTAL_BYTES` (default 10 GiB); raise it before importing a larger export.
 - Baileys answers `400` for an animated sticker with more than 500 frames.
 - `backup.sh` and `restore.sh` exit with status 2 when `./.env` or `.env.generated` sets a key in a form they cannot parse; fix the line or pass the key in the environment.

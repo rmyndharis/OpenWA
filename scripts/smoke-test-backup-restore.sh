@@ -54,8 +54,9 @@
 #   (ah) pg_dump makes the app's TLS check when DATABASE_SSL=true (falling back to the system CA store
 #       without node), connects as before when it is not, and never starts past a DATABASE_SSL or
 #       DATABASE_SSL_REJECT_UNAUTHORIZED line the scripts cannot parse
-#   (ai) ./data paths in .env.generated follow OPENWA_DATA_DIR in a run on the host, in both scripts,
-#       while non-path settings there are read as written
+#   (ai) the ./data defaults and ./data paths in ./.env and .env.generated follow OPENWA_DATA_DIR in a
+#       run on the host, in both scripts, while non-path settings and a ./data path from the environment
+#       are read as written
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -1927,22 +1928,29 @@ if [ "$(PATH="$AH/nonode" backup_ah "${PG_AH}DATABASE_SSL=true\n")" != "mode=ver
   fail "(ah) without node the system CA store was not used, or the log gave no hint: $(cat "$AH/out.log")"
 fi
 pass "(ah) pg_dump verifies the server under DATABASE_SSL=true and is unchanged without it"
-echo "==> (ai) ./data paths in .env.generated follow OPENWA_DATA_DIR in a run on the host"
+echo "==> (ai) ./data defaults and paths follow OPENWA_DATA_DIR in a run on the host"
 # The app writes STORAGE_LOCAL_PATH=./data/media on first run, and a dashboard save adds
-# SESSION_DATA_PATH=./data/sessions, both relative to /app in the image. Run on the host with
-# OPENWA_DATA_DIR at the volume's mountpoint, the scripts read them against the host's working
-# directory: the backup left the volume's media and sessions out, or took a stale ./data there, and
-# exited 0, and the restore put them where the app never reads them.
+# SESSION_DATA_PATH=./data/sessions, both relative to /app in the image, where the databases default to
+# ./data too and compose hands ./.env's PLUGINS_DIR=./data/plugins (as .env.example sets it) to the
+# app. Run on the host with OPENWA_DATA_DIR at the volume's mountpoint, the scripts read these
+# against the host's working directory: the backup took a stale ./data there, or left the volume's
+# state out, and exited 0, and the restore put it where the app never reads it.
 AI="$WORK/ai"
-mkdir -p "$AI/vol/media" "$AI/vol/sessions/session-1" "$AI/host/data/media" "$AI/vol2" "$AI/x"
+mkdir -p "$AI/vol/media" "$AI/vol/sessions/session-1" "$AI/vol/plugins/p1" "$AI/host/data/media" \
+  "$AI/host/data/plugins/stale" "$AI/vol2" "$AI/x"
 make_fixture "$AI/vol/main.sqlite" "ai-main"
 make_fixture "$AI/vol/openwa.sqlite" "ai-data"
+make_fixture "$AI/host/data/main.sqlite" "ai-stale-main"
+make_fixture "$AI/host/data/openwa.sqlite" "ai-stale-data"
 printf 'ai-media\n' >"$AI/vol/media/a.jpg"
 printf 'ai-session\n' >"$AI/vol/sessions/session-1/marker"
+printf '{}\n' >"$AI/vol/plugins/p1/manifest.json"
 printf 'host-stale\n' >"$AI/host/data/media/stale.jpg"
-# The database paths come from the same file here, so they follow the volume too.
-printf '%s\n' STORAGE_LOCAL_PATH=./data/media SESSION_DATA_PATH=./data/sessions \
-  MAIN_DATABASE_NAME=./data/main.sqlite DATABASE_NAME=./data/openwa.sqlite >"$AI/vol/.env.generated"
+printf '{}\n' >"$AI/host/data/plugins/stale/manifest.json"
+printf 'PLUGINS_DIR=./data/plugins\n' >"$AI/host/.env"
+# What the app writes: no database path, so the databases take their ./data defaults.
+printf '%s\n' DATABASE_TYPE=sqlite STORAGE_LOCAL_PATH=./data/media SESSION_DATA_PATH=./data/sessions \
+  >"$AI/vol/.env.generated"
 (cd "$AI/host" && OPENWA_DATA_DIR="$AI/vol" BACKUP_DIR="$AI/out" "$BACKUP" >/dev/null 2>&1) ||
   fail "(ai) backup from the host failed"
 ARCHIVE_AI="$(ls "$AI"/out/openwa-backup-*.tar.gz)"
@@ -1957,24 +1965,37 @@ fi
 if [ "$(cat "$AI/x/sessions/session-1/marker" 2>/dev/null || true)" != "ai-session" ]; then
   fail "(ai) backup did not archive the volume's sessions"
 fi
+if [ ! -f "$AI/x/plugin-packages/p1/manifest.json" ] || [ -e "$AI/x/plugin-packages/stale" ]; then
+  fail "(ai) backup did not archive the volume's plugins: $(find "$AI/x/plugin-packages" 2>&1 | tr '\n' ' ')"
+fi
 (cd "$AI/host" && OPENWA_DATA_DIR="$AI/vol2" "$RESTORE" "$ARCHIVE_AI" >/dev/null 2>&1) ||
   fail "(ai) restore from the host failed"
 if [ "$(cat "$AI/vol2/media/a.jpg" 2>/dev/null || true)" != "ai-media" ] ||
   [ "$(cat "$AI/vol2/sessions/session-1/marker" 2>/dev/null || true)" != "ai-session" ] ||
   [ "$(db_fingerprint "$AI/vol2/main.sqlite" 2>/dev/null || true)" != "ai-main" ] ||
-  [ "$(db_fingerprint "$AI/vol2/openwa.sqlite" 2>/dev/null || true)" != "ai-data" ]; then
-  fail "(ai) restore did not put media, sessions and databases in the volume"
+  [ "$(db_fingerprint "$AI/vol2/openwa.sqlite" 2>/dev/null || true)" != "ai-data" ] ||
+  [ ! -f "$AI/vol2/plugins/p1/manifest.json" ]; then
+  fail "(ai) restore did not put media, sessions, plugins and databases in the volume"
 fi
-if [ "$(ls -A "$AI/host/data")" != media ] || [ "$(ls -A "$AI/host/data/media")" != stale.jpg ]; then
+if [ "$(db_fingerprint "$AI/host/data/main.sqlite")" != "ai-stale-main" ] ||
+  [ "$(db_fingerprint "$AI/host/data/openwa.sqlite")" != "ai-stale-data" ] ||
+  [ "$(cd "$AI/host/data" && find . -mindepth 1 -maxdepth 1 | LC_ALL=C sort | tr '\n' ' ')" != \
+    "./main.sqlite ./media ./openwa.sqlite ./plugins " ] ||
+  [ "$(ls -A "$AI/host/data/media")" != stale.jpg ] || [ "$(ls -A "$AI/host/data/plugins")" != stale ]; then
   fail "(ai) restore wrote into the host's working directory: $(find "$AI/host/data" | tr '\n' ' ')"
+fi
+# A ./data path passed in the environment is the caller's own and is read against the working directory.
+mkdir -p "$AI/host/data/sessions/session-1"
+printf 'ai-host-session\n' >"$AI/host/data/sessions/session-1/marker"
+(cd "$AI/host" && OPENWA_DATA_DIR="$AI/vol" SESSION_DATA_PATH=./data/sessions BACKUP_DIR="$AI/out-env" \
+  "$BACKUP" >/dev/null 2>&1) || fail "(ai) backup with SESSION_DATA_PATH in the environment failed"
+if [ "$(tar -xzOf "$(ls "$AI"/out-env/openwa-backup-*.tar.gz)" ./sessions/session-1/marker)" != "ai-host-session" ]; then
+  fail "(ai) a ./data path from the environment was taken under OPENWA_DATA_DIR"
 fi
 # A leftover ./uploads falls back to the volume's media as well, not to the host's ./data/media.
 printf 'STORAGE_LOCAL_PATH=./uploads\n' >"$AI/vol/.env.generated"
-(
-  cd "$AI/host"
-  MAIN_DATABASE_NAME="$AI/vol/main.sqlite" DATABASE_NAME="$AI/vol/openwa.sqlite" \
-    OPENWA_DATA_DIR="$AI/vol" BACKUP_DIR="$AI/out-uploads" "$BACKUP" >/dev/null 2>&1
-) || fail "(ai) backup with a leftover ./uploads failed"
+(cd "$AI/host" && OPENWA_DATA_DIR="$AI/vol" BACKUP_DIR="$AI/out-uploads" "$BACKUP" >/dev/null 2>&1) ||
+  fail "(ai) backup with a leftover ./uploads failed"
 if ! tar -tzf "$(ls "$AI"/out-uploads/openwa-backup-*.tar.gz)" | grep -qx './media/a.jpg'; then
   fail "(ai) a leftover ./uploads did not fall back to the volume's media"
 fi
@@ -1994,7 +2015,7 @@ printf 'DATABASE_TYPE=postgres\nDATABASE_HOST=data\nDATABASE_USERNAME=data\nDATA
 if [ "$(cat "$AI/pg/pg_dump-args" 2>/dev/null || true)" != "data/s3cret|-h|data|-p|5432|-U|data|data|" ]; then
   fail "(ai) Postgres settings from .env.generated were rewritten: $(cat "$AI/pg/pg_dump-args" 2>&1)"
 fi
-pass "(ai) a host run backs up and restores the volume's databases, media and sessions, not the working directory's"
+pass "(ai) a host run backs up and restores the volume's databases, media, sessions and plugins, not the working directory's"
 
 echo ""
 echo "All smoke tests passed!"

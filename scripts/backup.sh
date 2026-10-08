@@ -22,14 +22,14 @@
 # Usage:
 #   ./scripts/backup.sh
 # Environment:
-#   MAIN_DATABASE_NAME  auth/audit SQLite file (default: ./data/main.sqlite)
-#   DATABASE_NAME       data-store SQLite file (default: ./data/openwa.sqlite; sqlite only)
+#   MAIN_DATABASE_NAME  auth/audit SQLite file (default: <data dir>/main.sqlite)
+#   DATABASE_NAME       data-store SQLite file (default: <data dir>/openwa.sqlite; sqlite only)
 #                       Both resolve EXACTLY like the app: the environment first, then ./.env, then
-#                       <data dir>/.env.generated, otherwise the fixed ./data default (see
-#                       lib-env.sh). The defaults are NOT derived from OPENWA_DATA_DIR, as the app
-#                       never does that either.
-#   OPENWA_DATA_DIR   data directory for the non-DB state below (default: ./data); a ./data/...
-#                     path read from .env.generated, database paths included, is taken under it
+#                       <data dir>/.env.generated, otherwise the app's ./data default (see
+#                       lib-env.sh).
+#   OPENWA_DATA_DIR   the app's ./data directory, such as a volume's mountpoint on the host
+#                     (default: ./data); the ./data defaults, and a ./data/... path read from ./.env
+#                     or .env.generated, are taken under it
 #   BACKUP_DIR        where archives are written (default: ./backups)
 #   DATABASE_TYPE     sqlite (default) | postgres
 #   SESSION_DATA_PATH, BAILEYS_AUTH_DIR, STORAGE_LOCAL_PATH, PLUGINS_DIR
@@ -79,14 +79,14 @@ DATABASE_TYPE="$(openwa_resolve DATABASE_TYPE sqlite)"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 # Database paths resolve exactly like the app: an explicit environment value wins, then ./.env, then
-# the dashboard's <data dir>/.env.generated, otherwise the fixed ./data default. OPENWA_DATA_DIR
-# bases the defaults of the non-DB state directories below and a ./data/... path from .env.generated,
-# never the database defaults: deriving those from it would back up files the app never reads.
-MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME ./data/main.sqlite path)"
+# the dashboard's <data dir>/.env.generated, otherwise the app's ./data default. That default, like
+# the state directories below, is relative to the app's working directory, so it is taken under
+# OPENWA_DATA_DIR: on the host, the cwd's ./data is not the one the app writes.
+MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME "${DATA_DIR%/}/main.sqlite" path)"
 # With DATABASE_TYPE=postgres, DATABASE_NAME names the database instead, read below only when pg_dump
 # needs it, so a line for it the scripts cannot parse stops only a backup that uses it.
 if [ "$DATABASE_TYPE" != "postgres" ]; then
-  DATA_DB="$(openwa_resolve DATABASE_NAME ./data/openwa.sqlite path)"
+  DATA_DB="$(openwa_resolve DATABASE_NAME "${DATA_DIR%/}/openwa.sqlite" path)"
 fi
 SESSIONS_DIR="$(openwa_resolve SESSION_DATA_PATH "$DATA_DIR/sessions" path)"
 BAILEYS_DIR="$(openwa_resolve BAILEYS_AUTH_DIR "$DATA_DIR/baileys" path)"
