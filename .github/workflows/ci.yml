@@ -141,6 +141,12 @@ jobs:
         # `build` job that needs it does not run. A re-run clears a transient outage.
         run: cd dashboard && npm audit --audit-level=high
 
+      # The JavaScript SDK is the third tree. Its published package has no runtime dependencies, so
+      # what this catches is its build and test toolchain, which otherwise went unscanned. `npm audit`
+      # reads the lockfile alone, so the tree is not installed here.
+      - name: Security audit (JavaScript SDK)
+        run: cd sdk/javascript && npm audit --audit-level=high
+
   test:
     name: Test
     runs-on: ubuntu-latest
