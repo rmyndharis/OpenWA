@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Retain send idempotency keys after engine-stage failures, including HTTP 409.
 - Reject poll votes with no matching options while preserving explicit vote clearing.
 
+### Documentation
+
+- The integration docs say `integration_delivery_failures` holds only failed inbound deliveries.
+
 ### Upgrade notes (behavior changes)
 
 - Baileys answers `400` for an animated sticker with more than 500 frames.
