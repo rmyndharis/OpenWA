@@ -372,20 +372,72 @@ openwa_writable() {
   [ -d "$p" ] && [ -w "$p" ]
 }
 
+# openwa_physical <path> - <path> without trailing / or /., following a final symlink even when its
+# target is missing, and with its longest existing leading directory resolved by pwd -P.
+openwa_physical() {
+  local p="$1" t parent n=0
+  while :; do
+    while case "$p" in ?*/ | ?*/.) true ;; *) false ;; esac; do
+      p="${p%/}"
+      p="${p%/.}"
+    done
+    if [ "$n" -ge 40 ] || [ ! -L "$p" ]; then break; fi
+    t="$(readlink -- "$p")"
+    case "$t" in
+      /*) p="$t" ;;
+      *) p="$(dirname -- "$p")/$t" ;;
+    esac
+    n=$((n + 1))
+  done
+  if [ -d "$p" ] && parent="$(CDPATH='' cd -P -- "$p" 2>/dev/null && pwd -P)"; then
+    printf '%s' "$parent"
+    return
+  fi
+  parent="$(openwa_physical "$(dirname -- "$p")")"
+  printf '%s/%s' "${parent%/}" "$(basename -- "$p")"
+}
+
+# openwa_is_cwd_data_dir - whether DATA_DIR is the working directory's ./data, however it is spelled:
+# the same directory when either exists (by device and inode, so through a symlink or a bind mount),
+# else the same physical path, so a ./data link whose target is not created yet counts when DATA_DIR
+# names that target.
+openwa_is_cwd_data_dir() {
+  if [ -e "$DATA_DIR" ] || [ -e ./data ]; then
+    [ "$DATA_DIR" -ef ./data ]
+    return
+  fi
+  [ "$(openwa_physical "$DATA_DIR")" = "$(openwa_physical ./data)" ]
+}
+
 # openwa_media_dir - STORAGE_LOCAL_PATH as the app settles it (src/config/storage-root.ts). v0.2.0 to
 # v0.7.3 persisted ./uploads into .env.generated; where that cannot be created, as under the image's
 # root-owned /app, the app keeps media in ./data/media (<data dir>/media) instead, so the scripts have
 # to look there too. Writability alone cannot tell: `docker exec` runs these as root, which can create
 # /app/uploads while the app's own user cannot. The app creates a ./uploads it uses at boot, so a
-# missing one beside an existing <data dir>/media means that one is in use.
+# missing one beside an existing <data dir>/media means that one is in use. With OPENWA_DATA_DIR naming
+# another directory than the working directory's ./data, such as a volume's mountpoint on the host, the
+# working directory is not the app's: its ./uploads, present or not, is not the one the app would use,
+# which lies outside the volume, so <data dir>/media is the target even before it exists, as when
+# restoring into an empty volume. A value from the environment is the caller's own and skips that rule.
 openwa_media_dir() {
   local dir
   dir="$(openwa_resolve STORAGE_LOCAL_PATH "$DATA_DIR/media" path)" || return
   case "$dir" in
     ./uploads | uploads)
-      if ! openwa_writable "$dir" || { [ ! -d "$dir" ] && [ -d "$DATA_DIR/media" ]; }; then
+      if ! openwa_writable "$dir" || { [ ! -d "$dir" ] && [ -d "$DATA_DIR/media" ]; } ||
+        { [ -z "$(printenv STORAGE_LOCAL_PATH)" ] && ! openwa_is_cwd_data_dir; }; then
+        local fix="Remove the line from ./.env or .env.generated."
+        [ -z "$(printenv STORAGE_LOCAL_PATH)" ] || fix="Unset it in the environment."
         echo "[config] WARN: STORAGE_LOCAL_PATH=$dir is a leftover the app does not use here, so it keeps" >&2
-        echo "[config]       media in ./data/media; using $DATA_DIR/media. Remove the line from .env.generated." >&2
+        echo "[config]       media in ./data/media; using $DATA_DIR/media. $fix" >&2
+        # A non-empty ./uploads beside a missing or empty <data dir>/media (the entrypoint creates an
+        # empty one at boot) may be a host folder a container mounts at /app/uploads; that layout cannot
+        # be told apart from here, so name the override for it.
+        if [ -z "$(find -H "$DATA_DIR/media" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ] &&
+          [ -n "$(find -H "$dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+          echo "[config] WARN: $dir is not empty but is skipped. If it is mounted at /app/uploads as the app's media" >&2
+          echo "[config]       dir, pass STORAGE_LOCAL_PATH=\"$PWD/uploads\" in the environment instead." >&2
+        fi
         dir="$DATA_DIR/media"
       fi
       ;;

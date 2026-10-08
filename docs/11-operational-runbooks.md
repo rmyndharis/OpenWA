@@ -783,6 +783,22 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 > host mount, a path recorded inside the container (`/app/data/...`) is not host-visible, so override
 > it in the environment.
 >
+> A leftover `STORAGE_LOCAL_PATH=./uploads` (which v0.2.0 to v0.7.3 wrote to `.env.generated`), in
+> `./.env` or `.env.generated`, is read as `<OPENWA_DATA_DIR>/media` whenever `OPENWA_DATA_DIR` is
+> not the current directory's own `./data`, since the current directory's `./uploads` is then not
+> the app's. A `./data` symlink counts as that directory even before its target exists. On bare metal
+> with `./data` linking to a data directory kept elsewhere, create the link before restoring, or pass
+> an absolute `STORAGE_LOCAL_PATH="$PWD/uploads"` in the environment; otherwise the media goes to the
+> data directory's `media/` while the app keeps serving `./uploads`. A container that mounts a host
+> `./uploads` at `/app/uploads` as its media directory, which no shipped compose file or chart does,
+> needs the same absolute `STORAGE_LOCAL_PATH` in the environment; the scripts warn when they skip a
+> non-empty `./uploads` while the data directory's `media/` is missing or empty, as it is in a volume
+> such a container has booted on. The scripts cannot tell bare metal from a checkout whose `./data` is
+> bind-mounted into the container, as in `docker-compose.dev.yml`, or from a root run inside a
+> container with a writable root filesystem, and keep `./uploads` there; pass
+> `STORAGE_LOCAL_PATH=./data/media` in the environment when restoring into an empty data directory in
+> those layouts.
+>
 > On every install, inside a container or not, the scripts stop with an error naming the key, before
 > anything is archived or restored, when the last line setting it in `./.env` or `.env.generated`,
 > which is the one the app keeps, has one of these forms:

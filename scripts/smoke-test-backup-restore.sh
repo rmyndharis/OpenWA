@@ -55,8 +55,11 @@
 #       without node), connects as before when it is not, and never starts past a DATABASE_SSL or
 #       DATABASE_SSL_REJECT_UNAUTHORIZED line the scripts cannot parse
 #   (ai) the ./data defaults and ./data paths in ./.env and .env.generated follow OPENWA_DATA_DIR in a
-#       run on the host, in both scripts, while non-path settings and a ./data path from the environment
-#       are read as written
+#       run on the host, in both scripts, as does a leftover ./uploads, also into an empty volume, while a
+#       bare-metal ./data named by another spelling or a symlink keeps ./uploads, non-path settings and
+#       a ./data path or absolute media path from the environment are read as written, an
+#       environment ./uploads is exempt from the empty-volume rule, and a skipped non-empty ./uploads
+#       is named in a warning
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -1998,6 +2001,103 @@ printf 'STORAGE_LOCAL_PATH=./uploads\n' >"$AI/vol/.env.generated"
   fail "(ai) backup with a leftover ./uploads failed"
 if ! tar -tzf "$(ls "$AI"/out-uploads/openwa-backup-*.tar.gz)" | grep -qx './media/a.jpg'; then
   fail "(ai) a leftover ./uploads did not fall back to the volume's media"
+fi
+# Restored into an empty volume, whose media dir does not exist yet, the media lands there too rather
+# than in the host's ./uploads, which the app in the container never reads, whether or not one exists.
+ARCHIVE_AI_UP="$(ls "$AI"/out-uploads/openwa-backup-*.tar.gz)"
+for AI_VOL in vol3 vol3b; do
+  [ "$AI_VOL" = vol3b ] && mkdir -p "$AI/host/uploads"
+  mkdir -p "$AI/$AI_VOL"
+  (cd "$AI/host" && OPENWA_DATA_DIR="$AI/$AI_VOL" "$RESTORE" "$ARCHIVE_AI_UP" >/dev/null 2>"$AI/$AI_VOL.err") ||
+    fail "(ai) restore into $AI_VOL with a leftover ./uploads failed"
+  if [ "$(cat "$AI/$AI_VOL/media/a.jpg" 2>/dev/null || true)" != "ai-media" ] ||
+    [ -n "$(ls -A "$AI/host/uploads" 2>/dev/null)" ]; then
+    fail "(ai) a leftover ./uploads restored the media outside the empty volume $AI_VOL"
+  fi
+  if grep -q 'is not empty but is skipped' "$AI/$AI_VOL.err"; then
+    fail "(ai) restore into $AI_VOL warned about an empty or missing ./uploads"
+  fi
+done
+# A non-empty host ./uploads skipped that way, as one a container mounts at /app/uploads would be, is
+# named in a warning with the environment override that keeps it.
+mkdir -p "$AI/hostup/uploads" "$AI/vol3c"
+printf 'in-use\n' >"$AI/hostup/uploads/old.jpg"
+(cd "$AI/hostup" && OPENWA_DATA_DIR="$AI/vol3c" "$RESTORE" "$ARCHIVE_AI_UP" >/dev/null 2>"$AI/vol3c.err") ||
+  fail "(ai) restore into vol3c beside a non-empty ./uploads failed"
+if ! grep -qF "STORAGE_LOCAL_PATH=\"$AI/hostup/uploads\" in the environment" "$AI/vol3c.err"; then
+  fail "(ai) a skipped non-empty ./uploads was not named in a warning: $(cat "$AI/vol3c.err")"
+fi
+# So is one beside the empty media/ the entrypoint creates in every volume it boots on, as when backing
+# up a live install from the host.
+cp -R "$AI/vol3c" "$AI/vol3d"
+rm -rf "$AI/vol3d/media" && mkdir "$AI/vol3d/media"
+(cd "$AI/hostup" && OPENWA_DATA_DIR="$AI/vol3d" BACKUP_DIR="$AI/out-vol3d" "$BACKUP" >/dev/null 2>"$AI/vol3d.err") ||
+  fail "(ai) backup from vol3d beside a non-empty ./uploads failed"
+if ! grep -qF "STORAGE_LOCAL_PATH=\"$AI/hostup/uploads\" in the environment" "$AI/vol3d.err"; then
+  fail "(ai) a non-empty ./uploads skipped beside an empty media dir was not named in a warning: $(cat "$AI/vol3d.err")"
+fi
+# A fresh bare-metal restore naming its own ./data by absolute path, or with a trailing /./ or /.,
+# keeps the ./uploads the restored app creates and uses at boot, as with the default ./data.
+for AI_SPELL in "$AI/bare/data" "$AI/bare-slash/data/./" ./data/.; do
+  AI_BARE="$AI/bare"
+  case "$AI_SPELL" in */data/./) AI_BARE="$AI/bare-slash" ;; ./*) AI_BARE="$AI/bare-dot" ;; esac
+  mkdir -p "$AI_BARE"
+  (cd "$AI_BARE" && OPENWA_DATA_DIR="$AI_SPELL" "$RESTORE" "$ARCHIVE_AI_UP" >/dev/null 2>&1) ||
+    fail "(ai) bare-metal restore into $AI_SPELL with a leftover ./uploads failed"
+  if [ "$(cat "$AI_BARE/uploads/a.jpg" 2>/dev/null || true)" != "ai-media" ] || [ -e "$AI_BARE/data/media" ]; then
+    fail "(ai) a bare-metal restore into $AI_SPELL did not restore the media into ./uploads"
+  fi
+done
+# A backup of that install, its ./data named by absolute or symlinked path, archives the ./uploads in use,
+# as does one whose ./data is itself a symlink to a data dir kept elsewhere, named by its target.
+ln -s "$AI/bare" "$AI/bare-link"
+mkdir -p "$AI/linked"
+cp -R "$AI/bare/data" "$AI/linked-target"
+cp -R "$AI/bare/uploads" "$AI/linked/uploads"
+ln -s "$AI/linked-target" "$AI/linked/data"
+for AI_SPELL in "$AI/bare:$AI/bare/data" "$AI/bare:$AI/bare-link/data" "$AI/linked:$AI/linked-target"; do
+  rm -rf "$AI/out-bare"
+  (cd "${AI_SPELL%%:*}" && OPENWA_DATA_DIR="${AI_SPELL#*:}" BACKUP_DIR="$AI/out-bare" "$BACKUP" >/dev/null 2>&1) ||
+    fail "(ai) bare-metal backup from ${AI_SPELL#*:} with a leftover ./uploads failed"
+  if [ "$(tar -xzOf "$(ls "$AI"/out-bare/openwa-backup-*.tar.gz)" ./media/a.jpg 2>/dev/null)" != "ai-media" ]; then
+    fail "(ai) a bare-metal backup from ${AI_SPELL#*:} did not archive the media in ./uploads"
+  fi
+done
+# STORAGE_LOCAL_PATH=./uploads passed in the environment is the caller's own and skips the empty-volume rule.
+mkdir -p "$AI/envup" "$AI/vol4"
+(cd "$AI/envup" && OPENWA_DATA_DIR="$AI/vol4" STORAGE_LOCAL_PATH=./uploads "$RESTORE" "$ARCHIVE_AI_UP" \
+  >/dev/null 2>&1) || fail "(ai) restore with STORAGE_LOCAL_PATH=./uploads in the environment failed"
+if [ "$(cat "$AI/envup/uploads/a.jpg" 2>/dev/null || true)" != "ai-media" ] || [ -e "$AI/vol4/media" ]; then
+  fail "(ai) STORAGE_LOCAL_PATH=./uploads from the environment was not read as written"
+fi
+# The runbook's ways to keep ./uploads for a bare-metal restore with OPENWA_DATA_DIR at the data dir
+# ./data links to: create that dir and the link first, or pass an absolute STORAGE_LOCAL_PATH, which the
+# fallback never touches, even beside an existing <data dir>/media with no ./uploads.
+mkdir -p "$AI/prelink/inst" "$AI/prelink/disk/data" "$AI/envabs" "$AI/vol5/media"
+ln -s "$AI/prelink/disk/data" "$AI/prelink/inst/data"
+(cd "$AI/prelink/inst" && OPENWA_DATA_DIR="$AI/prelink/disk/data" "$RESTORE" "$ARCHIVE_AI_UP" >/dev/null 2>&1) ||
+  fail "(ai) bare-metal restore through a pre-created ./data link failed"
+if [ "$(cat "$AI/prelink/inst/uploads/a.jpg" 2>/dev/null || true)" != "ai-media" ] ||
+  [ -e "$AI/prelink/disk/data/media" ]; then
+  fail "(ai) a bare-metal restore through a pre-created ./data link did not restore the media into ./uploads"
+fi
+# A ./data link created before its target, absolute or relative, is followed too when OPENWA_DATA_DIR
+# names that target.
+for AI_LINK in "$AI/danglink-abs/disk/data" ../disk/data; do
+  AI_BARE="$AI/danglink-abs"
+  [ "$AI_LINK" = ../disk/data ] && AI_BARE="$AI/danglink-rel"
+  mkdir -p "$AI_BARE/inst"
+  ln -s "$AI_LINK" "$AI_BARE/inst/data"
+  (cd "$AI_BARE/inst" && OPENWA_DATA_DIR="$AI_BARE/disk/data" "$RESTORE" "$ARCHIVE_AI_UP" >/dev/null 2>&1) ||
+    fail "(ai) bare-metal restore through a ./data link to $AI_LINK, not yet created, failed"
+  if [ "$(cat "$AI_BARE/inst/uploads/a.jpg" 2>/dev/null || true)" != "ai-media" ] || [ -e "$AI_BARE/disk/data/media" ]; then
+    fail "(ai) a restore through a ./data link to $AI_LINK, not yet created, did not restore the media into ./uploads"
+  fi
+done
+(cd "$AI/envabs" && OPENWA_DATA_DIR="$AI/vol5" STORAGE_LOCAL_PATH="$AI/envabs/uploads" "$RESTORE" \
+  "$ARCHIVE_AI_UP" >/dev/null 2>&1) || fail "(ai) restore with an absolute STORAGE_LOCAL_PATH failed"
+if [ "$(cat "$AI/envabs/uploads/a.jpg" 2>/dev/null || true)" != "ai-media" ] || [ -e "$AI/vol5/media/a.jpg" ]; then
+  fail "(ai) an absolute STORAGE_LOCAL_PATH from the environment was not read as written"
 fi
 # Only path settings are mapped: a dashboard-provisioned Postgres named, owned or reached as "data", or
 # a password under "data/", reaches pg_dump as written, with the default data dir too.
