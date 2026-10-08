@@ -460,7 +460,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
     ],
   }),
 
-  // Import integration delivery failures (inbound + outbound DLQ)
+  // Import integration delivery failures (inbound DLQ; direction restored as stored)
   defineTableImporter({
     key: 'integrationDeliveryFailures',
     label: 'integration delivery failure',

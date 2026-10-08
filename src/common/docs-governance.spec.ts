@@ -252,6 +252,34 @@ describe('governance docs match the repository', () => {
     expect(faq).toMatch(/last seeded, which still works while that key is an active, unscoped ADMIN key/);
   });
 
+  // The gateway writes only 'inbound' dead letters, but the data import copies `direction` as stored.
+  // Plugin manifests load in the global PluginsModule's onModuleInit, before the startup prune runs, so
+  // a prune-written dead letter derives its conversation id from the current manifest route.
+  it('describes integration dead letters as written inbound and restored as stored', () => {
+    const flat = (text: string): string => text.replace(/\s+/g, ' ');
+    const importer = between(read('src/modules/infra/table-importers.ts'), "key: 'integrationDeliveryFailures'", '}),');
+    expect(importer).toMatch(/map: \(df: IntegrationDeliveryFailureRow\) => \[\s*df\.id,\s*df\.direction,/);
+    expect(read('src/modules/integration/redrive.service.ts')).toMatch(/direction: 'inbound'/);
+    expect(read('src/core/plugins/plugins.module.ts')).toMatch(/@Global\(\)/);
+    expect(read('src/core/plugins/plugin-loader.service.ts')).toMatch(
+      /onModuleInit\(\): void \{\s*this\.scanner\.scanAtBoot\(\)/,
+    );
+    const table = '- **`integration_delivery_failures`**';
+    const fabric = flat(read('docs/25-integration-fabric.md'));
+    for (const entry of [
+      between(flat(read('docs/05-database-design.md')), table, ' - **'),
+      between(fabric, table, ' ## '),
+    ]) {
+      expect(entry).not.toMatch(/`direction` is (always )?`inbound`/);
+      expect(entry).toContain("A data import restores each row's `direction` as stored");
+    }
+    expect(fabric).not.toMatch(/before plugins load/);
+    expect(fabric).toContain(
+      "A dead-letter row the prune writes takes its conversation id from the plugin's current manifest route, as the live path does",
+    );
+    expect(fabric).toContain('or whose pointer does not resolve in that delivery carries none');
+  });
+
   it('keeps the README non-affiliation disclaimer', () => {
     const section = between(read('README.md'), '## Disclaimer', '\n## ');
     expect(section).toMatch(/not affiliated/);
