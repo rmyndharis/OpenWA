@@ -1,7 +1,7 @@
 import type { WASocket } from '@whiskeysockets/baileys';
 import { BadRequestException } from '@nestjs/common';
 import sharp from 'sharp';
-import { BaileysMessaging, type BaileysMessagingHost } from './baileys-messaging';
+import { BaileysMessaging, MAX_STICKER_FRAMES, type BaileysMessagingHost } from './baileys-messaging';
 import { createLogger } from '../../common/services/logger.service';
 
 /**
@@ -37,6 +37,18 @@ const ANIMATED_GIF = Buffer.from(
   'R0lGODlhAQABAIAAAP8AAAAA/yH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAAQABAAACAkQBACH5BAAKAAAALAAAAAABAAEAAAICTAEAOw==',
   'base64',
 );
+
+/** A GIF89a of `frames` 1x1 frames: about 23 bytes each, so a large count stays a small upload. */
+function manyFrameGif(frames: number): Buffer {
+  const head = Buffer.concat([
+    Buffer.from('GIF89a'),
+    Buffer.from([1, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 255, 255, 255, 0x21, 0xff, 0x0b]),
+    Buffer.from('NETSCAPE2.0'),
+    Buffer.from([3, 1, 0, 0, 0]),
+  ]);
+  const frame = Buffer.from([0x21, 0xf9, 4, 0, 1, 0, 0, 0, 0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 1, 0]);
+  return Buffer.concat([head, ...Array<Buffer>(frames).fill(frame), Buffer.from([0x3b])]);
+}
 
 const isWebp = (b: unknown): boolean =>
   Buffer.isBuffer(b) &&
@@ -128,6 +140,58 @@ describe('BaileysMessaging.sendStickerMessage — what reaches the socket must r
     const sent = contentOf(sock).sticker as Buffer;
     expect(isWebp(sent)).toBe(true);
     expect((await sharp(sent, { animated: true }).metadata()).pages).toBe(2);
+  });
+
+  // Conversion cost is linear in the frame count, and 1x1 frames make that count nearly free to
+  // inflate: 25,000 of them fit in under 600 KB and keep a threadpool worker busy for tens of seconds.
+  it('an animation with too many frames is refused as a 400 without being converted', async () => {
+    const { messaging, sock } = makeMessaging();
+    const convert = jest.spyOn(sharp.prototype, 'toBuffer');
+
+    try {
+      const send = messaging.sendStickerMessage('628111@s.whatsapp.net', {
+        data: manyFrameGif(MAX_STICKER_FRAMES + 1),
+        mimetype: 'image/gif',
+      });
+
+      await expect(send).rejects.toBeInstanceOf(BadRequestException);
+      await expect(send).rejects.toThrow(`has ${MAX_STICKER_FRAMES + 1} frames; at most ${MAX_STICKER_FRAMES}`);
+      expect(convert).not.toHaveBeenCalled();
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      convert.mockRestore();
+    }
+  });
+
+  // Each pipeline holds a libuv worker for its whole run; unbounded, a handful of concurrent
+  // conversions occupy the pool that fs, dns.lookup and crypto also wait on.
+  it('runs at most two conversions at once and queues the rest', async () => {
+    const pending: Array<(b: Buffer) => void> = [];
+    const metadata = jest.spyOn(sharp.prototype, 'metadata').mockResolvedValue({ pages: 1 });
+    const convert = jest
+      .spyOn(sharp.prototype, 'toBuffer')
+      .mockImplementation(() => new Promise<Buffer>(resolve => pending.push(resolve)));
+    const settle = () => new Promise(resolve => setImmediate(resolve));
+
+    try {
+      const { messaging, sock } = makeMessaging();
+      const sends = [1, 2, 3].map(() =>
+        messaging.sendStickerMessage('628111@s.whatsapp.net', { data: PNG, mimetype: 'image/png' }),
+      );
+      await settle();
+      expect(convert).toHaveBeenCalledTimes(2);
+
+      pending.shift()!(WEBP);
+      await settle();
+      expect(convert).toHaveBeenCalledTimes(3);
+
+      pending.splice(0).forEach(resolve => resolve(WEBP));
+      await Promise.all(sends);
+      expect(sock.sendMessage).toHaveBeenCalledTimes(3);
+    } finally {
+      metadata.mockRestore();
+      convert.mockRestore();
+    }
   });
 
   it('input that cannot become a sticker is refused BEFORE the socket, as a 400', async () => {

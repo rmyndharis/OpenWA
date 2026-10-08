@@ -43,6 +43,7 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { EngineNotSentError } from '../../common/errors/engine-not-sent.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
+import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 
 /**
  * Messaging-domain operations extracted from BaileysAdapter. The adapter keeps the public
@@ -137,6 +138,19 @@ export async function loadSharp() {
   }
 }
 
+/**
+ * Animation frames a sticker conversion accepts: a 10-second animation at 50 fps. Each frame is
+ * resized and encoded at 512x512 (a few ms apiece), so cost is linear in the frame count, and a
+ * GIF of 1x1 frames packs tens of thousands of them into well under a megabyte.
+ */
+export const MAX_STICKER_FRAMES = 500;
+
+/**
+ * Conversions running at once, process-wide. A sharp pipeline holds a libuv threadpool worker
+ * (4 by default) for its whole run, and that pool also serves fs, dns.lookup, crypto and zlib.
+ */
+const stickerConversions = new ConcurrencyLimiter(2);
+
 async function toWebpSticker(data: Buffer, mimetype: string): Promise<Buffer> {
   if (isWebpBuffer(data)) {
     return data;
@@ -156,11 +170,22 @@ async function toWebpSticker(data: Buffer, mimetype: string): Promise<Buffer> {
   // deferral the adapters already use for the engine libraries themselves.
   const sharp = await loadSharp();
   try {
-    return await sharp(data, { animated: true })
-      .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-      .webp()
-      .toBuffer();
+    const image = sharp(data, { animated: true });
+    // Counting frames only scans the file, so an oversized animation is refused before any decode.
+    const { pages = 1 } = await image.metadata();
+    if (pages > MAX_STICKER_FRAMES) {
+      throw new BadRequestException(
+        `The sticker animation has ${pages} frames; at most ${MAX_STICKER_FRAMES} can be converted.`,
+      );
+    }
+    return await stickerConversions.run(() =>
+      image
+        .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .webp()
+        .toBuffer(),
+    );
   } catch (error) {
+    if (error instanceof BadRequestException) throw error;
     // Bytes that do not decode as the image they claim to be. Refuse before the socket rather than
     // ship them mislabelled — that is the whole point.
     throw new BadRequestException(
