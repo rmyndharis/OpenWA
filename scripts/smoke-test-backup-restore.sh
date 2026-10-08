@@ -107,7 +107,7 @@ db_fingerprint() {
 # to shadow tar (simulating an incomplete archive) without touching the real scripts.
 populate_shim() {
   shim_dir="$1"
-  tools="env bash sh cp tar gzip mktemp date rm sed mkdir ls cat chmod grep printf uname dirname"
+  tools="env bash sh cp tar gzip mktemp date rm sed mkdir ls cat chmod grep printf uname dirname tr tail"
   if [ "${2:-}" = "with-sqlite3" ]; then
     tools="$tools sqlite3"
   fi
@@ -1562,6 +1562,10 @@ done
 if ! grep -q 'sets ENGINE_TYPE in a form' <<<"$OUT_AG" || ! grep -q 'skipping only the check for missing Baileys state' <<<"$OUT_AG"; then
   fail "(ag) backup did not report the ENGINE_TYPE line it cannot parse and that it carried on: $OUT_AG"
 fi
+# The run carries on, so the line is reported as a warning rather than an error.
+if grep -q 'ERROR' <<<"$OUT_AG" || ! grep -q '^\[config\] WARN: .* sets ENGINE_TYPE in a form' <<<"$OUT_AG"; then
+  fail "(ag) backup reported the ENGINE_TYPE line it carries on past as an error: $OUT_AG"
+fi
 rm -f "$AGB/data/act"$'\343\200\200'"ive.sqlite"
 # dotenv reads the line after a bare `NAME:` line as NAME's value, so the app never sets the key from it.
 printf 'LOG_LEVEL:\nDATABASE_NAME=./data/active.sqlite\n' >"$AGB/.env"
@@ -1591,20 +1595,157 @@ for check in 'DATABASE_NAME\n=./data/active.sqlite|names DATABASE_NAME on a line
   fi
 done
 # dotenv can take the backslash and quote that end a quoted value for an escaped quote, and read on to a
-# quote on a later line.
-printf '%s\n' "DATABASE_NAME='./data/active.sqlite\\'" "'" >"$AGB/.env"
-set +e
-OUT_AG="$(cd "$AGB" && DATA_DIR=./data && . "$REPO_ROOT/scripts/lib-env.sh" && openwa_resolve DATABASE_NAME DEFAULT 2>&1)"
-RC_AG=$?
-set -e
-if [ "$RC_AG" -eq 0 ] || ! grep -q 'ending in a backslash' <<<"$OUT_AG"; then
-  fail "(ag) a quoted DATABASE_NAME ending in a backslash did not fail the lookup (rc $RC_AG): $OUT_AG"
-fi
+# later quote that only blanks or a comment follow, escaped or not.
+for ag_next in "'" "x\\' # note"; do
+  printf '%s\n' "DATABASE_NAME='./data/active.sqlite\\'" "$ag_next" >"$AGB/.env"
+  set +e
+  OUT_AG="$(cd "$AGB" && DATA_DIR=./data && . "$REPO_ROOT/scripts/lib-env.sh" && openwa_resolve DATABASE_NAME DEFAULT 2>&1)"
+  RC_AG=$?
+  set -e
+  if [ "$RC_AG" -eq 0 ] || ! grep -q 'ending in a backslash' <<<"$OUT_AG"; then
+    fail "(ag) a quoted DATABASE_NAME ending in a backslash before '$ag_next' did not fail the lookup (rc $RC_AG): $OUT_AG"
+  fi
+done
 # An empty `KEY=` followed by blank lines and an unquoted line stays empty for dotenv too.
 printf 'DATABASE_NAME=\n\n# data store\nLOG_LEVEL=info\n' >"$AGB/.env"
 if [ "$(cd "$AGB" && DATA_DIR=./data && . "$REPO_ROOT/scripts/lib-env.sh" && openwa_resolve DATABASE_NAME DEFAULT)" != DEFAULT ]; then
   fail "(ag) an empty DATABASE_NAME= followed by a comment and another key did not resolve to the default"
 fi
+# dotenv reads each of these unambiguously, and the scripts used to stop on them: a Unicode blank inside
+# a quoted value; a Unicode blank, a byte that is not UTF-8 or a bare NAME: line before it on an earlier
+# line for the key, which the last one overrides; and a value single-quoted for its `#` and ending in a
+# backslash, as the dashboard writes it, with no single quote on a later line or only one followed by
+# more than a comment. An empty value followed by a comment holding a Unicode blank is still empty, so
+# the default applies. The key's line also sets it after a quoted value that closes on its own lines,
+# even on a line that looks like it opens one, or that nothing closes, which dotenv then reads without
+# its quote, and after one closed by an escaped quote whose later quote is followed by more than a
+# comment. A line that would open a quoted value but is the value of a bare NAME: line before it
+# opens nothing, and neither does a U+2028 inside an unquoted value start a line. Nor does a quote
+# inside a value opened with another quote character open a value, even after a U+2029 there, or a
+# quote in an unquoted value, which runs on past a U+2028. Fields: ./.env, .env.generated, the key and
+# the value the app reads, all with printf escapes.
+AGC="$WORK/ag-last-line"
+mkdir -p "$AGC/data"
+for check in 'DATABASE_NAME=\047a\302\240#b\047||DATABASE_NAME|a\302\240#b' \
+  'LOG_LEVEL:\nDATABASE_NAME=a\nDATABASE_NAME=b||DATABASE_NAME|b' \
+  'DATABASE_NAME=a\302\240\nDATABASE_NAME=b||DATABASE_NAME|b' \
+  'DATABASE_NAME=a # donn\351es\nDATABASE_NAME=b||DATABASE_NAME|b' \
+  'DATABASE_NAME= # note\302\240||DATABASE_NAME|DEFAULT' \
+  'DATABASE_NAME=#a\302\240#b\nLOG_LEVEL=info||DATABASE_NAME|DEFAULT' \
+  '|DATABASE_PASSWORD=\047p#w\134\047\nDATABASE_HOST="db"|DATABASE_PASSWORD|p#w\134' \
+  '|DATABASE_PASSWORD=\047p#w\134\047\nREDIS_PASSWORD=\047x#y\047|DATABASE_PASSWORD|p#w\134' \
+  'N:\nB=\047y\nDATABASE_NAME=b\nz\047||DATABASE_NAME|b' \
+  'M:\nN=\n\047x\nDATABASE_NAME=b\nz\047||DATABASE_NAME|b' \
+  'A=1\342\200\250B=\047y\nDATABASE_NAME=b\nz\047||DATABASE_NAME|b' \
+  '|DATABASE_PASSWORD=\047pw\302\240#x\047|DATABASE_PASSWORD|pw\302\240#x' \
+  'CERT="BEGIN\nabc\nEND"\nDATABASE_NAME=b||DATABASE_NAME|b' \
+  'LOG_LEVEL=\047x\nDATABASE_NAME=b||DATABASE_NAME|b' \
+  'LOG_LEVEL=\047a\134\047\nDATABASE_NAME=b\nY=\047c\047||DATABASE_NAME|b' \
+  'CERT=\047a\nNOTE=\047 # c\nDATABASE_NAME=b\nY=x\047||DATABASE_NAME|b' \
+  'A=\047x\nB="y\n\047\nDATABASE_NAME=b\nC=z"||DATABASE_NAME|b' \
+  'A=\047x\342\200\251B="y\047 # c\nDATABASE_NAME=b\nC=z"||DATABASE_NAME|b' \
+  'A=x\047y\342\200\250B=\047z\nDATABASE_NAME=b\nz\047||DATABASE_NAME|b' \
+  'N:\nx\047\342\200\250B=\047z\nDATABASE_NAME=b\nz\047||DATABASE_NAME|b'; do
+  IFS='|' read -r ag_env ag_gen ag_key ag_want <<<"$check"
+  # shellcheck disable=SC2059 # the fields' escapes are the point
+  printf "$ag_env\n" >"$AGC/.env"
+  # shellcheck disable=SC2059
+  printf "$ag_gen\n" >"$AGC/data/.env.generated"
+  # shellcheck disable=SC2059
+  ag_want="$(printf "$ag_want")"
+  set +e
+  got="$(cd "$AGC" && DATA_DIR=./data && . "$REPO_ROOT/scripts/lib-env.sh" && openwa_resolve "$ag_key" DEFAULT 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ] || [ "$got" != "$ag_want" ]; then
+    fail "(ag) $ag_key in '$ag_env' / '$ag_gen' resolved to '$got' (rc $rc) instead of the app's '$ag_want'"
+  fi
+done
+# dotenv reads the line after a bare `DATABASE_NAME:` as its value, and Docker Compose, which
+# interpolates ./.env into the container, reads `KEY:value` and `KEY :value` as settings, so each stops
+# the run even when .env.generated sets the key. The error names the `KEY: value` form, not a bare
+# NAME: line before the key's line.
+printf 'DATABASE_NAME=./data/gen\n' >"$AGC/data/.env.generated"
+for ag_env in 'DATABASE_NAME:\n./data/active.sqlite' 'DATABASE_NAME:./data/a.sqlite' \
+  'DATABASE_NAME=./data/b.sqlite\nDATABASE_NAME :./data/a.sqlite'; do
+  # shellcheck disable=SC2059 # the escapes are the point
+  printf "$ag_env\n" >"$AGC/.env"
+  set +e
+  OUT_AG="$(cd "$AGC" && DATA_DIR=./data && . "$REPO_ROOT/scripts/lib-env.sh" && openwa_resolve DATABASE_NAME DEFAULT 2>&1)"
+  RC_AG=$?
+  set -e
+  if [ "$RC_AG" -ne 2 ] || ! grep -q 'sets DATABASE_NAME in a form' <<<"$OUT_AG" || grep -q 'bare NAME:' <<<"$OUT_AG"; then
+    fail "(ag) '$ag_env' was not reported as KEY: value (rc $RC_AG): $OUT_AG"
+  fi
+done
+# dotenv reads a quoted value on to its closing quote, so a line for the key inside it does not set the
+# key. Whether the quote opens on an earlier line for the key or another key's, at the start of a line
+# after an empty NAME=, after a bare NAME: line that is itself the value of the one before it, or after
+# a bare CR, U+2028 or U+2029, where dotenv starts a line, and whether it closes before one of those,
+# the run stops instead of reading the key's last line or a line inside the value. A quote followed by
+# a colon opens a value too.
+for ag_env in 'DATABASE_NAME=\047a\302\240\nDATABASE_NAME=./data/a.sqlite\047' \
+  'DATABASE_NAME=\047x\nDATABASE_NAME=\377a\nDATABASE_NAME=./data/a.sqlite\047' \
+  'LOG_LEVEL=\047x\nDATABASE_NAME=a\302\240\nDATABASE_NAME=./data/a.sqlite\nY\047' \
+  'LOG_LEVEL=\047x\nLOG:\nDATABASE_NAME=a\nDATABASE_NAME=./data/a.sqlite\nY\047' \
+  'DATABASE_NAME=\047a\nDATABASE_NAME=./data/a.sqlite\047' \
+  'LOG_LEVEL=\n\n"x\nDATABASE_NAME=./data/a.sqlite" # note' \
+  'W:\nN:\nB=\047y\nDATABASE_NAME=./data/a.sqlite\nz\047' \
+  'x\rA=\047y\nDATABASE_NAME=./data/a.sqlite\nz\047' \
+  '# n\342\200\250A=\047y\nDATABASE_NAME=./data/a.sqlite\nz\047' \
+  'A=\047x\nDATABASE_NAME=./data/a.sqlite\nz\047\342\200\251more' \
+  'A=\047x\nDATABASE_NAME=./data/a.sqlite\nz\047\rmore' \
+  'A=\047x\nB=\047:\nDATABASE_NAME=./data/a.sqlite\n\047'; do
+  # shellcheck disable=SC2059 # the escapes are the point
+  printf "$ag_env\n" >"$AGC/.env"
+  set +e
+  OUT_AG="$(cd "$AGC" && DATA_DIR=./data && . "$REPO_ROOT/scripts/lib-env.sh" && openwa_resolve DATABASE_NAME DEFAULT 2>&1)"
+  RC_AG=$?
+  set -e
+  if [ "$RC_AG" -ne 2 ] || ! grep -q 'opens a quoted value on line' <<<"$OUT_AG"; then
+    fail "(ag) DATABASE_NAME inside the quoted value in '$ag_env' resolved to '$OUT_AG' (rc $RC_AG) instead of stopping"
+  fi
+done
+# The error names the file's line that opens the value, not one counted after a line break dotenv adds,
+# and still counts a line of the file that starts with U+2029.
+printf 'Q=1\n\342\200\251# n\nx\ry\342\200\250A=\047v\nDATABASE_NAME=./data/a.sqlite\nz\047\n' >"$AGC/.env"
+set +e
+OUT_AG="$(cd "$AGC" && DATA_DIR=./data && . "$REPO_ROOT/scripts/lib-env.sh" && openwa_resolve DATABASE_NAME DEFAULT 2>&1)"
+set -e
+if ! grep -q 'opens a quoted value on line 3 that the app can read on to line 4,' <<<"$OUT_AG"; then
+  fail "(ag) the quoted value opened after a bare CR and U+2028 was not reported on line 3: $OUT_AG"
+fi
+# The scripts trim only ASCII blanks, so a no-break space after a closing quote stops the run in a
+# UTF-8 locale too, as it does in the C locale.
+ag_loc="$(locale -a 2>/dev/null | grep -m 1 -ixE 'C\.UTF-?8|en_US\.UTF-?8')" || true
+if [ -n "$ag_loc" ]; then
+  printf 'DATABASE_NAME=\047\047 \302\240\n' >"$AGC/.env"
+  set +e
+  # shellcheck disable=SC2016 # expanded by the inner shell
+  OUT_AG="$(cd "$AGC" && LC_ALL="$ag_loc" bash -c 'DATA_DIR=./data && . "$1" && openwa_resolve DATABASE_NAME DEFAULT' _ "$REPO_ROOT/scripts/lib-env.sh" 2>&1)"
+  RC_AG=$?
+  set -e
+  if [ "$RC_AG" -ne 2 ] || ! grep -q 'sets DATABASE_NAME in a form' <<<"$OUT_AG"; then
+    fail "(ag) a no-break space after a closing quote resolved to '$OUT_AG' (rc $RC_AG) under LC_ALL=$ag_loc"
+  fi
+fi
+# Without tr, tail, sed or grep the key's line cannot be read, so the lookup stops instead of taking
+# the default.
+printf 'DATABASE_SSL=true\n' >"$AGC/.env"
+for ag_tool in tr tail sed grep; do
+  rm -rf "$AGC/shim"
+  mkdir -p "$AGC/shim"
+  populate_shim "$AGC/shim"
+  rm -f "$AGC/shim/$ag_tool"
+  set +e
+  # shellcheck disable=SC2016 # expanded by the inner shell
+  OUT_AG="$(cd "$AGC" && PATH="$AGC/shim" bash -c 'DATA_DIR=./data && . "$1" && openwa_resolve DATABASE_SSL false' _ "$REPO_ROOT/scripts/lib-env.sh" 2>&1)"
+  RC_AG=$?
+  set -e
+  if [ "$RC_AG" -ne 2 ] || ! grep -q "$ag_tool is required" <<<"$OUT_AG"; then
+    fail "(ag) without $ag_tool DATABASE_SSL resolved to '$OUT_AG' (rc $RC_AG) instead of stopping"
+  fi
+done
 # A quoted value holding its own quote character is named as such, and the remedy warns that double
 # quotes expand \n and \r. The other quote style, which the error suggests, archives the configured store.
 make_fixture "$AGB/data/o'brien.sqlite" "ag-active"

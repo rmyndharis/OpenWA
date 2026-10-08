@@ -297,8 +297,11 @@ if [ -d "$BAILEYS_DIR" ]; then
   if [ -n "$(find -H "$BAILEYS_DIR" -mindepth 1 -maxdepth 1 -type d -print -quit)" ]; then
     record_engine_state_note "baileys/ (recorded whenever Baileys state exists; it cannot show whether it was live)"
   fi
-# The warning is advisory, so an ENGINE_TYPE line the scripts cannot parse skips it instead of the backup.
-elif ! ENGINE_TYPE_RESOLVED="$(openwa_resolve ENGINE_TYPE '')"; then
+# The warning is advisory, so an ENGINE_TYPE line the scripts cannot parse skips it instead of the backup,
+# and its error is reported as a warning. A failed lookup prints nothing on stdout and a successful one
+# nothing on stderr, so both share the substitution.
+elif ! ENGINE_TYPE_RESOLVED="$(openwa_resolve ENGINE_TYPE '' 2>&1)"; then
+  sed -e 's/^\[config\] ERROR: /[config] WARN: /' -e 's/^\[config\]        /[config]       /' <<<"$ENGINE_TYPE_RESOLVED" >&2
   log "WARN: ENGINE_TYPE could not be read (see above); skipping only the check for missing Baileys state"
 elif [ "$ENGINE_TYPE_RESOLVED" = "baileys" ]; then
   log "WARN: ENGINE_TYPE=baileys but $BAILEYS_DIR was not found — restored sessions will require pairing"
