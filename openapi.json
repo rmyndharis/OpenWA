@@ -7401,6 +7401,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "The server is shutting down; retry the batch shortly",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Send messages to multiple recipients (async batch processing)",
