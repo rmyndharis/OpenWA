@@ -6,6 +6,7 @@ import { Repository } from 'typeorm';
 import { createLogger } from '../../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue-names';
 import { workerConnectionOptions, webhookWorkerConcurrency } from '../redis-connection';
+import { closeWorkerIfStarted } from './close-worker';
 import { WebhookJobData, WebhookPayload } from '../../webhook/webhook.service';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import { WebhookOutboxService } from '../../webhook/webhook-outbox.service';
@@ -79,6 +80,12 @@ export class WebhookProcessor extends WorkerHost {
     this.degradedSessionConcurrency =
       this.configService.get<number | undefined>('webhook.degradedSessionConcurrency') ??
       Math.max(1, Math.floor(webhookWorkerConcurrency() / 4));
+  }
+
+  // Stop taking jobs before the plugins are torn down, so a final attempt's webhook:error hook still
+  // reaches them; see IngressProcessor.onModuleDestroy. The wait covers one POST plus its bookkeeping.
+  async onModuleDestroy(): Promise<void> {
+    await closeWorkerIfStarted(this, this.configService.get<number>('webhook.timeout', 10000) + 5000);
   }
 
   async process(job: Job<WebhookJobData>, token?: string): Promise<WebhookJobResult> {

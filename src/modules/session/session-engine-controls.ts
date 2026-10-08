@@ -4,6 +4,7 @@ import {
   ConflictException,
   HttpStatus,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Repository, DataSource } from 'typeorm';
@@ -41,6 +42,13 @@ import {
 
 /** A start refused because an operator stopped the session. Same 409 on the wire as any conflict. */
 export class SessionStoppedException extends ConflictException {}
+
+/** A start refused because the gateway is shutting down. Retryable once it is back. */
+export class ServerShuttingDownException extends ServiceUnavailableException {
+  constructor() {
+    super('Server is shutting down');
+  }
+}
 
 /**
  * The stop marks. Each add() stamps the id afresh, even one already marked, so start() can tell a mark
@@ -114,6 +122,8 @@ export interface SessionEngineControlsHost {
   updateStatus(id: string, status: SessionStatus): Promise<void>;
   /** Ownership gate, same contract as SessionEngineWiringHost.ownsSession. */
   ownsSession(id: string): boolean;
+  /** True once shutdown() has begun; the lifecycle never reopens. */
+  isClosed(): boolean;
   stoppingSessions: StopMarks;
   /** The engine each operator-initiated teardown is retiring; see the lifecycle field of the same name. */
   operatorTeardowns: Map<string, IWhatsAppEngine>;
@@ -338,8 +348,10 @@ export class SessionEngineControls {
           // Fenced on ownership like the engine callbacks: initializeEngine can await a slow
           // Chromium launch for minutes, and this node's lease can lapse and be taken over inside
           // that window. FAILED is excluded from the boot reset AND from the takeover sweep, so
-          // writing it onto a row a peer now owns strands the session on every node.
-          if (this.host.ownsSession(id)) {
+          // writing it onto a row a peer now owns strands the session on every node. Skipped during
+          // shutdown too: an init that rejects then usually does so because shutdown destroyed its
+          // engine, and the INITIALIZING row is reset by the next boot, where FAILED would not be.
+          if (this.host.ownsSession(id) && !this.host.isClosed()) {
             await this.host.updateStatus(id, SessionStatus.FAILED).catch(() => undefined);
           }
         }
