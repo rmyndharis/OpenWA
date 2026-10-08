@@ -692,6 +692,11 @@ OPENWA_DATA_DIR=/srv/openwa/data \
   BACKUP_DIR=/backups/openwa \
   DATABASE_TYPE=postgres DATABASE_URL=postgres://user@host:5432/openwa PGPASSWORD='<password>' \
   ./scripts/backup.sh
+
+# With DATABASE_SSL=true, pg_dump makes the app's TLS check: sslmode=verify-full against the CA roots
+# Node trusts (add a private CA through NODE_EXTRA_CA_CERTS, as for the app), or sslmode=require when
+# DATABASE_SSL_REJECT_UNAUTHORIZED=false. On a host without node it uses sslrootcert=system, which needs
+# libpq 16+ and a system CA store. PGSSLMODE and PGSSLROOTCERT, when set, take precedence.
 ```
 
 > The data directory is a Docker **named volume** (`openwa-data`) in the production

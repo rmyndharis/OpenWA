@@ -43,6 +43,11 @@
 #                     other local users can read in the process list, so leave the password out of
 #                     it and supply PGPASSWORD or ~/.pgpass instead; the DATABASE_* path already
 #                     passes DATABASE_PASSWORD through PGPASSWORD.
+#   DATABASE_SSL, DATABASE_SSL_REJECT_UNAUTHORIZED
+#                     pg_dump makes the app's TLS check: sslmode=verify-full against the CA roots
+#                     Node trusts (NODE_EXTRA_CA_CERTS included), or require when the second is
+#                     false. Without node it uses sslrootcert=system, which needs libpq 16+ and a
+#                     system CA store. PGSSLMODE and PGSSLROOTCERT, when set, take precedence.
 #
 # Failure policy: a missing source database is FATAL (no silent empty backup), and the finished
 # archive must contain every configured database or it is deleted and the run fails. When the
@@ -211,6 +216,27 @@ if [ "$DATABASE_TYPE" = "postgres" ]; then
   if ! command -v pg_dump >/dev/null 2>&1; then
     log "ERROR: DATABASE_TYPE=postgres but pg_dump is not installed"
     exit 1
+  fi
+  # libpq defaults to sslmode=prefer, which falls back to plaintext and accepts any certificate, so
+  # the dump sent the database password past the TLS check the app makes. Apply the app's check:
+  # verify the server against the CA roots Node trusts (the image has no system CA store), or only
+  # encrypt when DATABASE_SSL_REJECT_UNAUTHORIZED=false. An operator's PGSSLMODE or PGSSLROOTCERT wins.
+  if [ "$(openwa_resolve DATABASE_SSL false)" = true ] && [ -z "${PGSSLMODE:-}" ]; then
+    if [ "$(openwa_resolve DATABASE_SSL_REJECT_UNAUTHORIZED true)" = false ]; then
+      export PGSSLMODE=require
+    else
+      if [ -z "${PGSSLROOTCERT:-}" ] && command -v node >/dev/null 2>&1; then
+        PG_ROOT_CERTS="$(mktemp)"
+        trap 'rm -rf "$STAGE" "$PG_ROOT_CERTS"' EXIT
+        node -e 'const tls = require("tls");
+          console.log((tls.getCACertificates ? tls.getCACertificates("default") : tls.rootCertificates).join("\n"))' \
+          >"$PG_ROOT_CERTS"
+      elif [ -z "${PGSSLROOTCERT:-}" ]; then
+        log "node not found: verifying the server against the system CA store (sslrootcert=system," \
+          "libpq 16+); set PGSSLROOTCERT to a CA file if pg_dump cannot use it"
+      fi
+      export PGSSLMODE=verify-full PGSSLROOTCERT="${PGSSLROOTCERT:-${PG_ROOT_CERTS:-system}}"
+    fi
   fi
   DATABASE_URL_RESOLVED="$(openwa_resolve DATABASE_URL '')"
   if [ -n "$DATABASE_URL_RESOLVED" ]; then

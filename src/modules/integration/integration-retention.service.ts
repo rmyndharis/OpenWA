@@ -1,8 +1,9 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThan, Repository } from 'typeorm';
+import { IsNull, LessThan, Not, Repository } from 'typeorm';
 import { IngressEvent } from './entities/ingress-event.entity';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
+import { IngressReconcilerService } from './ingress-reconciler.service';
 import { createLogger } from '../../common/services/logger.service';
 
 // Dedup rows are a delivery-id oracle, not an audit log: provider retries arrive within minutes, so
@@ -23,7 +24,8 @@ const DEFAULT_FAILURE_RETENTION_DAYS = 90;
  * - `INGRESS_DEDUP_RETENTION_DAYS` (default 7) prunes `ingress_events`. <= 0 does NOT disable it —
  *   an unpruned dedup table grows without bound for zero functional gain (its payloads are retired
  *   on dispatch and its audit value is nil), so a non-positive value falls back to the default with
- *   a warning instead of silently opting into unbounded growth.
+ *   a warning instead of silently opting into unbounded growth. A 'pending' row that still carries
+ *   its payload is only deleted after deadLetterAgedPending has settled it.
  * - `INGRESS_RETENTION_DAYS` (default 90) prunes `integration_delivery_failures` — the redrive
  *   payload store, where long retention can be a deliberate operator choice. <= 0 disables that
  *   prune (and only that prune).
@@ -37,6 +39,7 @@ export class IntegrationRetentionService implements OnModuleInit, OnModuleDestro
     @InjectRepository(IngressEvent, 'data') private readonly eventRepository: Repository<IngressEvent>,
     @InjectRepository(IntegrationDeliveryFailure, 'data')
     private readonly failureRepository: Repository<IntegrationDeliveryFailure>,
+    private readonly reconciler: IngressReconcilerService,
   ) {}
 
   onModuleInit(): void {
@@ -86,7 +89,8 @@ export class IntegrationRetentionService implements OnModuleInit, OnModuleDestro
   /**
    * Delete ingress_events rows older than `eventsDays` and integration_delivery_failures rows older
    * than `failuresDays` (null skips the failures prune; omitted = same window as events). Returns
-   * the number removed from each table.
+   * the number removed from each table. Aged 'pending' events that still carry a payload are kept and
+   * settled by deadLetterAgedPending, so the next run deletes them; one whose hand-off fails stays.
    */
   async pruneOlderThan(
     eventsDays: number,
@@ -96,12 +100,32 @@ export class IntegrationRetentionService implements OnModuleInit, OnModuleDestro
     eventsCutoff.setDate(eventsCutoff.getDate() - eventsDays);
     const failuresCutoff = new Date();
     if (failuresDays !== null) failuresCutoff.setDate(failuresCutoff.getDate() - failuresDays);
-    const [eventsResult, failuresResult] = await Promise.all([
-      this.eventRepository.delete({ createdAt: LessThan(eventsCutoff) }),
+    // DLQ first, so an undispatched event whose only dead letter just aged out is handed a fresh one.
+    // The dedup delete keeps every 'pending' row that still carries its payload, so it runs before the
+    // hand-off, which can wait on an unreachable queue for its job-state lookup; the rows the hand-off
+    // settles go on the next run. A failed step is logged and never blocks the next one.
+    const logFailure = (step: string) => (err: unknown) => {
+      this.logger.error(
+        `Integration ingress retention: ${step} failed`,
+        err instanceof Error ? err.stack : String(err),
+      );
+      return { affected: 0 };
+    };
+    const failuresResult =
       failuresDays === null
-        ? Promise.resolve({ affected: 0 })
-        : this.failureRepository.delete({ createdAt: LessThan(failuresCutoff) }),
-    ]);
+        ? { affected: 0 }
+        : await this.failureRepository
+            .delete({ createdAt: LessThan(failuresCutoff) })
+            .catch(logFailure('delivery-failure prune'));
+    const aged = LessThan(eventsCutoff);
+    const eventsResult = await this.eventRepository
+      .delete([
+        { createdAt: aged, dispatchState: Not('pending') },
+        { createdAt: aged, dispatchState: IsNull() },
+        { createdAt: aged, payload: IsNull() },
+      ])
+      .catch(logFailure('dedup prune'));
+    await this.reconciler.deadLetterAgedPending(eventsCutoff).catch(logFailure('undispatched event hand-off'));
     return { events: eventsResult.affected || 0, failures: failuresResult.affected || 0 };
   }
 }
