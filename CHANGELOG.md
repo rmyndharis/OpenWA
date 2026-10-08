@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stop pending webhook deliveries from holding over-cap inline media already omitted from their payload.
 - Deliver Baileys API edit and revoke events to webhook and WebSocket consumers.
 - Preserve chat-scoped WebSocket event order while resolving chat identities.
 - Preserve poll choices across dashboard echoes and keep revoked messages cleared.
