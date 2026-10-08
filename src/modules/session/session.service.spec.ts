@@ -16,7 +16,7 @@ import {
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { ConfigService } from '@nestjs/config';
-import { SessionService, AUTOSTART_THROTTLE_MS } from './session.service';
+import { SessionService, AUTOSTART_SHUTDOWN_WAIT_MS, AUTOSTART_THROTTLE_MS } from './session.service';
 import { SessionOwnershipService } from './session-ownership.service';
 import { ServerShuttingDownException, SessionStoppedException } from './session-engine-controls';
 import { decideReconnect, STABLE_READY_MS } from './reconnect-policy';
@@ -9529,6 +9529,137 @@ describe('SessionService', () => {
       expect(blocked).toBe('blocked');
       releaseLaunch();
       await destroy;
+    });
+
+    /** An ownership stub for the auto-start run and shutdown; records what releaseAll was told to keep. */
+    const withAutoStartOwnership = () => {
+      const ownership = {
+        kept: [] as string[],
+        claimableWhere: jest.fn().mockReturnValue([{}]),
+        claim: jest.fn().mockResolvedValue(true),
+        release: jest.fn().mockResolvedValue(undefined),
+        isHeldByOtherNode: jest.fn().mockResolvedValue(false),
+        onLeaseLoss: jest.fn(),
+        setEngineLiveness: jest.fn(),
+        startHeartbeat: jest.fn(),
+        stopHeartbeat: jest.fn(),
+        releaseAll: jest.fn((keep: Iterable<string> = []) => {
+          ownership.kept = [...keep];
+          return Promise.resolve();
+        }),
+      };
+      Object.assign(service as unknown as Record<string, unknown>, { ownership });
+      return ownership;
+    };
+
+    // An init stalled on an unreachable WhatsApp Web settles only at its deadline (>= 60s), past
+    // the kill deadline; the destroy is what ends it, so it cannot wait behind the run.
+    it('destroys the engine of a launch in flight instead of waiting for its init to settle', async () => {
+      process.env.AUTO_START_SESSIONS = 'true';
+      const session = createMockSession();
+      (repository.find as jest.Mock).mockResolvedValue([session]);
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const ownership = withAutoStartOwnership();
+      let resolveInit: () => void = () => undefined;
+      mockEngine.initialize.mockImplementationOnce(() => new Promise<void>(resolve => (resolveInit = resolve)));
+      // As the whatsapp-web.js adapter does: a teardown landing mid-init settles initialize() quietly.
+      mockEngine.destroy.mockImplementationOnce(() => {
+        resolveInit();
+        return Promise.resolve();
+      });
+      const logInfo = jest.spyOn((service as unknown as { logger: { log: jest.Mock } }).logger, 'log');
+      const flush = async (until: () => boolean): Promise<void> => {
+        for (let i = 0; i < 50 && !until(); i++) await new Promise(resolve => setImmediate(resolve));
+      };
+
+      service.onApplicationBootstrap();
+      await flush(() => mockEngine.initialize.mock.calls.length > 0);
+      expect(mockEngine.initialize).toHaveBeenCalledTimes(1);
+      const shutdown = service.onModuleDestroy();
+      await flush(() => mockEngine.destroy.mock.calls.length > 0);
+      const destroyedWhileLaunching = mockEngine.destroy.mock.calls.length;
+      // Stands in for the init deadline, so the shutdown completes either way.
+      resolveInit();
+      await shutdown;
+
+      expect(destroyedWhileLaunching).toBe(1);
+      expect(service.isActive(session.id)).toBe(false);
+      // The run handed its claim back before the shutdown went on to releaseAll.
+      expect(ownership.release).toHaveBeenCalledWith(session.id);
+      expect(ownership.release.mock.invocationCallOrder[0]).toBeLessThan(
+        ownership.releaseAll.mock.invocationCallOrder[0],
+      );
+      expect(ownership.kept).toEqual([]);
+      expect(logInfo).toHaveBeenCalledWith(
+        `Auto-start abandoned for session ${session.name}: shutting down`,
+        expect.objectContaining({ action: 'auto_start_aborted' }),
+      );
+      expect(logInfo).not.toHaveBeenCalledWith(`Auto-started session: ${session.name}`, expect.anything());
+    });
+
+    // A whatsapp-web.js launch still starting Chromium has no browser for the destroy to close, so
+    // its init runs until whatsapp-web.js settles it, at worst to the init deadline (>= 60s);
+    // shutdown must not wait that out, and must not hand away the claim that browser may still use.
+    it('stops waiting for a launch the engine teardown did not end, keeping its claim', async () => {
+      process.env.AUTO_START_SESSIONS = 'true';
+      (repository.find as jest.Mock).mockResolvedValue([{ id: 'a', name: 'A' }]);
+      const ownership = withAutoStartOwnership();
+      let releaseLaunch: () => void = () => undefined;
+      let launchStarted: () => void = () => undefined;
+      const launching = new Promise<void>(resolve => (launchStarted = resolve));
+      // The real start() wraps this, so the launch holds its start reservation as a real one would.
+      jest
+        .spyOn(service as unknown as { claimAndStart: () => Promise<unknown> }, 'claimAndStart')
+        .mockImplementation(() => {
+          launchStarted();
+          return new Promise<never>(resolve => (releaseLaunch = () => resolve(undefined as never)));
+        });
+
+      jest.useFakeTimers();
+      try {
+        service.onApplicationBootstrap();
+        await launching;
+        let completed = false;
+        const destroy = service.onModuleDestroy().then(() => (completed = true));
+        await jest.advanceTimersByTimeAsync(AUTOSTART_SHUTDOWN_WAIT_MS - 1);
+        expect(completed).toBe(false);
+        await jest.advanceTimersByTimeAsync(1);
+
+        expect(completed).toBe(true);
+        await destroy;
+        expect(ownership.releaseAll).toHaveBeenCalledTimes(1);
+        expect(ownership.kept).toEqual(['a']);
+      } finally {
+        jest.useRealTimers();
+        releaseLaunch();
+        await autoStartRun();
+      }
+    });
+
+    it('ends the run without the inter-launch throttle when a launch fails during shutdown', async () => {
+      process.env.AUTO_START_SESSIONS = 'true';
+      (repository.find as jest.Mock).mockResolvedValue([
+        { id: 'a', name: 'A' },
+        { id: 'b', name: 'B' },
+      ]);
+      const startSpy = jest.spyOn(service, 'start').mockImplementationOnce(() => {
+        (service as unknown as { shuttingDown: boolean }).shuttingDown = true;
+        return Promise.reject(new Error('Target closed'));
+      });
+
+      jest.useFakeTimers();
+      try {
+        service.onApplicationBootstrap();
+        let ended = false;
+        void autoStartRun().then(() => (ended = true));
+        await jest.advanceTimersByTimeAsync(AUTOSTART_THROTTLE_MS - 1);
+
+        expect(ended).toBe(true);
+        expect(startSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 

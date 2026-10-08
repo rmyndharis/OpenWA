@@ -86,6 +86,12 @@ function isTransientLaunchFailure(error: unknown): boolean {
 /** Pause between sequential auto-start launches so a burst of Chromium boots does not spike the host. */
 export const AUTOSTART_THROTTLE_MS = 2_000;
 
+/**
+ * How long shutdown waits for the auto-start run once the engines are destroyed. Short: the 45s kill
+ * deadline in compose and the Helm chart still has to cover releaseAll and the database close.
+ */
+export const AUTOSTART_SHUTDOWN_WAIT_MS = 5_000;
+
 /** List window for {@link SessionService.findAll}, plus an optional exact session-name filter. */
 export interface SessionListOptions extends ListOptions {
   name?: string;
@@ -290,6 +296,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       const session = sessions[i];
       try {
         await this.start(session.id);
+        // A launch the shutdown tore down mid-init resolves too (the adapter settles a torn-down
+        // init quietly), but nothing was started.
+        if (this.shuttingDown && !this.isActive(session.id)) {
+          this.logger.log(`Auto-start abandoned for session ${session.name}: shutting down`, {
+            sessionId: session.id,
+            action: 'auto_start_aborted',
+          });
+          return;
+        }
         this.logger.log(`Auto-started session: ${session.name}`, {
           sessionId: session.id,
           action: 'auto_start_success',
@@ -318,7 +333,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         }
       }
       // Throttle between sequential Chromium launches; no need to wait after the last one.
-      if (i < sessions.length - 1) {
+      // Skipped once shutdown began: onModuleDestroy awaits this loop, and the check above ends it.
+      if (i < sessions.length - 1 && !this.shuttingDown) {
         await setTimeout(AUTOSTART_THROTTLE_MS);
       }
     }
@@ -330,16 +346,31 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     this.shuttingDown = true;
     this.watchdog.stop();
     this.ownership?.stopHeartbeat();
-    // A SIGTERM during boot can land while the detached auto-start is mid-launch. Let that one
-    // settle — the flag above stops the loop taking another — so the engine it registers is torn
-    // down below instead of outliving the process as an orphaned browser. Bounded by the launch
-    // already in flight, never by the whole run.
-    await this.autoStartRun;
-    // Reconnect timers + engine teardown belong to the lifecycle owner.
+    // Reconnect timers + engine teardown belong to the lifecycle owner. Run before waiting on the
+    // detached auto-start: a launch it has in flight already registered its engine, so this destroys
+    // it and the run unwinds. Waiting first would let a stalled init (an unreachable WhatsApp Web, a
+    // proxy that never answers) hold the teardown until its init deadline, past the kill deadline.
     await this.engineLifecycle.shutdown();
+    // The lifecycle is closed now, so the run registers no further engine; awaited so its claim
+    // release and status writes land before releaseAll and the database close. Bounded: a
+    // whatsapp-web.js launch still starting Chromium has no browser handle yet, so the destroy
+    // closes nothing and that init runs until whatsapp-web.js settles it, at worst to the init
+    // deadline. Past the bound, its browser is left to Puppeteer's exit hook.
+    let timer: NodeJS.Timeout | undefined;
+    const settled = await Promise.race([
+      this.autoStartRun.then(() => true),
+      new Promise<false>(resolve => (timer = globalThis.setTimeout(resolve, AUTOSTART_SHUTDOWN_WAIT_MS, false))),
+    ]);
+    clearTimeout(timer);
+    if (!settled) {
+      this.logger.warn(`Auto-start still launching after ${AUTOSTART_SHUTDOWN_WAIT_MS}ms; shutting down without it`, {
+        action: 'auto_start_shutdown_timeout',
+      });
+    }
     // Released only after the engines are actually down, so a peer never claims a session this
-    // process is still holding open.
-    await this.ownership?.releaseAll();
+    // process is still holding open. A start still in flight may own a browser the teardown could
+    // not reach (one the bound above gave up on), so its claim is kept and lapses as after a hard kill.
+    await this.ownership?.releaseAll(this.startReservations.keys());
   }
 
   async create(dto: CreateSessionDto): Promise<Session> {
