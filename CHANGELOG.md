@@ -41,7 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop in-flight webhook replay, ingress replay and pending-message sweeps at shutdown.
 - Close queue workers, waiting up to 15 s for running jobs, before plugins shut down, so no new job is taken against stopped plugins.
 - Answer new HTTP requests with `503` once teardown begins after SIGTERM, SIGINT or `POST /api/infra/restart`.
-- Refuse session starts with `503` once shutdown begins, and leave a start that shutdown interrupts for the next boot instead of marking it failed.
+- Refuse session starts with `503` once shutdown begins, including one already past its checks.
+- Leave a session start that shutdown interrupts for the next boot instead of marking it failed.
 - Stop dashboard multi-page loads and a pending chat mark-as-read from sending requests after logout.
 - Keep a new dashboard login signed in when a request sent with the previous API key fails afterwards.
 - Enforce the plugin package size limit before reading `manifest.json`, and reject archive entries whose path starts with `/`.

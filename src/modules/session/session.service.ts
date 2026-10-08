@@ -296,8 +296,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       const session = sessions[i];
       try {
         await this.start(session.id);
-        // A launch the shutdown tore down mid-init resolves too (the adapter settles a torn-down
-        // init quietly), but nothing was started.
+        // A launch shutdown tore down mid-init is refused with ServerShuttingDownException (caught
+        // below). One already past the engine's post-init checks resolves, but shutdown can still
+        // destroy its engine during the start's last row read or its claim bookkeeping, so
+        // nothing is left running.
         if (this.shuttingDown && !this.isActive(session.id)) {
           this.logger.log(`Auto-start abandoned for session ${session.name}: shutting down`, {
             sessionId: session.id,

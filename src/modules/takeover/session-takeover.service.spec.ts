@@ -1,6 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { SessionTakeoverService } from './session-takeover.service';
-import { SessionStoppedException } from '../session/session-engine-controls';
+import { ServerShuttingDownException, SessionStoppedException } from '../session/session-engine-controls';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import type { SessionService } from '../session/session.service';
 import type { SessionOwnershipService } from '../session/session-ownership.service';
@@ -175,6 +175,22 @@ describe('SessionTakeoverService', () => {
 
     expect(debug.mock.calls.map(([message]) => message as string)).toEqual([
       'Session halted skipped: stopped by an operator',
+    ]);
+  });
+
+  it('a start refused by shutdown ends the sweep quietly instead of logging a failed takeover', async () => {
+    const start = jest.fn().mockRejectedValueOnce(new ServerShuttingDownException()).mockResolvedValue({});
+    const { svc } = build([lapsed({ name: 'late' }), lapsed({ name: 'next' })], { startImpl: start });
+    const logger = (svc as unknown as { logger: { warn: jest.Mock; debug: jest.Mock } }).logger;
+    const warn = jest.spyOn(logger, 'warn');
+    const debug = jest.spyOn(logger, 'debug');
+
+    await svc.sweep();
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    expect(debug.mock.calls.map(([message]) => message as string)).toEqual([
+      'Takeover of session late abandoned: shutting down',
     ]);
   });
 
