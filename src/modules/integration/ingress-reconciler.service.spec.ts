@@ -52,7 +52,7 @@ describe('IngressReconcilerService.sweep', () => {
   });
 
   afterEach(async () => {
-    service.onModuleDestroy();
+    await service.onModuleDestroy();
     if (ds.isInitialized) await ds.destroy();
   });
 
@@ -639,6 +639,41 @@ describe('IngressReconcilerService.sweep', () => {
     expect(enqueue).toHaveBeenCalledTimes(2);
     updateSpy.mockRestore();
   });
+
+  // Plugin sandboxes stop right after this module is torn down: a replay landing later fails,
+  // spends an attempt, and dead-letters a row on its last one.
+  it('stops a running sweep on destroy and finishes the replay in hand before destroy resolves', async () => {
+    const first = await insertEvent({ createdAt: minutesAgo(6) });
+    const rest = [await insertEvent(), await insertEvent({ dispatchAttempts: 4 })];
+    let dispatching!: () => void;
+    const started = new Promise<void>(resolve => (dispatching = resolve));
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    enqueue.mockImplementationOnce(async () => {
+      dispatching();
+      await held;
+      return { outcome: 'queued' };
+    });
+    enqueue.mockResolvedValue({ outcome: 'failed', error: 'no live sandbox host' });
+
+    const sweep = service.sweep(OPTS);
+    await started;
+    const destroyed = service.onModuleDestroy();
+    release();
+    await destroyed;
+    const firstAtDestroy = (await stored(first)).dispatchState;
+    const stats = await sweep;
+
+    expect(firstAtDestroy).toBe('dispatched');
+    expect(stats).toMatchObject({ scanned: 1, replayed: 1, failed: 0 });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    for (const [i, id] of rest.entries()) {
+      const event = await stored(id);
+      expect(event.dispatchState).toBe('pending');
+      expect(event.dispatchAttempts).toBe([0, 4][i]);
+    }
+    expect(await failures.count()).toBe(0);
+  });
 });
 
 describe('IngressReconcilerService.onModuleInit (scheduling)', () => {
@@ -671,7 +706,7 @@ describe('IngressReconcilerService.onModuleInit (scheduling)', () => {
       svc.onModuleInit();
       jest.advanceTimersByTime(10 * 60_000);
       expect(sweepSpy).not.toHaveBeenCalled();
-      svc.onModuleDestroy();
+      void svc.onModuleDestroy();
     } finally {
       jest.useRealTimers();
     }
@@ -694,7 +729,7 @@ describe('IngressReconcilerService.onModuleInit (scheduling)', () => {
       svc.onModuleInit();
       jest.advanceTimersByTime(60_000);
       expect(sweepSpy).toHaveBeenCalledTimes(1);
-      svc.onModuleDestroy();
+      void svc.onModuleDestroy();
     } finally {
       jest.useRealTimers();
     }
@@ -717,7 +752,7 @@ describe('IngressReconcilerService.onModuleInit (scheduling)', () => {
       svc.onModuleInit();
       jest.advanceTimersByTime(60_000);
       expect(sweepSpy).toHaveBeenCalledTimes(1);
-      svc.onModuleDestroy();
+      void svc.onModuleDestroy();
       sweepSpy.mockClear();
       jest.advanceTimersByTime(60_000);
       expect(sweepSpy).not.toHaveBeenCalled();

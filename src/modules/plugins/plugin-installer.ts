@@ -18,12 +18,13 @@ export interface PackageLimits {
 export const DEFAULT_PACKAGE_LIMITS: PackageLimits = { maxEntries: 200, maxTotalBytes: 20 * 1024 * 1024 };
 
 /**
- * Decompress one zip entry with a hard cap on actual output bytes. adm-zip only forwards zlib
- * `maxOutputLength` when the entry's declared uncompressed size is positive, so an entry that lies
- * about being empty (header.size = 0) would otherwise inflate with NO cap — a memory-exhaustion
- * vector. For that case we inflate bounded ourselves; every other path is left to `getData()` (a
- * corrupt/CRC mismatch or a lying-small header throws `BAD_CRC` / `ERR_BUFFER_TOO_LARGE`, which the
- * caller catches and maps to a clean 400).
+ * Decompress one zip entry with a hard cap on actual output bytes. An entry that lies about being
+ * empty (header.size = 0) is inflated here with zlib `maxOutputLength` set to the caller's cap.
+ * Every other entry goes through `getData()`: adm-zip caps a DEFLATED entry at its declared size,
+ * but copies a STORED entry at its real length whatever the header says, so output larger than the
+ * declared size is rejected here. That keeps every positive-size entry within the declared sum the
+ * caller has already checked. A corrupt entry, a CRC mismatch, or a lying-small header throws, and
+ * the caller maps that to a clean 400.
  */
 function readEntryData(entry: AdmZip.IZipEntry, maxBytes: number): Buffer {
   if (entry.header.size === 0 && entry.header.compressedSize > 0) {
@@ -33,7 +34,9 @@ function readEntryData(entry: AdmZip.IZipEntry, maxBytes: number): Buffer {
     // lying size=0 entry cannot grow unbounded in memory before we reject the archive.
     return zlib.inflateRawSync(compressed, { maxOutputLength: maxBytes });
   }
-  return entry.getData();
+  const data = entry.getData();
+  if (data.length > entry.header.size) throw new Error('Entry is larger than its declared size');
+  return data;
 }
 
 export interface ParsedPackage {
@@ -62,6 +65,10 @@ export function parsePluginPackage(buffer: Buffer, limits: PackageLimits = DEFAU
 
   if (files.length === 0) throw new BadRequestException('The archive is empty');
   if (files.length > limits.maxEntries) throw new BadRequestException('The archive has too many files');
+  // A leading slash makes path.posix.dirname return '/' or '//', so the prefix below would not match
+  // the manifest's own name and its declared size would escape the size guard.
+  const absolute = files.find(e => e.entryName.startsWith('/'));
+  if (absolute) throw new BadRequestException(`Unsafe path in archive: ${absolute.entryName}`);
 
   // Package root = directory of the shallowest manifest.json (handles flat and single-folder zips).
   const manifestEntry = files
@@ -70,6 +77,13 @@ export function parsePluginPackage(buffer: Buffer, limits: PackageLimits = DEFAU
   if (!manifestEntry) throw new BadRequestException('The archive has no manifest.json');
   const dir = path.posix.dirname(manifestEntry.entryName);
   const prefix = dir === '.' ? '' : dir + '/';
+
+  // Size guard FIRST, off the declared header sizes, so an archive that declares more than the limit
+  // is rejected before any entry, the manifest included, is decompressed. An entry that declares
+  // size 0 adds nothing here; readEntryData still inflates it, capped at maxTotalBytes.
+  const packaged = files.filter(e => !prefix || e.entryName.startsWith(prefix));
+  const declared = packaged.reduce((sum, e) => sum + e.header.size, 0);
+  if (declared > limits.maxTotalBytes) throw new BadRequestException('The archive contents exceed the size limit');
 
   let manifestRaw: Buffer;
   try {
@@ -95,11 +109,6 @@ export function parsePluginPackage(buffer: Buffer, limits: PackageLimits = DEFAU
     throw new BadRequestException(error instanceof Error ? error.message : String(error));
   }
   const manifest = parsed;
-
-  // Size guard FIRST, off the declared header sizes, so a zip bomb is rejected before we decompress.
-  const packaged = files.filter(e => !prefix || e.entryName.startsWith(prefix));
-  const declared = packaged.reduce((sum, e) => sum + e.header.size, 0);
-  if (declared > limits.maxTotalBytes) throw new BadRequestException('The archive contents exceed the size limit');
 
   const entries: { relPath: string; data: Buffer }[] = [];
   // Normalized paths already taken, NFC-normalized and case-folded because a case- or

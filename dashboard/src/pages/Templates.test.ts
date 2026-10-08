@@ -17,15 +17,31 @@ let extraSessions: Array<{ id: string; name: string }> = [];
 let firstSessionGone = false;
 let templates: Array<{ id: string; name: string; body: string }> = [];
 const deleted: string[] = [];
+const created: Array<{ path: string; name: string }> = [];
+const updated: Array<{ path: string; body: string }> = [];
+const copied: string[] = [];
+// When set, a template create or update answers only once this settles, holding the save in flight.
+let saveGate: Promise<void> | null = null;
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
 function installFetchStub(): void {
-  globalThis.fetch = ((input: RequestInfo | URL): Promise<Response> => {
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const path = url.replace(/^https?:\/\/[^/]+/, '');
+    if (init?.method === 'POST' && /^\/api\/sessions\/[^/]+\/templates$/.test(path)) {
+      const { name } = JSON.parse(String(init.body)) as { name: string };
+      created.push({ path, name });
+      const row = { id: `tpl-${created.length + 10}`, name, body: 'x' };
+      return (saveGate ?? Promise.resolve()).then(() => jsonResponse(row, 201));
+    }
+    if (init?.method === 'PUT' && /^\/api\/sessions\/[^/]+\/templates\/[^/]+$/.test(path)) {
+      const row = JSON.parse(String(init.body)) as { name: string; body: string };
+      updated.push({ path, body: row.body });
+      return (saveGate ?? Promise.resolve()).then(() => jsonResponse({ id: path.split('/').pop(), ...row }));
+    }
     if (path === '/api/sessions') {
       if (sessionsGate) return sessionsGate.then(() => jsonResponse([]));
       if (sessionsStatus !== 200) return Promise.resolve(jsonResponse({ message: 'gateway restarting' }, 502));
@@ -74,6 +90,11 @@ before(async () => {
   const { installJsdomGlobals } = await import('../test-helpers/jsdom.ts');
   await installJsdomGlobals();
   installFetchStub();
+  window.scrollTo = () => {}; // opening a template scrolls to the editor, which jsdom does not implement
+  Object.defineProperty(window.navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: (text: string) => (copied.push(text), Promise.resolve()) },
+  });
   window.sessionStorage.setItem('openwa_user_role', 'viewer');
   const { i18nReady } = await import('../i18n/index.ts');
   await i18nReady;
@@ -92,6 +113,11 @@ afterEach(() => {
   templates = [];
   extraSessions = [];
   firstSessionGone = false;
+  created.length = 0;
+  updated.length = 0;
+  copied.length = 0;
+  saveGate = null;
+  window.sessionStorage.setItem('openwa_user_role', 'viewer');
 });
 
 function renderTemplates(): void {
@@ -236,6 +262,146 @@ test('a selected session that disappears from the list is replaced by the first 
   assert.equal(screen.queryByText('invoice-reminder') === null, true);
   screen.getByText('Saved under support-bot');
   window.sessionStorage.setItem('openwa_user_role', 'viewer');
+});
+
+test('a successful create clears the form for the next template', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderTemplates();
+
+  await screen.findByText('No templates saved');
+  const name = screen.getByLabelText<HTMLInputElement>('Name');
+  const body = screen.getByLabelText<HTMLTextAreaElement>('Body');
+  fireEvent.change(name, { target: { value: 'invoice-reminder' } });
+  fireEvent.change(body, { target: { value: 'Hi {{name}}' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create Template' }));
+
+  await screen.findByText('Template created successfully');
+  await waitFor(() => assert.equal(name.value, ''));
+  assert.equal(body.value, '');
+  assert.deepEqual(created, [{ path: '/api/sessions/sess-1/templates', name: 'invoice-reminder' }]);
+});
+
+// The session select stays usable while a save is in flight. A create that resolves after the operator
+// switched session and started another draft must still land on the first session, and must not clear
+// the draft now on screen.
+test('a create that resolves after a session switch keeps the draft typed since', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  extraSessions = [{ id: 'sess-2', name: 'support-bot' }];
+  let release!: () => void;
+  saveGate = new Promise<void>(resolve => (release = resolve));
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderTemplates();
+
+  await screen.findByText('No templates saved');
+  const name = screen.getByLabelText<HTMLInputElement>('Name');
+  const body = screen.getByLabelText<HTMLTextAreaElement>('Body');
+  const select = screen.getByLabelText<HTMLSelectElement>('Session');
+  fireEvent.change(name, { target: { value: 'invoice-reminder' } });
+  fireEvent.change(body, { target: { value: 'Hi {{name}}' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create Template' }));
+  await waitFor(() => assert.equal(created.length, 1));
+
+  fireEvent.change(select, { target: { value: 'sess-2' } });
+  await screen.findByText('support-greeting');
+  fireEvent.change(name, { target: { value: 'support-followup' } });
+  fireEvent.change(body, { target: { value: 'Still there?' } });
+
+  release();
+  await screen.findByText('Template created successfully');
+  assert.equal(name.value, 'support-followup', 'the draft typed after the switch was cleared');
+  assert.equal(body.value, 'Still there?');
+  assert.equal(select.value, 'sess-2');
+  assert.ok(
+    screen.getByRole('heading', { name: 'Create Template' }),
+    'the new draft was tied to the first session row',
+  );
+  assert.deepEqual(created, [{ path: '/api/sessions/sess-1/templates', name: 'invoice-reminder' }]);
+});
+
+// Edits made while a create is in flight stay on screen, and saving them must update the row just created:
+// a second create with the same name would fail the per-session unique name check.
+test('edits typed while a create is in flight are saved as an update to the new template', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  let release!: () => void;
+  saveGate = new Promise<void>(resolve => (release = resolve));
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderTemplates();
+
+  await screen.findByText('No templates saved');
+  const name = screen.getByLabelText<HTMLInputElement>('Name');
+  const body = screen.getByLabelText<HTMLTextAreaElement>('Body');
+  fireEvent.change(name, { target: { value: 'invoice-reminder' } });
+  fireEvent.change(body, { target: { value: 'Hi {{name}}' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create Template' }));
+  await waitFor(() => assert.equal(created.length, 1));
+  fireEvent.change(body, { target: { value: 'Hi {{name}}, your invoice is due' } });
+
+  release();
+  await screen.findByText('Template created successfully');
+  await screen.findByRole('heading', { name: 'Edit Template' });
+  assert.equal(name.value, 'invoice-reminder');
+  assert.equal(body.value, 'Hi {{name}}, your invoice is due');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+  await screen.findByText('Template updated successfully');
+  assert.equal(created.length, 1, 'the edits were sent as a second create');
+  assert.deepEqual(updated, [
+    { path: '/api/sessions/sess-1/templates/tpl-11', body: 'Hi {{name}}, your invoice is due' },
+  ]);
+});
+
+test('an update that resolves after starting a new template keeps the new draft', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  templates = [{ id: 'tpl-1', name: 'welcome', body: 'Hello' }];
+  let release!: () => void;
+  saveGate = new Promise<void>(resolve => (release = resolve));
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderTemplates();
+
+  fireEvent.click(await screen.findByText('welcome'));
+  const name = screen.getByLabelText<HTMLInputElement>('Name');
+  const body = screen.getByLabelText<HTMLTextAreaElement>('Body');
+  fireEvent.change(body, { target: { value: 'Hello again' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+  await waitFor(() => assert.equal(updated.length, 1));
+
+  fireEvent.click(screen.getByRole('button', { name: 'New Template' }));
+  fireEvent.change(name, { target: { value: 'order-shipped' } });
+  fireEvent.change(body, { target: { value: 'On its way' } });
+
+  release();
+  await screen.findByText('Template updated successfully');
+  assert.equal(name.value, 'order-shipped', 'the new draft was cleared');
+  assert.equal(body.value, 'On its way');
+  assert.ok(screen.getByRole('heading', { name: 'Create Template' }));
+  assert.deepEqual(updated, [{ path: '/api/sessions/sess-1/templates/tpl-1', body: 'Hello again' }]);
+});
+
+// Edits made while a rename is in flight stay on screen, so the editor must follow the stored row: the header's
+// copy button would otherwise hand out the old name, which no longer exists.
+test('edits typed while an update is in flight keep the editor on the renamed template', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  templates = [{ id: 'tpl-1', name: 'welcome', body: 'Hello' }];
+  let release!: () => void;
+  saveGate = new Promise<void>(resolve => (release = resolve));
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderTemplates();
+
+  fireEvent.click(await screen.findByText('welcome'));
+  const name = screen.getByLabelText<HTMLInputElement>('Name');
+  const body = screen.getByLabelText<HTMLTextAreaElement>('Body');
+  fireEvent.change(name, { target: { value: 'welcome-v2' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+  await waitFor(() => assert.equal(updated.length, 1));
+  fireEvent.change(body, { target: { value: 'Hello there' } });
+
+  release();
+  await screen.findByText('Template updated successfully');
+  assert.equal(body.value, 'Hello there');
+  fireEvent.click(screen.getByTitle('Copy template name'));
+  await screen.findByText('Template name copied');
+  assert.deepEqual(copied, ['welcome-v2']);
 });
 
 // The count above the list still shows the library is not empty, so a search that matches nothing
