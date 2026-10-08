@@ -328,6 +328,12 @@ export class SessionController {
       'retry answers 404.',
   })
   @ApiResponse({
+    status: 503,
+    description:
+      "The gateway is shutting down, or the engine's browser or socket connection died during launch and " +
+      'the one automatic retry failed too; no engine is left running, so the start can be retried.',
+  })
+  @ApiResponse({
     status: 504,
     description:
       'The engine did not finish starting within its timeout (WhatsApp Web or the network unreachable, ' +

@@ -52,6 +52,21 @@ describe('ShutdownService.shutdown (idempotent, bounded grace)', () => {
     expect(jest.getTimerCount()).toBe(1);
   });
 
+  it('marks teardown only once the grace has elapsed, before the teardown callback runs', async () => {
+    process.env.SHUTDOWN_DELAY_MS = '2000';
+    const svc = new ShutdownService();
+    let tearingDownInCallback: boolean | undefined;
+    svc.setShutdownCallback(() => {
+      tearingDownInCallback = svc.isTearingDown();
+      return Promise.resolve();
+    });
+    svc.shutdown();
+    await jest.advanceTimersByTimeAsync(1999);
+    expect(svc.isTearingDown()).toBe(false); // still draining: requests are served
+    await jest.advanceTimersByTimeAsync(1);
+    expect(tearingDownInCallback).toBe(true);
+  });
+
   it('runs the teardown callback and exits exactly once even when called repeatedly', async () => {
     process.env.SHUTDOWN_DELAY_MS = '0';
     const { svc, cb } = svcWithCb();

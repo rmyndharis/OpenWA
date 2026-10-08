@@ -6,6 +6,7 @@ import { test, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 let sessionApi: (typeof import('./api.ts'))['sessionApi'];
+let pluginsApi: (typeof import('./api.ts'))['pluginsApi'];
 const navigations: string[] = [];
 
 before(async () => {
@@ -17,7 +18,7 @@ before(async () => {
     configurable: true,
     writable: true,
   });
-  ({ sessionApi } = await import('./api.ts'));
+  ({ sessionApi, pluginsApi } = await import('./api.ts'));
 });
 
 beforeEach(() => {
@@ -66,6 +67,124 @@ test('a role 403 keeps the key and rejects with the status', async () => {
     return true;
   });
   assert.equal(sessionStorage.getItem('openwa_api_key'), 'stored-key');
+  assert.deepEqual(navigations, []);
+});
+
+// Each response shape the client reads, so the key check covers every path into the failure handler.
+const shapes = [
+  ['JSON', () => sessionApi.list()],
+  ['text', () => pluginsApi.getConfigUi('p1')],
+  ['blob', () => sessionApi.getMessageMediaBlob('s1', '100@c.us', 'WA1')],
+] as const;
+
+// Hold every response until the test releases them, recording the key each request was sent with.
+function deferAnswers(status: number, message: string): { sentKeys: (string | undefined)[]; release: () => void } {
+  const sentKeys: (string | undefined)[] = [];
+  const releases: (() => void)[] = [];
+  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+    sentKeys.push((init?.headers as Record<string, string> | undefined)?.['X-API-Key']);
+    return new Promise<Response>(resolve => {
+      releases.push(() =>
+        resolve(
+          new Response(JSON.stringify({ statusCode: status, message }), {
+            status,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        ),
+      );
+    });
+  }) as typeof fetch;
+  return { sentKeys, release: () => releases.forEach(release => release()) };
+}
+
+// Both answers that prove a key unusable: a 401, and a 403 because the key's allowedIps refuse this client.
+const keyFailures = [
+  [401, 'API key is revoked'],
+  [403, 'IP address not allowed'],
+] as const;
+
+// A stale answer wrongly left pending drains the event loop, and node:test then cancels every later test;
+// holding a timer open past the per-test timeout lets that timeout fail just the one test instead.
+const stale = { timeout: 2000 };
+async function rejectsWithStatus(result: Promise<unknown>, status: number): Promise<void> {
+  const hold = setTimeout(() => {}, 3000);
+  try {
+    await assert.rejects(result, (err: Error & { status?: number }) => err.status === status);
+  } finally {
+    clearTimeout(hold);
+  }
+}
+
+for (const [status, message] of keyFailures) {
+  for (const [shape, call] of shapes) {
+    test(`a late ${status} ${shape} answer for a key signed out since keeps the key signed in now`, stale, async () => {
+      const pending = deferAnswers(status, message);
+      const result = call();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(pending.sentKeys, ['stored-key']);
+      sessionStorage.removeItem('openwa_api_key');
+      sessionStorage.setItem('openwa_api_key', 'next-key');
+      pending.release();
+      await rejectsWithStatus(result, status);
+      assert.equal(sessionStorage.getItem('openwa_api_key'), 'next-key');
+      assert.deepEqual(navigations, []);
+    });
+
+    test(`a ${status} ${shape} answer for the key still in use clears it and returns to login`, async () => {
+      const pending = deferAnswers(status, message);
+      const result = call();
+      await new Promise(resolve => setImmediate(resolve));
+      pending.release();
+      assert.equal(await settled(result), false, 'the call settled, so its caller would render the failure');
+      assert.equal(sessionStorage.getItem('openwa_api_key'), null);
+      assert.deepEqual(navigations, ['/']);
+    });
+
+    test(`a late ${status} ${shape} answer while signed out stays silent and stays on the login form`, async () => {
+      const pending = deferAnswers(status, message);
+      const result = call();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(pending.sentKeys, ['stored-key']);
+      sessionStorage.removeItem('openwa_api_key');
+      pending.release();
+      assert.equal(await settled(result), false, 'the call settled, so its caller would render the failure');
+      assert.equal(sessionStorage.getItem('openwa_api_key'), null);
+      assert.deepEqual(navigations, []);
+    });
+  }
+
+  test(`a burst of ${status}s for the key still in use keeps every call pending and navigates once`, async () => {
+    const pending = deferAnswers(status, message);
+    const results = shapes.map(([, call]) => call());
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(pending.sentKeys, ['stored-key', 'stored-key', 'stored-key']);
+    pending.release();
+    for (const result of results) {
+      assert.equal(await settled(result), false, 'the call settled, so its caller would render the failure');
+    }
+    assert.equal(sessionStorage.getItem('openwa_api_key'), null);
+    assert.deepEqual(navigations, ['/']);
+  });
+}
+
+test('a 401 for a request sent without a key while none is stored returns to login', async () => {
+  sessionStorage.removeItem('openwa_api_key');
+  answer(401, 'API key is required');
+  const result = sessionApi.list();
+  assert.equal(await settled(result), false, 'the call settled, so its caller would render the failure');
+  assert.deepEqual(navigations, ['/']);
+});
+
+test('a late 401 for a request sent while signed out keeps the key signed in since', stale, async () => {
+  sessionStorage.removeItem('openwa_api_key');
+  const pending = deferAnswers(401, 'API key is required');
+  const result = sessionApi.list();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(pending.sentKeys, [undefined]);
+  sessionStorage.setItem('openwa_api_key', 'next-key');
+  pending.release();
+  await rejectsWithStatus(result, 401);
+  assert.equal(sessionStorage.getItem('openwa_api_key'), 'next-key');
   assert.deepEqual(navigations, []);
 });
 
