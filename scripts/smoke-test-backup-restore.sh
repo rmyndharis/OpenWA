@@ -50,6 +50,8 @@
 #   (af) the online SQLite backup waits out a writer holding the database lock (skipped without sqlite3)
 #   (ag) quoted values, inline comments and `KEY=""` in ./.env resolve as dotenv reads them, and a line
 #       the scripts cannot parse ends the lookup at the default instead of reading data/.env.generated
+#   (ah) pg_dump makes the app's TLS check when DATABASE_SSL=true (falling back to the system CA store
+#       without node), and connects as before when it is not
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -59,7 +61,8 @@ set -euo pipefail
 # would aim a case at a real install, and restore replaces the state directories wholesale, so every
 # case starts from none of them and sets exactly the paths it uses.
 unset OPENWA_DATA_DIR BACKUP_DIR DATABASE_TYPE MAIN_DATABASE_NAME DATABASE_NAME SESSION_DATA_PATH \
-  BAILEYS_AUTH_DIR STORAGE_LOCAL_PATH PLUGINS_DIR PLUGIN_STATE_DIR OPENWA_RESTORE_SNAPSHOT_DIR BOOTSTRAP_KEY_FILE
+  BAILEYS_AUTH_DIR STORAGE_LOCAL_PATH PLUGINS_DIR PLUGIN_STATE_DIR OPENWA_RESTORE_SNAPSHOT_DIR BOOTSTRAP_KEY_FILE \
+  DATABASE_URL DATABASE_SSL DATABASE_SSL_REJECT_UNAUTHORIZED PGSSLMODE PGSSLROOTCERT
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP="$REPO_ROOT/scripts/backup.sh"
@@ -1439,6 +1442,67 @@ if [ "$(grep -c 'do not parse' "$AG/err")" -ne 3 ] || ! grep -q 'sets SESSION_DA
   fail "(ag) the parse warning did not name exactly the three unparsed lines: $(cat "$AG/err")"
 fi
 pass "(ag) dotenv's quoted, commented and empty forms resolve like the app, and an unparsed line stops the lookup"
+
+echo ""
+echo "==> (ah) pg_dump makes the app's TLS check when DATABASE_SSL=true"
+# libpq defaults to sslmode=prefer: it falls back to plaintext and takes any certificate, so a dump of
+# a database the app reaches over verified TLS sent its password to whoever answered. The shim pg_dump
+# records the TLS settings it was started with and whether its root certificate file held any CA.
+AH="$WORK/ah"
+mkdir -p "$AH/data" "$AH/shim"
+make_fixture "$AH/data/main.sqlite" "hotel2-main"
+cat >"$AH/shim/pg_dump" <<'SHIM'
+#!/bin/sh
+certs=none
+[ -f "${PGSSLROOTCERT:-}" ] && certs="$(grep -c 'BEGIN CERTIFICATE' "$PGSSLROOTCERT")"
+echo "mode=${PGSSLMODE:-} root=${PGSSLROOTCERT:-} certs=$certs" >"$AH_LOG"
+echo '-- dump'
+SHIM
+chmod +x "$AH/shim/pg_dump"
+# backup_ah <.env.generated content> [env assignments...]: the TLS settings pg_dump ran with. The
+# backup's output is kept in out.log.
+backup_ah() {
+  printf '%b' "$1" >"$AH/data/.env.generated"
+  shift
+  rm -rf "$AH/out"
+  if ! OUT_AH="$(cd "$AH" && env "$@" AH_LOG="$AH/log" PATH="$AH/shim:$PATH" BACKUP_DIR="$AH/out" \
+    "$BACKUP" 2>&1)"; then
+    fail "(ah) the backup failed: $OUT_AH"
+  fi
+  printf '%s\n' "$OUT_AH" >"$AH/out.log"
+  cat "$AH/log"
+}
+PG_AH='DATABASE_TYPE=postgres\n'
+if [ "$(backup_ah "$PG_AH")" != "mode= root= certs=none" ]; then
+  fail "(ah) pg_dump got TLS settings without DATABASE_SSL: $(cat "$AH/log")"
+fi
+GOT_AH="$(backup_ah "${PG_AH}DATABASE_SSL=true\n")"
+if ! [[ "$GOT_AH" =~ ^mode=verify-full\ root=(/[^ ]+)\ certs=([0-9]+)$ ]]; then
+  fail "(ah) DATABASE_SSL=true did not verify the server against a root certificate file: $GOT_AH"
+fi
+# Node's CA set runs to well over a hundred roots; the file holding it is removed with the staging copy.
+if [ "${BASH_REMATCH[2]}" -lt 100 ] || [ -e "${BASH_REMATCH[1]}" ]; then
+  fail "(ah) the root certificates were not Node's CA set, or were left behind: $GOT_AH"
+fi
+if [ "$(backup_ah "${PG_AH}DATABASE_SSL=true\nDATABASE_SSL_REJECT_UNAUTHORIZED=false\n" \
+  DATABASE_URL=postgres://openwa@db/openwa)" != "mode=require root= certs=none" ]; then
+  fail "(ah) DATABASE_SSL_REJECT_UNAUTHORIZED=false did not encrypt without verifying: $(cat "$AH/log")"
+fi
+if [ "$(backup_ah "${PG_AH}DATABASE_SSL=true\n" PGSSLROOTCERT="$AH/ca.pem")" != \
+  "mode=verify-full root=$AH/ca.pem certs=none" ] ||
+  [ "$(backup_ah "${PG_AH}DATABASE_SSL=true\n" PGSSLMODE=verify-ca)" != "mode=verify-ca root= certs=none" ]; then
+  fail "(ah) an operator's PGSSLROOTCERT or PGSSLMODE was not honoured: $(cat "$AH/log")"
+fi
+# Without node there is no CA set to write: libpq's system store is used, and the log says what it needs.
+mkdir -p "$AH/nonode"
+populate_shim "$AH/nonode"
+ln -sf "$(command -v tail)" "$AH/nonode/tail"
+ln -sf "$AH/shim/pg_dump" "$AH/nonode/pg_dump"
+if [ "$(PATH="$AH/nonode" backup_ah "${PG_AH}DATABASE_SSL=true\n")" != "mode=verify-full root=system certs=none" ] ||
+  ! grep -q 'node not found.*sslrootcert=system.*libpq 16+' "$AH/out.log"; then
+  fail "(ah) without node the system CA store was not used, or the log gave no hint: $(cat "$AH/out.log")"
+fi
+pass "(ah) pg_dump verifies the server under DATABASE_SSL=true and is unchanged without it"
 
 echo ""
 echo "All smoke tests passed!"
