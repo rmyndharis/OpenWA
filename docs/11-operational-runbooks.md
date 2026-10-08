@@ -721,12 +721,35 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 > first, then `./.env`, then `<data dir>/.env.generated`. Settings made through Dashboard >
 > Infrastructure therefore apply without being restated on the command line. A restore reads that
 > third layer from the archive's `.env.generated` when the archive carries one, because that copy
-> replaces the target's and is the one the restored app reads. Two caveats when
-> operating directly on the host mount: a path recorded inside the container (`/app/data/...`) is not
-> host-visible, so override it in the environment; and a quoted value followed by a `#` comment, a
-> double-quoted value with backslash escapes, or a `KEY: value` line is reported and resolves to the
-> script default, so pass those explicitly too. Blanks around `=`, CRLF line endings, a value in one
-> pair of quotes and a `#` comment after an unquoted value are read as the app reads them.
+> replaces the target's and is the one the restored app reads. When operating directly on the host
+> mount, a path recorded inside the container (`/app/data/...`) is not host-visible, so override it in
+> the environment.
+>
+> On every install, inside a container or not, a quoted value followed by a `#` comment or not
+> closed on its line, a quoted value containing its own quote character or ending in a backslash, a
+> double-quoted value with a backslash, or a `KEY: value` line in `./.env` or `.env.generated` stops
+> the script with an error naming the key, before anything is archived or restored. So does a bare
+> CR, U+2028 or U+2029 on any line naming the key, a comment included, since the app starts a new
+> line there; a NUL or a byte that is not UTF-8 on a line setting the key; a byte-order mark or a
+> Unicode blank (such as a no-break space) before the key, around its `=` or at either end of its
+> value; a bare `NAME:` line right before the key's line, which the app reads as `NAME`'s value;
+> and a key whose value the app takes from a later line, either a bare `KEY` line followed, past
+> any blank lines, by one starting with `=` or an empty `KEY=` followed by a quoted value. The app
+> reads such a line, so neither the script default nor a guess is safe to use. `DATABASE_NAME` is
+> not read by a PostgreSQL backup through `DATABASE_URL` or by the restore of a PostgreSQL archive,
+> and an unreadable `ENGINE_TYPE` only skips the warning about missing Baileys state.
+> Move the comment to its own line and keep the quotes (an unquoted value ends at a `#` and loses
+> its outer blanks), wrap the value in a quote character it does not contain, single-quote a value
+> whose backslashes are literal and not at its end (inside double quotes the app turns `\n` and `\r`
+> into line breaks; if that is intended, pass the key in the environment), write `KEY=value` on one
+> line for `KEY: value` and for a value on a later line, give a bare `NAME:` line a value or remove
+> it, save the file as UTF-8 with ASCII blanks and LF or CRLF line endings, or pass the key in the
+> environment. A restore reads the archive's `.env.generated`, which cannot be edited in place, so a
+> key it holds in such a form has to be passed in the environment. Blanks around `=`, CRLF line
+> endings, a value in one pair of quotes and a `#` comment after an unquoted value are read as the
+> app reads them. The scripts read the file line by line, so a line for the key inside a quoted
+> value that spans several lines, another key's or an earlier one for the same key, is taken as a
+> setting, although the app reads it as part of that value.
 
 **Verification:**
 

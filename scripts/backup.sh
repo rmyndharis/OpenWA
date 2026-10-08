@@ -75,7 +75,11 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 # below only bases the non-DB state directories — deriving DB paths from it would back up files the
 # app never reads.
 MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME ./data/main.sqlite)"
-DATA_DB="$(openwa_resolve DATABASE_NAME ./data/openwa.sqlite)"
+# With DATABASE_TYPE=postgres, DATABASE_NAME names the database instead, read below only when pg_dump
+# needs it, so a line for it the scripts cannot parse stops only a backup that uses it.
+if [ "$DATABASE_TYPE" != "postgres" ]; then
+  DATA_DB="$(openwa_resolve DATABASE_NAME ./data/openwa.sqlite)"
+fi
 SESSIONS_DIR="$(openwa_resolve SESSION_DATA_PATH "$DATA_DIR/sessions")"
 BAILEYS_DIR="$(openwa_resolve BAILEYS_AUTH_DIR "$DATA_DIR/baileys")"
 MEDIA_DIR="$(openwa_media_dir)"
@@ -213,12 +217,15 @@ if [ "$DATABASE_TYPE" = "postgres" ]; then
     pg_dump "$DATABASE_URL_RESOLVED" >"$STAGE/database.sql"
   else
     # Same layered resolution as the paths above: a dashboard-provisioned Postgres keeps its
-    # connection details in <data dir>/.env.generated, never in the operator's shell.
-    PGPASSWORD="$(openwa_resolve DATABASE_PASSWORD '')" pg_dump \
-      -h "$(openwa_resolve DATABASE_HOST localhost)" \
-      -p "$(openwa_resolve DATABASE_PORT 5432)" \
-      -U "$(openwa_resolve DATABASE_USERNAME openwa)" \
-      "$(openwa_resolve DATABASE_NAME openwa)" >"$STAGE/database.sql"
+    # connection details in <data dir>/.env.generated, never in the operator's shell. Each is
+    # resolved on its own line, where set -e stops the run on a value the scripts cannot read; inside
+    # the pg_dump arguments that failure would be ignored and the default dumped instead.
+    PG_PASSWORD="$(openwa_resolve DATABASE_PASSWORD '')"
+    PG_HOST="$(openwa_resolve DATABASE_HOST localhost)"
+    PG_PORT="$(openwa_resolve DATABASE_PORT 5432)"
+    PG_USER="$(openwa_resolve DATABASE_USERNAME openwa)"
+    PG_NAME="$(openwa_resolve DATABASE_NAME openwa)"
+    PGPASSWORD="$PG_PASSWORD" pg_dump -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" "$PG_NAME" >"$STAGE/database.sql"
   fi
   REQUIRED_MEMBERS+=("./database.sql")
 else
@@ -253,7 +260,10 @@ if [ -d "$BAILEYS_DIR" ]; then
   if [ -n "$(find -H "$BAILEYS_DIR" -mindepth 1 -maxdepth 1 -type d -print -quit)" ]; then
     record_engine_state_note "baileys/ (recorded whenever Baileys state exists; it cannot show whether it was live)"
   fi
-elif [ "$(openwa_resolve ENGINE_TYPE '')" = "baileys" ]; then
+# The warning is advisory, so an ENGINE_TYPE line the scripts cannot parse skips it instead of the backup.
+elif ! ENGINE_TYPE_RESOLVED="$(openwa_resolve ENGINE_TYPE '')"; then
+  log "WARN: ENGINE_TYPE could not be read (see above); skipping only the check for missing Baileys state"
+elif [ "$ENGINE_TYPE_RESOLVED" = "baileys" ]; then
   log "WARN: ENGINE_TYPE=baileys but $BAILEYS_DIR was not found — restored sessions will require pairing"
 fi
 

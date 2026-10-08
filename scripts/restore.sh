@@ -301,9 +301,14 @@ tar -xzf "$ARCHIVE" -C "$STAGE"
 # replaced file pointed would never be opened. Resolved before anything is validated or written.
 if [ -f "$STAGE/.env.generated" ]; then
   OPENWA_GENERATED_ENV="$STAGE/.env.generated"
+  log "Paths not set in the environment or ./.env come from the archive's .env.generated."
 fi
 MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME ./data/main.sqlite)"
-DATA_DB="$(openwa_resolve DATABASE_NAME ./data/openwa.sqlite)"
+# DATABASE_NAME is only a target for an archive carrying the SQLite data store; a PostgreSQL dump is
+# loaded by hand, so a line for it the scripts cannot parse does not stop that restore.
+if [ -f "$STAGE/openwa.sqlite" ]; then
+  DATA_DB="$(openwa_resolve DATABASE_NAME ./data/openwa.sqlite)"
+fi
 SESSIONS_DIR="$(openwa_resolve SESSION_DATA_PATH "$DATA_DIR/sessions")"
 BAILEYS_DIR="$(openwa_resolve BAILEYS_AUTH_DIR "$DATA_DIR/baileys")"
 MEDIA_DIR="$(openwa_media_dir)"
