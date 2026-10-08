@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Verify the PostgreSQL server certificate in `backup.sh` when `DATABASE_SSL=true`, as the app does.
+- Dead-letter undispatched ingress events instead of deleting them when they age out of the dedup window.
+- Keep a re-sent ingress delivery redrivable when an earlier dead letter for its id was already redriven.
 - Deliver Baileys API edit and revoke events to webhook and WebSocket consumers.
 - Preserve chat-scoped WebSocket event order while resolving chat identities.
 - Preserve poll choices across dashboard echoes and keep revoked messages cleared.
@@ -56,6 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep one terminal webhook failure per receiver idempotency key.
 - Retain send idempotency keys after engine-stage failures, including HTTP 409.
 - Reject poll votes with no matching options while preserving explicit vote clearing.
+
+### Upgrade notes (behavior changes)
+
+- With `DATABASE_SSL=true`, `backup.sh` now fails against a PostgreSQL server whose certificate the app would reject; trust a private CA through `NODE_EXTRA_CA_CERTS` or `PGSSLROOTCERT`.
 
 ## [0.24.0] - 2026-10-03
 
