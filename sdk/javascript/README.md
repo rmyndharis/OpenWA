@@ -120,10 +120,11 @@ Cutting a release:
 2. Tag that commit `js-sdk-v<version>` (e.g. `js-sdk-v0.5.1`) and push the tag.
    The SDK has its own version line — the monorepo's `v*` tags are the app
    version and never trigger an SDK publish.
-3. The workflow re-runs the SDK's tests, typecheck, build and dual CJS/ESM
-   smoke check (packaging plus requests through each build's client), then
-   publishes. The published tarball is the one those gates passed, not a
-   later rebuild.
+3. The workflow audits the SDK lockfile (`npm audit --audit-level=high`),
+   re-runs the SDK's tests, typecheck, build and dual CJS/ESM smoke check
+   (packaging plus requests through each build's client), then publishes.
+   The published tarball is the one those gates passed, not a later
+   rebuild.
 
 ## License
 

@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The JavaScript SDK release job runs `npm audit` over the SDK tree before it installs, tests and publishes.
 - The JavaScript SDK CommonJS build no longer sets `moduleResolution` node10, which TypeScript 7 removed; the built output is unchanged.
 - JavaScript SDK CI and release jobs install with `--engine-strict` wherever they run the tests, so an unsupported Node fails at install.
 - The JavaScript SDK smoke check sends requests through both built clients, so the Node 18 CI lane covers the request path.

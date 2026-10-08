@@ -9,10 +9,10 @@ import { executableLines } from './workflow-lines';
  * The release workflow publishes the image and the GitHub Release from a tag push. A tag starts
  * release.yml ALONE (ci.yml triggers on branches), so whatever gate the tag path skips is a gate a
  * release never ran; the workflow's own header states the invariant ("a tag can never publish
- * something the branch gate would have refused"; "the release gate must not be laxer than the PR
- * gate"). Both sides drifted before: check:contract-shapes and test:docs ran only on branches, so
- * an SDK wire-shape regression or a repo-file drift could ride a tag to publication while the same
- * commit would have failed CI.
+ * something the branch gate would have refused"; "for the trees the image ships, the release gate
+ * must not be laxer than the PR gate"). Both sides drifted before: check:contract-shapes and
+ * test:docs ran only on branches, so an SDK wire-shape regression or a repo-file drift could ride a
+ * tag to publication while the same commit would have failed CI.
  *
  * This locks the invariant structurally: every gate command (npm/npx lines) in ci.yml's lint and
  * test jobs must also run in release.yml's lint and test jobs (the workflow header and the check:audit step comment both state
@@ -167,6 +167,48 @@ describe('every npm tree is audited and kept current', () => {
   it.each(['ci.yml', 'security-scan.yml'])('%s audits every tree', file => {
     const runs = runSteps(file, 'audit');
     expect(trees().filter(tree => !runs.includes(auditCommand(tree)))).toEqual([]);
+  });
+
+  type ReleaseStep = { run?: string; 'continue-on-error'?: unknown; 'working-directory'?: string };
+  const releaseAudits = (file: string, job: string) => {
+    const workflow = yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as {
+      jobs: Record<string, { defaults?: { run?: { 'working-directory'?: string } }; steps: ReleaseStep[] }>;
+    };
+    const cwd = workflow.jobs[job].defaults?.run?.['working-directory'] ?? '';
+    return workflow.jobs[job].steps.flatMap((step, index) =>
+      executableLines(step.run ?? '')
+        .split('\n')
+        .map(line => /^(?:cd (\S+) && )?npm (?:run check:audit|audit --audit-level=high)$/.exec(line.trim()))
+        .flatMap(match =>
+          match ? [{ index, step, tree: path.posix.join(cwd, match[1] ?? '').replace(/^\.$/, '') }] : [],
+        ),
+    );
+  };
+
+  // A tag starts only its own release workflow, so each one audits the trees it publishes: the image
+  // carries the root and the dashboard, the npm package is built from the SDK. Exact, so moving a
+  // tree from one path to the other is a deliberate edit here.
+  it.each([
+    ['release.yml', 'lint', ['', 'dashboard']],
+    ['js-sdk-release.yml', 'publish', ['sdk/javascript']],
+  ])('%s %s audits exactly the trees it publishes', (file, job, published) => {
+    const audits = releaseAudits(file, job);
+    expect(audits.map(audit => audit.tree)).toEqual(published);
+    // An audit allowed to fail gates nothing, and a step-level working-directory audits another tree.
+    expect(
+      audits.filter(({ step }) => step['continue-on-error'] !== undefined || step['working-directory'] !== undefined),
+    ).toEqual([]);
+  });
+
+  // `npm audit` reads the lockfile alone, so a high advisory stops the publish job before `npm ci`
+  // runs any of the toolchain while the job can mint a publish credential.
+  it('js-sdk-release.yml audits the SDK before it installs it', () => {
+    const [audit] = releaseAudits('js-sdk-release.yml', 'publish');
+    const install = jobSteps('js-sdk-release.yml', 'publish').findIndex(step =>
+      /^npm ci\b/.test(executableLines(step.run ?? '').trim()),
+    );
+    expect(install).toBeGreaterThan(-1);
+    expect(audit.index).toBeLessThan(install);
   });
 
   it('Dependabot updates every tree', () => {
