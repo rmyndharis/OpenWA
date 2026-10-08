@@ -57,7 +57,7 @@ import { HookManager } from '../../core/hooks';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { Message } from '../message/entities/message.entity';
-import { SessionStoppedException } from './session-engine-controls';
+import { ServerShuttingDownException, SessionStoppedException } from './session-engine-controls';
 // Type-only: the module binds this class to PLUGIN_SESSION_PORT with a `useExisting` alias, which
 // TypeScript does not check, so `implements` is what keeps the two in step.
 import type { PluginSessionPort } from '../../core/plugins/plugin-host-ports';
@@ -301,6 +301,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             sessionId: session.id,
             action: 'auto_start_skipped',
           });
+        } else if (error instanceof ServerShuttingDownException) {
+          // The launch in flight when shutdown began, refused so nothing outlives the teardown.
+          this.logger.log(`Auto-start abandoned for session ${session.name}: shutting down`, {
+            sessionId: session.id,
+            action: 'auto_start_aborted',
+          });
+          // Nothing later in the run would start either, and shutdown waits on this loop.
+          return;
         } else {
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
           this.logger.error(`Auto-start failed for session: ${session.name}`, errorMessage, {
@@ -602,6 +610,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * the engine start refuses them a row still marked stopped when it reads it.
    */
   async start(id: string, { explicit = false }: { explicit?: boolean } = {}): Promise<Session> {
+    // Refused before the claim, the stop clear and the session:starting hook: none of them should run
+    // for a start the exiting process will not keep.
+    this.refuseIfShuttingDown();
     // At the cap, refused before the claim: the engine's own cap check runs after it, and its
     // refusal releases the claim to no node. A row nobody holds is never adopted by a peer, while a
     // lapsed lease left where it is gets taken over by one with room. The engine check stays the
@@ -629,6 +640,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       if (left > 0) this.startReservations.set(id, left);
       else this.startReservations.delete(id);
     }
+  }
+
+  private refuseIfShuttingDown(): void {
+    if (this.shuttingDown) throw new ServerShuttingDownException();
   }
 
   private async claimAndStart(id: string, explicit: boolean): Promise<Session> {
@@ -684,6 +699,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     if (this.stopRequests.get(id) !== stopRequestsBefore) {
       throw new SessionStoppedException(`Session ${id} was stopped`);
     }
+    // Shutdown may have begun while the claim was pending; the stop clear and the hook must not run.
+    this.refuseIfShuttingDown();
     try {
       return await this.engineLifecycle.start(id, { explicit });
     } catch (error) {
@@ -702,17 +719,38 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       if (this.stopRequests.get(id) !== stopRequestsBefore) {
         throw new SessionStoppedException(`Session ${id} was stopped`);
       }
-      // The lease may have lapsed while the first attempt ran; the retry must keep holding the
-      // claim, never 409 on the session it already owns.
-      if (this.ownership && !(await this.ownership.claim(id))) {
-        await this.findOne(id);
-        throw new ConflictException(`Session ${id} is running on another node`);
+      try {
+        // Shutdown may have released this node's claims during the delay; re-claiming would pin the row.
+        this.refuseIfShuttingDown();
+        // The lease may have lapsed while the first attempt ran; the retry must keep holding the
+        // claim, never 409 on the session it already owns.
+        if (this.ownership && !(await this.ownership.claim(id))) {
+          await this.findOne(id);
+          throw new ConflictException(`Session ${id} is running on another node`);
+        }
+        // Checked again: a stop that landed during the re-claim leaves the claim for claimAndStart's catch to release.
+        if (this.stopRequests.get(id) !== stopRequestsBefore) {
+          throw new SessionStoppedException(`Session ${id} was stopped`);
+        }
+        // And shutdown may have begun during the re-claim; the stop clear and the hook must not run.
+        this.refuseIfShuttingDown();
+        return await this.engineLifecycle.start(id, { explicit });
+      } catch (retryError) {
+        // The first attempt may have left FAILED, which the boot reset, auto-start and the takeover
+        // sweep all skip, and shutdown refused the retry that would have overwritten it. Handed back
+        // as DISCONNECTED so the next boot restores the session. Best-effort: the refusal is the answer.
+        // Fenced like the boot reset: a FAILED on a row a peer has since adopted is the peer's.
+        if (retryError instanceof ServerShuttingDownException) {
+          const claimable = this.ownership?.claimableWhere() ?? [{}];
+          await this.sessionRepository
+            .update(
+              claimable.map(clause => ({ ...clause, id, status: SessionStatus.FAILED })),
+              { status: SessionStatus.DISCONNECTED },
+            )
+            .catch(() => undefined);
+        }
+        throw retryError;
       }
-      // Checked again: a stop that landed during the re-claim leaves the claim for claimAndStart's catch to release.
-      if (this.stopRequests.get(id) !== stopRequestsBefore) {
-        throw new SessionStoppedException(`Session ${id} was stopped`);
-      }
-      return this.engineLifecycle.start(id, { explicit });
     }
   }
 
