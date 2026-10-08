@@ -443,6 +443,42 @@ describe('PluginLoaderService — graceful shutdown (onModuleDestroy)', () => {
     expect(loader.getPlugin('slow-plg')?.status).toBe(PluginStatus.DISABLED);
   });
 
+  it('joins a disable already in flight instead of running onDisable twice', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const onDisable = jest.fn(() => gate);
+    loader.registerBuiltInPlugin(ext('busy-plg'), { onDisable });
+    await loader.enablePlugin('busy-plg');
+
+    const disabling = loader.disablePlugin('busy-plg');
+    const destroying = loader.onModuleDestroy();
+    release();
+    await disabling;
+    await destroying;
+
+    expect(onDisable).toHaveBeenCalledTimes(1);
+    expect(loader.getPlugin('busy-plg')?.status).toBe(PluginStatus.DISABLED);
+  });
+
+  it('joins the disable of an unload already in flight', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const onDisable = jest.fn(() => gate);
+    const onUnload = jest.fn(() => Promise.resolve());
+    loader.registerBuiltInPlugin(ext('gone-plg'), { onDisable, onUnload });
+    await loader.enablePlugin('gone-plg');
+
+    const unloading = loader.unloadPlugin('gone-plg');
+    const destroying = loader.onModuleDestroy();
+    release();
+    await unloading;
+    await destroying;
+
+    expect(onDisable).toHaveBeenCalledTimes(1);
+    expect(onUnload).toHaveBeenCalledTimes(1);
+    expect(loader.getPlugin('gone-plg')).toBeUndefined();
+  });
+
   it('refuses an enable once teardown has begun', async () => {
     const onEnable = jest.fn(() => Promise.resolve());
     loader.registerBuiltInPlugin(ext('late-plg'), { onEnable });

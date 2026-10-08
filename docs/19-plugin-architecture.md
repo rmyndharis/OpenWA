@@ -581,10 +581,13 @@ double-enable, and engines must match the configured active engine):
 sandboxed plugin, even if `onDisable` hangs or throws) and unregisters the plugin's hooks. `onModuleDestroy`
 disables every enabled plugin on graceful shutdown so stateful plugins can flush. Running plugins are
 disabled first; then it waits for enables already in flight (a sandboxed enable is three 30 s-bounded
-calls) and disables those plugins too. New enables are refused once teardown starts. `uninstallPlugin`
-disables + unloads, drops the registry entry, and deletes the plugin's directory and its `ctx.storage`
-data dir (built-ins are protected and cannot be uninstalled). The unload path dispatches `onUnload`:
-for a sandboxed plugin it runs in the worker between `onDisable` and terminate (a plain disable does
+calls) and disables those plugins too. New enables are refused once teardown starts. A disable that
+arrives while the same plugin is still being disabled (shutdown overlapping a REST disable, an
+uninstall or an update unload) joins the running teardown, so `onDisable` runs once; an unload that
+joins this way gets no worker-side `onUnload`. `uninstallPlugin` disables + unloads, drops the
+registry entry, and deletes the plugin's directory and its `ctx.storage` data dir (built-ins are
+protected and cannot be uninstalled). The unload path dispatches `onUnload`: for a sandboxed plugin
+it runs in the worker between `onDisable` and terminate (a plain disable does
 NOT fire `onUnload` — disable is reversible and its cleanup hook is `onDisable`).
 
 **Context.** `createPluginContext` builds the `PluginContext` (§19.4): a per-plugin logger,
