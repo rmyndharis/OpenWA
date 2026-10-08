@@ -645,12 +645,33 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
 
   it('keeps aged pending rows while a reconcile sweep holds the guard', async () => {
     await insertEvent('stranded', {});
-    (reconciler as unknown as { sweeping: boolean }).sweeping = true;
+    (reconciler as unknown as { inFlight?: Promise<void> }).inFlight = new Promise(() => undefined);
 
     const result = await service.pruneOlderThan(7, 90);
 
     expect(result.events).toBe(0);
     expect((await events.findOneByOrFail({ id: 'stranded' })).payload).not.toBeNull();
     expect(await failures.count()).toBe(0);
+  });
+
+  it('stops the hand-off at the next row once shutdown begins, and destroy waits for the row in hand', async () => {
+    await insertEvent('first', { createdAt: daysAgo(9) });
+    await insertEvent('second', {});
+    const realSave = failures.save.bind(failures) as (
+      row: IntegrationDeliveryFailure,
+    ) => Promise<IntegrationDeliveryFailure>;
+    let destroyed: Promise<void> | undefined;
+    jest.spyOn(failures, 'save').mockImplementationOnce(async row => {
+      destroyed = reconciler.onModuleDestroy();
+      return realSave(row as IntegrationDeliveryFailure);
+    });
+
+    await service.pruneOlderThan(7, 90);
+    await destroyed;
+
+    expect(await failures.count()).toBe(1);
+    const rows = await events.find({ order: { createdAt: 'ASC' } });
+    expect(rows.map(r => r.dispatchState)).toEqual(['failed', 'pending']);
+    expect(rows[1].payload).not.toBeNull();
   });
 });

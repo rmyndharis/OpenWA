@@ -1,4 +1,5 @@
 import AdmZip from 'adm-zip';
+import zlib from 'zlib';
 import { BadRequestException } from '@nestjs/common';
 import { parsePluginPackage } from './plugin-installer';
 
@@ -38,9 +39,9 @@ function zipWithCorruptEntry(target: string): Buffer {
 
 /**
  * Build a plugin zip whose `target` entry declares uncompressed size = 0 in BOTH the central
- * directory and the local header, while the entry still carries real (deflated) content. adm-zip
- * only sets zlib `maxOutputLength` when the declared size is > 0, so without a bound this entry
- * inflates with no cap — the zip-bomb residual gap (a lying-header entry).
+ * directory and the local header, while the entry still carries real (deflated) content. The
+ * declared-size guard counts it as 0, so only readEntryData's `maxOutputLength` cap and the running
+ * actual-bytes total bound what it inflates to.
  */
 function zipWithLyingZeroSizeEntries(targets: Record<string, string>): Buffer {
   const z = new AdmZip();
@@ -244,9 +245,61 @@ describe('parsePluginPackage', () => {
     expect(() => parsePluginPackage(zipOf(files), { maxEntries: 3, maxTotalBytes: 1e9 })).toThrow(/too many/i);
   });
 
+  /** Assert the archive is rejected with no entry inflated and the manifest text never parsed. */
+  function expectRejectedUnread(buf: Buffer, maxTotalBytes: number, manifest: string, message: RegExp): void {
+    const inflate = jest.spyOn(zlib, 'inflateRawSync');
+    const parse = jest.spyOn(JSON, 'parse');
+    try {
+      expect(() => parsePluginPackage(buf, { maxEntries: 100, maxTotalBytes })).toThrow(message);
+      expect(inflate).not.toHaveBeenCalled();
+      expect(parse.mock.calls.filter(([text]) => text === manifest)).toHaveLength(0);
+    } finally {
+      inflate.mockRestore();
+      parse.mockRestore();
+    }
+  }
+
   it('rejects an archive that exceeds the size limit (before decompressing)', () => {
-    const buf = zipOf({ 'manifest.json': JSON.stringify(validManifest), 'index.js': 'a'.repeat(100) });
-    expect(() => parsePluginPackage(buf, { maxEntries: 100, maxTotalBytes: 10 })).toThrow(/size limit/i);
+    const manifest = JSON.stringify(validManifest);
+    const buf = zipOf({ 'manifest.json': manifest, 'index.js': 'a'.repeat(100) });
+    expectRejectedUnread(buf, 10, manifest, /size limit/i);
+  });
+
+  it.each([
+    ['manifest.json', /size limit/i],
+    ['/manifest.json', /unsafe path/i],
+    ['//manifest.json', /unsafe path/i],
+    ['pkg/manifest.json', /size limit/i],
+  ])('rejects an oversized %s without inflating or parsing it', (name, message) => {
+    // The manifest honestly declares more than the limit. adm-zip caps inflation at the declared
+    // size, not at maxTotalBytes, so reading it first would decompress and JSON-parse the whole thing.
+    // adm-zip strips a leading slash on addFile, so slash-led names are written into the raw bytes
+    // over a placeholder of the same length (the CRC does not cover names).
+    const manifest = JSON.stringify(validManifest) + ' '.repeat(64 * 1024);
+    const dir = name.slice(0, -'manifest.json'.length);
+    const placeholder = dir.replace(/^\/+/, m => 'X'.repeat(m.length));
+    const buf = Buffer.from(zipOf({ [`${placeholder}manifest.json`]: manifest, [`${placeholder}index.js`]: 'x' }));
+    for (const file of ['manifest.json', 'index.js']) {
+      const from = Buffer.from(placeholder + file);
+      for (let at = buf.indexOf(from); at !== -1; at = buf.indexOf(from, at + 1)) buf.write(dir + file, at);
+    }
+    expect(new AdmZip(buf).getEntries().map(e => e.entryName)).toContain(name);
+    expectRejectedUnread(buf, 1024, manifest, message);
+  });
+
+  it('rejects a stored manifest larger than its declared size, without inflating or parsing it', () => {
+    // adm-zip returns a STORED entry at its real length, so a central header that declares 10 bytes
+    // would slip past the declared-size check and hand the whole manifest to JSON.parse.
+    const manifest = JSON.stringify(validManifest) + ' '.repeat(64 * 1024);
+    const z = new AdmZip();
+    z.addFile('manifest.json', Buffer.from(manifest));
+    z.addFile('index.js', Buffer.from('x'));
+    z.getEntries().find(e => e.entryName === 'manifest.json')!.header.method = 0;
+    const buf = Buffer.from(z.toBuffer());
+    const cen = buf.lastIndexOf('manifest.json') - 46; // the central directory comes last
+    expect(buf.readUInt32LE(cen)).toBe(0x02014b50);
+    buf.writeUInt32LE(10, cen + 24); // declared uncompressed size
+    expectRejectedUnread(buf, 1024, manifest, /corrupt or too large/i);
   });
 
   it('rejects a corrupt entry with a clean 400, not an uncaught decompression error / 500', () => {
@@ -258,8 +311,8 @@ describe('parsePluginPackage', () => {
   });
 
   it('rejects a lying size=0 entry whose actual content exceeds the cap (no unbounded inflation)', () => {
-    // adm-zip skips zlib `maxOutputLength` when declared size is 0, so this entry would inflate with
-    // NO cap. The declared aggregate (0 + tiny manifest + index) passes the pre-check; only the
+    // readEntryData inflates a size=0 entry itself, with zlib `maxOutputLength` set to the cap. The
+    // declared aggregate (0 + tiny manifest + index) passes the pre-check; only the
     // actual-bytes bound stops the lying entry. Actual content (500B) exceeds the per-entry cap (200B)
     // → ERR_BUFFER_TOO_LARGE → BadRequestException.
     const buf = zipWithLyingZeroSizeEntry('big.bin', 'A'.repeat(500));
