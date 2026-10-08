@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Retain send idempotency keys after engine-stage failures, including HTTP 409.
 - Reject poll votes with no matching options while preserving explicit vote clearing.
 
+### Dependencies
+
+- `vitest` 2.1 to 4.1 in the JavaScript SDK tree, closing its dev-only advisories. Its tests now need Node 20+; the published package still supports Node 18.
+
 ### Upgrade notes (behavior changes)
 
 - Baileys answers `400` for an animated sticker with more than 500 frames.
