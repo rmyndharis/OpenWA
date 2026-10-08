@@ -10,6 +10,7 @@ import {
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { QUEUE_NAMES } from '../queue/queue-names';
+import { producerReady } from '../queue/redis-connection';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -198,6 +199,7 @@ export class InfraStatusController {
     let webhooks = { pending: 0, completed: 0, failed: 0 };
     if (queueEnabled && this.webhookQueue) {
       try {
+        await producerReady(this.webhookQueue);
         const counts = await this.webhookQueue.getJobCounts('wait', 'active', 'delayed', 'completed', 'failed');
         webhooks = {
           pending: (counts.wait ?? 0) + (counts.active ?? 0) + (counts.delayed ?? 0),

@@ -12,6 +12,7 @@ import { WebhookOutboxService } from './webhook-outbox.service';
 import { WebhookReconcilerService } from './webhook-reconciler.service';
 import { WebhookRedriveService } from './webhook-redrive.service';
 import { WebhookDeliveryService } from './webhook-delivery.service';
+import { producerConnectWaitMs } from '../queue/redis-connection';
 
 describe('webhook recovery across live ownership and configuration changes', () => {
   let ds: DataSource;
@@ -59,7 +60,11 @@ describe('webhook recovery across live ownership and configuration changes', () 
     const delivery = {
       isLocallyPending: jest.fn((key: string) => key === 'key0'),
       isQueueJobPending: jest.fn((id: string) => Promise.resolve(id === 'job1' || id === 'job2')),
-      redeliver: jest.fn().mockResolvedValue('delivered'),
+      // Like the real redeliver, a delivered replay retires its own outbox row.
+      redeliver: jest.fn(async (webhook: Webhook, _sessionId: string, _event: string, key: string) => {
+        await outbox.close(webhook.id, key, 'dispatched');
+        return 'delivered';
+      }),
       recordReplayExhaustion: jest.fn().mockResolvedValue(true),
     };
     const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery as never, new ConfigService());
@@ -288,6 +293,7 @@ describe('webhook recovery across live ownership and configuration changes', () 
     const queue = {
       add: jest.fn().mockRejectedValue(new Error('Connection is closed')),
       getJob: jest.fn().mockResolvedValue(undefined),
+      waitUntilReady: jest.fn().mockResolvedValue(undefined),
     };
     const delivery = new WebhookDeliveryService(webhooks, failures, config, hooks, outbox, undefined, queue as never);
     const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery, config);
@@ -316,6 +322,53 @@ describe('webhook recovery across live ownership and configuration changes', () 
       state: 'pending',
       attempts: 1,
     });
+  });
+
+  // Before Redis has ever connected, the queue add waits up to the connect timeout and then falls back
+  // to a direct POST. A replay whose owner stopped during that wait must send nothing and run no hooks.
+  it('sends nothing for a replay stopped while its queue add waited for a first connect', async () => {
+    const config = new ConfigService({ queue: { enabled: true }, webhook: { timeout: 1000 } });
+    const hooks = new HookManager();
+    const execute = jest.spyOn(hooks, 'execute');
+    let onWait!: () => void;
+    const waiting = new Promise<void>(resolve => (onWait = resolve));
+    const never = () => new Promise<never>(() => {});
+    const queue = {
+      add: jest.fn(never),
+      waitUntilReady: jest.fn(() => {
+        onWait();
+        return never();
+      }),
+    };
+    const outbox = new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent));
+    const delivery = new WebhookDeliveryService(webhooks, failures, config, hooks, outbox, undefined, queue as never);
+    const post = jest
+      .spyOn(ssrf, 'withSafeFetch')
+      .mockImplementation((_url, _init, use) => Promise.resolve(use(new Response(null, { status: 200 }))));
+    const stop = new AbortController();
+
+    let result: unknown;
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    try {
+      const running = delivery
+        .redeliver(primary, primary.sessionId, 'message.received', 'key-a', {}, { signal: stop.signal })
+        .then(
+          outcome => outcome,
+          (error: Error) => error.name,
+        );
+      await waiting;
+      stop.abort();
+      await jest.advanceTimersByTimeAsync(producerConnectWaitMs());
+      result = await running;
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(result).toBe('AbortError');
+    expect(queue.add).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+    expect(execute.mock.calls.map(([name]) => name).filter(name => name !== 'webhook:before')).toEqual([]);
+    expect(await failures.count()).toBe(0);
   });
 
   it('does not replay a row whose pre-checks were under way when destroy began', async () => {

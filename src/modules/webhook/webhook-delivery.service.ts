@@ -19,6 +19,7 @@ import { createLogger } from '../../common/services/logger.service';
 import { DEFAULT_WEBHOOK_MEDIA_INLINE_MAX_BYTES, shedInlineMedia } from '../../common/utils/inline-media';
 import { incrementWebhookDeliveryFailures } from '../../common/metrics/webhook-delivery-metrics';
 import { QUEUE_NAMES } from '../queue/queue-names';
+import { producerReady } from '../queue/redis-connection';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
 import { evaluateFilters } from './filters/filter-evaluator';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
@@ -76,8 +77,8 @@ export const DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS = 5000;
  * handled in place, so a try/catch cannot tell a delivered event from a dead-lettered one. Two
  * exceptions escape, both from shutdown, and both keep the outbox row pending: 'ConcurrencyLimiter
  * closed' from a retry backoff woken after it, which only runLimited sees and records, and the
- * AbortError of a replay whose signal stopped its retries, which reaches WebhookReconcilerService
- * through redeliver.
+ * AbortError of a replay whose signal stopped its retries or its queue fallback, which reaches
+ * WebhookReconcilerService through redeliver.
  * 'cancelled' is terminal like 'delivered' and must never be replayed: either a plugin suppressed the
  * dispatch (nothing left the process), or a direct retry found the webhook removed, disabled or
  * unsubscribed (an earlier attempt may already have been POSTed).
@@ -535,7 +536,8 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * Every failure path here is already handled in place (a dead-letter row, a hook, a log), so none
    * of them reach the caller as an exception, except 'ConcurrencyLimiter closed' from a retry backoff
    * woken after shutdown, which runLimited handles (redeliver passes no yieldSlot and never sees it),
-   * and the AbortError of a replay whose signal stopped its retries, which reaches its caller.
+   * and the AbortError of a replay whose signal stopped its retries or its queue fallback, which
+   * reaches its caller.
    * The reconciler has to tell a delivered event from a
    * dead-lettered one to know whether the outbox row may be retired, and a caught throw cannot tell
    * it: there is none. This mirrors the inbound twin, where `ingressEnqueue.enqueue` returns an
@@ -593,6 +595,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         ...(this.keepsFailurePayload() ? { replayData: ctx.baseData } : {}),
       };
 
+      await producerReady(this.webhookQueue!);
       await this.webhookQueue!.add(`webhook-${webhook.id}`, jobData, {
         // jobId = deliveryId makes this add() idempotent within BullMQ (same precedent as the ingress
         // producer). It does not dedup a crash replay: if the process dies before the outbox row is
@@ -625,6 +628,10 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         action: 'webhook_queued',
       });
     } catch (error) {
+      // A replay whose owner stopped while the add was out (it can wait for a first connect, or on a
+      // stalled Redis) must not POST or run hooks after the drain: the reconciler reads the abort as
+      // interrupted.
+      ctx.signal?.throwIfAborted();
       // Execute hook on queue error (not delivery error - that happens in processor)
       await this.hookManager.execute(
         'webhook:error',
@@ -637,7 +644,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         action: 'webhook_queue_failed',
       });
 
-      // Fallback: deliver directly when the queue add failed (e.g. Redis unreachable with the
+      // Fallback: deliver directly when the queue add failed (Redis not connected yet, or down with the
       // producer's enableOfflineQueue:false). This is at-least-once — if add() actually reached
       // Redis before rejecting, the queued job AND this fallback may both POST. Both paths carry the
       // same X-OpenWA-Idempotency-Key / X-OpenWA-Delivery-Id, so a conformant receiver dedupes.
@@ -961,6 +968,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   async isQueueJobPending(deliveryId: string): Promise<boolean> {
     if (!this.webhookQueue) return false;
     try {
+      await producerReady(this.webhookQueue);
       const job = await this.webhookQueue.getJob(deliveryId);
       if (!job) return false;
       return !['completed', 'failed', 'unknown'].includes(await job.getState());

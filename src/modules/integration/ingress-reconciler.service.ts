@@ -79,7 +79,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
   private timer?: ReturnType<typeof setInterval>;
   // The pass in flight, settled when it ends; doubles as the overlap guard.
   private inFlight?: Promise<void>;
-  private stopping = false;
+  private readonly stop = new AbortController();
 
   constructor(
     @InjectRepository(IngressEvent, 'data') private readonly events: Repository<IngressEvent>,
@@ -109,12 +109,14 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
    * rows after PluginLoaderService has stopped the plugin sandboxes, so each remaining row fails,
    * spends an attempt and, at its last one, is dead-lettered. Stop it at the next row and wait for
    * the row in hand, while its plugin is still running. The wait is bounded by the inline dispatch
-   * timeout: a queue lookup made while Redis has never been reachable does not return, and waiting on it
-   * would keep every later destroy hook (engines, session leases, plugins) from running.
-   * A row given up on stays 'pending': once its lookup returns, the row sees the stop and writes nothing.
+   * timeout: before Redis has ever connected, the row's queue lookup can wait up to
+   * REDIS_CONNECT_TIMEOUT_MS ahead of that dispatch, and a stalled Redis holds a lookup or add longer
+   * still; waiting it out would delay every later destroy hook (engines, session leases, plugins).
+   * A row given up on is never dispatched inline after the stop: it stays 'pending', unless its queue
+   * add still succeeds and the queued job takes the delivery.
    */
   async onModuleDestroy(): Promise<void> {
-    this.stopping = true;
+    this.stop.abort();
     if (this.timer) clearInterval(this.timer);
     if (!this.inFlight) return;
     let timer: NodeJS.Timeout | undefined;
@@ -137,7 +139,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
    */
   async sweep(opts: IngressReconcilerOptions, now: Date = new Date()): Promise<IngressReconcileStats> {
     const stats: IngressReconcileStats = { scanned: 0, replayed: 0, failed: 0, skipped: 0 };
-    if (this.inFlight || this.stopping) return stats;
+    if (this.inFlight || this.stop.signal.aborted) return stats;
     let settle!: () => void;
     this.inFlight = new Promise(resolve => (settle = resolve));
     try {
@@ -161,7 +163,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
         .limit(opts.batchSize)
         .getMany();
       for (const row of rows) {
-        if (this.stopping) break;
+        if (this.stop.signal.aborted) break;
         // A row whose latest attempt is still inside the grace window cools down between replays;
         // it keeps its batch slot (bounded by maxAttempts, so the leak is capped) but is not hit again.
         if (row.lastDispatchAt && row.lastDispatchAt > cutoff) {
@@ -234,7 +236,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
    * dead letter. Returns the number of rows dead-lettered.
    */
   async deadLetterAgedPending(cutoff: Date, batchSize = 100): Promise<number> {
-    if (this.inFlight || this.stopping) return 0;
+    if (this.inFlight || this.stop.signal.aborted) return 0;
     let settle!: () => void;
     this.inFlight = new Promise(resolve => (settle = resolve));
     let retired = 0;
@@ -247,7 +249,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
         });
         let progressed = 0;
         for (const row of rows) {
-          if (this.stopping) return retired;
+          if (this.stop.signal.aborted) return retired;
           if (!hasPayload(row)) continue;
           const meta = { pluginId: row.pluginId, instanceId: row.instanceId, deliveryId: row.providerDeliveryId };
           try {
@@ -270,7 +272,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
             // letter while a copy can still deliver. A failed one falls through to its existing DLQ row.
             const existing = await this.ingressEnqueue.existingJobState(jobData, row.providerDeliveryId);
             // Shutdown began while the lookup was out (destroy may have stopped waiting for it).
-            if (this.stopping) return retired;
+            if (this.stop.signal.aborted) return retired;
             if (existing && existing !== 'failed') {
               const settled = await this.events.update(
                 { id: row.id, dispatchState: 'pending' },
@@ -375,7 +377,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     const existing = await this.ingressEnqueue.existingJobState(jobData, row.providerDeliveryId);
     // Shutdown began while the lookup was out, and destroy may have stopped waiting for it: a dispatch
     // now could land after plugin teardown and spend an attempt. Leave the row for the next start.
-    if (this.stopping) return 'interrupted';
+    if (this.stop.signal.aborted) return 'interrupted';
     if (existing === 'failed') {
       // Every queue attempt already ran and IngressProcessor dead-lettered the delivery, or re-queued it
       // and every copy failed too: a live or completed copy answers for the job (see existingJobState).
@@ -410,9 +412,16 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       });
       return 'failed';
     }
-    const { outcome, error }: EnqueueOutcome = existing
+    // The add can also outlast destroy's wait (see onModuleDestroy). Given the stop signal, enqueue()
+    // throws instead of dispatching inline once it has aborted, and the row is left as above.
+    const result: EnqueueOutcome | undefined = existing
       ? { outcome: 'queued' }
-      : await this.ingressEnqueue.enqueue(jobData, row.providerDeliveryId);
+      : await this.ingressEnqueue.enqueue(jobData, row.providerDeliveryId, this.stop.signal).catch(err => {
+          if (this.stop.signal.aborted) return undefined;
+          throw err;
+        });
+    if (!result) return 'interrupted';
+    const { outcome, error } = result;
     if (outcome !== 'failed') {
       // Retire the payload with the outcome: the dispatch tier owns the delivery from here (the
       // BullMQ job data, or a DLQ row on an in-tier failure), so the dedup row slims to its marker.
@@ -433,7 +442,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     // A failure once shutdown began says nothing about the event: the add may have been refused by a
     // queue connection closing under it, or the inline fallback met a plugin being torn down. Spend no
     // attempt and leave the row for the next start.
-    if (this.stopping) return 'interrupted';
+    if (this.stop.signal.aborted) return 'interrupted';
 
     const attempts = (row.dispatchAttempts ?? 0) + 1;
     const terminal = attempts >= maxAttempts;

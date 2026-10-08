@@ -381,10 +381,14 @@ describe('IngressReconcilerService.sweep', () => {
   // attempt: IngressProcessor already dead-lettered it. A replay under the same jobId is swallowed by
   // BullMQ as a duplicate (add() still resolves), so it must not count as delivered.
   describe('when the live path already queued a job for the delivery', () => {
-    let queue: { add: jest.Mock; getJobState: jest.Mock };
+    let queue: { add: jest.Mock; getJobState: jest.Mock; waitUntilReady: jest.Mock };
 
     beforeEach(() => {
-      queue = { add: jest.fn().mockResolvedValue(undefined), getJobState: jest.fn() };
+      queue = {
+        add: jest.fn().mockResolvedValue(undefined),
+        getJobState: jest.fn(),
+        waitUntilReady: jest.fn().mockResolvedValue(undefined),
+      };
       const realEnqueue = new IngressEnqueueService(
         { dispatchWebhookForInstance: jest.fn() } as unknown as PluginLoaderService,
         { get: jest.fn().mockReturnValue(true) } as unknown as ConfigService,
@@ -703,8 +707,8 @@ describe('IngressReconcilerService.sweep', () => {
     expect(await failures.count()).toBe(0);
   });
 
-  // A job-state lookup made while Redis has never been reachable only returns once the queue connection
-  // is closed later in shutdown. Waiting for it kept every later destroy hook from running; dispatching
+  // A job-state lookup against a stalled Redis may only return once the queue connection is closed
+  // later in shutdown. Waiting for it kept every later destroy hook from running; dispatching
   // once it returns would land after plugin teardown and dead-letter a row on its last attempt.
   it('stops waiting for a job-state lookup that does not return, and leaves its row pending', async () => {
     const id = await insertEvent({ dispatchAttempts: 4 });
@@ -722,7 +726,11 @@ describe('IngressReconcilerService.sweep', () => {
       new IngressEnqueueService(
         { dispatchWebhookForInstance } as unknown as PluginLoaderService,
         { get: jest.fn().mockReturnValue(true) } as unknown as ConfigService,
-        { getJobState, add: jest.fn().mockRejectedValue(new Error('Connection is closed')) } as never,
+        {
+          getJobState,
+          add: jest.fn().mockRejectedValue(new Error('Connection is closed')),
+          waitUntilReady: jest.fn().mockResolvedValue(undefined),
+        } as never,
       ),
       { getPlugin } as unknown as PluginLoaderService,
       { resolve: resolveInstance } as unknown as PluginInstanceService,
@@ -750,6 +758,48 @@ describe('IngressReconcilerService.sweep', () => {
 
     expect(destroyedBeforeDeadline).toBe(false);
     expect(destroyedAtDeadline).toBe(true);
+    expect(stats).toMatchObject({ replayed: 0, failed: 0, skipped: 1 });
+    expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
+    expect(await stored(id)).toMatchObject({ dispatchState: 'pending', dispatchAttempts: 4 });
+    expect((await stored(id)).payload).not.toBeNull();
+    expect(await failures.count()).toBe(0);
+  });
+
+  // A queue add held by a stalled Redis can fail after destroy has begun. Its inline fallback would then
+  // race plugin teardown and, on the row's last attempt, dead-letter it.
+  it('does not dispatch inline when the queue add fails after shutdown began', async () => {
+    const id = await insertEvent({ dispatchAttempts: 4 });
+    let failAdd!: (error: Error) => void;
+    let onAdd!: () => void;
+    const adding = new Promise<void>(resolve => (onAdd = resolve));
+    const queue = {
+      getJobState: jest.fn().mockResolvedValue('unknown'),
+      add: jest.fn(() => {
+        onAdd();
+        return new Promise<never>((_resolve, reject) => (failAdd = reject));
+      }),
+      waitUntilReady: jest.fn().mockResolvedValue(undefined),
+    };
+    const dispatchWebhookForInstance = jest.fn().mockRejectedValue(new Error('no live sandbox host'));
+    service = new IngressReconcilerService(
+      events,
+      failures,
+      new IngressEnqueueService(
+        { dispatchWebhookForInstance } as unknown as PluginLoaderService,
+        { get: jest.fn().mockReturnValue(true) } as unknown as ConfigService,
+        queue as never,
+      ),
+      { getPlugin } as unknown as PluginLoaderService,
+      { resolve: resolveInstance } as unknown as PluginInstanceService,
+    );
+
+    const sweep = service.sweep(OPTS);
+    await adding;
+    const destroyed = service.onModuleDestroy();
+    failAdd(new Error('Connection is closed.'));
+    const stats = await sweep;
+    await destroyed;
+
     expect(stats).toMatchObject({ replayed: 0, failed: 0, skipped: 1 });
     expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
     expect(await stored(id)).toMatchObject({ dispatchState: 'pending', dispatchAttempts: 4 });

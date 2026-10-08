@@ -614,7 +614,7 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
   it('prunes aged settled markers while the hand-off is still waiting', async () => {
     await insertEvent('dispatched', { dispatchState: 'dispatched', payload: null });
     await insertEvent('stranded', {});
-    // A job-state lookup against a queue that never became reachable does not return.
+    // A job-state lookup against a stalled Redis that has not returned yet.
     const lookedUp = new Promise<void>(resolve =>
       existingJobState.mockImplementation(() => {
         resolve();

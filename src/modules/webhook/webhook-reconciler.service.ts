@@ -99,8 +99,8 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
    * and after PluginLoaderService has unregistered the `webhook:before` hooks. Stop it at the next row,
    * stop the replay in hand without a further retry, and wait for it, at most WEBHOOK_SHUTDOWN_DRAIN_MS
    * like the delivery drain beside it: the replay's hooks are not capped, and a queue lookup or add made
-   * while Redis has never been reachable does not return. A row given up on stays 'pending' unless the
-   * replay in hand completes before the process exits.
+   * before Redis has ever connected waits up to REDIS_CONNECT_TIMEOUT_MS. A row given up on stays
+   * 'pending' unless the replay in hand completes before the process exits.
    */
   async onModuleDestroy(): Promise<void> {
     this.stop.abort();
@@ -199,9 +199,9 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
             stats.failed++;
             continue;
           }
-          // Enqueued rows retain their copy until the worker settles them. Success and deliberate
-          // cancellation can retire immediately.
-          if (outcome !== 'enqueued') await this.outbox.close(row.webhookId, row.idempotencyKey, 'dispatched');
+          // Enqueued rows retain their copy until the worker settles them, and redeliver has already
+          // retired a delivered one. A deliberate cancellation retires here.
+          if (outcome === 'cancelled') await this.outbox.close(row.webhookId, row.idempotencyKey, 'dispatched');
           stats.replayed++;
         } catch (error) {
           // A replay cut short in its retry backoff by shutdown was interrupted, not failed. Any other

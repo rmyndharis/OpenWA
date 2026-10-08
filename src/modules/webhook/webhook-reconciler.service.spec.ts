@@ -81,7 +81,8 @@ describe('WebhookReconcilerService', () => {
       { from: '628123456789@c.us' },
       { signal: expect.any(AbortSignal) as AbortSignal },
     );
-    expect(outbox.close).toHaveBeenCalledWith('wh-1', 'stored-key_wh-1', 'dispatched');
+    // redeliver retires a delivered event's row itself; a second close here only repeats the write.
+    expect(outbox.close).not.toHaveBeenCalled();
     expect(stats).toMatchObject({ scanned: 1, replayed: 1 });
   });
 
@@ -229,8 +230,8 @@ describe('WebhookReconcilerService', () => {
     expect(outbox.findStale).toHaveBeenCalledTimes(1);
   });
 
-  // A queue lookup made while Redis has never been reachable does not return, and the destroy hooks
-  // after this one (engines, session leases, plugins) must not wait on it for ever.
+  // A queue lookup against a stalled Redis may not return, and the destroy hooks after this one
+  // (engines, session leases, plugins) must not wait on it for ever.
   it('stops waiting on destroy after WEBHOOK_SHUTDOWN_DRAIN_MS and replays nothing once the lookup returns', async () => {
     outbox.findStale.mockResolvedValue([row({ deliveryId: 'job-1' })]);
     let reached!: () => void;
