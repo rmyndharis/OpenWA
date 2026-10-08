@@ -71,8 +71,9 @@ and then drops privileges. Chromium comes from Chrome for Testing on amd64 and f
 
 The healthcheck probes the `PORT` of the container environment, falling back to 2785. To run the
 image on another port, pass `PORT` as an environment variable (`docker run -e PORT=8080 ...`): the
-probe never reads a mounted `.env`, so a `PORT` set only there moves the app but not the probe, and
-the container stays `unhealthy`.
+probe never reads a mounted `.env` or `data/.env.generated`, so a `PORT` set only in one of those
+files moves the app but not the probe, and the container stays `unhealthy`. Boot refuses a `PORT`
+with surrounding whitespace, which the probe URL would carry verbatim.
 
 ### Docker Compose (Development)
 
