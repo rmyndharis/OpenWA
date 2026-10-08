@@ -265,9 +265,21 @@ empty; nothing logs it, and it stays `pending` until `INGRESS_DEDUP_RETENTION_DA
 Table growth is bounded by construction rather than by operator hygiene: the per-instance ingress
 throttle caps the row-creation rate, dispatched rows slim to a marker + hash, and the two retention
 windows prune what remains — `INGRESS_DEDUP_RETENTION_DAYS` (default 7) for the dedup oracle and
-`INGRESS_RETENTION_DAYS` (default 90, `<= 0` disables) for the DLQ. There is deliberately no
-per-instance row-count cap: eviction under a flood of forged delivery ids would silently drop legit
-dedup rows and re-admit their replays, which is worse than the bounded growth it would prevent.
+`INGRESS_RETENTION_DAYS` (default 90, `<= 0` disables) for the DLQ. A `pending` row that still
+carries its payload is settled before the age prune deletes it: the prune first writes its
+dead-letter row (unless an open one exists) and marks it `failed`. A delivery stranded across
+downtime longer than the dedup window, or held by an instance disabled for that long, is therefore
+not dropped: it stays redrivable until `INGRESS_RETENTION_DAYS` prunes that dead-letter row. A row
+whose dead-letter write fails is kept for the next run. Two cases get no dead-letter row: a
+queue job that still owns the delivery takes the `dispatched` mark (closing any open dead-letter
+row), and a row whose instance or bound session was deleted is dropped, since redrive refuses a
+deleted instance and a session delete purges its dead letters. A delivery whose completed job was
+already removed from the queue, or whose job lookup failed while Redis was down, is dead-lettered
+anyway and may already have been delivered: check before redriving it. The startup prune runs before
+plugins load, so a dead-letter row it writes carries no conversation id and its redrive takes the
+per-instance lane. There is deliberately no per-instance row-count cap: eviction under a flood of
+forged delivery ids would silently drop legit dedup rows and re-admit their replays, which is worse
+than the bounded growth it would prevent.
 
 ## 25.8 The Integration SDK (v1)
 
