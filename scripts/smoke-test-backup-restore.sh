@@ -51,9 +51,11 @@
 #       another line does not hide the key, and a line the scripts cannot parse fails the lookup, so
 #       backup and restore stop before archiving or writing anything instead of using a default the app
 #       may not read
-#   (ah) pg_dump makes the app's TLS check when DATABASE_SSL=true (falling back to the system CA store
-#       without node), connects as before when it is not, and never starts past a DATABASE_SSL or
-#       DATABASE_SSL_REJECT_UNAUTHORIZED line the scripts cannot parse
+#   (ah) pg_dump makes the app's TLS check when DATABASE_SSL=true (trusting NODE_EXTRA_CA_CERTS on a
+#       Node without tls.getCACertificates, falling back to the system CA store without node), connects
+#       as before when it is not, and never starts past a DATABASE_SSL or DATABASE_SSL_REJECT_UNAUTHORIZED
+#       line the scripts cannot parse; the psql command restore prints asks for the same TLS mode and
+#       says where verify-full takes its CA from
 #   (ai) the ./data defaults and ./data paths in ./.env and .env.generated follow OPENWA_DATA_DIR in a
 #       run on the host, in both scripts, as does a leftover ./uploads, also into an empty volume, while a
 #       bare-metal ./data named by another spelling or a symlink keeps ./uploads, non-path settings and
@@ -71,7 +73,8 @@ set -euo pipefail
 unset OPENWA_DATA_DIR BACKUP_DIR DATABASE_TYPE MAIN_DATABASE_NAME DATABASE_NAME SESSION_DATA_PATH \
   BAILEYS_AUTH_DIR STORAGE_LOCAL_PATH PLUGINS_DIR PLUGIN_STATE_DIR OPENWA_RESTORE_SNAPSHOT_DIR BOOTSTRAP_KEY_FILE \
   ENGINE_TYPE DATABASE_URL DATABASE_HOST DATABASE_PORT DATABASE_USERNAME DATABASE_PASSWORD \
-  DATABASE_SSL DATABASE_SSL_REJECT_UNAUTHORIZED PGSSLMODE PGSSLROOTCERT
+  DATABASE_SSL DATABASE_SSL_REJECT_UNAUTHORIZED PGSSLMODE PGSSLROOTCERT \
+  NODE_EXTRA_CA_CERTS
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP="$REPO_ROOT/scripts/backup.sh"
@@ -1891,9 +1894,46 @@ fi
 if [ "${BASH_REMATCH[2]}" -lt 100 ] || [ -e "${BASH_REMATCH[1]}" ]; then
   fail "(ah) the root certificates were not Node's CA set, or were left behind: $GOT_AH"
 fi
+# A private CA in NODE_EXTRA_CA_CERTS is trusted too. Before Node 22.15 tls.getCACertificates is
+# missing and tls.rootCertificates leaves that file out; the preload stands in for such a Node.
+node -p 'require("tls").rootCertificates[0]' >"$AH/extra-ca.pem"
+printf 'delete require("tls").getCACertificates;\n' >"$AH/old-node.js"
+for preload in "" "--require=$AH/old-node.js"; do
+  GOT_AH="$(backup_ah "${PG_AH}DATABASE_SSL=true\n" NODE_OPTIONS="$preload")"
+  GOT_AH_EXTRA="$(backup_ah "${PG_AH}DATABASE_SSL=true\n" NODE_OPTIONS="$preload" NODE_EXTRA_CA_CERTS="$AH/extra-ca.pem")"
+  if [ "${GOT_AH_EXTRA##*certs=}" != "$((${GOT_AH##*certs=} + 1))" ]; then
+    fail "(ah) NODE_EXTRA_CA_CERTS was left out of the root certificates (NODE_OPTIONS=$preload): $GOT_AH, then $GOT_AH_EXTRA"
+  fi
+done
 if [ "$(backup_ah "${PG_AH}DATABASE_SSL=true\nDATABASE_SSL_REJECT_UNAUTHORIZED=false\n" \
   DATABASE_URL=postgres://openwa@db/openwa)" != "mode=require root= certs=none" ]; then
   fail "(ah) DATABASE_SSL_REJECT_UNAUTHORIZED=false did not encrypt without verifying: $(cat "$AH/log")"
+fi
+# psql defaults to sslmode=prefer as well, so the import command restore.sh prints asks for the
+# app's TLS mode. restore_ah [./.env content] [VAR=value...]: what that command sets before psql, for
+# the archive in out/, then +ca when the CA hint follows it, +unread when the note on a TLS line the
+# scripts cannot parse does, and +error when the restore printed a configuration error.
+restore_ah() {
+  rm -rf "$AH/dst" && mkdir -p "$AH/dst"
+  printf '%b' "${1:-}" >"$AH/dst/.env"
+  OUT_AH="$(cd "$AH/dst" && env "${@:2}" "$RESTORE" "$(ls "$AH"/out/openwa-backup-*.tar.gz)" 2>&1)" ||
+    fail "(ah) the restore failed: $OUT_AH"
+  printf '%s' "$(sed -n 's/.*database\.sql | \(.*\)psql -v ON_ERROR_STOP=1.*/\1/p' <<<"$OUT_AH")"
+  if grep -q "verify-full needs the server's CA: set PGSSLROOTCERT" <<<"$OUT_AH"; then printf '+ca'; fi
+  if grep -q 'could not be read from the configuration' <<<"$OUT_AH"; then printf '+unread'; fi
+  if grep -q '\[config\] ERROR' <<<"$OUT_AH"; then printf '+error'; fi
+}
+GOT_AH="$(restore_ah)"
+backup_ah "${PG_AH}DATABASE_SSL=true\n" >/dev/null
+# An operator's PGSSLMODE is left alone, and the CA hint is needed only without PGSSLROOTCERT.
+GOT_AH="$GOT_AH|$(restore_ah)|$(restore_ah '' PGSSLROOTCERT=/ca.pem)|$(restore_ah '' PGSSLMODE=disable)"
+backup_ah "$PG_AH" >/dev/null
+# A TLS line the scripts cannot parse leaves the check on: the restore is done by then.
+GOT_AH="$GOT_AH|$(restore_ah)|$(restore_ah 'DATABASE_SSL="true" # tls on\n')"
+GOT_AH="$GOT_AH|$(restore_ah 'DATABASE_SSL=true\nDATABASE_SSL_REJECT_UNAUTHORIZED="false" # x\n')"
+if [ "$GOT_AH" != "PGSSLMODE=require |PGSSLMODE=verify-full +ca|PGSSLMODE=verify-full ||\
+|PGSSLMODE=verify-full +ca+unread|PGSSLMODE=verify-full +ca+unread" ]; then
+  fail "(ah) the printed psql command did not follow DATABASE_SSL: '$GOT_AH'"
 fi
 # The app reads a TLS line the scripts cannot parse, so the run stops before pg_dump connects without it.
 for check in 'DATABASE_SSL|DATABASE_SSL="true" # tls on\n' \
@@ -1930,7 +1970,7 @@ if [ "$(PATH="$AH/nonode" backup_ah "${PG_AH}DATABASE_SSL=true\n")" != "mode=ver
   ! grep -q 'node not found.*sslrootcert=system.*libpq 16+' "$AH/out.log"; then
   fail "(ah) without node the system CA store was not used, or the log gave no hint: $(cat "$AH/out.log")"
 fi
-pass "(ah) pg_dump verifies the server under DATABASE_SSL=true and is unchanged without it"
+pass "(ah) pg_dump and the printed psql command verify the server under DATABASE_SSL=true and are unchanged without it"
 echo "==> (ai) ./data defaults and paths follow OPENWA_DATA_DIR in a run on the host"
 # The app writes STORAGE_LOCAL_PATH=./data/media on first run, and a dashboard save adds
 # SESSION_DATA_PATH=./data/sessions, both relative to /app in the image, where the databases default to

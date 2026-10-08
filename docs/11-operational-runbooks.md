@@ -624,7 +624,11 @@ tar -xzOf "$BACKUP_DIR/openwa-backup-<timestamp>.tar.gz" ./database.sql | sed '/
 # An external PostgreSQL server: rename the upgraded database and create an empty one under the
 # DATABASE_NAME the app uses in the same way, then load the dump into it. DATABASE_URL is not an
 # OpenWA setting: fill in your own URL for that database, such as
-# postgres://<user>@<host>:5432/<database>, with the password in PGPASSWORD
+# postgres://<user>@<host>:5432/<database>, with the password in PGPASSWORD. With DATABASE_SSL=true,
+# run psql under PGSSLMODE=verify-full (require when DATABASE_SSL_REJECT_UNAUTHORIZED=false), as the
+# command restore.sh prints does; libpq's default sslmode=prefer accepts any certificate. verify-full
+# also needs PGSSLROOTCERT set to the server's CA file: libpq otherwise reads ~/.postgresql/root.crt,
+# and sslrootcert=system needs libpq 16+ and a system CA store, which the image lacks
 tar -xzOf "$BACKUP_DIR/openwa-backup-<timestamp>.tar.gz" ./database.sql | sed '/^SET transaction_timeout = 0;$/d' |
   psql -v ON_ERROR_STOP=1 "$DATABASE_URL"
 
@@ -914,7 +918,12 @@ tar -xzOf ./backups/openwa-backup-<timestamp>.tar.gz ./database.sql | sed '/^SET
 #    An external PostgreSQL server: rename the current database and create an empty one under the
 #    DATABASE_NAME the app uses in the same way, then load the dump into it. DATABASE_URL is not an
 #    OpenWA setting: fill in your own URL for that database, such as
-#    postgres://<user>@<host>:5432/<database>, with the password in PGPASSWORD
+#    postgres://<user>@<host>:5432/<database>, with the password in PGPASSWORD. With
+#    DATABASE_SSL=true, run psql under PGSSLMODE=verify-full (require when
+#    DATABASE_SSL_REJECT_UNAUTHORIZED=false), as the command restore.sh prints does; libpq's default
+#    sslmode=prefer accepts any certificate. verify-full also needs PGSSLROOTCERT set to the server's
+#    CA file: libpq otherwise reads ~/.postgresql/root.crt, and sslrootcert=system needs libpq 16+
+#    and a system CA store, which the image lacks
 tar -xzOf ./backups/openwa-backup-<timestamp>.tar.gz ./database.sql | sed '/^SET transaction_timeout = 0;$/d' |
   psql -v ON_ERROR_STOP=1 "$DATABASE_URL"
 

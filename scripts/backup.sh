@@ -239,8 +239,15 @@ if [ "$DATABASE_TYPE" = "postgres" ]; then
       if [ -z "${PGSSLROOTCERT:-}" ] && command -v node >/dev/null 2>&1; then
         PG_ROOT_CERTS="$(mktemp)"
         trap 'rm -rf "$STAGE" "$PG_ROOT_CERTS"' EXIT
+        # Before Node 22.15 there is no getCACertificates, and rootCertificates holds only the bundled
+        # roots, so NODE_EXTRA_CA_CERTS is added from its file. An unreadable file is skipped, as Node
+        # itself skips it after the warning it prints at startup.
         node -e 'const tls = require("tls");
-          console.log((tls.getCACertificates ? tls.getCACertificates("default") : tls.rootCertificates).join("\n"))' \
+          let certs = tls.getCACertificates ? tls.getCACertificates("default") : tls.rootCertificates;
+          if (!tls.getCACertificates && process.env.NODE_EXTRA_CA_CERTS) {
+            try { certs = certs.concat(require("fs").readFileSync(process.env.NODE_EXTRA_CA_CERTS, "utf8")); } catch {}
+          }
+          console.log(certs.join("\n"))' \
           >"$PG_ROOT_CERTS"
       elif [ -z "${PGSSLROOTCERT:-}" ]; then
         log "node not found: verifying the server against the system CA store (sslrootcert=system," \

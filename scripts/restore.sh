@@ -479,7 +479,31 @@ if [ -f "$STAGE/database.sql" ]; then
   log "Postgres dump present: load it into an EMPTY database, as docs/11-operational-runbooks.md"
   log "(Restore from Backup, step 3) shows for the built-in openwa-postgres container. For an external"
   log "server, with DATABASE_URL set to your own URL for that database:"
-  log "  sed '/^SET transaction_timeout = 0;\$/d' $DATA_DIR/database.sql | psql -v ON_ERROR_STOP=1 \"\$DATABASE_URL\""
+  # psql defaults to sslmode=prefer, which falls back to plaintext and takes any certificate, so the
+  # printed command asks for the TLS mode the app uses. The restore is already done: a TLS line the
+  # scripts cannot parse leaves the check on rather than stopping it.
+  PSQL_SSL=""
+  PSQL_UNREAD=""
+  if [ -z "${PGSSLMODE:-}" ]; then
+    PSQL_TLS="$(openwa_resolve DATABASE_SSL false 2>/dev/null)" || { PSQL_TLS=true && PSQL_UNREAD=DATABASE_SSL; }
+    if [ "$PSQL_TLS" = true ]; then
+      PSQL_SSL="PGSSLMODE=verify-full "
+      PSQL_REJECT="$(openwa_resolve DATABASE_SSL_REJECT_UNAUTHORIZED true 2>/dev/null)" ||
+        PSQL_UNREAD="${PSQL_UNREAD:+$PSQL_UNREAD and }DATABASE_SSL_REJECT_UNAUTHORIZED"
+      if [ "$PSQL_REJECT" = false ]; then
+        PSQL_SSL="PGSSLMODE=require "
+      fi
+    fi
+  fi
+  log "  sed '/^SET transaction_timeout = 0;\$/d' $DATA_DIR/database.sql | ${PSQL_SSL}psql -v ON_ERROR_STOP=1 \"\$DATABASE_URL\""
+  if [ -n "$PSQL_UNREAD" ]; then
+    log "($PSQL_UNREAD could not be read from the configuration, so the command takes the stricter setting)"
+  fi
+  if [ "$PSQL_SSL" = "PGSSLMODE=verify-full " ] && [ -z "${PGSSLROOTCERT:-}" ]; then
+    log "(verify-full needs the server's CA: set PGSSLROOTCERT to its CA file, such as the NODE_EXTRA_CA_CERTS"
+    log "file for a private CA; libpq otherwise reads ~/.postgresql/root.crt, and sslrootcert=system needs libpq 16+"
+    log "and a system CA store, which the image lacks)"
+  fi
   log "(sed drops a setting this image's pg_dump 17 writes and PostgreSQL 16 rejects)"
 fi
 

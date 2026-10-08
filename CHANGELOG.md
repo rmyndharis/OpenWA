@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Drop whatsapp-web.js inbound media over `MEDIA_DOWNLOAD_MAX_BYTES` in the page when the sender understates its size.
+- Trust `NODE_EXTRA_CA_CERTS` in `backup.sh`'s PostgreSQL TLS check on Node older than 22.15.
+- Set `PGSSLMODE` in the `psql` import command `restore.sh` prints when `DATABASE_SSL=true`.
 - Use the `OPENWA_DATA_DIR` volume's `media/`, even before it exists, for a leftover `STORAGE_LOCAL_PATH=./uploads` in host-side `backup.sh` and `restore.sh` runs, instead of the working directory's `./uploads`.
 - Read the `./data` database defaults and `./data/...` paths in `./.env` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs, instead of the working directory's `./data`.
 - Probe the configured `PORT` in the Docker image healthcheck instead of a fixed 2785.
