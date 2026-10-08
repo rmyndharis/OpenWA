@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Retain send idempotency keys after engine-stage failures, including HTTP 409.
 - Reject poll votes with no matching options while preserving explicit vote clearing.
 
+### Documentation
+
+- Document how to recover a lost admin API key without revoking the other keys.
+
 ### Upgrade notes (behavior changes)
 
 - Baileys answers `400` for an animated sticker with more than 500 frames.

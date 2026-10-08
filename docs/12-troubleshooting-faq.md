@@ -1406,6 +1406,10 @@ The shipped script also covers `main.sqlite`, the selected data store, whatsapp-
 `BAILEYS_AUTH_DIR` (default `./data/baileys`), media, plugin packages/state, and generated secrets. Apply
 retention/encryption to completed archives externally; see the [backup and restore runbooks](./11-operational-runbooks.md#runbook-database-backup).
 
+**Q: I lost the admin API key. How do I get back in?**
+
+> A: Keys are stored hashed, so the database cannot give it back. Check `data/.api-key` (or `BOOTSTRAP_KEY_FILE`) and the `API_MASTER_KEY` value the instance was first started with, then use another unscoped ADMIN key to mint a replacement. With neither, stop the instance and write a new key's hash into the lost key's row in the main database, which keeps every other key working. The steps are in [Recovering a lost admin key](./04-security-design.md#recovering-a-lost-admin-key).
+
 ### Webhook Questions
 
 **Q: What events can I subscribe to?**

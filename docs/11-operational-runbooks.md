@@ -926,8 +926,8 @@ curl -s -X POST -H "X-API-Key: <an-existing-key>" http://localhost:2785/api/auth
 > `main.sqlite` carries the hashed API keys and audit log; `.api-key`, when retained by the original
 > installation, carries the plaintext bootstrap admin key. After restore, verify that both expected files
 > were present in the archive and that the client is using the original plaintext key. Re-running backup
-> after the source state or key has already been lost cannot recover it; use an older valid archive or the
-> documented credential-recovery procedure instead.
+> after the source state or key has already been lost cannot recover it; use an older valid archive or
+> [recover the admin key](./04-security-design.md#recovering-a-lost-admin-key) instead.
 
 **Verification:**
 
