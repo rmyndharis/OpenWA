@@ -10,6 +10,8 @@ import {
   Param,
   All,
   Req,
+  Injectable,
+  OnModuleDestroy,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { NestFactory } from '@nestjs/core';
@@ -23,6 +25,7 @@ import { configureApp } from '../src/configure-app';
 import { applyGlobalValidation } from '../src/config/app-validation';
 import { DASHBOARD_CSP_NONCE_PLACEHOLDER } from '../src/config/dashboard-csp';
 import { ActiveKeyIndex } from '../src/modules/auth/active-key-index';
+import { ShutdownService } from '../src/common/services/shutdown.service';
 import { documentErrorResponses, ERROR_RESPONSE_SCHEMA } from '../src/config/swagger.config';
 
 /**
@@ -378,6 +381,105 @@ describe('in-flight body budget tiers (configureApp)', () => {
       expect(keyed.status).toBe(201);
     } finally {
       held.destroy();
+    }
+  });
+});
+
+describe('requests during shutdown teardown (configureApp)', () => {
+  // Nest keeps the listener open until every destroy hook has finished, so the hook below can still
+  // reach the server: it records what a client arriving mid-teardown gets back.
+  let base = '';
+  const handled: string[] = [];
+  const duringTeardown: Record<string, request.Response> = {};
+  let slowEntered!: () => void;
+  const slowAdmitted = new Promise<void>(resolve => (slowEntered = resolve));
+  let releaseSlow!: () => void;
+  const slowReleased = new Promise<void>(resolve => (releaseSlow = resolve));
+
+  @Controller()
+  class TeardownProbeController {
+    @Get('work')
+    work() {
+      handled.push('work');
+      return { ok: true };
+    }
+
+    @Get('slow')
+    async slow() {
+      handled.push('slow');
+      slowEntered();
+      await slowReleased;
+      return { ok: true };
+    }
+
+    @Get('health/live')
+    live() {
+      return { status: 'ok' };
+    }
+  }
+
+  @Injectable()
+  class TeardownProbe implements OnModuleDestroy {
+    async onModuleDestroy() {
+      for (const path of ['/api/work', '/api/health/live']) {
+        duringTeardown[path] = await request(base).get(path).set('Connection', 'keep-alive');
+      }
+      releaseSlow();
+    }
+  }
+
+  @Module({ controllers: [TeardownProbeController], providers: [ShutdownService, TeardownProbe] })
+  class TeardownSurfaceModule {}
+
+  it('refuses new requests once teardown begins, while admitted requests and the health probes complete', async () => {
+    const app = await NestFactory.create<INestApplication<App>>(TeardownSurfaceModule, {
+      bodyParser: false,
+      logger: false,
+    });
+    configureApp(app);
+    applyGlobalValidation(app);
+    await app.listen(0, '127.0.0.1');
+    base = await app.getUrl();
+
+    let exited!: () => void;
+    const exitCalled = new Promise<void>(resolve => (exited = resolve));
+    const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => exited()) as never);
+    let teardownStarted = false;
+    try {
+      const shutdown = app.get(ShutdownService);
+      shutdown.setShutdownCallback(() => app.close());
+
+      // The drain: readiness reports 503 so the balancer stops routing, but traffic is still served.
+      shutdown.markShuttingDown();
+      expect((await request(base).get('/api/work')).status).toBe(200);
+
+      const slow = request(base)
+        .get('/api/slow')
+        .then(res => res);
+      await slowAdmitted;
+      teardownStarted = true;
+      shutdown.shutdown(0);
+      await exitCalled;
+
+      const refused = duringTeardown['/api/work'];
+      expect(refused.status).toBe(503);
+      expect(refused.headers.connection).toBe('close');
+      expect(refused.body).toEqual({
+        statusCode: 503,
+        message: 'Server is shutting down',
+        error: 'Service Unavailable',
+      });
+      // The handler never ran for the refused request: only the drain-time call and the slow one did.
+      expect(handled).toEqual(['work', 'slow']);
+      expect(duringTeardown['/api/health/live'].status).toBe(200);
+      expect((await slow).status).toBe(200);
+    } finally {
+      exitSpy.mockRestore();
+      // A failure before teardown would otherwise leave the listener and the slow handler open.
+      if (!teardownStarted) {
+        releaseSlow();
+        await app.close();
+      }
     }
   });
 });

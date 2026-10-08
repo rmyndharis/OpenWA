@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Apply the Java SDK request timeout to the response body as well as the headers.
+- Keep a new dashboard template draft when an earlier template save finishes.
+- Stop the dashboard Chats page from marking the open chat read on a newly selected session.
+- Refuse bulk batches once shutdown begins, and fail a batch saved during shutdown instead of sending it.
+- Disable plugins whose enable is still running at shutdown, and refuse new plugin enables during teardown.
+- Stop in-flight webhook replay, ingress replay and pending-message sweeps at shutdown.
+- Close queue workers before plugins shut down, so jobs taken during shutdown no longer spend attempts or get dead-lettered.
+- Answer new HTTP requests with `503` once shutdown teardown begins.
+- Refuse session starts with `503` once shutdown begins, and leave a start that shutdown interrupts for the next boot instead of marking it failed.
+- Retire the pending webhook outbox record when a redrive delivers, so the sweep does not send the event again.
+- Stop dashboard multi-page loads and a pending chat mark-as-read from sending requests after logout.
+- Keep a new dashboard login signed in when a request sent with the previous API key fails afterwards.
+- Enforce the plugin package size limit before reading `manifest.json`, and reject archive entries whose path starts with `/`.
 - Refuse Baileys animated stickers over 500 frames and run at most two sticker conversions at once.
 - Stop pending webhook deliveries from holding over-cap inline media already omitted from their payload.
 - Resolve `./data/...` paths from `.env.generated` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs.
@@ -63,6 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep one terminal webhook failure per receiver idempotency key.
 - Retain send idempotency keys after engine-stage failures, including HTTP 409.
 - Reject poll votes with no matching options while preserving explicit vote clearing.
+
+### Documentation
+
+- The webhook runbook documents the ADMIN delivery-failure redrive and no longer says failed deliveries retry on their own.
 
 ### Upgrade notes (behavior changes)
 

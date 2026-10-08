@@ -972,6 +972,7 @@ export class MessageController {
     status: 429,
     description: 'Too many bulk batches in progress on this node (BULK_MAX_CONCURRENT_BATCHES); retry shortly',
   })
+  @ApiResponse({ status: 503, description: 'The server is shutting down; retry the batch shortly' })
   async sendBulk(
     @Param('sessionId') sessionId: string,
     @Body() dto: SendBulkMessageDto,
