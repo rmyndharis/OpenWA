@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Retire the whatsapp-web.js download-mimetype install patch; inbound media downloads now pass the mimetype themselves.
+- Storage import abort messages name the `STORAGE_IMPORT_MAX_BYTES` or `STORAGE_IMPORT_MAX_ENTRIES` setting that stopped them.
 - CI and the weekly security scan run `npm audit` over the JavaScript SDK, and Dependabot watches its lockfile.
 
 ### Fixed
@@ -31,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Drop whatsapp-web.js inbound media over `MEDIA_DOWNLOAD_MAX_BYTES` in the page when the sender understates its size.
 - Warn at storage export when a file is larger than the per-entry import cap `STORAGE_IMPORT_MAX_BYTES`.
 - Probe the configured `PORT` in the Docker image healthcheck instead of a fixed 2785.
-- Cap the total bytes one storage import writes at `STORAGE_IMPORT_MAX_TOTAL_BYTES`.
+- Cap the total bytes one storage import extracts at `STORAGE_IMPORT_MAX_TOTAL_BYTES`.
 - Close the Baileys session proxy's fetch dispatcher when the session disconnects, logs out or is destroyed.
 - Java SDK (next SDK release after 0.5.1): the request timeout also bounds the response body, so a stalled body raises `OpenWATimeoutError`.
 - Keep a new dashboard template draft when an earlier template save finishes.
@@ -87,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - Document the memory media messages and parked webhook deliveries hold during a media burst, and the settings that limit it.
+- The storage migration guide says to check the store size and file count against the import caps before switching backends, and how to re-run an aborted import.
 - The README and architecture docs describe the Local/S3 storage backend as the live media store, not a backup target.
 - Document how to recover a lost admin API key without revoking the other keys.
 - The integration docs say `integration_delivery_failures` holds only failed inbound deliveries.

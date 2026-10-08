@@ -234,11 +234,31 @@ does not go back to `false` until a restart, so it shows the bucket came up, not
 outage after that makes the count and the export fail with `500`, and the import answer `imported: false`
 with the entries counted in `failed`.
 
+Check the import caps before the switch. The import counts every byte it extracts from the archive and
+stops before it would write past `STORAGE_IMPORT_MAX_TOTAL_BYTES` (default `10737418240`, 10 GiB), or
+past `STORAGE_IMPORT_MAX_ENTRIES` files (default `100000`), so when Step 1's `sizeBytes` or `count` is
+larger, set a higher value in the `.env` with the Step 3 changes. Compose passes `.env` values to the
+container only when it creates it, so the Step 4 `docker compose up -d` applies the value and a
+dashboard restart, which reuses the container, does not: on the dashboard route run
+`docker compose up -d` before Step 5, or set the value in `data/.env.generated` instead, which every
+restart reads (under compose it lives in the `openwa-data` volume, so edit it through
+`docker compose exec openwa-api`). The import also stops at any single file above
+`STORAGE_IMPORT_MAX_BYTES` (default `209715200`, 200 MiB). It holds each file in memory, about twice its
+size at peak, so raise that cap only while `OPENWA_MEM_LIMIT` (default `2g`) leaves that much headroom
+beside the running sessions, or the container can be killed mid-import. The export logs a warning for
+each of these three caps the archive is above, measured against the lower of this deployment's value and
+the shipped default, so a warning whose "this deployment" value is already above the archive's figure
+needs no change on this gateway. An aborted import keeps what it wrote, and a re-run under the same caps
+stops at the same file, so raise the matching setting on the destination as above (`.env` plus
+`docker compose up -d`, or `data/.env.generated` plus a restart) before re-running Step 5.
+
 ```bash
 # Step 1: Check current storage file count
 curl -s 'http://localhost:2785/api/infra/storage/files/count' \
   -H 'X-API-Key: YOUR_KEY'
 # Response: { "storageType": "local", "count": 150, "sizeBytes": 15000000 }
+# Compare sizeBytes with STORAGE_IMPORT_MAX_TOTAL_BYTES and count with STORAGE_IMPORT_MAX_ENTRIES
+# (see above) before Step 3.
 
 # Step 2: Export all files as tar.gz
 curl -s 'http://localhost:2785/api/infra/storage/export' \
@@ -246,6 +266,9 @@ curl -s 'http://localhost:2785/api/infra/storage/export' \
 # Response: { "message": "Storage export completed", "download": "data/exports/storage-export-xxx.tar.gz" }
 # The archive is auto-removed after STORAGE_EXPORT_TTL_MS (default 1h), so re-import it before then.
 # It is written under data/ so it survives the restart in Step 4 and stays import-able.
+# Before Step 3, check `docker compose logs openwa-api` for an "Export contains" warning: one about
+#   the per-entry import limit means raising STORAGE_IMPORT_MAX_BYTES with the Step 3 changes,
+#   unless its "this deployment" value is already above the file's size.
 
 # Step 3: Change the storage configuration
 # Dashboard: Infrastructure > Amazon S3 + "Use Built-in MinIO Container"; save, then
@@ -268,11 +291,6 @@ curl -X POST 'http://localhost:2785/api/infra/storage/import' \
   -H 'Content-Type: application/json' \
   -d '{"filePath": "data/exports/storage-export-xxx.tar.gz"}'
 ```
-
-The import aborts once it has written more than `STORAGE_IMPORT_MAX_TOTAL_BYTES` (default 10 GiB). For a
-larger store, raise it on the destination before Step 5; the export logs a warning when it exceeds that
-limit. The import also aborts on any single file above `STORAGE_IMPORT_MAX_BYTES` (default 200 MiB), and
-the export warns about that too. An aborted import keeps what it wrote and can be re-run.
 
 | Scenario                     | Support | Method                   |
 | ---------------------------- | ------- | ------------------------ |

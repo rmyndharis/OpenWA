@@ -265,7 +265,7 @@ describe('importFromStream reports partial counts on an abort', () => {
       ).catch((err: unknown) => err);
 
       expect(rejection).toBeInstanceOf(Error);
-      expect((rejection as Error).message).toMatch(/2-entry limit/);
+      expect((rejection as Error).message).toMatch(/2-entry limit \(STORAGE_IMPORT_MAX_ENTRIES\)/);
       expect(rejection).toMatchObject({ imported: 2, failed: 0 });
       expect(written).toEqual(['a.jpg', 'b.jpg']);
     } finally {
@@ -275,7 +275,7 @@ describe('importFromStream reports partial counts on an abort', () => {
   });
 });
 
-describe('importFromStream caps the total bytes one import writes', () => {
+describe('importFromStream caps the total bytes one import extracts', () => {
   const withTotalCap = async <T>(cap: string, run: () => Promise<T>): Promise<T> => {
     const prev = process.env.STORAGE_IMPORT_MAX_TOTAL_BYTES;
     process.env.STORAGE_IMPORT_MAX_TOTAL_BYTES = cap;

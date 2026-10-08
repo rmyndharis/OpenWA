@@ -228,6 +228,27 @@ describe('governance docs match the repository', () => {
       expect(read(file)).not.toMatch(/backup\s*\/\s*migration|media backup/i);
       expect(read(file)).toMatch(/live media store/i);
     }
+    // The table cell also says "live media store", so pin the README sentence carrying the warning.
+    expect(read('README.md')).toMatch(
+      /backup\.sh` archives only the local media directory, so an S3 bucket needs a backup/,
+    );
+  });
+
+  // The export writes one archive entry per file, so Step 1's count meets the entry cap at import.
+  it('has the storage migration check both import caps before the backend switch', () => {
+    const guide = read('docs/14-migration-guide.md');
+    const caps = between(guide, 'Check the import caps before the switch.', '\n\n').replace(/\s+/g, ' ');
+    expect(caps).toContain('`STORAGE_IMPORT_MAX_ENTRIES` files (default `100000`)');
+    expect(caps).toContain("Step 1's `sizeBytes` or `count`");
+    // The import buffers each file whole, so a raised per-entry cap must fit the container's memory.
+    expect(caps).toContain('`OPENWA_MEM_LIMIT` (default `2g`)');
+    const step1 = between(guide, '# Step 1: Check current storage file count', '# Step 2').replace(/\s+/g, ' ');
+    expect(step1).toContain('sizeBytes with STORAGE_IMPORT_MAX_TOTAL_BYTES');
+    expect(step1).toContain('count with STORAGE_IMPORT_MAX_ENTRIES');
+    // Step 1 cannot show the largest file, so the export warning is the only early per-file signal.
+    const step2 = between(guide, '# Step 2: Export all files as tar.gz', '# Step 3').replace(/\s+/g, ' ');
+    expect(step2).toContain('docker compose logs openwa-api');
+    expect(step2).toContain('STORAGE_IMPORT_MAX_BYTES');
   });
 
   it('keeps the README non-affiliation disclaimer', () => {

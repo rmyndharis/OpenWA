@@ -9,7 +9,7 @@ import { LoggerService } from '../services/logger.service';
 const DEFAULT_IMPORT_MAX_BYTES = 200 * 1024 * 1024;
 /** Max number of entries an import archive may contain. Bounds an entry-count DoS. */
 const DEFAULT_IMPORT_MAX_ENTRIES = 100_000;
-/** Cap on the bytes one import writes in total (10 GiB). The two caps above still allow terabytes. */
+/** Cap on the bytes one import extracts in total (10 GiB). The two caps above still allow terabytes. */
 const DEFAULT_IMPORT_MAX_TOTAL_BYTES = 10 * 1024 * 1024 * 1024;
 
 /**
@@ -258,7 +258,7 @@ export async function importFromStream(
       }
       if (++entryCount > maxEntries) {
         stream.resume();
-        fail(new Error(`Import aborted: archive exceeds the ${maxEntries}-entry limit`));
+        fail(new Error(`Import aborted: archive exceeds the ${maxEntries}-entry limit (STORAGE_IMPORT_MAX_ENTRIES)`));
         return;
       }
       // Only regular files are media. A directory or link entry carries no content, and writing it
@@ -284,7 +284,11 @@ export async function importFromStream(
         if (entryBytes > maxEntryBytes) {
           entryAborted = true;
           stream.resume(); // drain the remainder so the source can end
-          fail(new Error(`Import aborted: entry "${key}" exceeds the ${maxEntryBytes}-byte per-entry cap`));
+          fail(
+            new Error(
+              `Import aborted: entry "${key}" exceeds the ${maxEntryBytes}-byte per-entry cap (STORAGE_IMPORT_MAX_BYTES)`,
+            ),
+          );
         } else if (totalBytes > maxTotalBytes) {
           // The entry that crosses the cap is dropped, so no import writes more than maxTotalBytes.
           entryAborted = true;

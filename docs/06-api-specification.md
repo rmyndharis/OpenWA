@@ -6010,7 +6010,7 @@ Import storage files from a `tar.gz` located inside the `data/` directory.
 
 `failed` counts archive entries the store refused to write; a bad or traversing entry is skipped without failing the rest. `imported` is `false` when entries failed and none was written.
 
-**Errors:** `400` missing/out-of-`data/`/not-found path, or `Storage import failed: <reason>` when the file is not a readable gzip tar archive or exceeds the import resource caps (an abort keeps the entries written before it, since there is no rollback; re-run the import once the archive is fixed, as each entry overwrites) · `401` · `403` · `500` · `503` S3 configured but not reachable since boot (a later outage answers `200` with `imported: false` and the entries in `failed`)
+**Errors:** `400` missing/out-of-`data/`/not-found path, or `Storage import failed: <reason>` when the file is not a readable gzip tar archive or exceeds the import resource caps `STORAGE_IMPORT_MAX_BYTES` (per file), `STORAGE_IMPORT_MAX_ENTRIES` or `STORAGE_IMPORT_MAX_TOTAL_BYTES` (an abort keeps the entries written before it, since there is no rollback, and each entry overwrites on a re-run; a re-run under the same caps stops at the same entry, so for a cap abort first raise the matching setting on the destination as the migration guide describes, and for an unreadable archive re-run with a sound copy) · `401` · `403` · `500` · `503` S3 configured but not reachable since boot (a later outage answers `200` with `imported: false` and the entries in `failed`)
 
 ---
 
