@@ -145,6 +145,16 @@ describe('governance docs match the repository', () => {
     expect(note).toContain('`docker compose up -d --no-build`');
   });
 
+  // Compose hands `./.env`'s PLUGINS_DIR to the container, where `./data/plugins` is in the volume;
+  // the backup scripts read the same line against the host's working directory.
+  it('tells a host-mount backup to override the ./data paths ./.env sets', () => {
+    expect(read('.env.example')).toMatch(/^PLUGINS_DIR=\.\/data\/plugins\b/m);
+    expect(read('docker-compose.yml')).toContain('- PLUGINS_DIR=${PLUGINS_DIR:-');
+    const note = between(read('docs/11-operational-runbooks.md'), '> The scripts resolve every other path', '\n>\n');
+    expect(note).toMatch(/A `\.\/data\/\.\.\.` path in `\.\/\.env` needs the same\s+>\s+override/);
+    expect(note).toContain('`PLUGINS_DIR=./data/plugins`');
+  });
+
   // docs/20 section 20.4: the project runs no real-time chat server, and the `openwa` name is shared.
   it('links no chat server the project does not run', () => {
     const docs = readdirSync(join(root, 'docs'))

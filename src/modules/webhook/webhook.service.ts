@@ -361,8 +361,12 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Delivery facade: same entry point event producers have always called; the engine lives on WebhookDeliveryService. */
-  async dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
-    await this.delivery.dispatch(sessionId, event, data);
+  /**
+   * Delivery facade: same entry point event producers have always called; the engine lives on
+   * WebhookDeliveryService. Not async on purpose: a frame suspended on the engine would keep the
+   * unshed event alive until every delivery settles.
+   */
+  dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
+    return this.delivery.dispatch(sessionId, event, data);
   }
 }

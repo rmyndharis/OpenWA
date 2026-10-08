@@ -265,6 +265,10 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
             this.configService.get<number>('webhook.mediaInlineMaxBytes', DEFAULT_WEBHOOK_MEDIA_INLINE_MAX_BYTES),
           )
         : data;
+    // The await below holds this frame, parameters included, until every delivery settles: point
+    // `data` at the shed copy so parked deliveries pin only that, not the caller's full blob.
+    // eslint-disable-next-line no-useless-assignment
+    data = baseData;
 
     const ctx: DispatchEventContext = { sessionId, event, baseData };
     // allSettled preserves the per-webhook isolation: one failing delivery never rejects the others.

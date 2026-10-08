@@ -294,6 +294,66 @@ describe('IngressReconcilerService.sweep', () => {
     expect(await failures.count({ where: { deliveryId: 'd-1' } })).toBe(1);
   });
 
+  it('writes no redrivable DLQ row when the live-path row is redriven during the final replay', async () => {
+    const id = await insertEvent({ dispatchAttempts: 4 });
+    const live = await failures.save(
+      failures.create({
+        direction: 'inbound',
+        pluginId: 'plug',
+        instanceId: 'inst',
+        sessionId: 'sess-1',
+        deliveryId: 'd-1',
+        attempts: 1,
+        lastError: 'inline dispatch failed',
+        payload: null,
+        redriven: false,
+      }),
+    );
+    // An operator redrive delivers the live-path row while this replay is failing: it closes the
+    // pending event, then the row (RedriveService's order).
+    enqueue.mockImplementation(async () => {
+      await events.update({ id, dispatchState: 'pending' }, { dispatchState: 'dispatched', payload: null });
+      await failures.update({ id: live.id }, { redriven: true });
+      return { outcome: 'failed', error: 'still down' };
+    });
+
+    await service.sweep(OPTS);
+
+    expect((await stored(id)).dispatchState).toBe('dispatched');
+    expect(await failures.count({ where: { deliveryId: 'd-1', redriven: false } })).toBe(0);
+  });
+
+  it('writes a redrivable DLQ row on terminal failure when the only row for the id was already redriven', async () => {
+    // An earlier delivery under the same id was dead-lettered and redriven; its event row aged out of
+    // the dedup window, so the id was accepted again and this new event exhausted its replay budget.
+    const old = await failures.save(
+      failures.create({
+        direction: 'inbound',
+        pluginId: 'plug',
+        instanceId: 'inst',
+        sessionId: 'sess-1',
+        deliveryId: 'd-1',
+        attempts: 1,
+        lastError: 'inline dispatch failed',
+        payload: null,
+        redriven: true,
+      }),
+    );
+    const id = await insertEvent({ dispatchAttempts: 4 });
+    enqueue.mockResolvedValue({ outcome: 'failed', error: 'sandbox 5xx' });
+
+    await service.sweep(OPTS);
+
+    const event = await stored(id);
+    expect(event.dispatchState).toBe('failed');
+    expect(event.payload).toBeNull();
+    const open = await failures.find({ where: { deliveryId: 'd-1', redriven: false } });
+    expect(open).toHaveLength(1);
+    expect(open[0].id).not.toBe(old.id);
+    expect(open[0]).toMatchObject({ attempts: 5, lastError: 'sandbox 5xx' });
+    expect(open[0].payload).toMatchObject({ route: 'chatwoot', ingress: { rawBody: '{}' } });
+  });
+
   it('retires the live-path DLQ row when the replay succeeds (no double delivery via redrive)', async () => {
     await insertEvent();
     const dlq = await failures.save(
@@ -379,6 +439,31 @@ describe('IngressReconcilerService.sweep', () => {
       const [row] = await failures.find({ where: { deliveryId: 'd-1' } });
       expect(row).toMatchObject({ direction: 'inbound', redriven: false });
       expect(row.payload).toMatchObject({ route: 'chatwoot', ingress: { rawBody: '{}' } });
+      expect((await stored(id)).dispatchState).toBe('failed');
+    });
+
+    it('writes its own dead-letter row when the only row for the id was already redriven', async () => {
+      await failures.save(
+        failures.create({
+          direction: 'inbound',
+          pluginId: 'plug',
+          instanceId: 'inst',
+          sessionId: 'sess-1',
+          deliveryId: 'd-1',
+          attempts: 3,
+          lastError: 'no live sandbox host',
+          payload: null,
+          redriven: true,
+        }),
+      );
+      const id = await insertEvent();
+      queue.getJobState.mockResolvedValue('failed');
+
+      await service.sweep(OPTS);
+
+      const open = await failures.find({ where: { deliveryId: 'd-1', redriven: false } });
+      expect(open).toHaveLength(1);
+      expect(open[0].payload).toMatchObject({ route: 'chatwoot', ingress: { rawBody: '{}' } });
       expect((await stored(id)).dispatchState).toBe('failed');
     });
 
