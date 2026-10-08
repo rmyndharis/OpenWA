@@ -267,12 +267,22 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     if (terminal) {
       // DLQ BEFORE the terminal mark + payload retirement: the dead-letter row is the payload's new
       // home, so it must exist first. ensureDeadLetterRow is idempotent (count-guarded), so a crash
-      // between the two writes just makes the next sweep re-take this path and finish the mark.
-      await this.ensureDeadLetterRow(jobData, attempts, error);
-      await this.events.update(
-        { id: row.id },
+      // between the two writes just makes the next sweep re-take this path and finish the mark. A
+      // redrive of the live-path row during this replay closes the event and that row, so, as in the
+      // failed-job branch, the mark only lands on a still-'pending' event and the row written for an
+      // event the redrive already dispatched is retired.
+      const written = await this.ensureDeadLetterRow(jobData, attempts, error);
+      const marked = await this.events.update(
+        { id: row.id, dispatchState: 'pending' },
         { dispatchAttempts: attempts, lastDispatchAt: now, dispatchState: 'failed', payload: null },
       );
+      if (!marked.affected && written) {
+        const current = await this.events.findOne({ where: { id: row.id }, select: { dispatchState: true } });
+        if (current?.dispatchState === 'dispatched') {
+          await this.failures.update({ id: written, redriven: false }, { redriven: true });
+          return 'replayed';
+        }
+      }
       this.logger.warn('Ingress event replay budget exhausted; event is dead-lettered', {
         pluginId: row.pluginId,
         instanceId: row.instanceId,
@@ -313,7 +323,9 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
 
   // The live path dead-letters an inline-dispatch failure at request time, so a terminal row may
   // already have its DLQ entry — write one only if missing, and never a second copy. Returns the id of
-  // the row it wrote, or undefined when one already existed.
+  // the row it wrote, or undefined when an open one already existed. Only an open row counts: a
+  // redriven one is closed for good, so an event re-sent under the same id after the dedup window
+  // still needs its own redrivable row.
   private async ensureDeadLetterRow(
     data: IngressJobData,
     attempts: number,
@@ -325,6 +337,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
         pluginId: data.pluginId,
         instanceId: data.instanceId,
         deliveryId: data.deliveryId,
+        redriven: false,
       },
     });
     if (existing > 0) return undefined;
