@@ -1074,6 +1074,33 @@ test('a reconnect refetch that settles after the page was left sends no mark-as-
   );
 });
 
+async function leaveWithPendingRead(loggedOut: boolean): Promise<number> {
+  const { screen, fireEvent, within } = rtl;
+  const { container, unmount } = renderChats();
+  await screen.findByText('Main (15551234567)');
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  // Opening the chat queued its read behind the quiet window; the page goes away inside it.
+  resetFetchCalls();
+  // Logout removes the key before the authenticated tree unmounts.
+  if (loggedOut) window.sessionStorage.removeItem('openwa_api_key');
+  try {
+    unmount();
+    await new Promise(resolve => setTimeout(resolve, 1_000));
+  } finally {
+    window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  }
+  return countFetchCalls('POST', `/api/sessions/${SESSION.id}/chats/read`);
+}
+
+test('leaving the page sends the pending mark-as-read', async () => {
+  assert.equal(await leaveWithPendingRead(false), 1, 'the pending mark-as-read was dropped');
+});
+
+test('logging out sends no pending mark-as-read without a key', async () => {
+  assert.equal(await leaveWithPendingRead(true), 0, 'a keyless mark-as-read went out after logout');
+});
+
 test('a reconnect refetch overtaken by a newer list still marks the open chat read', async () => {
   const { screen, fireEvent, within, act, waitFor } = rtl;
   const { container } = renderChats();
@@ -1172,6 +1199,46 @@ test("a reconnect refetch that settles after a session switch leaves the new ses
     await flush();
     assert.ok(screen.queryByLabelText('3 unread messages'), "session 1's refetch cleared session 2's unread badge");
   } finally {
+    twoSessions = false;
+  }
+});
+
+test('switching session with a chat open marks only the chats opened on the new session read', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  twoSessions = true;
+  // Session 2 lists Alice too (a contact both accounts share). The stub folds session 2's routes onto
+  // session 1's, so its mark-as-read bodies are collected before that.
+  chatsResponder = sessionId =>
+    Promise.resolve(
+      jsonResponse(sessionId === SESSION.id ? [CHAT] : [{ ...CHAT, lastMessage: 'alice on two' }, CHAT_2]),
+    );
+  const readsOnTwo: unknown[] = [];
+  const stub = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith(`/api/sessions/${SESSION_2.id}/chats/read`))
+      readsOnTwo.push(JSON.parse(String(init?.body)));
+    return stub(input, init);
+  }) as typeof fetch;
+  try {
+    const { container, unmount } = renderChats();
+    await screen.findByText('Main (15551234567)');
+    fireEvent.click(await screen.findByText('Alice'));
+    await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+
+    fireEvent.change(container.querySelector('select.session-selector') as HTMLSelectElement, {
+      target: { value: SESSION_2.id },
+    });
+    await screen.findByText('alice on two');
+    fireEvent.click(await screen.findByText('Carol'));
+    await waitFor(() => assert.ok(container.querySelector('.room-messages')));
+
+    // Unmounting flushes the reads still queued for session 2, so none can be missed by a timer.
+    unmount();
+    await flush();
+    await flush();
+    assert.deepEqual(readsOnTwo, [{ chatId: CHAT_2.id }]);
+  } finally {
+    globalThis.fetch = stub;
     twoSessions = false;
   }
 });

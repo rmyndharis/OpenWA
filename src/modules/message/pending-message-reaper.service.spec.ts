@@ -34,7 +34,7 @@ describe('PendingMessageReaperService.sweep', () => {
   });
 
   afterEach(async () => {
-    service.onModuleDestroy();
+    await service.onModuleDestroy();
     if (ds.isInitialized) await ds.destroy();
   });
 
@@ -191,6 +191,42 @@ describe('PendingMessageReaperService.sweep', () => {
     expect(row.waMessageId).toBe('wamid.race');
     expect(persistedCalls()).toHaveLength(0);
   });
+
+  // Plugins unregister their hooks and the DataSource closes right after this module is torn down,
+  // so a reap landing later would leave a provider's copy PENDING for good.
+  it('stops a running pass on destroy and finishes the row in hand before destroy resolves', async () => {
+    const ids: string[] = [];
+    for (const age of [4, 3, 2]) ids.push(await insertMessage({ createdAt: hoursAgo(age) }));
+    const realUpdate = messages.update.bind(messages);
+    let reaping!: () => void;
+    const started = new Promise<void>(resolve => (reaping = resolve));
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    const updateSpy = jest.spyOn(messages, 'update').mockImplementationOnce(async (criteria, partial) => {
+      reaping();
+      await held;
+      return realUpdate(criteria, partial);
+    });
+
+    const sweep = service.sweep(OPTS);
+    await started;
+    const destroyed = service.onModuleDestroy();
+    release();
+    await destroyed;
+    const writesAtDestroy = updateSpy.mock.calls.length;
+    const emissionsAtDestroy = persistedCalls().length;
+    const stats = await sweep;
+
+    expect(stats).toEqual({ scanned: 1, reaped: 1, failed: 0 });
+    expect(writesAtDestroy).toBe(1);
+    expect(emissionsAtDestroy).toBe(1);
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(persistedCalls()).toHaveLength(1);
+    expect((await stored(ids[0])).status).toBe(MessageStatus.FAILED);
+    for (const id of ids.slice(1)) expect((await stored(id)).status).toBe(MessageStatus.PENDING);
+    // A stopped reaper starts no further pass.
+    expect(await service.sweep(OPTS)).toEqual({ scanned: 0, reaped: 0, failed: 0 });
+  });
 });
 
 describe('resolvePendingMessageReaperOptions', () => {
@@ -268,7 +304,7 @@ describe('PendingMessageReaperService.onModuleInit (scheduling)', () => {
       svc.onModuleInit();
       jest.advanceTimersByTime(10 * 600_000);
       expect(sweepSpy).not.toHaveBeenCalled();
-      svc.onModuleDestroy();
+      void svc.onModuleDestroy();
     } finally {
       jest.useRealTimers();
     }
@@ -284,7 +320,7 @@ describe('PendingMessageReaperService.onModuleInit (scheduling)', () => {
       svc.onModuleInit();
       jest.advanceTimersByTime(60_000);
       expect(sweepSpy).toHaveBeenCalledTimes(1);
-      svc.onModuleDestroy();
+      void svc.onModuleDestroy();
       sweepSpy.mockClear();
       jest.advanceTimersByTime(60_000);
       expect(sweepSpy).not.toHaveBeenCalled();
