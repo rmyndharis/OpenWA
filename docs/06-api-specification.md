@@ -6342,7 +6342,7 @@ Set which sessions a session-scoped plugin is activated for. This is a **full re
 
 #### POST /api/plugins/:id/update
 
-Update an installed plugin in place from a URL, preserving config + enabled state. The new package is written to a staging sibling and validated BEFORE the running plugin is stopped, then swapped in with two renames (live → backup, staging → live); a failure before or during the swap restores the previous version, and a process crash mid-swap is reconciled at boot (the backup is restored when the live directory is missing), so an interrupted update can never make the plugin silently vanish. The URL follows the same transport and pin rules as `install-url`: plain http only with a `#sha256=` digest pin, and https needs the pin too under `NODE_ENV=production` unless `PLUGIN_INSTALL_REQUIRE_PIN=false` (fail-closed on mismatch).
+Update an installed plugin in place from a URL, preserving config + enabled state. The new package is written to a staging sibling and validated BEFORE the running plugin is stopped, then swapped in with two renames (live → backup, staging → live); a failure before or during the swap restores the previous version, and a process crash mid-swap is reconciled at boot (the backup is restored when the live directory is missing), so an interrupted update can never make the plugin silently vanish. An update of a plugin the operator switched on (not one in `error`) that is still applying once shutdown has begun is refused, or rolled back if the swap already happened, and answered with `503`, since the new version cannot be started to prove it works. The URL follows the same transport and pin rules as `install-url`: plain http only with a `#sha256=` digest pin, and https needs the pin too under `NODE_ENV=production` unless `PLUGIN_INSTALL_REQUIRE_PIN=false` (fail-closed on mismatch).
 
 **Auth:** API key (ADMIN)
 
@@ -6366,7 +6366,7 @@ Update an installed plugin in place from a URL, preserving config + enabled stat
 
 **Response** `201` — the updated `PluginDto`.
 
-**Errors:** `400` download/package invalid, manifest id mismatch, or built-in plugin · `401` · `403` · `404` unknown id
+**Errors:** `400` download/package invalid, manifest id mismatch, or built-in plugin · `401` · `403` · `404` unknown id · `503` shutdown began before the update of a plugin the operator switched on finished applying (the previous version is kept)
 
 ---
 
