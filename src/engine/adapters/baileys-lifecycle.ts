@@ -207,7 +207,7 @@ export class BaileysLifecycle {
   private lastConnectionCloseAt = 0;
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
   private lib?: typeof BaileysLib;
-  /** The session proxy's fetch dispatcher, built once: the proxy URL is fixed for the adapter's life. */
+  /** The session proxy's fetch dispatcher, built on first use and closed at teardown. */
   private dispatcher?: Dispatcher;
 
   constructor(private readonly host: BaileysLifecycleHost) {
@@ -230,6 +230,16 @@ export class BaileysLifecycle {
       return undefined;
     }
     return (this.dispatcher ??= createProxyDispatcher(proxyUrl));
+  }
+
+  /**
+   * Drop the proxy's pooled tunnels at teardown instead of leaving them to idle out. close(), not
+   * destroy(): a request already in progress finishes. A later fetch builds a fresh dispatcher.
+   */
+  private closeFetchDispatcher(): void {
+    const dispatcher = this.dispatcher;
+    this.dispatcher = undefined;
+    void dispatcher?.close().catch(() => undefined);
   }
 
   async initialize(): Promise<void> {
@@ -855,6 +865,7 @@ export class BaileysLifecycle {
     this.cancelAddressbookRestore();
     void this.sock?.end(undefined);
     this.sock = null;
+    this.closeFetchDispatcher();
     // Cached call handles die with the socket — drop them so a later rejectCall() reports
     // not-found instead of acting on a closed connection.
     this.host.liveCalls.clear();
@@ -942,6 +953,7 @@ export class BaileysLifecycle {
     } catch {
       // end() may already have run from Baileys' own close handler — a safe no-op.
     }
+    this.closeFetchDispatcher();
     // Cached call handles die with the connection — drop them so a later rejectCall() reports
     // not-found (404) instead of acting on a dead socket (mirrors disconnect/destroy).
     this.host.liveCalls.clear();
@@ -974,6 +986,7 @@ export class BaileysLifecycle {
     // A message still being processed must not recreate a row of the unlinked account after the wipe below.
     this.host.fenceStoredWrites();
     void dead?.end(undefined);
+    this.closeFetchDispatcher();
 
     const cleanup = (async (): Promise<void> => {
       try {
@@ -1031,6 +1044,7 @@ export class BaileysLifecycle {
     this.cancelAddressbookRestore();
     void this.sock?.end(undefined);
     this.sock = null;
+    this.closeFetchDispatcher();
     this.host.liveCalls.clear();
     this.setStatus(EngineStatus.DISCONNECTED);
     return Promise.resolve();
