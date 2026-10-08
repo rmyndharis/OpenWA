@@ -230,6 +230,28 @@ describe('governance docs match the repository', () => {
     }
   });
 
+  // The bootstrap key file outlives a demotion or a scope change, and the Helm chart's StatefulSet
+  // leaves no pod to exec into once it is scaled to 0 for the database write.
+  it('gives the admin key recovery its Helm commands and the bootstrap key caveat', () => {
+    const security = read('docs/04-security-design.md');
+    const recovery = between(security, '### Recovering a lost admin key', '\n## ');
+    expect(read('charts/openwa/templates/NOTES.txt')).toContain('default "/app/data/.api-key"');
+    expect(recovery).toContain('`kubectl exec openwa-0 -- cat /app/data/.api-key`');
+    expect(recovery).toMatch(/demoted from `admin`[\s\S]+go on to step 2 or 3/);
+    expect(recovery).toMatch(/given any `allowedSessions` or `allowedChats`, or given `allowedIps` that exclude/);
+    expect(recovery).toMatch(/`allowedIps` \(when set\) admits/);
+    expect(recovery).toContain('`kubectl exec openwa-0 -- node -e "$GEN"`');
+    expect(recovery).toContain('`kubectl exec openwa-restore --`');
+    const restore = between(read('docs/11-operational-runbooks.md'), '### Runbook: Restore from Backup', '\n### ');
+    expect(restore).toContain('name: openwa-restore');
+    expect(restore).toContain('claimName: data-openwa-0');
+    const pepper = between(security, '**Setting or changing `API_KEY_PEPPER`', '\n\n');
+    expect(pepper).toContain('`kubectl exec openwa-restore -- sqlite3 /app/data/main.sqlite "DELETE FROM api_keys"`');
+    const faq = between(read('docs/12-troubleshooting-faq.md'), '**Q: I lost the admin API key.', '\n\n### ');
+    expect(faq).not.toMatch(/first started with/);
+    expect(faq).toMatch(/last seeded, which still works while that key is an active, unscoped ADMIN key/);
+  });
+
   it('keeps the README non-affiliation disclaimer', () => {
     const section = between(read('README.md'), '## Disclaimer', '\n## ');
     expect(section).toMatch(/not affiliated/);

@@ -1417,7 +1417,7 @@ retention/encryption to completed archives externally; see the [backup and resto
 
 **Q: I lost the admin API key. How do I get back in?**
 
-> A: Keys are stored hashed, so the database cannot give it back. Check `data/.api-key` (or `BOOTSTRAP_KEY_FILE`) and the `API_MASTER_KEY` value the instance was first started with, then use another unscoped ADMIN key to mint a replacement. With neither, stop the instance and write a new key's hash into the lost key's row in the main database, which keeps every other key working. The steps are in [Recovering a lost admin key](./04-security-design.md#recovering-a-lost-admin-key).
+> A: Keys are stored hashed, so the database cannot give it back. Try the key in `data/.api-key` (or `BOOTSTRAP_KEY_FILE`), or the `API_MASTER_KEY` value set when the key table was last seeded, which still works while that key is an active, unscoped ADMIN key. Failing that, use another unscoped ADMIN key to mint a replacement. With neither, stop the instance and write a new key's hash into the lost key's row in the main database, which keeps every other key working. The steps are in [Recovering a lost admin key](./04-security-design.md#recovering-a-lost-admin-key).
 
 ### Webhook Questions
 
