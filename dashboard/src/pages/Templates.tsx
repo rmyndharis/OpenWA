@@ -97,6 +97,9 @@ export function Templates() {
     );
   }, [searchTerm, templates]);
   const isSaving = createMutation.isPending || updateMutation.isPending;
+  // The row whose update is in flight: the list shows its pre-save values until the update settles, and
+  // reopening it then would load them into the editor to be saved back. Every other row is current.
+  const updatingId = updateMutation.isPending ? updateMutation.variables?.id : undefined;
 
   // Select the first session, and again once the selected one is gone (deleted elsewhere): a stale id
   // matches no option, so the select would show another session while every read and write still
@@ -317,6 +320,7 @@ export function Templates() {
                       <button
                         className={`template-list-item ${isSelected ? 'selected' : ''}`}
                         onClick={() => openEdit(template)}
+                        disabled={template.id === updatingId}
                         type="button"
                       >
                         <span className="template-list-title">{template.name}</span>
