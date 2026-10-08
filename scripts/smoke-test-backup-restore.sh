@@ -51,7 +51,9 @@
 #       another line does not hide the key, and a line the scripts cannot parse fails the lookup, so
 #       backup and restore stop before archiving or writing anything instead of using a default the app
 #       may not read
-#   (ah) ./data paths in .env.generated follow OPENWA_DATA_DIR in a run on the host, in both scripts,
+#   (ah) pg_dump makes the app's TLS check when DATABASE_SSL=true (falling back to the system CA store
+#       without node), and connects as before when it is not
+#   (ai) ./data paths in .env.generated follow OPENWA_DATA_DIR in a run on the host, in both scripts,
 #       while non-path settings there are read as written
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
@@ -63,7 +65,8 @@ set -euo pipefail
 # case starts from none of them and sets exactly the paths it uses.
 unset OPENWA_DATA_DIR BACKUP_DIR DATABASE_TYPE MAIN_DATABASE_NAME DATABASE_NAME SESSION_DATA_PATH \
   BAILEYS_AUTH_DIR STORAGE_LOCAL_PATH PLUGINS_DIR PLUGIN_STATE_DIR OPENWA_RESTORE_SNAPSHOT_DIR BOOTSTRAP_KEY_FILE \
-  ENGINE_TYPE DATABASE_URL DATABASE_HOST DATABASE_PORT DATABASE_USERNAME DATABASE_PASSWORD
+  ENGINE_TYPE DATABASE_URL DATABASE_HOST DATABASE_PORT DATABASE_USERNAME DATABASE_PASSWORD \
+  DATABASE_SSL DATABASE_SSL_REJECT_UNAUTHORIZED PGSSLMODE PGSSLROOTCERT
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP="$REPO_ROOT/scripts/backup.sh"
@@ -1702,74 +1705,133 @@ fi
 pass "(ag) dotenv's quoted, commented and empty forms resolve like the app, and an unparsed line stops both scripts"
 
 echo ""
-echo "==> (ah) ./data paths in .env.generated follow OPENWA_DATA_DIR in a run on the host"
+echo "==> (ah) pg_dump makes the app's TLS check when DATABASE_SSL=true"
+# libpq defaults to sslmode=prefer: it falls back to plaintext and takes any certificate, so a dump of
+# a database the app reaches over verified TLS sent its password to whoever answered. The shim pg_dump
+# records the TLS settings it was started with and whether its root certificate file held any CA.
+AH="$WORK/ah"
+mkdir -p "$AH/data" "$AH/shim"
+make_fixture "$AH/data/main.sqlite" "hotel2-main"
+cat >"$AH/shim/pg_dump" <<'SHIM'
+#!/bin/sh
+certs=none
+[ -f "${PGSSLROOTCERT:-}" ] && certs="$(grep -c 'BEGIN CERTIFICATE' "$PGSSLROOTCERT")"
+echo "mode=${PGSSLMODE:-} root=${PGSSLROOTCERT:-} certs=$certs" >"$AH_LOG"
+echo '-- dump'
+SHIM
+chmod +x "$AH/shim/pg_dump"
+# backup_ah <.env.generated content> [env assignments...]: the TLS settings pg_dump ran with. The
+# backup's output is kept in out.log.
+backup_ah() {
+  printf '%b' "$1" >"$AH/data/.env.generated"
+  shift
+  rm -rf "$AH/out"
+  if ! OUT_AH="$(cd "$AH" && env "$@" AH_LOG="$AH/log" PATH="$AH/shim:$PATH" BACKUP_DIR="$AH/out" \
+    "$BACKUP" 2>&1)"; then
+    fail "(ah) the backup failed: $OUT_AH"
+  fi
+  printf '%s\n' "$OUT_AH" >"$AH/out.log"
+  cat "$AH/log"
+}
+PG_AH='DATABASE_TYPE=postgres\n'
+if [ "$(backup_ah "$PG_AH")" != "mode= root= certs=none" ]; then
+  fail "(ah) pg_dump got TLS settings without DATABASE_SSL: $(cat "$AH/log")"
+fi
+GOT_AH="$(backup_ah "${PG_AH}DATABASE_SSL=true\n")"
+if ! [[ "$GOT_AH" =~ ^mode=verify-full\ root=(/[^ ]+)\ certs=([0-9]+)$ ]]; then
+  fail "(ah) DATABASE_SSL=true did not verify the server against a root certificate file: $GOT_AH"
+fi
+# Node's CA set runs to well over a hundred roots; the file holding it is removed with the staging copy.
+if [ "${BASH_REMATCH[2]}" -lt 100 ] || [ -e "${BASH_REMATCH[1]}" ]; then
+  fail "(ah) the root certificates were not Node's CA set, or were left behind: $GOT_AH"
+fi
+if [ "$(backup_ah "${PG_AH}DATABASE_SSL=true\nDATABASE_SSL_REJECT_UNAUTHORIZED=false\n" \
+  DATABASE_URL=postgres://openwa@db/openwa)" != "mode=require root= certs=none" ]; then
+  fail "(ah) DATABASE_SSL_REJECT_UNAUTHORIZED=false did not encrypt without verifying: $(cat "$AH/log")"
+fi
+if [ "$(backup_ah "${PG_AH}DATABASE_SSL=true\n" PGSSLROOTCERT="$AH/ca.pem")" != \
+  "mode=verify-full root=$AH/ca.pem certs=none" ] ||
+  [ "$(backup_ah "${PG_AH}DATABASE_SSL=true\n" PGSSLMODE=verify-ca)" != "mode=verify-ca root= certs=none" ]; then
+  fail "(ah) an operator's PGSSLROOTCERT or PGSSLMODE was not honoured: $(cat "$AH/log")"
+fi
+# Without node there is no CA set to write: libpq's system store is used, and the log says what it needs.
+mkdir -p "$AH/nonode"
+populate_shim "$AH/nonode"
+ln -sf "$(command -v tail)" "$AH/nonode/tail"
+ln -sf "$AH/shim/pg_dump" "$AH/nonode/pg_dump"
+if [ "$(PATH="$AH/nonode" backup_ah "${PG_AH}DATABASE_SSL=true\n")" != "mode=verify-full root=system certs=none" ] ||
+  ! grep -q 'node not found.*sslrootcert=system.*libpq 16+' "$AH/out.log"; then
+  fail "(ah) without node the system CA store was not used, or the log gave no hint: $(cat "$AH/out.log")"
+fi
+pass "(ah) pg_dump verifies the server under DATABASE_SSL=true and is unchanged without it"
+echo "==> (ai) ./data paths in .env.generated follow OPENWA_DATA_DIR in a run on the host"
 # The app writes STORAGE_LOCAL_PATH=./data/media on first run, and a dashboard save adds
 # SESSION_DATA_PATH=./data/sessions, both relative to /app in the image. Run on the host with
 # OPENWA_DATA_DIR at the volume's mountpoint, the scripts read them against the host's working
 # directory: the backup left the volume's media and sessions out, or took a stale ./data there, and
 # exited 0, and the restore put them where the app never reads them.
-AH="$WORK/ah"
-mkdir -p "$AH/vol/media" "$AH/vol/sessions/session-1" "$AH/host/data/media" "$AH/vol2" "$AH/x"
-make_fixture "$AH/vol/main.sqlite" "ah-main"
-make_fixture "$AH/vol/openwa.sqlite" "ah-data"
-printf 'ah-media\n' >"$AH/vol/media/a.jpg"
-printf 'ah-session\n' >"$AH/vol/sessions/session-1/marker"
-printf 'host-stale\n' >"$AH/host/data/media/stale.jpg"
+AI="$WORK/ai"
+mkdir -p "$AI/vol/media" "$AI/vol/sessions/session-1" "$AI/host/data/media" "$AI/vol2" "$AI/x"
+make_fixture "$AI/vol/main.sqlite" "ai-main"
+make_fixture "$AI/vol/openwa.sqlite" "ai-data"
+printf 'ai-media\n' >"$AI/vol/media/a.jpg"
+printf 'ai-session\n' >"$AI/vol/sessions/session-1/marker"
+printf 'host-stale\n' >"$AI/host/data/media/stale.jpg"
 # The database paths come from the same file here, so they follow the volume too.
 printf '%s\n' STORAGE_LOCAL_PATH=./data/media SESSION_DATA_PATH=./data/sessions \
-  MAIN_DATABASE_NAME=./data/main.sqlite DATABASE_NAME=./data/openwa.sqlite >"$AH/vol/.env.generated"
-(cd "$AH/host" && OPENWA_DATA_DIR="$AH/vol" BACKUP_DIR="$AH/out" "$BACKUP" >/dev/null 2>&1) ||
-  fail "(ah) backup from the host failed"
-ARCHIVE_AH="$(ls "$AH"/out/openwa-backup-*.tar.gz)"
-tar -xzf "$ARCHIVE_AH" -C "$AH/x"
-if [ "$(db_fingerprint "$AH/x/main.sqlite")" != "ah-main" ] ||
-  [ "$(db_fingerprint "$AH/x/openwa.sqlite")" != "ah-data" ]; then
-  fail "(ah) backup did not archive the volume's databases"
+  MAIN_DATABASE_NAME=./data/main.sqlite DATABASE_NAME=./data/openwa.sqlite >"$AI/vol/.env.generated"
+(cd "$AI/host" && OPENWA_DATA_DIR="$AI/vol" BACKUP_DIR="$AI/out" "$BACKUP" >/dev/null 2>&1) ||
+  fail "(ai) backup from the host failed"
+ARCHIVE_AI="$(ls "$AI"/out/openwa-backup-*.tar.gz)"
+tar -xzf "$ARCHIVE_AI" -C "$AI/x"
+if [ "$(db_fingerprint "$AI/x/main.sqlite")" != "ai-main" ] ||
+  [ "$(db_fingerprint "$AI/x/openwa.sqlite")" != "ai-data" ]; then
+  fail "(ai) backup did not archive the volume's databases"
 fi
-if [ "$(cat "$AH/x/media/a.jpg" 2>/dev/null || true)" != "ah-media" ] || [ -e "$AH/x/media/stale.jpg" ]; then
-  fail "(ah) backup did not archive the volume's media: $(find "$AH/x/media" 2>&1 | tr '\n' ' ')"
+if [ "$(cat "$AI/x/media/a.jpg" 2>/dev/null || true)" != "ai-media" ] || [ -e "$AI/x/media/stale.jpg" ]; then
+  fail "(ai) backup did not archive the volume's media: $(find "$AI/x/media" 2>&1 | tr '\n' ' ')"
 fi
-if [ "$(cat "$AH/x/sessions/session-1/marker" 2>/dev/null || true)" != "ah-session" ]; then
-  fail "(ah) backup did not archive the volume's sessions"
+if [ "$(cat "$AI/x/sessions/session-1/marker" 2>/dev/null || true)" != "ai-session" ]; then
+  fail "(ai) backup did not archive the volume's sessions"
 fi
-(cd "$AH/host" && OPENWA_DATA_DIR="$AH/vol2" "$RESTORE" "$ARCHIVE_AH" >/dev/null 2>&1) ||
-  fail "(ah) restore from the host failed"
-if [ "$(cat "$AH/vol2/media/a.jpg" 2>/dev/null || true)" != "ah-media" ] ||
-  [ "$(cat "$AH/vol2/sessions/session-1/marker" 2>/dev/null || true)" != "ah-session" ] ||
-  [ "$(db_fingerprint "$AH/vol2/main.sqlite" 2>/dev/null || true)" != "ah-main" ] ||
-  [ "$(db_fingerprint "$AH/vol2/openwa.sqlite" 2>/dev/null || true)" != "ah-data" ]; then
-  fail "(ah) restore did not put media, sessions and databases in the volume"
+(cd "$AI/host" && OPENWA_DATA_DIR="$AI/vol2" "$RESTORE" "$ARCHIVE_AI" >/dev/null 2>&1) ||
+  fail "(ai) restore from the host failed"
+if [ "$(cat "$AI/vol2/media/a.jpg" 2>/dev/null || true)" != "ai-media" ] ||
+  [ "$(cat "$AI/vol2/sessions/session-1/marker" 2>/dev/null || true)" != "ai-session" ] ||
+  [ "$(db_fingerprint "$AI/vol2/main.sqlite" 2>/dev/null || true)" != "ai-main" ] ||
+  [ "$(db_fingerprint "$AI/vol2/openwa.sqlite" 2>/dev/null || true)" != "ai-data" ]; then
+  fail "(ai) restore did not put media, sessions and databases in the volume"
 fi
-if [ "$(ls -A "$AH/host/data")" != media ] || [ "$(ls -A "$AH/host/data/media")" != stale.jpg ]; then
-  fail "(ah) restore wrote into the host's working directory: $(find "$AH/host/data" | tr '\n' ' ')"
+if [ "$(ls -A "$AI/host/data")" != media ] || [ "$(ls -A "$AI/host/data/media")" != stale.jpg ]; then
+  fail "(ai) restore wrote into the host's working directory: $(find "$AI/host/data" | tr '\n' ' ')"
 fi
 # A leftover ./uploads falls back to the volume's media as well, not to the host's ./data/media.
-printf 'STORAGE_LOCAL_PATH=./uploads\n' >"$AH/vol/.env.generated"
+printf 'STORAGE_LOCAL_PATH=./uploads\n' >"$AI/vol/.env.generated"
 (
-  cd "$AH/host"
-  MAIN_DATABASE_NAME="$AH/vol/main.sqlite" DATABASE_NAME="$AH/vol/openwa.sqlite" \
-    OPENWA_DATA_DIR="$AH/vol" BACKUP_DIR="$AH/out-uploads" "$BACKUP" >/dev/null 2>&1
-) || fail "(ah) backup with a leftover ./uploads failed"
-if ! tar -tzf "$(ls "$AH"/out-uploads/openwa-backup-*.tar.gz)" | grep -qx './media/a.jpg'; then
-  fail "(ah) a leftover ./uploads did not fall back to the volume's media"
+  cd "$AI/host"
+  MAIN_DATABASE_NAME="$AI/vol/main.sqlite" DATABASE_NAME="$AI/vol/openwa.sqlite" \
+    OPENWA_DATA_DIR="$AI/vol" BACKUP_DIR="$AI/out-uploads" "$BACKUP" >/dev/null 2>&1
+) || fail "(ai) backup with a leftover ./uploads failed"
+if ! tar -tzf "$(ls "$AI"/out-uploads/openwa-backup-*.tar.gz)" | grep -qx './media/a.jpg'; then
+  fail "(ai) a leftover ./uploads did not fall back to the volume's media"
 fi
 # Only path settings are mapped: a dashboard-provisioned Postgres named, owned or reached as "data", or
 # a password under "data/", reaches pg_dump as written, with the default data dir too.
-mkdir -p "$AH/pg/data" "$AH/pg/bin"
-make_fixture "$AH/pg/data/main.sqlite" "ah-pg-main"
-cat >"$AH/pg/bin/pg_dump" <<EOF
+mkdir -p "$AI/pg/data" "$AI/pg/bin"
+make_fixture "$AI/pg/data/main.sqlite" "ai-pg-main"
+cat >"$AI/pg/bin/pg_dump" <<EOF
 #!/bin/sh
-printf '%s|' "\$PGPASSWORD" "\$@" >"$AH/pg/pg_dump-args"
+printf '%s|' "\$PGPASSWORD" "\$@" >"$AI/pg/pg_dump-args"
 EOF
-chmod +x "$AH/pg/bin/pg_dump"
+chmod +x "$AI/pg/bin/pg_dump"
 printf 'DATABASE_TYPE=postgres\nDATABASE_HOST=data\nDATABASE_USERNAME=data\nDATABASE_PASSWORD=data/s3cret\nDATABASE_NAME=data\n' \
-  >"$AH/pg/data/.env.generated"
-(cd "$AH/pg" && PATH="$AH/pg/bin:$PATH" BACKUP_DIR="$AH/pg/out" "$BACKUP" >/dev/null 2>&1) ||
-  fail "(ah) Postgres backup with settings named data failed"
-if [ "$(cat "$AH/pg/pg_dump-args" 2>/dev/null || true)" != "data/s3cret|-h|data|-p|5432|-U|data|data|" ]; then
-  fail "(ah) Postgres settings from .env.generated were rewritten: $(cat "$AH/pg/pg_dump-args" 2>&1)"
+  >"$AI/pg/data/.env.generated"
+(cd "$AI/pg" && PATH="$AI/pg/bin:$PATH" BACKUP_DIR="$AI/pg/out" "$BACKUP" >/dev/null 2>&1) ||
+  fail "(ai) Postgres backup with settings named data failed"
+if [ "$(cat "$AI/pg/pg_dump-args" 2>/dev/null || true)" != "data/s3cret|-h|data|-p|5432|-U|data|data|" ]; then
+  fail "(ai) Postgres settings from .env.generated were rewritten: $(cat "$AI/pg/pg_dump-args" 2>&1)"
 fi
-pass "(ah) a host run backs up and restores the volume's databases, media and sessions, not the working directory's"
+pass "(ai) a host run backs up and restores the volume's databases, media and sessions, not the working directory's"
 
 echo ""
 echo "All smoke tests passed!"

@@ -8,8 +8,10 @@ import { DateTransformer } from '../../../common/transformers/date.transformer';
 //  - 'dispatched' — the event reached the dispatch tier (handed to BullMQ or delivered inline). A
 //                   failure INSIDE the tier (BullMQ attempts exhausted) dead-letters separately, so a
 //                   'dispatched' row is never the reconciler's concern.
-//  - 'failed'     — terminal: the reconciler exhausted its replay budget; recovery continues via the
-//                   integration_delivery_failures row + RedriveService.
+//  - 'failed'     — terminal: the reconciler exhausted its replay budget or found the queue job failed,
+//                   or the row aged past INGRESS_DEDUP_RETENTION_DAYS undispatched; recovery continues
+//                   via the integration_delivery_failures row + RedriveService (none is written when the
+//                   instance or session was deleted).
 // NULL marks rows that predate these columns on synchronize-bootstrapped DBs (no backfill ran there);
 // NULL reads as "not watched" — the reconciler never sweeps it, so an upgrade can never mass-replay
 // the historical dedup log.

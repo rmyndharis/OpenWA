@@ -24,8 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Read `./data/...` paths from `.env.generated` under `OPENWA_DATA_DIR` in `scripts/backup.sh` and `scripts/restore.sh`, so a run on the host against the data volume archives and restores media and sessions.
-- Stop `scripts/backup.sh` and `scripts/restore.sh` with an error naming the key when `./.env` or `.env.generated` holds a line for that key they cannot parse, instead of falling back to the default.
+- Resolve `./data/...` paths from `.env.generated` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs.
+- Stop `backup.sh` and `restore.sh` on an env line they cannot parse instead of falling back to the default path.
+- Verify the PostgreSQL server certificate in `backup.sh` when `DATABASE_SSL=true`, as the app does.
+- Dead-letter undispatched ingress events instead of deleting them when they age out of the dedup window.
+- Keep a re-sent ingress delivery redrivable when an earlier dead letter for its id was already redriven.
 - Deliver Baileys API edit and revoke events to webhook and WebSocket consumers.
 - Preserve chat-scoped WebSocket event order while resolving chat identities.
 - Preserve poll choices across dashboard echoes and keep revoked messages cleared.
@@ -57,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep one terminal webhook failure per receiver idempotency key.
 - Retain send idempotency keys after engine-stage failures, including HTTP 409.
 - Reject poll votes with no matching options while preserving explicit vote clearing.
+
+### Upgrade notes (behavior changes)
+
+- `backup.sh` and `restore.sh` exit with status 2 when `./.env` or `.env.generated` sets a key in a form they cannot parse; fix the line or pass the key in the environment.
+- With `DATABASE_SSL=true`, `backup.sh` now fails against a PostgreSQL server whose certificate the app would reject; trust a private CA through `NODE_EXTRA_CA_CERTS` or `PGSSLROOTCERT`.
 
 ## [0.24.0] - 2026-10-03
 
