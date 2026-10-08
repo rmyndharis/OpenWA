@@ -1,9 +1,11 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { isUUID } from 'class-validator';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, LessThan, Not, Repository } from 'typeorm';
 import { IngressEvent } from './entities/ingress-event.entity';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
 import { PluginInstance } from './entities/plugin-instance.entity';
+import { Session } from '../session/entities/session.entity';
 import {
   EnqueueOutcome,
   IngressEnqueueService,
@@ -153,8 +155,9 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
         try {
           // Re-apply the eligibility oracle the live path checks at the door (IngressService.handle
           // 404s an unknown/disabled instance): an instance disabled or deleted AFTER persist must
-          // not receive the replay. The row stays 'pending' — a re-enabled instance is replayed by a
-          // later sweep; a deleted one ages out via INGRESS_DEDUP_RETENTION_DAYS pruning.
+          // not receive the replay. The row stays 'pending' and a re-enabled instance is replayed by a
+          // later sweep; past INGRESS_DEDUP_RETENTION_DAYS the retention prune dead-letters it instead
+          // (deadLetterAgedPending), while a deleted one ages out without a dead letter.
           const instance = await this.instances.resolve(row.pluginId, row.instanceId);
           if (!instance || !instance.enabled) {
             this.logger.log('Skipping ingress event for a disabled or deleted instance', {
@@ -186,6 +189,141 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     } finally {
       this.sweeping = false;
     }
+  }
+
+  /**
+   * Hand every 'pending' row created before `cutoff` that still carries its payload to the DLQ, then
+   * retire the payload with a 'failed' mark, so the dedup-window prune never deletes an acknowledged
+   * delivery that was never dispatched: one stranded across downtime longer than the window, one of an
+   * instance disabled for that long, or any stranded row while the sweep is disabled. Same
+   * DLQ-before-retire order as the replay budget path. A row whose writes fail stays 'pending' with its
+   * payload, which the prune keeps, and is retried on the next run. Skipped while a sweep is running.
+   * A row whose instance or session was deleted, or whose queue job still owns the delivery, gets no
+   * dead letter. Returns the number of rows dead-lettered.
+   */
+  async deadLetterAgedPending(cutoff: Date, batchSize = 100): Promise<number> {
+    if (this.sweeping) return 0;
+    this.sweeping = true;
+    let retired = 0;
+    try {
+      for (;;) {
+        const rows = await this.events.find({
+          where: { dispatchState: 'pending', createdAt: LessThan(cutoff), payload: Not(IsNull()) },
+          order: { createdAt: 'ASC' },
+          take: batchSize,
+        });
+        let progressed = 0;
+        for (const row of rows) {
+          if (!hasPayload(row)) continue;
+          const meta = { pluginId: row.pluginId, instanceId: row.instanceId, deliveryId: row.providerDeliveryId };
+          try {
+            if (await this.ownerDeleted(row)) {
+              // The redrive endpoint refuses a deleted instance, and a session delete purges its dead
+              // letters on purpose: retire the payload without writing one back, so the prune drops it.
+              await this.events.update(
+                { id: row.id, dispatchState: 'pending' },
+                { dispatchState: 'failed', payload: null },
+              );
+              progressed++;
+              this.logger.warn('Undispatched ingress event of a deleted instance or session dropped', {
+                ...meta,
+                action: 'ingress_event_retention_dropped',
+              });
+              continue;
+            }
+            const jobData = this.jobDataFor(row);
+            // A job still in the queue (or completed) owns the delivery, as in reconcileRow: no dead
+            // letter while a copy can still deliver. A failed one falls through to its existing DLQ row.
+            const existing = await this.ingressEnqueue.existingJobState(jobData, row.providerDeliveryId);
+            if (existing && existing !== 'failed') {
+              const settled = await this.events.update(
+                { id: row.id, dispatchState: 'pending' },
+                { dispatchState: 'dispatched', payload: null },
+              );
+              // As in reconcileRow: the job delivers it, so an inline-failure dead letter must close.
+              if (settled.affected) await this.retireOpenDeadLetters(row);
+              progressed++;
+              continue;
+            }
+            const written = await this.ensureDeadLetterRow(
+              jobData,
+              row.dispatchAttempts,
+              'not dispatched within the ingress dedup retention window',
+            );
+            const marked = await this.events.update(
+              { id: row.id, dispatchState: 'pending' },
+              { dispatchState: 'failed', payload: null },
+            );
+            progressed++;
+            if (written) {
+              // A delivery the dispatch tier made concurrently must not stay redrivable. For a failed
+              // event, another node's hand-off may have written a dead letter too, or skipped its own
+              // because of this one, so a writer retires its row only when an open one with a lower id
+              // exists: the lowest-id open row is never retired, and normally it is the only one left.
+              // Ids are random UUIDs, so a writer whose check runs before a lower-id row is visible
+              // keeps its own as well, and two open rows can remain.
+              const state = marked.affected
+                ? 'failed'
+                : (await this.events.findOne({ where: { id: row.id }, select: { dispatchState: true } }))
+                    ?.dispatchState;
+              if (state === 'dispatched' || (state === 'failed' && (await this.hasLowerOpenDeadLetter(row, written)))) {
+                await this.failures.update({ id: written, redriven: false }, { redriven: true });
+              }
+            }
+            if (!marked.affected) continue;
+            retired++;
+            this.logger.warn('Ingress event was never dispatched within the dedup retention window; dead-lettered', {
+              ...meta,
+              action: 'ingress_event_retention_dead_lettered',
+            });
+          } catch (err) {
+            this.logger.error(
+              'Failed to dead-letter an undispatched ingress event; kept for the next run',
+              err instanceof Error ? err.message : String(err),
+              { ...meta, action: 'ingress_event_retention_dead_letter_failed' },
+            );
+          }
+        }
+        if (rows.length < batchSize || progressed === 0) return retired;
+      }
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  // The row's instance is gone, or it was bound to a session that is gone. A wildcard or non-id scope
+  // never names a sessions row, so it is never treated as deleted.
+  private async ownerDeleted(row: IngressEvent): Promise<boolean> {
+    if (!(await this.instances.resolve(row.pluginId, row.instanceId))) return true;
+    const sessionId = row.sessionId;
+    return !!sessionId && isUUID(sessionId) && !(await this.events.manager.existsBy(Session, { id: sessionId }));
+  }
+
+  private async hasLowerOpenDeadLetter(row: IngressEvent, written: string): Promise<boolean> {
+    const lower = await this.failures.count({
+      where: {
+        direction: 'inbound',
+        pluginId: row.pluginId,
+        instanceId: row.instanceId,
+        deliveryId: row.providerDeliveryId,
+        redriven: false,
+        id: LessThan(written),
+      },
+    });
+    return lower > 0;
+  }
+
+  private async retireOpenDeadLetters(row: IngressEvent): Promise<void> {
+    await this.failures.update(
+      {
+        direction: 'inbound',
+        pluginId: row.pluginId,
+        instanceId: row.instanceId,
+        deliveryId: row.providerDeliveryId,
+        redriven: false,
+      },
+      { redriven: true },
+    );
   }
 
   private async reconcileRow(
@@ -242,16 +380,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       // Retire any dead-letter row the live path already wrote for this delivery (the inline-failure
       // case): the replay, or the job or re-queued copy still live in the queue, delivers it, so a later
       // manual redrive must not deliver it again.
-      await this.failures.update(
-        {
-          direction: 'inbound',
-          pluginId: row.pluginId,
-          instanceId: row.instanceId,
-          deliveryId: row.providerDeliveryId,
-          redriven: false,
-        },
-        { redriven: true },
-      );
+      await this.retireOpenDeadLetters(row);
       this.logger.log('Replayed stranded ingress event', {
         pluginId: row.pluginId,
         instanceId: row.instanceId,
