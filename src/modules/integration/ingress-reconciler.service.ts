@@ -69,13 +69,16 @@ export interface IngressReconcileStats {
  * (RedriveService), a dispatched event is the dispatch tier's concern.
  *
  * Mirrors IntegrationRetentionService's lifecycle: a raw unref'd setInterval started on module init
- * (first sweep after one interval, so plugin sandboxes have time to boot), cleared on destroy.
+ * (first sweep after one interval, so plugin sandboxes have time to boot), cleared on destroy, which
+ * also stops a pass in flight and waits for it.
  */
 @Injectable()
 export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('IngressReconcilerService');
   private timer?: ReturnType<typeof setInterval>;
-  private sweeping = false;
+  // The pass in flight, settled when it ends; doubles as the overlap guard.
+  private inFlight?: Promise<void>;
+  private stopping = false;
 
   constructor(
     @InjectRepository(IngressEvent, 'data') private readonly events: Repository<IngressEvent>,
@@ -100,8 +103,16 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     this.timer.unref?.();
   }
 
-  onModuleDestroy(): void {
+  /**
+   * Clearing the interval only stops the NEXT pass. A pass already running would go on replaying
+   * rows after PluginLoaderService has stopped the plugin sandboxes, so each remaining row fails,
+   * spends an attempt and, at its last one, is dead-lettered. Stop it at the next row and wait for
+   * the row in hand, while its plugin is still running.
+   */
+  async onModuleDestroy(): Promise<void> {
+    this.stopping = true;
     if (this.timer) clearInterval(this.timer);
+    await this.inFlight;
   }
 
   /**
@@ -110,8 +121,9 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
    */
   async sweep(opts: IngressReconcilerOptions, now: Date = new Date()): Promise<IngressReconcileStats> {
     const stats: IngressReconcileStats = { scanned: 0, replayed: 0, failed: 0, skipped: 0 };
-    if (this.sweeping) return stats;
-    this.sweeping = true;
+    if (this.inFlight || this.stopping) return stats;
+    let settle!: () => void;
+    this.inFlight = new Promise(resolve => (settle = resolve));
     try {
       const cutoff = new Date(now.getTime() - opts.graceMs);
       // Only rows the sweep can act on may take a batch slot: a row of a disabled or deleted instance,
@@ -133,6 +145,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
         .limit(opts.batchSize)
         .getMany();
       for (const row of rows) {
+        if (this.stopping) break;
         // A row whose latest attempt is still inside the grace window cools down between replays;
         // it keeps its batch slot (bounded by maxAttempts, so the leak is capped) but is not hit again.
         if (row.lastDispatchAt && row.lastDispatchAt > cutoff) {
@@ -187,7 +200,8 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       }
       return stats;
     } finally {
-      this.sweeping = false;
+      this.inFlight = undefined;
+      settle();
     }
   }
 
@@ -197,13 +211,15 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
    * delivery that was never dispatched: one stranded across downtime longer than the window, one of an
    * instance disabled for that long, or any stranded row while the sweep is disabled. Same
    * DLQ-before-retire order as the replay budget path. A row whose writes fail stays 'pending' with its
-   * payload, which the prune keeps, and is retried on the next run. Skipped while a sweep is running.
+   * payload, which the prune keeps, and is retried on the next run. Skipped while a sweep is running,
+   * and stopped at the next row once shutdown begins, like a sweep.
    * A row whose instance or session was deleted, or whose queue job still owns the delivery, gets no
    * dead letter. Returns the number of rows dead-lettered.
    */
   async deadLetterAgedPending(cutoff: Date, batchSize = 100): Promise<number> {
-    if (this.sweeping) return 0;
-    this.sweeping = true;
+    if (this.inFlight || this.stopping) return 0;
+    let settle!: () => void;
+    this.inFlight = new Promise(resolve => (settle = resolve));
     let retired = 0;
     try {
       for (;;) {
@@ -214,6 +230,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
         });
         let progressed = 0;
         for (const row of rows) {
+          if (this.stopping) return retired;
           if (!hasPayload(row)) continue;
           const meta = { pluginId: row.pluginId, instanceId: row.instanceId, deliveryId: row.providerDeliveryId };
           try {
@@ -287,7 +304,8 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
         if (rows.length < batchSize || progressed === 0) return retired;
       }
     } finally {
-      this.sweeping = false;
+      this.inFlight = undefined;
+      settle();
     }
   }
 
