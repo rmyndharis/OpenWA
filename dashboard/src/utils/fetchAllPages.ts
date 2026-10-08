@@ -47,10 +47,20 @@ export async function fetchAllPages<T>(
 ): Promise<{ items: T[]; truncated: boolean; throttled: boolean }> {
   const all: T[] = [];
   let offset = 0;
+  // Logout cancels nothing in flight. A walk that outlived its key would send the rest of its pages
+  // keyless (a 401 that reloads the login form) or as the next sign-in's key, mixing two actors'
+  // rows, and a page answered after logout would still finish it. Stop once the key has changed.
+  const key = sessionStorage.getItem('openwa_api_key');
+  const fetchOnce = async () => {
+    if (sessionStorage.getItem('openwa_api_key') !== key) throw new Error('Signed out');
+    const page = await fetchPage(pageSize, offset);
+    if (sessionStorage.getItem('openwa_api_key') !== key) throw new Error('Signed out');
+    return page;
+  };
   for (;;) {
     let page: Page<T>;
     try {
-      page = await retryThrottled(() => fetchPage(pageSize, offset), retryDelayMs);
+      page = await retryThrottled(fetchOnce, retryDelayMs);
     } catch (err) {
       if (all.length > 0 && (err as { status?: number }).status === 429) {
         return { items: all, truncated: true, throttled: true };

@@ -409,8 +409,15 @@ export function Chats() {
   // fire-and-forget (a failure only raises a warning toast), so firing on the way out is safe —
   // and dropping the pending call would leave the last messages of a quickly-exited chat unread.
   // The flush closure still references the PREVIOUS session on a session switch, which is exactly
-  // where those queued reads belong.
-  useEffect(() => () => markReadCoalescer.flush(), [markReadCoalescer]);
+  // where those queued reads belong. Logout removes the key before the page unmounts, though: a
+  // read flushed then goes out keyless and its 401 reloads the login form, so drop it instead.
+  useEffect(
+    () => () => {
+      if (sessionStorage.getItem('openwa_api_key')) markReadCoalescer.flush();
+      else markReadCoalescer.cancel();
+    },
+    [markReadCoalescer],
+  );
 
   // Marking a chat read is an operator write; a read-only key would only collect 403 toasts.
   const markChatRead = useCallback(

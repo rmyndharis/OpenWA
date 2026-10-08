@@ -77,6 +77,7 @@ describe('WebhookReconcilerService', () => {
       'message.received',
       'stored-key_wh-1',
       { from: '628123456789@c.us' },
+      { signal: expect.any(AbortSignal) as AbortSignal },
     );
     expect(outbox.close).toHaveBeenCalledWith('wh-1', 'stored-key_wh-1', 'dispatched');
     expect(stats).toMatchObject({ scanned: 1, replayed: 1 });
