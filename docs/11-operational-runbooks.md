@@ -346,7 +346,7 @@ curl -X PUT http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId} 
 #    it. The outbox sweep runs only while WEBHOOK_RECONCILE_INTERVAL_MS > 0 (default 60000). It
 #    sends an event again only if it was shed, refused at shutdown, or cut off by a restart or a
 #    database fault before its dispatch settled, and then only until WEBHOOK_RECONCILE_MAX_ATTEMPTS
-#    sweeps are spent, so such an event can show an attempts > 0 row while the sweep still holds it.
+#    replays are spent, so such an event can show an attempts > 0 row while the sweep still holds it.
 #    A row can be replayed only while step 2 lists it with "replayable": true, that is, it was
 #    recorded while WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS > 0 (with the queue on, also when the
 #    event was queued) and that window has not passed. With the default 0 no event data is kept

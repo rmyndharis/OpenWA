@@ -86,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- The API reference, database design, runbook and glossary describe when the webhook outbox copy is retired after a sweep replay or a redrive, and which rows neither path recovers.
 - Document the memory media messages and parked webhook deliveries hold during a media burst, and the settings that limit it.
 - The README and architecture docs describe the Local/S3 storage backend as the live media store, not a backup target.
 - Document how to recover a lost admin API key without revoking the other keys.

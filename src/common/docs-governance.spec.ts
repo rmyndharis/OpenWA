@@ -221,6 +221,37 @@ describe('governance docs match the repository', () => {
     expect(glossary).not.toMatch(staleClaim);
   });
 
+  // A direct sweep replay that fails keeps its outbox copy pending, a delivered redrive closes it,
+  // and the replay budget counts replays, not sweeps. An attempts-0 row the sweep never replays has
+  // no other way back, since redrive takes only terminal rows.
+  it('describes the webhook outbox copy after a sweep replay or a redrive', () => {
+    const flat = (text: string): string => text.replace(/\n#?\s*/g, ' ').replace(/\s+/g, ' ');
+    const doc06 = read('docs/06-api-specification.md');
+    const redrive = between(doc06, '#### POST /api/webhooks/delivery-failures/redrive', '\n#### ');
+    expect(redrive).toMatch(/Success removes its row and closes any outbox copy/);
+    expect(redrive).toMatch(/sweep replay of the same event already under way can still POST/);
+    expect(redrive).toMatch(/excluded before applying the limit when it has `attempts: 0`/);
+    const crash = between(doc06, '**Crash boundary.**', '\n\n');
+    expect(crash).toMatch(/^\*\*Crash boundary\.\*\* For an ordinary dispatch, a successfully written outbox record/);
+    expect(crash).toMatch(
+      /\(the queue off, or its enqueue failed\) that exhausts its retries stores its terminal failure row but keeps the outbox copy pending/,
+    );
+    const runbook = flat(between(read('docs/11-operational-runbooks.md'), '# 6. Replay deliveries', '```'));
+    expect(runbook).toContain('until WEBHOOK_RECONCILE_MAX_ATTEMPTS replays are spent');
+    const glossary = between(read('docs/21-glossary.md'), '### Dead Letter Queue (DLQ)', '\n### ');
+    expect(glossary).toMatch(
+      /with the sweep off such an event is not replayed, but turning the sweep back on replays it/,
+    );
+    expect(glossary).toMatch(
+      /shed or shutdown-refused one the sweep dropped because its webhook was removed, disabled or unsubscribed, nor/,
+    );
+    expect(doc06).not.toMatch(/Removed, disabled, unsubscribed, expired and out-of-scope rows are excluded/);
+    const outbox = between(read('docs/05-database-design.md'), '- **`webhook_outbox_events`**', '\n');
+    expect(outbox).toMatch(/For an ordinary dispatch, delivery success, subscription invalidation/);
+    expect(outbox).toMatch(/that fails keeps the copy pending until the replay budget is spent/);
+    expect(outbox).toMatch(/a delivered redrive of the event also retires it/);
+  });
+
   // Status media lives only in the storage backend, and backup.sh never copies an S3 bucket.
   it('describes the storage backend as the live media store, not a backup target', () => {
     expect(read('scripts/backup.sh')).toMatch(/the bucket's contents are not archived/);
