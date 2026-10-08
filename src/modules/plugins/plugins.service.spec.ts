@@ -165,6 +165,25 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     enableSpy.mockRestore();
   });
 
+  it('keeps the new version when an update finishes during shutdown instead of rolling back', async () => {
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+    pluginStorage.setPluginEnabledByOperator('svc-plg', true);
+    // Teardown has begun (nothing was enabled yet), then the update of a running plugin reaches its re-enable.
+    await loader.onModuleDestroy();
+    loader.getPlugin('svc-plg')!.status = PluginStatus.ENABLED;
+
+    const dto = await service.updatePackage('svc-plg', pkg({ version: '2.0.0' }));
+
+    expect(dto.version).toBe('2.0.0');
+    const onDisk = JSON.parse(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'manifest.json'), 'utf8')) as {
+      version: string;
+    };
+    expect(onDisk.version).toBe('2.0.0');
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak'))).toBe(false);
+    // The operator decision survives, so the next boot restores the new version.
+    expect(pluginStorage.getPluginEntry('svc-plg')?.enabledByOperator).toBe(true);
+  });
+
   it('cleans up the staging + backup dirs after a successful update (swap happened)', async () => {
     service.install({ buffer: pkg({ version: '1.0.0' }) });
 

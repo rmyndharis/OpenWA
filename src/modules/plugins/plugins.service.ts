@@ -598,7 +598,14 @@ export class PluginsService {
         fs.chmodSync(stateFile, 0o600);
       }
       this.pluginLoader.loadPlugin(dir);
-      if (wasEnabled) {
+      if (wasEnabled && this.pluginLoader.isShuttingDown()) {
+        // Shutdown refuses new enables. That is not a failed update: keep the new version and let the
+        // next boot restore it from the persisted operator decision instead of rolling back.
+        logger.warn(`Plugin ${id} updated during shutdown; it will be enabled on the next start`, {
+          pluginId: id,
+          action: 'plugin_update_enable_deferred',
+        });
+      } else if (wasEnabled) {
         await this.pluginLoader.enablePlugin(id);
       }
       fs.rmSync(backup, { recursive: true, force: true });
