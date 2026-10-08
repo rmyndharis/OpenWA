@@ -85,6 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Document the memory inbound media holds while waiting to be stored on PostgreSQL or while being archived, and the settings that limit it.
 - The README and architecture docs describe the S3 storage backend as the live media store, not a backup target.
 - Document how to recover a lost admin API key without revoking the other keys.
 - The integration docs say `integration_delivery_failures` holds only failed inbound deliveries.
