@@ -121,8 +121,9 @@ Cutting a release:
    The SDK has its own version line — the monorepo's `v*` tags are the app
    version and never trigger an SDK publish.
 3. The workflow re-runs the SDK's tests, typecheck, build and dual CJS/ESM
-   smoke check, then publishes. The published tarball is the one those gates
-   passed, not a later rebuild.
+   smoke check (packaging plus requests through each build's client), then
+   publishes. The published tarball is the one those gates passed, not a
+   later rebuild.
 
 ## License
 

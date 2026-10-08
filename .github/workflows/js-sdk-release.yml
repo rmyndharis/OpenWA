@@ -91,7 +91,7 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
-      - run: npm run smoke # dual CJS+ESM consumable — must run after build
+      - run: npm run smoke # packaging plus request smoke; must run after build
 
       - name: Publish to npm (trusted publishing, provenance automatic)
         # No --provenance flag: npm attaches provenance on its own for a trusted-publisher release, and

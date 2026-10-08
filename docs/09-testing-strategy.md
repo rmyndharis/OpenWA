@@ -57,7 +57,7 @@ npm --prefix dashboard run test:unit
 | `cd dashboard && npm run i18n:check`                             | Verify dashboard locale key parity                                                                           |
 | `cd dashboard && npm run build`                                  | Type-check and build the dashboard                                                                           |
 | `cd sdk/javascript && npm test && npm run typecheck`             | Type-check and unit-test the JavaScript SDK                                                                  |
-| `cd sdk/javascript && npm run build && npm run smoke`            | Build and dual CJS/ESM package-smoke the JavaScript SDK                                                      |
+| `cd sdk/javascript && npm run build && npm run smoke`            | Build the JavaScript SDK, then smoke-load both builds and send requests through each client                  |
 | `cd sdk/python && pytest`                                        | Run the Python SDK tests                                                                                     |
 | `cd sdk/php && ./vendor/bin/phpunit`                             | Run the PHP SDK tests                                                                                        |
 | `cd sdk/java && mvn -B verify`                                   | Run the Java SDK tests                                                                                       |
@@ -271,7 +271,7 @@ contract surfaces that SDKs mirror (`src/**/dto/**`, `src/**/*.controller.ts`, `
 `src/engine/interfaces/whatsapp-engine.interface.ts`), so any backend controller or service change also
 re-runs the SDK suites. It runs:
 
-- JavaScript SDK type-check, build, and dual CJS/ESM smoke test on Node 18 (the `engines` floor), 20 and 22, with unit tests on 20 and 22 (vitest 4 needs Node 20+).
+- JavaScript SDK type-check, build, and dual CJS/ESM smoke test (module loading plus requests through each build's client) on Node 18 (the `engines` floor), 20 and 22, with unit tests on 20 and 22 (vitest 4 needs Node 20+).
 - Python SDK type check with `mypy` and tests with `pytest` on Python 3.9 and 3.12.
 - PHP SDK tests with PHPUnit.
 - Java SDK tests with Maven.

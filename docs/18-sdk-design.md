@@ -1175,7 +1175,7 @@ The wire types live in a dedicated module (`types.ts` / `types.py`) so they can 
 
 ```bash
 # JavaScript
-cd sdk/javascript && npm test && npm run build && npm run smoke   # smoke = require()+import() packaging check
+cd sdk/javascript && npm test && npm run build && npm run smoke   # smoke = require()+import() packaging plus request check
 # Python
 cd sdk/python && python -m pytest -q
 # PHP
