@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Read `./data/...` paths from `.env.generated` under `OPENWA_DATA_DIR` in `scripts/backup.sh` and `scripts/restore.sh`, so a run on the host against the data volume archives and restores media and sessions.
 - Stop `scripts/backup.sh` and `scripts/restore.sh` with an error naming the key when `./.env` or `.env.generated` holds a line for that key they cannot parse, instead of falling back to the default.
 - Deliver Baileys API edit and revoke events to webhook and WebSocket consumers.
 - Preserve chat-scoped WebSocket event order while resolving chat identities.

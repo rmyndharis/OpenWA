@@ -51,6 +51,8 @@
 #       another line does not hide the key, and a line the scripts cannot parse fails the lookup, so
 #       backup and restore stop before archiving or writing anything instead of using a default the app
 #       may not read
+#   (ah) ./data paths in .env.generated follow OPENWA_DATA_DIR in a run on the host, in both scripts,
+#       while non-path settings there are read as written
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -1698,6 +1700,76 @@ if [ "$(db_fingerprint "$AGB/dst/data/active.sqlite")" != "ag-active" ] || [ -e 
   fail "(ag) restore with DATABASE_NAME in the environment did not land on the configured data store only"
 fi
 pass "(ag) dotenv's quoted, commented and empty forms resolve like the app, and an unparsed line stops both scripts"
+
+echo ""
+echo "==> (ah) ./data paths in .env.generated follow OPENWA_DATA_DIR in a run on the host"
+# The app writes STORAGE_LOCAL_PATH=./data/media on first run, and a dashboard save adds
+# SESSION_DATA_PATH=./data/sessions, both relative to /app in the image. Run on the host with
+# OPENWA_DATA_DIR at the volume's mountpoint, the scripts read them against the host's working
+# directory: the backup left the volume's media and sessions out, or took a stale ./data there, and
+# exited 0, and the restore put them where the app never reads them.
+AH="$WORK/ah"
+mkdir -p "$AH/vol/media" "$AH/vol/sessions/session-1" "$AH/host/data/media" "$AH/vol2" "$AH/x"
+make_fixture "$AH/vol/main.sqlite" "ah-main"
+make_fixture "$AH/vol/openwa.sqlite" "ah-data"
+printf 'ah-media\n' >"$AH/vol/media/a.jpg"
+printf 'ah-session\n' >"$AH/vol/sessions/session-1/marker"
+printf 'host-stale\n' >"$AH/host/data/media/stale.jpg"
+# The database paths come from the same file here, so they follow the volume too.
+printf '%s\n' STORAGE_LOCAL_PATH=./data/media SESSION_DATA_PATH=./data/sessions \
+  MAIN_DATABASE_NAME=./data/main.sqlite DATABASE_NAME=./data/openwa.sqlite >"$AH/vol/.env.generated"
+(cd "$AH/host" && OPENWA_DATA_DIR="$AH/vol" BACKUP_DIR="$AH/out" "$BACKUP" >/dev/null 2>&1) ||
+  fail "(ah) backup from the host failed"
+ARCHIVE_AH="$(ls "$AH"/out/openwa-backup-*.tar.gz)"
+tar -xzf "$ARCHIVE_AH" -C "$AH/x"
+if [ "$(db_fingerprint "$AH/x/main.sqlite")" != "ah-main" ] ||
+  [ "$(db_fingerprint "$AH/x/openwa.sqlite")" != "ah-data" ]; then
+  fail "(ah) backup did not archive the volume's databases"
+fi
+if [ "$(cat "$AH/x/media/a.jpg" 2>/dev/null || true)" != "ah-media" ] || [ -e "$AH/x/media/stale.jpg" ]; then
+  fail "(ah) backup did not archive the volume's media: $(find "$AH/x/media" 2>&1 | tr '\n' ' ')"
+fi
+if [ "$(cat "$AH/x/sessions/session-1/marker" 2>/dev/null || true)" != "ah-session" ]; then
+  fail "(ah) backup did not archive the volume's sessions"
+fi
+(cd "$AH/host" && OPENWA_DATA_DIR="$AH/vol2" "$RESTORE" "$ARCHIVE_AH" >/dev/null 2>&1) ||
+  fail "(ah) restore from the host failed"
+if [ "$(cat "$AH/vol2/media/a.jpg" 2>/dev/null || true)" != "ah-media" ] ||
+  [ "$(cat "$AH/vol2/sessions/session-1/marker" 2>/dev/null || true)" != "ah-session" ] ||
+  [ "$(db_fingerprint "$AH/vol2/main.sqlite" 2>/dev/null || true)" != "ah-main" ] ||
+  [ "$(db_fingerprint "$AH/vol2/openwa.sqlite" 2>/dev/null || true)" != "ah-data" ]; then
+  fail "(ah) restore did not put media, sessions and databases in the volume"
+fi
+if [ "$(ls -A "$AH/host/data")" != media ] || [ "$(ls -A "$AH/host/data/media")" != stale.jpg ]; then
+  fail "(ah) restore wrote into the host's working directory: $(find "$AH/host/data" | tr '\n' ' ')"
+fi
+# A leftover ./uploads falls back to the volume's media as well, not to the host's ./data/media.
+printf 'STORAGE_LOCAL_PATH=./uploads\n' >"$AH/vol/.env.generated"
+(
+  cd "$AH/host"
+  MAIN_DATABASE_NAME="$AH/vol/main.sqlite" DATABASE_NAME="$AH/vol/openwa.sqlite" \
+    OPENWA_DATA_DIR="$AH/vol" BACKUP_DIR="$AH/out-uploads" "$BACKUP" >/dev/null 2>&1
+) || fail "(ah) backup with a leftover ./uploads failed"
+if ! tar -tzf "$(ls "$AH"/out-uploads/openwa-backup-*.tar.gz)" | grep -qx './media/a.jpg'; then
+  fail "(ah) a leftover ./uploads did not fall back to the volume's media"
+fi
+# Only path settings are mapped: a dashboard-provisioned Postgres named, owned or reached as "data", or
+# a password under "data/", reaches pg_dump as written, with the default data dir too.
+mkdir -p "$AH/pg/data" "$AH/pg/bin"
+make_fixture "$AH/pg/data/main.sqlite" "ah-pg-main"
+cat >"$AH/pg/bin/pg_dump" <<EOF
+#!/bin/sh
+printf '%s|' "\$PGPASSWORD" "\$@" >"$AH/pg/pg_dump-args"
+EOF
+chmod +x "$AH/pg/bin/pg_dump"
+printf 'DATABASE_TYPE=postgres\nDATABASE_HOST=data\nDATABASE_USERNAME=data\nDATABASE_PASSWORD=data/s3cret\nDATABASE_NAME=data\n' \
+  >"$AH/pg/data/.env.generated"
+(cd "$AH/pg" && PATH="$AH/pg/bin:$PATH" BACKUP_DIR="$AH/pg/out" "$BACKUP" >/dev/null 2>&1) ||
+  fail "(ah) Postgres backup with settings named data failed"
+if [ "$(cat "$AH/pg/pg_dump-args" 2>/dev/null || true)" != "data/s3cret|-h|data|-p|5432|-U|data|data|" ]; then
+  fail "(ah) Postgres settings from .env.generated were rewritten: $(cat "$AH/pg/pg_dump-args" 2>&1)"
+fi
+pass "(ah) a host run backs up and restores the volume's databases, media and sessions, not the working directory's"
 
 echo ""
 echo "All smoke tests passed!"

@@ -26,9 +26,10 @@
 #   DATABASE_NAME       data-store SQLite file (default: ./data/openwa.sqlite; sqlite only)
 #                       Both resolve EXACTLY like the app: the environment first, then ./.env, then
 #                       <data dir>/.env.generated, otherwise the fixed ./data default (see
-#                       lib-env.sh). They are NOT derived from OPENWA_DATA_DIR — the app never does
-#                       that either.
-#   OPENWA_DATA_DIR   data directory for the non-DB state below (default: ./data)
+#                       lib-env.sh). The defaults are NOT derived from OPENWA_DATA_DIR, as the app
+#                       never does that either.
+#   OPENWA_DATA_DIR   data directory for the non-DB state below (default: ./data); a ./data/...
+#                     path read from .env.generated, database paths included, is taken under it
 #   BACKUP_DIR        where archives are written (default: ./backups)
 #   DATABASE_TYPE     sqlite (default) | postgres
 #   SESSION_DATA_PATH, BAILEYS_AUTH_DIR, STORAGE_LOCAL_PATH, PLUGINS_DIR
@@ -72,32 +73,32 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 # Database paths resolve exactly like the app: an explicit environment value wins, then ./.env, then
 # the dashboard's <data dir>/.env.generated, otherwise the fixed ./data default. OPENWA_DATA_DIR
-# below only bases the non-DB state directories — deriving DB paths from it would back up files the
-# app never reads.
-MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME ./data/main.sqlite)"
+# bases the defaults of the non-DB state directories below and a ./data/... path from .env.generated,
+# never the database defaults: deriving those from it would back up files the app never reads.
+MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME ./data/main.sqlite path)"
 # With DATABASE_TYPE=postgres, DATABASE_NAME names the database instead, read below only when pg_dump
 # needs it, so a line for it the scripts cannot parse stops only a backup that uses it.
 if [ "$DATABASE_TYPE" != "postgres" ]; then
-  DATA_DB="$(openwa_resolve DATABASE_NAME ./data/openwa.sqlite)"
+  DATA_DB="$(openwa_resolve DATABASE_NAME ./data/openwa.sqlite path)"
 fi
-SESSIONS_DIR="$(openwa_resolve SESSION_DATA_PATH "$DATA_DIR/sessions")"
-BAILEYS_DIR="$(openwa_resolve BAILEYS_AUTH_DIR "$DATA_DIR/baileys")"
+SESSIONS_DIR="$(openwa_resolve SESSION_DATA_PATH "$DATA_DIR/sessions" path)"
+BAILEYS_DIR="$(openwa_resolve BAILEYS_AUTH_DIR "$DATA_DIR/baileys" path)"
 MEDIA_DIR="$(openwa_media_dir)"
 # Installed plugin code. The app defaults this to <dataDir>/plugins — the same tree as the
 # registry and each plugin's ctx.storage below — so an unset PLUGINS_DIR must resolve there
 # too, or the archive silently omits the plugin packages.
-PLUGIN_PACKAGES_DIR="$(openwa_resolve PLUGINS_DIR "$DATA_DIR/plugins")"
+PLUGIN_PACKAGES_DIR="$(openwa_resolve PLUGINS_DIR "$DATA_DIR/plugins" path)"
 # Plugin registry + every plugin's persisted ctx.storage. The app puts them at <dataDir>/plugins,
 # where dataDir is PLUGIN_STATE_DIR when that is set and ./data otherwise, so the knob has to be
 # resolved here exactly like PLUGINS_DIR above. Hardcoding $DATA_DIR/plugins meant an operator who
 # moved plugin state got an archive with neither the registry nor any plugin's storage in it, and
 # a restore that put nothing back. Resolved under its own name because the knob names the ROOT,
 # not the plugins directory inside it.
-PLUGIN_STATE_ROOT="$(openwa_resolve PLUGIN_STATE_DIR "$DATA_DIR")"
+PLUGIN_STATE_ROOT="$(openwa_resolve PLUGIN_STATE_DIR "$DATA_DIR" path)"
 PLUGIN_STATE_DIR="$PLUGIN_STATE_ROOT/plugins"
 GENERATED_ENV="$DATA_DIR/.env.generated"
 # The app writes the generated admin key to BOOTSTRAP_KEY_FILE when that is set.
-ADMIN_KEY_FILE="$(openwa_resolve BOOTSTRAP_KEY_FILE "$DATA_DIR/.api-key")"
+ADMIN_KEY_FILE="$(openwa_resolve BOOTSTRAP_KEY_FILE "$DATA_DIR/.api-key" path)"
 
 log() { echo "[backup] $*"; }
 

@@ -20,10 +20,11 @@
 #   DATABASE_NAME       restore target for the SQLite data store (default: ./data/openwa.sqlite)
 #                       Both resolve EXACTLY like the app: the environment first, then ./.env, then
 #                       .env.generated (the archive's copy when it carries one, else the data dir's),
-#                       otherwise the fixed ./data default (see lib-env.sh). They are NOT derived
-#                       from OPENWA_DATA_DIR; restoring there would write databases the app never
-#                       reads (fresh-empty boot + new master key).
-#   OPENWA_DATA_DIR   data directory to restore non-DB state into (default: ./data)
+#                       otherwise the fixed ./data default (see lib-env.sh). The defaults are NOT
+#                       derived from OPENWA_DATA_DIR; restoring there would write databases the app
+#                       never reads (fresh-empty boot + new master key).
+#   OPENWA_DATA_DIR   data directory to restore non-DB state into (default: ./data); a ./data/...
+#                     path read from .env.generated, database paths included, is taken under it
 #   SESSION_DATA_PATH, BAILEYS_AUTH_DIR, STORAGE_LOCAL_PATH, PLUGINS_DIR
 #                     override the corresponding state directories
 #   PLUGIN_STATE_DIR  root whose plugins/ holds the plugin registry and ctx.storage (default: the
@@ -303,29 +304,29 @@ if [ -f "$STAGE/.env.generated" ]; then
   OPENWA_GENERATED_ENV="$STAGE/.env.generated"
   log "Paths not set in the environment or ./.env come from the archive's .env.generated."
 fi
-MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME ./data/main.sqlite)"
+MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME ./data/main.sqlite path)"
 # DATABASE_NAME is only a target for an archive carrying the SQLite data store; a PostgreSQL dump is
 # loaded by hand, so a line for it the scripts cannot parse does not stop that restore.
 if [ -f "$STAGE/openwa.sqlite" ]; then
-  DATA_DB="$(openwa_resolve DATABASE_NAME ./data/openwa.sqlite)"
+  DATA_DB="$(openwa_resolve DATABASE_NAME ./data/openwa.sqlite path)"
 fi
-SESSIONS_DIR="$(openwa_resolve SESSION_DATA_PATH "$DATA_DIR/sessions")"
-BAILEYS_DIR="$(openwa_resolve BAILEYS_AUTH_DIR "$DATA_DIR/baileys")"
+SESSIONS_DIR="$(openwa_resolve SESSION_DATA_PATH "$DATA_DIR/sessions" path)"
+BAILEYS_DIR="$(openwa_resolve BAILEYS_AUTH_DIR "$DATA_DIR/baileys" path)"
 MEDIA_DIR="$(openwa_media_dir)"
 # Installed plugin code. The app defaults this to <dataDir>/plugins — the same tree as the
 # registry and each plugin's ctx.storage below — so an unset PLUGINS_DIR must resolve there
 # too, or the archive silently omits the plugin packages.
-PLUGIN_PACKAGES_DIR="$(openwa_resolve PLUGINS_DIR "$DATA_DIR/plugins")"
+PLUGIN_PACKAGES_DIR="$(openwa_resolve PLUGINS_DIR "$DATA_DIR/plugins" path)"
 # Plugin registry + every plugin's persisted ctx.storage. The app puts them at <dataDir>/plugins,
 # where dataDir is PLUGIN_STATE_DIR when that is set and ./data otherwise, so the knob has to be
 # resolved here exactly like PLUGINS_DIR above. Hardcoding $DATA_DIR/plugins meant an operator who
 # moved plugin state got an archive with neither the registry nor any plugin's storage in it, and
 # a restore that put nothing back. Resolved under its own name because the knob names the ROOT,
 # not the plugins directory inside it.
-PLUGIN_STATE_ROOT="$(openwa_resolve PLUGIN_STATE_DIR "$DATA_DIR")"
+PLUGIN_STATE_ROOT="$(openwa_resolve PLUGIN_STATE_DIR "$DATA_DIR" path)"
 PLUGIN_STATE_DIR="$PLUGIN_STATE_ROOT/plugins"
 # The app reads the plaintext admin key from BOOTSTRAP_KEY_FILE when that is set.
-ADMIN_KEY_FILE="$(openwa_resolve BOOTSTRAP_KEY_FILE "$DATA_DIR/.api-key")"
+ADMIN_KEY_FILE="$(openwa_resolve BOOTSTRAP_KEY_FILE "$DATA_DIR/.api-key" path)"
 
 # backup.sh archives state directories by content. An archive from before it followed symlinks
 # carries a link instead, which on this host may point at the very directory the restore empties

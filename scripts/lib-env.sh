@@ -160,19 +160,19 @@ openwa_writable() {
 
 # openwa_media_dir - STORAGE_LOCAL_PATH as the app settles it (src/config/storage-root.ts). v0.2.0 to
 # v0.7.3 persisted ./uploads into .env.generated; where that cannot be created, as under the image's
-# root-owned /app, the app keeps media in ./data/media instead, so the scripts have to look there too.
-# Writability alone cannot tell: `docker exec` runs these as root, which can create /app/uploads while
-# the app's own user cannot. The app creates a ./uploads it uses at boot, so a missing one beside an
-# existing ./data/media means ./data/media is in use.
+# root-owned /app, the app keeps media in ./data/media (<data dir>/media) instead, so the scripts have
+# to look there too. Writability alone cannot tell: `docker exec` runs these as root, which can create
+# /app/uploads while the app's own user cannot. The app creates a ./uploads it uses at boot, so a
+# missing one beside an existing <data dir>/media means that one is in use.
 openwa_media_dir() {
   local dir
-  dir="$(openwa_resolve STORAGE_LOCAL_PATH "$DATA_DIR/media")" || return
+  dir="$(openwa_resolve STORAGE_LOCAL_PATH "$DATA_DIR/media" path)" || return
   case "$dir" in
     ./uploads | uploads)
-      if ! openwa_writable "$dir" || { [ ! -d "$dir" ] && [ -d ./data/media ]; }; then
+      if ! openwa_writable "$dir" || { [ ! -d "$dir" ] && [ -d "$DATA_DIR/media" ]; }; then
         echo "[config] WARN: STORAGE_LOCAL_PATH=$dir is a leftover the app does not use here, so it keeps" >&2
-        echo "[config]       media in ./data/media; using that. Remove the line from .env.generated." >&2
-        dir=./data/media
+        echo "[config]       media in ./data/media; using $DATA_DIR/media. Remove the line from .env.generated." >&2
+        dir="$DATA_DIR/media"
       fi
       ;;
   esac
@@ -183,13 +183,17 @@ openwa_media_dir() {
 # shell; restore.sh points it at the archive's copy, which replaces this file during the restore.
 OPENWA_GENERATED_ENV="${DATA_DIR:-./data}/.env.generated"
 
-# openwa_resolve <key> <default> - the application's precedence: environment, then ./.env, then
-# $OPENWA_GENERATED_ENV, then the built-in default. Requires DATA_DIR to be set before sourcing.
+# openwa_resolve <key> <default> [path] - the application's precedence: environment, then ./.env,
+# then $OPENWA_GENERATED_ENV, then the built-in default. Requires DATA_DIR to be set before sourcing.
+# With a third argument of `path`, the value names a filesystem path: the app reads .env.generated as
+# ./data/.env.generated, so a ./data or ./data/... value there names a path in the data dir and is
+# taken under DATA_DIR, which on the host is the volume's mountpoint rather than the working
+# directory's ./data. Other keys (a PostgreSQL name, user or password) are returned as written.
 # Fails, printing nothing, when a layer sets the key in a form openwa_env_file_value rejects. Callers
 # must act on that status: set -e does for a top-level assignment, but not inside a function called
 # from a command substitution or for a substitution in a command's arguments.
 openwa_resolve() {
-  local key="$1" fallback="$2" current value layer rc
+  local key="$1" fallback="$2" kind="${3:-}" current value layer rc
   current="$(printenv "$key" 2>/dev/null || true)"
   if [ -n "$current" ]; then
     printf '%s' "$current"
@@ -203,6 +207,12 @@ openwa_resolve() {
     value="$(openwa_env_file_value "$layer" "$key")" || rc=$?
     case "$rc" in
       0)
+        if [ "$kind" = path ] && [ "$layer" = "$OPENWA_GENERATED_ENV" ]; then
+          case "$value" in
+            ./data | data) value="$DATA_DIR" ;;
+            ./data/* | data/*) value="${DATA_DIR%/}/${value#*data/}" ;;
+          esac
+        fi
         printf '%s' "${value:-$fallback}"
         return 0
         ;;
