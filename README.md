@@ -161,15 +161,15 @@ For any deployment where ethical, legal, or regulatory compliance matters (healt
 
 ### Infrastructure
 
-| Feature          | Status | Description                                |
-| ---------------- | ------ | ------------------------------------------ |
-| SQLite           | ✅     | Zero-config embedded database              |
-| PostgreSQL       | ✅     | Production-grade database                  |
-| Redis Cache      | ✅     | Optional performance caching               |
-| S3/MinIO Storage | ✅     | Live media store (statuses, archived chat) |
-| Docker           | ✅     | One-command deployment                     |
-| Health Checks    | ✅     | Kubernetes-ready probes                    |
-| Data Migration   | ✅     | Export/import between backends             |
+| Feature          | Status | Description                                      |
+| ---------------- | ------ | ------------------------------------------------ |
+| SQLite           | ✅     | Zero-config embedded database                    |
+| PostgreSQL       | ✅     | Production-grade database                        |
+| Redis Cache      | ✅     | Optional performance caching                     |
+| S3/MinIO Storage | ✅     | Live media store (statuses, archived chat media) |
+| Docker           | ✅     | One-command deployment                           |
+| Health Checks    | ✅     | Kubernetes-ready probes                          |
+| Data Migration   | ✅     | Export/import between backends                   |
 
 ---
 
