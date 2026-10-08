@@ -420,6 +420,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'TEMPLATE_RENDER_MAX_CHARS',
     'STORAGE_IMPORT_MAX_BYTES',
     'STORAGE_IMPORT_MAX_ENTRIES',
+    'STORAGE_IMPORT_MAX_TOTAL_BYTES',
     'STORAGE_LIST_MAX_FILES',
     'BAILEYS_MESSAGE_STORE_LIMIT',
     // Each read fell back to its default on 0 or garbage, or passed a negative or fractional value on

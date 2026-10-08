@@ -664,6 +664,7 @@ describe('validateEnv', () => {
     ['TEMPLATE_RENDER_MAX_CHARS', '64k'],
     ['STORAGE_IMPORT_MAX_BYTES', '200mb'],
     ['STORAGE_IMPORT_MAX_ENTRIES', '1e5'],
+    ['STORAGE_IMPORT_MAX_TOTAL_BYTES', '10gb'],
     ['STORAGE_LIST_MAX_FILES', '100k'],
     ['BAILEYS_MESSAGE_STORE_LIMIT', '5k'],
   ])('rejects a unit-suffixed or zero %s', (key, bad) => {

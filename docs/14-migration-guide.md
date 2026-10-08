@@ -269,6 +269,10 @@ curl -X POST 'http://localhost:2785/api/infra/storage/import' \
   -d '{"filePath": "data/exports/storage-export-xxx.tar.gz"}'
 ```
 
+The import aborts once it has written more than `STORAGE_IMPORT_MAX_TOTAL_BYTES` (default 10 GiB). For a
+larger store, raise it on the destination before Step 5; the export logs a warning when it exceeds that
+limit. An aborted import keeps what it wrote and can be re-run.
+
 | Scenario                     | Support | Method                   |
 | ---------------------------- | ------- | ------------------------ |
 | Local → Built-in MinIO       | ✅      | Export → Config → Import |
