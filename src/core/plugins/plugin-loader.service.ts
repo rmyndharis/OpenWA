@@ -133,6 +133,10 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
   private readonly lifecycle: PluginLifecycle;
   /** Owns the removal job — uninstall of an installed user plugin. */
   private readonly uninstaller: PluginUninstaller;
+  /** Set when shutdown teardown begins; from then on no enable may start. */
+  private shuttingDown = false;
+  /** Enables in flight, awaited by onModuleDestroy so one that lands during teardown is still disabled. */
+  private readonly pendingEnables = new Set<Promise<void>>();
 
   constructor(
     private readonly configService: ConfigService,
@@ -252,7 +256,14 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     const restorable = this.getAllPlugins().filter(
       p => !p.builtIn && this.pluginStorage.getPluginEntry(p.manifest.id)?.enabledByOperator === true,
     );
-    for (const plugin of restorable) {
+    for (let i = 0; i < restorable.length; i++) {
+      if (this.shuttingDown) {
+        this.logger.log(`Plugin restore stopped at ${i} of ${restorable.length} plugin(s): shutting down`, {
+          action: 'plugin_restore_aborted',
+        });
+        return;
+      }
+      const plugin = restorable[i];
       const pluginId = plugin.manifest.id;
       try {
         await this.enablePlugin(pluginId);
@@ -271,8 +282,13 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
    * buffers, close connections, and persist state. Previously onDisable only ran via the REST disable
    * and uninstall paths, so a normal restart/deploy/scale-down skipped it and stateful plugins lost
    * in-flight work. Best-effort and sequential: one plugin's failure must not block the others.
+   *
+   * Enables already in flight are awaited first, so a plugin that finishes enabling mid-teardown is in
+   * the snapshot below instead of running on with its onDisable never called; later enables are refused.
    */
   async onModuleDestroy(): Promise<void> {
+    this.shuttingDown = true;
+    await Promise.allSettled(this.pendingEnables);
     const enabled = this.getAllPlugins().filter(p => p.status === PluginStatus.ENABLED);
     for (const plugin of enabled) {
       try {
@@ -312,8 +328,22 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     return this.scanner.loadPlugin(pluginPath);
   }
 
-  enablePlugin(pluginId: string): Promise<void> {
-    return this.lifecycle.enablePlugin(pluginId);
+  /** True once shutdown teardown has begun; enablePlugin refuses from then on. */
+  isShuttingDown(): boolean {
+    return this.shuttingDown;
+  }
+
+  async enablePlugin(pluginId: string): Promise<void> {
+    if (this.shuttingDown) {
+      throw new Error(`Plugin ${pluginId} cannot be enabled while the gateway is shutting down`);
+    }
+    const enabling = this.lifecycle.enablePlugin(pluginId);
+    this.pendingEnables.add(enabling);
+    try {
+      await enabling;
+    } finally {
+      this.pendingEnables.delete(enabling);
+    }
   }
 
   disablePlugin(pluginId: string, opts?: { unload?: boolean }): Promise<void> {

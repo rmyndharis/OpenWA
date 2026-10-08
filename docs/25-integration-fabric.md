@@ -160,8 +160,9 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   rows are pruned on their own short window (`INGRESS_DEDUP_RETENTION_DAYS`, default 7 — a dedup
   oracle is not an audit log, and `<= 0` falls back to the default rather than disabling the prune
   into unbounded growth).
-- **`integration_delivery_failures`** — a dead-letter record of last resort for both directions, with a
-  redrive path (added in P1).
+- **`integration_delivery_failures`** — a dead-letter record of last resort for inbound (ingress)
+  deliveries, with a redrive path (added in P1). Only the ingress path writes it, so every row's
+  `direction` is `inbound`; a failed outbound call to the provider is not dead-lettered.
 
 ## 25.6 Security model
 

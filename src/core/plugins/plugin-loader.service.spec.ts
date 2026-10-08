@@ -399,6 +399,33 @@ describe('PluginLoaderService — graceful shutdown (onModuleDestroy)', () => {
     expect(okDisable).toHaveBeenCalledTimes(1);
     expect(loader.getPlugin('ok-plg')?.status).toBe(PluginStatus.DISABLED);
   });
+
+  it('waits for an enable already in flight and disables it, so its onDisable still runs', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const onDisable = jest.fn(() => Promise.resolve());
+    loader.registerBuiltInPlugin(ext('slow-plg'), { onEnable: () => gate, onDisable });
+
+    const enabling = loader.enablePlugin('slow-plg');
+    const destroying = loader.onModuleDestroy();
+    release();
+    await enabling;
+    await destroying;
+
+    expect(onDisable).toHaveBeenCalledTimes(1);
+    expect(loader.getPlugin('slow-plg')?.status).toBe(PluginStatus.DISABLED);
+  });
+
+  it('refuses an enable once teardown has begun', async () => {
+    const onEnable = jest.fn(() => Promise.resolve());
+    loader.registerBuiltInPlugin(ext('late-plg'), { onEnable });
+
+    await loader.onModuleDestroy();
+
+    await expect(loader.enablePlugin('late-plg')).rejects.toThrow(/shutting down/);
+    expect(onEnable).not.toHaveBeenCalled();
+    expect(loader.getPlugin('late-plg')?.status).not.toBe(PluginStatus.ENABLED);
+  });
 });
 
 describe('PluginLoaderService — enable-failure hook cleanup', () => {

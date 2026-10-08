@@ -10,6 +10,8 @@ import com.rmyndharis.openwa.errors.OpenWATimeoutError;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
@@ -20,6 +22,7 @@ import org.junit.jupiter.api.Test;
 class DefaultHttpTransportTest {
     private HttpServer server;
     private String baseUrl;
+    private final CountDownLatch release = new CountDownLatch(1);
 
     @BeforeEach
     void start() throws Exception {
@@ -30,6 +33,7 @@ class DefaultHttpTransportTest {
 
     @AfterEach
     void stop() {
+        release.countDown();
         server.stop(0);
     }
 
@@ -76,5 +80,24 @@ class DefaultHttpTransportTest {
 
         assertThrows(OpenWATimeoutError.class,
             () -> client(Duration.ofMillis(100)).requestVoid(HttpMethod.GET, "/slow", null, null));
+    }
+
+    @Test
+    void mapsABodyStallToOpenWATimeoutError() {
+        server.createContext("/stall", ex -> {
+            try {
+                ex.sendResponseHeaders(200, 2);
+                ex.getResponseBody().write('{');
+                ex.getResponseBody().flush();
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                ex.close();
+            }
+        });
+
+        assertThrows(OpenWATimeoutError.class,
+            () -> client(Duration.ofMillis(100)).requestVoid(HttpMethod.GET, "/stall", null, null));
     }
 }

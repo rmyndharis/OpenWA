@@ -136,6 +136,26 @@ updates:
       - dependency-name: "@types/node"
         versions: [">=23.0.0"]
 
+  # The JavaScript SDK publishes no runtime dependencies, so every update here moves the toolchain
+  # that builds and tests it. These PRs touch sdk/**, so SDK CI gates each one.
+  - package-ecosystem: npm
+    directory: /sdk/javascript
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+      major:
+        update-types:
+          - major
+    labels:
+      - dependencies
+      - javascript
+
   # All workflow action refs are pinned to commit SHAs (with a `# vX.Y.Z` comment). Dependabot
   # understands that form: it proposes the new SHA and rewrites the version comment, so the pins
   # stay current without ever floating on a mutable major tag.

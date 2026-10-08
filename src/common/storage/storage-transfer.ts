@@ -9,6 +9,8 @@ import { LoggerService } from '../services/logger.service';
 const DEFAULT_IMPORT_MAX_BYTES = 200 * 1024 * 1024;
 /** Max number of entries an import archive may contain. Bounds an entry-count DoS. */
 const DEFAULT_IMPORT_MAX_ENTRIES = 100_000;
+/** Cap on the bytes one import writes in total (10 GiB). The two caps above still allow terabytes. */
+const DEFAULT_IMPORT_MAX_TOTAL_BYTES = 10 * 1024 * 1024 * 1024;
 
 /**
  * True when a storage read failed because the object is simply not there.
@@ -114,6 +116,7 @@ async function appendEntries(
   output: PassThrough,
   logger: LoggerService,
 ): Promise<void> {
+  let exportedBytes = 0;
   for (const file of files) {
     let source: ExportFileSource;
     try {
@@ -128,6 +131,7 @@ async function appendEntries(
       continue;
     }
     const { stream, size } = source;
+    exportedBytes += size ?? 0;
     // The output closes early when the archive fails or the consumer goes away: stop reading files.
     // Checked synchronously before waiting, so a 'close' that already fired cannot be missed.
     if (output.destroyed) {
@@ -166,6 +170,16 @@ async function appendEntries(
     archive.abort();
     return;
   }
+  // Same reasoning as the entry-count warning in createExportStream, for the import's total-bytes cap.
+  const localByteCap = positiveIntFromEnv('STORAGE_IMPORT_MAX_TOTAL_BYTES', DEFAULT_IMPORT_MAX_TOTAL_BYTES);
+  const warnAboveBytes = Math.min(localByteCap, DEFAULT_IMPORT_MAX_TOTAL_BYTES);
+  if (exportedBytes > warnAboveBytes) {
+    logger.warn(
+      `Export contains ${exportedBytes} bytes, above the import limit of ${warnAboveBytes} ` +
+        `(this deployment: ${localByteCap}, shipped default: ${DEFAULT_IMPORT_MAX_TOTAL_BYTES}). ` +
+        'Raise STORAGE_IMPORT_MAX_TOTAL_BYTES on the destination before restoring this archive.',
+    );
+  }
   // finalize() rejections also emit via the 'error' handler above; catch the promise so it
   // never surfaces as an unhandled rejection.
   archive.finalize().catch(() => undefined);
@@ -188,15 +202,17 @@ export async function importFromStream(
   let importedCount = 0;
   let failedCount = 0;
   let entryCount = 0;
+  let totalBytes = 0;
   const maxEntryBytes = positiveIntFromEnv('STORAGE_IMPORT_MAX_BYTES', DEFAULT_IMPORT_MAX_BYTES);
   const maxEntries = positiveIntFromEnv('STORAGE_IMPORT_MAX_ENTRIES', DEFAULT_IMPORT_MAX_ENTRIES);
+  const maxTotalBytes = positiveIntFromEnv('STORAGE_IMPORT_MAX_TOTAL_BYTES', DEFAULT_IMPORT_MAX_TOTAL_BYTES);
 
   const extract = tar.extract();
   const gunzip = createGunzip();
 
   return new Promise<{ imported: number; failed: number }>((resolve, reject) => {
     let settled = false;
-    // Abort the whole import: a per-entry overflow or too many entries is a (zip-bomb) attack, not
+    // Abort the whole import: a per-entry or total overflow or too many entries is a (zip-bomb) attack, not
     // a per-file skip — tear down the pipeline and reject so nothing further is buffered or written.
     const fail = (err: Error): void => {
       if (settled) return;
@@ -251,10 +267,20 @@ export async function importFromStream(
       stream.on('data', (chunk: Buffer) => {
         if (entryAborted || settled) return;
         entryBytes += chunk.length;
+        totalBytes += chunk.length;
         if (entryBytes > maxEntryBytes) {
           entryAborted = true;
           stream.resume(); // drain the remainder so the source can end
           fail(new Error(`Import aborted: entry "${key}" exceeds the ${maxEntryBytes}-byte per-entry cap`));
+        } else if (totalBytes > maxTotalBytes) {
+          // The entry that crosses the cap is dropped, so no import writes more than maxTotalBytes.
+          entryAborted = true;
+          stream.resume();
+          fail(
+            new Error(
+              `Import aborted: archive exceeds the ${maxTotalBytes}-byte total cap (STORAGE_IMPORT_MAX_TOTAL_BYTES)`,
+            ),
+          );
         } else {
           chunks.push(chunk);
         }
