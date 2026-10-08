@@ -143,6 +143,44 @@ describe('webhook recovery across live ownership and configuration changes', () 
     },
   );
 
+  it('retires the outbox copy when a redrive delivers, so the next sweep sends nothing', async () => {
+    const config = new ConfigService({ webhook: { failurePayloadRetentionHours: 24, timeout: 1000, retryDelay: 1 } });
+    const repository = ds.getRepository(WebhookOutboxEvent);
+    const outbox = new WebhookOutboxService(repository);
+    const delivery = new WebhookDeliveryService(webhooks, failures, config, new HookManager(), outbox);
+    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery);
+    const redrive = new WebhookRedriveService(webhooks, failures, delivery, config);
+    const options = { intervalMs: 1000, graceMs: 0, batchSize: 50, maxAttempts: 5 };
+    // A dispatch interrupted before it settled leaves its row pending for the sweep.
+    await outbox.open({
+      webhookId: primary.id,
+      sessionId: primary.sessionId,
+      event: 'message.received',
+      idempotencyKey: 'stranded-key',
+      deliveryId: 'job0',
+      payload: { id: 'MSG1' },
+    });
+    await repository.update({ idempotencyKey: 'stranded-key' }, { createdAt: new Date(Date.now() - 60_000) });
+    let status = 503;
+    const post = jest
+      .spyOn(ssrf, 'withSafeFetch')
+      .mockImplementation((_url, _init, use) => Promise.resolve(use(new Response(null, { status }))));
+
+    // The sweep's replay fails: the row stays pending and a redrivable failure row is filed.
+    expect(await reconciler.sweep(options)).toMatchObject({ scanned: 1, failed: 1 });
+    expect(await failures.count({ where: { idempotencyKey: 'stranded-key' } })).toBe(1);
+
+    status = 200;
+    expect(await redrive.redrive({})).toMatchObject({ delivered: 1, failed: 0 });
+    expect(await failures.count()).toBe(0);
+    const row = await repository.findOneByOrFail({ idempotencyKey: 'stranded-key' });
+    expect(row.state).toBe('dispatched');
+    expect(row.payload).toBeNull();
+
+    expect(await reconciler.sweep(options)).toMatchObject({ scanned: 0 });
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
   it('rechecks the receiver after a held webhook hook before the first POST', async () => {
     const config = new ConfigService({ webhook: { failurePayloadRetentionHours: 24 } });
     const hooks = new HookManager();
