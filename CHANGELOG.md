@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stop dashboard multi-page loads and a pending chat mark-as-read from sending requests after logout.
 - Keep a new dashboard login signed in when a request sent with the previous API key fails afterwards.
 - Refuse Baileys animated stickers over 500 frames and run at most two sticker conversions at once.
 - Stop pending webhook deliveries from holding over-cap inline media already omitted from their payload.
