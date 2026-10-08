@@ -170,3 +170,68 @@ describe('BaileysLifecycle QR refresh', () => {
     expect(onQRCode).not.toHaveBeenCalled();
   });
 });
+
+describe('BaileysLifecycle proxy fetch dispatcher', () => {
+  function lifecycle() {
+    const noCallback = (): undefined => undefined;
+    const host = {
+      authPath: '/nonexistent/openwa-lifecycle-spec/session-sess-1',
+      logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+      config: {
+        sessionId: 'sess-1',
+        dbSessionId: 'db-1',
+        proxyUrl: 'http://user:pass@proxy.example:8080',
+        messageStore: { clearSession: jest.fn().mockResolvedValue(undefined) },
+      },
+      liveCalls: new Map(),
+      fenceStoredWrites: jest.fn(),
+      getOnStateChanged: noCallback,
+      getOnDisconnected: noCallback,
+      getOnError: noCallback,
+      getOnCredentialTeardownStarted: noCallback,
+    } as unknown as BaileysLifecycleHost;
+    const engine = new BaileysLifecycle(host);
+    engine.sock = {
+      user: { id: '628999:1@s.whatsapp.net' },
+      query: jest.fn().mockResolvedValue({ tag: 'iq' }),
+      generateMessageTag: () => 'tag-1',
+      end: jest.fn(),
+    } as unknown as BaileysLifecycle['sock'];
+    return engine;
+  }
+
+  // The pooled proxy tunnels must not outlive the session: teardown closes the dispatcher (gracefully,
+  // so a request already in progress still finishes) and forgets it, so a later fetch gets a fresh one.
+  it.each([
+    ['disconnect', (engine: BaileysLifecycle) => engine.disconnect()],
+    ['destroy', (engine: BaileysLifecycle) => engine.destroy()],
+    ['logout', (engine: BaileysLifecycle) => engine.logout()],
+    [
+      'a failed logout',
+      async (engine: BaileysLifecycle) => {
+        jest.mocked(engine.sock!.query).mockRejectedValue(new Error('timed out'));
+        await expect(engine.logout()).rejects.toThrow('timed out');
+      },
+    ],
+    [
+      'a WhatsApp-side logout',
+      (engine: BaileysLifecycle) =>
+        (engine as unknown as { handleRemoteLoggedOut(): Promise<void> }).handleRemoteLoggedOut(),
+    ],
+  ])('closes the dispatcher on %s and builds a fresh one afterwards', async (_name, teardown) => {
+    const engine = lifecycle();
+    const dispatcher = engine.fetchDispatcher();
+    if (!dispatcher) throw new Error('Expected a proxy dispatcher');
+    const close = jest.spyOn(dispatcher, 'close');
+    const destroy = jest.spyOn(dispatcher, 'destroy');
+
+    await teardown(engine);
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(destroy).not.toHaveBeenCalled();
+    const fresh = engine.fetchDispatcher();
+    expect(fresh).toBeDefined();
+    expect(fresh).not.toBe(dispatcher);
+    await fresh?.close();
+  });
+});

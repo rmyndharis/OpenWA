@@ -69,6 +69,10 @@ jobs:
       - name: Security audit (dashboard)
         run: cd dashboard && npm audit --audit-level=high
 
+      # Audited from its lockfile alone; same rationale as the ci.yml audit job.
+      - name: Security audit (JavaScript SDK)
+        run: cd sdk/javascript && npm audit --audit-level=high
+
   # Dependabot proposes refreshed node:22-slim digests, yet the pin has trailed the tag for weeks
   # (a refresh that is late or left unmerged), and a stale base ages silently: Node patch releases
   # and Debian fixes that the image scan below does not flag (medium/low, or not yet fixed upstream)
