@@ -413,11 +413,14 @@ export function Chats() {
   useEffect(() => () => markReadCoalescer.flush(), [markReadCoalescer]);
 
   // Marking a chat read is an operator write; a read-only key would only collect 403 toasts.
+  // A session switch rebuilds the coalescer for the new session one render before the open chat is
+  // cleared, so until the new session's list is on screen the open chat is still the previous
+  // account's and nothing is marked read.
   const markChatRead = useCallback(
     (chatId: string) => {
-      if (canWrite) markReadCoalescer.call(chatId);
+      if (canWrite && listedSessionRef.current === selectedSessionId) markReadCoalescer.call(chatId);
     },
-    [markReadCoalescer, canWrite],
+    [markReadCoalescer, canWrite, selectedSessionId],
   );
 
   // 3. WebSocket integration for real-time messages

@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stop the dashboard Chats page from marking the open chat read on a newly selected session.
 - Refuse Baileys animated stickers over 500 frames and run at most two sticker conversions at once.
 - Stop pending webhook deliveries from holding over-cap inline media already omitted from their payload.
 - Resolve `./data/...` paths from `.env.generated` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs.

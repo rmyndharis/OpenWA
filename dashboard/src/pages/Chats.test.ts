@@ -1176,6 +1176,46 @@ test("a reconnect refetch that settles after a session switch leaves the new ses
   }
 });
 
+test('switching session with a chat open marks only the chats opened on the new session read', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  twoSessions = true;
+  // Session 2 lists Alice too (a contact both accounts share). The stub folds session 2's routes onto
+  // session 1's, so its mark-as-read bodies are collected before that.
+  chatsResponder = sessionId =>
+    Promise.resolve(
+      jsonResponse(sessionId === SESSION.id ? [CHAT] : [{ ...CHAT, lastMessage: 'alice on two' }, CHAT_2]),
+    );
+  const readsOnTwo: unknown[] = [];
+  const stub = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith(`/api/sessions/${SESSION_2.id}/chats/read`))
+      readsOnTwo.push(JSON.parse(String(init?.body)));
+    return stub(input, init);
+  }) as typeof fetch;
+  try {
+    const { container, unmount } = renderChats();
+    await screen.findByText('Main (15551234567)');
+    fireEvent.click(await screen.findByText('Alice'));
+    await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+
+    fireEvent.change(container.querySelector('select.session-selector') as HTMLSelectElement, {
+      target: { value: SESSION_2.id },
+    });
+    await screen.findByText('alice on two');
+    fireEvent.click(await screen.findByText('Carol'));
+    await waitFor(() => assert.ok(container.querySelector('.room-messages')));
+
+    // Unmounting flushes the reads still queued for session 2, so none can be missed by a timer.
+    unmount();
+    await flush();
+    await flush();
+    assert.deepEqual(readsOnTwo, [{ chatId: CHAT_2.id }]);
+  } finally {
+    globalThis.fetch = stub;
+    twoSessions = false;
+  }
+});
+
 test('a read-only key opening a chat sends no mark-as-read', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   resetFetchCalls();
