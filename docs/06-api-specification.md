@@ -2093,7 +2093,7 @@ Send a contact card (vCard).
 
 #### POST /api/sessions/:sessionId/messages/send-sticker
 
-Send a sticker (by URL or base64; typically webp). Reuses `SendMediaMessageDto`.
+Send a sticker (by URL or base64; typically webp). Reuses `SendMediaMessageDto`. On Baileys a WebP is sent unchanged and any other `image/*` is converted to a 512x512 WebP first, keeping up to 500 animation frames.
 
 **Auth:** API key (OPERATOR)
 
@@ -2115,7 +2115,7 @@ Send a sticker (by URL or base64; typically webp). Reuses `SendMediaMessageDto`.
 { "messageId": "true_628123456789@c.us_3EB0ABCD", "timestamp": 1719312000 }
 ```
 
-**Errors:** `400` media validation failure / a `url` that answers non-2xx, times out or cannot be reached / session not active / unknown body field · `401` missing/invalid API key · `403` key role below OPERATOR · `404` the `quotedMessageId` could not be resolved (see Quoted sends) · `413` base64 or downloaded media over the media cap (see §6.3) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine, or (whatsapp-web.js) a sticker to a channel, `status@broadcast` or a broadcast list · `503` a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable) · `422` the `Idempotency-Key` was already used for a different request (see [Idempotent sends](#idempotent-sends))
+**Errors:** `400` media validation failure / (Baileys) media that is neither WebP nor an image that converts to one, or an animation with more than 500 frames / a `url` that answers non-2xx, times out or cannot be reached / session not active / unknown body field · `401` missing/invalid API key · `403` key role below OPERATOR · `404` the `quotedMessageId` could not be resolved (see Quoted sends) · `413` base64 or downloaded media over the media cap (see §6.3) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine, or (whatsapp-web.js) a sticker to a channel, `status@broadcast` or a broadcast list · `503` a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable) · `422` the `Idempotency-Key` was already used for a different request (see [Idempotent sends](#idempotent-sends))
 
 #### POST /api/sessions/:sessionId/messages/send-poll
 
