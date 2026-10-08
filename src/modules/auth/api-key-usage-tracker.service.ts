@@ -24,7 +24,7 @@ export class ApiKeyUsageTracker {
   /** Coalesce per-request usage-stat writes to at most one DB write per key per window. */
   private static readonly STAT_FLUSH_INTERVAL_MS = 60_000;
   /** Upper bound for the best-effort usage-stat flush on shutdown — teardown must not stall on a wedged DB. */
-  private static readonly SHUTDOWN_FLUSH_TIMEOUT_MS = 5_000;
+  static readonly SHUTDOWN_FLUSH_TIMEOUT_MS = 5_000;
   /** keyId -> usage increments observed but not yet persisted (flushed on the next windowed write). */
   private readonly pending = new Map<string, number>();
 
