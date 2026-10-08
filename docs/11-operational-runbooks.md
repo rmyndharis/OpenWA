@@ -338,8 +338,9 @@ curl -X PUT http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId} 
 #    Rows stay inside the ADMIN key's allowedSessions; sessionId, webhookId and ids only narrow
 #    the batch. The webhook must be active and still subscribed to the event (re-enable it if
 #    step 5C left it off). Each row gets one direct POST to the webhook's current URL with its
-#    stored X-OpenWA-Idempotency-Key; a delivered row is removed, a failed one stays. If the sweep
-#    still holds the event it can POST it again under the same key, so receivers must deduplicate.
+#    stored X-OpenWA-Idempotency-Key; a delivered row is removed, along with the copy the sweep
+#    still held for that event, and a failed one stays. A sweep replay already under way can still
+#    POST the event again under the same key, so receivers must deduplicate.
 curl -X POST http://localhost:2785/api/webhooks/delivery-failures/redrive \
   -H "X-API-Key: $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
