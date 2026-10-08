@@ -579,8 +579,9 @@ double-enable, and engines must match the configured active engine):
 
 **Disable / unload / uninstall.** `disablePlugin` runs `onDisable` (force-terminating the worker for a
 sandboxed plugin, even if `onDisable` hangs or throws) and unregisters the plugin's hooks. `onModuleDestroy`
-disables every enabled plugin on graceful shutdown so stateful plugins can flush; it first waits for
-enables already in flight, and refuses new ones once teardown starts. `uninstallPlugin`
+disables every enabled plugin on graceful shutdown so stateful plugins can flush. Running plugins are
+disabled first; then it waits for enables already in flight (a sandboxed enable is three 30 s-bounded
+calls) and disables those plugins too. New enables are refused once teardown starts. `uninstallPlugin`
 disables + unloads, drops the registry entry, and deletes the plugin's directory and its `ctx.storage`
 data dir (built-ins are protected and cannot be uninstalled). The unload path dispatches `onUnload`:
 for a sandboxed plugin it runs in the worker between `onDisable` and terminate (a plain disable does
