@@ -56,7 +56,7 @@ RUN npm ci --omit=dev --ignore-scripts \
     && npm cache clean --force
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:2785/api/health/ready || exit 1
+    CMD curl -f "http://localhost:${PORT:-2785}/api/health/ready" || exit 1
 
 # dumb-init is PID 1; the entrypoint runs as root, fixes /app/data ownership, then drops to the
 # openwa user with gosu before it execs the command.
@@ -68,6 +68,11 @@ The image deliberately has no `USER openwa` directive and no `chown -R` over `/a
 walks every production dependency (#1045), so the entrypoint re-owns only the writable data volume
 and then drops privileges. Chromium comes from Chrome for Testing on amd64 and from Debian's
 `chromium` package on arm64; see the `Dockerfile` for the multi-arch build.
+
+The healthcheck probes the `PORT` of the container environment, falling back to 2785. To run the
+image on another port, pass `PORT` as an environment variable (`docker run -e PORT=8080 ...`): the
+probe never reads a mounted `.env`, so a `PORT` set only there moves the app but not the probe, and
+the container stays `unhealthy`.
 
 ### Docker Compose (Development)
 
