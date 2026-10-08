@@ -31,9 +31,10 @@ for (const [format, mod] of [
   }
 }
 
-// Request smoke: the Node 18 lane skips the unit tests (vitest 4 needs Node 20+), and the typecheck
-// accepts DOM-declared globals Node 18 lacks, so send real requests through each build's client over
-// the default global fetch: a parsed 2xx body, a typed error for a non-2xx, and the abort timeout.
+// Request smoke: the Node 18 lane skips the unit tests (vitest 4 needs Node 20.19+ or 22.12+), and
+// the typecheck accepts DOM-declared globals Node 18 lacks, so send real requests through each
+// build's client over the default global fetch: a parsed 2xx body, a typed error for a non-2xx, and
+// the abort timeout.
 const server = createServer((req, res) => {
   if (req.url === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });

@@ -271,7 +271,7 @@ contract surfaces that SDKs mirror (`src/**/dto/**`, `src/**/*.controller.ts`, `
 `src/engine/interfaces/whatsapp-engine.interface.ts`), so any backend controller or service change also
 re-runs the SDK suites. It runs:
 
-- JavaScript SDK type-check, build, and dual CJS/ESM smoke test (module loading plus requests through each build's client) on Node 18 (the `engines` floor), 20 and 22, with unit tests on 20 and 22 (vitest 4 needs Node 20+).
+- JavaScript SDK type-check, build, and dual CJS/ESM smoke test (module loading plus requests through each build's client) on Node 18 (the `engines` floor), 20 and 22, with unit tests on 20 and 22 (vitest 4 needs Node 20.19+ or 22.12+).
 - Python SDK type check with `mypy` and tests with `pytest` on Python 3.9 and 3.12.
 - PHP SDK tests with PHPUnit.
 - Java SDK tests with Maven.

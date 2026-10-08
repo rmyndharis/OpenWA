@@ -84,7 +84,8 @@ jobs:
           npm install -g npm@12.1.0
           npm --version
 
-      - run: npm ci
+      # --engine-strict: the tests below must not run on a Node the locked toolchain does not support.
+      - run: npm ci --engine-strict
 
       # Same gates as SDK CI, and for the same reason Java's release runs its tests: the artifact that
       # reaches the registry must be the one that passed, not a rebuild nobody checked.

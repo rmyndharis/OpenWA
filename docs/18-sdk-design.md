@@ -1174,7 +1174,7 @@ The wire types live in a dedicated module (`types.ts` / `types.py`) so they can 
 ### Release process
 
 ```bash
-# JavaScript
+# JavaScript (the tests need Node 20.19+ or 22.12+; the published package runs on Node 18+)
 cd sdk/javascript && npm test && npm run build && npm run smoke   # smoke = require()+import() packaging plus request check
 # Python
 cd sdk/python && python -m pytest -q

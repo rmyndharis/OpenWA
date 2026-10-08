@@ -40,9 +40,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 18 is the published package's engines floor; vitest 4 needs Node 20+, so 18 only gates the
-        # typecheck, build and smoke (packaging plus real requests through each build's client), and
-        # the unit tests run on 20 and 22.
+        # 18 is the published package's engines floor; vitest 4 needs Node 20.19+ or 22.12+, so 18
+        # only gates the typecheck, build and smoke (packaging plus real requests through each
+        # build's client), and the unit tests run on 20 and 22.
         node: ['18', '20', '22']
     defaults:
       run:
@@ -54,7 +54,11 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: 'npm'
           cache-dependency-path: sdk/javascript/package-lock.json
-      - run: npm ci
+      # The lane that runs the tests installs with --engine-strict, so a locked toolchain that drops
+      # its Node fails here, naming the package, instead of warning and then testing on an
+      # unsupported runtime or failing at startup on a skipped native binding. The condition is the
+      # test step's own.
+      - run: npm ci --engine-strict=${{ matrix.node != '18' }}
       - run: npm test
         if: matrix.node != '18'
       # The build tsconfigs exclude test/, and vitest strips types without checking them, so the

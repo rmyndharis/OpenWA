@@ -179,6 +179,33 @@ describe('every npm tree is audited and kept current', () => {
 });
 
 /**
+ * The SDK's engines floor (>=18) is for the published package; its test toolchain needs a newer
+ * Node. npm only warns when a locked package's engines exclude the running Node, so a toolchain bump
+ * that drops a lane's Node still installs there, then tests on an unsupported runtime or fails at
+ * startup on an optional native binding npm skipped. Each job that runs the SDK tests installs under
+ * --engine-strict on exactly the lanes the test step runs on.
+ */
+describe('the JavaScript SDK tests run only on a Node their toolchain supports', () => {
+  it.each([
+    ['sdk-ci.yml', 'javascript'],
+    ['js-sdk-release.yml', 'publish'],
+  ])('%s %s installs under --engine-strict wherever it runs npm test', (file, job) => {
+    const steps = (
+      yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as {
+        jobs: Record<string, { steps: Array<{ run?: string; if?: string }> }>;
+      }
+    ).jobs[job].steps;
+    const installs = steps.filter(step => /^npm ci\b/.test(step.run ?? ''));
+    const tests = steps.filter(step => step.run === 'npm test');
+    expect(installs).toHaveLength(1);
+    expect(tests).toHaveLength(1);
+    expect(installs[0].if).toBeUndefined();
+    const gate = tests[0].if;
+    expect(installs[0].run).toBe(gate ? `npm ci --engine-strict=\${{ ${gate} }}` : 'npm ci --engine-strict');
+  });
+});
+
+/**
  * BuildKit's provenance and SBOM travel inside the image index unsigned, so nothing a user could check
  * tied a published image to this workflow. promote now records a signed build-provenance attestation
  * for the tested digest, and verify-published checks it on every promoted tag of both registries.

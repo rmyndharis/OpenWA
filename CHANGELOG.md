@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The JavaScript SDK CommonJS build no longer sets `moduleResolution` node10, which TypeScript 7 removed; the built output is unchanged.
+- JavaScript SDK CI and release jobs install with `--engine-strict` wherever they run the tests, so an unsupported Node fails at install.
 - The JavaScript SDK smoke check sends requests through both built clients, so the Node 18 CI lane covers the request path.
 - Retire the whatsapp-web.js download-mimetype install patch; inbound media downloads now pass the mimetype themselves.
 - CI and the weekly security scan run `npm audit` over the JavaScript SDK, and Dependabot watches its lockfile.
@@ -96,7 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Dependencies
 
 - `handlebars` 4.7.9 to 4.7.10, closing two critical advisories in which a crafted template could inject JavaScript into compiled output. It reaches the root tree only through `ts-jest`, so it is dev-only and nothing that ships changes.
-- `vitest` 2.1 to 4.1 in the JavaScript SDK tree, closing its dev-only advisories. Its tests now need Node 20+; the published package still supports Node 18.
+- `vitest` 2.1 to 4.1 in the JavaScript SDK tree, closing its dev-only advisories. Its tests now need Node 20.19+ or 22.12+; the published package still supports Node 18.
 
 ### Upgrade notes (behavior changes)
 
