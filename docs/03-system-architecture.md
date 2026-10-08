@@ -671,7 +671,7 @@ flowchart TB
     end
 
     subgraph Storage["External Storage"]
-        S3[S3/MinIO<br/>Media backup / migration]
+        S3[S3/MinIO<br/>Live media store]
     end
 
     API --> S3
@@ -1307,9 +1307,10 @@ flowchart TB
 Media storage is a **single service** (`src/common/storage/storage.service.ts`) that branches
 internally on `storageType` — there is no `I*Adapter` interface, separate adapter classes, or a
 `StorageFactory`. The two backends are `local` (the default; files under `./data/media`) and `s3`.
-The main producer/consumer is the storage export/import migration and backup flow; the status store
-also writes status media through `putFile` (under `statuses/`) and sweeps orphans back out with
-`deleteFile`. Incoming and outgoing message media is returned inline to REST/webhook consumers and is
+It is the live media store: the status store writes status media through `putFile` (under
+`statuses/`) and sweeps orphans back out with `deleteFile`, and the storage export/import endpoints
+move its contents between backends. `scripts/backup.sh` copies only the local media directory, never
+the S3 bucket. Incoming and outgoing message media is returned inline to REST/webhook consumers and is
 **not** written through `StorageService` unless `CHAT_MEDIA_ARCHIVE_ENABLED=true`, which archives a copy
 under `chat-media/<sessionId>/` (media this account sent also needs `CHAT_MEDIA_ARCHIVE_OUTBOUND=true`).
 That copy is in addition to the inline one unless `MESSAGE_INLINE_MEDIA=archive`, which replaces the

@@ -147,6 +147,38 @@ describe('the release and weekly audits fail when the audit cannot run', () => {
 });
 
 /**
+ * Each npm tree has its own lockfile, and `npm audit` in one directory never sees another's. A tree
+ * the merge and weekly audits skip, or that Dependabot does not watch, collects advisories unseen.
+ */
+describe('every npm tree is audited and kept current', () => {
+  const root = path.join(__dirname, '..', '..');
+  const trees = (): string[] =>
+    spawnSync('git', ['ls-files', '--', '*package-lock.json'], { cwd: root, encoding: 'utf8' })
+      .stdout.split('\n')
+      .filter(Boolean)
+      .map(file => path.posix.dirname(file).replace(/^\.$/, ''));
+  const auditCommand = (tree: string): string =>
+    tree === '' ? 'npm run check:audit' : `cd ${tree} && npm audit --audit-level=high`;
+
+  it('finds every tree', () => {
+    expect(trees()).toEqual(expect.arrayContaining(['', 'dashboard', 'sdk/javascript']));
+  });
+
+  it.each(['ci.yml', 'security-scan.yml'])('%s audits every tree', file => {
+    const runs = runSteps(file, 'audit');
+    expect(trees().filter(tree => !runs.includes(auditCommand(tree)))).toEqual([]);
+  });
+
+  it('Dependabot updates every tree', () => {
+    const dependabot = yaml.load(fs.readFileSync(path.join(root, '.github', 'dependabot.yml'), 'utf8')) as {
+      updates: Array<{ 'package-ecosystem': string; directory: string }>;
+    };
+    const watched = dependabot.updates.filter(u => u['package-ecosystem'] === 'npm').map(u => u.directory);
+    expect(trees().filter(tree => !watched.includes(`/${tree}`))).toEqual([]);
+  });
+});
+
+/**
  * BuildKit's provenance and SBOM travel inside the image index unsigned, so nothing a user could check
  * tied a published image to this workflow. promote now records a signed build-provenance attestation
  * for the tested digest, and verify-published checks it on every promoted tag of both registries.

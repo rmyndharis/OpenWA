@@ -301,8 +301,8 @@ not supported on whatsapp-web.js, the default engine.
 | `github_actions`      | Pull requests that update GitHub Actions code                                   |
 | `javascript`          | Pull requests that update javascript code                                       |
 
-`.github/dependabot.yml` applies `dependencies`, `dashboard`, `ci` and `docker`; `github_actions` and
-`javascript` are Dependabot defaults from before it set explicit labels.
+`.github/dependabot.yml` applies `dependencies`, `dashboard`, `javascript` (the JavaScript SDK), `ci` and
+`docker`; `github_actions` is a Dependabot default from before it set explicit labels.
 
 ## 20.4 Community Channels
 

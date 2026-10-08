@@ -32,7 +32,7 @@
 
 **OpenWA** is a free, open-source WhatsApp API Gateway designed for developers who need full control over their messaging infrastructure—without vendor lock-in or hidden paywalls.
 
-Built on a **pluggable architecture**, OpenWA lets you select database engines (SQLite/PostgreSQL), backup/migration storage backends (Local/S3), and cache layers (disabled/Redis) through configuration rather than application-code changes. Message media itself is returned inline to API and webhook consumers; it is not automatically persisted to the storage backend.
+Built on a **pluggable architecture**, OpenWA lets you select database engines (SQLite/PostgreSQL), media storage backends (Local/S3), and cache layers (disabled/Redis) through configuration rather than application-code changes. The storage backend is the live store for status media and, when chat-media archiving is enabled, archived chat media; other message media is returned inline to API and webhook consumers. `scripts/backup.sh` copies only the local media directory, so an S3 bucket needs a backup of its own.
 
 |                               |                                                                                                                                          |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -161,15 +161,15 @@ For any deployment where ethical, legal, or regulatory compliance matters (healt
 
 ### Infrastructure
 
-| Feature          | Status | Description                              |
-| ---------------- | ------ | ---------------------------------------- |
-| SQLite           | ✅     | Zero-config embedded database            |
-| PostgreSQL       | ✅     | Production-grade database                |
-| Redis Cache      | ✅     | Optional performance caching             |
-| S3/MinIO Storage | ✅     | Media-directory backup/migration backend |
-| Docker           | ✅     | One-command deployment                   |
-| Health Checks    | ✅     | Kubernetes-ready probes                  |
-| Data Migration   | ✅     | Export/import between backends           |
+| Feature          | Status | Description                                |
+| ---------------- | ------ | ------------------------------------------ |
+| SQLite           | ✅     | Zero-config embedded database              |
+| PostgreSQL       | ✅     | Production-grade database                  |
+| Redis Cache      | ✅     | Optional performance caching               |
+| S3/MinIO Storage | ✅     | Live media store (statuses, archived chat) |
+| Docker           | ✅     | One-command deployment                     |
+| Health Checks    | ✅     | Kubernetes-ready probes                    |
+| Data Migration   | ✅     | Export/import between backends             |
 
 ---
 

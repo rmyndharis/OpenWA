@@ -40,7 +40,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ['18', '22'] # declared engines floor + current
+        # 18 is the published package's engines floor; vitest 4 needs Node 20+, so 18 only gates the
+        # typecheck, build and packaging smoke, and the unit tests run on 20 and 22.
+        node: ['18', '20', '22']
     defaults:
       run:
         working-directory: sdk/javascript
@@ -53,6 +55,7 @@ jobs:
           cache-dependency-path: sdk/javascript/package-lock.json
       - run: npm ci
       - run: npm test
+        if: matrix.node != '18'
       # The build tsconfigs exclude test/, and vitest strips types without checking them, so the
       # type-level wire contract in test/*.test-d.ts only gates if tsc runs over test/ too (#754).
       - run: npm run typecheck

@@ -1,5 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, HttpException, PayloadTooLargeException } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  PayloadTooLargeException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { LoggerService } from '../../common/services/logger.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { In } from 'typeorm';
@@ -554,6 +559,65 @@ describe('BulkMessageService.processBatch', () => {
     } as never);
 
     expect(inFlightMarkers().get(created.id)).toBe(false);
+  });
+
+  // The shutdown fail reads each registered batch's row, and a row still being written is not there
+  // yet: its guarded write matches nothing. The batch must not start sending once that write lands.
+  it('fails a batch whose row was still being written when shutdown began, and sends nothing', async () => {
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>(resolve => (releaseSave = resolve));
+    Object.assign(repo, { create: jest.fn((b: Partial<MessageBatch>) => ({ ...b })) });
+    repo.save.mockImplementation(async (b: MessageBatch) => {
+      await saveGate;
+      return b;
+    });
+    const pickup = jest.spyOn(service as unknown as { processBatch: () => Promise<void> }, 'processBatch');
+    const created = service.createBatch('s1', {
+      messages: [
+        { chatId: 'c0@c.us', type: 'text', content: { text: 'a' } },
+        { chatId: 'c1@c.us', type: 'text', content: { text: 'b' } },
+      ],
+      options: { delayBetweenMessages: 0, randomizeDelay: false },
+    } as never);
+    await new Promise(resolve => setImmediate(resolve)); // createBatch is parked in save
+    expect(repo.save).toHaveBeenCalledTimes(1);
+
+    repo.findOne.mockResolvedValueOnce(null); // the shutdown read: the row is not there yet
+    repo.update.mockResolvedValueOnce({ affected: 0 });
+    await service.onModuleDestroy();
+
+    repo.findOne.mockImplementationOnce(({ where }: { where: { id: string } }) =>
+      Promise.resolve({ ...makeBatch(2), id: where.id }),
+    ); // the pickup reads the committed PENDING row
+    releaseSave();
+    const batch = await created;
+    await pickup.mock.results[0].value;
+
+    expect(engine.sendTextMessage).not.toHaveBeenCalled();
+    expect(repo.update).toHaveBeenLastCalledWith(
+      { id: batch.id, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
+      expect.objectContaining({ status: BatchStatus.FAILED }),
+    );
+    expect(repo.update).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ status: BatchStatus.PROCESSING }),
+    );
+    expect(inFlightMarkers().size).toBe(0);
+    expect((service as unknown as { inFlightBatches: number }).inFlightBatches).toBe(0);
+  });
+
+  it('refuses a new batch once shutdown has begun, before writing its row', async () => {
+    repo.findOne.mockResolvedValue(null); // batchId not taken
+    Object.assign(repo, { create: jest.fn((b: Partial<MessageBatch>) => ({ ...b })) });
+    await service.onModuleDestroy();
+
+    const create = service.createBatch('s1', {
+      messages: [{ chatId: 'c@c.us', type: 'text', content: { text: 'hi' } }],
+    } as never);
+
+    await expect(create).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(repo.save).not.toHaveBeenCalled();
+    expect(inFlightMarkers().size).toBe(0);
   });
 
   it('rejects a new batch (before persisting) when the concurrent in-flight cap is reached', async () => {
