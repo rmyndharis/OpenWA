@@ -339,3 +339,28 @@ describe('importFromStream caps the total bytes one import writes', () => {
     );
   });
 });
+
+describe('createExportStream and the per-entry import cap', () => {
+  it('warns at export time when one file is larger than the import accepts', async () => {
+    const exportWith = async (cap: string) => {
+      const logger = makeLogger();
+      const prev = process.env.STORAGE_IMPORT_MAX_BYTES;
+      process.env.STORAGE_IMPORT_MAX_BYTES = cap;
+      try {
+        const { openFile } = trackingOpener();
+        const output = await createExportStream(() => Promise.resolve(files.slice(0, 3)), openFile, logger as never);
+        await new Promise<void>(resolve => output.on('end', resolve).resume());
+      } finally {
+        if (prev === undefined) delete process.env.STORAGE_IMPORT_MAX_BYTES;
+        else process.env.STORAGE_IMPORT_MAX_BYTES = prev;
+      }
+      return logger.warn;
+    };
+
+    expect(await exportWith(String(FILE_BYTES))).not.toHaveBeenCalled();
+    const warn = await exportWith(String(FILE_BYTES - 1));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Raise STORAGE_IMPORT_MAX_BYTES'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`(${FILE_BYTES} bytes)`));
+  });
+});

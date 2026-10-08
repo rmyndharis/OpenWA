@@ -271,7 +271,8 @@ curl -X POST 'http://localhost:2785/api/infra/storage/import' \
 
 The import aborts once it has written more than `STORAGE_IMPORT_MAX_TOTAL_BYTES` (default 10 GiB). For a
 larger store, raise it on the destination before Step 5; the export logs a warning when it exceeds that
-limit. An aborted import keeps what it wrote and can be re-run.
+limit. The import also aborts on any single file above `STORAGE_IMPORT_MAX_BYTES` (default 200 MiB), and
+the export warns about that too. An aborted import keeps what it wrote and can be re-run.
 
 | Scenario                     | Support | Method                   |
 | ---------------------------- | ------- | ------------------------ |
