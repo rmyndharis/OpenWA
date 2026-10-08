@@ -252,7 +252,7 @@ as a delivery failure rather than retaining payloads without limit.
 
 **Prerequisites:**
 
-- An OPERATOR (or ADMIN) API key, and an ADMIN key for step 2
+- An OPERATOR (or ADMIN) API key, and an ADMIN key for steps 2 and 6
 - Access to webhook endpoint
 
 **Steps:**
@@ -323,8 +323,36 @@ curl -X PUT http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId} 
   -H "Content-Type: application/json" \
   -d '{"active": true}'
 
-# 6. Retry failed deliveries
-# No retry-failed API — failed deliveries auto-retry with exponential backoff (doc 06 §6.6)
+# 6. Replay deliveries that exhausted their retries
+#    Automatic retry covers one delivery: up to the webhook's retryCount attempts with exponential
+#    backoff (doc 06 §6.6). A step 2 row with attempts > 0 has spent those attempts; do not wait on
+#    it. The outbox sweep runs only while WEBHOOK_RECONCILE_INTERVAL_MS > 0 (default 60000). It
+#    sends an event again only if it was shed, refused at shutdown, or cut off by a restart or a
+#    database fault before its dispatch settled, and then only until WEBHOOK_RECONCILE_MAX_ATTEMPTS
+#    sweeps are spent, so such an event can show an attempts > 0 row while the sweep still holds it.
+#    A row can be replayed only while step 2 lists it with "replayable": true, that is, it was
+#    recorded while WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS > 0 (with the queue on, also when the
+#    event was queued) and that window has not passed. With the default 0 no event data is kept
+#    and this call replays nothing; turning the setting on later does not cover rows already
+#    recorded. Those events must be re-sent by their source.
+#    Rows stay inside the ADMIN key's allowedSessions; sessionId, webhookId and ids only narrow
+#    the batch. The webhook must be active and still subscribed to the event (re-enable it if
+#    step 5C left it off). Each row gets one direct POST to the webhook's current URL with its
+#    stored X-OpenWA-Idempotency-Key; a delivered row is removed, a failed one stays. If the sweep
+#    still holds the event it can POST it again under the same key, so receivers must deduplicate.
+curl -X POST http://localhost:2785/api/webhooks/delivery-failures/redrive \
+  -H "X-API-Key: $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"sessionId": "{sessionId}", "webhookId": "{webhookId}", "limit": 50}'
+# Expected: {"redriven": N, "delivered": N, "enqueued": 0, "failed": 0, "skipped": 0, "remaining": 0}
+# failed > 0: the replay did not deliver, most often because the receiver still rejects it (the
+# server log names the cause); fix that before calling again. remaining > 0 alone does not mean
+# another call will succeed. skipped > 0: a webhook:before hook cancelled the replay or the webhook
+# changed during the call. A row listed in step 2 but left out of the batch is excluded: it holds
+# no event data, retention is now 0 or its window has passed, it has attempts 0, its webhook was
+# deleted, disabled or unsubscribed, or its session is outside the key's allowedSessions or the
+# body's sessionId. Body fields, limits and the full exclusion list are in doc 06
+# (POST /api/webhooks/delivery-failures/redrive).
 ```
 
 **Verification:**

@@ -198,6 +198,29 @@ describe('governance docs match the repository', () => {
     expect(risks).toMatch(/\[README disclaimer\]/);
   });
 
+  // A delivery that spent its retries is not retried by its dispatch. Only a shed, shutdown-refused or
+  // interrupted event goes back through the outbox sweep, and the operator can replay a terminal row
+  // whose payload was kept.
+  it('points the webhook runbook and the glossary at the outbound redrive route', () => {
+    const route = '/api/webhooks/delivery-failures/redrive';
+    const staleClaim = /No retry-failed API|auto-retr|nothing retries|for plugin ingress only/i;
+    const openapi = JSON.parse(read('openapi.json')) as { paths: Record<string, { post?: unknown }> };
+    expect(openapi.paths[route]?.post).toBeDefined();
+    const runbook = between(read('docs/11-operational-runbooks.md'), '### Runbook: Webhook Delivery Failure', '\n### ');
+    expect(runbook).toContain(route);
+    expect(runbook).toContain('WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS');
+    expect(runbook).not.toMatch(staleClaim);
+    // The sweep can still replay an attempts > 0 row, so a redrive may race it, but only while it runs.
+    expect(runbook).toContain('WEBHOOK_RECONCILE_MAX_ATTEMPTS');
+    expect(runbook).toContain('WEBHOOK_RECONCILE_INTERVAL_MS');
+    expect(runbook).toMatch(/skipped > 0/);
+    const glossary = between(read('docs/21-glossary.md'), '### Dead Letter Queue (DLQ)', '\n### ');
+    expect(glossary).toContain(route);
+    expect(glossary).toContain('WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS');
+    expect(glossary).toContain('WEBHOOK_RECONCILE_INTERVAL_MS');
+    expect(glossary).not.toMatch(staleClaim);
+  });
+
   it('keeps the README non-affiliation disclaimer', () => {
     const section = between(read('README.md'), '## Disclaimer', '\n## ');
     expect(section).toMatch(/not affiliated/);
