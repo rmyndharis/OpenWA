@@ -52,7 +52,8 @@
 #       backup and restore stop before archiving or writing anything instead of using a default the app
 #       may not read
 #   (ah) pg_dump makes the app's TLS check when DATABASE_SSL=true (falling back to the system CA store
-#       without node), and connects as before when it is not
+#       without node), connects as before when it is not, and never starts past a DATABASE_SSL or
+#       DATABASE_SSL_REJECT_UNAUTHORIZED line the scripts cannot parse
 #   (ai) ./data paths in .env.generated follow OPENWA_DATA_DIR in a run on the host, in both scripts,
 #       while non-path settings there are read as written
 #
@@ -1748,6 +1749,27 @@ fi
 if [ "$(backup_ah "${PG_AH}DATABASE_SSL=true\nDATABASE_SSL_REJECT_UNAUTHORIZED=false\n" \
   DATABASE_URL=postgres://openwa@db/openwa)" != "mode=require root= certs=none" ]; then
   fail "(ah) DATABASE_SSL_REJECT_UNAUTHORIZED=false did not encrypt without verifying: $(cat "$AH/log")"
+fi
+# The app reads a TLS line the scripts cannot parse, so the run stops before pg_dump connects without it.
+for check in 'DATABASE_SSL|DATABASE_SSL="true" # tls on\n' \
+  'DATABASE_SSL_REJECT_UNAUTHORIZED|DATABASE_SSL=true\nDATABASE_SSL_REJECT_UNAUTHORIZED="false" # x\n'; do
+  key="${check%%|*}"
+  printf '%b' "${PG_AH}${check#*|}" >"$AH/data/.env.generated"
+  rm -rf "$AH/out" "$AH/log"
+  set +e
+  OUT_AH="$(cd "$AH" && AH_LOG="$AH/log" PATH="$AH/shim:$PATH" BACKUP_DIR="$AH/out" "$BACKUP" 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 2 ] || [ -e "$AH/log" ] || ls "$AH"/out/openwa-backup-* >/dev/null 2>&1 ||
+    ! grep -q "sets $key in a form" <<<"$OUT_AH"; then
+    fail "(ah) backup ran pg_dump past an unparsed $key line (rc $rc): $OUT_AH"
+  fi
+done
+# A line the run does not read does not stop it: DATABASE_SSL under PGSSLMODE, the second key when
+# the first is false.
+if [ "$(backup_ah "${PG_AH}DATABASE_SSL=\"true\" # tls on\n" PGSSLMODE=require)" != "mode=require root= certs=none" ] ||
+  [ "$(backup_ah "${PG_AH}DATABASE_SSL=false\nDATABASE_SSL_REJECT_UNAUTHORIZED=\"false\" # x\n")" != "mode= root= certs=none" ]; then
+  fail "(ah) an unparsed TLS line the run does not read stopped the backup: $(cat "$AH/log")"
 fi
 if [ "$(backup_ah "${PG_AH}DATABASE_SSL=true\n" PGSSLROOTCERT="$AH/ca.pem")" != \
   "mode=verify-full root=$AH/ca.pem certs=none" ] ||

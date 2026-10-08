@@ -49,6 +49,8 @@
 #                     Node trusts (NODE_EXTRA_CA_CERTS included), or require when the second is
 #                     false. Without node it uses sslrootcert=system, which needs libpq 16+ and a
 #                     system CA store. PGSSLMODE and PGSSLROOTCERT, when set, take precedence.
+#                     verify-full also matches the host pg_dump connects to, DATABASE_URL's
+#                     included, against the certificate, so name the host the certificate carries.
 #
 # Failure policy: a missing source database is FATAL (no silent empty backup), and the finished
 # archive must contain every configured database or it is deleted and the run fails. When the
@@ -222,8 +224,16 @@ if [ "$DATABASE_TYPE" = "postgres" ]; then
   # the dump sent the database password past the TLS check the app makes. Apply the app's check:
   # verify the server against the CA roots Node trusts (the image has no system CA store), or only
   # encrypt when DATABASE_SSL_REJECT_UNAUTHORIZED=false. An operator's PGSSLMODE or PGSSLROOTCERT wins.
-  if [ "$(openwa_resolve DATABASE_SSL false)" = true ] && [ -z "${PGSSLMODE:-}" ]; then
-    if [ "$(openwa_resolve DATABASE_SSL_REJECT_UNAUTHORIZED true)" = false ]; then
+  # Each key is resolved on its own line, where set -e stops the run on a line the scripts cannot
+  # parse; inside a `[` test that failure would be ignored and pg_dump would connect as if the line
+  # were absent.
+  PG_SSL=false
+  if [ -z "${PGSSLMODE:-}" ]; then
+    PG_SSL="$(openwa_resolve DATABASE_SSL false)"
+  fi
+  if [ "$PG_SSL" = true ]; then
+    PG_SSL_REJECT="$(openwa_resolve DATABASE_SSL_REJECT_UNAUTHORIZED true)"
+    if [ "$PG_SSL_REJECT" = false ]; then
       export PGSSLMODE=require
     else
       if [ -z "${PGSSLROOTCERT:-}" ] && command -v node >/dev/null 2>&1; then

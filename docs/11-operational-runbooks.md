@@ -744,6 +744,8 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 # Node trusts (add a private CA through NODE_EXTRA_CA_CERTS, as for the app), or sslmode=require when
 # DATABASE_SSL_REJECT_UNAUTHORIZED=false. On a host without node it uses sslrootcert=system, which needs
 # libpq 16+ and a system CA store. PGSSLMODE and PGSSLROOTCERT, when set, take precedence.
+# verify-full also matches the host pg_dump connects to, DATABASE_URL's included, against the
+# certificate, so name the host the certificate carries.
 ```
 
 > The data directory is a Docker **named volume** (`openwa-data`) in the production
