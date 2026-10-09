@@ -6,6 +6,7 @@ import {
 } from './ingress-enqueue.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { ConfigService } from '@nestjs/config';
+import { producerConnectWaitMs } from '../queue/redis-connection';
 
 describe('IngressEnqueueService', () => {
   const data = {
@@ -19,12 +20,12 @@ describe('IngressEnqueueService', () => {
 
   let loader: jest.Mocked<Partial<PluginLoaderService>>;
   let config: jest.Mocked<Partial<ConfigService>>;
-  let queue: { add: jest.Mock };
+  let queue: { add: jest.Mock; waitUntilReady: jest.Mock };
 
   beforeEach(() => {
     loader = { dispatchWebhookForInstance: jest.fn().mockResolvedValue(undefined) };
     config = { get: jest.fn() };
-    queue = { add: jest.fn().mockResolvedValue(undefined) };
+    queue = { add: jest.fn().mockResolvedValue(undefined), waitUntilReady: jest.fn().mockResolvedValue(undefined) };
   });
 
   it('adds a job to the ingress queue keyed by the namespaced jobId when queueing is enabled and a queue is present', async () => {
@@ -246,6 +247,37 @@ describe('IngressEnqueueService', () => {
       attempts: 3,
       backoff: { type: 'exponential', delay: 5000 },
     });
+    expect(loader.dispatchWebhookForInstance).toHaveBeenCalledWith(data);
+  });
+
+  // Until the first connect, BullMQ holds every queue call without sending a command and retries the
+  // connection for ever, so enableOfflineQueue:false never rejects: with Redis unreachable since boot,
+  // the ingress request, a redrive and the reconciler's row in hand would wait indefinitely.
+  it('falls back to inline dispatch and reports no job when Redis has not connected within the connect timeout', async () => {
+    (config.get as jest.Mock).mockReturnValue(true);
+    const pending = () => new Promise<never>(() => {});
+    queue.waitUntilReady.mockImplementation(pending);
+    queue.add.mockImplementation(pending);
+    const getJobState = jest.fn(pending);
+    const svc = new IngressEnqueueService(
+      loader as PluginLoaderService,
+      config as ConfigService,
+      { ...queue, getJobState } as never,
+    );
+    let results: unknown;
+    jest.useFakeTimers();
+    try {
+      void Promise.all([svc.existingJobState(data, 'd1'), svc.enqueue(data, 'd1')]).then(r => (results = r));
+      await jest.advanceTimersByTimeAsync(producerConnectWaitMs() - 1);
+      expect(results).toBeUndefined();
+      await jest.advanceTimersByTimeAsync(1);
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(results).toEqual([undefined, { outcome: 'dispatched' }]);
+    expect(getJobState).not.toHaveBeenCalled();
+    expect(queue.add).not.toHaveBeenCalled();
     expect(loader.dispatchWebhookForInstance).toHaveBeenCalledWith(data);
   });
 

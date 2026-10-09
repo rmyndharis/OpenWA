@@ -166,9 +166,11 @@ WebhookDelivery delivery =
 - **Redirects are never followed.** A `3xx` surfaces as an `OpenWAApiError`
   rather than being followed, so the API key is never re-sent to a redirect
   target.
-- **Default per-request timeout** is 30 s (configurable). Path segments (chat /
-  message ids) are percent-encoded; a base-URL path prefix (e.g. behind a proxy
-  at `/v1`) is preserved.
+- **Default per-request timeout** is 30 s (configurable). It bounds the whole
+  exchange, response body included, so raise `timeout` for large
+  `messages.media` or `status.media` downloads over a slow link. Path segments
+  (chat / message ids) are percent-encoded; a base-URL path prefix (e.g. behind
+  a proxy at `/v1`) is preserved.
 - **Empty and dot ids are refused.** An empty, `.` or `..` id throws
   `IllegalArgumentException` and nothing is sent, so a proxy that resolves dot
   segments cannot turn the call into one on the parent resource. The raw

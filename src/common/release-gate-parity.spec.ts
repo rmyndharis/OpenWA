@@ -9,10 +9,10 @@ import { executableLines } from './workflow-lines';
  * The release workflow publishes the image and the GitHub Release from a tag push. A tag starts
  * release.yml ALONE (ci.yml triggers on branches), so whatever gate the tag path skips is a gate a
  * release never ran; the workflow's own header states the invariant ("a tag can never publish
- * something the branch gate would have refused"; "the release gate must not be laxer than the PR
- * gate"). Both sides drifted before: check:contract-shapes and test:docs ran only on branches, so
- * an SDK wire-shape regression or a repo-file drift could ride a tag to publication while the same
- * commit would have failed CI.
+ * something the branch gate would have refused"; "for the trees the image ships, the release gate
+ * must not be laxer than the PR gate"). Both sides drifted before: check:contract-shapes and
+ * test:docs ran only on branches, so an SDK wire-shape regression or a repo-file drift could ride a
+ * tag to publication while the same commit would have failed CI.
  *
  * This locks the invariant structurally: every gate command (npm/npx lines) in ci.yml's lint and
  * test jobs must also run in release.yml's lint and test jobs (the workflow header and the check:audit step comment both state
@@ -169,12 +169,81 @@ describe('every npm tree is audited and kept current', () => {
     expect(trees().filter(tree => !runs.includes(auditCommand(tree)))).toEqual([]);
   });
 
+  type ReleaseStep = { run?: string; 'continue-on-error'?: unknown; 'working-directory'?: string };
+  const releaseAudits = (file: string, job: string) => {
+    const workflow = yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as {
+      jobs: Record<string, { defaults?: { run?: { 'working-directory'?: string } }; steps: ReleaseStep[] }>;
+    };
+    const cwd = workflow.jobs[job].defaults?.run?.['working-directory'] ?? '';
+    return workflow.jobs[job].steps.flatMap((step, index) =>
+      executableLines(step.run ?? '')
+        .split('\n')
+        .map(line => /^(?:cd (\S+) && )?npm (?:run check:audit|audit --audit-level=high)$/.exec(line.trim()))
+        .flatMap(match =>
+          match ? [{ index, step, tree: path.posix.join(cwd, match[1] ?? '').replace(/^\.$/, '') }] : [],
+        ),
+    );
+  };
+
+  // A tag starts only its own release workflow, so each one audits the trees it publishes: the image
+  // carries the root and the dashboard, the npm package is built from the SDK. Exact, so moving a
+  // tree from one path to the other is a deliberate edit here.
+  it.each([
+    ['release.yml', 'lint', ['', 'dashboard']],
+    ['js-sdk-release.yml', 'publish', ['sdk/javascript']],
+  ])('%s %s audits exactly the trees it publishes', (file, job, published) => {
+    const audits = releaseAudits(file, job);
+    expect(audits.map(audit => audit.tree)).toEqual(published);
+    // An audit allowed to fail gates nothing, and a step-level working-directory audits another tree.
+    expect(
+      audits.filter(({ step }) => step['continue-on-error'] !== undefined || step['working-directory'] !== undefined),
+    ).toEqual([]);
+  });
+
+  // `npm audit` reads the lockfile alone, so a high advisory stops the publish job before `npm ci`
+  // runs any of the toolchain while the job can mint a publish credential.
+  it('js-sdk-release.yml audits the SDK before it installs it', () => {
+    const [audit] = releaseAudits('js-sdk-release.yml', 'publish');
+    const install = jobSteps('js-sdk-release.yml', 'publish').findIndex(step =>
+      /^npm ci\b/.test(executableLines(step.run ?? '').trim()),
+    );
+    expect(install).toBeGreaterThan(-1);
+    expect(audit.index).toBeLessThan(install);
+  });
+
   it('Dependabot updates every tree', () => {
     const dependabot = yaml.load(fs.readFileSync(path.join(root, '.github', 'dependabot.yml'), 'utf8')) as {
       updates: Array<{ 'package-ecosystem': string; directory: string }>;
     };
     const watched = dependabot.updates.filter(u => u['package-ecosystem'] === 'npm').map(u => u.directory);
     expect(trees().filter(tree => !watched.includes(`/${tree}`))).toEqual([]);
+  });
+});
+
+/**
+ * The SDK's engines floor (>=18) is for the published package; its test toolchain needs a newer
+ * Node. npm only warns when a locked package's engines exclude the running Node, so a toolchain bump
+ * that drops a lane's Node still installs there, then tests on an unsupported runtime or fails at
+ * startup on an optional native binding npm skipped. Each job that runs the SDK tests installs under
+ * --engine-strict on exactly the lanes the test step runs on.
+ */
+describe('the JavaScript SDK tests run only on a Node their toolchain supports', () => {
+  it.each([
+    ['sdk-ci.yml', 'javascript'],
+    ['js-sdk-release.yml', 'publish'],
+  ])('%s %s installs under --engine-strict wherever it runs npm test', (file, job) => {
+    const steps = (
+      yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as {
+        jobs: Record<string, { steps: Array<{ run?: string; if?: string }> }>;
+      }
+    ).jobs[job].steps;
+    const installs = steps.filter(step => /^npm ci\b/.test(step.run ?? ''));
+    const tests = steps.filter(step => step.run === 'npm test');
+    expect(installs).toHaveLength(1);
+    expect(tests).toHaveLength(1);
+    expect(installs[0].if).toBeUndefined();
+    const gate = tests[0].if;
+    expect(installs[0].run).toBe(gate ? `npm ci --engine-strict=\${{ ${gate} }}` : 'npm ci --engine-strict');
   });
 });
 
