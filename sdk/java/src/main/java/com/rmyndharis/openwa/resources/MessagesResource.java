@@ -313,6 +313,7 @@ public final class MessagesResource {
     /**
      * Fetch a message's stored media bytes: the archived file when one exists, else the inline
      * copy on the message row (covers media sent by this account); 404 when neither holds bytes.
+     * The client timeout bounds the whole download.
      */
     public BinaryResponse media(String sessionId, String chatId, String messageId) {
         return client.requestBytes(

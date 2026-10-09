@@ -107,7 +107,7 @@ public final class ClientConfig {
             return this;
         }
 
-        /** Per-request timeout (default 30s). */
+        /** Per-request timeout (default 30s), covering the whole exchange, response body included, with the default transport. */
         public Builder timeout(Duration v) {
             this.timeout = v;
             return this;

@@ -126,6 +126,27 @@ describe('PluginLoaderService — sandbox tier routing', () => {
     expect((loader as unknown as { sandboxHosts: Map<string, unknown> }).sandboxHosts.has('p1')).toBe(false);
   });
 
+  it('runs the worker onDisable and terminate once when shutdown overlaps a disable in flight', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+    await loader.enablePlugin('p1');
+    const host = loader.hosts[0];
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    host.runLifecycle.mockClear().mockReturnValueOnce(gate);
+
+    const disabling = loader.disablePlugin('p1');
+    const destroying = loader.onModuleDestroy();
+    release();
+    await disabling;
+    await destroying;
+
+    expect(host.runLifecycle).toHaveBeenCalledTimes(1);
+    expect(host.runLifecycle).toHaveBeenCalledWith('onDisable', expect.any(Number));
+    expect(host.terminate).toHaveBeenCalledTimes(1);
+    expect(pluginOf(loader).status).toBe(PluginStatus.DISABLED);
+  });
+
   it('dedups duplicate hook-subscribe from the worker so a flood cannot grow the host registry', async () => {
     const loader = makeLoader();
     seed(loader, { builtIn: false, instance: null });

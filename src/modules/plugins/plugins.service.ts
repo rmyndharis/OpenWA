@@ -1,4 +1,11 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, HttpException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ConflictException,
+  HttpException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -483,7 +490,9 @@ export class PluginsService {
    * reconciled at boot by the loader's interrupted-update recovery, which restores the backup when
    * the live dir is missing — an interrupted update can no longer make the plugin silently vanish.
    * If loading/enabling the new version fails, the backup is restored and reloaded, so a bad update
-   * never leaves the plugin broken.
+   * never leaves the plugin broken. An update of a plugin the operator switched on that is still
+   * applying once shutdown has begun is refused or rolled back the same way (with a 503), since the
+   * new version cannot be enabled to prove it works.
    */
   updatePackage(id: string, buffer: Buffer): Promise<PluginDto> {
     return this.serialize(id, () => this.updatePackageInner(id, buffer));
@@ -505,6 +514,23 @@ export class PluginsService {
     }
 
     const wasEnabled = plugin.status === PluginStatus.ENABLED;
+    // Shutdown refuses new enables, so an update of a plugin meant to run cannot prove the new version
+    // starts. It is refused with a 503 and the previous version stays, so the next boot restores that
+    // one from the persisted operator decision. wasEnabled alone is not enough: once teardown has
+    // disabled the plugin, it reads false while enabledByOperator stays true. A plugin the operator
+    // switched off, or one in ERROR (which is not running either way), is never enabled after an
+    // update, so its update still applies.
+    const meantToRun =
+      wasEnabled ||
+      (plugin.status !== PluginStatus.ERROR && this.pluginLoader.getRegistryEntry(id)?.enabledByOperator === true);
+    const refuseDuringShutdown = (): void => {
+      if (meantToRun && this.pluginLoader.isShuttingDown()) {
+        throw new ServiceUnavailableException(`Plugin ${id} was not updated: the gateway is shutting down`);
+      }
+    };
+    // Already shutting down (a slow download or a queued operation): refuse before touching disk or
+    // running any plugin code.
+    refuseDuringShutdown();
     // The tree the package was loaded from, which is the legacy plugins directory for a host that
     // has not migrated. Updating in the configured root instead renames a directory that is not
     // there, after unloadPlugin has already dropped the plugin from the runtime.
@@ -598,16 +624,10 @@ export class PluginsService {
         fs.chmodSync(stateFile, 0o600);
       }
       this.pluginLoader.loadPlugin(dir);
-      if (wasEnabled && this.pluginLoader.isShuttingDown()) {
-        // Shutdown refuses new enables. That is not a failed update: keep the new version and let the
-        // next boot restore it from the persisted operator decision instead of rolling back.
-        logger.warn(`Plugin ${id} updated during shutdown; it will be enabled on the next start`, {
-          pluginId: id,
-          action: 'plugin_update_enable_deferred',
-        });
-      } else if (wasEnabled) {
-        await this.pluginLoader.enablePlugin(id);
-      }
+      // Shutdown may have begun while the old version was being stopped: roll back below rather than
+      // keep the new version untested with its backup deleted.
+      refuseDuringShutdown();
+      if (wasEnabled) await this.pluginLoader.enablePlugin(id);
       fs.rmSync(backup, { recursive: true, force: true });
       logger.log(`Plugin updated: ${id} → v${manifest.version}`, {
         pluginId: id,
