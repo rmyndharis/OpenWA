@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import { MetricsService, METRICS_RENDER_TTL_MS, QUEUE_READ_TIMEOUT_MS } from './metrics.service';
 import { StatsService, OverviewStats } from '../stats/stats.service';
+import { producerConnectWaitMs } from '../queue/redis-connection';
 import { getWebhookDeliveryFailuresTotal } from '../../common/metrics/webhook-delivery-metrics';
 import {
   getSessionReconnectAttemptsTotal,
@@ -200,7 +201,8 @@ describe('MetricsService runtime series', () => {
   };
   const config = { get: () => undefined } as unknown as ConfigService;
   const stats = { getOverview: jest.fn().mockResolvedValue(overview) } as unknown as StatsService;
-  const queue = (getJobCounts: () => Promise<Record<string, number>>): Queue => ({ getJobCounts }) as unknown as Queue;
+  const queue = (getJobCounts: () => Promise<Record<string, number>>): Queue =>
+    ({ waitUntilReady: () => Promise.resolve(), getJobCounts }) as unknown as Queue;
   const services: MetricsService[] = [];
   const make = (webhook?: Queue, ingress?: Queue): MetricsService => {
     const svc = new MetricsService(config, stats, webhook, ingress);
@@ -302,6 +304,22 @@ describe('MetricsService runtime series', () => {
 
     expect(text).toContain('openwa_up 1');
     expect(text).not.toContain('openwa_queue_jobs');
+  });
+
+  it('leaves no job-count read pending on a queue whose Redis has never connected', async () => {
+    jest.useFakeTimers();
+    const getJobCounts = jest.fn(() => Promise.resolve({ wait: 1, active: 0, delayed: 0, failed: 0 }));
+    const svc = make({ waitUntilReady: () => new Promise(() => undefined), getJobCounts } as unknown as Queue);
+
+    const rendering = svc.render();
+    await jest.advanceTimersByTimeAsync(QUEUE_READ_TIMEOUT_MS);
+    expect(await rendering).not.toContain('openwa_queue_jobs');
+
+    // Once the first-connect wait has passed, a scrape skips the queue without waiting.
+    await jest.advanceTimersByTimeAsync(producerConnectWaitMs());
+    (svc as unknown as { cachedRender: unknown }).cachedRender = null;
+    expect(await svc.render()).not.toContain('openwa_queue_jobs');
+    expect(getJobCounts).not.toHaveBeenCalled();
   });
 
   it('keeps the healthy queue when only the other one fails', async () => {
