@@ -221,6 +221,23 @@ curl -H "X-API-Key: $API_KEY" \
 
 # Consider removing unused sessions
 
+# C. If memory climbs during a media burst (received, or sent on whatsapp-web.js):
+# on PostgreSQL each payload, received or the echo of a media send, waits in memory as base64
+# (about 4/3 of the file size) until its row is stored, with no limit on how many wait; a slow
+# message:received or message:sent plugin hook holds them the same way on either database.
+# Lower MEDIA_DOWNLOAD_MAX_BYTES to cap each one (it also caps outbound media sends), or set
+# MEDIA_DOWNLOAD_ENABLED=false to hold none. Lowering INBOUND_MEDIA_CONCURRENCY does not bound
+# it. Archiving (CHAT_MEDIA_ARCHIVE_ENABLED=true) adds its own cost on either database: each
+# message being archived holds its payload as base64 and decoded until the upload finishes (more
+# under MESSAGE_INLINE_MEDIA=archive, which also reads the file back and rewrites the row), and
+# nothing limits how many archive at once. Lowering CHAT_MEDIA_ARCHIVE_MAX_BYTES (25 MiB by
+# default) bounds that cost per message, since larger media are not archived, but not how many
+# archive at once; slow storage such as S3 makes more overlap. With QUEUE_ENABLED=false, webhook
+# deliveries to receivers that stop answering also hold their inline media (up to
+# 4/3 x WEBHOOK_MEDIA_INLINE_MAX_BYTES each as base64, for up to WEBHOOK_DISPATCH_CONCURRENCY
+# + WEBHOOK_DISPATCH_MAX_QUEUED deliveries); lower those settings or enable the queue.
+# Sizing: 12 - Troubleshooting & FAQ, "How many sessions can I run?"
+
 # 5. Long-term fix:
 # Edit docker-compose.yml
 # Increase memory limit or reduce max sessions

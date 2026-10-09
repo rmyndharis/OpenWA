@@ -491,7 +491,9 @@ WEBHOOK_DISPATCH_MAX_QUEUED=1000
 # The failing state and the cap are held per process, not per cluster.
 # The first 2xx from the webhook lifts it. With the queue disabled, a session parks at most a
 # quarter of WEBHOOK_DISPATCH_MAX_QUEUED behind that limit and sheds the rest, so other sessions
-# keep room.
+# keep room. Each running, parked or backoff-waiting inline delivery holds its event's inline media
+# (up to 4/3 x WEBHOOK_MEDIA_INLINE_MAX_BYTES as base64), about 1.3 GiB per process at the defaults
+# when every slot is taken; lower these caps or enable the queue to reduce it.
 # WEBHOOK_DEGRADED_SESSION_CONCURRENCY=
 # Delivery attempts (total, including the first) are set per webhook with the retryCount API field (default 3, range 0-5).
 

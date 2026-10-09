@@ -19,7 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add bounded webhook failure redrive with optional payload retention.
 - Expose caller-supplied send idempotency keys in all five SDKs.
 - Add optional 24-hour idempotency keys to twelve single-recipient send routes.
-
 - Add opt-in archive-only chat media with dashboard previews.
 
 ### Changed
@@ -33,16 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Probe the configured `PORT` in the Docker image healthcheck instead of a fixed 2785.
 - Cap the total bytes one storage import writes at `STORAGE_IMPORT_MAX_TOTAL_BYTES`.
 - Close the Baileys session proxy's fetch dispatcher when the session disconnects, logs out or is destroyed.
-- Apply the Java SDK request timeout to the response body as well as the headers.
+- Java SDK (next SDK release after 0.5.1): the request timeout also bounds the response body, so a stalled body raises `OpenWATimeoutError`.
 - Keep a new dashboard template draft when an earlier template save finishes.
 - Stop the dashboard Chats page from marking the open chat read on a newly selected session.
 - Refuse bulk batches once shutdown begins, and fail a batch saved during shutdown instead of sending it.
 - Disable plugins whose enable is still running at shutdown, and refuse new plugin enables during teardown.
 - Stop in-flight webhook replay, ingress replay and pending-message sweeps at shutdown.
-- Close queue workers before plugins shut down, so jobs taken during shutdown no longer spend attempts or get dead-lettered.
-- Answer new HTTP requests with `503` once shutdown teardown begins.
+- Close queue workers, waiting up to 15 s for running jobs, before plugins shut down, so no new job is taken against stopped plugins.
+- Answer new HTTP requests with `503` once teardown begins after SIGTERM, SIGINT or `POST /api/infra/restart`.
 - Refuse session starts with `503` once shutdown begins, and leave a start that shutdown interrupts for the next boot instead of marking it failed.
-- Retire the pending webhook outbox record when a redrive delivers, so the sweep does not send the event again.
 - Stop dashboard multi-page loads and a pending chat mark-as-read from sending requests after logout.
 - Keep a new dashboard login signed in when a request sent with the previous API key fails afterwards.
 - Enforce the plugin package size limit before reading `manifest.json`, and reject archive entries whose path starts with `/`.
@@ -87,7 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
-- The README and architecture docs describe the S3 storage backend as the live media store, not a backup target.
+- Document the memory media messages and parked webhook deliveries hold during a media burst, and the settings that limit it.
+- The README and architecture docs describe the Local/S3 storage backend as the live media store, not a backup target.
 - Document how to recover a lost admin API key without revoking the other keys.
 - The integration docs say `integration_delivery_failures` holds only failed inbound deliveries.
 - The webhook runbook documents the ADMIN delivery-failure redrive and no longer says failed deliveries retry on their own.
@@ -98,6 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes (behavior changes)
 
+- Aged undispatched ingress events are dead-lettered instead of deleted; some may already have been delivered, so check before redriving them.
+- Java SDK (next SDK release after 0.5.1): the request timeout (default 30 s) also bounds the response body; raise it for large media downloads.
 - A storage import stops at `STORAGE_IMPORT_MAX_TOTAL_BYTES` (default 10 GiB); raise it before importing a larger export.
 - Baileys answers `400` for an animated sticker with more than 500 frames.
 - `backup.sh` and `restore.sh` exit with status 2 when `./.env` or `.env.generated` sets a key in a form they cannot parse; fix the line or pass the key in the environment.
