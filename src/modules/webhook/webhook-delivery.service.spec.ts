@@ -35,6 +35,7 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { userPart } from '../../engine/identity/wa-id';
 import { HookManager } from '../../core/hooks';
 import { QUEUE_NAMES } from '../queue/queue-names';
+import { producerConnectWaitMs } from '../queue/redis-connection';
 import { getWebhookDeliveryFailuresTotal } from '../../common/metrics/webhook-delivery-metrics';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 
@@ -169,6 +170,7 @@ describe('WebhookDeliveryService', () => {
 
     webhookQueue = {
       add: jest.fn().mockResolvedValue(undefined),
+      waitUntilReady: jest.fn().mockResolvedValue(undefined),
     };
 
     lidStore = {
@@ -826,6 +828,8 @@ describe('WebhookDeliveryService', () => {
       await expect(
         service.redeliver(webhook, 'sess-1', 'message.received', 'stored-key-2', { from: 'x@c.us' }),
       ).resolves.toBe('delivered');
+      // The reconciler leaves a delivered replay's outbox row to this close.
+      expect(outboxService.close).toHaveBeenCalledWith(webhook.id, 'stored-key-2', 'dispatched');
     });
 
     it('reports a plugin-cancelled dispatch as cancelled, recording no failure and sending nothing', async () => {
@@ -1954,6 +1958,44 @@ describe('WebhookDeliveryService', () => {
         'webhook:delivered',
         expect.objectContaining({ webhookId: webhook.id, fallback: 'queue_failed' }),
         expect.anything(),
+      );
+    });
+
+    // Until the first connect BullMQ holds every queue call without sending a command and retries the
+    // connection for ever, so enableOfflineQueue:false never rejects: with Redis unreachable since boot,
+    // each dispatch held its slot indefinitely and the reconciler's job lookup never answered.
+    it('delivers directly, and reads the job as pending, when Redis has not connected within the connect timeout', async () => {
+      const queueService = await buildQueueService(<T>(key: string, def?: T): T | boolean | number => {
+        if (key === 'queue.enabled') return true;
+        return def as T;
+      });
+      const webhook = createMockWebhook({ events: ['message.received'], retryCount: 1 });
+      const mockFetch = undiciFetch as jest.Mock;
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const pending = () => new Promise<never>(() => {});
+      webhookQueue.waitUntilReady.mockImplementation(pending);
+      webhookQueue.add.mockImplementation(pending);
+      webhookQueue.getJob = jest.fn(pending);
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+      let settled: unknown;
+      jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+      try {
+        void Promise.all([
+          queueService.dispatch('sess-1', 'message.received', {}),
+          queueService.isQueueJobPending('job-1'),
+        ]).then(r => (settled = r));
+        await jest.advanceTimersByTimeAsync(producerConnectWaitMs());
+      } finally {
+        jest.useRealTimers();
+      }
+
+      expect(settled).toEqual([undefined, true]);
+      expect(webhookQueue.add).not.toHaveBeenCalled();
+      expect(webhookQueue.getJob).not.toHaveBeenCalled();
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/webhook',
+        expect.objectContaining({ method: 'POST' }),
       );
     });
   });

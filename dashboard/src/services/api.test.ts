@@ -167,12 +167,13 @@ for (const [status, message] of keyFailures) {
   });
 }
 
-test('a 401 for a request sent without a key while none is stored returns to login', async () => {
+test('a 401 for a request sent without a key while none is stored stays silent on the login form', async () => {
   sessionStorage.removeItem('openwa_api_key');
   answer(401, 'API key is required');
   const result = sessionApi.list();
   assert.equal(await settled(result), false, 'the call settled, so its caller would render the failure');
-  assert.deepEqual(navigations, ['/']);
+  assert.equal(sessionStorage.getItem('openwa_api_key'), null);
+  assert.deepEqual(navigations, []);
 });
 
 test('a late 401 for a request sent while signed out keeps the key signed in since', stale, async () => {

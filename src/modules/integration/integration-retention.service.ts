@@ -102,8 +102,9 @@ export class IntegrationRetentionService implements OnModuleInit, OnModuleDestro
     if (failuresDays !== null) failuresCutoff.setDate(failuresCutoff.getDate() - failuresDays);
     // DLQ first, so an undispatched event whose only dead letter just aged out is handed a fresh one.
     // The dedup delete keeps every 'pending' row that still carries its payload, so it runs before the
-    // hand-off, which can wait on an unreachable queue for its job-state lookup; the rows the hand-off
-    // settles go on the next run. A failed step is logged and never blocks the next one.
+    // hand-off, which can wait on a running sweep or on an unreachable queue for its job-state lookup;
+    // the rows the hand-off settles go on the next run. A failed step is logged and never blocks the
+    // next one.
     const logFailure = (step: string) => (err: unknown) => {
       this.logger.error(
         `Integration ingress retention: ${step} failed`,

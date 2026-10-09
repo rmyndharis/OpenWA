@@ -1,5 +1,7 @@
 import {
   ingressWorkerConcurrency,
+  producerConnectWaitMs,
+  producerReady,
   queueConnectionOptions,
   workerConnectionOptions,
   webhookWorkerConcurrency,
@@ -85,5 +87,88 @@ describe('webhookWorkerConcurrency', () => {
     expect(webhookWorkerConcurrency()).toBe(10);
     process.env = { ...ORIGINAL_ENV, INGRESS_WORKER_CONCURRENCY: '5abc' };
     expect(ingressWorkerConcurrency()).toBe(10);
+  });
+});
+
+describe('producerReady', () => {
+  const ORIGINAL_ENV = process.env;
+
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => {
+    jest.useRealTimers();
+    process.env = ORIGINAL_ENV;
+  });
+
+  /** A queue whose first connect completes after `connectMs`, or never when undefined. */
+  const queueReadyAfter = (connectMs?: number) => ({
+    waitUntilReady: () =>
+      new Promise<never>(resolve => {
+        if (connectMs !== undefined) setTimeout(resolve, connectMs);
+      }),
+  });
+
+  /** Settle state of `promise` once the fake clock has advanced `ms`. */
+  async function settledAfter(promise: Promise<void>, ms: number): Promise<string> {
+    const state = promise.then(
+      () => 'resolved',
+      (error: Error) => `rejected: ${error.message}`,
+    );
+    let result = 'pending';
+    void state.then(s => (result = s));
+    await jest.advanceTimersByTimeAsync(ms);
+    return result;
+  }
+
+  it('waits for a first connect that lands within REDIS_CONNECT_TIMEOUT_MS', async () => {
+    process.env = { ...ORIGINAL_ENV, REDIS_CONNECT_TIMEOUT_MS: '1000' };
+    await expect(settledAfter(producerReady(queueReadyAfter(900)), 900)).resolves.toBe('resolved');
+  });
+
+  it('rejects once REDIS_CONNECT_TIMEOUT_MS passes without a connect', async () => {
+    process.env = { ...ORIGINAL_ENV, REDIS_CONNECT_TIMEOUT_MS: '1000' };
+    const ready = producerReady(queueReadyAfter());
+    await expect(settledAfter(ready, 999)).resolves.toBe('pending');
+    await expect(settledAfter(ready, 1)).resolves.toBe('rejected: Redis has not connected within 1000ms');
+  });
+
+  it('still waits the default for a first connect when REDIS_CONNECT_TIMEOUT_MS is 0', async () => {
+    // 0 turns off the socket connect timeout; it must not skip a healthy queue that is still connecting.
+    process.env = { ...ORIGINAL_ENV, REDIS_CONNECT_TIMEOUT_MS: '0' };
+    await expect(settledAfter(producerReady(queueReadyAfter(20)), 20)).resolves.toBe('resolved');
+
+    const never = producerReady(queueReadyAfter());
+    await expect(settledAfter(never, 4999)).resolves.toBe('pending');
+    await expect(settledAfter(never, 1)).resolves.toBe('rejected: Redis has not connected within 5000ms');
+  });
+
+  it('caps the wait at the Node timer ceiling instead of overflowing to 1 ms', async () => {
+    // Above the ceiling a Node timer fires after 1 ms and would skip a healthy queue that is connecting.
+    process.env = { ...ORIGINAL_ENV, REDIS_CONNECT_TIMEOUT_MS: '3000000000' };
+    expect(producerConnectWaitMs()).toBe(2147483647);
+    await expect(settledAfter(producerReady(queueReadyAfter()), 1000)).resolves.toBe('pending');
+  });
+
+  // Each wait on BullMQ's pending connect holds memory until Redis connects, which may be never.
+  it('shares one wait per queue: calls after an expired window reject at once until Redis connects', async () => {
+    process.env = { ...ORIGINAL_ENV, REDIS_CONNECT_TIMEOUT_MS: '1000' };
+    let connect!: () => void;
+    const queue = { waitUntilReady: jest.fn(() => new Promise<void>(resolve => (connect = resolve))) };
+
+    const first = producerReady(queue);
+    await expect(settledAfter(first, 600)).resolves.toBe('pending');
+    const inWindow = producerReady(queue);
+    await expect(settledAfter(inWindow, 400)).resolves.toBe('rejected: Redis has not connected within 1000ms');
+    await expect(settledAfter(first, 0)).resolves.toBe('rejected: Redis has not connected within 1000ms');
+
+    await expect(settledAfter(producerReady(queue), 0)).resolves.toBe(
+      'rejected: Redis has not connected within 1000ms',
+    );
+    expect(queue.waitUntilReady).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
+
+    connect();
+    await jest.advanceTimersByTimeAsync(0);
+    await expect(settledAfter(producerReady(queue), 0)).resolves.toBe('resolved');
+    expect(queue.waitUntilReady).toHaveBeenCalledTimes(1);
   });
 });

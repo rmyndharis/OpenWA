@@ -160,9 +160,13 @@
   text-align: start;
 }
 
-.templates-page .template-list-item:hover {
+.templates-page .template-list-item:hover:where(:not(:disabled)) {
   border-color: var(--border);
   background: var(--bg-white);
+}
+
+.templates-page .template-list-item:disabled {
+  cursor: not-allowed;
 }
 
 .templates-page .template-list-item.selected {

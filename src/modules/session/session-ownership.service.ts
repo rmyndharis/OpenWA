@@ -215,11 +215,17 @@ export class SessionOwnershipService {
     if ((lapsed.affected ?? 0) > 0) this.followAdoption(sessionId);
   }
 
-  /** Release everything this process holds, on the way down. */
-  async releaseAll(): Promise<void> {
-    const ids = [...this.owned];
-    this.owned.clear();
-    this.claimGen.clear();
+  /**
+   * Release everything this process holds, on the way down, except `keep`: claims whose engine may
+   * still be alive. Those are left to lapse, since the heartbeat has stopped.
+   */
+  async releaseAll(keep: Iterable<string> = []): Promise<void> {
+    const kept = new Set(keep);
+    const ids = [...this.owned].filter(id => !kept.has(id));
+    for (const id of ids) {
+      this.owned.delete(id);
+      this.claimGen.delete(id);
+    }
     if (ids.length === 0) return;
     await this.sessions
       .createQueryBuilder()
