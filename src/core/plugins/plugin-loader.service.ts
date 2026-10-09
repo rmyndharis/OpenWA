@@ -283,12 +283,18 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
    * and uninstall paths, so a normal restart/deploy/scale-down skipped it and stateful plugins lost
    * in-flight work. Best-effort and sequential: one plugin's failure must not block the others.
    *
-   * Enables already in flight are awaited first, so a plugin that finishes enabling mid-teardown is in
-   * the snapshot below instead of running on with its onDisable never called; later enables are refused.
+   * Running plugins are disabled first, so a slow enable still in flight cannot hold back their onDisable.
+   * Then the in-flight enables are awaited and a second pass disables the plugins that finished enabling
+   * mid-teardown, instead of leaving them running with onDisable never called. Later enables are refused.
    */
   async onModuleDestroy(): Promise<void> {
     this.shuttingDown = true;
+    await this.disableEnabledPlugins();
     await Promise.allSettled(this.pendingEnables);
+    await this.disableEnabledPlugins();
+  }
+
+  private async disableEnabledPlugins(): Promise<void> {
     const enabled = this.getAllPlugins().filter(p => p.status === PluginStatus.ENABLED);
     for (const plugin of enabled) {
       try {
