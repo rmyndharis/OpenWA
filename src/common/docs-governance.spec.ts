@@ -145,14 +145,17 @@ describe('governance docs match the repository', () => {
     expect(note).toContain('`docker compose up -d --no-build`');
   });
 
-  // Compose hands `./.env`'s PLUGINS_DIR to the container, where `./data/plugins` is in the volume;
-  // the backup scripts read the same line against the host's working directory.
-  it('tells a host-mount backup to override the ./data paths ./.env sets', () => {
+  // Compose hands `./.env`'s PLUGINS_DIR to the container, where `./data/plugins` is in the volume,
+  // so the backup scripts read it, like the ./data defaults, under OPENWA_DATA_DIR.
+  it('tells a host-mount backup that ./data paths in ./.env follow OPENWA_DATA_DIR', () => {
     expect(read('.env.example')).toMatch(/^PLUGINS_DIR=\.\/data\/plugins\b/m);
     expect(read('docker-compose.yml')).toContain('- PLUGINS_DIR=${PLUGINS_DIR:-');
-    const note = between(read('docs/11-operational-runbooks.md'), '> The scripts resolve every other path', '\n>\n');
-    expect(note).toMatch(/A `\.\/data\/\.\.\.` path in `\.\/\.env` needs the same\s+>\s+override/);
+    const note = between(read('docs/11-operational-runbooks.md'), '> The scripts resolve every other path', '\n>\n')
+      .replace(/^> ?/gm, '')
+      .replace(/\s+/g, ' ');
+    expect(note).toContain('A relative `./data/...` path in `./.env` or `.env.generated`');
     expect(note).toContain('`PLUGINS_DIR=./data/plugins`');
+    expect(note).toContain('is read under `OPENWA_DATA_DIR`, as are the `./data` database and state defaults');
   });
 
   // docs/20 section 20.4: the project runs no real-time chat server, and the `openwa` name is shared.
