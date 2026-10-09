@@ -25,6 +25,7 @@ const (
 	EventSessionReconnectLoop WebhookEvent = "session.reconnect_loop"
 	EventSessionRestriction   WebhookEvent = "session.restriction"
 	EventPresenceUpdate       WebhookEvent = "presence.update"
+	EventEventResponse        WebhookEvent = "event.response"
 	EventCallAccepted         WebhookEvent = "call.accepted"
 	EventCallRejected         WebhookEvent = "call.rejected"
 	EventCallMissed           WebhookEvent = "call.missed"

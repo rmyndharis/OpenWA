@@ -535,6 +535,7 @@
       "session.reconnect_loop": "Quando uma sessão continua sem conseguir se reconectar",
       "session.restriction": "Quando o WhatsApp restringe a conta ou remove uma restrição",
       "presence.update": "Quando um chat inscrito fica online, digita ou fica offline",
+      "event.response": "Quando um convidado responde a um evento do WhatsApp (vai, não vai, talvez)",
       "group.join": "Quando participantes entram em um grupo ou são adicionados",
       "group.leave": "Quando participantes saem de um grupo ou são removidos",
       "group.update": "Quando o nome, a descrição ou as configurações de um grupo mudam",

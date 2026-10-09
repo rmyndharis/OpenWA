@@ -1191,6 +1191,7 @@ func TestWebhookEventWireValues(t *testing.T) {
 		EventSessionReconnectLoop: "session.reconnect_loop",
 		EventSessionRestriction:   "session.restriction",
 		EventPresenceUpdate:       "presence.update",
+		EventEventResponse:        "event.response",
 		EventCallAccepted:         "call.accepted",
 		EventCallRejected:         "call.rejected",
 		EventCallMissed:           "call.missed",

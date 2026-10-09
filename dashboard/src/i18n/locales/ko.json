@@ -529,6 +529,7 @@
       "session.reconnect_loop": "세션 재연결이 계속 실패할 때",
       "session.restriction": "WhatsApp이 계정을 제한하거나 제한을 해제했을 때",
       "presence.update": "구독한 채팅이 온라인이 되거나 입력 중이거나 오프라인이 되었을 때",
+      "event.response": "게스트가 WhatsApp 이벤트 초대에 응답했을 때 (참석, 불참, 미정)",
       "group.join": "참여자가 그룹에 참여하거나 추가되었을 때",
       "group.leave": "참여자가 그룹을 나가거나 내보내졌을 때",
       "group.update": "그룹 이름, 설명 또는 설정이 바뀌었을 때",

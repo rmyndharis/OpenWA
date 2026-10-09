@@ -75,6 +75,7 @@ const CHAT_EVENTS = new Set([
   'group.update',
   'group.join_request',
   'presence.update',
+  'event.response',
 ]);
 
 function chatRoom(sessionId: string, event: string, chatId: string): string {
@@ -880,6 +881,11 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
    */
   emitPresenceUpdate(sessionId: string, data: Record<string, unknown>) {
     this.emitToRooms(sessionId, 'presence.update', data);
+  }
+
+  /** Emit an RSVP to a WhatsApp event (Baileys only). Payload mirrors the `event.response` webhook. */
+  emitEventResponse(sessionId: string, data: Record<string, unknown>) {
+    this.emitToRooms(sessionId, 'event.response', data);
   }
 
   /**

@@ -1,5 +1,10 @@
 import type { proto } from '@whiskeysockets/baileys';
-import { DeliveryStatus, IncomingMessage, MessageType } from '../interfaces/whatsapp-engine.interface';
+import {
+  DeliveryStatus,
+  EventResponseKind,
+  IncomingMessage,
+  MessageType,
+} from '../interfaces/whatsapp-engine.interface';
 import { chatKind } from '../identity/wa-id';
 
 /**
@@ -18,6 +23,23 @@ export const BAILEYS_NON_CONTENT_TYPES: ReadonlySet<string> = new Set([
   'secretEncryptedMessage',
   'encCommentMessage',
 ]);
+
+/**
+ * Map Baileys' `EventResponseMessage.EventResponseType` (UNKNOWN=0, GOING=1, NOT_GOING=2, MAYBE=3)
+ * to the neutral RSVP kind. Matched by number so the mapper needs no runtime proto import.
+ */
+export function mapBaileysEventResponseType(type: number | null | undefined): EventResponseKind {
+  switch (type) {
+    case 1:
+      return 'going';
+    case 2:
+      return 'not_going';
+    case 3:
+      return 'maybe';
+    default:
+      return 'unknown';
+  }
+}
 
 /**
  * Map a Baileys message content-type token (from `getContentType`) to the engine-neutral

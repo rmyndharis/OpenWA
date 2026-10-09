@@ -118,6 +118,7 @@ function makeHost(overrides: Partial<BaileysEventsHost> = {}): BaileysEventsHost
     getOnMessageReaction: () => undefined,
     getOnMessageAck: () => undefined,
     getOnGroupEvent: () => undefined,
+    getOnEventResponse: () => undefined,
     getOnCall: () => undefined,
     getOnPresenceUpdate: () => undefined,
     getOnCallOutcome: () => undefined,
@@ -628,5 +629,120 @@ describe('BaileysEvents record of messages deleted for everyone', () => {
     expect(events.wasDeletedForEveryone('M0')).toBe(false);
     expect(events.wasDeletedForEveryone('M1')).toBe(true);
     expect(events.wasDeletedForEveryone(`M${limit}`)).toBe(true);
+  });
+});
+
+describe('BaileysEvents event RSVPs (event.response)', () => {
+  const group = '120363000000000001@g.us';
+  const eventKey = { id: 'EVT1', remoteJid: group };
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+  function rsvp(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      eventResponseMessageKey: {
+        id: 'RSVP1',
+        remoteJid: group,
+        participant: '6281111111111@s.whatsapp.net',
+        fromMe: false,
+      },
+      senderTimestampMs: 1786000000123,
+      response: { response: 1, timestampMs: 1786000000123, extraGuestCount: 2 },
+      ...overrides,
+    };
+  }
+
+  it('reports a decrypted RSVP with the event name read from the stored creation message', async () => {
+    const onEventResponse = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getOnEventResponse: () => onEventResponse,
+        getStoredMessage: () =>
+          Promise.resolve({ key: eventKey, message: { eventMessage: { name: 'Game night' } } } as unknown as WAMessage),
+      }),
+    );
+
+    events.handleMessagesUpdate([{ key: eventKey, update: { eventResponses: [rsvp()] } }] as never);
+    await flush();
+
+    expect(onEventResponse).toHaveBeenCalledTimes(1);
+    expect(onEventResponse).toHaveBeenCalledWith({
+      eventMessageId: 'EVT1',
+      chatId: group,
+      responderId: '6281111111111@s.whatsapp.net',
+      fromMe: false,
+      response: 'going',
+      extraGuestCount: 2,
+      eventName: 'Game night',
+      responseMessageId: 'RSVP1',
+      timestamp: 1786000000,
+    });
+  });
+
+  it.each([
+    [2, 'not_going'],
+    [3, 'maybe'],
+    [0, 'unknown'],
+    [undefined, 'unknown'],
+  ])('maps response type %p to %p', async (type, expected) => {
+    const onEventResponse = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnEventResponse: () => onEventResponse }));
+
+    events.handleMessagesUpdate([
+      { key: eventKey, update: { eventResponses: [rsvp({ response: { response: type } })] } },
+    ] as never);
+    await flush();
+
+    expect(onEventResponse).toHaveBeenCalledWith(expect.objectContaining({ response: expected }));
+    expect((onEventResponse.mock.calls as unknown[][])[0][0]).not.toHaveProperty('extraGuestCount');
+  });
+
+  it("attributes the account's own 1:1 answer to the account", async () => {
+    const onEventResponse = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnEventResponse: () => onEventResponse }));
+    const chat = '6282222222222@s.whatsapp.net';
+
+    events.handleMessagesUpdate([
+      {
+        key: { id: 'EVT2', remoteJid: chat },
+        update: { eventResponses: [rsvp({ eventResponseMessageKey: { id: 'RSVP2', remoteJid: chat, fromMe: true } })] },
+      },
+    ] as never);
+    await flush();
+
+    expect(onEventResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: chat, responderId: '6280000000000@s.whatsapp.net', fromMe: true }),
+    );
+  });
+
+  it('still reports the RSVP, without a name, when the store cannot be read', async () => {
+    const onEventResponse = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getOnEventResponse: () => onEventResponse,
+        getStoredMessage: () => Promise.reject(new Error('database is locked')),
+      }),
+    );
+
+    events.handleMessagesUpdate([{ key: eventKey, update: { eventResponses: [rsvp()] } }] as never);
+    await flush();
+
+    expect(onEventResponse).toHaveBeenCalledTimes(1);
+    expect((onEventResponse.mock.calls as unknown[][])[0][0]).not.toHaveProperty('eventName');
+  });
+
+  it('keeps reporting acks next to RSVPs, and ignores an RSVP without its own key', async () => {
+    const onEventResponse = jest.fn();
+    const onMessageAck = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({ getOnEventResponse: () => onEventResponse, getOnMessageAck: () => onMessageAck }),
+    );
+
+    events.handleMessagesUpdate([
+      { key: eventKey, update: { status: 3, eventResponses: [rsvp({ eventResponseMessageKey: null })] } },
+    ] as never);
+    await flush();
+
+    expect(onMessageAck).toHaveBeenCalledTimes(1);
+    expect(onEventResponse).not.toHaveBeenCalled();
   });
 });

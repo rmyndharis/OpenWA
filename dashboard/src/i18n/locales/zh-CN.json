@@ -529,6 +529,7 @@
       "session.reconnect_loop": "会话反复重连失败时",
       "session.restriction": "WhatsApp 限制账号或解除限制时",
       "presence.update": "已订阅的聊天上线、正在输入或下线时",
+      "event.response": "嘉宾回复 WhatsApp 活动邀请时（参加、不参加、可能参加）",
       "group.join": "有成员加入或被添加到群组时",
       "group.leave": "有成员退出或被移出群组时",
       "group.update": "群组名称、描述或设置变化时",

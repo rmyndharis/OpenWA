@@ -147,6 +147,9 @@ export class SessionEngineEventWiring {
     // Closure state rather than a Map: it is scoped to this engine instance. A service-level
     // reconnect builds a new engine and a new callback table, so nothing has to be cleaned up.
     let reconnectingSince = 0;
+    // RSVPs are published in arrival order even though each waits on a contact lookup first: a guest
+    // who answers "going" and then "not going" must not reach consumers in the reverse order.
+    let eventResponses: Promise<void> = Promise.resolve();
     /**
      * Persist an engine-driven status, but only while this node still owns the session.
      *
@@ -278,6 +281,40 @@ export class SessionEngineEventWiring {
         });
 
         host.messages.applyMessageEditQueued(id, message);
+      },
+      onEventResponse: (event): void => {
+        if (!host.isLiveEngine(id, engine)) return;
+        this.logger.debug(`Event response: ${event.response} to ${event.eventMessageId}`, {
+          sessionId: id,
+          chatId: event.chatId,
+          eventMessageId: event.eventMessageId,
+          action: 'event_response',
+        });
+        eventResponses = eventResponses.then(async () => {
+          // Name the responder the way message.received names its sender (`contact { name, pushName }`),
+          // so a consumer can build an attendance list without a lookup per answer. Best-effort: an
+          // unknown or failed lookup still publishes the RSVP, without `contact`.
+          let contact: { name?: string; pushName?: string } | undefined;
+          try {
+            const found = await engine.getContactById(event.responderId);
+            if (found && (found.name || found.pushName)) {
+              contact = {
+                ...(found.name ? { name: found.name } : {}),
+                ...(found.pushName ? { pushName: found.pushName } : {}),
+              };
+            }
+          } catch (err) {
+            this.logger.debug('Could not name an event responder', {
+              sessionId: id,
+              responderId: event.responderId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          if (!host.isLiveEngine(id, engine)) return;
+          const payload: Record<string, unknown> = { sessionId: id, ...event, ...(contact ? { contact } : {}) };
+          host.eventsGateway.emitEventResponse(id, payload);
+          void host.webhookService.dispatch(id, 'event.response', payload);
+        });
       },
       onGroupEvent: (event): void => {
         if (!host.isLiveEngine(id, engine)) return;

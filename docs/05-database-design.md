@@ -476,6 +476,7 @@ CREATE TABLE webhooks (
   "session.reconnect_loop",
   "session.restriction",
   "presence.update",
+  "event.response",
   "group.join",
   "group.leave",
   "group.update",

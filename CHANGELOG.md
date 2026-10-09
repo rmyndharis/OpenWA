@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expose caller-supplied send idempotency keys in all five SDKs.
 - Add optional 24-hour idempotency keys to twelve single-recipient send routes.
 - Add opt-in archive-only chat media with dashboard previews.
+- Report RSVPs to WhatsApp events as an `event.response` webhook and WebSocket event on Baileys (going, not going or maybe, with the responder, their name when known and the extra guest count), listed in the JavaScript, Python, Go and Java SDKs. Only events the session received and still holds in its message store can be decrypted; whatsapp-web.js never fires it.
 
 ### Changed
 

@@ -651,6 +651,35 @@ export interface EditedMessage {
   timestamp: number;
 }
 
+/** A guest's answer to a WhatsApp event invitation (the "Going" / "Not going" / "Maybe" buttons). */
+export type EventResponseKind = 'going' | 'not_going' | 'maybe' | 'unknown';
+
+/**
+ * One RSVP to a WhatsApp event (the calendar-style event created from the attach menu). WhatsApp
+ * encrypts each RSVP with a key derived from the event creation message's `messageSecret`, so an
+ * engine can only report the answers to events whose creation message it holds. A guest who changes
+ * their answer produces a new RSVP; the latest one per `responderId` is the current state.
+ */
+export interface EventResponseEvent {
+  /** Id of the event creation message the RSVP answers. */
+  eventMessageId: string;
+  /** Neutral id of the chat the event was posted in. */
+  chatId: string;
+  /** Neutral id of the guest who answered (the account itself when it answered from its phone). */
+  responderId: string;
+  /** True when the account itself answered (from its phone). */
+  fromMe: boolean;
+  response: EventResponseKind;
+  /** Extra guests the responder said they are bringing; absent when WhatsApp sent none. */
+  extraGuestCount?: number;
+  /** The event's name, when the creation message is available to read it from. */
+  eventName?: string;
+  /** Id of the RSVP message itself; unique per answer, so a changed answer has a new one. */
+  responseMessageId: string;
+  /** Unix seconds the guest answered (sender clock). */
+  timestamp: number;
+}
+
 export interface ReactionEvent {
   messageId: string;
   chatId: string;
@@ -816,6 +845,11 @@ export interface EngineEventCallbacks {
   onMessageRevoked?: (message: RevokedMessage) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
+  /**
+   * Fired for each RSVP to a WhatsApp event (consumers emit `event.response`). Baileys only: it
+   * decrypts the RSVP itself from the stored event creation message. whatsapp-web.js never fires it.
+   */
+  onEventResponse?: (event: EventResponseEvent) => void;
   /**
    * Fired on group membership changes (join/leave), group metadata updates
    * (subject/description/announce/locked), and pending join requests. The `kind` selects the

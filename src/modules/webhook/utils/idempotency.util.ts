@@ -109,6 +109,11 @@ export function generateIdempotencyKey(event: string, data: Record<string, unkno
       // is already distinct — no occurrence salt, matching call.received's stable key.
       return `call_${toStr(data.sessionId)}_${toStr(data.callId)}_${toStr(data.outcome)}`;
 
+    case 'event.response':
+      // Each RSVP is its own message with its own id, and a changed answer is a new RSVP with a new
+      // id, so (session, RSVP id) is already unique per occurrence and stable across retries.
+      return `rsvp_${toStr(data.sessionId)}_${toStr(data.responseMessageId)}`;
+
     case 'presence.update':
       // Keyed on the chat and salted per occurrence. Only genuine state CHANGES are dispatched, and
       // a contact who types, stops, and types again produces the same payload each time — content
