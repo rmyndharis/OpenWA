@@ -45,9 +45,9 @@ export interface PendingMessageReaperStats {
  * performs for every persisted outbound state — so a provider's copy reconciles to the terminal
  * state instead of staying stuck at the initial PENDING write.
  *
- * Mirrors IngressReconcilerService's lifecycle: a raw unref'd setInterval started on module init
- * (first sweep after one interval), cleared on destroy, which also stops a pass in flight and waits
- * for it. Young PENDING rows (a send still in flight) and non-outgoing rows are never touched.
+ * Same timer lifecycle as IngressReconcilerService: a raw unref'd setInterval started on module init
+ * (first sweep after one interval) and cleared on destroy. Destroy also stops a pass in flight and
+ * waits for it. Young PENDING rows (a send still in flight) and non-outgoing rows are never touched.
  */
 @Injectable()
 export class PendingMessageReaperService implements OnModuleInit, OnModuleDestroy {

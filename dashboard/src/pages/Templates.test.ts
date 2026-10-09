@@ -404,6 +404,139 @@ test('edits typed while an update is in flight keep the editor on the renamed te
   assert.deepEqual(copied, ['welcome-v2']);
 });
 
+// Until an update settles, the list still holds the row as it was before the save. Reopening it then
+// would put the old values back in the editor, bound to the same template, and the next save would
+// silently undo the update.
+test('the template being updated stays inert until its update settles', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  templates = [{ id: 'tpl-1', name: 'welcome', body: 'Hello' }];
+  let release!: () => void;
+  saveGate = new Promise<void>(resolve => (release = resolve));
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderTemplates();
+
+  fireEvent.click(await screen.findByText('welcome'));
+  const body = screen.getByLabelText<HTMLTextAreaElement>('Body');
+  fireEvent.change(body, { target: { value: 'Hello again' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+  await waitFor(() => assert.equal(updated.length, 1));
+
+  const row = document.querySelector<HTMLButtonElement>('.template-list-item')!;
+  assert.equal(row.disabled, true, 'the row being saved could be reopened');
+  fireEvent.click(row);
+
+  templates = [{ id: 'tpl-1', name: 'welcome', body: 'Hello again' }];
+  release();
+  await screen.findByText('Template updated successfully');
+  assert.equal(body.value, '', 'the pre-save values stayed in the editor');
+  assert.ok(screen.getByRole('heading', { name: 'Create Template' }));
+  await waitFor(() => assert.equal(row.disabled, false));
+  assert.deepEqual(updated, [{ path: '/api/sessions/sess-1/templates/tpl-1', body: 'Hello again' }]);
+});
+
+// Only the row being updated holds stale values, so every other row stays openable mid-save: a save that
+// never answers must not lock the whole library, and the one that resolves leaves the newer draft alone.
+test('other templates stay openable while a save is in flight', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  templates = [
+    { id: 'tpl-1', name: 'welcome', body: 'Hello' },
+    { id: 'tpl-2', name: 'invoice', body: 'Due soon' },
+  ];
+  let release!: () => void;
+  saveGate = new Promise<void>(resolve => (release = resolve));
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderTemplates();
+
+  fireEvent.click(await screen.findByText('welcome'));
+  const name = screen.getByLabelText<HTMLInputElement>('Name');
+  const body = screen.getByLabelText<HTMLTextAreaElement>('Body');
+  fireEvent.change(body, { target: { value: 'Hello again' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+  await waitFor(() => assert.equal(updated.length, 1));
+
+  const [first, second] = document.querySelectorAll<HTMLButtonElement>('.template-list-item');
+  assert.equal(first.disabled, true);
+  assert.equal(second.disabled, false, 'a row with no save in flight was locked');
+  fireEvent.click(second);
+  assert.equal(body.value, 'Due soon');
+
+  release();
+  await screen.findByText('Template updated successfully');
+  assert.equal(name.value, 'invoice', 'the template opened mid-save was replaced');
+  assert.equal(body.value, 'Due soon');
+  await waitFor(() => assert.equal(first.disabled, false));
+
+  saveGate = new Promise<void>(resolve => (release = resolve));
+  fireEvent.click(screen.getByRole('button', { name: 'New Template' }));
+  fireEvent.change(name, { target: { value: 'order-shipped' } });
+  fireEvent.change(body, { target: { value: 'On its way' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create Template' }));
+  await waitFor(() => assert.equal(created.length, 1));
+  assert.equal(first.disabled, false, 'a pending create locked the list');
+  assert.equal(second.disabled, false, 'a pending create locked the list');
+  release();
+  await screen.findByText('Template created successfully');
+});
+
+// The rows come back as soon as the update resolves, before the list refetch lands, and a failed refetch keeps
+// the cached rows. Either way the row must already carry the saved values, or reopening it and saving again
+// would write the old ones back.
+test('reopening a template after its update loads the saved values even if the list refresh fails', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  templates = [{ id: 'tpl-1', name: 'welcome', body: 'Hello' }];
+  let release!: () => void;
+  saveGate = new Promise<void>(resolve => (release = resolve));
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderTemplates();
+
+  fireEvent.click(await screen.findByText('welcome'));
+  fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Hello again' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+  await waitFor(() => assert.equal(updated.length, 1));
+
+  templatesStatus = 502;
+  release();
+  await screen.findByText('Template updated successfully');
+  const row = document.querySelector<HTMLButtonElement>('.template-list-item')!;
+  await waitFor(() => assert.equal(row.disabled, false));
+  fireEvent.click(row);
+
+  assert.equal(screen.getByLabelText<HTMLTextAreaElement>('Body').value, 'Hello again');
+  fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+  await waitFor(() => assert.equal(updated.length, 2));
+  assert.equal(updated[1].body, 'Hello again', 'the second save wrote the pre-save body back');
+});
+
+// A session deleted elsewhere while an update is in flight moves the editor to an empty draft on the next
+// session. The update resolving afterwards must leave that draft unbound: tied to the old session's row,
+// its next save would send that row's id to the new session.
+test('an update that resolves after its session disappeared leaves the next session draft unbound', async () => {
+  const { screen, fireEvent, waitFor, act } = rtl;
+  templates = [{ id: 'tpl-1', name: 'welcome', body: 'Hello' }];
+  extraSessions = [{ id: 'sess-2', name: 'support-bot' }];
+  let release!: () => void;
+  saveGate = new Promise<void>(resolve => (release = resolve));
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
+  renderTemplates();
+
+  fireEvent.click(await screen.findByText('welcome'));
+  fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Hello again' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+  await waitFor(() => assert.equal(updated.length, 1));
+
+  firstSessionGone = true;
+  await act(() => queryClient!.refetchQueries({ queryKey: ['sessions'], exact: true }));
+  await screen.findByText('support-greeting');
+
+  release();
+  await screen.findByText('Template updated successfully');
+  assert.equal(screen.getByLabelText<HTMLSelectElement>('Session').value, 'sess-2');
+  assert.ok(
+    screen.getByRole('heading', { name: 'Create Template' }),
+    'the next session draft was tied to the old session row',
+  );
+});
+
 // The count above the list still shows the library is not empty, so a search that matches nothing
 // must say so rather than claim no templates are saved.
 test('a search with no match says so instead of reporting an empty library', async () => {
@@ -424,4 +557,13 @@ test('the workspace columns and list rows follow the text direction', () => {
   const css = readFileSync(new URL('./Templates.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.doesNotMatch(css, /border-(left|right)\s*:/, 'a column divider uses a physical side');
   assert.doesNotMatch(css, /text-align\s*:\s*(left|right)\b/, 'text is aligned to a physical side');
+});
+
+// The selected row's highlight wins over the hover style by source order, so the hover rule may not carry any
+// more specificity than `.selected`: hovering the open template would otherwise drop its highlight.
+test('hovering the selected template row keeps its selected highlight', () => {
+  const css = readFileSync(new URL('./Templates.css', import.meta.url), 'utf8');
+  const hover = /^([^{}\n]*\.template-list-item:hover[^{}\n]*)\{/m.exec(css)?.[1].trim();
+  assert.equal(hover?.replace(/:where\([^)]*\)+/g, ''), '.templates-page .template-list-item:hover');
+  assert.ok(css.indexOf('.template-list-item.selected {') > css.indexOf(hover!), 'the selected rule must come last');
 });
