@@ -640,17 +640,18 @@ export class SessionEngineLifecycle {
   }
 
   private async initializeEngine(id: string, session: Session): Promise<void> {
+    // A stop that landed before this engine exists had nothing to tear down and already wrote its
+    // DISCONNECTED; registering now would overwrite it with INITIALIZING and then retire. start()
+    // clears its own mark and executeReconnect checks it on entry, so a mark seen here always came
+    // from a later stop, force-kill, logout or delete. Checked before `closed`: start() answers a
+    // retired start as the stop or delete, never as a 503 a client would replay after the restart.
+    if (this.stoppingSessions.has(id)) return;
     // shutdown() destroys only the engines registered when it starts. A start or a transient retry
     // still on its way here would register one nothing tears down, so it fails instead; its caller
     // releases the claim. A 503 is not a transient launch failure, so it is not retried.
     if (this.closed) {
       throw new ServerShuttingDownException();
     }
-    // A stop that landed before this engine exists had nothing to tear down and already wrote its
-    // DISCONNECTED; registering now would overwrite it with INITIALIZING and then retire. start()
-    // clears its own mark and executeReconnect checks it on entry, so a mark seen here always came
-    // from a later stop, force-kill, logout or delete.
-    if (this.stoppingSessions.has(id)) return;
     this.logger.log(`Initializing engine for session: ${session.name}`, {
       sessionId: id,
       action: 'engine_init',
@@ -713,7 +714,8 @@ export class SessionEngineLifecycle {
     // lookup, so nothing can swap the engine between them (a second, identical check used to sit
     // after the stop mark and could never disagree with this one). `closed` covers an engine that
     // shutdown() is already destroying: it stays registered until every destroy settles. Returned,
-    // not thrown: start()'s failure path would force-destroy the engine shutdown is destroying.
+    // not thrown: start()'s failure path would force-destroy the engine shutdown is destroying. start()
+    // answers 503 past that path instead.
     if (this.closed || !this.isLiveEngine(id, engine)) {
       return;
     }

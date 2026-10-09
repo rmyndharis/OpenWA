@@ -224,6 +224,20 @@ describe('SessionOwnershipService', () => {
       expect((await sessions.findOneByOrFail({ id: two.id })).nodeId).toBeNull();
     });
 
+    // A start still in flight at shutdown may own a live browser; a peer must not claim under it.
+    it('keeps the claims it is told to keep, on the way down', async () => {
+      const [one, two] = [await seed(), await seed()];
+      const nodeA = service('node-a');
+      await nodeA.claim(one.id);
+      await nodeA.claim(two.id);
+
+      await nodeA.releaseAll([two.id]);
+
+      expect(nodeA.ownedIds()).toEqual([two.id]);
+      expect((await sessions.findOneByOrFail({ id: one.id })).nodeId).toBeNull();
+      expect((await sessions.findOneByOrFail({ id: two.id })).nodeId).toBe('node-a');
+    });
+
     // Per-session bookkeeping must end with the claim, or create/delete churn grows it forever.
     it('keeps no per-session state once a claim ends by release, shutdown or loss', async () => {
       const [one, two, three] = [await seed(), await seed(), await seed()];

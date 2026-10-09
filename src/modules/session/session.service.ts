@@ -53,6 +53,7 @@ import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-err
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { IWhatsAppEngine, ChatSummary, ChatState } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
+import { ShutdownService } from '../../common/services/shutdown.service';
 import { HookManager } from '../../core/hooks';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
@@ -85,6 +86,12 @@ function isTransientLaunchFailure(error: unknown): boolean {
 
 /** Pause between sequential auto-start launches so a burst of Chromium boots does not spike the host. */
 export const AUTOSTART_THROTTLE_MS = 2_000;
+
+/**
+ * How long shutdown waits for the auto-start run once the engines are destroyed. Short: the 45s kill
+ * deadline in compose and the Helm chart still has to cover releaseAll and the database close.
+ */
+export const AUTOSTART_SHUTDOWN_WAIT_MS = 5_000;
 
 /** List window for {@link SessionService.findAll}, plus an optional exact session-name filter. */
 export interface SessionListOptions extends ListOptions {
@@ -165,7 +172,19 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // behaves as unowned there, which is what a single-process deployment is anyway.
     @Optional()
     private readonly ownership?: SessionOwnershipService,
+    // The drain signal, set when shutdown begins and SHUTDOWN_DELAY_MS before onModuleDestroy. Same
+    // source the reconnect scheduler and the takeover sweep consult.
+    @Optional()
+    private readonly shutdownService?: ShutdownService,
   ) {}
+
+  /**
+   * True from the start of the shutdown drain. An engine launched during the drain would be torn
+   * down seconds later by onModuleDestroy, so starts are refused from here, not from teardown.
+   */
+  private get stopping(): boolean {
+    return this.shuttingDown || this.shutdownService?.isShuttingDown() === true;
+  }
 
   /**
    * On startup, mark as disconnected the sessions whose engines this process was running, since no
@@ -272,7 +291,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     for (let i = 0; i < sessions.length; i++) {
       // A shutdown landing mid-run must not launch anything further: onModuleDestroy tears down what
       // exists, and a browser launched after that point is never destroyed.
-      if (this.shuttingDown) {
+      if (this.stopping) {
         this.logger.log(`Auto-start stopped at ${i} of ${sessions.length} session(s): shutting down`, {
           action: 'auto_start_aborted',
         });
@@ -290,6 +309,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       const session = sessions[i];
       try {
         await this.start(session.id);
+        // A launch shutdown tore down mid-init is refused with ServerShuttingDownException (caught
+        // below). One already past the engine's post-init checks resolves, but shutdown can still
+        // destroy its engine during the start's last row read or its claim bookkeeping, so
+        // nothing is left running.
+        if (this.shuttingDown && !this.isActive(session.id)) {
+          this.logger.log(`Auto-start abandoned for session ${session.name}: shutting down`, {
+            sessionId: session.id,
+            action: 'auto_start_aborted',
+          });
+          return;
+        }
         this.logger.log(`Auto-started session: ${session.name}`, {
           sessionId: session.id,
           action: 'auto_start_success',
@@ -318,7 +348,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         }
       }
       // Throttle between sequential Chromium launches; no need to wait after the last one.
-      if (i < sessions.length - 1) {
+      // Skipped once shutdown began: onModuleDestroy awaits this loop, and the check above ends it.
+      if (i < sessions.length - 1 && !this.stopping) {
         await setTimeout(AUTOSTART_THROTTLE_MS);
       }
     }
@@ -330,16 +361,31 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     this.shuttingDown = true;
     this.watchdog.stop();
     this.ownership?.stopHeartbeat();
-    // A SIGTERM during boot can land while the detached auto-start is mid-launch. Let that one
-    // settle — the flag above stops the loop taking another — so the engine it registers is torn
-    // down below instead of outliving the process as an orphaned browser. Bounded by the launch
-    // already in flight, never by the whole run.
-    await this.autoStartRun;
-    // Reconnect timers + engine teardown belong to the lifecycle owner.
+    // Reconnect timers + engine teardown belong to the lifecycle owner. Run before waiting on the
+    // detached auto-start: a launch it has in flight already registered its engine, so this destroys
+    // it and the run unwinds. Waiting first would let a stalled init (an unreachable WhatsApp Web, a
+    // proxy that never answers) hold the teardown until its init deadline, past the kill deadline.
     await this.engineLifecycle.shutdown();
+    // The lifecycle is closed now, so the run registers no further engine; awaited so its claim
+    // release and status writes land before releaseAll and the database close. Bounded: a
+    // whatsapp-web.js launch still starting Chromium has no browser handle yet, so the destroy
+    // closes nothing and that init runs until whatsapp-web.js settles it, at worst to the init
+    // deadline. Past the bound, its browser is left to Puppeteer's exit hook.
+    let timer: NodeJS.Timeout | undefined;
+    const settled = await Promise.race([
+      this.autoStartRun.then(() => true),
+      new Promise<false>(resolve => (timer = globalThis.setTimeout(resolve, AUTOSTART_SHUTDOWN_WAIT_MS, false))),
+    ]);
+    clearTimeout(timer);
+    if (!settled) {
+      this.logger.warn(`Auto-start still launching after ${AUTOSTART_SHUTDOWN_WAIT_MS}ms; shutting down without it`, {
+        action: 'auto_start_shutdown_timeout',
+      });
+    }
     // Released only after the engines are actually down, so a peer never claims a session this
-    // process is still holding open.
-    await this.ownership?.releaseAll();
+    // process is still holding open. A start still in flight may own a browser the teardown could
+    // not reach (one the bound above gave up on), so its claim is kept and lapses as after a hard kill.
+    await this.ownership?.releaseAll(this.startReservations.keys());
   }
 
   async create(dto: CreateSessionDto): Promise<Session> {
@@ -643,7 +689,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   private refuseIfShuttingDown(): void {
-    if (this.shuttingDown) throw new ServerShuttingDownException();
+    if (this.stopping) throw new ServerShuttingDownException();
   }
 
   private async claimAndStart(id: string, explicit: boolean): Promise<Session> {
