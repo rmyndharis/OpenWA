@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, MoreThan, Not, Repository } from 'typeorm';
@@ -55,7 +55,7 @@ export interface WebhookRedriveResult {
  * replay only raises its attempt count.
  */
 @Injectable()
-export class WebhookRedriveService {
+export class WebhookRedriveService implements OnModuleDestroy {
   private readonly logger = createLogger('WebhookRedrive');
   /**
    * One redrive at a time on this node, so two overlapping calls (a double click, a retrying script)
@@ -63,6 +63,8 @@ export class WebhookRedriveService {
    * idempotency key, which the receiver dedups on.
    */
   private running: Promise<unknown> = Promise.resolve();
+  // Aborted on destroy: a batch in progress takes no further row.
+  private readonly stop = new AbortController();
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -72,6 +74,19 @@ export class WebhookRedriveService {
     private readonly delivery: WebhookDeliveryService,
     private readonly configService: ConfigService,
   ) {}
+
+  /**
+   * A redrive runs inside an admitted HTTP request, which shutdown lets finish, and its replays hold
+   * no dispatch slot, so the delivery drain neither waits for nor stops them. Left alone it would go
+   * on POSTing after PluginLoaderService has unregistered the `webhook:before` hooks, sending the
+   * stored pre-hook data. Stop at the next row and wait for the replays in hand: this module is
+   * destroyed before the global plugin module, so those still run with their hooks. Rows not reached
+   * stay for a later call and are counted in `remaining`.
+   */
+  async onModuleDestroy(): Promise<void> {
+    this.stop.abort();
+    await this.running;
+  }
 
   redrive(request: WebhookRedriveRequest, allowedSessions?: string[] | null): Promise<WebhookRedriveResult> {
     const run = this.running.then(() => this.redriveBatch(request, allowedSessions));
@@ -126,16 +141,19 @@ export class WebhookRedriveService {
       .andWhere('webhook.active = :active', { active: true })
       .andWhere(`EXISTS (SELECT 1 FROM ${subscriptions} WHERE ${subscribedEvent} IN ('*', failure.event))`);
     const limit = Math.min(Math.max(1, request.limit ?? DEFAULT_WEBHOOK_REDRIVE_LIMIT), MAX_WEBHOOK_REDRIVE_LIMIT);
-    const rows = await query
-      .clone()
-      // `payload` is select: false on the entity; replay explicitly reads it.
-      .addSelect('failure.payload')
-      // Failed replays move behind rows with fewer attempts, so a bad receiver cannot pin a batch.
-      .orderBy('failure.attempts', 'ASC')
-      .addOrderBy('failure.createdAt', 'ASC')
-      .addOrderBy('failure.id', 'ASC')
-      .take(limit)
-      .getMany();
+    // A call still queued when shutdown starts reads no rows (or their payloads); it only counts them.
+    const rows = this.stop.signal.aborted
+      ? []
+      : await query
+          .clone()
+          // `payload` is select: false on the entity; replay explicitly reads it.
+          .addSelect('failure.payload')
+          // Failed replays move behind rows with fewer attempts, so a bad receiver cannot pin a batch.
+          .orderBy('failure.attempts', 'ASC')
+          .addOrderBy('failure.createdAt', 'ASC')
+          .addOrderBy('failure.id', 'ASC')
+          .take(limit)
+          .getMany();
 
     if (rows.length > 0) {
       const webhookIds = [...new Set(rows.map(r => r.webhookId))];
@@ -144,7 +162,7 @@ export class WebhookRedriveService {
       );
       const queue = [...rows];
       const worker = async (): Promise<void> => {
-        for (let row = queue.shift(); row; row = queue.shift()) {
+        for (let row = queue.shift(); row && !this.stop.signal.aborted; row = queue.shift()) {
           await this.redriveRow(row, webhooks.get(row.webhookId) ?? null, result);
         }
       };

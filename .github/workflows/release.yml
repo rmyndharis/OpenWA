@@ -64,20 +64,21 @@ jobs:
           echo "Tag $TAG matches package.json $PKG_VERSION"
 
       - name: Security audit
-        # Matches ci.yml's advisory rules exactly, including its per-advisory allowlist. The release
-        # gate must not be laxer than the PR gate, or a HIGH advisory blocked on every PR would still
-        # sail through at tag time, and it must not excuse fewer advisories either, or a tag fails on
-        # something main has already accepted. The one difference is an audit that could not run:
-        # PR CI skips it with a warning, while a release refuses to publish with no advisory checked.
-        # A re-run clears a transient npm outage.
+        # Matches ci.yml's advisory rules exactly, including its per-advisory allowlist. For the trees
+        # the image ships, the release gate must not be laxer than the PR gate, or a HIGH advisory
+        # blocked on every PR would still sail through at tag time, and it must not excuse fewer
+        # advisories either, or a tag fails on something main has already accepted. The one
+        # difference is an audit that could not run: PR CI skips it with a warning, while a release
+        # refuses to publish with no advisory checked. A re-run clears a transient npm outage.
         env:
           CHECK_AUDIT_REQUIRED: '1'
         run: npm run check:audit
 
-      # Second tree, same rule. The dashboard's runtime deps are bundled into dashboard/dist and the
+      # The dashboard tree, same rule. Its runtime deps are bundled into dashboard/dist and the
       # published image serves them to every operator's browser, so the tag path must scan them for
-      # the same reason ci.yml's audit job now does — otherwise this gate is laxer than the PR gate
-      # for exactly the dependencies that reach a user.
+      # the same reason ci.yml's audit job does, or this gate is laxer than the PR gate for exactly
+      # the dependencies that reach a user. The third tree, sdk/javascript, is not audited here: the
+      # image does not ship it, and js-sdk-release.yml audits it before publishing the SDK.
       - name: Install dashboard dependencies
         run: cd dashboard && npm ci
 

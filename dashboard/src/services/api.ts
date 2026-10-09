@@ -743,8 +743,11 @@ export interface SearchResults {
 // `sentKey` is the key the request carried (null when none). Logout aborts nothing in flight, so an
 // answer can arrive after the stored key changed. With a key sent but none stored, a sign-out is
 // already under way (an earlier failure of the same burst, or the user on the login form): stay
-// silent and do not navigate again. With another key stored, the answer speaks for a key no longer
-// in use and must not sign out the current one, so it fails like any other error.
+// silent and do not navigate again. A request sent without a key comes only from a chain that
+// outlived a logout (the dashboard shows the login form whenever no key is stored), so with none
+// stored it stays silent too rather than reloading the login form under the user. With another key
+// stored, the answer speaks for a key no longer in use and must not sign out the current one, so it
+// fails like any other error.
 async function handleErrorResponse<T>(response: Response, sentKey: string | null): Promise<T> {
   // On a non-JSON body (e.g. a reverse-proxy 502/503/504 HTML page) fall through to `HTTP <status>`
   // rather than statusText: the toast folds an exact `HTTP 502`/`HTTP 503` into its connection-lost
@@ -754,7 +757,7 @@ async function handleErrorResponse<T>(response: Response, sentKey: string | null
   if (isKeyUnusable(response.status, error.message) && (storedKey === sentKey || storedKey === null)) {
     sessionStorage.removeItem('openwa_api_key');
     if (typeof window !== 'undefined') {
-      if (storedKey === sentKey) window.location.assign('/');
+      if (sentKey !== null && storedKey === sentKey) window.location.assign('/');
       return new Promise<T>(() => {});
     }
   }

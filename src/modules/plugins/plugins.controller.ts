@@ -202,6 +202,10 @@ export class PluginsController {
   @ApiResponse({ status: 201, description: 'Plugin updated', type: PluginDto })
   @ApiResponse({ status: 400, description: 'Invalid URL/package, id mismatch, or built-in' })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
+  @ApiResponse({
+    status: 503,
+    description: 'Gateway shutting down; the previous version was kept',
+  })
   async update(@Param('id') id: string, @Body() dto: InstallFromUrlDto): Promise<PluginDto> {
     return await this.pluginsService.updateFromUrl(id, dto.url);
   }

@@ -146,8 +146,9 @@ export async function loadSharp() {
 export const MAX_STICKER_FRAMES = 500;
 
 /**
- * Conversions running at once, process-wide. A sharp pipeline holds a libuv threadpool worker
- * (4 by default) for its whole run, and that pool also serves fs, dns.lookup, crypto and zlib.
+ * Conversions running at once, process-wide. Each sharp call (the frame scan, then the pipeline)
+ * holds a libuv threadpool worker (4 by default) for its whole run, and that pool also serves fs,
+ * dns.lookup, crypto and zlib.
  */
 const stickerConversions = new ConcurrencyLimiter(2);
 
@@ -171,19 +172,21 @@ async function toWebpSticker(data: Buffer, mimetype: string): Promise<Buffer> {
   const sharp = await loadSharp();
   try {
     const image = sharp(data, { animated: true });
-    // Counting frames only scans the file, so an oversized animation is refused before any decode.
-    const { pages = 1 } = await image.metadata();
-    if (pages > MAX_STICKER_FRAMES) {
-      throw new BadRequestException(
-        `The sticker animation has ${pages} frames; at most ${MAX_STICKER_FRAMES} can be converted.`,
-      );
-    }
-    return await stickerConversions.run(() =>
-      image
+    return await stickerConversions.run(async () => {
+      // Counting frames only scans the file, so an oversized animation is refused before any decode.
+      // The scan still runs on the threadpool and grows faster than the frame count, so it holds the
+      // same slot as the pipeline.
+      const { pages = 1 } = await image.metadata();
+      if (pages > MAX_STICKER_FRAMES) {
+        throw new BadRequestException(
+          `The sticker animation has ${pages} frames; at most ${MAX_STICKER_FRAMES} can be converted.`,
+        );
+      }
+      return image
         .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
         .webp()
-        .toBuffer(),
-    );
+        .toBuffer();
+    });
   } catch (error) {
     if (error instanceof BadRequestException) throw error;
     // Bytes that do not decode as the image they claim to be. Refuse before the socket rather than

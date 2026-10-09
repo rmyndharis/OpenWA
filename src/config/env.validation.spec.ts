@@ -86,6 +86,15 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ PORT: '2785' })).not.toThrow();
   });
 
+  // main.ts listens on the raw PORT and the image healthcheck puts it in a URL verbatim, so a padded
+  // value would boot on 2785 while every probe of `http://localhost:2785 /...` fails as malformed.
+  it('rejects a PORT with surrounding whitespace and takes only an empty one as unset', () => {
+    expect(() => validateEnv({ PORT: '2785 ' })).toThrow(/PORT/);
+    expect(() => validateEnv({ PORT: ' 8080' })).toThrow(/PORT/);
+    expect(() => validateEnv({ PORT: '   ' })).toThrow(/PORT/);
+    expect(() => validateEnv({ PORT: '' })).not.toThrow();
+  });
+
   it('rejects a non-numeric database timeout knob (a typo would become NaN and break the pg pool)', () => {
     expect(() => validateEnv({ DATABASE_STATEMENT_TIMEOUT_MS: 'abc' })).toThrow(/DATABASE_STATEMENT_TIMEOUT_MS/);
     expect(() => validateEnv({ DATABASE_IDLE_TIMEOUT_MS: '30s' })).toThrow(/DATABASE_IDLE_TIMEOUT_MS/);
