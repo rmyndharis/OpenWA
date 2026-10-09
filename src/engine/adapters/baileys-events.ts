@@ -9,6 +9,8 @@ import {
   PresenceState,
   CallOutcome,
   IncomingMessage,
+  MessageReceiptEvent,
+  MessageReceiptStatus,
   MessageType,
   ReactionEvent,
   RevokedMessage,
@@ -201,6 +203,8 @@ export interface BaileysEventsHost {
   getOnMessageReaction(): EngineEventCallbacks['onMessageReaction'];
   /** The currently-registered onMessageAck callback, if any (assigned at initialize()). */
   getOnMessageAck(): EngineEventCallbacks['onMessageAck'];
+  /** The currently-registered onMessageReceipt callback, if any (assigned at initialize()). */
+  getOnMessageReceipt(): EngineEventCallbacks['onMessageReceipt'];
   /** The currently-registered onGroupEvent callback, if any (assigned at initialize()). */
   getOnGroupEvent(): EngineEventCallbacks['onGroupEvent'];
   /** The currently-registered onCall callback, if any (assigned at initialize()). */
@@ -779,6 +783,78 @@ export class BaileysEvents {
   }
 
   /**
+   * Baileys `message-receipt.update`: per-participant receipts, which Baileys raises only for group
+   * and status messages (1:1 receipts arrive as `messages.update` instead). Only receipts for
+   * messages this account sent are reported, and receipts from the account's own linked devices are
+   * dropped. The event buffer can merge several receipts of one participant into one entry, so each
+   * timestamp the entry carries becomes its own event. rc14 files a `played` receipt under
+   * `readTimestamp`, so on that version a voice note that was played reports `read`.
+   */
+  handleMessageReceiptUpdate(
+    updates: Array<{
+      key?: { id?: string | null; remoteJid?: string | null; fromMe?: boolean | null };
+      receipt?: {
+        userJid?: string | null;
+        receiptTimestamp?: number | { toNumber(): number } | null;
+        readTimestamp?: number | { toNumber(): number } | null;
+        playedTimestamp?: number | { toNumber(): number } | null;
+      };
+    }>,
+  ): void {
+    const onReceipt = this.host.getOnMessageReceipt();
+    if (!onReceipt) {
+      return;
+    }
+    const isSelf = this.selfMatcher();
+    for (const { key, receipt } of Array.isArray(updates) ? updates : []) {
+      if (!key?.id || !key.remoteJid || key.fromMe !== true || !receipt?.userJid || isSelf(receipt.userJid)) {
+        continue;
+      }
+      const stamps: Array<[MessageReceiptStatus, typeof receipt.receiptTimestamp]> = [
+        ['delivered', receipt.receiptTimestamp],
+        ['read', receipt.readTimestamp],
+        ['played', receipt.playedTimestamp],
+      ];
+      for (const [status, ts] of stamps) {
+        if (ts == null) continue;
+        const event: MessageReceiptEvent = {
+          messageId: key.id,
+          chatId: this.host.toNeutralJid(key.remoteJid),
+          participant: this.host.toNeutralJid(receipt.userJid),
+          status,
+          timestamp: toUnixSeconds(ts),
+        };
+        onReceipt(event);
+      }
+    }
+  }
+
+  /**
+   * Matches any jid of this account, in either dialect and from any of its devices (user parts are
+   * compared). Answers false for everything while the account's own id is unknown.
+   */
+  private selfMatcher(): (jid: string | null | undefined) => boolean {
+    const selfJid = this.host.normalizedSelfJid();
+    if (!selfJid) {
+      return () => false;
+    }
+    const phone = userPart(selfJid);
+    const lid = this.host.getSocketOrNull()?.user?.lid;
+    const lidUser = lid ? userPart(lid) : undefined;
+    return (jid: string | null | undefined): boolean => {
+      if (!jid) return false;
+      const { kind, userPart: user } = parseWaId(jid);
+      if (kind === 'user') return user === phone;
+      if (kind !== 'lid') return false;
+      if (lidUser !== undefined) return user === lidUser;
+      // Creds carrying no `user.lid` leave nothing to compare a lid-addressed jid against, and every
+      // such comparison would answer false. Fall back to the session's own lid to phone mapping,
+      // which the store learns from the same traffic.
+      return userPart(this.host.toNeutralJid(jid)) === phone;
+    };
+  }
+
+  /**
    * Baileys `group-participants.update`: a membership change. Only add/remove map to the neutral
    * join/leave kinds — promote/demote (and 'modify', a phone-number-change rewrite) change no
    * membership and are skipped. The event carries no timestamp, so it is stamped at receipt.
@@ -828,21 +904,9 @@ export class BaileysEvents {
     if (!selfJid) {
       return; // no own id to report as the joining participant
     }
-    const phone = userPart(selfJid);
-    const lid = this.host.getSocketOrNull()?.user?.lid;
-    const lidUser = lid ? userPart(lid) : undefined;
-    const isSelf = (jid: string | undefined): boolean => {
-      if (!jid) return false;
-      const { kind, userPart: user } = parseWaId(jid);
-      if (kind === 'user') return user === phone;
-      if (kind !== 'lid') return false;
-      if (lidUser !== undefined) return user === lidUser;
-      // Creds carrying no `user.lid` leave nothing to compare a lid-addressed actor against, and
-      // every such comparison would answer false: a group this session created would then be
-      // reported as a join of itself. Fall back to the session's own lid to phone mapping, which the
-      // store learns from the same traffic.
-      return userPart(this.host.toNeutralJid(jid)) === phone;
-    };
+    // Without the lid fallback inside selfMatcher, a group this session created by a lid-addressed
+    // actor would be reported as a join of itself.
+    const isSelf = this.selfMatcher();
     for (const group of Array.isArray(groups) ? groups : []) {
       // Live, whatsapp-web.js emits no group.join when the session created the group, so that entry is
       // skipped. The acting participant alone does not identify it: an invite-link join may name the

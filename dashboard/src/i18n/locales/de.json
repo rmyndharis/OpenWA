@@ -518,6 +518,7 @@
       "message.received": "Wenn eine Nachricht empfangen wird",
       "message.sent": "Wenn eine Nachricht gesendet wird",
       "message.ack": "Wenn sich der Zustell- oder Lesestatus einer Nachricht ändert",
+      "message.receipt": "Jeder Empfänger, der eine von Ihnen gesendete Gruppen- oder Statusnachricht erhält, liest oder abspielt (nur Baileys; nicht in * enthalten)",
       "message.failed": "Wenn eine ausgehende Nachricht nicht zugestellt werden kann",
       "message.revoked": "Wenn eine Nachricht für alle gelöscht wird",
       "message.reaction": "Wenn eine Reaktion hinzugefügt, geändert oder entfernt wird",

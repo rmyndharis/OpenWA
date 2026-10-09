@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add bounded webhook failure redrive with optional payload retention.
 - Expose caller-supplied send idempotency keys in all five SDKs.
 - Add optional 24-hour idempotency keys to twelve single-recipient send routes.
+- Add the opt-in `message.receipt` event for per-recipient group and status receipts on Baileys (#1748).
 
 - Add opt-in archive-only chat media with dashboard previews.
 

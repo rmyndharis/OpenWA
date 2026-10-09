@@ -208,6 +208,7 @@ describe('SessionService', () => {
       emitMessage: jest.fn(),
       emitMessageSent: jest.fn(),
       emitMessageAck: jest.fn(),
+      emitMessageReceipt: jest.fn(),
       emitMessageRevoked: jest.fn(),
       emitMessageReaction: jest.fn(),
       emitMessageEdited: jest.fn(),
@@ -5761,6 +5762,35 @@ describe('SessionService', () => {
       expect(socketPayload).toEqual(webhookPayload);
       expect(socketPayload).toMatchObject({ id: 'wa-out-1', messageId: 'wa-out-1', status: 'read' });
       expect(socketPayload.ack).toBeDefined();
+    });
+
+    it('forwards a per-recipient receipt as message.receipt, identically over the socket and the webhook', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      expect(typeof callbacks.onMessageReceipt).toBe('function');
+
+      callbacks.onMessageReceipt!({
+        messageId: 'wa-out-1',
+        chatId: '120363000000000001@g.us',
+        participant: '628222@c.us',
+        status: 'read',
+        timestamp: 1700000000,
+      });
+      await flush();
+
+      const receiptCalls = (eventsGateway.emitMessageReceipt as jest.Mock).mock.calls as unknown[][];
+      const socketPayload = receiptCalls[0][1] as Record<string, unknown>;
+      const webhookPayload = dispatchedEvents('message.receipt')[0][2] as Record<string, unknown>;
+      expect(socketPayload).toEqual(webhookPayload);
+      expect(socketPayload).toEqual({
+        id: 'wa-out-1',
+        messageId: 'wa-out-1',
+        chatId: '120363000000000001@g.us',
+        participant: '628222@c.us',
+        status: 'read',
+        timestamp: 1700000000,
+      });
+      // A receipt is not the message's own tick: it never advances the stored status or fires message.ack.
+      expect(dispatchedEvents('message.ack')).toHaveLength(0);
     });
 
     it("reflects delivery on the stored message: 'delivered' updates status to DELIVERED (#220)", async () => {

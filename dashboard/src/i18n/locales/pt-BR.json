@@ -524,6 +524,7 @@
       "message.received": "Quando uma mensagem é recebida",
       "message.sent": "Quando uma mensagem é enviada",
       "message.ack": "Quando o status de entrega ou leitura de uma mensagem muda",
+      "message.receipt": "Cada destinatário que recebe, lê ou reproduz uma mensagem de grupo ou status que você enviou (somente Baileys; não incluído em *)",
       "message.failed": "Quando a entrega de uma mensagem enviada falha",
       "message.revoked": "Quando uma mensagem é apagada para todos",
       "message.reaction": "Quando uma reação é adicionada, alterada ou removida",

@@ -14,6 +14,7 @@ const (
 	EventMessageReceived      WebhookEvent = "message.received"
 	EventMessageSent          WebhookEvent = "message.sent"
 	EventMessageAck           WebhookEvent = "message.ack"
+	EventMessageReceipt       WebhookEvent = "message.receipt"
 	EventMessageFailed        WebhookEvent = "message.failed"
 	EventMessageRevoked       WebhookEvent = "message.revoked"
 	EventMessageReaction      WebhookEvent = "message.reaction"

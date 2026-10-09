@@ -10,6 +10,7 @@ export const SUBSCRIBABLE_EVENTS = [
   'message.received',
   'message.sent',
   'message.ack',
+  'message.receipt',
   'message.revoked',
   'message.reaction',
   'message.edited',

@@ -6,6 +6,7 @@ export const availableEventNames = [
   'message.received',
   'message.sent',
   'message.ack',
+  'message.receipt',
   'message.failed',
   'message.revoked',
   'message.reaction',

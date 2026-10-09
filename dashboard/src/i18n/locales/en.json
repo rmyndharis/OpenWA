@@ -518,6 +518,7 @@
       "message.received": "When a message is received",
       "message.sent": "When a message is sent",
       "message.ack": "When a message's delivery or read status changes",
+      "message.receipt": "Each recipient receiving, reading or playing a group or status message you sent (Baileys only; not included in *)",
       "message.failed": "When an outgoing message fails to deliver",
       "message.revoked": "When a message is deleted for everyone",
       "message.reaction": "When a reaction is added, changed or removed",

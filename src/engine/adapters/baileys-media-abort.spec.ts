@@ -52,6 +52,7 @@ function build(dispatcher?: object): { events: BaileysEvents; warns: string[] } 
     getOnMessageEdited: () => undefined,
     getOnMessageReaction: () => undefined,
     getOnMessageAck: () => undefined,
+    getOnMessageReceipt: () => undefined,
     getOnGroupEvent: () => undefined,
     getOnCall: () => undefined,
     getOnPresenceUpdate: () => undefined,

@@ -920,6 +920,7 @@ export interface EngineEventCallbacks {
   onMessage?: (message: IncomingMessage) => void;
   onMessageCreate?: (message: IncomingMessage) => void; // outgoing (incl. linked-phone sends)
   onMessageAck?: (messageId: string, status: DeliveryStatus) => void;
+  onMessageReceipt?: (event: MessageReceiptEvent) => void; // per-recipient group/status receipts (Baileys only)
   onMessageRevoked?: (message: RevokedMessage) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;

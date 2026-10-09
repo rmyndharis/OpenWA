@@ -50,6 +50,10 @@ export function generateIdempotencyKey(event: string, data: Record<string, unkno
       // the legacy `ack` integer for backward compatibility with older payloads.
       return `ack_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}_${toStr(data.status ?? data.ack, '0')}`;
 
+    case 'message.receipt':
+      // One receipt per recipient and status: the participant keeps two members' `read` apart.
+      return `receipt_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}_${toStr(data.participant)}_${toStr(data.status)}`;
+
     case 'message.failed':
       return `failed_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}_${toStr(data.status ?? data.ack, '0')}`;
 

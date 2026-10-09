@@ -518,6 +518,7 @@
       "message.received": "Bir mesaj alındığında",
       "message.sent": "Bir mesaj gönderildiğinde",
       "message.ack": "Bir mesajın teslim veya okunma durumu değiştiğinde",
+      "message.receipt": "Gönderdiğiniz bir grup veya durum mesajını her alıcının alması, okuması ya da oynatması (yalnızca Baileys; * kapsamında değil)",
       "message.failed": "Giden bir mesaj teslim edilemediğinde",
       "message.revoked": "Bir mesaj herkesten silindiğinde",
       "message.reaction": "Bir tepki eklendiğinde, değiştirildiğinde veya kaldırıldığında",

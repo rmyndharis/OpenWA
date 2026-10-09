@@ -1416,6 +1416,7 @@ available_events:
   - message.received # New incoming message
   - message.sent # Message sent
   - message.ack # Message status update (sent, delivered, read)
+  - message.receipt # One recipient received/read/played a group or status message you sent (Baileys only; not included in "*", must be listed explicitly)
   - message.failed # Receipt resolved to failed
   - message.revoked # Message deleted
   - message.reaction # Reaction added, changed, or removed

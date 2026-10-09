@@ -4,6 +4,7 @@ import { withSafeFetch, redactSsrfError, isSsrfProtectionEnabled } from '../../.
 import { type LoggerService } from '../../../common/services/logger.service';
 import { WebhookDeliveryFailure } from '../entities/webhook-delivery-failure.entity';
 import { recordWebhookDeliveryFailure, statusCodeFromError } from './record-delivery-failure';
+import { subscriptionCoversEvent } from '../../../common/utils/wildcard-events';
 
 /**
  * Drop operator-supplied custom headers that target the names the system sets (Content-Type,
@@ -28,7 +29,7 @@ export function sanitizeCustomHeaders(custom: Record<string, string> | null | un
 
 /**
  * Whether a webhook row as read now may still receive `event`: it exists, is active and subscribes to
- * the event or to '*' (an events column that is not an array subscribes to nothing). Its filters are
+ * the event or to '*' (minus WILDCARD_EXCLUDED_EVENTS; an events column that is not an array subscribes to nothing). Its filters are
  * not re-applied here, since they need the event data. Every path that delivers after the dispatch
  * moment (a queued job, a direct retry, an outbox replay) runs this against a fresh row, so a removed,
  * disabled or unsubscribed webhook stops receiving the event.
@@ -37,7 +38,7 @@ export function isDeliverableWebhook<T extends { active: boolean; events: string
   row: T | null | undefined,
   event: string,
 ): row is T {
-  return !!row && row.active && Array.isArray(row.events) && (row.events.includes(event) || row.events.includes('*'));
+  return !!row && row.active && Array.isArray(row.events) && subscriptionCoversEvent(row.events, event);
 }
 
 /** HMAC-SHA256 over the exact pre-serialized body, prefixed for receiver-side verification. */

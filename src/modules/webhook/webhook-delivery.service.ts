@@ -26,6 +26,7 @@ import { redactSsrfError } from '../../common/security/ssrf-guard';
 import { HookManager } from '../../core/hooks';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { isWebhookBeforeResult } from '../../core/hooks/hook-results';
+import { subscriptionCoversEvent } from '../../common/utils/wildcard-events';
 
 export interface WebhookPayload {
   event: string;
@@ -298,9 +299,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     // other webhook of the session. A `filters` that is not a plain object, or a non-array `conditions`,
     // is refused explicitly: evaluateFilters reads either as "no filter", which would deliver every
     // subscribed event unfiltered.
-    const subscribed = webhooks.filter(
-      w => Array.isArray(w.events) && (w.events.includes(event) || w.events.includes('*')),
-    );
+    const subscribed = webhooks.filter(w => Array.isArray(w.events) && subscriptionCoversEvent(w.events, event));
     const matching = subscribed.filter(w => {
       try {
         const filters: unknown = w.filters;

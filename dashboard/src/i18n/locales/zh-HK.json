@@ -518,6 +518,7 @@
       "message.received": "收到訊息時",
       "message.sent": "傳送訊息時",
       "message.ack": "訊息的送達或已讀狀態變更時",
+      "message.receipt": "你傳送的群組或狀態訊息被每位接收者送達、閱讀或播放時（僅限 Baileys；不包含在 * 中）",
       "message.failed": "發出的訊息傳送失敗時",
       "message.revoked": "訊息被收回時",
       "message.reaction": "新增、變更或移除回應時",

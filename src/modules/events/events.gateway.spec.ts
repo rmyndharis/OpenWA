@@ -827,6 +827,32 @@ describe('EventsGateway session.qr role gate', () => {
     expect(sock.rooms.has(QR_DENIED_ROOM)).toBe(true);
     expect(qrEvents(sock)).toEqual([]);
   });
+
+  it('delivers message.receipt only to sockets that named it, never through a wildcard', async () => {
+    const wildcard = await connect('operator');
+    await subscribe(wildcard, '*', ['*']);
+    const sessionWildcard = await connect('operator');
+    await subscribe(sessionWildcard, 'sess-1', ['*']);
+    const named = await connect('operator');
+    await subscribe(named, 'sess-1', ['message.receipt']);
+    const namedAllSessions = await connect('operator');
+    await subscribe(namedAllSessions, '*', ['message.receipt']);
+
+    gateway.emitMessageReceipt('sess-1', {
+      id: 'OUT1',
+      messageId: 'OUT1',
+      chatId: '120363000000000001@g.us',
+      participant: '628222@c.us',
+      status: 'read',
+      timestamp: 1700000000,
+    });
+
+    const events = (s: RoomSocket): string[] => s.received.map(m => m.payload.event);
+    expect(events(wildcard)).toEqual([]);
+    expect(events(sessionWildcard)).toEqual([]);
+    expect(events(named)).toEqual(['message.receipt']);
+    expect(events(namedAllSessions)).toEqual(['message.receipt']);
+  });
 });
 
 describe('event catalog ⇔ emitter invariants (drift guard)', () => {

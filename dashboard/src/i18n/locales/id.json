@@ -518,6 +518,7 @@
       "message.received": "Saat pesan diterima",
       "message.sent": "Saat pesan dikirim",
       "message.ack": "Saat status pengiriman atau status baca pesan berubah",
+      "message.receipt": "Setiap penerima yang menerima, membaca, atau memutar pesan grup atau status yang Anda kirim (hanya Baileys; tidak termasuk dalam *)",
       "message.failed": "Saat pesan keluar gagal terkirim",
       "message.revoked": "Saat pesan dihapus untuk semua orang",
       "message.reaction": "Saat reaksi ditambahkan, diubah atau dihapus",

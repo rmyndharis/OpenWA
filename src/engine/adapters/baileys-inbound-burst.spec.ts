@@ -61,6 +61,7 @@ describe('BaileysEvents inbound media burst', () => {
       getOnMessageEdited: () => undefined,
       getOnMessageReaction: () => undefined,
       getOnMessageAck: () => undefined,
+      getOnMessageReceipt: () => undefined,
       getOnGroupEvent: () => undefined,
       getOnCall: () => undefined,
       getOnPresenceUpdate: () => undefined,

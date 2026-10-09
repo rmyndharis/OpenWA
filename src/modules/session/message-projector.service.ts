@@ -22,6 +22,7 @@ import type { StatusUpdate } from '../status-store/entities/status-update.entity
 import {
   IWhatsAppEngine,
   DeliveryStatus,
+  MessageReceiptEvent,
   IncomingMessage,
   ReactionEvent,
   EditedMessage,
@@ -849,6 +850,26 @@ export class MessageProjector {
       { messageId, status, ack: deliveryStatusToAck(status) },
       { sessionId: id, source: 'Engine' },
     );
+  }
+
+  /**
+   * Engine callback body for one recipient's receipt (Baileys group and status messages). Nothing is
+   * stored: the event is forwarded as is, over the socket and the webhook with the same shape. `id`
+   * mirrors the other message.* events (and is what the idempotency-key resolver reads); `chatId` lets
+   * webhook chatId filters scope it.
+   */
+  handleMessageReceipt(id: string, engine: IWhatsAppEngine, event: MessageReceiptEvent): void {
+    if (!this.engines.isLive(id, engine)) return;
+    const payload = {
+      id: event.messageId,
+      messageId: event.messageId,
+      chatId: event.chatId,
+      participant: event.participant,
+      status: event.status,
+      timestamp: event.timestamp,
+    };
+    this.eventsGateway.emitMessageReceipt(id, payload);
+    void this.webhookService.dispatch(id, 'message.receipt', payload);
   }
 
   /**

@@ -78,6 +78,7 @@ Start workflows when WhatsApp events occur.
 | `message.received`                                | New incoming message                          | Auto-reply, lead capture                     |
 | `message.sent`                                    | Message sent successfully                     | Delivery confirmation                        |
 | `message.ack`                                     | Delivery/read status advanced                 | Read receipts                                |
+| `message.receipt`                                 | Per-recipient group/status receipt (Baileys)  | Per-member read tracking                     |
 | `message.failed`                                  | Outgoing message failed                       | Failure alerting                             |
 | `message.revoked`                                 | Message deleted for everyone                  | Deletion tracking                            |
 | `message.reaction`                                | Reaction added / changed / removed            | Reaction tracking                            |

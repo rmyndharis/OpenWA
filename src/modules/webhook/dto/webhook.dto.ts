@@ -80,6 +80,7 @@ export const WEBHOOK_EVENTS = [
   'message.received',
   'message.sent',
   'message.ack',
+  'message.receipt',
   'message.failed',
   'message.revoked',
   'message.reaction',
@@ -121,7 +122,8 @@ export class CreateWebhookDto {
   url!: string;
 
   @ApiPropertyOptional({
-    description: "Event types to subscribe to. '*' subscribes to all events.",
+    description:
+      "Event types to subscribe to. '*' subscribes to all events except `message.receipt`, which must be named explicitly.",
     example: ['message.received', 'session.status'],
     enum: [...WEBHOOK_EVENTS, '*'],
     type: String,
@@ -209,7 +211,8 @@ export class UpdateWebhookDto {
   url?: string;
 
   @ApiPropertyOptional({
-    description: "Event types to subscribe to. '*' subscribes to all events.",
+    description:
+      "Event types to subscribe to. '*' subscribes to all events except `message.receipt`, which must be named explicitly.",
     enum: [...WEBHOOK_EVENTS, '*'],
     type: String,
     isArray: true,

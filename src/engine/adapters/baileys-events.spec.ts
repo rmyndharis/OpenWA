@@ -3,6 +3,7 @@ import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { inboundMediaConcurrency } from './inbound-media-cap';
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
+import type { MessageReceiptEvent } from '../interfaces/whatsapp-engine.interface';
 
 /**
  * `downloadMediaMessage` is a jest mock, not a silent no-op: the real-download branch
@@ -117,6 +118,7 @@ function makeHost(overrides: Partial<BaileysEventsHost> = {}): BaileysEventsHost
     getOnMessageEdited: () => undefined,
     getOnMessageReaction: () => undefined,
     getOnMessageAck: () => undefined,
+    getOnMessageReceipt: () => undefined,
     getOnGroupEvent: () => undefined,
     getOnCall: () => undefined,
     getOnPresenceUpdate: () => undefined,
@@ -628,5 +630,83 @@ describe('BaileysEvents record of messages deleted for everyone', () => {
     expect(events.wasDeletedForEveryone('M0')).toBe(false);
     expect(events.wasDeletedForEveryone('M1')).toBe(true);
     expect(events.wasDeletedForEveryone(`M${limit}`)).toBe(true);
+  });
+});
+
+describe('BaileysEvents.handleMessageReceiptUpdate', () => {
+  const group = '120363000000000001@g.us';
+  const member = '6281111111111@s.whatsapp.net';
+
+  function setup(overrides: Partial<BaileysEventsHost> = {}) {
+    const onMessageReceipt = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnMessageReceipt: () => onMessageReceipt, ...overrides }));
+    return { events, onMessageReceipt };
+  }
+
+  it('reports one event per recipient receipt of a message the account sent', () => {
+    const { events, onMessageReceipt } = setup();
+    events.handleMessageReceiptUpdate([
+      {
+        key: { id: 'OUT1', remoteJid: group, fromMe: true },
+        receipt: { userJid: member, receiptTimestamp: 1700000000 },
+      },
+      { key: { id: 'OUT1', remoteJid: group, fromMe: true }, receipt: { userJid: member, readTimestamp: 1700000060 } },
+    ]);
+    expect(onMessageReceipt.mock.calls).toEqual([
+      [{ messageId: 'OUT1', chatId: group, participant: member, status: 'delivered', timestamp: 1700000000 }],
+      [{ messageId: 'OUT1', chatId: group, participant: member, status: 'read', timestamp: 1700000060 }],
+    ]);
+  });
+
+  it('splits a buffered entry that carries several timestamps into one event per status', () => {
+    const { events, onMessageReceipt } = setup();
+    events.handleMessageReceiptUpdate([
+      {
+        key: { id: 'OUT1', remoteJid: group, fromMe: true },
+        receipt: { userJid: member, receiptTimestamp: 1, readTimestamp: 2, playedTimestamp: 3 },
+      },
+    ]);
+    const calls = onMessageReceipt.mock.calls as Array<[MessageReceiptEvent]>;
+    expect(calls.map(([e]) => [e.status, e.timestamp])).toEqual([
+      ['delivered', 1],
+      ['read', 2],
+      ['played', 3],
+    ]);
+  });
+
+  it("drops receipts from the account's own devices, in either dialect", () => {
+    const { events, onMessageReceipt } = setup({
+      getSocketOrNull: () =>
+        ({ user: { id: '6280000000000:3@s.whatsapp.net', lid: '99999@lid' } }) as unknown as WASocket,
+    });
+    events.handleMessageReceiptUpdate([
+      {
+        key: { id: 'OUT1', remoteJid: group, fromMe: true },
+        receipt: { userJid: '6280000000000@s.whatsapp.net', readTimestamp: 1 },
+      },
+      { key: { id: 'OUT1', remoteJid: group, fromMe: true }, receipt: { userJid: '99999@lid', readTimestamp: 1 } },
+    ]);
+    expect(onMessageReceipt).not.toHaveBeenCalled();
+  });
+
+  it('ignores receipts for messages the account did not send, and malformed entries', () => {
+    const { events, onMessageReceipt } = setup();
+    events.handleMessageReceiptUpdate([
+      { key: { id: 'IN1', remoteJid: group, fromMe: false }, receipt: { userJid: member, readTimestamp: 1 } },
+      { key: { remoteJid: group, fromMe: true }, receipt: { userJid: member, readTimestamp: 1 } },
+      { key: { id: 'OUT1', remoteJid: group, fromMe: true }, receipt: { readTimestamp: 1 } },
+      { key: { id: 'OUT1', remoteJid: group, fromMe: true }, receipt: { userJid: member } },
+    ]);
+    expect(onMessageReceipt).not.toHaveBeenCalled();
+  });
+
+  it('neutralises the chat and participant ids', () => {
+    const { events, onMessageReceipt } = setup({ toNeutralJid: (jid: string) => `n:${jid}` });
+    events.handleMessageReceiptUpdate([
+      { key: { id: 'OUT1', remoteJid: group, fromMe: true }, receipt: { userJid: '55555@lid', readTimestamp: 1 } },
+    ]);
+    expect(onMessageReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: `n:${group}`, participant: 'n:55555@lid' }),
+    );
   });
 });

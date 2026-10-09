@@ -1016,6 +1016,15 @@ describe('WebhookDeliveryService', () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
+    it('should NOT dispatch message.receipt to a wildcard (*) webhook, which must name it', async () => {
+      const webhook = createMockWebhook({ events: ['*'] });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+
+      await service.dispatch('sess-1', 'message.receipt', { id: 'OUT1', participant: '628222@c.us', status: 'read' });
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     it('should skip dispatch when plugin cancels via hook', async () => {
       const webhook = createMockWebhook({ events: ['message.received'] });
       (repository.find as jest.Mock).mockResolvedValue([webhook]);

@@ -518,6 +518,7 @@
       "message.received": "메시지를 받았을 때",
       "message.sent": "메시지를 보냈을 때",
       "message.ack": "메시지의 전달 또는 읽음 상태가 바뀌었을 때",
+      "message.receipt": "보낸 그룹 또는 상태 메시지를 각 수신자가 받거나 읽거나 재생했을 때 (Baileys 전용, *에 포함되지 않음)",
       "message.failed": "보낸 메시지의 전달이 실패했을 때",
       "message.revoked": "메시지가 모두에게서 삭제되었을 때",
       "message.reaction": "반응이 추가, 변경 또는 삭제되었을 때",

@@ -7,6 +7,21 @@ describe('Idempotency Utils', () => {
       expect(key).toBe('msg_A_ABC123');
     });
 
+    it('keys message.receipt by recipient and status, so two members reading the same message stay distinct', () => {
+      const read = (participant: string): string =>
+        generateIdempotencyKey('message.receipt', { id: 'ABC123', participant, status: 'read', sessionId: 'A' });
+      expect(read('628111@c.us')).toBe('receipt_A_ABC123_628111@c.us_read');
+      expect(read('628222@c.us')).not.toBe(read('628111@c.us'));
+      expect(
+        generateIdempotencyKey('message.receipt', {
+          id: 'ABC123',
+          participant: '628111@c.us',
+          status: 'delivered',
+          sessionId: 'A',
+        }),
+      ).not.toBe(read('628111@c.us'));
+    });
+
     it('falls back to the legacy `ack` integer for message.ack when no `status` is present', () => {
       const key = generateIdempotencyKey('message.ack', { messageId: 'ABC123', ack: 3, sessionId: 'A' });
       expect(key).toBe('ack_A_ABC123_3');
