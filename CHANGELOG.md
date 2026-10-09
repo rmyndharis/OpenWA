@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The JavaScript SDK CommonJS build no longer sets `moduleResolution` node10, which TypeScript 7 removed; the built output is unchanged.
 - The JavaScript SDK smoke check sends requests through both built clients, so the Node 18 CI lane covers the request path.
 - Retire the whatsapp-web.js download-mimetype install patch; inbound media downloads now pass the mimetype themselves.
 - CI and the weekly security scan run `npm audit` over the JavaScript SDK, and Dependabot watches its lockfile.
