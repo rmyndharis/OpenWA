@@ -1,15 +1,21 @@
 package com.rmyndharis.openwa.http;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rmyndharis.openwa.ClientConfig;
 import com.rmyndharis.openwa.OpenWAClient;
 import com.rmyndharis.openwa.errors.OpenWAApiError;
 import com.rmyndharis.openwa.errors.OpenWATimeoutError;
 import com.sun.net.httpserver.HttpServer;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.time.temporal.ChronoUnit;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -83,13 +89,18 @@ class DefaultHttpTransportTest {
     }
 
     @Test
-    void mapsABodyStallToOpenWATimeoutError() {
+    void mapsABodyStallToOpenWATimeoutErrorAndDropsTheConnection() throws Exception {
+        CountDownLatch clientClosed = new CountDownLatch(1);
         server.createContext("/stall", ex -> {
             try {
-                ex.sendResponseHeaders(200, 2);
-                ex.getResponseBody().write('{');
-                ex.getResponseBody().flush();
-                release.await(10, TimeUnit.SECONDS);
+                // A body that never ends: keeps writing until the client hangs up.
+                ex.sendResponseHeaders(200, 0);
+                while (!release.await(20, TimeUnit.MILLISECONDS)) {
+                    ex.getResponseBody().write(' ');
+                    ex.getResponseBody().flush();
+                }
+            } catch (IOException e) {
+                clientClosed.countDown();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } finally {
@@ -99,5 +110,42 @@ class DefaultHttpTransportTest {
 
         assertThrows(OpenWATimeoutError.class,
             () -> client(Duration.ofMillis(100)).requestVoid(HttpMethod.GET, "/stall", null, null));
+        assertTrue(clientClosed.await(5, TimeUnit.SECONDS), "the timed-out exchange was not cancelled");
+    }
+
+    @Test
+    void reportsAFailedExchangeAsAnIOException() {
+        AtomicInteger hits = new AtomicInteger();
+        server.createContext("/ok", ex -> {
+            hits.incrementAndGet();
+            ex.sendResponseHeaders(204, -1);
+            ex.close();
+        });
+        // HttpClient fails this exchange with an ArithmeticException; it must not escape as one.
+        HttpRequestData req = new HttpRequestData(
+            HttpMethod.GET, baseUrl + "/ok", Map.of(), null, ChronoUnit.FOREVER.getDuration());
+
+        IOException err = assertThrows(IOException.class, () -> new DefaultHttpTransport().send(req));
+
+        assertInstanceOf(ArithmeticException.class, err.getCause());
+        assertEquals(0, hits.get());
+    }
+
+    @Test
+    void passesThroughOnlyTheFailuresHttpClientSendDoes() {
+        IOException io = new IOException("reset");
+        assertSame(io, DefaultHttpTransport.transportFailure(io));
+
+        IllegalArgumentException bad = new IllegalArgumentException("bad header");
+        assertSame(bad, assertThrows(IllegalArgumentException.class, () -> DefaultHttpTransport.transportFailure(bad)));
+        SecurityException denied = new SecurityException("denied");
+        assertSame(denied, assertThrows(SecurityException.class, () -> DefaultHttpTransport.transportFailure(denied)));
+
+        IllegalStateException closed = new IllegalStateException("selector manager closed");
+        IOException wrapped = DefaultHttpTransport.transportFailure(closed);
+        assertSame(closed, wrapped.getCause());
+        assertEquals("selector manager closed", wrapped.getMessage());
+        AssertionError fatal = new AssertionError("boom");
+        assertSame(fatal, DefaultHttpTransport.transportFailure(fatal).getCause());
     }
 }
