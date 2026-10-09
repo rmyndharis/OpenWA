@@ -218,6 +218,11 @@ export class BaileysLifecycle {
     });
   }
 
+  /** The module once {@link loadLib} has loaded it, which happens before any socket exists. */
+  get loadedLib(): typeof BaileysLib | undefined {
+    return this.lib;
+  }
+
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
   async loadLib(): Promise<typeof BaileysLib> {
     return (this.lib ??= await import('@whiskeysockets/baileys'));

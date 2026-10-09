@@ -1,5 +1,6 @@
-import { type Client, MessageTypes } from 'whatsapp-web.js';
+import { type Client, type Message, MessageTypes } from 'whatsapp-web.js';
 import {
+  type InboundTicket,
   type IncomingMessage,
   type RevokedMessage,
   type ReactionEvent,
@@ -7,7 +8,8 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { type SerializedWid } from '../types/whatsapp-web-js.types';
 import { buildEditedMessage, buildIncomingMessageBase, mapContactFields } from './message-mapper';
-import { extractWwebjsCall, wwebjsAckToDeliveryStatus } from './wwebjs-messaging';
+import { extractWwebjsCall, plannedInboundDownload, wwebjsAckToDeliveryStatus } from './wwebjs-messaging';
+import { admitInboundSafely, inboundMediaTimeoutMs, withInboundDownloadTimeout } from './inbound-media-cap';
 import { type WwebjsEngineHost } from './wwebjs-host';
 
 /**
@@ -18,73 +20,42 @@ import { type WwebjsEngineHost } from './wwebjs-host';
  * latches this file never touches.
  */
 export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHost): void {
-  // eslint-disable-next-line @typescript-eslint/no-misused-promises
-  client.on('message', async msg => {
+  // Where the session holds a message until its row is written (PostgreSQL), each arrival is admitted
+  // synchronously, before anything awaits, so its chat's order and its room follow arrival. The
+  // ticket keeps the room until the processing settles, and is dropped when nothing was emitted.
+  const admit = (msg: Message, base: IncomingMessage, mayDownload: boolean): InboundTicket | undefined =>
+    admitInboundSafely(
+      () =>
+        host.getCallbacks().admitInbound?.({
+          id: base.id,
+          chatId: base.chatId,
+          status: Boolean(base.isStatusBroadcast),
+          needsRoom: mayDownload && plannedInboundDownload(msg),
+        }),
+      error =>
+        host.logger.error(
+          `Could not admit inbound message ${base.id}; processing it without room for media`,
+          String(error),
+        ),
+    );
+  const holdWhileProcessing = (ticket: InboundTicket | undefined, done: Promise<void>): void => {
+    ticket?.holdUntil(done);
+    void done.then(
+      () => ticket?.drop(),
+      () => ticket?.drop(),
+    );
+  };
+
+  client.on('message', msg => {
+    let base: IncomingMessage;
     try {
-      const incomingMessage: IncomingMessage = buildIncomingMessageBase(msg);
-
-      // Attach the sender's contact info. getContact() gives the real sender (author in groups, from
-      // in 1:1); we read only its synchronous fields and never the async getters (profile pic, about),
-      // which would hit WhatsApp on every message.
-      try {
-        const contact = await msg.getContact();
-        if (contact) {
-          // Off by default the payload keeps { name, pushName }; WEBHOOK_CONTACT_DETAILS opts into the
-          // full set. Merge over the base so the notifyName pushName isn't lost, and skip an empty
-          // result so we don't emit an empty contact object.
-          const full = process.env.WEBHOOK_CONTACT_DETAILS === 'true';
-          const merged = { ...incomingMessage.contact, ...mapContactFields(contact, full) };
-          if (Object.keys(merged).length > 0) {
-            incomingMessage.contact = merged;
-          }
-        }
-      } catch (error) {
-        host.logger.error('Error getting message contact', String(error));
-      }
-
-      // Handle location
-      if (msg.type === MessageTypes.LOCATION && msg.location) {
-        incomingMessage.location = {
-          latitude: Number(msg.location.latitude),
-          longitude: Number(msg.location.longitude),
-          description: msg.location.description || undefined,
-          address: msg.location.address || undefined,
-          url: msg.location.url || undefined,
-        };
-      }
-
-      // Handle media
-      if (msg.hasMedia) {
-        try {
-          const capped = await host.capInboundMediaFor(msg);
-          if (capped) incomingMessage.media = capped;
-        } catch (error) {
-          host.logger.error('Error downloading media', String(error));
-        }
-      }
-
-      // Handle quoted message
-      if (msg.hasQuotedMsg) {
-        try {
-          const quoted = await msg.getQuotedMessage();
-          incomingMessage.quotedMessage = {
-            id: quoted.id._serialized,
-            body: quoted.body,
-          };
-        } catch (error) {
-          host.logger.error('Error getting quoted message', String(error));
-        }
-      }
-
-      // Surface call-log detail on the live path too (getChatHistory already does this), so a missed/
-      // video incoming call renders a labeled bubble instead of a generic "Call".
-      const call = extractWwebjsCall(msg);
-      if (call) incomingMessage.call = call;
-
-      host.getCallbacks().onMessage?.(incomingMessage);
+      base = buildIncomingMessageBase(msg);
     } catch (error) {
       host.logger.error('Error processing incoming message', String(error));
+      return;
     }
+    const ticket = admit(msg, base, true);
+    holdWhileProcessing(ticket, handleIncoming(host, msg, base, ticket));
   });
 
   client.on('message_create', msg => {
@@ -96,15 +67,18 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       return;
     }
 
-    void (async () => {
+    let ticket: InboundTicket | undefined;
+    const done = (async () => {
       const incomingMessage = buildIncomingMessageBase(msg);
+      // Synchronous, as the first await comes after it.
+      ticket = admit(msg, incomingMessage, !incomingMessage.isStatusBroadcast);
       // Enrich with the media payload through the same capped path the incoming handler uses —
       // the base builder is sync and carries none, so a phone-sent image would otherwise persist
       // and render as a bare 📎 marker even though the media is downloadable right here. Not for an own
       // status post: the echo consumer drops those, so the download would only hold a limiter slot.
       if (msg.hasMedia && !incomingMessage.isStatusBroadcast) {
         try {
-          incomingMessage.media = await host.capInboundMediaFor(msg);
+          incomingMessage.media = await host.capInboundMediaFor(msg, undefined, ticket);
         } catch (error) {
           host.logger.warn('Own-send media download failed; emitting echo without media', {
             msgId: msg.id?._serialized,
@@ -113,11 +87,14 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
         }
       }
       try {
-        host.getCallbacks().onMessageCreate?.(incomingMessage);
+        // The ticket goes along only where one was issued, so elsewhere the call is unchanged.
+        if (ticket) host.getCallbacks().onMessageCreate?.(incomingMessage, ticket);
+        else host.getCallbacks().onMessageCreate?.(incomingMessage);
       } catch (error) {
         host.logger.error('Error processing outgoing message', String(error));
       }
     })();
+    holdWhileProcessing(ticket, done);
   });
 
   client.on('message_ack', (msg, ack) => {
@@ -226,4 +203,92 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       host.logger.error('Error processing message_edit', String(error));
     }
   });
+}
+
+/**
+ * The `message` event body: enrich the incoming message (contact, location, media, quote, call) and
+ * emit it with its ticket. Never rejects.
+ */
+async function handleIncoming(
+  host: WwebjsEngineHost,
+  msg: Message,
+  incomingMessage: IncomingMessage,
+  ticket: InboundTicket | undefined,
+): Promise<void> {
+  // A held message (a ticket) keeps every later message of its chat waiting until it is emitted, so its
+  // page lookups get the download deadline instead of Puppeteer's protocol timeout, and go without.
+  const lookup = <T>(what: string, call: Promise<T>): Promise<T | null> =>
+    ticket
+      ? withInboundDownloadTimeout(call, inboundMediaTimeoutMs(), () =>
+          host.logger.warn(`Getting the ${what} passed MEDIA_DOWNLOAD_TIMEOUT_MS; emitting without it`, {
+            msgId: incomingMessage.id,
+          }),
+        )
+      : call;
+  try {
+    // Attach the sender's contact info. getContact() gives the real sender (author in groups, from
+    // in 1:1); we read only its synchronous fields and never the async getters (profile pic, about),
+    // which would hit WhatsApp on every message.
+    try {
+      const contact = await lookup('message contact', msg.getContact());
+      if (contact) {
+        // Off by default the payload keeps { name, pushName }; WEBHOOK_CONTACT_DETAILS opts into the
+        // full set. Merge over the base so the notifyName pushName isn't lost, and skip an empty
+        // result so we don't emit an empty contact object.
+        const full = process.env.WEBHOOK_CONTACT_DETAILS === 'true';
+        const merged = { ...incomingMessage.contact, ...mapContactFields(contact, full) };
+        if (Object.keys(merged).length > 0) {
+          incomingMessage.contact = merged;
+        }
+      }
+    } catch (error) {
+      host.logger.error('Error getting message contact', String(error));
+    }
+
+    // Handle location
+    if (msg.type === MessageTypes.LOCATION && msg.location) {
+      incomingMessage.location = {
+        latitude: Number(msg.location.latitude),
+        longitude: Number(msg.location.longitude),
+        description: msg.location.description || undefined,
+        address: msg.location.address || undefined,
+        url: msg.location.url || undefined,
+      };
+    }
+
+    // Handle media
+    if (msg.hasMedia) {
+      try {
+        const capped = await host.capInboundMediaFor(msg, undefined, ticket);
+        if (capped) incomingMessage.media = capped;
+      } catch (error) {
+        host.logger.error('Error downloading media', String(error));
+      }
+    }
+
+    // Handle quoted message
+    if (msg.hasQuotedMsg) {
+      try {
+        const quoted = await lookup('quoted message', msg.getQuotedMessage());
+        if (quoted) {
+          incomingMessage.quotedMessage = {
+            id: quoted.id._serialized,
+            body: quoted.body,
+          };
+        }
+      } catch (error) {
+        host.logger.error('Error getting quoted message', String(error));
+      }
+    }
+
+    // Surface call-log detail on the live path too (getChatHistory already does this), so a missed/
+    // video incoming call renders a labeled bubble instead of a generic "Call".
+    const call = extractWwebjsCall(msg);
+    if (call) incomingMessage.call = call;
+
+    if (ticket) host.getCallbacks().onMessage?.(incomingMessage, ticket);
+    else host.getCallbacks().onMessage?.(incomingMessage);
+  } catch (error) {
+    host.logger.error('Error processing incoming message', String(error));
+  }
 }

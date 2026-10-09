@@ -207,4 +207,48 @@ describe('EngineRegistry', () => {
       expect(registry.activeIds().sort()).toEqual(['running', 'starting']);
     });
   });
+
+  describe('onRetire', () => {
+    // The projector releases what a retired engine's messages hold from here, so every path that
+    // ends an engine's life must report it, and only those.
+    const retired = (): Array<[string, unknown]> => {
+      const seen: Array<[string, unknown]> = [];
+      registry.onRetire((id, engine) => seen.push([id, (engine as unknown as { tag: string }).tag]));
+      return seen;
+    };
+
+    it('fires for delete, deleteIfLive and clear, after the map changed', () => {
+      const seen = retired();
+      let liveDuringListener: boolean | undefined;
+      const a = engineStub('a');
+      registry.set('s1', a);
+      registry.onRetire(id => (liveDuringListener = registry.has(id)));
+      registry.delete('s1');
+      registry.set('s2', engineStub('b'));
+      registry.deleteIfLive('s2', engineStub('stale'));
+      registry.deleteIfLive('s2', registry.get('s2')!);
+      registry.set('s3', engineStub('c'));
+      registry.set('s4', engineStub('d'));
+      registry.clear();
+      registry.delete('missing');
+
+      expect(seen).toEqual([
+        ['s1', 'a'],
+        ['s2', 'b'],
+        ['s3', 'c'],
+        ['s4', 'd'],
+      ]);
+      expect(liveDuringListener).toBe(false);
+    });
+
+    it('fires for a set that replaces a different engine, not for one that re-registers the same', () => {
+      const seen = retired();
+      const first = engineStub('first');
+      registry.set('s1', first);
+      registry.set('s1', first);
+      registry.set('s1', engineStub('second'));
+
+      expect(seen).toEqual([['s1', 'first']]);
+    });
+  });
 });

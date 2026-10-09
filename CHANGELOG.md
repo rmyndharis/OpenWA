@@ -25,10 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Retire the whatsapp-web.js download-mimetype install patch; inbound media downloads now pass the mimetype themselves.
 - CI and the weekly security scan run `npm audit` over the JavaScript SDK, and Dependabot watches its lockfile.
+- On PostgreSQL, inbound media that waits `2 x MEDIA_DOWNLOAD_TIMEOUT_MS` without a free slot arrives with the omitted marker instead of being downloaded.
+- On PostgreSQL, a chat's messages are stored in arrival order, so a text waits for earlier media in its chat.
+- On PostgreSQL with whatsapp-web.js, a held message's contact and quoted-message lookups wait at most `MEDIA_DOWNLOAD_TIMEOUT_MS`.
 
 ### Fixed
 
 - Drop whatsapp-web.js inbound media over `MEDIA_DOWNLOAD_MAX_BYTES` in the page when the sender understates its size.
+- Bound the inbound media a PostgreSQL session holds before storing it to `INBOUND_MEDIA_CONCURRENCY` payloads, keeping each chat's arrival order.
+- Drop a Baileys edit, revoke or reaction from another chat, or an edit or revoke from the wrong author, aimed at a message still being downloaded, on SQLite too.
 - Probe the configured `PORT` in the Docker image healthcheck instead of a fixed 2785.
 - Cap the total bytes one storage import writes at `STORAGE_IMPORT_MAX_TOTAL_BYTES`.
 - Close the Baileys session proxy's fetch dispatcher when the session disconnects, logs out or is destroyed.

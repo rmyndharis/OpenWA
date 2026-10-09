@@ -8,6 +8,7 @@ import {
   MessageResult,
   MediaInput,
   IncomingMessage,
+  InboundTicket,
   Contact,
   Group,
   GroupInfo,
@@ -44,7 +45,13 @@ import { ChannelMediaNotSupportedError } from '../../common/errors/channel-media
 import { WwebjsGroups } from './wwebjs-groups';
 import { type WwebjsEngineHost } from './wwebjs-host';
 import { registerWwebjsMessageEvents } from './wwebjs-message-events';
-import { WwebjsMessaging, declaredOnlyMedia, downloadCappedMedia, type PageMediaDownload } from './wwebjs-messaging';
+import {
+  WwebjsMessaging,
+  declaredMediaSize,
+  declaredOnlyMedia,
+  downloadCappedMedia,
+  type PageMediaDownload,
+} from './wwebjs-messaging';
 import { WwebjsContacts } from './wwebjs-contacts';
 import { WwebjsProfile } from './wwebjs-profile';
 import { WwebjsLabels } from './wwebjs-labels';
@@ -60,7 +67,6 @@ import { WwebjsStuckAuth } from './wwebjs-stuck-auth';
 import { WwebjsCalls } from './wwebjs-calls';
 import {
   capInboundMedia,
-  coerceDeclaredSize,
   inboundMediaConcurrency,
   inboundMediaMaxBytes,
   inboundMediaTimeoutMs,
@@ -214,7 +220,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       reportIfPageTransportError: (error, context) => this.reportIfPageTransportError(error, context),
       ensureNotChannelRecipient: chatId => this.ensureNotChannelRecipient(chatId),
       getNumberId: number => this.getNumberId(number),
-      capInboundMediaFor: (msg, maxBytesOverride) => this.capInboundMediaFor(msg, maxBytesOverride),
+      capInboundMediaFor: (msg, maxBytesOverride, ticket) => this.capInboundMediaFor(msg, maxBytesOverride, ticket),
       config: this.config,
       getCallbacks: () => this.callbacks,
     };
@@ -285,10 +291,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
    * (2) let the page drop a decrypted payload over the cap before encoding it (downloadMediaInPage),
    * and (3) run the download through the concurrency limiter for backpressure. Resolves an envelope
    * whenever it has one to build: the payload, or the declared-only marker when no blob is available.
+   * With a ticket (PostgreSQL), the download waits for a slot of the session's room first, and that
+   * slot is held until the page download settles, since it cannot be aborted.
    */
   private async capInboundMediaFor(
     msg: Message,
     maxBytesOverride?: number,
+    ticket?: InboundTicket,
   ): Promise<IncomingMessage['media'] | undefined> {
     if (!isMediaDownloadEnabled()) {
       return declaredOnlyMedia(msg);
@@ -300,8 +309,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // An override (the status seed's STATUS_MEDIA_MAX_BYTES) only tightens the global cap: a larger one
     // would let a download the cap below always drops run anyway, past the memory guard it exists for.
     const maxBytes = Math.min(maxBytesOverride ?? Number.POSITIVE_INFINITY, inboundMediaMaxBytes());
-    const data = (msg as unknown as { _data?: { size?: number; mimetype?: string; filename?: string } })._data;
-    const declared = coerceDeclaredSize(data?.size);
+    const declared = declaredMediaSize(msg);
     if (declared > maxBytes) {
       this.logger.warn('Inbound media declared size exceeds the cap; skipped download', {
         msgId,
@@ -309,6 +317,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         maxBytes,
       });
       return declaredOnlyMedia(msg);
+    }
+    if (ticket) {
+      const granted = ticket.reserve();
+      if (!(granted === true || (granted !== false && (await granted)))) {
+        this.logger.warn('No room for inbound media within the wait; emitting the omitted marker', { msgId });
+        return declaredOnlyMedia(msg);
+      }
     }
     // The page download can't be aborted, so freeing the slot the moment the wall-clock deadline fires
     // would admit a fresh download while the abandoned one is still materialising in heap — letting the
@@ -362,6 +377,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // Per-session slot first, then the process-wide one, so a session parks at most its own
     // INBOUND_MEDIA_CONCURRENCY waiters on the shared gate. Both are held until the download settles.
     const slotHeld = this.inboundLimiter.run(() => runUnderGlobalMediaGate(downloadInSlot));
+    // The payload can reach Node after the wait below gave up on it: keep the room until it settles.
+    ticket?.holdUntil(slotHeld);
     // Defensive only, and deliberately kept. `run()` rejects on a full queue (gone — the queue is
     // unbounded) or on close(), which nothing calls on this limiter; the task itself swallows both
     // download outcomes. So nothing is expected here — but an unhandled rejection from a

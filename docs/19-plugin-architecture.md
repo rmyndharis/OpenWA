@@ -526,8 +526,11 @@ The gateway still stores and emits each chat's messages in arrival order: the `m
 `message:sent` chains run concurrently, but the row insert, the websocket event, `message:persisted` and
 the start of webhook dispatch wait for every earlier message of the same chat. A slow handler therefore
 delays that chat's later messages, by at most its 5 s hook timeout (`SANDBOX_HOOK_TIMEOUT_MS`) for a
-sandboxed plugin. Webhook dispatch itself is not ordered: its queue jobs and HTTP deliveries run
-concurrently, so a receiver that needs order should sort by the message's `data.timestamp`. That value is
+sandboxed plugin. On PostgreSQL a chat's `message:received` and `message:sent` chains also start in
+arrival order, and a handler registered in-process that never settles holds the media slots of its message
+too, so once `INBOUND_MEDIA_CONCURRENCY` slots are stuck the session's media arrives with the omitted
+marker (see [12 - Troubleshooting & FAQ](./12-troubleshooting-faq.md)). Webhook dispatch itself is not ordered: its queue jobs and
+HTTP deliveries run concurrently, so a receiver that needs order should sort by the message's `data.timestamp`. That value is
 whole seconds from WhatsApp, so messages sent within the same second cannot be put back in order.
 
 ## 19.6 Plugin Loader

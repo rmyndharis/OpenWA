@@ -23,6 +23,7 @@ import {
   coerceDeclaredSize,
   inboundMediaMaxBytes,
   ingestMediaBudgetBytes,
+  isMediaDownloadEnabled,
 } from './inbound-media-cap';
 import { buildIncomingMessageBase, mapContactFields } from './message-mapper';
 import { buildVCard } from './vcard';
@@ -70,6 +71,19 @@ export function declaredOnlyMedia(msg: Message): IncomingMessage['media'] {
     omitted: true,
     sizeBytes: coerceDeclaredSize(data?.size),
   };
+}
+
+/** The media size the sender declared; 0 when unknown, which does not pre-gate the download. */
+export function declaredMediaSize(msg: Message): number {
+  return coerceDeclaredSize((msg as unknown as { _data?: { size?: unknown } })._data?.size);
+}
+
+/**
+ * Whether the adapter's capInboundMediaFor, with no override, downloads this message's media: its
+ * pre-gates, read as the message arrives so the download can be given room first.
+ */
+export function plannedInboundDownload(msg: Message): boolean {
+  return Boolean(msg.hasMedia) && isMediaDownloadEnabled() && declaredMediaSize(msg) <= inboundMediaMaxBytes();
 }
 
 /** A media download as {@link downloadMediaInPage} returns it: `data` is empty when the payload was over the cap. */

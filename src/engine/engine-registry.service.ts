@@ -43,6 +43,8 @@ export class EngineRegistry {
    */
   readonly initializing = new Set<string>();
 
+  private readonly retireListeners: Array<(id: string, engine: IWhatsAppEngine) => void> = [];
+
   // ── Map-compatible surface (used by the lifecycle owner) ──────────────
 
   get(id: string): IWhatsAppEngine | undefined {
@@ -56,8 +58,10 @@ export class EngineRegistry {
    * It stays optional only because the specs that register a bare engine stub do not care.
    */
   set(id: string, engine: IWhatsAppEngine, proxyUrl?: string): void {
+    const previous = this.engines.get(id);
     this.engines.set(id, engine);
     this.proxies.set(id, proxyUrl);
+    if (previous && previous !== engine) this.retired(id, previous);
   }
 
   has(id: string): boolean {
@@ -65,13 +69,30 @@ export class EngineRegistry {
   }
 
   delete(id: string): boolean {
+    const previous = this.engines.get(id);
     this.proxies.delete(id);
-    return this.engines.delete(id);
+    const deleted = this.engines.delete(id);
+    if (previous) this.retired(id, previous);
+    return deleted;
   }
 
   clear(): void {
+    const previous = this.entries();
     this.engines.clear();
     this.proxies.clear();
+    for (const [id, engine] of previous) this.retired(id, engine);
+  }
+
+  /**
+   * Run `listener` each time an engine stops being the live one for its session (replaced, deleted,
+   * or cleared at shutdown), after the map changed, so `isLive` already reports it stale.
+   */
+  onRetire(listener: (id: string, engine: IWhatsAppEngine) => void): void {
+    this.retireListeners.push(listener);
+  }
+
+  private retired(id: string, engine: IWhatsAppEngine): void {
+    for (const listener of this.retireListeners) listener(id, engine);
   }
 
   get size(): number {

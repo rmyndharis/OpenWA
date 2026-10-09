@@ -5,6 +5,7 @@ import {
   EngineEventCallbacks,
   GroupEvent,
   IncomingCallEvent,
+  InboundTicket,
   ParticipantPresence,
   PresenceState,
   CallOutcome,
@@ -33,6 +34,7 @@ import { toUnixSeconds } from './baileys-history';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { CallNotFoundError } from '../../common/errors/call-not-found.error';
 import {
+  admitInboundSafely,
   capInboundMedia,
   coerceDeclaredSize,
   inboundMediaMaxBytes,
@@ -158,6 +160,33 @@ export function isWhatsAppMediaSource(
   }
 }
 
+const BAILEYS_MEDIA_TYPES = new Set([
+  'imageMessage',
+  'videoMessage',
+  'ptvMessage',
+  'audioMessage',
+  'documentMessage',
+  'documentWithCaptionMessage',
+  'stickerMessage',
+]);
+
+/** Whether a normalized content type carries a downloadable payload. */
+function isBaileysMediaType(contentType: string | undefined): boolean {
+  return contentType !== undefined && BAILEYS_MEDIA_TYPES.has(contentType);
+}
+
+/** The media sub-message of normalized content: its mimetype and declared size. */
+function mediaSubMessage(normalized: NonNullable<WAMessage['message']>) {
+  return (
+    normalized.imageMessage ??
+    normalized.videoMessage ??
+    normalized.ptvMessage ??
+    normalized.audioMessage ??
+    normalized.documentMessage ??
+    normalized.stickerMessage
+  );
+}
+
 export interface BaileysEventsHost {
   /** Live socket handle for media re-upload requests (inbound media download). */
   getSocket(): WASocket;
@@ -189,6 +218,10 @@ export interface BaileysEventsHost {
   consumeOwnSend(id: string | null | undefined): boolean;
   /** A message this session already delivered or sent, from the persistent store; undefined without a store. */
   getStoredMessage(messageId: string): Promise<WAMessage | null> | undefined;
+  /** The currently-registered admitInbound callback, if any (assigned at initialize()). */
+  getAdmitInbound?(): EngineEventCallbacks['admitInbound'];
+  /** The Baileys module once loaded (it is, before any socket exists), without waiting for it. */
+  getLoadedLib?(): typeof BaileysLib | undefined;
   /** The currently-registered onMessage callback, if any (assigned at initialize()). */
   getOnMessage(): EngineEventCallbacks['onMessage'];
   /** The currently-registered onMessageCreate callback, if any (assigned at initialize()). */
@@ -359,8 +392,11 @@ export class BaileysEvents {
       // limiter rejects only when it has been closed, since processInboundMessage handles its own
       // failures (a media download that fails emits the omitted marker rather than throwing).
       const generation = this.storeGeneration;
+      // Where the session holds a message until its row is written (PostgreSQL), admit it now, in
+      // arrival order: its chat's order, and a slot of the session's room when it downloads media.
+      const ticket = this.admitInbound(msg);
       const processed = this.host.inboundLimiter
-        .run(() => this.processInboundMessage(msg, { generation }))
+        .run(yieldSlot => this.processInboundMessage(msg, { generation, ticket, yieldSlot }))
         .catch((error: unknown) => {
           // Only one failure can actually land here today: the limiter closing, an orderly teardown.
           // Its queue is unbounded so it never sheds, and processInboundMessage swallows its own
@@ -375,8 +411,11 @@ export class BaileysEvents {
               : 'Inbound media download failed; emitting message without media',
             { msgId: msg.key?.id ?? 'unknown', ...(closed ? {} : { error: String(error) }) },
           );
-          return this.processInboundMessage(msg, { generation, skipMedia: true });
+          return this.processInboundMessage(msg, { generation, skipMedia: true, ticket });
         });
+      // The room stays held until the processing settles too, and a message never emitted drops its turn.
+      ticket?.holdUntil(processed);
+      void processed.finally(() => ticket?.drop());
       const id = msg.key.id;
       if (id) {
         // A repeat delivery can arrive while the first is still downloading and finish before it, so
@@ -394,6 +433,47 @@ export class BaileysEvents {
         });
       }
     }
+  }
+
+  /** Admit a live message (see EngineEventCallbacks.admitInbound); undefined where nothing is held. */
+  private admitInbound(msg: WAMessage): InboundTicket | undefined {
+    const admit = this.host.getAdmitInbound?.();
+    if (!admit) return undefined;
+    return admitInboundSafely(
+      () => {
+        // Learned before the chat id is canonicalized, as processInboundMessage does without a ticket.
+        this.host.recordKeyLidMappings(msg.key);
+        const remoteJid = msg.key.remoteJid!;
+        return admit({
+          id: msg.key.id ?? '',
+          chatId: this.host.toNeutralJid(baileysChatJid(remoteJid, msg.key.participant, msg.key.fromMe === true)),
+          status: remoteJid === 'status@broadcast',
+          needsRoom: this.plannedMediaDownload(this.host.getLoadedLib?.(), msg),
+        });
+      },
+      error =>
+        this.host.logger.error(
+          `Could not admit inbound message ${msg.key.id ?? 'unknown'}; processing it without room for media`,
+          String(error),
+        ),
+    );
+  }
+
+  /**
+   * Whether processing `msg` downloads its media: the gates of {@link resolveInboundMedia}, read before
+   * the processing starts. True when the module is not loaded yet, which cannot happen once a socket
+   * delivers messages, so a slot is never missing for a download.
+   */
+  plannedMediaDownload(b: typeof BaileysLib | undefined, msg: WAMessage): boolean {
+    if (!b) return true;
+    const ownStatusPost = msg.key.fromMe === true && msg.key.remoteJid === 'status@broadcast';
+    const normalized = b.normalizeMessageContent(msg.message ?? undefined) ?? msg.message ?? undefined;
+    return (
+      isBaileysMediaType(b.getContentType(normalized)) &&
+      !ownStatusPost &&
+      isMediaDownloadEnabled() &&
+      coerceDeclaredSize(mediaSubMessage(normalized ?? {})?.fileLength) <= inboundMediaMaxBytes()
+    );
   }
 
   /** Diagnostic: log a contacts event's size + whether records carry names/lids (and a small sample). */
@@ -421,7 +501,12 @@ export class BaileysEvents {
 
   private async processInboundMessage(
     msg: WAMessage,
-    opts: { generation: number; skipMedia?: boolean },
+    opts: {
+      generation: number;
+      skipMedia?: boolean;
+      ticket?: InboundTicket;
+      yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R>;
+    },
   ): Promise<void> {
     try {
       const b = await this.host.loadLib();
@@ -431,8 +516,8 @@ export class BaileysEvents {
       const chatJid = baileysChatJid(remoteJid, msg.key.participant, msg.key.fromMe === true);
       // Learn any lid->pn pair the key carries BEFORE canonicalizing ids below, so a fresh @lid
       // sender resolves to its phone in this message and for later contact lookups (#362). The pairs
-      // also write through to the persistent lid->phone table via addLidMappings.
-      this.host.recordKeyLidMappings(msg.key);
+      // also write through to the persistent lid->phone table via addLidMappings. Admission did it already.
+      if (!opts.ticket) this.host.recordKeyLidMappings(msg.key);
       // A live disappearing message (also viewOnce / documentWithCaption / edited) arrives wrapped, so the
       // raw `getContentType` returns the OUTER wrapper key (e.g. 'ephemeralMessage') and downstream type/
       // body/media/location detection would miss the real inner content. Normalize ONCE so the true inner
@@ -619,6 +704,8 @@ export class BaileysEvents {
       const ownStatusPost = msg.key.fromMe === true && remoteJid === 'status@broadcast';
       const incoming = await this.mapMessage(msg, contentType, {
         skipMediaDownload: opts.skipMedia || ownStatusPost,
+        ticket: opts.ticket,
+        yieldSlot: opts.yieldSlot,
       });
       // Stored before it is announced: whoever hears about this message may act on it at once (a quoted
       // reply, a reaction, a read receipt), and the store holds a read of an id until its write lands.
@@ -644,13 +731,15 @@ export class BaileysEvents {
       }
       // Its delete was announced first and found nothing to clear, so announcing the message now, or
       // leaving its text as the chat preview, would publish what the sender took back. An edit announced
-      // first found nothing to change either, so the message carries it here and in the preview.
-      if (!deleted) {
-        if (msg.key.fromMe === true) {
-          this.host.getOnMessageCreate()?.(incoming);
-        } else {
-          this.host.getOnMessage()?.(incoming);
-        }
+      // first found nothing to change either, so the message carries it here and in the preview. Where
+      // the projector recorded the delete on the message it holds, the message still goes there, as on
+      // whatsapp-web.js: it stores the row cleared and announces nothing. A delete it never saw (a
+      // status post, a history revoke) keeps the message from being emitted at all.
+      if (!deleted || opts.ticket?.revoked) {
+        const emit = msg.key.fromMe === true ? this.host.getOnMessageCreate() : this.host.getOnMessage();
+        // The ticket goes along only where one was issued, so elsewhere the call is unchanged.
+        if (opts.ticket) emit?.(incoming, opts.ticket);
+        else emit?.(incoming);
       }
       this.host.recordMessage(msg, incoming.type);
       if (deleted) {
@@ -693,8 +782,9 @@ export class BaileysEvents {
    * Whether an edit, revoke or reaction names a stored message it cannot touch: one in another chat,
    * or, with `checkAuthor`, one somebody else sent. WhatsApp clients ignore such a message, but Baileys
    * emits it as-is and the projector updates the stored row by id alone, so a contact who knows an id
-   * could rewrite or erase that message. Fails open: with no stored original, or ids that cannot be
-   * compared (see {@link differentWaIds}), the event goes through as it always has.
+   * could rewrite or erase that message. A message still being processed is checked against the key
+   * it arrived under. Fails open: with no original at all, or ids that cannot be compared (see
+   * {@link differentWaIds}), the event goes through as it always has.
    *
    * A reaction to a message the account sent to a broadcast list is exempt: Baileys files the
    * own-device copy under the list jid (`<id>@broadcast`), while each recipient reacts from their 1:1
@@ -709,8 +799,11 @@ export class BaileysEvents {
     checkAuthor: boolean,
     kind?: 'reaction',
   ): Promise<boolean> {
+    // A message still being processed has no stored copy yet, but the projector may already hold it
+    // (PostgreSQL), so its own key is checked instead.
     const original = targetId
-      ? (await this.readStoredMessage(targetId, 'checking what an edit, revoke or reaction targets'))?.key
+      ? ((await this.readStoredMessage(targetId, 'checking what an edit, revoke or reaction targets'))?.key ??
+        this.inboundInFlight.get(targetId)?.key)
       : undefined;
     if (!original) return false;
     const broadcast = kind === 'reaction' && !!original.remoteJid?.endsWith('@broadcast');
@@ -1342,16 +1435,9 @@ export class BaileysEvents {
     content: NonNullable<WAMessage['message']>,
     b: typeof BaileysLib,
     skipMediaDownload: boolean,
+    room?: { ticket?: InboundTicket; yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R> },
   ): Promise<IncomingMessage['media']> {
-    const isMediaType =
-      contentType === 'imageMessage' ||
-      contentType === 'videoMessage' ||
-      contentType === 'ptvMessage' ||
-      contentType === 'audioMessage' ||
-      contentType === 'documentMessage' ||
-      contentType === 'documentWithCaptionMessage' ||
-      contentType === 'stickerMessage';
-    if (!isMediaType) {
+    if (!isBaileysMediaType(contentType)) {
       return undefined;
     }
 
@@ -1363,13 +1449,7 @@ export class BaileysEvents {
       // Emit the omitted marker so the media field is present (webhook/n8n/dashboard contract).
       // mimetype is available pre-download from the message content.
       const normalizedContent = b.normalizeMessageContent(content) ?? content;
-      const subMessage =
-        normalizedContent.imageMessage ??
-        normalizedContent.videoMessage ??
-        normalizedContent.ptvMessage ??
-        normalizedContent.audioMessage ??
-        normalizedContent.documentMessage ??
-        normalizedContent.stickerMessage;
+      const subMessage = mediaSubMessage(normalizedContent);
       return {
         mimetype: subMessage?.mimetype ?? '',
         filename: normalizedContent.documentMessage?.fileName ?? undefined,
@@ -1381,13 +1461,7 @@ export class BaileysEvents {
     // normalizeMessageContent unwraps documentWithCaptionMessage / viewOnceMessage / ephemeralMessage
     // so we reach the inner media sub-message — needed BEFORE download for the declared-size pre-gate.
     const normalizedContent = b.normalizeMessageContent(content) ?? content;
-    const subMessage =
-      normalizedContent.imageMessage ??
-      normalizedContent.videoMessage ??
-      normalizedContent.ptvMessage ??
-      normalizedContent.audioMessage ??
-      normalizedContent.documentMessage ??
-      normalizedContent.stickerMessage;
+    const subMessage = mediaSubMessage(normalizedContent);
     const mimetype = subMessage?.mimetype ?? '';
     const filename = normalizedContent.documentMessage?.fileName ?? undefined;
     const maxBytes = inboundMediaMaxBytes();
@@ -1405,6 +1479,21 @@ export class BaileysEvents {
     }
 
     try {
+      // Where payloads wait for their rows (PostgreSQL), download only into a slot of the session's
+      // room, held until the row is written. The inbound limiter slot is given up while waiting, so
+      // other chats' messages keep flowing. No room in time: the marker, and nothing downloaded.
+      const ticket = room?.ticket;
+      if (ticket) {
+        const granted = ticket.reserve();
+        const yieldSlot = room?.yieldSlot ?? (<R>(fn: () => Promise<R>) => fn());
+        if (!(granted === true || (granted !== false && (await yieldSlot(() => granted))))) {
+          this.host.logger.warn('No room for inbound media within the wait; emitting the omitted marker', {
+            msgId: msg.key.id,
+            sizeBytes: declared,
+          });
+          return { mimetype, filename, omitted: true, sizeBytes: declared };
+        }
+      }
       // Stream-download with a running-total abort so a sender who understates fileLength still
       // can't materialise an over-cap blob. For under-cap media this yields the identical buffer.
       const buf = await this.downloadInboundMediaCapped(msg, maxBytes);
@@ -1449,7 +1538,11 @@ export class BaileysEvents {
   async mapMessage(
     msg: WAMessage,
     contentType: string | undefined,
-    opts?: { skipMediaDownload?: boolean },
+    opts?: {
+      skipMediaDownload?: boolean;
+      ticket?: InboundTicket;
+      yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R>;
+    },
   ): Promise<IncomingMessage> {
     const b = await this.host.loadLib();
     const content = msg.message ?? {};
@@ -1462,7 +1555,7 @@ export class BaileysEvents {
     // Body: text first, then media caption, then WhatsApp Business interactive shapes (#562).
     const body = extractBaileysBody(normalized);
     const location = extractBaileysLocation(normalized, contentType);
-    const media = await this.resolveInboundMedia(msg, contentType, content, b, opts?.skipMediaDownload === true);
+    const media = await this.resolveInboundMedia(msg, contentType, content, b, opts?.skipMediaDownload === true, opts);
     // The quote, the disappearing-messages timer, the mentions and the status styling all come from
     // one region of the content — see BaileysMessageContext.
     const context = extractBaileysContext(normalized);

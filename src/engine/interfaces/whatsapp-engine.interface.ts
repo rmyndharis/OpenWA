@@ -796,15 +796,49 @@ export interface CallOutcomeEvent {
   timestamp: number;
 }
 
+/**
+ * A message's place in its session from the moment it arrives until its row is written (see
+ * `EngineEventCallbacks.admitInbound`). The engine hands it back with the message it emits.
+ */
+export interface InboundTicket {
+  /**
+   * Room for one downloaded payload: true once granted, false when the message asked for none, or
+   * when no room came free in time (the media then goes out with the omitted marker, undownloaded).
+   * Call it right before the download, never earlier: the grant is held until the row is written.
+   */
+  reserve: () => boolean | Promise<boolean>;
+  /** Keep the room until `p` settles too: work on the payload that may outlive the emit. */
+  holdUntil: (p: Promise<unknown>) => void;
+  /** The message will not be emitted: release its turn and its room. A no-op after the emit. */
+  drop: () => void;
+  /**
+   * Whether the session recorded a delete for everyone of this message while holding it, so emitting
+   * it stores the row cleared and announces nothing. False for a revoke the session never saw.
+   */
+  readonly revoked: boolean;
+}
+
 export interface EngineEventCallbacks {
   onQRCode?: (qr: string) => void;
   onReady?: (phone: string, pushName: string) => void;
-  onMessage?: (message: IncomingMessage) => void;
+  /**
+   * Set only where a downloaded payload outlives the emit (PostgreSQL writes asynchronously). The
+   * engine calls it synchronously as each live message arrives, in arrival order, and passes the
+   * ticket to the emit, or drops it when the message is not emitted. `needsRoom` says whether the
+   * message will download media; `status` marks a status post. Undefined when the engine is stale.
+   */
+  admitInbound?: (arrival: {
+    id: string;
+    chatId: string;
+    needsRoom: boolean;
+    status: boolean;
+  }) => InboundTicket | undefined;
+  onMessage?: (message: IncomingMessage, ticket?: InboundTicket) => void;
   /**
    * Fired for messages the account itself created (outgoing) — including sends composed on a
    * linked phone, which the `message`/`onMessage` event never delivers. Used to emit `message.sent`.
    */
-  onMessageCreate?: (message: IncomingMessage) => void;
+  onMessageCreate?: (message: IncomingMessage, ticket?: InboundTicket) => void;
   /**
    * Fired when the delivery status of an outgoing message advances. The adapter maps its native
    * delivery signal to the neutral `DeliveryStatus`, so consumers never see engine-specific codes.

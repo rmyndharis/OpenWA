@@ -152,6 +152,8 @@ export class BaileysAdapter implements IWhatsAppEngine {
       pendingEditOf: (messageId, target) => this.events.pendingEditOf(messageId, target),
       rememberOwnSend: id => this.ownSends.remember(id),
       consumeOwnSend: id => this.ownSends.consume(id),
+      getAdmitInbound: () => this.callbacks.admitInbound,
+      getLoadedLib: () => this.lifecycle.loadedLib,
       getOnMessage: () => this.callbacks.onMessage,
       getOnMessageCreate: () => this.callbacks.onMessageCreate,
       getOnMessageRevoked: () => this.callbacks.onMessageRevoked,

@@ -223,11 +223,26 @@ curl -H "X-API-Key: $API_KEY" \
 
 # C. If memory climbs during a media burst (received, or sent on whatsapp-web.js):
 # on PostgreSQL each payload, received or the echo of a media send, waits in memory as base64
-# (about 4/3 of the file size) until its row is stored, with no limit on how many wait; a slow
-# message:received or message:sent plugin hook holds them the same way on either database.
-# Lower MEDIA_DOWNLOAD_MAX_BYTES to cap each one (it also caps outbound media sends), or set
-# MEDIA_DOWNLOAD_ENABLED=false to hold none. Lowering INBOUND_MEDIA_CONCURRENCY does not bound
-# it. Archiving (CHAT_MEDIA_ARCHIVE_ENABLED=true) adds its own cost on either database: each
+# (about 4/3 of the file size) until its row is stored, in one of INBOUND_MEDIA_CONCURRENCY
+# slots per session, so a session holds at most INBOUND_MEDIA_CONCURRENCY x 4 x
+# ceil(MEDIA_DOWNLOAD_MAX_BYTES / 3) bytes (about 267 MiB at the defaults) even while inserts
+# stall. Lower either setting to shrink that bound (MEDIA_DOWNLOAD_MAX_BYTES also caps outbound
+# media sends), or set MEDIA_DOWNLOAD_ENABLED=false to hold none. Media logged as "No room for
+# inbound media" arrived with the omitted marker because no slot was freed for 2 x
+# MEDIA_DOWNLOAD_TIMEOUT_MS. A slot is held until its message's commit settles: the
+# message:received or message:sent hook chain, with RESOLVE_LID_TO_PHONE=true the sender's phone
+# lookup, the insert, and on whatsapp-web.js a timed-out page download (until
+# PUPPETEER_PROTOCOL_TIMEOUT_MS fails it). To find the holder, look for long-running inserts
+# (SELECT pid, now() - query_start, state, query FROM pg_stat_activity WHERE query ILIKE
+# 'INSERT INTO "messages"%') and for "Sandboxed plugin ... timed out after 5000ms" warnings: a
+# plugin loaded from the plugins directory delays a slot by at most 5 s per hook, so such a stall
+# clears on its own. A hook registered in-process (a plugin registered programmatically) has no
+# time limit: one that never settles keeps its chat's later messages from being stored and holds
+# every slot they or its own message took, for the life of the process. A reconnect does not free
+# them, so once INBOUND_MEDIA_CONCURRENCY slots are stuck the session sheds all media; fix or
+# remove that hook and restart the process. On SQLite a slow message:received or message:sent
+# plugin hook still holds payloads with no limit on how many.
+# Archiving (CHAT_MEDIA_ARCHIVE_ENABLED=true) adds its own cost on either database: each
 # message being archived holds its payload as base64 and decoded until the upload finishes (more
 # under MESSAGE_INLINE_MEDIA=archive, which also reads the file back and rewrites the row), and
 # nothing limits how many archive at once. Lowering CHAT_MEDIA_ARCHIVE_MAX_BYTES (25 MiB by

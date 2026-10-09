@@ -5383,6 +5383,23 @@ describe('SessionService', () => {
       }
     });
 
+    // better-sqlite3 writes within the arrival's own task, so nothing is held there and the engines
+    // run exactly as before; PostgreSQL inserts asynchronously and gets the arrival tickets.
+    it('offers admitInbound to the engine on PostgreSQL only', async () => {
+      const sqlite = await startAndCapture();
+      expect(sqlite).not.toHaveProperty('admitInbound');
+      await service.stop('sess-uuid-1');
+
+      (messageRepository as unknown as { manager: unknown }).manager = {
+        connection: { options: { type: 'postgres' } },
+      };
+      mockEngine.initialize.mockClear();
+      const postgres = await startAndCapture();
+      const ticket = postgres.admitInbound?.({ id: 'wa-1', chatId: 'peer@c.us', needsRoom: false, status: false });
+      expect(typeof ticket?.reserve).toBe('function');
+      ticket?.drop();
+    });
+
     it('ignores onMessage from a superseded engine (no persist, no webhook)', async () => {
       const callbacks = await startAndCapture();
       enginesOf().set('sess-uuid-1', { marker: 'engine-B' });

@@ -1,4 +1,4 @@
-import type { IncomingMessage } from '../interfaces/whatsapp-engine.interface';
+import type { InboundTicket, IncomingMessage } from '../interfaces/whatsapp-engine.interface';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 
 /** Default inbound media cap: 50 MiB. Shares MEDIA_DOWNLOAD_MAX_BYTES with the outbound download cap. */
@@ -196,4 +196,28 @@ export function capInboundMedia(args: {
     return { mimetype: args.mimetype, filename: args.filename, omitted: true, sizeBytes: args.sizeBytes };
   }
   return { mimetype: args.mimetype, filename: args.filename, data: args.toBase64() };
+}
+
+const NO_ROOM: InboundTicket = {
+  reserve: () => false,
+  holdUntil: () => undefined,
+  drop: () => undefined,
+  revoked: false,
+};
+
+/**
+ * Admit a live message (EngineEventCallbacks.admitInbound) without letting a throw escape the event
+ * handler. A message whose admission failed still goes out, but holds no room, so its media takes the
+ * omitted marker instead of a download nothing bounds.
+ */
+export function admitInboundSafely(
+  admit: () => InboundTicket | undefined,
+  onError: (error: unknown) => void,
+): InboundTicket | undefined {
+  try {
+    return admit();
+  } catch (error) {
+    onError(error);
+    return NO_ROOM;
+  }
 }
