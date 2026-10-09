@@ -184,6 +184,7 @@ test('a walk stops once the key it started with is signed out or replaced', asyn
       },
       { retryDelayMs: 0 },
     ),
+    /Signed out/,
   );
   assert.deepEqual(sentWith, ['key-a', 'key-a']);
 
@@ -196,6 +197,7 @@ test('a walk stops once the key it started with is signed out or replaced', asyn
       if (offset === 200) sessionStorage.setItem('openwa_api_key', 'key-b');
       return page;
     }),
+    /Signed out/,
   );
   assert.deepEqual(sentWith, ['key-a', 'key-a']);
 
@@ -207,5 +209,23 @@ test('a walk stops once the key it started with is signed out or replaced', asyn
       if (offset === 800) sessionStorage.removeItem('openwa_api_key');
       return page;
     }),
+    /Signed out/,
   );
+
+  // Signed out while the last retry of a throttled page was out: the rows in hand do not come back
+  // as a throttled partial walk.
+  sessionStorage.setItem('openwa_api_key', 'key-a');
+  let refused = 0;
+  await assert.rejects(
+    fetchAllPages(
+      async (limit, offset) => {
+        if (offset === 0) return fetchPage(limit, offset);
+        if (++refused === 3) sessionStorage.removeItem('openwa_api_key');
+        throw httpError(429);
+      },
+      { retryDelayMs: 0 },
+    ),
+    /Signed out/,
+  );
+  assert.equal(refused, 3, 'the walk did not reach the last retry');
 });

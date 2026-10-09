@@ -9,6 +9,7 @@ const MAX_SHUTDOWN_DELAY_MS = 30_000;
 export class ShutdownService {
   private readonly logger = createLogger('ShutdownService');
   private destroyCallback: (() => Promise<void>) | null = null;
+  private readonly shutdownListeners: Array<() => void> = [];
   private shuttingDown = false;
   private shutdownScheduled = false;
   private tearingDown = false;
@@ -18,6 +19,14 @@ export class ShutdownService {
    */
   setShutdownCallback(callback: () => Promise<void>): void {
     this.destroyCallback = callback;
+  }
+
+  /**
+   * Run `listener` when shutdown begins, before the grace and every destroy hook. It runs inside the
+   * signal handler, so it must not throw or block.
+   */
+  onShutdown(listener: () => void): void {
+    this.shutdownListeners.push(listener);
   }
 
   /**
@@ -42,6 +51,7 @@ export class ShutdownService {
     if (!this.shuttingDown) {
       this.shuttingDown = true;
       this.logger.log('Entering draining state — readiness now reports 503');
+      for (const listener of this.shutdownListeners) listener();
     }
   }
 
