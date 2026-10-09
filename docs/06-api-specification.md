@@ -2434,7 +2434,7 @@ The rendered text is bounded the same way, by `TEMPLATE_RENDER_MAX_CHARS` (defau
 }
 ```
 
-**Errors:** `400` session not active, duplicate `batchId`, a `batchId` of `.` or `..`, or DTO/nested validation failure (unknown nested field rejected) · `401` missing/invalid API key · `403` key role below OPERATOR · `413` base64 media over the media cap (see §6.3) · `429` too many bulk batches already in progress on this node (`BULK_MAX_CONCURRENT_BATCHES`, default 50); retry shortly · `500` engine error · `503` the server is shutting down; retry the batch shortly
+**Errors:** `400` session not active, duplicate `batchId`, a `batchId` of `.` or `..`, or DTO/nested validation failure (unknown nested field rejected) · `401` missing/invalid API key · `403` key role below OPERATOR · `413` base64 media over the media cap (see §6.3) · `429` too many bulk batches already in progress on this node (`BULK_MAX_CONCURRENT_BATCHES`, default 50); retry shortly · `500` engine error · `503` the server is shutting down; nothing was sent, so retry the batch shortly
 
 #### POST /api/sessions/:sessionId/messages/batch/:batchId/cancel
 
@@ -6342,7 +6342,7 @@ Set which sessions a session-scoped plugin is activated for. This is a **full re
 
 #### POST /api/plugins/:id/update
 
-Update an installed plugin in place from a URL, preserving config + enabled state. The new package is written to a staging sibling and validated BEFORE the running plugin is stopped, then swapped in with two renames (live → backup, staging → live); a failure before or during the swap restores the previous version, and a process crash mid-swap is reconciled at boot (the backup is restored when the live directory is missing), so an interrupted update can never make the plugin silently vanish. The URL follows the same transport and pin rules as `install-url`: plain http only with a `#sha256=` digest pin, and https needs the pin too under `NODE_ENV=production` unless `PLUGIN_INSTALL_REQUIRE_PIN=false` (fail-closed on mismatch).
+Update an installed plugin in place from a URL, preserving config + enabled state. The new package is written to a staging sibling and validated BEFORE the running plugin is stopped, then swapped in with two renames (live → backup, staging → live); a failure before or during the swap restores the previous version, and a process crash mid-swap is reconciled at boot (the backup is restored when the live directory is missing), so an interrupted update can never make the plugin silently vanish. An update of a plugin the operator switched on (not one in `error`) that is still applying once shutdown has begun is refused, or rolled back if the swap already happened, and answered with `503`, since the new version cannot be started to prove it works. The URL follows the same transport and pin rules as `install-url`: plain http only with a `#sha256=` digest pin, and https needs the pin too under `NODE_ENV=production` unless `PLUGIN_INSTALL_REQUIRE_PIN=false` (fail-closed on mismatch).
 
 **Auth:** API key (ADMIN)
 
@@ -6366,7 +6366,7 @@ Update an installed plugin in place from a URL, preserving config + enabled stat
 
 **Response** `201` — the updated `PluginDto`.
 
-**Errors:** `400` download/package invalid, manifest id mismatch, or built-in plugin · `401` · `403` · `404` unknown id
+**Errors:** `400` download/package invalid, manifest id mismatch, or built-in plugin · `401` · `403` · `404` unknown id · `503` shutdown began before the update of a plugin the operator switched on finished applying (the previous version is kept)
 
 ---
 
@@ -7246,7 +7246,7 @@ Webhook delivery is **at-least-once**. A consumer can legitimately receive the s
 
 **Crash boundary.** A successfully written outbox record retains the pre-hook event data until delivery succeeds, the subscription becomes ineligible, or the terminal failure is stored. Queued records keep this copy even after enqueue; the worker retires it only after one of those outcomes. If failure recording fails, the copy remains eligible for recovery. The bounded sweep (`WEBHOOK_RECONCILE_INTERVAL_MS`, default 60s) checks the stored job before replaying, leaves active jobs alone, and reuses the stored `X-OpenWA-Idempotency-Key`. If Redis cannot confirm the job state, replay waits. A missing or failed job can be replayed within `WEBHOOK_RECONCILE_MAX_ATTEMPTS`; exhausting that budget retires the outbox only after terminal failure recording succeeds. Receiver deduplication remains necessary because a crash after receiver processing can cause another POST.
 
-Outbox creation is best effort, and message persistence and outbox insertion are separate transactions. A write failure or crash between them can still lose the webhook delivery. Failure records with zero attempts are excluded from operator redrive. Capacity and shutdown rejections can still be recovered from an unsettled outbox record; shutdown during retry backoff may follow earlier POSTs. The direct dispatcher leaves its local in-flight work alone during reconciliation. Graceful shutdown drains current queue jobs; direct sends wait up to `WEBHOOK_SHUTDOWN_DRAIN_MS` (default 5s). Shutdown waits for an outbox replay in flight, including its `webhook:before` hooks. That replay sends at most one more POST, bounded by `WEBHOOK_TIMEOUT`, and no further row is replayed; the next start replays what it left pending.
+Outbox creation is best effort, and message persistence and outbox insertion are separate transactions. A write failure or crash between them can still lose the webhook delivery. Failure records with zero attempts are excluded from operator redrive. Capacity and shutdown rejections can still be recovered from an unsettled outbox record; shutdown during retry backoff may follow earlier POSTs. The direct dispatcher leaves its local in-flight work alone during reconciliation. Graceful shutdown drains current queue jobs; direct sends, and an outbox replay in flight with its plugin hooks, get up to `WEBHOOK_SHUTDOWN_DRAIN_MS` (default 5s). That replay sends at most one more POST, bounded by `WEBHOOK_TIMEOUT`, and no further row is replayed; the next start replays what it left pending.
 
 Before downgrading to a version that does not recognize the `queued` outbox state, drain or recover those records and take a backup. Its cleanup may otherwise treat an unsettled queued record as settled. Reverting the terminal-identity migration removes its index but does not restore historical duplicates.
 
