@@ -2093,7 +2093,7 @@ Send a contact card (vCard).
 
 #### POST /api/sessions/:sessionId/messages/send-sticker
 
-Send a sticker (by URL or base64; typically webp). Reuses `SendMediaMessageDto`.
+Send a sticker (by URL or base64; typically webp). Reuses `SendMediaMessageDto`. On Baileys a WebP is sent unchanged and any other `image/*` is converted to a 512x512 WebP first, keeping up to 500 animation frames.
 
 **Auth:** API key (OPERATOR)
 
@@ -2115,7 +2115,7 @@ Send a sticker (by URL or base64; typically webp). Reuses `SendMediaMessageDto`.
 { "messageId": "true_628123456789@c.us_3EB0ABCD", "timestamp": 1719312000 }
 ```
 
-**Errors:** `400` media validation failure / a `url` that answers non-2xx, times out or cannot be reached / session not active / unknown body field · `401` missing/invalid API key · `403` key role below OPERATOR · `404` the `quotedMessageId` could not be resolved (see Quoted sends) · `413` base64 or downloaded media over the media cap (see §6.3) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine, or (whatsapp-web.js) a sticker to a channel, `status@broadcast` or a broadcast list · `503` a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable) · `422` the `Idempotency-Key` was already used for a different request (see [Idempotent sends](#idempotent-sends))
+**Errors:** `400` media validation failure / (Baileys) media that is neither WebP nor an image that converts to one, or an animation with more than 500 frames / a `url` that answers non-2xx, times out or cannot be reached / session not active / unknown body field · `401` missing/invalid API key · `403` key role below OPERATOR · `404` the `quotedMessageId` could not be resolved (see Quoted sends) · `413` base64 or downloaded media over the media cap (see §6.3) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine, or (whatsapp-web.js) a sticker to a channel, `status@broadcast` or a broadcast list · `503` a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable) · `422` the `Idempotency-Key` was already used for a different request (see [Idempotent sends](#idempotent-sends))
 
 #### POST /api/sessions/:sessionId/messages/send-poll
 
@@ -2434,7 +2434,7 @@ The rendered text is bounded the same way, by `TEMPLATE_RENDER_MAX_CHARS` (defau
 }
 ```
 
-**Errors:** `400` session not active, duplicate `batchId`, a `batchId` of `.` or `..`, or DTO/nested validation failure (unknown nested field rejected) · `401` missing/invalid API key · `403` key role below OPERATOR · `413` base64 media over the media cap (see §6.3) · `429` too many bulk batches already in progress on this node (`BULK_MAX_CONCURRENT_BATCHES`, default 50); retry shortly · `500` engine error · `503` the server is shutting down; retry the batch shortly
+**Errors:** `400` session not active, duplicate `batchId`, a `batchId` of `.` or `..`, or DTO/nested validation failure (unknown nested field rejected) · `401` missing/invalid API key · `403` key role below OPERATOR · `413` base64 media over the media cap (see §6.3) · `429` too many bulk batches already in progress on this node (`BULK_MAX_CONCURRENT_BATCHES`, default 50); retry shortly · `500` engine error · `503` the server is shutting down; nothing was sent, so retry the batch shortly
 
 #### POST /api/sessions/:sessionId/messages/batch/:batchId/cancel
 
@@ -4745,7 +4745,7 @@ Queued deliveries retain their pre-hook outbox copy until the worker completes d
 
 Replay recorded webhook deliveries that still hold their event data, in one bounded batch, with the lowest attempt counts first, then oldest first. A row is replayable when it is terminal (`attempts` > 0; an `attempts: 0` row is the outbox's to replay) and was recorded while `WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS` > 0, until that window passes. With the default `0` nothing is kept and this call replays nothing.
 
-Each replay reuses the row's stored `idempotencyKey` (sent as `X-OpenWA-Idempotency-Key`), so receivers can deduplicate a POST that timed out after processing. `webhook:before` hooks run again on the stored pre-hook data. Each row gets **one direct POST** inside the request, including when ordinary dispatch uses the queue. Success removes its row; another failure keeps it and raises its attempt count. Calls on one node run serially. The audit log records counts without payload content.
+Each replay reuses the row's stored `idempotencyKey` (sent as `X-OpenWA-Idempotency-Key`), so receivers can deduplicate a POST that timed out after processing. `webhook:before` hooks run again on the stored pre-hook data. Each row gets **one direct POST** inside the request, including when ordinary dispatch uses the queue. Success removes its row and closes any outbox copy the sweep still holds for that event, so the sweep does not send it again; another failure keeps it and raises its attempt count. A sweep replay of the same event already under way can still POST it again under the same key. Calls on one node run serially. Graceful shutdown stops a batch at its next row and waits for the replays still running (at most four), including their `webhook:before` hooks; each POST is bounded by `WEBHOOK_TIMEOUT`. Rows it did not reach stay for a later call, and a call queued behind it replays nothing. The audit log records counts without payload content.
 
 Choose a batch limit that fits the client's timeout, especially for unavailable receivers. A client
 timeout does not cancel the batch; inspect the failure log before retrying it.
@@ -4774,7 +4774,7 @@ timeout does not cancel the batch; inspect the failure log before retrying it.
 }
 ```
 
-`redriven` equals `delivered`; `enqueued` is retained for response compatibility and is always `0`. Removed, disabled, unsubscribed, expired and out-of-scope rows are excluded before applying the limit. `skipped` counts selected rows cancelled by a hook or invalidated during the call. `remaining` counts eligible rows in the same requested session, webhook and IDs after the call. Retry another batch only after resolving persistent failures or hook cancellations; `remaining > 0` alone does not mean another call will succeed.
+`redriven` equals `delivered`; `enqueued` is retained for response compatibility and is always `0`. A row is excluded before applying the limit when it has `attempts: 0`, holds no event data, is past the retention window or out of scope, or its webhook is removed, disabled, unsubscribed from the event or no longer in the row's session. `skipped` counts selected rows cancelled by a hook or invalidated during the call. `remaining` counts eligible rows in the same requested session, webhook and IDs after the call. Retry another batch only after resolving persistent failures or hook cancellations; `remaining > 0` alone does not mean another call will succeed.
 
 **Errors:** `400` body fails validation · `401` missing/invalid API key · `403` key role below ADMIN
 
@@ -6010,7 +6010,7 @@ Import storage files from a `tar.gz` located inside the `data/` directory.
 
 `failed` counts archive entries the store refused to write; a bad or traversing entry is skipped without failing the rest. `imported` is `false` when entries failed and none was written.
 
-**Errors:** `400` missing/out-of-`data/`/not-found path, or `Storage import failed: <reason>` when the file is not a readable gzip tar archive or exceeds the import resource caps (an abort keeps the entries written before it, since there is no rollback; re-run the import once the archive is fixed, as each entry overwrites) · `401` · `403` · `500` · `503` S3 configured but not reachable since boot (a later outage answers `200` with `imported: false` and the entries in `failed`)
+**Errors:** `400` missing/out-of-`data/`/not-found path, or `Storage import failed: <reason>` when the file is not a readable gzip tar archive or exceeds the import resource caps `STORAGE_IMPORT_MAX_BYTES` (per file), `STORAGE_IMPORT_MAX_ENTRIES` or `STORAGE_IMPORT_MAX_TOTAL_BYTES` (an abort keeps the entries written before it, since there is no rollback, and each entry overwrites on a re-run; a re-run under the same caps stops at the same entry, so for a cap abort first raise the matching setting on the destination as the migration guide describes, and for an unreadable archive re-run with a sound copy) · `401` · `403` · `500` · `503` S3 configured but not reachable since boot (a later outage answers `200` with `imported: false` and the entries in `failed`)
 
 ---
 
@@ -6342,7 +6342,7 @@ Set which sessions a session-scoped plugin is activated for. This is a **full re
 
 #### POST /api/plugins/:id/update
 
-Update an installed plugin in place from a URL, preserving config + enabled state. The new package is written to a staging sibling and validated BEFORE the running plugin is stopped, then swapped in with two renames (live → backup, staging → live); a failure before or during the swap restores the previous version, and a process crash mid-swap is reconciled at boot (the backup is restored when the live directory is missing), so an interrupted update can never make the plugin silently vanish. The URL follows the same transport and pin rules as `install-url`: plain http only with a `#sha256=` digest pin, and https needs the pin too under `NODE_ENV=production` unless `PLUGIN_INSTALL_REQUIRE_PIN=false` (fail-closed on mismatch).
+Update an installed plugin in place from a URL, preserving config + enabled state. The new package is written to a staging sibling and validated BEFORE the running plugin is stopped, then swapped in with two renames (live → backup, staging → live); a failure before or during the swap restores the previous version, and a process crash mid-swap is reconciled at boot (the backup is restored when the live directory is missing), so an interrupted update can never make the plugin silently vanish. An update of a plugin the operator switched on (not one in `error`) that is still applying once shutdown has begun is refused, or rolled back if the swap already happened, and answered with `503`, since the new version cannot be started to prove it works. The URL follows the same transport and pin rules as `install-url`: plain http only with a `#sha256=` digest pin, and https needs the pin too under `NODE_ENV=production` unless `PLUGIN_INSTALL_REQUIRE_PIN=false` (fail-closed on mismatch).
 
 **Auth:** API key (ADMIN)
 
@@ -6366,7 +6366,7 @@ Update an installed plugin in place from a URL, preserving config + enabled stat
 
 **Response** `201` — the updated `PluginDto`.
 
-**Errors:** `400` download/package invalid, manifest id mismatch, or built-in plugin · `401` · `403` · `404` unknown id
+**Errors:** `400` download/package invalid, manifest id mismatch, or built-in plugin · `401` · `403` · `404` unknown id · `503` shutdown began before the update of a plugin the operator switched on finished applying (the previous version is kept)
 
 ---
 
@@ -7244,9 +7244,9 @@ Webhook delivery is **at-least-once**. A consumer can legitimately receive the s
 - The underlying WhatsApp engine can re-fire an event for a single message.
 - A failed delivery (non-2xx response, timeout, or network error) is retried.
 
-**Crash boundary.** A successfully written outbox record retains the pre-hook event data until delivery succeeds, the subscription becomes ineligible, or the terminal failure is stored. Queued records keep this copy even after enqueue; the worker retires it only after one of those outcomes. If failure recording fails, the copy remains eligible for recovery. The bounded sweep (`WEBHOOK_RECONCILE_INTERVAL_MS`, default 60s) checks the stored job before replaying, leaves active jobs alone, and reuses the stored `X-OpenWA-Idempotency-Key`. If Redis cannot confirm the job state, replay waits. A missing or failed job can be replayed within `WEBHOOK_RECONCILE_MAX_ATTEMPTS`; exhausting that budget retires the outbox only after terminal failure recording succeeds. Receiver deduplication remains necessary because a crash after receiver processing can cause another POST.
+**Crash boundary.** For an ordinary dispatch, a successfully written outbox record retains the pre-hook event data until delivery succeeds, the subscription becomes ineligible, or the terminal failure is stored. Queued records keep this copy even after enqueue; the worker retires it only after one of those outcomes. If failure recording fails, the copy remains eligible for recovery. The bounded sweep (`WEBHOOK_RECONCILE_INTERVAL_MS`, default 60s) checks the stored job before replaying, leaves active jobs alone, and reuses the stored `X-OpenWA-Idempotency-Key`. If Redis cannot confirm the job state, replay waits. A missing or failed job, or a stranded direct delivery, can be replayed within `WEBHOOK_RECONCILE_MAX_ATTEMPTS`. A replay sent directly (the queue off, or its enqueue failed) that exhausts its retries stores its terminal failure row but keeps the outbox copy pending, so later sweeps replay it until that budget is spent; exhausting it retires the outbox only after terminal failure recording succeeds. Receiver deduplication remains necessary because a crash after receiver processing can cause another POST.
 
-Outbox creation is best effort, and message persistence and outbox insertion are separate transactions. A write failure or crash between them can still lose the webhook delivery. Failure records with zero attempts are excluded from operator redrive. Capacity and shutdown rejections can still be recovered from an unsettled outbox record; shutdown during retry backoff may follow earlier POSTs. The direct dispatcher leaves its local in-flight work alone during reconciliation. Graceful shutdown drains current queue jobs; direct sends wait up to `WEBHOOK_SHUTDOWN_DRAIN_MS` (default 5s). An outbox replay in flight at shutdown sends at most one more POST, bounded by `WEBHOOK_TIMEOUT`, and replays no further row; the next start replays what it left pending.
+Outbox creation is best effort, and message persistence and outbox insertion are separate transactions. A write failure or crash between them can still lose the webhook delivery. Failure records with zero attempts are excluded from operator redrive. Capacity and shutdown rejections can still be recovered from an unsettled outbox record; shutdown during retry backoff may follow earlier POSTs. The direct dispatcher leaves its local in-flight work alone during reconciliation. Graceful shutdown drains current queue jobs; direct sends, and an outbox replay in flight with its plugin hooks, get up to `WEBHOOK_SHUTDOWN_DRAIN_MS` (default 5s). That replay sends at most one more POST, bounded by `WEBHOOK_TIMEOUT`, and no further row is replayed; the next start replays what it left pending.
 
 Before downgrading to a version that does not recognize the `queued` outbox state, drain or recover those records and take a backup. Its cleanup may otherwise treat an unsettled queued record as settled. Reverting the terminal-identity migration removes its index but does not restore historical duplicates.
 

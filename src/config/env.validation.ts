@@ -197,15 +197,21 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   // value identical to the parsed one.
   const DECIMAL_INTEGER = /^\d+$/;
 
-  const checkPort = (key: string): void => {
-    const raw = str(key);
+  const checkPort = (key: string, read: (key: string) => string | undefined = str): void => {
+    const raw = read(key);
     if (raw === undefined) return;
     const n = DECIMAL_INTEGER.test(raw) ? Number(raw) : NaN;
     if (!Number.isInteger(n) || n < 1 || n > 65535) {
       errors.push(`${key} must be an integer port in [1, 65535] (got "${raw}")`);
     }
   };
-  checkPort('PORT');
+  // PORT is read untrimmed: main.ts listens on it, and the image healthcheck and the startup banner
+  // splice it into a URL, where a padded "2785 " is malformed although Node still binds 2785. Only an
+  // empty value takes the default there, so validate the exact value with only '' meaning unset.
+  checkPort('PORT', key => {
+    const value = config[key];
+    return typeof value === 'string' && value !== '' ? value : undefined;
+  });
   checkPort('DATABASE_PORT');
   checkPort('REDIS_PORT');
 

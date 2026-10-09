@@ -161,8 +161,9 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   oracle is not an audit log, and `<= 0` falls back to the default rather than disabling the prune
   into unbounded growth).
 - **`integration_delivery_failures`** — a dead-letter record of last resort for inbound (ingress)
-  deliveries, with a redrive path (added in P1). Only the ingress path writes it, so every row's
-  `direction` is `inbound`; a failed outbound call to the provider is not dead-lettered.
+  deliveries, with a redrive path (added in P1). Only the ingress path writes it, and only as
+  `inbound`; a failed outbound call to the provider is not dead-lettered. A data import restores each
+  row's `direction` as stored, and redrive replays only `inbound` rows.
 
 ## 25.6 Security model
 
@@ -231,8 +232,11 @@ job id; per-instance fairness via a token bucket; and a dead-letter record with 
 queued worker path, an **in-process** per-conversation lock prevents concurrent starts for the same lane;
 strict FIFO is not preserved across retry/redrive, and the lock is single-node state rather than Redis or
 PostgreSQL state. When the queue is disabled, ingress dispatches inline after persisting and does not
-serialize concurrent same-conversation deliveries. Providers already deliver over unordered,
-at-least-once HTTP, so plugin handlers must be idempotent and treat ingress as a reconciliation trigger.
+serialize concurrent same-conversation deliveries. A queued delivery falls back to the same inline
+dispatch when Redis is unreachable. Before Redis has ever connected, queue calls wait for it at most
+`REDIS_CONNECT_TIMEOUT_MS` (5s when unset or 0) from the first one, then fall back at once until it
+connects. Providers already deliver over unordered, at-least-once HTTP, so plugin handlers must be
+idempotent and treat ingress as a reconciliation trigger.
 
 A job waiting on that lock still holds one of the `INGRESS_WORKER_CONCURRENCY` worker slots (default
 10). A burst on one lane larger than that fills every slot with same-lane waiters, and events for other
@@ -275,12 +279,15 @@ whose dead-letter write fails is kept for the next run. Two cases get no dead-le
 queue job that still owns the delivery takes the `dispatched` mark (closing any open dead-letter
 row), and a row whose instance or bound session was deleted is dropped, since redrive refuses a
 deleted instance and a session delete purges its dead letters. A delivery whose completed job was
-already removed from the queue, or whose job lookup failed while Redis was down, is dead-lettered
-anyway and may already have been delivered: check before redriving it. The startup prune runs before
-plugins load, so a dead-letter row it writes carries no conversation id and its redrive takes the
-per-instance lane. There is deliberately no per-instance row-count cap: eviction under a flood of
-forged delivery ids would silently drop legit dedup rows and re-admit their replays, which is worse
-than the bounded growth it would prevent.
+already removed from the queue, or whose job lookup failed while Redis was down (or, for a Redis
+slow to start at boot, not yet connected within that first-connect wait), is dead-lettered anyway and
+may already have been delivered: check before redriving it. A dead-letter row the prune writes takes
+its conversation id from the plugin's current manifest route, as the live path does, so a row whose
+plugin package or route is gone, whose route declares no `conversationId` pointer, or whose pointer
+does not resolve in that delivery carries none and its redrive takes the per-instance lane. There is
+deliberately no per-instance row-count cap: eviction under a flood of forged delivery ids would
+silently drop legit dedup rows and re-admit their replays, which is worse than the bounded growth it
+would prevent.
 
 ## 25.8 The Integration SDK (v1)
 

@@ -14,7 +14,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import AdmZip from 'adm-zip';
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { PluginsService, isIngressCapable } from './plugins.service';
@@ -165,12 +165,79 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     enableSpy.mockRestore();
   });
 
-  it('keeps the new version when an update finishes during shutdown instead of rolling back', async () => {
+  it('restores the previous version when shutdown begins while an update stops the running plugin', async () => {
     service.install({ buffer: pkg({ version: '1.0.0' }) });
     pluginStorage.setPluginEnabledByOperator('svc-plg', true);
-    // Teardown has begun (nothing was enabled yet), then the update of a running plugin reaches its re-enable.
-    await loader.onModuleDestroy();
     loader.getPlugin('svc-plg')!.status = PluginStatus.ENABLED;
+    // Hold the update inside unloadPlugin so teardown can begin while the old version is being stopped.
+    let entered!: () => void;
+    const unloading = new Promise<void>(resolve => (entered = resolve));
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const realUnload = loader.unloadPlugin.bind(loader);
+    jest.spyOn(loader, 'unloadPlugin').mockImplementationOnce(async (pluginId: string) => {
+      entered();
+      await gate;
+      return realUnload(pluginId);
+    });
+    const enableSpy = jest.spyOn(loader, 'enablePlugin');
+
+    const updating = service.updatePackage('svc-plg', pkg({ version: '2.0.0' }));
+    await unloading;
+    const destroying = loader.onModuleDestroy();
+    release();
+
+    await expect(updating).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await destroying;
+
+    // The new version was never enabled, so it is not kept: the previous one is back, loaded and on disk.
+    expect(loader.getPlugin('svc-plg')?.manifest.version).toBe('1.0.0');
+    const onDisk = JSON.parse(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'manifest.json'), 'utf8')) as {
+      version: string;
+    };
+    expect(onDisk.version).toBe('1.0.0');
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak'))).toBe(false);
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.new'))).toBe(false);
+    // Only the rollback's best-effort re-enable reached enablePlugin, and shutdown refused it.
+    expect(enableSpy).toHaveBeenCalledTimes(1);
+    await expect(enableSpy.mock.results[0].value).rejects.toThrow(/shutting down/);
+    expect(loader.getPlugin('svc-plg')?.status).not.toBe(PluginStatus.ENABLED);
+    // The operator decision survives, so the next boot brings the previous version back up.
+    expect(pluginStorage.getPluginEntry('svc-plg')?.enabledByOperator).toBe(true);
+  });
+
+  it('restores the previous version when an update applies after shutdown already disabled the plugin', async () => {
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+    pluginStorage.setPluginEnabledByOperator('svc-plg', true);
+    loader.getPlugin('svc-plg')!.status = PluginStatus.ENABLED;
+    // A slow download or a queued operation lets teardown disable the plugin before the update applies.
+    await loader.onModuleDestroy();
+    expect(loader.getPlugin('svc-plg')?.status).not.toBe(PluginStatus.ENABLED);
+    const unloadSpy = jest.spyOn(loader, 'unloadPlugin');
+
+    await expect(service.updatePackage('svc-plg', pkg({ version: '2.0.0' }))).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+
+    // Refused before the swap: the previous version was never stopped and no plugin code ran.
+    expect(unloadSpy).not.toHaveBeenCalled();
+    expect(loader.getPlugin('svc-plg')?.manifest.version).toBe('1.0.0');
+    const onDisk = JSON.parse(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'manifest.json'), 'utf8')) as {
+      version: string;
+    };
+    expect(onDisk.version).toBe('1.0.0');
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak'))).toBe(false);
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.new'))).toBe(false);
+    // The next boot enables the previous version, not an untested new one.
+    expect(pluginStorage.getPluginEntry('svc-plg')?.enabledByOperator).toBe(true);
+  });
+
+  it('still applies an update of a plugin in ERROR once shutdown has begun', async () => {
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+    pluginStorage.setPluginEnabledByOperator('svc-plg', true);
+    // For example its restore on boot failed: it is not running, and the update is likely the fix.
+    loader.getPlugin('svc-plg')!.status = PluginStatus.ERROR;
+    await loader.onModuleDestroy();
 
     const dto = await service.updatePackage('svc-plg', pkg({ version: '2.0.0' }));
 
@@ -180,8 +247,23 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     };
     expect(onDisk.version).toBe('2.0.0');
     expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak'))).toBe(false);
-    // The operator decision survives, so the next boot restores the new version.
     expect(pluginStorage.getPluginEntry('svc-plg')?.enabledByOperator).toBe(true);
+  });
+
+  it('still applies an update of a plugin the operator switched off once shutdown has begun', async () => {
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+    await loader.onModuleDestroy();
+
+    const dto = await service.updatePackage('svc-plg', pkg({ version: '2.0.0' }));
+
+    // Nothing will ever enable it, so there is nothing to prove and no reason to refuse the update.
+    expect(dto.version).toBe('2.0.0');
+    const onDisk = JSON.parse(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'manifest.json'), 'utf8')) as {
+      version: string;
+    };
+    expect(onDisk.version).toBe('2.0.0');
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak'))).toBe(false);
+    expect(pluginStorage.getPluginEntry('svc-plg')?.enabledByOperator).toBeFalsy();
   });
 
   it('cleans up the staging + backup dirs after a successful update (swap happened)', async () => {

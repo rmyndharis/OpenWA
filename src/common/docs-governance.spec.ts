@@ -145,14 +145,17 @@ describe('governance docs match the repository', () => {
     expect(note).toContain('`docker compose up -d --no-build`');
   });
 
-  // Compose hands `./.env`'s PLUGINS_DIR to the container, where `./data/plugins` is in the volume;
-  // the backup scripts read the same line against the host's working directory.
-  it('tells a host-mount backup to override the ./data paths ./.env sets', () => {
+  // Compose hands `./.env`'s PLUGINS_DIR to the container, where `./data/plugins` is in the volume,
+  // so the backup scripts read it, like the ./data defaults, under OPENWA_DATA_DIR.
+  it('tells a host-mount backup that ./data paths in ./.env follow OPENWA_DATA_DIR', () => {
     expect(read('.env.example')).toMatch(/^PLUGINS_DIR=\.\/data\/plugins\b/m);
     expect(read('docker-compose.yml')).toContain('- PLUGINS_DIR=${PLUGINS_DIR:-');
-    const note = between(read('docs/11-operational-runbooks.md'), '> The scripts resolve every other path', '\n>\n');
-    expect(note).toMatch(/A `\.\/data\/\.\.\.` path in `\.\/\.env` needs the same\s+>\s+override/);
+    const note = between(read('docs/11-operational-runbooks.md'), '> The scripts resolve every other path', '\n>\n')
+      .replace(/^> ?/gm, '')
+      .replace(/\s+/g, ' ');
+    expect(note).toContain('A relative `./data/...` path in `./.env` or `.env.generated`');
     expect(note).toContain('`PLUGINS_DIR=./data/plugins`');
+    expect(note).toContain('is read under `OPENWA_DATA_DIR`, as are the `./data` database and state defaults');
   });
 
   // docs/20 section 20.4: the project runs no real-time chat server, and the `openwa` name is shared.
@@ -221,6 +224,37 @@ describe('governance docs match the repository', () => {
     expect(glossary).not.toMatch(staleClaim);
   });
 
+  // A direct sweep replay that fails keeps its outbox copy pending, a delivered redrive closes it,
+  // and the replay budget counts replays, not sweeps. An attempts-0 row the sweep never replays has
+  // no other way back, since redrive takes only terminal rows.
+  it('describes the webhook outbox copy after a sweep replay or a redrive', () => {
+    const flat = (text: string): string => text.replace(/\n#?\s*/g, ' ').replace(/\s+/g, ' ');
+    const doc06 = read('docs/06-api-specification.md');
+    const redrive = between(doc06, '#### POST /api/webhooks/delivery-failures/redrive', '\n#### ');
+    expect(redrive).toMatch(/Success removes its row and closes any outbox copy/);
+    expect(redrive).toMatch(/sweep replay of the same event already under way can still POST/);
+    expect(redrive).toMatch(/excluded before applying the limit when it has `attempts: 0`/);
+    const crash = between(doc06, '**Crash boundary.**', '\n\n');
+    expect(crash).toMatch(/^\*\*Crash boundary\.\*\* For an ordinary dispatch, a successfully written outbox record/);
+    expect(crash).toMatch(
+      /\(the queue off, or its enqueue failed\) that exhausts its retries stores its terminal failure row but keeps the outbox copy pending/,
+    );
+    const runbook = flat(between(read('docs/11-operational-runbooks.md'), '# 6. Replay deliveries', '```'));
+    expect(runbook).toContain('until WEBHOOK_RECONCILE_MAX_ATTEMPTS replays are spent');
+    const glossary = between(read('docs/21-glossary.md'), '### Dead Letter Queue (DLQ)', '\n### ');
+    expect(glossary).toMatch(
+      /with the sweep off such an event is not replayed, but turning the sweep back on replays it/,
+    );
+    expect(glossary).toMatch(
+      /shed or shutdown-refused one the sweep dropped because its webhook was removed, disabled or unsubscribed, nor/,
+    );
+    expect(doc06).not.toMatch(/Removed, disabled, unsubscribed, expired and out-of-scope rows are excluded/);
+    const outbox = between(read('docs/05-database-design.md'), '- **`webhook_outbox_events`**', '\n');
+    expect(outbox).toMatch(/For an ordinary dispatch, delivery success, subscription invalidation/);
+    expect(outbox).toMatch(/that fails keeps the copy pending until the replay budget is spent/);
+    expect(outbox).toMatch(/a delivered redrive of the event also retires it/);
+  });
+
   // Status media lives only in the storage backend, and backup.sh never copies an S3 bucket.
   it('describes the storage backend as the live media store, not a backup target', () => {
     expect(read('scripts/backup.sh')).toMatch(/the bucket's contents are not archived/);
@@ -228,6 +262,89 @@ describe('governance docs match the repository', () => {
       expect(read(file)).not.toMatch(/backup\s*\/\s*migration|media backup/i);
       expect(read(file)).toMatch(/live media store/i);
     }
+    // The table cell also says "live media store", so pin the README sentence carrying the warning.
+    expect(read('README.md')).toMatch(
+      /backup\.sh` archives only the local media directory, so an S3 bucket needs a backup/,
+    );
+  });
+
+  // The export writes one archive entry per file, so Step 1's count meets the entry cap at import.
+  it('has the storage migration check both import caps before the backend switch', () => {
+    const guide = read('docs/14-migration-guide.md');
+    const caps = between(guide, 'Check the import caps before the switch.', '\n\n').replace(/\s+/g, ' ');
+    expect(caps).toContain('`STORAGE_IMPORT_MAX_ENTRIES` files (default `100000`)');
+    expect(caps).toContain("Step 1's `sizeBytes` or `count`");
+    // The import buffers each file whole, so a raised per-entry cap must fit the container's memory.
+    expect(caps).toContain('`OPENWA_MEM_LIMIT` (default `2g`)');
+    const step1 = between(guide, '# Step 1: Check current storage file count', '# Step 2').replace(/\s+/g, ' ');
+    expect(step1).toContain('sizeBytes with STORAGE_IMPORT_MAX_TOTAL_BYTES');
+    expect(step1).toContain('count with STORAGE_IMPORT_MAX_ENTRIES');
+    // Step 1 cannot show the largest file, so the export warning is the only early per-file signal.
+    const step2 = between(guide, '# Step 2: Export all files as tar.gz', '# Step 3').replace(/\s+/g, ' ');
+    expect(step2).toContain('docker compose logs openwa-api');
+    expect(step2).toContain('STORAGE_IMPORT_MAX_BYTES');
+  });
+
+  // The Java transport waits on the whole exchange with the client timeout, so a slow media download
+  // can time out where it once finished. Callers size the timeout from these two descriptions.
+  it('says the Java SDK timeout also bounds the response body', () => {
+    const java = 'sdk/java/src/main/java/com/rmyndharis/openwa';
+    expect(read(java, 'http/DefaultHttpTransport.java')).toMatch(/future\.get\(timeoutMs, TimeUnit\.MILLISECONDS\)/);
+    const readme = between(read('sdk/java/README.md'), '- **Default per-request timeout**', '\n- **');
+    expect(readme.replace(/\s+/g, ' ')).toMatch(/bounds the whole exchange, response body included/);
+    expect(read(java, 'ClientConfig.java')).toMatch(
+      /Per-request timeout \(default 30s\), covering the whole exchange, response body included, with the default transport/,
+    );
+  });
+
+  // The bootstrap key file outlives a demotion or a scope change, and the Helm chart's StatefulSet
+  // leaves no pod to exec into once it is scaled to 0 for the database write.
+  it('gives the admin key recovery its Helm commands and the bootstrap key caveat', () => {
+    const security = read('docs/04-security-design.md');
+    const recovery = between(security, '### Recovering a lost admin key', '\n## ');
+    expect(read('charts/openwa/templates/NOTES.txt')).toContain('default "/app/data/.api-key"');
+    expect(recovery).toContain('`kubectl exec openwa-0 -- cat /app/data/.api-key`');
+    expect(recovery).toMatch(/demoted from `admin`[\s\S]+go on to step 2 or 3/);
+    expect(recovery).toMatch(/given any `allowedSessions` or `allowedChats`, or given `allowedIps` that exclude/);
+    expect(recovery).toMatch(/`allowedIps` \(when set\) admits/);
+    expect(recovery).toContain('`kubectl exec openwa-0 -- node -e "$GEN"`');
+    expect(recovery).toContain('`kubectl exec openwa-restore --`');
+    const restore = between(read('docs/11-operational-runbooks.md'), '### Runbook: Restore from Backup', '\n### ');
+    expect(restore).toContain('name: openwa-restore');
+    expect(restore).toContain('claimName: data-openwa-0');
+    const pepper = between(security, '**Setting or changing `API_KEY_PEPPER`', '\n\n');
+    expect(pepper).toContain('`kubectl exec openwa-restore -- sqlite3 /app/data/main.sqlite "DELETE FROM api_keys"`');
+    const faq = between(read('docs/12-troubleshooting-faq.md'), '**Q: I lost the admin API key.', '\n\n### ');
+    expect(faq).not.toMatch(/first started with/);
+    expect(faq).toMatch(/last seeded, which still works while that key is an active, unscoped ADMIN key/);
+  });
+
+  // The gateway writes only 'inbound' dead letters, but the data import copies `direction` as stored.
+  // Plugin manifests load in the global PluginsModule's onModuleInit, before the startup prune runs, so
+  // a prune-written dead letter derives its conversation id from the current manifest route.
+  it('describes integration dead letters as written inbound and restored as stored', () => {
+    const flat = (text: string): string => text.replace(/\s+/g, ' ');
+    const importer = between(read('src/modules/infra/table-importers.ts'), "key: 'integrationDeliveryFailures'", '}),');
+    expect(importer).toMatch(/map: \(df: IntegrationDeliveryFailureRow\) => \[\s*df\.id,\s*df\.direction,/);
+    expect(read('src/modules/integration/redrive.service.ts')).toMatch(/direction: 'inbound'/);
+    expect(read('src/core/plugins/plugins.module.ts')).toMatch(/@Global\(\)/);
+    expect(read('src/core/plugins/plugin-loader.service.ts')).toMatch(
+      /onModuleInit\(\): void \{\s*this\.scanner\.scanAtBoot\(\)/,
+    );
+    const table = '- **`integration_delivery_failures`**';
+    const fabric = flat(read('docs/25-integration-fabric.md'));
+    for (const entry of [
+      between(flat(read('docs/05-database-design.md')), table, ' - **'),
+      between(fabric, table, ' ## '),
+    ]) {
+      expect(entry).not.toMatch(/`direction` is (always )?`inbound`/);
+      expect(entry).toContain("A data import restores each row's `direction` as stored");
+    }
+    expect(fabric).not.toMatch(/before plugins load/);
+    expect(fabric).toContain(
+      "A dead-letter row the prune writes takes its conversation id from the plugin's current manifest route, as the live path does",
+    );
+    expect(fabric).toContain('or whose pointer does not resolve in that delivery carries none');
   });
 
   it('keeps the README non-affiliation disclaimer', () => {

@@ -23,36 +23,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Retire the whatsapp-web.js download-mimetype install patch; inbound media downloads now pass the mimetype themselves.
-- CI and the weekly security scan run `npm audit` over the JavaScript SDK, and Dependabot watches its lockfile.
 - On PostgreSQL, inbound media that waits `2 x MEDIA_DOWNLOAD_TIMEOUT_MS` without a free slot arrives with the omitted marker instead of being downloaded.
 - On PostgreSQL, a chat's messages are stored in arrival order, so a text waits for earlier media in its chat.
 - On PostgreSQL with whatsapp-web.js, a held message's contact and quoted-message lookups wait at most `MEDIA_DOWNLOAD_TIMEOUT_MS`.
+- The JavaScript SDK release job runs `npm audit` over the SDK tree before it installs, tests and publishes.
+- The JavaScript SDK CommonJS build no longer sets `moduleResolution` node10, which TypeScript 7 removed; the built output is unchanged.
+- JavaScript SDK CI and release jobs install with `--engine-strict` wherever they run the tests, so an unsupported Node fails at install.
+- The JavaScript SDK smoke check sends requests through both built clients, so the Node 18 CI lane covers the request path.
+- Retire the whatsapp-web.js download-mimetype install patch; inbound media downloads now pass the mimetype themselves.
+- Storage import abort messages name the `STORAGE_IMPORT_MAX_BYTES` or `STORAGE_IMPORT_MAX_ENTRIES` setting that stopped them.
+- CI and the weekly security scan run `npm audit` over the JavaScript SDK, and Dependabot watches its lockfile.
 
 ### Fixed
 
-- Drop whatsapp-web.js inbound media over `MEDIA_DOWNLOAD_MAX_BYTES` in the page when the sender understates its size.
 - Bound the inbound media a PostgreSQL session holds before storing it to `INBOUND_MEDIA_CONCURRENCY` payloads, keeping each chat's arrival order.
 - Drop a Baileys edit, revoke or reaction from another chat, or an edit or revoke from the wrong author, aimed at a message still being downloaded, on SQLite too.
+- Warn at storage export when a file is larger than the per-entry import cap `STORAGE_IMPORT_MAX_BYTES`.
+- Refuse a `PORT` with surrounding whitespace at boot instead of binding a port the image healthcheck cannot probe.
+- Skip or cancel the Baileys version lookup of a session stopped while it connects, so no proxy dispatcher outlives it.
+- Stop a request left over from before logout from reloading the dashboard login form.
+- Stop a dashboard Logs export from downloading rows after sign-out when its last page was throttled.
+- Stop reopening a just-saved dashboard template from loading its old values, which a second save wrote back.
+- Stop an operator webhook redrive at its next row on shutdown.
+- Run a plugin's `onDisable` once when shutdown, uninstall or an update overlaps a disable already in progress.
+- Answer `503` and keep the previous version when shutdown begins before an update of a plugin the operator switched on has applied.
+- Disable plugins whose enable is still running at shutdown, after the running ones, and refuse new plugin enables during teardown.
+- Refuse session starts with `503` once shutdown begins, including one already past its checks.
+- Leave a session start that shutdown interrupts for the next boot instead of marking it failed.
+- Destroy session engines at shutdown before waiting on a boot auto-start launch, and bound that wait, so a stalled launch no longer holds teardown past the kill deadline.
+- Stop taking ingress queue jobs once shutdown begins after SIGTERM, SIGINT or an admin restart, instead of running them against stopped sessions.
+- Run the daily ingress retention hand-off after a reconcile sweep in progress instead of skipping it.
+- Try each failing ingress retention hand-off row once per run instead of stopping at the first batch of them.
+- Retire the ingress replay sweep's duplicate dead letter when it races another dead-letter write, and stop logging an event a redrive delivered meanwhile as dead-lettered.
+- Fall back instead of hanging when an ingress, webhook or infra status queue call runs before Redis has ever connected.
+- Drop whatsapp-web.js inbound media over `MEDIA_DOWNLOAD_MAX_BYTES` in the page when the sender understates its size.
+- Trust `NODE_EXTRA_CA_CERTS` in `backup.sh`'s PostgreSQL TLS check on Node older than 22.15.
+- Set `PGSSLMODE` in the `psql` import command `restore.sh` prints when `DATABASE_SSL=true`.
+- Use the `OPENWA_DATA_DIR` volume's `media/`, even before it exists, for a leftover `STORAGE_LOCAL_PATH=./uploads` in host-side `backup.sh` and `restore.sh` runs, instead of the working directory's `./uploads`.
+- Read the `./data` database defaults and `./data/...` paths in `./.env` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs, instead of the working directory's `./data`.
 - Probe the configured `PORT` in the Docker image healthcheck instead of a fixed 2785.
-- Cap the total bytes one storage import writes at `STORAGE_IMPORT_MAX_TOTAL_BYTES`.
+- Cap the total bytes one storage import extracts at `STORAGE_IMPORT_MAX_TOTAL_BYTES`.
 - Close the Baileys session proxy's fetch dispatcher when the session disconnects, logs out or is destroyed.
 - Java SDK (next SDK release after 0.5.1): the request timeout also bounds the response body, so a stalled body raises `OpenWATimeoutError`.
 - Keep a new dashboard template draft when an earlier template save finishes.
 - Stop the dashboard Chats page from marking the open chat read on a newly selected session.
-- Refuse bulk batches once shutdown begins, and fail a batch saved during shutdown instead of sending it.
-- Disable plugins whose enable is still running at shutdown, and refuse new plugin enables during teardown.
-- Stop in-flight webhook replay, ingress replay and pending-message sweeps at shutdown.
+- Refuse bulk batches once shutdown begins, and answer `503` for a batch saved during shutdown instead of sending it.
+- Stop in-flight webhook replay, ingress replay and pending-message sweeps at shutdown, waiting a bounded time for a replay in hand.
 - Close queue workers, waiting up to 15 s for running jobs, before plugins shut down, so no new job is taken against stopped plugins.
-- Answer new HTTP requests with `503` once teardown begins after SIGTERM, SIGINT or `POST /api/infra/restart`.
-- Refuse session starts with `503` once shutdown begins, and leave a start that shutdown interrupts for the next boot instead of marking it failed.
+- Answer new HTTP requests other than health probes with `503` once teardown begins after SIGTERM, SIGINT or `POST /api/infra/restart`.
 - Stop dashboard multi-page loads and a pending chat mark-as-read from sending requests after logout.
 - Keep a new dashboard login signed in when a request sent with the previous API key fails afterwards.
 - Enforce the plugin package size limit before reading `manifest.json`, and reject archive entries whose path starts with `/`.
 - Refuse Baileys animated stickers over 500 frames and run at most two sticker conversions at once.
 - Stop pending webhook deliveries from holding over-cap inline media already omitted from their payload.
 - Resolve `./data/...` paths from `.env.generated` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs.
-- Stop `backup.sh` and `restore.sh` on an env line they cannot parse instead of falling back to the default path.
+- Stop `backup.sh` and `restore.sh` on an env line they cannot parse instead of falling back to a default path or TLS setting.
 - Verify the PostgreSQL server certificate in `backup.sh` when `DATABASE_SSL=true`, as the app does.
 - Dead-letter undispatched ingress events instead of deleting them when they age out of the dedup window.
 - Keep a re-sent ingress delivery redrivable when an earlier dead letter for its id was already redriven.
@@ -90,25 +115,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- The integration docs say `integration_delivery_failures` is written only for failed inbound deliveries.
+- The API reference, database design, runbook and glossary describe when the webhook outbox copy is retired after a sweep replay or a redrive, and which rows neither path recovers.
 - Document the memory media messages and parked webhook deliveries hold during a media burst, and the settings that limit it.
+- The storage migration guide says to check the store size and file count against the import caps before switching backends, and how to re-run an aborted import.
 - The README and architecture docs describe the Local/S3 storage backend as the live media store, not a backup target.
-- Document how to recover a lost admin API key without revoking the other keys.
-- The integration docs say `integration_delivery_failures` holds only failed inbound deliveries.
+- Document how to recover a lost admin API key without revoking the other keys, on source, Compose and Helm installs.
 - The webhook runbook documents the ADMIN delivery-failure redrive and no longer says failed deliveries retry on their own.
 
 ### Dependencies
 
 - `handlebars` 4.7.9 to 4.7.10, closing two critical advisories in which a crafted template could inject JavaScript into compiled output. It reaches the root tree only through `ts-jest`, so it is dev-only and nothing that ships changes.
-- `vitest` 2.1 to 4.1 in the JavaScript SDK tree, closing its dev-only advisories. Its tests now need Node 20+; the published package still supports Node 18.
+- `vitest` 2.1 to 4.1 in the JavaScript SDK tree, closing its dev-only advisories. Its tests now need Node 20.19+ or 22.12+; the published package still supports Node 18.
 
 ### Upgrade notes (behavior changes)
 
+- Boot fails on a `PORT` with surrounding whitespace or a whitespace-only `PORT`; remove the padding.
 - Aged undispatched ingress events are dead-lettered instead of deleted; some may already have been delivered, so check before redriving them.
 - Java SDK (next SDK release after 0.5.1): the request timeout (default 30 s) also bounds the response body; raise it for large media downloads.
+- With `OPENWA_DATA_DIR` set, `backup.sh` and `restore.sh` read the default SQLite databases and `./data/...` paths in `./.env` under it; pass a path in the environment to keep it in the working directory.
 - A storage import stops at `STORAGE_IMPORT_MAX_TOTAL_BYTES` (default 10 GiB); raise it before importing a larger export.
 - Baileys answers `400` for an animated sticker with more than 500 frames.
 - `backup.sh` and `restore.sh` exit with status 2 when `./.env` or `.env.generated` sets a key in a form they cannot parse; fix the line or pass the key in the environment.
-- With `DATABASE_SSL=true`, `backup.sh` now fails against a PostgreSQL server whose certificate the app would reject; trust a private CA through `NODE_EXTRA_CA_CERTS` or `PGSSLROOTCERT`.
+- With `DATABASE_SSL=true`, `backup.sh` now fails against a PostgreSQL server whose certificate the app would reject; trust a private CA through `NODE_EXTRA_CA_CERTS` or `PGSSLROOTCERT`, and give `DATABASE_URL` the host name the certificate carries or set `PGSSLMODE`.
 
 ## [0.24.0] - 2026-10-03
 

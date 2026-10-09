@@ -1309,10 +1309,11 @@ internally on `storageType` — there is no `I*Adapter` interface, separate adap
 `StorageFactory`. The two backends are `local` (the default; files under `./data/media`) and `s3`.
 It is the live media store: the status store writes status media through `putFile` (under
 `statuses/`) and sweeps orphans back out with `deleteFile`, and the storage export/import endpoints
-move its contents between backends. `scripts/backup.sh` copies only the local media directory, never
-the S3 bucket. Incoming and outgoing message media is returned inline to REST/webhook consumers and is
-**not** written through `StorageService` unless `CHAT_MEDIA_ARCHIVE_ENABLED=true`, which archives a copy
-under `chat-media/<sessionId>/` (media this account sent also needs `CHAT_MEDIA_ARCHIVE_OUTBOUND=true`).
+move its contents between backends. Of the media, `scripts/backup.sh` archives only the local media
+directory, never the S3 bucket. Incoming and outgoing message media is returned inline to REST/webhook
+consumers and is **not** written through `StorageService` unless `CHAT_MEDIA_ARCHIVE_ENABLED=true`, which
+archives a copy under `chat-media/<sessionId>/` (media this account sent also needs
+`CHAT_MEDIA_ARCHIVE_OUTBOUND=true`).
 That copy is in addition to the inline one unless `MESSAGE_INLINE_MEDIA=archive`, which replaces the
 row's inline base64 with an `{ omitted: true, archived: true }` marker once the file reads back intact.
 On S3 every key sits under the `S3_KEY_PREFIX` root (default `media/`).
