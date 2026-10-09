@@ -6,7 +6,7 @@ import { Session, SessionStatus } from '../session/entities/session.entity';
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { SessionService } from '../session/session.service';
-import { SessionStoppedException } from '../session/session-engine-controls';
+import { ServerShuttingDownException, SessionStoppedException } from '../session/session-engine-controls';
 import { resolveMaxConcurrentSessions } from '../session/session-engine-lifecycle.service';
 
 /**
@@ -179,6 +179,10 @@ export class SessionTakeoverService implements OnApplicationBootstrap, OnModuleD
         if (error instanceof SessionStoppedException) {
           // Stopped between the sweep's read and this start; the start refused it, as it should.
           this.logger.debug(`Session ${session.name} skipped: stopped by an operator`, { sessionId: session.id });
+        } else if (error instanceof ServerShuttingDownException) {
+          // Shutdown began while this start was in flight; the session is left for a peer or the next boot.
+          this.logger.debug(`Takeover of session ${session.name} abandoned: shutting down`, { sessionId: session.id });
+          return;
         } else if (error instanceof ConflictException) {
           // A peer won the race — exactly the claim doing its job.
           this.logger.debug(`Session ${session.name} was adopted by another node first`, { sessionId: session.id });
