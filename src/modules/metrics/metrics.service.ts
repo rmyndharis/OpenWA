@@ -12,6 +12,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { QUEUE_NAMES } from '../queue/queue-names';
+import { producerReady } from '../queue/redis-connection';
 import { constantTimeEqual } from '../../common/security/constantTimeEqual';
 import { limiterKeyForIp, resolveClientIp, type RequestLike } from '../../common/utils/ip';
 import { SlidingWindowLimiter } from '../events/ws-rate-limit';
@@ -264,7 +265,10 @@ export class MetricsService implements OnModuleDestroy {
     return text;
   }
 
-  /** Job counts for each registered queue that answered within QUEUE_READ_TIMEOUT_MS. */
+  /**
+   * Job counts for each registered queue that answered within QUEUE_READ_TIMEOUT_MS. producerReady keeps a
+   * scrape from leaving a read pending on a Redis that has never connected.
+   */
   private async readQueueCounts(): Promise<Array<[string, Record<string, number>]>> {
     const queues = [
       [QUEUE_NAMES.WEBHOOK, this.webhookQueue],
@@ -276,7 +280,7 @@ export class MetricsService implements OnModuleDestroy {
       let timer: NodeJS.Timeout | undefined;
       try {
         const counts = await Promise.race([
-          queue.getJobCounts(...QUEUE_JOB_STATES),
+          producerReady(queue).then(() => queue.getJobCounts(...QUEUE_JOB_STATES)),
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(new Error('timed out')), QUEUE_READ_TIMEOUT_MS);
           }),
