@@ -16,15 +16,14 @@
 #   --force           overwrite databases that already hold a working install's data; without it
 #                     the restore refuses to touch a live target before changing anything
 # Environment:
-#   MAIN_DATABASE_NAME  restore target for the auth/audit DB (default: ./data/main.sqlite)
-#   DATABASE_NAME       restore target for the SQLite data store (default: ./data/openwa.sqlite)
+#   MAIN_DATABASE_NAME  restore target for the auth/audit DB (default: <data dir>/main.sqlite)
+#   DATABASE_NAME       restore target for the SQLite data store (default: <data dir>/openwa.sqlite)
 #                       Both resolve EXACTLY like the app: the environment first, then ./.env, then
 #                       .env.generated (the archive's copy when it carries one, else the data dir's),
-#                       otherwise the fixed ./data default (see lib-env.sh). The defaults are NOT
-#                       derived from OPENWA_DATA_DIR; restoring there would write databases the app
-#                       never reads (fresh-empty boot + new master key).
-#   OPENWA_DATA_DIR   data directory to restore non-DB state into (default: ./data); a ./data/...
-#                     path read from .env.generated, database paths included, is taken under it
+#                       otherwise the app's ./data default (see lib-env.sh).
+#   OPENWA_DATA_DIR   the app's ./data directory to restore into, such as a volume's mountpoint on
+#                     the host (default: ./data); the ./data defaults, and a ./data/... path read
+#                     from ./.env or .env.generated, are taken under it
 #   SESSION_DATA_PATH, BAILEYS_AUTH_DIR, STORAGE_LOCAL_PATH, PLUGINS_DIR
 #                     override the corresponding state directories
 #   PLUGIN_STATE_DIR  root whose plugins/ holds the plugin registry and ctx.storage (default: the
@@ -296,19 +295,20 @@ done < <(tar -tzf "$ARCHIVE")
 tar -xzf "$ARCHIVE" -C "$STAGE"
 
 # Targets resolve exactly like the app: an explicit environment value, then ./.env, then the
-# dashboard's .env.generated, else the fixed ./data defaults. They may legitimately live outside
-# OPENWA_DATA_DIR. The archive's .env.generated replaces the target's further down, so when it carries
-# one, that copy is the third layer: the restored app reads its paths, and state placed where the
-# replaced file pointed would never be opened. Resolved before anything is validated or written.
+# dashboard's .env.generated, else the app's ./data defaults under OPENWA_DATA_DIR. They may
+# legitimately live outside it. The archive's .env.generated replaces the target's further down, so
+# when it carries one, that copy is the third layer: the restored app reads its paths, and state
+# placed where the replaced file pointed would never be opened. Resolved before anything is
+# validated or written.
 if [ -f "$STAGE/.env.generated" ]; then
   OPENWA_GENERATED_ENV="$STAGE/.env.generated"
   log "Paths not set in the environment or ./.env come from the archive's .env.generated."
 fi
-MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME ./data/main.sqlite path)"
+MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME "${DATA_DIR%/}/main.sqlite" path)"
 # DATABASE_NAME is only a target for an archive carrying the SQLite data store; a PostgreSQL dump is
 # loaded by hand, so a line for it the scripts cannot parse does not stop that restore.
 if [ -f "$STAGE/openwa.sqlite" ]; then
-  DATA_DB="$(openwa_resolve DATABASE_NAME ./data/openwa.sqlite path)"
+  DATA_DB="$(openwa_resolve DATABASE_NAME "${DATA_DIR%/}/openwa.sqlite" path)"
 fi
 SESSIONS_DIR="$(openwa_resolve SESSION_DATA_PATH "$DATA_DIR/sessions" path)"
 BAILEYS_DIR="$(openwa_resolve BAILEYS_AUTH_DIR "$DATA_DIR/baileys" path)"
@@ -479,7 +479,31 @@ if [ -f "$STAGE/database.sql" ]; then
   log "Postgres dump present: load it into an EMPTY database, as docs/11-operational-runbooks.md"
   log "(Restore from Backup, step 3) shows for the built-in openwa-postgres container. For an external"
   log "server, with DATABASE_URL set to your own URL for that database:"
-  log "  sed '/^SET transaction_timeout = 0;\$/d' $DATA_DIR/database.sql | psql -v ON_ERROR_STOP=1 \"\$DATABASE_URL\""
+  # psql defaults to sslmode=prefer, which falls back to plaintext and takes any certificate, so the
+  # printed command asks for the TLS mode the app uses. The restore is already done: a TLS line the
+  # scripts cannot parse leaves the check on rather than stopping it.
+  PSQL_SSL=""
+  PSQL_UNREAD=""
+  if [ -z "${PGSSLMODE:-}" ]; then
+    PSQL_TLS="$(openwa_resolve DATABASE_SSL false 2>/dev/null)" || { PSQL_TLS=true && PSQL_UNREAD=DATABASE_SSL; }
+    if [ "$PSQL_TLS" = true ]; then
+      PSQL_SSL="PGSSLMODE=verify-full "
+      PSQL_REJECT="$(openwa_resolve DATABASE_SSL_REJECT_UNAUTHORIZED true 2>/dev/null)" ||
+        PSQL_UNREAD="${PSQL_UNREAD:+$PSQL_UNREAD and }DATABASE_SSL_REJECT_UNAUTHORIZED"
+      if [ "$PSQL_REJECT" = false ]; then
+        PSQL_SSL="PGSSLMODE=require "
+      fi
+    fi
+  fi
+  log "  sed '/^SET transaction_timeout = 0;\$/d' $DATA_DIR/database.sql | ${PSQL_SSL}psql -v ON_ERROR_STOP=1 \"\$DATABASE_URL\""
+  if [ -n "$PSQL_UNREAD" ]; then
+    log "($PSQL_UNREAD could not be read from the configuration, so the command takes the stricter setting)"
+  fi
+  if [ "$PSQL_SSL" = "PGSSLMODE=verify-full " ] && [ -z "${PGSSLROOTCERT:-}" ]; then
+    log "(verify-full needs the server's CA: set PGSSLROOTCERT to its CA file, such as the NODE_EXTRA_CA_CERTS"
+    log "file for a private CA; libpq otherwise reads ~/.postgresql/root.crt, and sslrootcert=system needs libpq 16+"
+    log "and a system CA store, which the image lacks)"
+  fi
   log "(sed drops a setting this image's pg_dump 17 writes and PostgreSQL 16 rejects)"
 fi
 
