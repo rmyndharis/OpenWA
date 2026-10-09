@@ -29,6 +29,7 @@ jest.mock('bullmq', () => {
       this.name = name;
     }
     add = jest.fn().mockResolvedValue(undefined);
+    waitUntilReady = jest.fn().mockResolvedValue(undefined);
     close = jest.fn().mockResolvedValue(undefined);
     disconnect = jest.fn().mockResolvedValue(undefined);
   }

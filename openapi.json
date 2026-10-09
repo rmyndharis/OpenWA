@@ -16665,6 +16665,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Gateway shutting down; the previous version was kept",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Update an installed plugin in place from a URL (preserves config + enabled state)",

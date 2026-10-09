@@ -11,6 +11,7 @@ import {
   statsApi,
   type CreateWebhookRequest,
   type UpdateWebhookRequest,
+  type MessageTemplate,
   type TemplatePayload,
   type StatsPeriod,
   type CreateInstanceInput,
@@ -158,7 +159,12 @@ export function useUpdateTemplateMutation() {
   return useMutation({
     mutationFn: (params: { sessionId: string; id: string; data: Partial<TemplatePayload> }) =>
       templateApi.update(params.sessionId, params.id, params.data),
-    onSuccess: (_template, params) => {
+    onSuccess: (saved, params) => {
+      // Swap the saved row into the list before the refetch lands (or fails), so reopening it in the meantime
+      // loads the stored values rather than the pre-save ones that a second save would write back.
+      queryClient.setQueryData<MessageTemplate[]>(queryKeys.templates(params.sessionId), rows =>
+        rows?.map(row => (row.id === params.id ? saved : row)),
+      );
       void queryClient.invalidateQueries({ queryKey: queryKeys.templates(params.sessionId) });
     },
   });
