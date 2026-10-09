@@ -1076,12 +1076,16 @@ test('a reconnect refetch that settles after the page was left sends no mark-as-
 
 async function leaveWithPendingRead(loggedOut: boolean): Promise<number> {
   const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
   const { container, unmount } = renderChats();
   await screen.findByText('Main (15551234567)');
   fireEvent.click(await screen.findByText('Alice'));
   await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
   // Opening the chat queued its read behind the quiet window; the page goes away inside it.
-  resetFetchCalls();
+  assert.ok(
+    !findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`),
+    'the read went out before the page was left',
+  );
   // Logout removes the key before the authenticated tree unmounts.
   if (loggedOut) window.sessionStorage.removeItem('openwa_api_key');
   try {
@@ -1212,9 +1216,12 @@ test('switching session with a chat open marks only the chats opened on the new 
     Promise.resolve(
       jsonResponse(sessionId === SESSION.id ? [CHAT] : [{ ...CHAT, lastMessage: 'alice on two' }, CHAT_2]),
     );
+  const readsOnOne: unknown[] = [];
   const readsOnTwo: unknown[] = [];
   const stub = globalThis.fetch;
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith(`/api/sessions/${SESSION.id}/chats/read`))
+      readsOnOne.push(JSON.parse(String(init?.body)));
     if (String(input).endsWith(`/api/sessions/${SESSION_2.id}/chats/read`))
       readsOnTwo.push(JSON.parse(String(init?.body)));
     return stub(input, init);
@@ -1237,6 +1244,8 @@ test('switching session with a chat open marks only the chats opened on the new 
     await flush();
     await flush();
     assert.deepEqual(readsOnTwo, [{ chatId: CHAT_2.id }]);
+    // The read queued for the session that was left still reaches that session.
+    assert.deepEqual(readsOnOne, [{ chatId: CHAT.id }]);
   } finally {
     globalThis.fetch = stub;
     twoSessions = false;

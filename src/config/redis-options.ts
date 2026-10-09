@@ -13,6 +13,9 @@ export interface RedisConnectionOptions {
   tls?: TlsOptions;
 }
 
+/** Default REDIS_CONNECT_TIMEOUT_MS, also the producer's first-connect wait when that is set to 0. */
+export const DEFAULT_REDIS_CONNECT_TIMEOUT_MS = 5000;
+
 /**
  * The connection fields every Redis client shares: the cache, the throttler store, the BullMQ
  * producer and workers, and the WebSocket fan-out pair. Each caller spreads this and adds only its
@@ -30,7 +33,7 @@ export function redisConnectionOptions(): RedisConnectionOptions {
     port: parseInt(process.env.REDIS_PORT || '6379', 10),
     username: process.env.REDIS_USERNAME,
     password: process.env.REDIS_PASSWORD,
-    connectTimeout: parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS || '5000', 10),
+    connectTimeout: parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS || String(DEFAULT_REDIS_CONNECT_TIMEOUT_MS), 10),
     ...(process.env.REDIS_TLS === 'true' ? { tls: {} } : {}),
   };
 }

@@ -44,7 +44,10 @@ public final class StatusResource {
             StatusListResult.class);
     }
 
-    /** Fetch the stored media bytes for a status update (404 when there is no stored media). */
+    /**
+     * Fetch the stored media bytes for a status update (404 when there is no stored media).
+     * The client timeout bounds the whole download.
+     */
     public BinaryResponse media(String sessionId, String statusId) {
         return client.requestBytes(
             HttpMethod.GET,
