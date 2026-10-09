@@ -1,15 +1,17 @@
+import { Optional } from '@nestjs/common';
 import { InjectQueue, OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job, Queue } from 'bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { QUEUE_NAMES } from '../queue-names';
 import { workerConnectionOptions, ingressWorkerConcurrency } from '../redis-connection';
-import { closeWorkerIfStarted, MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
+import { closeWorkerIfStarted, MAX_WORKER_CLOSE_WAIT_MS, startedWorker } from './close-worker';
 import { IntegrationDeliveryFailure } from '../../integration/entities/integration-delivery-failure.entity';
 import { IngressEvent } from '../../integration/entities/ingress-event.entity';
 import { PluginLoaderService } from '../../../core/plugins/plugin-loader.service';
 import { HookManager } from '../../../core/hooks';
 import { createLogger } from '../../../common/services/logger.service';
+import { ShutdownService } from '../../../common/services/shutdown.service';
 import { KeyedAsyncLock, orderingKeyFor } from '../../integration/ordering-lock';
 import { requeuedJobIds } from '../../integration/ingress-enqueue.service';
 
@@ -66,8 +68,18 @@ export class IngressProcessor extends WorkerHost {
     private readonly ingressQueue: Queue<IngressJobData>,
     @InjectRepository(IngressEvent, 'data')
     private readonly events: Repository<IngressEvent>,
+    @Optional() shutdown?: ShutdownService,
   ) {
     super();
+    // A plugin's ingress handler sends through the session engines, and SessionModule tears them down
+    // before QueueModule is destroyed, so a job taken in between fails and spends an attempt. Stop taking
+    // jobs once shutdown begins: the jobs already running keep the drain window to finish while the
+    // engines are up, onModuleDestroy below waits for them, and the rest stay in Redis for another node
+    // or the next start. A close that skips ShutdownService (a signal Nest handles) closes there only.
+    shutdown?.onShutdown(() => {
+      const worker = startedWorker(this);
+      void worker?.close().catch(() => undefined);
+    });
   }
 
   /**
