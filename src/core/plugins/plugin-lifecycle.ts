@@ -25,6 +25,8 @@ import { resolvePluginMainPath } from './plugin-paths';
 export class PluginLifecycle {
   /** Plugin ids whose enable() is in flight — a synchronous lock so concurrent enables can't double-run. */
   private readonly enabling = new Set<string>();
+  /** In-flight disables by plugin id, so a concurrent disable joins the running teardown. */
+  private readonly disabling = new Map<string, Promise<void>>();
 
   constructor(
     // The LOADER's logger, deliberately — lifecycle lines carry the PluginLoaderService tag, and
@@ -136,6 +138,20 @@ export class PluginLifecycle {
       return; // Not enabled
     }
 
+    // Status flips to DISABLED only after the teardown awaits, so a second disable arriving meanwhile
+    // (shutdown overlapping a REST disable, an uninstall or an update unload) would pass the check
+    // above and run onDisable again. Join the teardown already in flight instead. An unload that joins a plain
+    // disable of a sandboxed plugin gets no onUnload, the same as unloading one already disabled.
+    const inFlight = this.disabling.get(pluginId);
+    if (inFlight) {
+      return inFlight;
+    }
+    const disabling = this.teardown(pluginId, plugin, opts).finally(() => this.disabling.delete(pluginId));
+    this.disabling.set(pluginId, disabling);
+    return disabling;
+  }
+
+  private async teardown(pluginId: string, plugin: PluginInstance, opts?: { unload?: boolean }): Promise<void> {
     try {
       const host = this.sandboxHosts.get(pluginId);
       if (host) {

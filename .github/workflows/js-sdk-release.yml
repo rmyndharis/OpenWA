@@ -84,14 +84,22 @@ jobs:
           npm install -g npm@12.1.0
           npm --version
 
-      - run: npm ci
+      # The audit ci.yml runs over this tree, so a tag cannot publish what main would refuse. The
+      # package has no runtime dependencies, but its build and test toolchain runs here, in a job that
+      # can mint a publish credential, and builds the dist/ that ships. `npm audit` reads the lockfile
+      # alone, so it runs before the install executes any of that toolchain. It has no skip path: an
+      # npm audit outage fails the publish, and a re-run clears it.
+      - run: npm audit --audit-level=high
+
+      # --engine-strict: the tests below must not run on a Node the locked toolchain does not support.
+      - run: npm ci --engine-strict
 
       # Same gates as SDK CI, and for the same reason Java's release runs its tests: the artifact that
       # reaches the registry must be the one that passed, not a rebuild nobody checked.
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
-      - run: npm run smoke # dual CJS+ESM consumable — must run after build
+      - run: npm run smoke # packaging plus request smoke; must run after build
 
       - name: Publish to npm (trusted publishing, provenance automatic)
         # No --provenance flag: npm attaches provenance on its own for a trusted-publisher release, and

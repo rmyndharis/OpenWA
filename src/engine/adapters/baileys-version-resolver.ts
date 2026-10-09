@@ -25,6 +25,11 @@ export interface BaileysVersionResolverOptions {
 export interface ResolveOptions {
   /** Global-fetch dispatcher for the session proxy; undefined on an unproxied session (direct). */
   dispatcher?: unknown;
+  /**
+   * Aborted when the session is torn down. The caller discards the result then, so the lookup stops
+   * without further requests or fallback warnings, and the in-flight WhatsApp Web request is cancelled.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -56,10 +61,16 @@ export class BaileysVersionResolver {
     if (waWebVersion) {
       return waWebVersion;
     }
+    if (resolveOptions.signal?.aborted) {
+      return DEFAULT_FALLBACK_WA_VERSION;
+    }
 
     const baileysVersion = await this.resolveFromBaileys(b, resolveOptions);
     if (baileysVersion) {
       return baileysVersion;
+    }
+    if (resolveOptions.signal?.aborted) {
+      return DEFAULT_FALLBACK_WA_VERSION;
     }
 
     const cachedVersion = this.resolveFromDiskCache();
@@ -110,7 +121,10 @@ export class BaileysVersionResolver {
     try {
       const fetchOptions = {
         ...(resolveOptions.dispatcher ? { dispatcher: resolveOptions.dispatcher } : {}),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.any([
+          AbortSignal.timeout(this.timeoutMs),
+          ...(resolveOptions.signal ? [resolveOptions.signal] : []),
+        ]),
       } as unknown as RequestInit;
 
       const result = await b.fetchLatestWaWebVersion(fetchOptions);
@@ -120,12 +134,18 @@ export class BaileysVersionResolver {
         this.saveCachedVersion(version);
         return version;
       }
+      if (resolveOptions.signal?.aborted) {
+        return null;
+      }
 
       this.options.logger.warn(
         `fetchLatestWaWebVersion returned isLatest=false (${JSON.stringify(result?.version)}); advancing to next tier`,
         { sessionId: this.options.sessionId },
       );
     } catch (err) {
+      if (resolveOptions.signal?.aborted) {
+        return null;
+      }
       this.options.logger.warn(`fetchLatestWaWebVersion failed: ${err instanceof Error ? err.message : String(err)}`, {
         sessionId: this.options.sessionId,
       });
@@ -168,12 +188,18 @@ export class BaileysVersionResolver {
         this.saveCachedVersion(version);
         return version;
       }
+      if (resolveOptions.signal?.aborted) {
+        return null;
+      }
 
       this.options.logger.warn(
         `fetchLatestBaileysVersion returned isLatest=false (${JSON.stringify(result?.version)}); advancing to next tier`,
         { sessionId: this.options.sessionId },
       );
     } catch (err) {
+      if (resolveOptions.signal?.aborted) {
+        return null;
+      }
       this.options.logger.warn(
         `fetchLatestBaileysVersion failed: ${err instanceof Error ? err.message : String(err)}`,
         { sessionId: this.options.sessionId },

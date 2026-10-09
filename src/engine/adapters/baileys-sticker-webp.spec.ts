@@ -164,8 +164,9 @@ describe('BaileysMessaging.sendStickerMessage — what reaches the socket must r
   });
 
   // Each pipeline holds a libuv worker for its whole run; unbounded, a handful of concurrent
-  // conversions occupy the pool that fs, dns.lookup and crypto also wait on.
-  it('runs at most two conversions at once and queues the rest', async () => {
+  // conversions occupy the pool that fs, dns.lookup and crypto also wait on. The frame scan is
+  // threadpool work too, and on a GIF of tens of MB it takes seconds, so it waits for a slot as well.
+  it('runs at most two conversions at once, frame scan included, and queues the rest', async () => {
     const pending: Array<(b: Buffer) => void> = [];
     const metadata = jest.spyOn(sharp.prototype, 'metadata').mockResolvedValue({ pages: 1 });
     const convert = jest
@@ -179,10 +180,12 @@ describe('BaileysMessaging.sendStickerMessage — what reaches the socket must r
         messaging.sendStickerMessage('628111@s.whatsapp.net', { data: PNG, mimetype: 'image/png' }),
       );
       await settle();
+      expect(metadata).toHaveBeenCalledTimes(2);
       expect(convert).toHaveBeenCalledTimes(2);
 
       pending.shift()!(WEBP);
       await settle();
+      expect(metadata).toHaveBeenCalledTimes(3);
       expect(convert).toHaveBeenCalledTimes(3);
 
       pending.splice(0).forEach(resolve => resolve(WEBP));
