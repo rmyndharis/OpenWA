@@ -529,7 +529,8 @@ export class InfraConfigController {
     // default 3s) — readiness reports 503 during the window so traffic drains first.
     void this.shutdownService.shutdown();
 
-    // Calculate estimated time - base 15s + additional for each service (increased for reliability)
+    // Calculate estimated time - base 15s + additional for each service (increased for reliability).
+    // A typical healthy value, not a bound: ShutdownService force-exits teardown 67s after the grace.
     let estimatedTime = 15;
     if (profiles.includes('postgres')) estimatedTime += 20;
     if (profiles.includes('redis')) estimatedTime += 13;

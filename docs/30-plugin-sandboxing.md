@@ -56,7 +56,8 @@ from disk is user-installed and sandboxed.
   still working through a backlog of dispatches reads the ping late, but every result it returns counts
   as an answer. A worker whose event loop is blocked answers nothing for 5 s, so the host terminates it
   and sets the plugin to `ERROR` (no automatic restart, the same as a crash); the operator re-enables it
-  once fixed.
+  once fixed. At graceful shutdown every plugin's `onDisable` shares one 10 s cap, and a worker still
+  running at the cap dies with the process.
 - **Memory-kind boundary.** The heap cap bounds the V8 heap only. `Buffer`/`ArrayBuffer` allocations
   are native memory outside `maxOldGenerationSizeMb`, and worker threads share the host's address
   space, so a plugin that accumulates Buffers grows host RSS until the container's memory limit

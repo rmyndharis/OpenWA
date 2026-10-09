@@ -1,7 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
-import { SessionLifecycleFences } from './session-lifecycle-fences';
+import { ENGINE_TEARDOWN_TIMEOUT_MS, SessionLifecycleFences } from './session-lifecycle-fences';
 
 /**
  * Direct invariant coverage for the credential-teardown / initial-status fences. Until now these
@@ -41,6 +41,23 @@ describe('SessionLifecycleFences', () => {
       await expect(fences.teardownEngineSafely('s1', engine({ destroy }), e => e.destroy(), 'destroy')).resolves.toBe(
         false,
       );
+    });
+
+    it('gives up on N hung engines at one ENGINE_TEARDOWN_TIMEOUT_MS, not N of them (the shutdown budget counts it once)', async () => {
+      jest.useFakeTimers();
+      try {
+        const { fences } = makeFences();
+        const hung = () => engine({ destroy: jest.fn(() => new Promise<void>(() => undefined)) });
+        const all = Promise.all([1, 2, 3, 4].map(n => fences.destroyEngineSafely(`s${n}`, hung())));
+        let settled = false;
+        void all.then(() => (settled = true));
+        await jest.advanceTimersByTimeAsync(ENGINE_TEARDOWN_TIMEOUT_MS - 1);
+        expect(settled).toBe(false);
+        await jest.advanceTimersByTimeAsync(1);
+        await expect(all).resolves.toEqual([false, false, false, false]);
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('tracks the RAW logout promise under the session NAME before racing the deadline', async () => {

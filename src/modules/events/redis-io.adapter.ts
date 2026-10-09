@@ -104,7 +104,9 @@ export class RedisIoAdapter extends IoAdapter {
     // Socket.IO's adapters unsubscribe from their Redis channels as the server closes. Tearing the
     // clients down FIRST left those unsubscribes to be issued on dead clients, and each rejection
     // surfaced as an unhandled rejection — a handful of ERROR lines on every graceful shutdown, for
-    // a shutdown that had in fact gone fine. Close the server first, then release the pair.
+    // a shutdown that had in fact gone fine. Close the server first, then release the pair. Under
+    // forceCloseConnections Nest skips the server close when the socket.io server shares the HTTP
+    // server, so only the pub/sub pair is released here and the HTTP close tears the sockets down.
     await super.close(server);
     await Promise.allSettled([this.quitClient(this.pubClient), this.quitClient(this.subClient)]);
     this.pubClient = undefined;

@@ -8,6 +8,7 @@ import { WebhookProcessor } from './processors/webhook.processor';
 import { IngressProcessor } from './processors/ingress.processor';
 import { QUEUE_NAMES } from './queue-names';
 import { queueConnectionOptions } from './redis-connection';
+import { ShutdownSafeQueue } from './shutdown-safe-queue';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookOutboxService } from '../webhook/webhook-outbox.service';
 import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.entity';
@@ -30,6 +31,9 @@ export const WEBHOOK_QUEUE_JOB_OPTIONS = {
   removeOnComplete: { age: 3600, count: 1000 },
   removeOnFail: { age: 86400, count: 5000 },
 } as const;
+
+// Read when registerQueue runs below, so it has to be set before the @Module decorator is evaluated.
+BullModule.queueClass = ShutdownSafeQueue;
 
 @Module({
   imports: [

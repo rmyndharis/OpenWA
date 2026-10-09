@@ -49,11 +49,16 @@ services:
       dockerfile: Dockerfile
     container_name: openwa-api
     restart: unless-stopped
-    # Give the graceful drain room to complete before Docker SIGKILLs the container: the shutdown
-    # grace (SHUTDOWN_DELAY_MS, default 3s) plus the worst-case per-engine teardown bound (~10s) can
-    # exceed Docker's 10s default, which would otherwise kill Chromium mid-teardown and orphan a
-    # session profile. Tune down if you raise neither SHUTDOWN_DELAY_MS nor run many sessions.
-    stop_grace_period: 45s
+    # Give the ordered teardown room to finish before Docker SIGKILLs the container, which would cut
+    # Chromium, the usage flush and the database close short. Bounded stages in order: drain 3s
+    # (SHUTDOWN_DELAY_MS) + ingress reconciler 5s + engines 10s + auto-start wait 5s + webhook drain 5s
+    # (WEBHOOK_SHUTDOWN_DRAIN_MS) + usage flush 5s = 33s. An enabled plugin adds 10s. QUEUE_ENABLED and
+    # REDIS_ENABLED add 20s (worker close 10s, producer queue close 2s for each of two queues, three
+    # Redis quits 2s each): 63s worst case. The process force-exits 67s after the drain and 5s before
+    # this deadline. Raising SHUTDOWN_DELAY_MS or WEBHOOK_SHUTDOWN_DRAIN_MS moves that exit later by the
+    # same amount, so raise this by the same amount too. The session count does not add: engines stop
+    # in parallel.
+    stop_grace_period: 75s
     # App network for datastores + the isolated network to reach
     # docker-proxy (DOCKER_HOST). createService() in docker.service.ts attaches
     # orchestrated containers to the literal `openwa-network`, so its name is fixed.

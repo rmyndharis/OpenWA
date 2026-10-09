@@ -88,8 +88,9 @@ function isTransientLaunchFailure(error: unknown): boolean {
 export const AUTOSTART_THROTTLE_MS = 2_000;
 
 /**
- * How long shutdown waits for the auto-start run once the engines are destroyed. Short: the 45s kill
- * deadline in compose and the Helm chart still has to cover releaseAll and the database close.
+ * How long shutdown waits for the auto-start run once the engines are destroyed. Short: the webhook
+ * drain, worker close, usage flush, plugin phase, releaseAll and the HTTP and database close still have
+ * to fit the kill deadline (see shutdown-budget.ts).
  */
 export const AUTOSTART_SHUTDOWN_WAIT_MS = 5_000;
 

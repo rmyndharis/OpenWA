@@ -142,7 +142,15 @@ async function bootstrap() {
   // Disable Nest's default body parser so we can set an explicit size cap below. Framework lines
   // (route mapping, unhandled-exception stacks) go through the app logger so LOG_LEVEL, LOG_FORMAT and
   // the request id apply to them too.
-  const app = await NestFactory.create(AppModule, { bodyParser: false, logger: createLogger('Nest') });
+  // forceCloseConnections: the HTTP close runs after every destroy hook, and a request still in flight
+  // would hold it until the force-exit; destroying the open sockets there keeps it at 0 s in the
+  // shutdown budget (shutdown-budget.ts). It also cuts in-flight requests and WebSocket clients at that
+  // point (the socket.io server is not closed first), after the destroy hooks have run.
+  const app = await NestFactory.create(AppModule, {
+    bodyParser: false,
+    logger: createLogger('Nest'),
+    forceCloseConnections: true,
+  });
   appInstance = app;
 
   // Cross-replica WebSocket fan-out: when Redis is enabled, broadcasts reach clients on every

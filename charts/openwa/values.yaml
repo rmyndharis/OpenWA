@@ -77,9 +77,14 @@ resources:
     memory: 2Gi
     cpu: 1000m
 
-# Matches docker-compose stop_grace_period: graceful drain + per-engine Chromium
-# teardown can exceed the 30s k8s default.
-terminationGracePeriodSeconds: 45
+# Matches docker-compose stop_grace_period. Sized for the worst case (QUEUE_ENABLED, Redis, a plugin
+# enabled), where the bounded teardown stages add up to 63s: drain 3 + ingress reconciler 5 + engines
+# 10 (in parallel, whatever the session count) + auto-start wait 5 + webhook drain 5 + worker close 10
+# + producer queue close 2 for each of two queues + usage flush 5 + plugin phase 10 + three Redis quits
+# 2 each. The process force-exits 67s after the drain and 5s before this deadline. Raising
+# SHUTDOWN_DELAY_MS or WEBHOOK_SHUTDOWN_DRAIN_MS moves that exit later by the same amount, so raise
+# this by the same amount too.
+terminationGracePeriodSeconds: 75
 
 # Pod-level securityContext, empty by default. The default image start is as
 # root: the entrypoint re-owns /app/data and the XDG dirs, then drops to the

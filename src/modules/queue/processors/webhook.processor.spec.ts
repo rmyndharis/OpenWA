@@ -3,6 +3,7 @@ import { FindOperator, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { WebhookOutboxService } from '../../webhook/webhook-outbox.service';
 import { WebhookProcessor } from './webhook.processor';
+import { MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import { WebhookDeliveryFailure } from '../../webhook/entities/webhook-delivery-failure.entity';
 import { HookManager } from '../../../core/hooks';
@@ -701,6 +702,37 @@ describe('WebhookProcessor', () => {
       a.release();
       b.release();
       await Promise.all(jobs);
+    });
+  });
+
+  describe('onModuleDestroy', () => {
+    // The wait for running jobs is the delivery timeout plus 5 s of bookkeeping, capped at the worker close cap.
+    const settleAfter = async (timeoutMs: number): Promise<number> => {
+      jest.useFakeTimers();
+      try {
+        configService.get.mockImplementation((key: string, def?: unknown) =>
+          key === 'webhook.timeout' ? timeoutMs : def,
+        );
+        (processor as unknown as { _worker: unknown })._worker = {
+          name: 'webhook',
+          close: () => new Promise<void>(() => undefined),
+        };
+        let doneAt = -1;
+        const started = Date.now();
+        void processor.onModuleDestroy().then(() => (doneAt = Date.now() - started));
+        await jest.advanceTimersByTimeAsync(MAX_WORKER_CLOSE_WAIT_MS + 1);
+        return doneAt;
+      } finally {
+        jest.useRealTimers();
+      }
+    };
+
+    it('waits for the delivery timeout plus 5 s when that is under the close cap', async () => {
+      expect(await settleAfter(2_000)).toBe(7_000);
+    });
+
+    it('waits no longer than the close cap for a long delivery timeout', async () => {
+      expect(await settleAfter(25_000)).toBe(MAX_WORKER_CLOSE_WAIT_MS);
     });
   });
 });

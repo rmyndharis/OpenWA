@@ -91,7 +91,7 @@ export class ApiKeyUsageTracker {
    * Best-effort flush of the coalesced counters on teardown. Nest runs the owning service's
    * onModuleDestroy before the TypeORM connection closes (the DataSource is destroyed in
    * onApplicationShutdown, the last lifecycle hook), so the DB is still writable here. Bounded so a
-   * wedged DB cannot stall shutdown past the grace window; whatever is still unflushed after the
+   * wedged DB cannot stall the teardown (a line item in shutdown-budget.ts); whatever is unflushed after the
    * bound is dropped — the counters are advisory statistics, authentication never depends on them.
    */
   async flushOnShutdown(): Promise<void> {

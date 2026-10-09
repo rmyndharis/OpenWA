@@ -16,6 +16,7 @@ import {
   recordTerminalFailure,
 } from './utils/deliver-once';
 import { createLogger } from '../../common/services/logger.service';
+import { DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS } from '../../common/services/shutdown-budget';
 import { DEFAULT_WEBHOOK_MEDIA_INLINE_MAX_BYTES, shedInlineMedia } from '../../common/utils/inline-media';
 import { incrementWebhookDeliveryFailures } from '../../common/metrics/webhook-delivery-metrics';
 import { QUEUE_NAMES } from '../queue/queue-names';
@@ -68,9 +69,9 @@ const DEFAULT_WEBHOOK_MAX_PAYLOAD_BYTES = 1024 * 1024;
 /**
  * How long shutdown waits for in-flight direct deliveries (and their dead-letter bookkeeping) to
  * finish before abandoning them, and for an outbox replay in flight. Default 5s; override with
- * WEBHOOK_SHUTDOWN_DRAIN_MS.
+ * WEBHOOK_SHUTDOWN_DRAIN_MS. Defined in shutdown-budget.ts, which sizes the kill deadline from it.
  */
-export const DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS = 5000;
+export { DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS };
 
 /**
  * The result of one delivery attempt. Reported, not thrown: every delivery failure below is already
@@ -233,7 +234,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * up to WEBHOOK_SHUTDOWN_DRAIN_MS to finish; anything still running after that is about to be
    * dropped by process exit, so it is logged per delivery — a dead-letter row would be wrong there,
    * since the receiver may already have gotten the event. Nest awaits this hook during app.close(),
-   * so the bound also keeps app.close() itself bounded.
+   * so the bound limits this hook only; the whole teardown is the sum in shutdown-budget.ts.
    */
   async onModuleDestroy(): Promise<void> {
     if (!this.queueEnabled) {

@@ -89,6 +89,8 @@ export class IngressProcessor extends WorkerHost {
    * Closing here, before the global modules, lets the jobs already running finish against live plugins
    * and leaves the rest in Redis for the next start. Running jobs that share an ordering key dispatch
    * one after another, so a full worker of them can outlast any wait; this one takes the whole cap.
+   * A job still running at the cap is cut mid-dispatch and re-run after the next start; BullMQ allows one
+   * stall per job, so a second one fails it.
    */
   async onModuleDestroy(): Promise<void> {
     await closeWorkerIfStarted(this, MAX_WORKER_CLOSE_WAIT_MS);

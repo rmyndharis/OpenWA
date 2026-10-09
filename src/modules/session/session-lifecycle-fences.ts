@@ -3,6 +3,9 @@ import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { type createLogger } from '../../common/services/logger.service';
 
+/** Per-engine teardown deadline. Shutdown tears engines down in parallel, so it counts once. See shutdown-budget.ts. */
+export const ENGINE_TEARDOWN_TIMEOUT_MS = 10_000;
+
 /**
  * The credential-teardown / initial-status fences extracted from SessionEngineLifecycle. Plain
  * class (NOT a NestJS provider — the lifecycle's constructor signature is frozen by specs), built
@@ -88,7 +91,7 @@ export class SessionLifecycleFences {
       await Promise.race([
         raw,
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`engine.${label}() timed out`)), 10_000);
+          timer = setTimeout(() => reject(new Error(`engine.${label}() timed out`)), ENGINE_TEARDOWN_TIMEOUT_MS);
         }),
       ]);
       return true;

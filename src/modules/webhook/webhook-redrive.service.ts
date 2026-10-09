@@ -4,8 +4,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { Webhook } from './entities/webhook.entity';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
-import { WebhookDeliveryService } from './webhook-delivery.service';
+import { DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS, WebhookDeliveryService } from './webhook-delivery.service';
 import { isDeliverableWebhook } from './utils/deliver-once';
+import { MAX_TIMER_MS } from '../../config/configuration';
 import { resolveSessionScope } from '../../common/security/session-scope';
 import { createLogger } from '../../common/services/logger.service';
 
@@ -81,11 +82,29 @@ export class WebhookRedriveService implements OnModuleDestroy {
    * on POSTing after PluginLoaderService has unregistered the `webhook:before` hooks, sending the
    * stored pre-hook data. Stop at the next row and wait for the replays in hand: this module is
    * destroyed before the global plugin module, so those still run with their hooks. Rows not reached
-   * stay for a later call and are counted in `remaining`.
+   * stay for a later call and are counted in `remaining`. The wait is at most WEBHOOK_SHUTDOWN_DRAIN_MS,
+   * like the delivery drain and the reconciler beside it: a replay in hand is one POST plus hooks and
+   * database writes that carry no cap of their own.
    */
   async onModuleDestroy(): Promise<void> {
     this.stop.abort();
-    await this.running;
+    // Above MAX_TIMER_MS a Node timer fires after 1 ms; the delivery drain honours such a value in full.
+    const waitMs = Math.min(
+      this.configService.get<number>('webhook.shutdownDrainMs', DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS),
+      MAX_TIMER_MS,
+    );
+    let timer: NodeJS.Timeout | undefined;
+    const settled = await Promise.race([
+      this.running.then(() => true),
+      new Promise<false>(resolve => (timer = setTimeout(resolve, waitMs, false))),
+    ]);
+    clearTimeout(timer);
+    if (!settled) {
+      this.logger.warn('Webhook redrive still running at shutdown; continuing without it', {
+        waitMs,
+        action: 'webhook_redrive_shutdown_timeout',
+      });
+    }
   }
 
   redrive(request: WebhookRedriveRequest, allowedSessions?: string[] | null): Promise<WebhookRedriveResult> {

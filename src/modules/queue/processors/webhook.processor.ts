@@ -83,7 +83,9 @@ export class WebhookProcessor extends WorkerHost {
   }
 
   // Stop taking jobs before the plugins are torn down, so a final attempt's webhook:error hook still
-  // reaches them; see IngressProcessor.onModuleDestroy. The wait covers one POST plus its bookkeeping.
+  // reaches them; see IngressProcessor.onModuleDestroy. The wait is min(WEBHOOK_TIMEOUT + 5 s, 10 s), so it
+  // covers one POST plus its bookkeeping only while WEBHOOK_TIMEOUT is 5 s or less; a job still active at the
+  // cap is re-run after the next start.
   async onModuleDestroy(): Promise<void> {
     await closeWorkerIfStarted(this, this.configService.get<number>('webhook.timeout', 10000) + 5000);
   }

@@ -116,7 +116,7 @@ describe('dispatchConversationMedia', () => {
 
 import * as fs from 'fs';
 import * as os from 'os';
-import { PluginLoaderService } from './plugin-loader.service';
+import { PLUGIN_SHUTDOWN_WAIT_MS, PluginLoaderService } from './plugin-loader.service';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { HookManager } from '../hooks';
@@ -477,6 +477,91 @@ describe('PluginLoaderService — graceful shutdown (onModuleDestroy)', () => {
     expect(onDisable).toHaveBeenCalledTimes(1);
     expect(onUnload).toHaveBeenCalledTimes(1);
     expect(loader.getPlugin('gone-plg')).toBeUndefined();
+  });
+
+  describe('time cap', () => {
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    const never = (): Promise<void> => new Promise<void>(() => undefined);
+
+    it('disables plugins in parallel and returns at PLUGIN_SHUTDOWN_WAIT_MS when onDisable never settles', async () => {
+      const a = jest.fn(never);
+      const b = jest.fn(never);
+      loader.registerBuiltInPlugin(ext('a-plg'), { onDisable: a });
+      loader.registerBuiltInPlugin(ext('b-plg'), { onDisable: b });
+      await loader.enablePlugin('a-plg');
+      await loader.enablePlugin('b-plg');
+      const warn = jest.spyOn(loader['logger'], 'warn').mockImplementation(() => undefined);
+
+      let done = false;
+      void loader.onModuleDestroy().then(() => (done = true));
+      await jest.advanceTimersByTimeAsync(0);
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(PLUGIN_SHUTDOWN_WAIT_MS - 1);
+      expect(done).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(done).toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('time cap'),
+        expect.objectContaining({ action: 'plugin_shutdown_timeout' }),
+      );
+    });
+
+    it('stops waiting for an enable that never settles at the same cap', async () => {
+      loader.registerBuiltInPlugin(ext('stuck-plg'), { onEnable: never });
+      void loader.enablePlugin('stuck-plg').catch(() => undefined);
+      jest.spyOn(loader['logger'], 'warn').mockImplementation(() => undefined);
+
+      let done = false;
+      void loader.onModuleDestroy().then(() => (done = true));
+      await jest.advanceTimersByTimeAsync(PLUGIN_SHUTDOWN_WAIT_MS - 1);
+      expect(done).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(done).toBe(true);
+    });
+
+    it('still disables an enable that lands at 2 s and returns then, without the warning', async () => {
+      const onDisable = jest.fn(() => Promise.resolve());
+      loader.registerBuiltInPlugin(ext('late-plg'), {
+        onEnable: () => new Promise<void>(resolve => setTimeout(resolve, 2000)),
+        onDisable,
+      });
+      void loader.enablePlugin('late-plg');
+      const warn = jest.spyOn(loader['logger'], 'warn').mockImplementation(() => undefined);
+
+      let done = false;
+      void loader.onModuleDestroy().then(() => (done = true));
+      await jest.advanceTimersByTimeAsync(1999);
+      expect(done).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(done).toBe(true);
+      expect(onDisable).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('leaves no timer behind after a teardown that finishes within the cap', async () => {
+      loader.registerBuiltInPlugin(ext('ok-plg'), { onDisable: () => Promise.resolve() });
+      await loader.enablePlugin('ok-plg');
+
+      await loader.onModuleDestroy();
+
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it('does not let one failing onDisable stop the others', async () => {
+      const ok = jest.fn(() => Promise.resolve());
+      loader.registerBuiltInPlugin(ext('bad-plg'), { onDisable: () => Promise.reject(new Error('flush failed')) });
+      loader.registerBuiltInPlugin(ext('ok-plg'), { onDisable: ok });
+      await loader.enablePlugin('bad-plg');
+      await loader.enablePlugin('ok-plg');
+      jest.spyOn(loader['logger'], 'error').mockImplementation(() => undefined);
+
+      await expect(loader.onModuleDestroy()).resolves.toBeUndefined();
+      expect(ok).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('refuses an enable once teardown has begun', async () => {

@@ -583,16 +583,18 @@ double-enable, and engines must match the configured active engine):
 
 **Disable / unload / uninstall.** `disablePlugin` runs `onDisable` (force-terminating the worker for a
 sandboxed plugin, even if `onDisable` hangs or throws) and unregisters the plugin's hooks. `onModuleDestroy`
-disables every enabled plugin on graceful shutdown so stateful plugins can flush. Running plugins are
-disabled first; then it waits for enables already in flight (a sandboxed enable is three 30 s-bounded
-calls) and disables those plugins too. New enables are refused once teardown starts. A disable that
-arrives while the same plugin is still being disabled (shutdown overlapping a REST disable, an
-uninstall or an update unload) joins the running teardown, so `onDisable` runs once; an unload that
-joins this way gets no worker-side `onUnload`. `uninstallPlugin` disables + unloads, drops the
-registry entry, and deletes the plugin's directory and its `ctx.storage` data dir (built-ins are
-protected and cannot be uninstalled). The unload path dispatches `onUnload`: for a sandboxed plugin
-it runs in the worker between `onDisable` and terminate (a plain disable does
-NOT fire `onUnload` — disable is reversible and its cleanup hook is `onDisable`).
+disables every enabled plugin on graceful shutdown so stateful plugins can flush. Plugins are disabled
+in parallel, so the order of `onDisable` across plugins is unspecified and a handler must not rely on
+another plugin still being enabled. Running plugins go first; then it waits for enables already in
+flight (a sandboxed enable is three 30 s-bounded calls) and disables those plugins too. The whole
+phase, waits included, is capped at 10 s; a plugin still running at the cap is terminated with the
+process. New enables are refused once teardown starts. A disable that arrives while the same plugin is
+still being disabled (shutdown overlapping a REST disable, an uninstall or an update unload) joins the
+running teardown, so `onDisable` runs once; an unload that joins this way gets no worker-side `onUnload`.
+`uninstallPlugin` disables + unloads, drops the registry entry, and deletes the plugin's directory and
+its `ctx.storage` data dir (built-ins are protected and cannot be uninstalled). The unload path
+dispatches `onUnload`: for a sandboxed plugin it runs in the worker between `onDisable` and terminate
+(a plain disable does NOT fire `onUnload`; disable is reversible and its cleanup hook is `onDisable`).
 
 **Context.** `createPluginContext` builds the `PluginContext` (§19.4): a per-plugin logger,
 `registerHook` (wrapped with the per-session activation gate), `registerWebhook`, the live

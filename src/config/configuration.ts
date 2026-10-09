@@ -4,6 +4,7 @@ import { computeSendPacingConfig } from '../modules/message/send-pacing.config';
 import { resolveInflightBodyBudgetBytes } from './inflight-body-budget';
 import { resolveRequestTimeoutMs } from './http-timeouts';
 import { readWsRateLimitConfig } from '../modules/events/ws-rate-limit';
+import { DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS, MAX_TIMER_MS } from '../common/services/shutdown-budget';
 
 /**
  * Root of the host's persistent state. Relative on purpose: the image sets WORKDIR /app and mounts
@@ -60,7 +61,7 @@ export function resolveNonNegativeIntEnv(raw: string | undefined, fallback: numb
  * arms `protocolTimeout` with a plain `setTimeout` (`common/CallbackRegistry.js`), so the ceiling
  * applies to it directly and the browser never finishes launching.
  */
-export const MAX_TIMER_MS = 2147483647;
+export { MAX_TIMER_MS };
 
 /**
  * The UI locale Chromium is pinned to. Without a pin the browser's language is whatever the launched
@@ -309,7 +310,7 @@ export default () => ({
     // How long shutdown waits for in-flight direct deliveries to finish before abandoning them.
     // 0 = don't wait (explicit opt-out); blank/garbage falls back to the default — a NaN here would
     // silently remove the drain deadline downstream (Math.max(0, NaN) is NaN).
-    shutdownDrainMs: resolveNonNegativeIntEnv(process.env.WEBHOOK_SHUTDOWN_DRAIN_MS, 5000),
+    shutdownDrainMs: resolveNonNegativeIntEnv(process.env.WEBHOOK_SHUTDOWN_DRAIN_MS, DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS),
     // How long a terminal delivery-failure row keeps the event data it was built from, so
     // `POST /webhooks/delivery-failures/redrive` can replay it. 0 (the default) stores nothing, which
     // is the pre-redrive behaviour. The retention sweep nulls an expired payload and keeps the row.

@@ -1,3 +1,4 @@
+import { MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
 import { IngressProcessor } from './ingress.processor';
 
 function job(overrides = {}) {
@@ -16,6 +17,27 @@ function job(overrides = {}) {
 }
 
 describe('IngressProcessor', () => {
+  // Running jobs that share an ordering key run one after another, so the close takes the whole cap.
+  it('waits MAX_WORKER_CLOSE_WAIT_MS for a worker that never closes, then returns', async () => {
+    jest.useFakeTimers();
+    try {
+      const proc = new IngressProcessor({} as never, {} as never, {} as never, {} as never, {} as never);
+      (proc as unknown as { _worker: unknown })._worker = {
+        name: 'ingress',
+        close: () => new Promise<void>(() => undefined),
+      };
+      let doneAt = -1;
+      const started = Date.now();
+      void proc.onModuleDestroy().then(() => (doneAt = Date.now() - started));
+      await jest.advanceTimersByTimeAsync(MAX_WORKER_CLOSE_WAIT_MS - 1);
+      expect(doneAt).toBe(-1);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(doneAt).toBe(MAX_WORKER_CLOSE_WAIT_MS);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('dispatches the event into the worker via dispatchWebhook', async () => {
     const dispatchWebhook = jest.fn().mockResolvedValue({ ok: true, status: 200 });
     const loader = { dispatchWebhookForInstance: dispatchWebhook };

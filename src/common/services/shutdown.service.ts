@@ -1,8 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { createLogger } from './logger.service';
+import {
+  DEFAULT_SHUTDOWN_DELAY_MS,
+  DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS,
+  shutdownTeardownLimitMs,
+} from './shutdown-budget';
 
-/** Default grace before teardown; capped so a misconfigured value can't exceed a typical SIGKILL window. */
-export const DEFAULT_SHUTDOWN_DELAY_MS = 3000;
+// The delay counts 1:1 against the kill deadline; see shutdown-budget.ts.
 const MAX_SHUTDOWN_DELAY_MS = 30_000;
 
 @Injectable()
@@ -13,6 +18,8 @@ export class ShutdownService {
   private shuttingDown = false;
   private shutdownScheduled = false;
   private tearingDown = false;
+
+  constructor(@Optional() private readonly config?: ConfigService) {}
 
   /**
    * Set the shutdown callback (called from main.ts after app creation)
@@ -73,12 +80,23 @@ export class ShutdownService {
     setTimeout(() => {
       this.logger.log('Initiating shutdown...');
       this.tearingDown = true;
+      // The only bound on the waits that have none of their own (the database waits, queue and pool
+      // close), and the only one on the admin-restart path, where no orchestrator kill follows. Armed
+      // here, after the grace, so a raised SHUTDOWN_DELAY_MS moves it with the kill deadline; see
+      // shutdown-budget.ts. Not unref'd: a teardown parked on a promise that holds no handle would let
+      // the loop drain and the process exit 0 with the remaining hooks never run.
+      const budgetMs = shutdownTeardownLimitMs(
+        this.config?.get<number>('webhook.shutdownDrainMs') ?? DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS,
+      );
+      const forceExit = setTimeout(() => {
+        this.logger.error('Shutdown teardown exceeded its budget, forcing exit', undefined, { budgetMs });
+        process.exit(1);
+      }, budgetMs);
       const doShutdown = async () => {
         // The exit status mirrors the teardown outcome: 0 when teardown completed, 1 when it
-        // failed — an orchestrator (k8s, systemd, docker restart policies) must not read a
-        // resource-leaking shutdown as a clean one. (A teardown that HANGS never reaches this
-        // exit at all; that case is bounded externally by the second-signal force-exit in
-        // main.ts or the orchestrator's SIGKILL deadline.)
+        // failed, so an orchestrator (k8s, systemd, docker restart policies) must not read a
+        // resource-leaking shutdown as a clean one. A teardown that hangs is cut by the force-exit
+        // timer above (or by a second signal in main.ts).
         let exitCode = 0;
         try {
           if (this.destroyCallback) {
@@ -91,6 +109,7 @@ export class ShutdownService {
             error instanceof Error ? error.message : String(error),
           );
         } finally {
+          clearTimeout(forceExit);
           process.exit(exitCode);
         }
       };
