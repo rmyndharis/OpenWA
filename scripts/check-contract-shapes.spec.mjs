@@ -42,6 +42,15 @@ test('parseHandTypes reads required and optional members (a required field is no
   assert.equal(types.Sample.name.optional, true);
 });
 
+test('parsers handle Windows CRLF line endings identically to LF', () => {
+  const crlfHand = handSource.replace(/\n/g, '\r\n');
+  assert.deepEqual(parseHandTypes(crlfHand), parseHandTypes(handSource));
+
+  const pySource = 'class Sample(TypedDict):\n    id: str\n    name: NotRequired[str]\n';
+  const crlfPy = pySource.replace(/\n/g, '\r\n');
+  assert.deepEqual(parsePythonTypes(crlfPy), parsePythonTypes(pySource));
+});
+
 const schemas = {
   SampleDto: {
     type: 'object',

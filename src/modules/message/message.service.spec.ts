@@ -53,6 +53,7 @@ function createMockEngine() {
   return {
     reactToMessage: jest.fn().mockResolvedValue(undefined),
     getMessageReactions: jest.fn().mockResolvedValue([]),
+    getMessageReceipts: jest.fn().mockResolvedValue({ delivery: [], read: [], played: [] }),
     deleteMessage: jest.fn().mockResolvedValue(undefined),
     pinMessage: jest.fn().mockResolvedValue(undefined),
     starMessage: jest.fn().mockResolvedValue(undefined),
@@ -709,6 +710,13 @@ describe('MessageService', () => {
       });
 
       expect(mockEngine.reactToMessage).toHaveBeenCalledWith('test@c.us', 'wa-msg-1', '👍');
+    });
+  });
+
+  describe('getMessageReceipts', () => {
+    it('should call engine.getMessageReceipts', async () => {
+      await service.getMessageReceipts('sess-1', 'test@c.us', 'wa-msg-1');
+      expect(mockEngine.getMessageReceipts).toHaveBeenCalledWith('test@c.us', 'wa-msg-1');
     });
   });
 

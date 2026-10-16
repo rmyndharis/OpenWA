@@ -180,6 +180,12 @@ class MessagesResource
         return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/{$this->http->encodeSegment($chatId)}/{$this->http->encodeSegment($messageId)}/reactions") ?? [];
     }
 
+    /** @return array<string,mixed> */
+    public function receipts(string $sessionId, string $chatId, string $messageId): array
+    {
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/{$this->http->encodeSegment($chatId)}/{$this->http->encodeSegment($messageId)}/receipts") ?? [];
+    }
+
     /**
      * Pin a message in its chat.
      *

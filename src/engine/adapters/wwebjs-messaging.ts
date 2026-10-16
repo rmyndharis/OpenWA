@@ -8,6 +8,8 @@ import {
   MediaInput,
   MessageContact,
   MessageReaction,
+  MessageReceiptParticipant,
+  MessageReceipts,
   MessageResult,
   PollInput,
   Quotable,
@@ -17,7 +19,7 @@ import { BadRequestException, NotImplementedException } from '@nestjs/common';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
-import { chatKind, userPart } from '../identity/wa-id';
+import { chatKind, toNeutralJid, userPart } from '../identity/wa-id';
 import {
   chatHistoryMediaBudgetBytes,
   coerceDeclaredSize,
@@ -879,6 +881,57 @@ export class WwebjsMessaging {
       });
     }
     return result;
+  }
+
+  async getMessageReceipts(chatId: string, messageId: string): Promise<MessageReceipts> {
+    this.host.ensureReady();
+    const info = await this.withPage('getMessageReceipts', async () => {
+      const chat = await this.client().getChatById(chatId);
+      if (!chat) {
+        throw new MessageNotFoundError(messageId, chatId);
+      }
+      const messages = await chat.fetchMessages({ limit: 100 });
+      const message = messages.find(m => m.id._serialized === messageId);
+      if (!message) {
+        throw new MessageNotFoundError(messageId, chatId);
+      }
+      const msgWithInfo = message as {
+        getInfo?: () => Promise<{
+          delivery?: Array<{ id: SerializedWid | string; t: number }>;
+          deliveryRemaining?: number;
+          read?: Array<{ id: SerializedWid | string; t: number }>;
+          readRemaining?: number;
+          played?: Array<{ id: SerializedWid | string; t: number }>;
+          playedRemaining?: number;
+        } | null>;
+      };
+      return msgWithInfo.getInfo ? msgWithInfo.getInfo() : null;
+    });
+
+    if (!info) {
+      return {
+        delivery: [],
+        read: [],
+        played: [],
+      };
+    }
+
+    const mapReceipts = (list?: Array<{ id: SerializedWid | string; t: number }>): MessageReceiptParticipant[] => {
+      if (!Array.isArray(list)) return [];
+      return list.map(item => ({
+        participant: toNeutralJid(readWid(item.id) || ''),
+        timestamp: Number(item.t || 0),
+      }));
+    };
+
+    return {
+      delivery: mapReceipts(info.delivery),
+      deliveryRemaining: typeof info.deliveryRemaining === 'number' ? info.deliveryRemaining : undefined,
+      read: mapReceipts(info.read),
+      readRemaining: typeof info.readRemaining === 'number' ? info.readRemaining : undefined,
+      played: mapReceipts(info.played),
+      playedRemaining: typeof info.playedRemaining === 'number' ? info.playedRemaining : undefined,
+    };
   }
 
   async getChatHistory(

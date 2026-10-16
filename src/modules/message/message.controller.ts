@@ -30,6 +30,7 @@ import {
   MessageListResponseDto,
   ChatHistoryMessageDto,
   MessageReactionDto,
+  MessageReceiptsResponseDto,
 } from './dto/message-responses.dto';
 import {
   SendLocationDto,
@@ -726,6 +727,35 @@ export class MessageController {
     @Param('messageId') messageId: string,
   ) {
     return this.messageService.getMessageReactions(sessionId, chatId, messageId);
+  }
+
+  @ChatScoped('fenced')
+  @Get(':chatId/:messageId/receipts')
+  @ApiOperation({ summary: 'Get delivery and read receipts for a specific message' })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'chatId', description: 'Chat ID containing the message' })
+  @ApiParam({ name: 'messageId', description: 'Message ID to get receipts for' })
+  @ApiResponse({
+    status: 200,
+    description: 'Message delivery and read receipts with timestamps',
+    type: MessageReceiptsResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Session not active' })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
+  @ApiResponse({ status: 501, description: ENGINE_NOT_SUPPORTED_501 })
+  @ApiResponse({
+    status: 503,
+    description:
+      'The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the ' +
+      'session is ready again.',
+  })
+  async getReceipts(
+    @Param('sessionId') sessionId: string,
+    @Param('chatId') chatId: string,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.messageService.getMessageReceipts(sessionId, chatId, messageId);
   }
 
   // Three path segments, so it never collides with `:chatId/history` (two) regardless of

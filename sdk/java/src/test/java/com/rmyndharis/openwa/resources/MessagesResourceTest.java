@@ -442,6 +442,14 @@ class MessagesResourceTest {
     }
 
     @Test
+    void receiptsHitsReceiptsPath() {
+        tx.respond(200, "{\"delivery\":[],\"read\":[],\"played\":[]}");
+        client.messages.receipts("s", "chat1", "msg1");
+        assertEquals("http://h/api/sessions/s/messages/chat1/msg1/receipts", tx.lastRequest().url());
+        assertEquals(HttpMethod.GET, tx.lastRequest().method());
+    }
+
+    @Test
     void sendBulkHitsSendBulkPath() {
         tx.respond(200, "{\"batchId\":\"b1\",\"status\":\"queued\",\"totalMessages\":1}");
         SendBulkRequest body = SendBulkRequest.builder()

@@ -19,6 +19,7 @@ import {
   PollInput,
   ContactCard,
   MessageReaction,
+  MessageReceipts,
   Label,
   Channel,
   ChannelMessage,
@@ -705,6 +706,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   getMessageReactions(chatId: string, messageId: string): Promise<MessageReaction[]> {
     return this.messaging.getMessageReactions(chatId, messageId);
+  }
+
+  getMessageReceipts(chatId: string, messageId: string): Promise<MessageReceipts> {
+    return this.messaging.getMessageReceipts(chatId, messageId);
   }
 
   // Labels (Phase 3) - WhatsApp Business only

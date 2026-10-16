@@ -486,6 +486,7 @@ const JAVA_MAPPING = {
 // ── hand-type parsing (declarations follow the regular formatting of the two files) ──
 
 export function parseHandTypes(source) {
+  source = source.replace(/\r\n/g, '\n');
   const types = {};
   const parents = {};
   const iface = /export interface (\w+)(?: extends (\w+))? \{([\s\S]*?)\n\}/g;
@@ -728,6 +729,7 @@ export function comparePair(handName, handMembers, schemaName, schema, schemas, 
  * TypedDict inheritance (the parent's own total flag governs its members).
  */
 export function parsePythonTypes(source) {
+  source = source.replace(/\r\n/g, '\n');
   // Join continuation lines inside unclosed brackets so multi-line Literal[...] aliases and
   // annotations parse as one token (a truncated `Literal[` is worse than no token).
   const joined = [];
@@ -915,6 +917,7 @@ function pythonToken(text, resolve, depth = 0) {
  * grouped per defined type produce enum tokens.
  */
 export function parseGoTypes(sources) {
+  sources = sources.map(s => s.replace(/\r\n/g, '\n'));
   const structs = {};
   const scalarAliases = {};
   const constGroups = {};
@@ -993,6 +996,7 @@ export function parseGoTypes(sources) {
  * (the client config sets compareOptionality=false).
  */
 export function parseJavaTypes(sources) {
+  sources = sources.map(s => s.replace(/\r\n/g, '\n'));
   const records = {};
   const primMap = {
     String: 'string',

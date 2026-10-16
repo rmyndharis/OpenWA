@@ -662,6 +662,21 @@ export interface ReactionRecord {
   senders: ReactionSender[];
 }
 
+export interface MessageReceiptParticipant {
+  participant: Jid;
+  /** Unix timestamp in seconds. */
+  timestamp: number;
+}
+
+export interface MessageReceiptsResponse {
+  delivery: MessageReceiptParticipant[];
+  deliveryRemaining?: number;
+  read: MessageReceiptParticipant[];
+  readRemaining?: number;
+  played: MessageReceiptParticipant[];
+  playedRemaining?: number;
+}
+
 // ── Bulk ──────────────────────────────────────────────────────────
 
 export type BulkMessageType = 'text' | 'image' | 'video' | 'audio' | 'document';

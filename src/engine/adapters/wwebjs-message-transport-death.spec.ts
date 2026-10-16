@@ -32,6 +32,7 @@ describe('non-send message operations distinguish a dead page from an ordinary f
       id: { _serialized: MESSAGE_ID, id: 'ABCDEF' },
       hasReaction: true,
       getReactions: on('getMessageReactions', []),
+      getInfo: on('getMessageReceipts', null),
       react: on('reactToMessage', undefined),
       delete: on('deleteMessage', undefined),
       edit: on('editMessage', { id: { _serialized: MESSAGE_ID }, timestamp: 1 }),
@@ -59,6 +60,7 @@ describe('non-send message operations distinguish a dead page from an ordinary f
     ({
       getChatHistory: () => messaging.getChatHistory(CHAT, 10),
       getMessageReactions: () => messaging.getMessageReactions(CHAT, MESSAGE_ID),
+      getMessageReceipts: () => messaging.getMessageReceipts(CHAT, MESSAGE_ID),
       reactToMessage: () => messaging.reactToMessage(CHAT, MESSAGE_ID, '👍'),
       deleteMessage: () => messaging.deleteMessage(CHAT, MESSAGE_ID),
       editMessage: () => messaging.editMessage(CHAT, MESSAGE_ID, 'new body'),
@@ -71,6 +73,7 @@ describe('non-send message operations distinguish a dead page from an ordinary f
   const OPS = [
     'getChatHistory',
     'getMessageReactions',
+    'getMessageReceipts',
     'reactToMessage',
     'deleteMessage',
     'editMessage',

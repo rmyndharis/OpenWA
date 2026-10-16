@@ -189,12 +189,15 @@ class MessagesTest extends TestCase
         $backend = new MockBackend();
         $backend->on(200, []);
         $backend->on(200, []);
+        $backend->on(200, ['delivery' => [], 'read' => [], 'played' => []]);
         $client = $backend->makeClient();
         $client->messages->history('s', 'a@c.us', ['limit' => 5]);
         $this->assertStringContainsString('/messages/a@c.us/history', $backend->calls()[0]['url']);
         $this->assertStringContainsString('limit=5', $backend->calls()[0]['url']);
         $client->messages->reactions('s', 'a@c.us', 'm1');
         $this->assertStringContainsString('/messages/a@c.us/m1/reactions', $backend->calls()[1]['url']);
+        $client->messages->receipts('s', 'a@c.us', 'm1');
+        $this->assertStringContainsString('/messages/a@c.us/m1/receipts', $backend->calls()[2]['url']);
     }
 
     public function testSendBulkBatchStatusCancelBatch(): void

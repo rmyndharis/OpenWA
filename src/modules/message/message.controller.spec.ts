@@ -309,11 +309,23 @@ describe('MessageController - caller-supplied batch ids', () => {
 // MessageService.getEngine() answers 400 for a session with no live engine; clients generated from
 // the OpenAPI contract need it declared on the read routes too.
 describe('MessageController OpenAPI error responses', () => {
-  it.each(['getChatHistory', 'getReactions'])('%s declares 400', method => {
+  it.each(['getChatHistory', 'getReactions', 'getReceipts'])('%s declares 400', method => {
     const responses = Reflect.getMetadata(
       'swagger/apiResponse',
       Object.getOwnPropertyDescriptor(MessageController.prototype, method)!.value as object,
     ) as Record<string, unknown>;
     expect(Object.keys(responses)).toContain('400');
+  });
+
+  it('getReceipts delegates to messageService.getMessageReceipts', async () => {
+    const getMessageReceipts = jest.fn().mockResolvedValue({ delivery: [], read: [], played: [] });
+    const ctrl = new MessageController(
+      { getMessageReceipts } as unknown as MessageService,
+      {} as unknown as BulkMessageService,
+      new ChatScopeService(),
+    );
+    const res = await ctrl.getReceipts('s1', 'c1', 'm1');
+    expect(getMessageReceipts).toHaveBeenCalledWith('s1', 'c1', 'm1');
+    expect(res).toEqual({ delivery: [], read: [], played: [] });
   });
 });

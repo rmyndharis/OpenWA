@@ -388,6 +388,22 @@ type ReactionRecord struct {
 	Senders []ReactionSender `json:"senders"`
 }
 
+// MessageReceiptParticipant is one recipient within a MessageReceiptsResponse.
+type MessageReceiptParticipant struct {
+	Participant string `json:"participant"`
+	Timestamp   int64  `json:"timestamp"`
+}
+
+// MessageReceiptsResponse groups per-participant delivery, read, and played receipts.
+type MessageReceiptsResponse struct {
+	Delivery          []MessageReceiptParticipant `json:"delivery"`
+	DeliveryRemaining *int                        `json:"deliveryRemaining,omitempty"`
+	Read              []MessageReceiptParticipant `json:"read"`
+	ReadRemaining     *int                        `json:"readRemaining,omitempty"`
+	Played            []MessageReceiptParticipant `json:"played"`
+	PlayedRemaining   *int                        `json:"playedRemaining,omitempty"`
+}
+
 // BulkMediaContent is a per-item media block for a bulk send. It mirrors the
 // server's BulkMediaDto whitelist (url/base64/mimetype/filename/ptt) exactly. It
 // deliberately omits chatId (the parent BulkMessageItem carries it) and caption

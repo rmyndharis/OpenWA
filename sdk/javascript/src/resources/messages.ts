@@ -21,6 +21,7 @@ import type {
   ListMessagesQuery,
   MessageHistoryQuery,
   MessageListResponse,
+  MessageReceiptsResponse,
   MessageResponse,
   PinMessageRequest,
   ReactionRecord,
@@ -196,6 +197,14 @@ export class MessagesResource {
     return this.client.request<ReactionRecord[]>({
       method: 'GET',
       path: `/api/sessions/${encodeSegment(sessionId)}/messages/${encodeSegment(chatId)}/${encodeSegment(messageId)}/reactions`,
+    });
+  }
+
+  /** Get per-participant delivery and read receipts for a specific message. */
+  receipts(sessionId: string, chatId: string, messageId: string): Promise<MessageReceiptsResponse> {
+    return this.client.request<MessageReceiptsResponse>({
+      method: 'GET',
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/${encodeSegment(chatId)}/${encodeSegment(messageId)}/receipts`,
     });
   }
 

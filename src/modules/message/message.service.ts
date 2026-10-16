@@ -545,6 +545,11 @@ export class MessageService implements PluginMessagePort {
     return engine.getMessageReactions(chatId, messageId);
   }
 
+  async getMessageReceipts(sessionId: string, chatId: string, messageId: string) {
+    const engine = this.getEngine(sessionId);
+    return engine.getMessageReceipts(chatId, messageId);
+  }
+
   /**
    * Read a message's media: the archived file when one exists, else the inline copy persisted on
    * the message row. The fallback is what makes media sent BY the account retrievable here — the

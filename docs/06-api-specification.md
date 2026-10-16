@@ -1464,6 +1464,47 @@ Returns a bare array of `MessageReaction`:
 
 **Errors:** `400` session not active · `401` missing/invalid API key · `404` message not found in the chat (whatsapp-web.js) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read (retryable)
 
+#### GET /api/sessions/:sessionId/messages/:chatId/:messageId/receipts
+
+Get per-participant delivery and read receipts for a specific message (own/fromMe messages).
+
+**Auth:** API key
+
+**Path parameters**
+
+| Name      | Type   | Description                    |
+| --------- | ------ | ------------------------------ |
+| sessionId | string | Session ID                     |
+| chatId    | string | Chat ID containing the message |
+| messageId | string | Message ID to get receipts for |
+
+**Response** `200`
+
+Returns a `MessageReceipts` object:
+
+```json
+{
+  "delivery": [
+    {
+      "participant": "628123456789@c.us",
+      "timestamp": 1719312050
+    }
+  ],
+  "deliveryRemaining": 0,
+  "read": [
+    {
+      "participant": "628123456789@c.us",
+      "timestamp": 1719312060
+    }
+  ],
+  "readRemaining": 0,
+  "played": [],
+  "playedRemaining": 0
+}
+```
+
+**Errors:** `400` session not active · `401` missing/invalid API key · `404` message not found · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read (retryable)
+
 #### POST /api/sessions/:sessionId/messages/vote-poll
 
 Cast a vote on a poll.

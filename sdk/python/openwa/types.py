@@ -656,6 +656,20 @@ class ReactionRecord(TypedDict, total=False):
     senders: list[ReactionSender]
 
 
+class MessageReceiptParticipant(TypedDict, total=False):
+    participant: Jid
+    timestamp: int
+
+
+class MessageReceiptsResponse(TypedDict, total=False):
+    delivery: list[MessageReceiptParticipant]
+    deliveryRemaining: NotRequired[int]
+    read: list[MessageReceiptParticipant]
+    readRemaining: NotRequired[int]
+    played: list[MessageReceiptParticipant]
+    playedRemaining: NotRequired[int]
+
+
 # ── Bulk ──────────────────────────────────────────────────────────
 
 

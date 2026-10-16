@@ -562,12 +562,15 @@ class TestMessages:
         backend = MockBackend()
         backend.on("GET", "/history", body=[])
         backend.on("GET", "/reactions", body=[])
+        backend.on("GET", "/receipts", body={"delivery": [], "read": [], "played": []})
         client = make_client(backend)
         client.messages.history("s", "a@c.us", {"limit": 5})
         assert "/messages/a@c.us/history" in backend.calls[-1].url
         assert "limit=5" in backend.calls[-1].url
         client.messages.reactions("s", "a@c.us", "m1")
         assert "/messages/a@c.us/m1/reactions" in backend.calls[-1].url
+        client.messages.receipts("s", "a@c.us", "m1")
+        assert "/messages/a@c.us/m1/receipts" in backend.calls[-1].url
 
     def test_history_boolean_query_serializes_lowercase(self):
         # Server reads `includeMedia === 'true'`; Python str(True) == 'True' would be ignored.

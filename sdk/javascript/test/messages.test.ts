@@ -299,6 +299,12 @@ describe('MessagesResource — exact paths', () => {
     expect(t.lastCall!.url).toContain('/a@c.us/m1/reactions');
   });
 
+  it('receipts puts chatId and messageId in the path', async () => {
+    const t = new MockTransport().on('GET', /\/receipts$/, { body: { delivery: [], read: [], played: [] } });
+    await client(t).messages.receipts('s', 'a@c.us', 'm1');
+    expect(t.lastCall!.url).toContain('/a@c.us/m1/receipts');
+  });
+
   it('sendBulk + batchStatus + cancelBatch', async () => {
     const t = new MockTransport()
       .on('POST', /send-bulk$/, {

@@ -6715,6 +6715,126 @@
         ]
       }
     },
+    "/api/sessions/{sessionId}/messages/{chatId}/{messageId}/receipts": {
+      "get": {
+        "operationId": "MessageController_getReceipts",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "description": "Chat ID containing the message",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "messageId",
+            "required": true,
+            "in": "path",
+            "description": "Message ID to get receipts for",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Message delivery and read receipts with timestamps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageReceiptsResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session not active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The API key is missing, unknown, revoked, or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key's role, session or chat scope, or IP allow-list does not allow this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and for those few seconds the answer is a `409` naming the reload; retry shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The active engine cannot serve this operation. It is part of the engine contract, but the engine currently running has no implementation for it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The whatsapp-web.js page connection died mid-read, so nothing could be read. Retry once the session is ready again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get delivery and read receipts for a specific message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
     "/api/sessions/{sessionId}/messages/{chatId}/{messageId}/media": {
       "get": {
         "operationId": "MessageController_getChatMedia",
@@ -21180,6 +21300,71 @@
         "required": [
           "emoji",
           "senders"
+        ]
+      },
+      "MessageReceiptParticipantDto": {
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string",
+            "example": "628123456789@c.us",
+            "description": "Participant WhatsApp ID"
+          },
+          "timestamp": {
+            "type": "number",
+            "description": "Unix seconds the receipt occurred.",
+            "example": 1700000010
+          }
+        },
+        "required": [
+          "participant",
+          "timestamp"
+        ]
+      },
+      "MessageReceiptsResponseDto": {
+        "type": "object",
+        "properties": {
+          "delivery": {
+            "description": "Participants who received the message",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageReceiptParticipantDto"
+            }
+          },
+          "deliveryRemaining": {
+            "type": "number",
+            "description": "Number of participants remaining to receive",
+            "example": 0
+          },
+          "read": {
+            "description": "Participants who read the message",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageReceiptParticipantDto"
+            }
+          },
+          "readRemaining": {
+            "type": "number",
+            "description": "Number of participants remaining to read",
+            "example": 0
+          },
+          "played": {
+            "description": "Participants who played the audio/voice message",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageReceiptParticipantDto"
+            }
+          },
+          "playedRemaining": {
+            "type": "number",
+            "description": "Number of participants remaining to play",
+            "example": 0
+          }
+        },
+        "required": [
+          "delivery",
+          "read",
+          "played"
         ]
       },
       "DeleteMessageDto": {

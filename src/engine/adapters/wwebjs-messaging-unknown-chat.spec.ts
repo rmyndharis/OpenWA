@@ -34,6 +34,9 @@ describe('an unknown chat resolves to 404 (or an empty history), not a 500', () 
   it('getMessageReactions throws MessageNotFoundError', async () => {
     await expect(makeMessaging().getMessageReactions(CHAT, MESSAGE_ID)).rejects.toBeInstanceOf(MessageNotFoundError);
   });
+  it('getMessageReceipts throws MessageNotFoundError', async () => {
+    await expect(makeMessaging().getMessageReceipts(CHAT, MESSAGE_ID)).rejects.toBeInstanceOf(MessageNotFoundError);
+  });
   it('deleteMessage throws MessageNotFoundError', async () => {
     await expect(makeMessaging().deleteMessage(CHAT, MESSAGE_ID)).rejects.toBeInstanceOf(MessageNotFoundError);
   });
@@ -48,5 +51,69 @@ describe('an unknown chat resolves to 404 (or an empty history), not a 500', () 
   });
   it('getChatHistory returns an empty page rather than throwing', async () => {
     await expect(makeMessaging().getChatHistory(CHAT, 10)).resolves.toEqual([]);
+  });
+
+  it('getMessageReceipts maps delivery, read and played receipts with neutral JIDs', async () => {
+    const mockMessage = {
+      id: { _serialized: MESSAGE_ID },
+      getInfo: jest.fn().mockResolvedValue({
+        delivery: [{ id: { _serialized: '628123456789:1@s.whatsapp.net' }, t: 1719312050 }],
+        deliveryRemaining: 2,
+        read: [{ id: '628987654321@c.us', t: 1719312060 }],
+        readRemaining: 1,
+        played: [{ id: '628555555555@c.us', t: 1719312070 }],
+        playedRemaining: 0,
+      }),
+    };
+    const client = {
+      getChatById: jest.fn().mockResolvedValue({
+        fetchMessages: jest.fn().mockResolvedValue([mockMessage]),
+      }),
+    };
+    const host = {
+      ensureReady: jest.fn(),
+      getClient: () => client as unknown as Client,
+      isPageTransportError: () => false,
+      reportIfPageTransportError: jest.fn(),
+      logger,
+    } as unknown as WwebjsEngineHost;
+    const messaging = new WwebjsMessaging(host);
+    const result = await messaging.getMessageReceipts(CHAT, MESSAGE_ID);
+
+    expect(result).toEqual({
+      delivery: [{ participant: '628123456789@c.us', timestamp: 1719312050 }],
+      deliveryRemaining: 2,
+      read: [{ participant: '628987654321@c.us', timestamp: 1719312060 }],
+      readRemaining: 1,
+      played: [{ participant: '628555555555@c.us', timestamp: 1719312070 }],
+      playedRemaining: 0,
+    });
+  });
+
+  it('getMessageReceipts returns empty lists when getInfo is null', async () => {
+    const mockMessage = {
+      id: { _serialized: MESSAGE_ID },
+      getInfo: jest.fn().mockResolvedValue(null),
+    };
+    const client = {
+      getChatById: jest.fn().mockResolvedValue({
+        fetchMessages: jest.fn().mockResolvedValue([mockMessage]),
+      }),
+    };
+    const host = {
+      ensureReady: jest.fn(),
+      getClient: () => client as unknown as Client,
+      isPageTransportError: () => false,
+      reportIfPageTransportError: jest.fn(),
+      logger,
+    } as unknown as WwebjsEngineHost;
+    const messaging = new WwebjsMessaging(host);
+    const result = await messaging.getMessageReceipts(CHAT, MESSAGE_ID);
+
+    expect(result).toEqual({
+      delivery: [],
+      read: [],
+      played: [],
+    });
   });
 });

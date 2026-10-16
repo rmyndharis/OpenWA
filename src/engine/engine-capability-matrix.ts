@@ -232,6 +232,12 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     evidence:
       'baileys no getReactions/fetchReactions; reactions exist only as event-augmented WAMessage.reactions (proto.IReaction @WAProto/index.d.ts:10623) via messages.reaction event; adapter does not persist them into its store; wwjs Message.getReactions (Message.js)',
   },
+  getMessageReceipts: {
+    wwjs: { status: 'supported' },
+    baileys: { status: 'not-available', rootCause: 'library-limitation' },
+    evidence:
+      'baileys no getReceipts/fetchReceipts on socket or store; receipts arrive only via message-receipt.update event; wwjs Message.getInfo (Message.js:758)',
+  },
   getProduct: {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
     baileys: { status: 'supported' },

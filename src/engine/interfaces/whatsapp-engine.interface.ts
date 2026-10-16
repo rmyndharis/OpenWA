@@ -416,6 +416,20 @@ export interface MessageReaction {
   senders: ReactionSender[];
 }
 
+export interface MessageReceiptParticipant {
+  participant: string;
+  timestamp: number;
+}
+
+export interface MessageReceipts {
+  delivery: MessageReceiptParticipant[];
+  deliveryRemaining?: number;
+  read: MessageReceiptParticipant[];
+  readRemaining?: number;
+  played: MessageReceiptParticipant[];
+  playedRemaining?: number;
+}
+
 // Phase 3: Labels (WhatsApp Business)
 export interface Label {
   id: string;
@@ -1187,6 +1201,12 @@ export interface MessageOperationsCapability {
   reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void>;
 
   getMessageReactions(chatId: string, messageId: string): Promise<MessageReaction[]>;
+
+  /**
+   * Get per-participant delivery and read receipts for an own (fromMe) message.
+   * Returns delivery, read, and played participant lists with timestamps.
+   */
+  getMessageReceipts(chatId: string, messageId: string): Promise<MessageReceipts>;
 
   deleteMessage(chatId: string, messageId: string, forEveryone?: boolean): Promise<void>;
 
