@@ -1,14 +1,36 @@
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, CircleDashed, Loader2, Megaphone, Plus, Search } from 'lucide-react';
+import {
+  AlertCircle,
+  Archive,
+  ArrowLeft,
+  BellOff,
+  Pin,
+  CircleDashed,
+  Loader2,
+  Megaphone,
+  MessageSquarePlus,
+  Plus,
+  Search,
+  TextSearch,
+  X,
+} from 'lucide-react';
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { Channel, Chat, ContactStatusGroup, Session } from '../../services/api';
 import { useRole } from '../../hooks/useRole';
+import { CHAT_LIST_FILTERS, type ChatListFilter } from '../../utils/chatFilters';
 import ChatAvatar from './ChatAvatar';
+import SessionPicker from './SessionPicker';
+import ChatRowMenu from './ChatRowMenu';
+import type { ChatRowActions } from './chatActionItems';
 
 export type ChatsTab = 'chats' | 'channels' | 'status';
 
 interface ChatSidebarProps {
+  /** The ready sessions the page can open. */
   sessions: Session[];
+  /** Every session the gateway lists, for the switcher to show with its state; defaults to `sessions`. */
+  pickerSessions?: Session[];
   selectedSessionId: string;
   onSelectSession: (sessionId: string) => void;
   activeTab: ChatsTab;
@@ -17,12 +39,24 @@ interface ChatSidebarProps {
   onSearchQueryChange: (query: string) => void;
   onComposeStatus: () => void;
   formatChatTime: (timestamp?: number) => string;
+  /** The full-text message search, or null when this key may not search. Shown behind a header toggle. */
+  messageSearch?: ReactNode;
+  /** Opens the new-chat panel; absent for a key that cannot write. */
+  onNewChat?: () => void;
+  /** The new-chat panel, rendered in place of the lists while it is open. */
+  newChatPanel?: ReactNode;
   chatsTab: {
     loading: boolean;
     chats: Chat[];
+    filter: ChatListFilter;
+    onFilterChange: (filter: ChatListFilter) => void;
     activeChatId?: string;
     pictures?: Record<string, string | null>;
     onSelectChat: (chat: Chat) => void;
+    /** The actions behind the chevron on a group or 1:1 row. */
+    rowActions?: ChatRowActions;
+    /** The archive: how many chats it holds, whether the list shows it, and the switch between the two. */
+    archive?: { count: number; showing: boolean; onToggle: () => void };
   };
   channelsTab: {
     engineLoading: boolean;
@@ -41,10 +75,12 @@ interface ChatSidebarProps {
   };
 }
 
-// LEFT SIDEBAR: session selector, Chats/Channels/Status tab bar, search, and the per-tab lists.
-// The page owns all queries/state; this component renders them and reports interactions up.
+// LEFT SIDEBAR: session switcher, header actions, Chats/Channels/Status tab bar, search, quick filters,
+// and the per-tab lists. The page owns all queries/state; this component renders them and reports
+// interactions up.
 function ChatSidebar({
   sessions,
+  pickerSessions,
   selectedSessionId,
   onSelectSession,
   activeTab,
@@ -53,6 +89,9 @@ function ChatSidebar({
   onSearchQueryChange,
   onComposeStatus,
   formatChatTime,
+  messageSearch,
+  onNewChat,
+  newChatPanel,
   chatsTab,
   channelsTab,
   statusTab,
@@ -60,6 +99,7 @@ function ChatSidebar({
   const { t } = useTranslation();
   // Posting a status needs an operator key; a read-only key would only reach a 403.
   const { canWrite } = useRole();
+  const [showMessageSearch, setShowMessageSearch] = useState(false);
 
   const formatLastMessageSnippet = (chat: Chat) => chat.lastMessage || '';
 
@@ -74,7 +114,7 @@ function ChatSidebar({
         role="button"
         tabIndex={0}
         aria-current={isActive ? 'true' : undefined}
-        className={`chat-item-card ${isActive ? 'active' : ''}`}
+        className={`chat-item-card ${isActive ? 'active' : ''} ${chat.unreadCount !== 0 ? 'unread' : ''}`}
         onClick={() => chatsTab.onSelectChat(chat)}
         onKeyDown={e => {
           if (e.key === 'Enter' || e.key === ' ') {
@@ -83,7 +123,7 @@ function ChatSidebar({
           }
         }}
       >
-        <ChatAvatar pictureUrl={chatsTab.pictures?.[chat.id]} kind={chat.kind} />
+        <ChatAvatar chatId={chat.id} pictureUrl={chatsTab.pictures?.[chat.id]} kind={chat.kind} />
 
         <div className="chat-item-info">
           <div className="chat-item-top">
@@ -105,6 +145,12 @@ function ChatSidebar({
               {formatLastMessageSnippet(chat) ||
                 (!chat.timestamp && <span className="no-message">{t('chats.noMessageYet')}</span>)}
             </span>
+            {(chat.muted || chat.pinned) && (
+              <span className="chat-item-flags">
+                {chat.muted && <BellOff size={15} role="img" aria-label={t('chats.rowActions.mutedLabel')} />}
+                {chat.pinned && <Pin size={15} role="img" aria-label={t('chats.rowActions.pinnedLabel')} />}
+              </span>
+            )}
             {/* A negative count is a chat marked unread (Baileys reports -1): a badge with no number. */}
             {chat.unreadCount < 0 ? (
               <span
@@ -127,28 +173,51 @@ function ChatSidebar({
     );
   };
 
+  if (newChatPanel) {
+    return <aside className="chats-sidebar">{newChatPanel}</aside>;
+  }
+
   return (
     <aside className="chats-sidebar">
-      <div className="sidebar-header-box">
-        {/* Session selector */}
-        <div className="session-select-group">
-          <label className="form-label" htmlFor="csb-1">
-            {t('chats.sessionLabel')}
-          </label>
-          <select
-            id="csb-1"
-            value={selectedSessionId}
-            onChange={e => onSelectSession(e.target.value)}
-            className="session-selector"
-          >
-            {sessions.map(s => (
-              <option key={s.id} value={s.id}>
-                {s.name} ({s.phone || t('chats.noPhone')})
-              </option>
-            ))}
-          </select>
-        </div>
+      <header className="sidebar-header">
+        <SessionPicker
+          sessions={pickerSessions ?? sessions}
+          selectedSessionId={selectedSessionId}
+          onSelectSession={onSelectSession}
+          canAddSession={canWrite}
+        />
 
+        <div className="sidebar-header-actions">
+          {messageSearch && (
+            <button
+              type="button"
+              className={`icon-btn ${showMessageSearch ? 'active' : ''}`}
+              onClick={() => setShowMessageSearch(open => !open)}
+              title={t('chats.searchMessages')}
+              aria-label={t('chats.searchMessages')}
+              aria-pressed={showMessageSearch}
+            >
+              <TextSearch size={22} />
+            </button>
+          )}
+          {onNewChat && (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={onNewChat}
+              title={t('chats.newChat.title')}
+              aria-label={t('chats.newChat.title')}
+            >
+              <MessageSquarePlus size={22} />
+            </button>
+          )}
+        </div>
+      </header>
+
+      {/* Full-text search over the stored messages of every session, collapsed by default. */}
+      {messageSearch && showMessageSearch && <div className="sidebar-message-search">{messageSearch}</div>}
+
+      <div className="sidebar-header-box">
         {/* Chats / Channels / Status tabs */}
         <div className="chats-tabs" role="tablist">
           {(['chats', 'channels', 'status'] as const).map(tab => (
@@ -174,6 +243,17 @@ function ChatSidebar({
             value={searchQuery}
             onChange={e => onSearchQueryChange(e.target.value)}
           />
+          {searchQuery && (
+            <button
+              type="button"
+              className="search-clear"
+              onClick={() => onSearchQueryChange('')}
+              aria-label={t('chats.clearSearch')}
+              title={t('chats.clearSearch')}
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
 
         {/* Compose a new status — only meaningful on the Status tab. */}
@@ -185,9 +265,36 @@ function ChatSidebar({
         )}
       </div>
 
+      {/* Quick filters over the chat list. Toggle buttons, not tabs: the tab bar above already is one. */}
+      {activeTab === 'chats' && (
+        <div className="chat-filters" role="group" aria-label={t('chats.filters.label')}>
+          {CHAT_LIST_FILTERS.map(filter => (
+            <button
+              key={filter}
+              type="button"
+              aria-pressed={chatsTab.filter === filter}
+              className={`chat-filter-pill ${chatsTab.filter === filter ? 'active' : ''}`}
+              onClick={() => chatsTab.onFilterChange(filter)}
+            >
+              {t(`chats.filters.${filter}`)}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Chat list */}
       {activeTab === 'chats' && (
         <div className="chats-list">
+          {/* The archive's entry heads the list, and its view says where it is and leads back. */}
+          {!chatsTab.loading && chatsTab.archive && (chatsTab.archive.showing || chatsTab.archive.count > 0) && (
+            <button type="button" className="chat-archive-entry" onClick={chatsTab.archive.onToggle}>
+              {chatsTab.archive.showing ? <ArrowLeft size={20} /> : <Archive size={20} />}
+              <span>
+                {chatsTab.archive.showing ? t('chats.rowActions.archivedTitle') : t('chats.rowActions.archivedEntry')}
+              </span>
+              {!chatsTab.archive.showing && <span className="chat-archive-count">{chatsTab.archive.count}</span>}
+            </button>
+          )}
           {chatsTab.loading ? (
             <div className="chats-list-loading">
               <Loader2 className="animate-spin" size={24} />
@@ -195,10 +302,25 @@ function ChatSidebar({
             </div>
           ) : chatsTab.chats.length === 0 ? (
             <div className="chats-list-empty">
-              <span>{t('chats.empty')}</span>
+              <span>
+                {chatsTab.archive?.showing
+                  ? t('chats.rowActions.archiveEmpty')
+                  : chatsTab.filter === 'all'
+                    ? t('chats.empty')
+                    : t('chats.noFilterResults')}
+              </span>
             </div>
           ) : (
-            chatsTab.chats.map(renderChatRow)
+            chatsTab.chats.map(chat =>
+              chatsTab.rowActions && (chat.kind === 'group' || chat.kind === 'individual') ? (
+                <div key={chat.id} className="chat-item-wrap has-menu">
+                  {renderChatRow(chat)}
+                  <ChatRowMenu chat={chat} actions={chatsTab.rowActions} />
+                </div>
+              ) : (
+                renderChatRow(chat)
+              ),
+            )
           )}
         </div>
       )}
@@ -250,8 +372,8 @@ function ChatSidebar({
                   }
                 }}
               >
-                <div className="chat-avatar">
-                  <Megaphone size={20} />
+                <div className="chat-avatar avatar-md">
+                  <Megaphone size={22} strokeWidth={1.75} />
                 </div>
                 <div className="chat-item-info">
                   <div className="chat-item-top">
@@ -304,8 +426,8 @@ function ChatSidebar({
                   }
                 }}
               >
-                <div className="chat-avatar">
-                  <CircleDashed size={20} />
+                <div className="chat-avatar avatar-md">
+                  <CircleDashed size={22} strokeWidth={1.75} />
                 </div>
                 <div className="chat-item-info">
                   <div className="chat-item-top">

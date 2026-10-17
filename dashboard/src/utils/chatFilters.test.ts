@@ -1,8 +1,48 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { filterChats, filterChannels, groupStatusesByContact } from './chatFilters.ts';
+import {
+  applyChatListFilter,
+  filterChats,
+  filterChannels,
+  groupStatusesByContact,
+  isUnsavedContact,
+} from './chatFilters.ts';
 
 const chat = (id: string, name?: string, kind?: string) => ({ id, name, kind });
+
+const row = (id: string, kind: string, unreadCount: number, name?: string) => ({ id, name, kind, unreadCount });
+
+test('the unread filter keeps chats with a count and chats marked unread', () => {
+  const all = [row('a@c.us', 'individual', 2), row('b@c.us', 'individual', 0), row('c@c.us', 'individual', -1)];
+
+  assert.deepEqual(
+    applyChatListFilter(all, 'unread').map(c => c.id),
+    ['a@c.us', 'c@c.us'],
+  );
+});
+
+test('the direct and group filters split on the chat kind, and all keeps every row', () => {
+  const all = [row('a@c.us', 'individual', 0), row('g@g.us', 'group', 0), row('b@broadcast', 'broadcast', 0)];
+
+  assert.deepEqual(
+    applyChatListFilter(all, 'direct').map(c => c.id),
+    ['a@c.us'],
+  );
+  assert.deepEqual(
+    applyChatListFilter(all, 'groups').map(c => c.id),
+    ['g@g.us'],
+  );
+  assert.equal(applyChatListFilter(all, 'all'), all);
+});
+
+test('a contact counts as unsaved without a name, with a push name, or named by its own number', () => {
+  assert.equal(isUnsavedContact(chat('491701234567@c.us', undefined, 'individual')), true);
+  assert.equal(isUnsavedContact(chat('491701234567@c.us', '~Max', 'individual')), true);
+  assert.equal(isUnsavedContact(chat('491701234567@c.us', '+49 170 1234567', 'individual')), true);
+  assert.equal(isUnsavedContact(chat('491701234567@c.us', 'Max Mustermann', 'individual')), false);
+  // A group is never a contact, saved or not.
+  assert.equal(isUnsavedContact(chat('120363000000000000@g.us', undefined, 'group')), false);
+});
 
 test('the chats tab hides channel and status rows, which have their own tabs', () => {
   const all = [chat('a@c.us', 'Alice'), chat('n@newsletter', 'News', 'channel'), chat('s@broadcast', 'S', 'status')];

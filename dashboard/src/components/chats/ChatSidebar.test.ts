@@ -6,6 +6,7 @@ import { createElement } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { Channel, Chat } from '../../services/api.ts';
 import type { ChatsTab } from './ChatSidebar.tsx';
+import type { ChatListFilter } from '../../utils/chatFilters.ts';
 
 let rtl: typeof import('@testing-library/react');
 let ChatSidebar: (typeof import('./ChatSidebar.tsx'))['default'];
@@ -37,7 +38,12 @@ const chat = (id: string, unreadCount: number): Chat => ({
   muted: false,
 });
 
-function renderSidebar(activeTab: ChatsTab, chats: Chat[], channels: { all: Channel[]; shown: Channel[] }) {
+function renderSidebar(
+  activeTab: ChatsTab,
+  chats: Chat[],
+  channels: { all: Channel[]; shown: Channel[] },
+  { filter = 'all' }: { filter?: ChatListFilter } = {},
+) {
   const role = {
     role: 'operator' as const,
     setRole: () => undefined,
@@ -65,7 +71,7 @@ function renderSidebar(activeTab: ChatsTab, chats: Chat[], channels: { all: Chan
         onSearchQueryChange: () => undefined,
         onComposeStatus: () => undefined,
         formatChatTime: () => '',
-        chatsTab: { loading: false, chats, onSelectChat: () => undefined },
+        chatsTab: { loading: false, chats, filter, onFilterChange: () => undefined, onSelectChat: () => undefined },
         channelsTab: {
           engineLoading: false,
           supported: true,
@@ -98,6 +104,28 @@ test('a chat marked unread (count -1) shows an unread badge without a number', (
       ['3', t('chats.unreadBadge', { count: 3 })],
     ],
   );
+});
+
+test('a quick filter that leaves no chat says so, while an empty account still reads as having none', () => {
+  const filtered = renderSidebar('chats', [], { all: [], shown: [] }, { filter: 'groups' });
+  assert.equal(filtered.container.querySelector('.chats-list-empty')?.textContent, t('chats.noFilterResults'));
+  rtl.cleanup();
+
+  const empty = renderSidebar('chats', [], { all: [], shown: [] });
+  assert.equal(empty.container.querySelector('.chats-list-empty')?.textContent, t('chats.empty'));
+});
+
+test('the quick filters show the active one as pressed, on the Chats tab only', () => {
+  const { container } = renderSidebar('chats', [], { all: [], shown: [] }, { filter: 'unread' });
+  const pressed = Array.from(container.querySelectorAll('.chat-filter-pill[aria-pressed="true"]'));
+  assert.deepEqual(
+    pressed.map(pill => pill.textContent),
+    [t('chats.filters.unread')],
+  );
+  rtl.cleanup();
+
+  const channels = renderSidebar('channels', [], { all: [], shown: [] });
+  assert.equal(channels.container.querySelector('.chat-filters'), null);
 });
 
 test('a channel search with no match says so instead of showing a blank list', () => {

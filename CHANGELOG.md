@@ -11,11 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add Number Checker page in dashboard for single and bulk WhatsApp recipient pre-validation.
 - Add the opt-in `message.receipt` event for per-recipient group and status receipts on Baileys (#1748).
+- Add a session switcher to the dashboard Chats page that lists every session with its state, picture, push name and number, lets only a ready one be selected, and offers operator keys a link to pair another number.
+- Add All, Unread, 1:1, Groups and Unknown quick filters to the dashboard chat list, where Unread includes chats marked unread and Unknown lists 1:1 chats whose contact is not saved.
+- Add a New chat panel to the dashboard Chats page for operator keys that opens a chat with a saved contact or a typed international number once the gateway confirms the number is on WhatsApp, and on Baileys creates a group from a name and picked contacts or numbers.
+- Add a menu to every dashboard chat row and to the open chat's header that pins, mutes, archives, marks unread, clears or deletes a chat, saves, renames or blocks its contact, and leaves a group, asking first before an action that cannot be undone.
+- Add an Archived view to the dashboard chat list; archived chats leave the main list, and pinned chats lead it.
+- Add a group info dialog to the dashboard Chats page that edits a group's name, picture and description and adds, removes, promotes and demotes its participants when the account administers the group.
+- Add a contact info panel to the dashboard chat room with the contact's picture, name, number and copyable chat id.
+- Add Today, Yesterday and date separators to the dashboard chat thread.
 
 ### Changed
 
 - Support Guzzle 8 in the PHP SDK while retaining Guzzle 7 compatibility (#1870).
 - Reject empty PHP SDK `defaultHeaders` lists before sending requests; use `''` for an empty header value (#1870).
+- Redesign the dashboard Chats page in a WhatsApp Web style, full height without the page header, with its own light and dark palette, a patterned wallpaper behind the thread, coloured avatars, tailed bubbles and a single-pill composer; every existing chat feature stays.
+- Show the dashboard Chats page's message search behind a toggle in the chat list header, still hidden for read-only keys.
+- Show a dashboard chat message's time and delivery ticks inside its last line of text, with the delivery status still named for screen readers.
+- Format dashboard chat times in the dashboard language instead of the browser's, and show chat list times as the clock today, Yesterday, the weekday within the last week and a short date before that.
+- Move the dashboard sidebar's collapse button from the sidebar edge into its header, beside the logo or under it when collapsed, with a panel icon mirrored for right-to-left languages.
 
 ### Fixed
 

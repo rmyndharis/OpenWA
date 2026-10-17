@@ -26,14 +26,16 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 1.5rem;
-  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 1.5rem;
   min-height: 72px;
 }
 
 .sidebar.collapsed .sidebar-header {
+  /* On the collapsed rail the header stacks: the logo, and the expand control under it. */
+  flex-direction: column;
   justify-content: center;
-  padding: 1.5rem 1rem;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
 }
 
 .sidebar-logo {
@@ -88,40 +90,38 @@
 }
 
 /* Collapse Toggle Button - Circular design at edge */
+/* Collapse control: a ghost button at the end of the header row. */
 .collapse-toggle {
-  position: absolute;
-  right: -14px;
-  top: 36px;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: var(--bg-white);
-  border: 1px solid var(--border);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-inline-start: auto;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   cursor: pointer;
-  color: var(--text-secondary);
-  transition: all 0.2s;
-  z-index: 101;
-  padding: 0;
+  transition:
+    background 0.2s,
+    color 0.2s;
 }
 
 .collapse-toggle:hover {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: white;
-  box-shadow: 0 4px 12px rgba(37, 211, 102, 0.3);
+  background: var(--bg-light);
+  color: var(--text-primary);
 }
 
-.collapse-toggle svg {
-  width: 16px;
-  height: 16px;
+.collapse-toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 .sidebar.collapsed .collapse-toggle {
-  right: -14px;
+  margin-inline-start: 0;
 }
 
 .sidebar-nav {
@@ -430,11 +430,6 @@
 [dir='rtl'] .sidebar {
   border-right: none;
   border-left: 1px solid var(--border);
-}
-
-[dir='rtl'] .collapse-toggle {
-  right: auto;
-  left: -14px;
 }
 
 [dir='rtl'] .language-menu-item {
