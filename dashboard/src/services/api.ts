@@ -440,6 +440,24 @@ export interface ContactStatusGroup {
 
 // Minimal contact type for the recipient picker; the backend GET /sessions/:id/contacts
 // returns a Contact array; fields beyond id are optional.
+/** GET /sessions/:id/groups/:groupId (GroupInfoDto). */
+export interface GroupInfo {
+  id: string;
+  name: string;
+  description?: string;
+  owner?: string;
+  createdAt?: number;
+  participants: Array<{ id: string; number: string; name?: string; isAdmin: boolean; isSuperAdmin: boolean }>;
+  /** Only admins may edit the group's info. */
+  locked?: boolean;
+  announce?: boolean;
+}
+
+export interface GroupAck {
+  success: boolean;
+  message: string;
+}
+
 export interface Contact {
   id: string;
   name?: string;
@@ -879,9 +897,84 @@ export const sessionApi = {
   getStats: () => request<SessionStats>('/sessions/stats/overview'),
   getGroups: (id: string) =>
     request<{ id: string; name?: string; linkedParentJID?: string | null }[]>(`/sessions/${id}/groups`),
+  // Operator route, Baileys only: whatsapp-web.js answers 501. Participants are WhatsApp ids (`…@c.us`).
+  createGroup: (id: string, name: string, participants: string[]) =>
+    request<{ id: string; name: string }>(`/sessions/${id}/groups`, {
+      method: 'POST',
+      body: JSON.stringify({ name, participants }),
+    }),
+  getGroup: (id: string, groupId: string) =>
+    request<GroupInfo>(`/sessions/${id}/groups/${encodeURIComponent(groupId)}`),
+  // The group writes below are operator routes. Whether WhatsApp lets this account make them (an admin,
+  // or any member while the group's info is unlocked) is decided by WhatsApp; a refusal answers 403.
+  setGroupSubject: (id: string, groupId: string, subject: string) =>
+    request<GroupAck>(`/sessions/${id}/groups/${encodeURIComponent(groupId)}/subject`, {
+      method: 'PUT',
+      body: JSON.stringify({ subject }),
+    }),
+  setGroupDescription: (id: string, groupId: string, description: string) =>
+    request<GroupAck>(`/sessions/${id}/groups/${encodeURIComponent(groupId)}/description`, {
+      method: 'PUT',
+      body: JSON.stringify({ description }),
+    }),
+  setGroupPicture: (id: string, groupId: string, base64: string, mimetype: string) =>
+    request<GroupAck>(`/sessions/${id}/groups/${encodeURIComponent(groupId)}/picture`, {
+      method: 'PUT',
+      body: JSON.stringify({ base64, mimetype }),
+    }),
+  addGroupParticipants: (id: string, groupId: string, participants: string[]) =>
+    request<GroupAck>(`/sessions/${id}/groups/${encodeURIComponent(groupId)}/participants`, {
+      method: 'POST',
+      body: JSON.stringify({ participants }),
+    }),
+  removeGroupParticipants: (id: string, groupId: string, participants: string[]) =>
+    request<GroupAck>(`/sessions/${id}/groups/${encodeURIComponent(groupId)}/participants`, {
+      method: 'DELETE',
+      body: JSON.stringify({ participants }),
+    }),
+  setGroupAdmins: (id: string, groupId: string, participants: string[], admin: boolean) =>
+    request<GroupAck>(
+      `/sessions/${id}/groups/${encodeURIComponent(groupId)}/participants/${admin ? 'promote' : 'demote'}`,
+      { method: 'POST', body: JSON.stringify({ participants }) },
+    ),
+  leaveGroup: (id: string, groupId: string) =>
+    request<GroupAck>(`/sessions/${id}/groups/${encodeURIComponent(groupId)}/leave`, { method: 'POST' }),
   getChats: (id: string) => request<Chat[]>(`/sessions/${id}/chats`),
   markChatRead: (id: string, chatId: string) =>
     request<{ success: boolean }>(`/sessions/${id}/chats/read`, {
+      method: 'POST',
+      body: JSON.stringify({ chatId }),
+    }),
+  // Both also delete the gateway's stored copy of the chat's messages (rows, media, search entries).
+  clearChatMessages: (id: string, chatId: string) =>
+    request<{ success: boolean }>(`/sessions/${id}/chats/${encodeURIComponent(chatId)}/messages`, {
+      method: 'DELETE',
+    }),
+  deleteChat: (id: string, chatId: string) =>
+    request<{ success: boolean }>(`/sessions/${id}/chats/delete`, {
+      method: 'POST',
+      body: JSON.stringify({ chatId }),
+    }),
+  // Archive, pin and mute answer `{ success: false }` when the engine declined to act (WhatsApp keeps at most
+  // three chats pinned), which the callers treat as a failure.
+  archiveChat: (id: string, chatId: string, archive: boolean) =>
+    request<{ success: boolean }>(`/sessions/${id}/chats/archive`, {
+      method: 'POST',
+      body: JSON.stringify({ chatId, archive }),
+    }),
+  pinChat: (id: string, chatId: string, pin: boolean) =>
+    request<{ success: boolean }>(`/sessions/${id}/chats/pin`, {
+      method: 'POST',
+      body: JSON.stringify({ chatId, pin }),
+    }),
+  /** `muteUntil` is epoch MILLISECONDS; null unmutes. */
+  muteChat: (id: string, chatId: string, muteUntil: number | null) =>
+    request<{ success: boolean }>(`/sessions/${id}/chats/mute`, {
+      method: 'POST',
+      body: JSON.stringify({ chatId, muteUntil }),
+    }),
+  markChatUnread: (id: string, chatId: string) =>
+    request<{ success: boolean }>(`/sessions/${id}/chats/unread`, {
       method: 'POST',
       body: JSON.stringify({ chatId }),
     }),
@@ -1024,6 +1117,22 @@ export const contactApi = {
     if (throttled) throw lastError;
     return items;
   },
+  /** The ids of the contacts this account has blocked. */
+  listBlocked: (sessionId: string) => request<string[]>(`/sessions/${sessionId}/contacts/blocked`),
+  block: (sessionId: string, contactId: string) =>
+    request<{ success: boolean }>(`/sessions/${sessionId}/contacts/${encodeURIComponent(contactId)}/block`, {
+      method: 'POST',
+    }),
+  unblock: (sessionId: string, contactId: string) =>
+    request<{ success: boolean }>(`/sessions/${sessionId}/contacts/${encodeURIComponent(contactId)}/block`, {
+      method: 'DELETE',
+    }),
+  /** Save the contact to the account's address book, or rename the entry it has. */
+  upsert: (sessionId: string, contactId: string, firstName: string, lastName?: string) =>
+    request<{ success: boolean }>(`/sessions/${sessionId}/contacts/${encodeURIComponent(contactId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ firstName, ...(lastName ? { lastName } : {}) }),
+    }),
   checkNumber: (sessionId: string, number: string) =>
     request<CheckNumberResponse>(`/sessions/${sessionId}/contacts/check/${encodeURIComponent(number)}`),
   // Returns the contact/group profile picture URL. Both engines return null when the user hid their

@@ -27,6 +27,41 @@ export function filterChats<T extends ChatLike>(chats: T[], query: string): T[] 
   return chats.filter(c => c.kind !== 'channel' && c.kind !== 'status' && matches(query, c.name, c.id));
 }
 
+/** The quick filters above the Chats tab list, applied after the search box. */
+export const CHAT_LIST_FILTERS = ['all', 'unread', 'direct', 'groups', 'unknown'] as const;
+export type ChatListFilter = (typeof CHAT_LIST_FILTERS)[number];
+
+/**
+ * A 1:1 chat with someone the address book does not name: no name at all, a WhatsApp push name (which
+ * the engines prefix with `~`), or a name that is only the number itself.
+ */
+export function isUnsavedContact(chat: ChatLike): boolean {
+  if (chat.kind !== 'individual') return false;
+  const name = chat.name?.trim() ?? '';
+  if (!name || name.startsWith('~')) return true;
+  const digits = name.replace(/\D/g, '');
+  return digits.length > 0 && digits === chat.id.split('@')[0];
+}
+
+/** A negative unread count is a chat marked unread (Baileys reports -1), which the Unread filter keeps. */
+export function applyChatListFilter<T extends ChatLike & { unreadCount: number }>(
+  chats: T[],
+  filter: ChatListFilter,
+): T[] {
+  switch (filter) {
+    case 'unread':
+      return chats.filter(c => c.unreadCount !== 0);
+    case 'direct':
+      return chats.filter(c => c.kind === 'individual');
+    case 'groups':
+      return chats.filter(c => c.kind === 'group');
+    case 'unknown':
+      return chats.filter(isUnsavedContact);
+    default:
+      return chats;
+  }
+}
+
 /** Channels tab: same search box, matched on the channel's own name/id. */
 export function filterChannels<T extends { id: string; name: string }>(channels: T[], query: string): T[] {
   return channels.filter(ch => matches(query, ch.name, ch.id));

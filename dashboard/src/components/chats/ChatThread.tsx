@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -6,11 +7,23 @@ import {
   useState,
   type FocusEvent,
   type KeyboardEvent,
+  type ReactElement,
   type SyntheticEvent,
   type RefObject,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, ChevronDown, CornerUpLeft, Loader2, MessageSquare, Smile, Trash2 } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  CheckCheck,
+  ChevronDown,
+  Clock,
+  CornerUpLeft,
+  Loader2,
+  MessageSquare,
+  Smile,
+  Trash2,
+} from 'lucide-react';
 import { useRole } from '../../hooks/useRole';
 import { sessionApi, type Chat } from '../../services/api';
 import {
@@ -33,6 +46,22 @@ const senderColor = (name: string): string => {
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0;
   return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length];
+};
+
+/** A message's time in epoch seconds: the WhatsApp timestamp, else when the gateway stored it. */
+const timestampOf = (msg: ChatMessageView): number =>
+  msg.timestamp || Math.floor(new Date(msg.createdAt).getTime() / 1000);
+
+const sameDay = (a: number, b: number): boolean =>
+  new Date(a * 1000).toDateString() === new Date(b * 1000).toDateString();
+
+// Delivered and read share a glyph and differ in colour only; the span around it spells the status out.
+const STATUS_ICONS: Record<ChatMessageView['status'], ReactElement> = {
+  pending: <Clock size={14} />,
+  sent: <Check size={16} />,
+  delivered: <CheckCheck size={16} />,
+  read: <CheckCheck size={16} />,
+  failed: <AlertCircle size={14} />,
 };
 
 interface ChatThreadProps {
@@ -92,7 +121,7 @@ function ChatThread({
   onDelete,
   onClickButton,
 }: ChatThreadProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   // Reply, react, delete and prompt taps all need an operator key, like the composer; a viewer
   // would only reach a 403.
   const { canWrite } = useRole();
@@ -386,10 +415,26 @@ function ChatThread({
     setButtonClick({});
   }, [activeChat?.id]);
 
-  // Helper formats
+  // Helper formats, in the dashboard's language rather than the browser's.
   const formatTime = (timestamp?: number) => {
     if (!timestamp) return '';
-    return new Date(timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return new Date(timestamp * 1000).toLocaleTimeString(i18n.language, { hour: '2-digit', minute: '2-digit' });
+  };
+
+  // The pill above the first message of each day: Today, Yesterday, else a short date (with the year
+  // once it is not this year's).
+  const formatDayLabel = (timestamp: number) => {
+    const date = new Date(timestamp * 1000);
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (date.toDateString() === new Date().toDateString()) return t('chats.today');
+    if (date.toDateString() === yesterday.toDateString()) return t('chats.yesterday');
+    return date.toLocaleDateString(i18n.language, {
+      weekday: 'short',
+      day: '2-digit',
+      month: 'short',
+      ...(date.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}),
+    });
   };
 
   return (
@@ -484,12 +529,17 @@ function ChatThread({
       ) : (
         messages.map((msg, index) => {
           const isMe = msg.direction === 'outgoing';
-          const formattedTime = formatTime(msg.timestamp || Math.floor(new Date(msg.createdAt).getTime() / 1000));
+          const ts = timestampOf(msg);
+          const formattedTime = formatTime(ts);
 
           // Label who posted, WhatsApp-style: only in groups, only on incoming messages,
           // and only on the first of a consecutive run from the same sender (so a burst
           // from one person isn't repeated on every bubble).
           const prev = messages[index - 1];
+          // A day pill heads the first message of each day. The first bubble of a run from one side
+          // carries the tail and the wider gap, like WhatsApp; a new day starts a new run.
+          const startsNewDay = !prev || !sameDay(timestampOf(prev), ts);
+          const startsRun = startsNewDay || prev.direction !== msg.direction;
           const showSender = Boolean(
             activeChat?.isGroup &&
             !isMe &&
@@ -646,183 +696,193 @@ function ChatThread({
           const isMasked = msg.type === 'masked';
 
           return (
-            <div
-              key={msg.id}
-              className={`message-bubble-wrapper ${isMe ? 'outgoing' : 'incoming'}`}
-              data-wa-message-id={msg.waMessageId}
-              data-scroll-anchor=""
-            >
+            <Fragment key={msg.id}>
+              {/* A sibling of the bubbles, not an anchor: the scroll hook holds the reader by messages only. */}
+              {startsNewDay && (
+                <div className="day-separator">
+                  <span>{formatDayLabel(ts)}</span>
+                </div>
+              )}
               <div
-                className="message-bubble-container"
-                {...(hasActions(msg)
-                  ? {
-                      'data-roving-message': '',
-                      tabIndex: tabStopId === msg.id ? 0 : -1,
-                      // Only focus on the bubble itself: a link or a button inside it is a stop of its own and
-                      // must not turn the bubble into the thread's tab stop as well.
-                      onFocus: (event: FocusEvent<HTMLDivElement>) => {
-                        if (event.target === event.currentTarget) setFocusedMessageId(msg.id);
-                      },
-                      onKeyDown: onBubbleKeyDown,
-                    }
-                  : {})}
+                className={`message-bubble-wrapper ${isMe ? 'outgoing' : 'incoming'}${startsRun ? ' run-start' : ''}${
+                  hasReactions ? ' has-reactions' : ''
+                }`}
+                data-wa-message-id={msg.waMessageId}
+                data-scroll-anchor=""
               >
                 <div
-                  className={`message-bubble ${isMe ? 'outgoing' : 'incoming'} ${msg.status} ${
-                    isMediaMessage ? 'media-type' : ''
-                  } ${isRevoked ? 'revoked-type' : ''}`}
+                  className="message-bubble-container"
+                  {...(hasActions(msg)
+                    ? {
+                        'data-roving-message': '',
+                        tabIndex: tabStopId === msg.id ? 0 : -1,
+                        // Only focus on the bubble itself: a link or a button inside it is a stop of its own and
+                        // must not turn the bubble into the thread's tab stop as well.
+                        onFocus: (event: FocusEvent<HTMLDivElement>) => {
+                          if (event.target === event.currentTarget) setFocusedMessageId(msg.id);
+                        },
+                        onKeyDown: onBubbleKeyDown,
+                      }
+                    : {})}
                 >
-                  {/* Group sender label (WhatsApp-style: coloured name atop the bubble) */}
-                  {/* Group sender label (WhatsApp-style: coloured name atop the bubble).
+                  <div
+                    className={`message-bubble ${isMe ? 'outgoing' : 'incoming'} ${msg.status} ${
+                      isMediaMessage ? 'media-type' : ''
+                    } ${isRevoked ? 'revoked-type' : ''}`}
+                  >
+                    {/* Group sender label (WhatsApp-style: coloured name atop the bubble) */}
+                    {/* Group sender label (WhatsApp-style: coloured name atop the bubble).
                       Colour keys on the stable sender id, so same-named participants
                       still get distinct colours; the label shows the human name. */}
-                  {showSender && (
-                    <div className="message-sender" style={{ color: senderColor(senderKey(msg)!) }}>
-                      {msg.chatName}
-                    </div>
-                  )}
+                    {showSender && (
+                      <div className="message-sender" style={{ color: senderColor(senderKey(msg)!) }}>
+                        {msg.chatName}
+                      </div>
+                    )}
 
-                  {/* Quoted message display */}
-                  {msg.metadata?.quotedMessage && (
-                    <div className="message-quote-box">
-                      <MessageBody
-                        text={resolveMentions(msg.metadata.quotedMessage.body, mentionNames)}
-                        className="quote-body"
-                      />
-                    </div>
-                  )}
+                    {/* Quoted message display */}
+                    {msg.metadata?.quotedMessage && (
+                      <div className="message-quote-box">
+                        <MessageBody
+                          text={resolveMentions(msg.metadata.quotedMessage.body, mentionNames)}
+                          className="quote-body"
+                        />
+                      </div>
+                    )}
 
-                  {renderMedia()}
+                    {renderMedia()}
 
-                  {isRevoked ? (
-                    <div className="message-text">{t('chats.messageDeleted')}</div>
-                  ) : isMasked ? (
-                    <div className="message-text message-masked">{t('chats.messageMasked')}</div>
-                  ) : (
-                    displayBody &&
-                    (!mediaInfo || displayBody !== mediaInfo.filename) &&
-                    msg.type !== 'location' &&
-                    msg.type !== 'call' && (
-                      <MessageBody text={resolveMentions(displayBody, mentionNames)} className="message-text" />
-                    )
-                  )}
+                    {/* Text flows inline and ends in an invisible spacer as wide as the time and ticks, so the
+                      meta tucks into the last line when it fits and wraps below it only when it does not. */}
+                    <div className="message-content">
+                      {isRevoked ? (
+                        <div className="message-text">{t('chats.messageDeleted')}</div>
+                      ) : isMasked ? (
+                        <div className="message-text message-masked">{t('chats.messageMasked')}</div>
+                      ) : (
+                        displayBody &&
+                        (!mediaInfo || displayBody !== mediaInfo.filename) &&
+                        msg.type !== 'location' &&
+                        msg.type !== 'call' && (
+                          <MessageBody text={resolveMentions(displayBody, mentionNames)} className="message-text" />
+                        )
+                      )}
 
-                  {!isRevoked && msg.type === 'poll' && (msg.metadata?.poll?.options?.length ?? 0) > 0 && (
-                    <ul className="message-text" aria-label={t('messageTester.pollOptions')}>
-                      {msg.metadata!.poll!.options.map((option, index) => (
-                        <li key={index}>
-                          <bdi>{option}</bdi>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+                      {!isRevoked && msg.type === 'poll' && (msg.metadata?.poll?.options?.length ?? 0) > 0 && (
+                        <ul className="message-text message-poll-options" aria-label={t('messageTester.pollOptions')}>
+                          {msg.metadata!.poll!.options.map((option, index) => (
+                            <li key={index}>
+                              <bdi>{option}</bdi>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
 
-                  {/* Inbound business prompt choices; a tap calls POST .../messages/click-button. */}
-                  {!isMe && !isRevoked && !isMasked && (msg.metadata?.buttons?.length ?? 0) > 0 && (
-                    <div className="message-prompt-buttons" role="group" aria-label={t('chats.promptButtons')}>
-                      {msg.metadata!.buttons!.map((btn, idx) => {
-                        const clickKey = msg.waMessageId || msg.id;
-                        const state = buttonClick[clickKey];
-                        const loading = state?.loadingId === btn.id;
-                        const disabled = Boolean(state?.loadingId || state?.done);
-                        return (
-                          <button
-                            key={`${idx}:${btn.id}`}
-                            type="button"
-                            className={`message-prompt-button${state?.selectedId === btn.id ? ' selected' : ''}${state?.done ? ' answered' : ''}`}
-                            disabled={disabled || !canWrite}
-                            onClick={() => void handleClickButton(msg, btn)}
+                      {/* Inbound business prompt choices; a tap calls POST .../messages/click-button. */}
+                      {!isMe && !isRevoked && !isMasked && (msg.metadata?.buttons?.length ?? 0) > 0 && (
+                        <div className="message-prompt-buttons" role="group" aria-label={t('chats.promptButtons')}>
+                          {msg.metadata!.buttons!.map((btn, idx) => {
+                            const clickKey = msg.waMessageId || msg.id;
+                            const state = buttonClick[clickKey];
+                            const loading = state?.loadingId === btn.id;
+                            const disabled = Boolean(state?.loadingId || state?.done);
+                            return (
+                              <button
+                                key={`${idx}:${btn.id}`}
+                                type="button"
+                                className={`message-prompt-button${state?.selectedId === btn.id ? ' selected' : ''}${state?.done ? ' answered' : ''}`}
+                                disabled={disabled || !canWrite}
+                                onClick={() => void handleClickButton(msg, btn)}
+                              >
+                                {loading ? <Loader2 size={14} className="animate-spin" /> : btn.text}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      <span className={`meta-spacer${isMe ? ' with-status' : ''}`} aria-hidden="true" />
+                      <span className="message-meta">
+                        <span className="message-time">{formattedTime}</span>
+                        {/* delivered and read render the SAME glyph and differ only in colour, which
+                          carries the meaning nowhere a screen reader or a colour-blind reader can
+                          reach it. The status is spelled out for both. */}
+                        {isMe && (
+                          <span
+                            className={`message-status-icon ${msg.status}`}
+                            role="img"
+                            aria-label={t(`chats.messageStatus.${msg.status}`)}
+                            title={t(`chats.messageStatus.${msg.status}`)}
                           >
-                            {loading ? <Loader2 size={14} className="animate-spin" /> : btn.text}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  <div className="message-meta">
-                    <span className="message-time">{formattedTime}</span>
-                    {/* delivered and read render the SAME glyph and differ only in colour, which
-                        carries the meaning nowhere a screen reader or a colour-blind reader can
-                        reach it. The status is spelled out for both. */}
-                    {isMe && (
-                      <span
-                        className={`message-status-icon ${msg.status}`}
-                        role="img"
-                        aria-label={t(`chats.messageStatus.${msg.status}`)}
-                        title={t(`chats.messageStatus.${msg.status}`)}
-                      >
-                        {msg.status === 'pending' && '🕒'}
-                        {msg.status === 'sent' && '✓'}
-                        {msg.status === 'delivered' && '✓✓'}
-                        {msg.status === 'read' && '✓✓'}
-                        {msg.status === 'failed' && '⚠️'}
+                            {STATUS_ICONS[msg.status]}
+                          </span>
+                        )}
                       </span>
+                    </div>
+
+                    {/* Reactions display */}
+                    {hasReactions && (
+                      <div className="message-reactions-badge">
+                        {Object.values(reactions)
+                          .slice(0, 3)
+                          .map((emoji, idx) => (
+                            <span key={idx} className="reaction-emoji-span">
+                              {emoji}
+                            </span>
+                          ))}
+                        {Object.keys(reactions).length > 1 && (
+                          <span className="reactions-count-span">{Object.keys(reactions).length}</span>
+                        )}
+                      </div>
                     )}
                   </div>
 
-                  {/* Reactions display */}
-                  {hasReactions && (
-                    <div className="message-reactions-badge">
-                      {Object.values(reactions)
-                        .slice(0, 3)
-                        .map((emoji, idx) => (
-                          <span key={idx} className="reaction-emoji-span">
-                            {emoji}
-                          </span>
-                        ))}
-                      {Object.keys(reactions).length > 1 && (
-                        <span className="reactions-count-span">{Object.keys(reactions).length}</span>
+                  {/* Message actions menu (hover, or focus inside the bubble). Every action addresses the message by its WhatsApp
+                    id, so an optimistic bubble still on its local temp_ id (pending, or failed for
+                    good) offers none: the gateway could never resolve it. */}
+                  {canWrite && !isRevoked && Boolean(msg.waMessageId) && (
+                    <div className="message-actions-menu">
+                      <button
+                        type="button"
+                        className="action-btn"
+                        onClick={() => onReply(msg)}
+                        title={t('chats.actions.reply')}
+                      >
+                        <CornerUpLeft size={14} />
+                      </button>
+
+                      <div
+                        className="reaction-trigger-wrapper"
+                        onMouseEnter={fitReactionPopover}
+                        onFocus={fitReactionPopover}
+                      >
+                        <button type="button" className="action-btn reaction-btn" title={t('chats.actions.react')}>
+                          <Smile size={14} />
+                        </button>
+                        <div className="reaction-quick-popover">
+                          {['👍', '❤️', '😂', '😮', '😢', '🙏'].map(emoji => (
+                            <button key={emoji} type="button" onClick={() => onReact(msg, emoji)}>
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {isMe && msg.status !== 'pending' && (
+                        <button
+                          type="button"
+                          className="action-btn delete-btn"
+                          onClick={() => onDelete(msg)}
+                          title={t('chats.actions.delete')}
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       )}
                     </div>
                   )}
                 </div>
-
-                {/* Message actions menu (hover, or focus inside the bubble). Every action addresses the message by its WhatsApp
-                    id, so an optimistic bubble still on its local temp_ id (pending, or failed for
-                    good) offers none: the gateway could never resolve it. */}
-                {canWrite && !isRevoked && Boolean(msg.waMessageId) && (
-                  <div className="message-actions-menu">
-                    <button
-                      type="button"
-                      className="action-btn"
-                      onClick={() => onReply(msg)}
-                      title={t('chats.actions.reply')}
-                    >
-                      <CornerUpLeft size={14} />
-                    </button>
-
-                    <div
-                      className="reaction-trigger-wrapper"
-                      onMouseEnter={fitReactionPopover}
-                      onFocus={fitReactionPopover}
-                    >
-                      <button type="button" className="action-btn reaction-btn" title={t('chats.actions.react')}>
-                        <Smile size={14} />
-                      </button>
-                      <div className="reaction-quick-popover">
-                        {['👍', '❤️', '😂', '😮', '😢', '🙏'].map(emoji => (
-                          <button key={emoji} type="button" onClick={() => onReact(msg, emoji)}>
-                            {emoji}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {isMe && msg.status !== 'pending' && (
-                      <button
-                        type="button"
-                        className="action-btn delete-btn"
-                        onClick={() => onDelete(msg)}
-                        title={t('chats.actions.delete')}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                )}
               </div>
-            </div>
+            </Fragment>
           );
         })
       )}

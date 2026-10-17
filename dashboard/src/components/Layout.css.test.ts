@@ -69,9 +69,10 @@ test('the closed mobile sidebar slides off the right edge under RTL, and opens b
   assert.equal(decl(open[0].body, 'transform'), 'translateX(0)');
 });
 
-test('the collapse chevron is mirrored once, by the icon Layout.tsx picks', () => {
-  assert.match(tsx, /isRtl \? \(\s*<ChevronLeft/, 'Layout.tsx no longer swaps the chevron for RTL');
-  for (const r of all.filter(r => r.selectors.some(s => s.includes('.collapse-toggle svg')))) {
-    assert.equal(decl(r.body, 'transform'), undefined, `${r.selectors.join(', ')} flips the chevron again`);
+test('the collapse icon is mirrored once, by the icon Layout.tsx picks', () => {
+  assert.match(tsx, /isRtl \?\s*\(?\s*<PanelRightClose/, 'Layout.tsx no longer swaps the collapse icon for RTL');
+  assert.match(tsx, /isRtl \?\s*\(?\s*<PanelRightOpen/, 'Layout.tsx no longer swaps the expand icon for RTL');
+  for (const r of all.filter(r => r.selectors.some(s => s.includes('.collapse-toggle') && s.includes('svg')))) {
+    assert.equal(decl(r.body, 'transform'), undefined, `${r.selectors.join(', ')} flips the icon again`);
   }
 });

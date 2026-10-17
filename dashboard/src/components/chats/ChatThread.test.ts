@@ -1307,10 +1307,17 @@ test('the scroll-to-bottom button is sticky inside the scroller, not absolute, a
   const css = readFileSync(new URL('../../pages/Chats.css', import.meta.url), 'utf8');
   const rule = /\.chats-page \.scroll-to-bottom-btn \{([^}]*)\}/.exec(css)?.[1] ?? '';
   assert.match(rule, /position:\s*sticky;/);
-  assert.match(rule, /bottom:\s*1rem;/);
+  assert.match(rule, /bottom:\s*[\d.]+rem;/);
   assert.match(rule, /align-self:\s*flex-end;/);
-  assert.match(rule, /margin-top:\s*calc\(-40px - 0\.75rem\);/);
   assert.doesNotMatch(rule, /position:\s*absolute/);
+  const plain = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const button = declarationsOf(plain, '.chats-page .scroll-to-bottom-btn');
+  const gap = lengthPx(declarationsOf(plain, '.chats-page .room-messages').gap);
+  assert.equal(
+    lengthPx(button['margin-top']),
+    -(lengthPx(button.height) + gap),
+    'the negative margin takes back the height and the gap the button adds to the scroll height',
+  );
   const menu = /\.chats-page \.message-actions-menu \{([^}]*)\}/.exec(css)?.[1] ?? '';
   const level = (text: string): number => Number(/z-index:\s*(\d+);/.exec(text)?.[1]);
   assert.ok(level(rule) < level(menu), 'the jump button paints over the actions menu');
@@ -1363,6 +1370,19 @@ function lengthPx(value: string, vars: Record<string, string> = {}, emPx = 16): 
     .replace(/(-?\d*\.?\d+)em/g, `($1*${emPx})`)
     .replace(/px/g, '');
   return Function(`return (${expression})`)() as number;
+}
+
+// Where the first text of a thread begins, below its padding. A thread opens with the day pill of its first
+// message (see the render test below), so that pill's text is the first a reader at the top of the thread sees.
+function firstTextStartsPx(): number {
+  const thread = declarationsOf(chatsCss, '.chats-page .room-messages');
+  const day = declarationsOf(chatsCss, '.chats-page .day-separator');
+  const pill = declarationsOf(chatsCss, '.chats-page .day-separator span');
+  return (
+    lengthPx(thread.padding) +
+    lengthPx(day['margin-block'].split(' ')[0]) +
+    lengthPx(pill['padding-block'].split(' ')[0])
+  );
 }
 
 // The older-page indicator sat in flow above the oldest bubble, so it pushed the reader's content down by its
@@ -1420,11 +1440,9 @@ test('the older-page indicator takes no room in the thread, loading or failed', 
   const box = Math.max(lineClamp * line + 2 * (border + paddingBlock), lengthPx(failed['min-height'], own));
   // The text paints into the room the clip leaves it below the last line, past the border.
   const ink = border + paddingBlock + lineClamp * line + clipRoom;
-  const bubble = rule('.chats-page .message-bubble');
-  const textStarts = padding + lengthPx(bubble.padding.split(' ')[0], own);
   assert.ok(
-    lengthPx(failed.top, own) + Math.max(box, ink) <= textStarts,
-    "the failure indicator, at two lines, ends above the first message's text",
+    lengthPx(failed.top, own) + Math.max(box, ink) <= firstTextStartsPx(),
+    "the failure indicator, at two lines, ends above the thread's first text",
   );
 });
 
@@ -1538,10 +1556,8 @@ test('the loading label may take two lines in a thread of 18rem or less, and no 
   const border = lengthPx(base.border.split(' ')[0], own);
   const height = lengthPx(base.height, own);
   assert.ok(lines * line + 2 * border <= height, 'the two lines fit inside the height of the pill');
-  const bubble = declarationsOf(chatsCss, '.chats-page .message-bubble');
-  const textStarts = padding + lengthPx(bubble.padding.split(' ')[0], own);
   const top = padding + lengthPx(base['margin-top'], own);
-  assert.ok(top + height <= textStarts, "the wrapped pill ends above the first message's text");
+  assert.ok(top + height <= firstTextStartsPx(), "the wrapped pill ends above the thread's first text");
 });
 
 test('a failed older page renders the whole sentence and the retry instruction as two texts', () => {
@@ -1820,4 +1836,56 @@ test('focus that arrives by keyboard clears the pointer mark a click left, and a
 
   bubble.focus();
   assert.equal(thread.hasAttribute('data-pointer'), false);
+});
+
+// Two messages one day apart, and a reply on the second day from the other side.
+const DAY = 86_400;
+const dayThread = (): ChatMessageView[] => [
+  { ...PROMPT, id: 'd1', waMessageId: 'wamid.d1', body: 'first day', metadata: undefined },
+  {
+    ...PROMPT,
+    id: 'd2',
+    waMessageId: 'wamid.d2',
+    body: 'second day',
+    timestamp: PROMPT.timestamp! + DAY,
+    metadata: undefined,
+  },
+  {
+    ...PROMPT,
+    id: 'd3',
+    waMessageId: 'wamid.d3',
+    body: 'reply',
+    direction: 'outgoing',
+    status: 'read',
+    timestamp: PROMPT.timestamp! + DAY + 60,
+    metadata: undefined,
+  },
+];
+
+// The older-page indicator is measured against the first text of the thread, which this pill is: a thread
+// always opens with the day of its first message.
+test('a thread opens with the day of its first message, and each new day gets a pill of its own', () => {
+  const { container } = renderThread('operator', dayThread());
+  const children = Array.from(container.querySelector('.room-messages')!.children);
+  assert.ok(children[0].classList.contains('day-separator'), 'the thread opens with a day pill');
+  assert.equal(container.querySelectorAll('.day-separator').length, 2, 'one pill per day');
+  // A pill is never an anchor the scroll hook holds the reader by: only messages are.
+  assert.ok(!children[0].hasAttribute('data-scroll-anchor'), 'the day pill is not a scroll anchor');
+});
+
+test('the first bubble of a run from one side starts a run, and a new day starts one too', () => {
+  const { container } = renderThread('operator', dayThread());
+  const starts = Array.from(container.querySelectorAll('.message-bubble-wrapper')).map(wrapper =>
+    wrapper.classList.contains('run-start'),
+  );
+  assert.deepEqual(starts, [true, true, true]);
+
+  rtl.cleanup();
+  const sameDay = dayThread().map(message => ({ ...message, direction: 'incoming' as const }));
+  sameDay[0] = { ...sameDay[0], timestamp: sameDay[1].timestamp };
+  const { container: oneRun } = renderThread('operator', sameDay);
+  const runStarts = Array.from(oneRun.querySelectorAll('.message-bubble-wrapper')).map(wrapper =>
+    wrapper.classList.contains('run-start'),
+  );
+  assert.deepEqual(runStarts, [true, false, false], 'one side on one day is a single run');
 });

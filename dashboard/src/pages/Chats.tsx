@@ -3,8 +3,25 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import { nextReconnectState } from '../utils/reconnectState';
 import { applyIncomingToChatList, promoteChatWithSnippet } from '../utils/chatList';
-import { filterChats, filterChannels, groupStatusesByContact } from '../utils/chatFilters';
-import { ArrowLeft, Loader2, Megaphone, CircleDashed, AlertCircle, MessageSquare } from 'lucide-react';
+import {
+  applyChatListFilter,
+  filterChats,
+  filterChannels,
+  groupStatusesByContact,
+  type ChatListFilter,
+} from '../utils/chatFilters';
+import {
+  ArrowLeft,
+  Loader2,
+  Megaphone,
+  CircleDashed,
+  AlertCircle,
+  MessageSquare,
+  CircleEllipsis,
+  Copy,
+  PanelRight,
+  X,
+} from 'lucide-react';
 import { useProfilePicture } from '../hooks/useProfilePicture';
 import { useProfilePictures } from '../hooks/useProfilePictures';
 import { useResolvedPhone } from '../hooks/useResolvedPhone';
@@ -12,6 +29,7 @@ import { formatPhoneForDisplay } from '../utils/formatPhone';
 import {
   sessionApi,
   messageApi,
+  contactApi,
   asMessageType,
   type Session,
   type Chat,
@@ -37,7 +55,6 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../hooks/useToast';
 import { useRole } from '../hooks/useRole';
-import { PageHeader } from '../components/PageHeader';
 import { GlobalSearch } from '../components/GlobalSearch';
 import {
   useChatMessages,
@@ -52,8 +69,13 @@ import { useChatScrollPosition } from '../hooks/useChatScrollPosition';
 import { createTrailingCoalescer } from '../utils/trailingCoalescer';
 import MessageBody from '../components/chats/MessageBody';
 import MediaLightbox, { type LightboxItem } from '../components/chats/MediaLightbox';
-import KindIcon from '../components/chats/KindIcon';
+import ChatAvatar from '../components/chats/ChatAvatar';
 import ChatSidebar from '../components/chats/ChatSidebar';
+import NewChatPanel from '../components/chats/NewChatPanel';
+import GroupInfoDialog from '../components/chats/GroupInfoDialog';
+import { MuteChatDialog, SaveContactDialog, type MuteDuration } from '../components/chats/ChatDialogs';
+import { chatActionItems, type ChatRowActions } from '../components/chats/chatActionItems';
+import { Modal } from '../components/Modal';
 import ChatThread from '../components/chats/ChatThread';
 import ChatComposer, { type StagedAttachment } from '../components/chats/ChatComposer';
 import StatusMedia from '../components/chats/StatusMedia';
@@ -94,6 +116,30 @@ interface IncomingWsMessage {
 // system face); 3–5 are legacy slots older clients still emit. Approximated with generic
 // families/weights since the actual faces are proprietary; slot 0 and unknown slots keep the UI
 // default.
+// The confirmation dialog's copy for each destructive chat row action; its confirm button repeats the title.
+const CONFIRM_TEXT = {
+  leave: {
+    title: 'chats.group.leave',
+    question: 'chats.group.leaveConfirm',
+    warning: 'chats.group.leaveWarning',
+  },
+  clear: {
+    title: 'chats.rowActions.clear',
+    question: 'chats.rowActions.clearConfirm',
+    warning: 'chats.rowActions.clearWarning',
+  },
+  block: {
+    title: 'chats.rowActions.block',
+    question: 'chats.rowActions.blockConfirm',
+    warning: 'chats.rowActions.blockWarning',
+  },
+  delete: {
+    title: 'chats.rowActions.delete',
+    question: 'chats.rowActions.deleteConfirm',
+    warning: 'chats.rowActions.deleteWarning',
+  },
+} as const;
+
 const STATUS_FONT: Record<number, { family?: string; weight?: number }> = {
   1: { family: 'serif' },
   2: { family: 'cursive' },
@@ -119,13 +165,15 @@ const statusFontStyle = (font?: number): { fontFamily?: string; fontWeight?: num
 };
 
 export function Chats() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   useDocumentTitle(t('nav.chats'));
-  const { error: showErrorToast, warning: showWarningToast } = useToast();
+  const { error: showErrorToast, warning: showWarningToast, success: showSuccessToast } = useToast();
   const { canWrite, engineType } = useRole();
 
   // Sessions list & active session
   const [sessions, setSessions] = useState<Session[]>([]);
+  // Every listed session, ready or not: the switcher shows the others with their state.
+  const [listedSessions, setListedSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>('');
   const [loadingSessions, setLoadingSessions] = useState<boolean>(true);
 
@@ -133,6 +181,27 @@ export function Chats() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [loadingChats, setLoadingChats] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [chatFilter, setChatFilter] = useState<ChatListFilter>('all');
+
+  // The new-chat panel replaces the sidebar lists while open; the contact panel sits beside the room,
+  // and the room's overflow menu drops from its header.
+  const [showNewChat, setShowNewChat] = useState<boolean>(false);
+  const [showContactInfo, setShowContactInfo] = useState<boolean>(false);
+  const [roomMenuOpen, setRoomMenuOpen] = useState<boolean>(false);
+  // The group whose info dialog is open, from its row's menu or from the open room's.
+  const [groupDialogChat, setGroupDialogChat] = useState<Chat | null>(null);
+  // A destructive row action awaiting confirmation, and whether it is in flight.
+  const [confirmAction, setConfirmAction] = useState<{
+    kind: 'leave' | 'clear' | 'delete' | 'block';
+    chat: Chat;
+  } | null>(null);
+  // The archive view of the Chats tab, and the chats whose mute or contact dialog is open.
+  const [showArchived, setShowArchived] = useState<boolean>(false);
+  const [muteDialogChat, setMuteDialogChat] = useState<Chat | null>(null);
+  const [contactDialogChat, setContactDialogChat] = useState<Chat | null>(null);
+  const [dialogBusy, setDialogBusy] = useState<boolean>(false);
+  const [confirmBusy, setConfirmBusy] = useState<boolean>(false);
+  const roomMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Selected chat & message history
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
@@ -273,6 +342,7 @@ export function Chats() {
   );
   const activePhoneText =
     activePhoneDisplay ?? (resolvedPhoneQ.data ? formatPhoneForDisplay(resolvedPhoneQ.data) : null);
+  const activeChatTitle = activeChat ? activeChat.name || activeChat.id.split('@')[0] : '';
 
   // The list loaders below reach the translator and the error toast through a ref, not as
   // dependencies: both change identity on a language switch, which re-ran the session load (it
@@ -295,6 +365,7 @@ export function Chats() {
         const list = await sessionApi.list();
         const readySessions = list.filter(s => s.status === 'ready');
         setSessions(readySessions);
+        setListedSessions(list);
         if (readySessions.length > 0) {
           setSelectedSessionId(readySessions[0].id);
         }
@@ -389,6 +460,14 @@ export function Chats() {
       setPreviewUrl(null);
       setReplyingTo(null);
       lastRoomIdRef.current = null;
+      // The new-chat panel lists the address book of the session being left, and an open group dialog
+      // edits a group through it.
+      setShowNewChat(false);
+      setGroupDialogChat(null);
+      setConfirmAction(null);
+      setMuteDialogChat(null);
+      setContactDialogChat(null);
+      setShowArchived(false);
     }
   }, [selectedSessionId, loadChats]);
 
@@ -860,7 +939,9 @@ export function Chats() {
       if (hit.sessionId !== selectedSessionId && !sessions.some(s => s.id === hit.sessionId)) {
         let ready: Session[];
         try {
-          ready = (await sessionApi.list()).filter(s => s.status === 'ready');
+          const listed = await sessionApi.list();
+          setListedSessions(listed);
+          ready = listed.filter(s => s.status === 'ready');
         } catch (err) {
           showLoadError('chats.errors.loadSessions', err);
           return;
@@ -950,29 +1031,275 @@ export function Chats() {
     pendingHitRef.current = null;
   }, [activeChat, loadingMessages, messages, messagesContainerRef, hitSeq]);
 
-  // Helper formats
+  // Helper formats. The list time follows WhatsApp's ladder, so the list scans the way operators
+  // expect: the clock for today, "Yesterday", the weekday within the last week, else a short date.
+  // In the dashboard's language rather than the browser's.
   const formatChatTime = useCallback(
     (timestamp?: number) => {
       if (!timestamp) return '';
       const date = new Date(timestamp * 1000);
       const today = new Date();
       if (date.toDateString() === today.toDateString()) {
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return date.toLocaleTimeString(i18n.language, { hour: '2-digit', minute: '2-digit' });
       }
       const yesterday = new Date(today);
       yesterday.setDate(yesterday.getDate() - 1);
       if (date.toDateString() === yesterday.toDateString()) {
         return t('chats.yesterday');
       }
-      return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      const weekAgo = new Date(today);
+      weekAgo.setHours(0, 0, 0, 0);
+      weekAgo.setDate(weekAgo.getDate() - 6);
+      if (date >= weekAgo) {
+        return date.toLocaleDateString(i18n.language, { weekday: 'long' });
+      }
+      return date.toLocaleDateString(i18n.language, {
+        weekday: 'short',
+        day: '2-digit',
+        month: 'short',
+        ...(date.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}),
+      });
     },
-    [t],
+    [t, i18n.language],
   );
 
   // One search box drives all three tabs; each matches on its own fields. Plain consts (not useMemo)
   // because chats/channelsQuery.data/statusesQuery.data are already stable, query-cached references,
   // so re-filtering on every render is cheap. See utils/chatFilters for the two status orderings.
-  const filteredChats = filterChats(chats, searchQuery);
+  // The quick filter narrows the Chats tab further. Archived chats are their own view, as in WhatsApp,
+  // except while searching, which finds a chat wherever it is; pinned chats lead the main list.
+  const searching = searchQuery.trim() !== '';
+  const searchedChats = filterChats(chats, searchQuery);
+  const archivedCount = filterChats(chats, '').filter(c => c.archived).length;
+  const shownChats = applyChatListFilter(
+    searching ? searchedChats : searchedChats.filter(c => c.archived === showArchived),
+    chatFilter,
+  );
+  const filteredChats = showArchived
+    ? shownChats
+    : [...shownChats.filter(c => c.pinned), ...shownChats.filter(c => !c.pinned)];
+
+  // Open a chat picked in the new-chat panel. A chat with no history is not in the engine's list, so
+  // it is added to the sidebar locally until the first message, or the next list load, settles it.
+  // The filter and search are cleared so the opened chat is visible in the list.
+  const handleOpenNewChat = (chat: Chat) => {
+    const existing = chats.find(c => c.id === chat.id);
+    if (!existing) setChats(prev => [chat, ...prev]);
+    setActiveTab('chats');
+    setActiveChannel(null);
+    setActiveStatusContactId(null);
+    setActiveChat(existing ?? chat);
+    setShowNewChat(false);
+    setChatFilter('all');
+    setSearchQuery('');
+  };
+
+  // Chat row actions. Everything but the group info is an operator route, so a read-only key gets only that.
+  const renameChat = useCallback((chatId: string, name: string) => {
+    setChats(prev => prev.map(c => (c.id === chatId ? { ...c, name } : c)));
+    setActiveChat(prev => (prev?.id === chatId ? { ...prev, name } : prev));
+  }, []);
+
+  const handleMarkUnread = async (chat: Chat) => {
+    try {
+      await sessionApi.markChatUnread(selectedSessionId, chat.id);
+      // A negative count is how the list shows a chat marked unread (a badge with no number).
+      setChats(prev => prev.map(c => (c.id === chat.id ? { ...c, unreadCount: -1 } : c)));
+      if (activeChat?.id === chat.id) setActiveChat(null);
+    } catch (err) {
+      showErrorToast(t('chats.rowActions.markUnreadFailed'), err instanceof Error ? err.message : undefined);
+    }
+  };
+
+  // The blocklist decides whether a 1:1 chat offers Block or Unblock. Only a key that can act on it reads it.
+  const blockedQuery = useQuery({
+    queryKey: ['contacts-blocked', selectedSessionId],
+    queryFn: () => contactApi.listBlocked(selectedSessionId),
+    enabled: Boolean(selectedSessionId) && canWrite,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const isBlocked = (chat: Chat) =>
+    (blockedQuery.data ?? []).some(id => id === chat.id || id.split('@')[0] === chat.id.split('@')[0]);
+
+  const patchChat = (chatId: string, patch: Partial<Chat>) => {
+    setChats(prev => prev.map(c => (c.id === chatId ? { ...c, ...patch } : c)));
+    setActiveChat(prev => (prev?.id === chatId ? { ...prev, ...patch } : prev));
+  };
+
+  // Archive, pin and mute answer `{ success: false }` when the engine declined, which is a failure here.
+  const expectSuccess = (result: { success: boolean }) => {
+    if (!result.success) throw new Error(t('chats.rowActions.declined'));
+  };
+  const failWith = (key: string) => (err: unknown) =>
+    showErrorToast(t(key), err instanceof Error ? err.message : undefined);
+
+  const handleTogglePin = (chat: Chat) =>
+    sessionApi
+      .pinChat(selectedSessionId, chat.id, !chat.pinned)
+      .then(expectSuccess)
+      .then(() => patchChat(chat.id, { pinned: !chat.pinned }))
+      // WhatsApp keeps at most three chats pinned and refuses a fourth.
+      .catch(failWith(chat.pinned ? 'chats.rowActions.unpinFailed' : 'chats.rowActions.pinFailed'));
+
+  const handleToggleArchive = (chat: Chat) =>
+    sessionApi
+      .archiveChat(selectedSessionId, chat.id, !chat.archived)
+      .then(expectSuccess)
+      .then(() => {
+        patchChat(chat.id, { archived: !chat.archived });
+        showSuccessToast(t(chat.archived ? 'chats.rowActions.unarchived' : 'chats.rowActions.archived'));
+      })
+      .catch(failWith('chats.rowActions.archiveFailed'));
+
+  const MUTE_FOREVER = Date.UTC(2100, 0, 1);
+  const handleMute = async (chat: Chat, duration: MuteDuration | null) => {
+    const until =
+      duration === null
+        ? null
+        : duration === 'always'
+          ? MUTE_FOREVER
+          : Date.now() + (duration === '8h' ? 8 * 3_600_000 : 7 * 86_400_000);
+    setDialogBusy(true);
+    try {
+      expectSuccess(await sessionApi.muteChat(selectedSessionId, chat.id, until));
+      // The list reports an indefinite mute as expiry 0.
+      patchChat(chat.id, {
+        muted: until !== null,
+        muteExpiration: until === null ? undefined : duration === 'always' ? 0 : until,
+      });
+      setMuteDialogChat(null);
+    } catch (err) {
+      failWith('chats.rowActions.muteFailed')(err);
+    } finally {
+      setDialogBusy(false);
+    }
+  };
+
+  const handleSaveContact = async (chat: Chat, firstName: string, lastName: string) => {
+    setDialogBusy(true);
+    try {
+      await contactApi.upsert(selectedSessionId, chat.id, firstName, lastName || undefined);
+      renameChat(chat.id, [firstName, lastName].filter(Boolean).join(' '));
+      showSuccessToast(t('chats.rowActions.contactSaved'));
+      void queryClient.invalidateQueries({ queryKey: ['contacts', selectedSessionId] });
+      setContactDialogChat(null);
+    } catch (err) {
+      failWith('chats.rowActions.contactSaveFailed')(err);
+    } finally {
+      setDialogBusy(false);
+    }
+  };
+
+  const handleUnblock = (chat: Chat) =>
+    contactApi
+      .unblock(selectedSessionId, chat.id)
+      .then(() => {
+        showSuccessToast(t('chats.rowActions.unblocked', { name: chat.name || chat.id.split('@')[0] }));
+        return blockedQuery.refetch();
+      })
+      .catch(failWith('chats.rowActions.blockFailed'));
+
+  const rowActions: ChatRowActions = {
+    onGroupInfo: setGroupDialogChat,
+    onContactInfo: chat => {
+      setActiveTab('chats');
+      setActiveChat(chat);
+      setShowContactInfo(true);
+    },
+    onSaveContact: canWrite ? setContactDialogChat : undefined,
+    onTogglePin: canWrite ? chat => void handleTogglePin(chat) : undefined,
+    onMute: canWrite ? chat => (chat.muted ? void handleMute(chat, null) : setMuteDialogChat(chat)) : undefined,
+    onToggleArchive: canWrite ? chat => void handleToggleArchive(chat) : undefined,
+    onMarkUnread: canWrite ? chat => void handleMarkUnread(chat) : undefined,
+    onLeaveGroup: canWrite ? chat => setConfirmAction({ kind: 'leave', chat }) : undefined,
+    onToggleBlock: canWrite
+      ? chat => (isBlocked(chat) ? void handleUnblock(chat) : setConfirmAction({ kind: 'block', chat }))
+      : undefined,
+    onClear: canWrite ? chat => setConfirmAction({ kind: 'clear', chat }) : undefined,
+    onDelete: canWrite ? chat => setConfirmAction({ kind: 'delete', chat }) : undefined,
+    isBlocked,
+  };
+
+  // Leaving a group, clearing a chat and deleting one all run from the confirmation dialog. On success the
+  // dialog closes; on a failure it stays open, so the action can be tried again.
+  const runConfirmedAction = async () => {
+    if (!confirmAction) return;
+    const { kind, chat } = confirmAction;
+    const name = chat.name || chat.id.split('@')[0];
+    setConfirmBusy(true);
+    try {
+      if (kind === 'leave') {
+        await sessionApi.leaveGroup(selectedSessionId, chat.id);
+        showSuccessToast(t('chats.group.left', { name }));
+        void loadChats(selectedSessionId, { background: true });
+      } else if (kind === 'block') {
+        await contactApi.block(selectedSessionId, chat.id);
+        showSuccessToast(t('chats.rowActions.blocked', { name }));
+        await blockedQuery.refetch();
+      } else if (kind === 'clear') {
+        await sessionApi.clearChatMessages(selectedSessionId, chat.id);
+        showSuccessToast(t('chats.rowActions.cleared', { name }));
+        setChats(prev => prev.map(c => (c.id === chat.id ? { ...c, lastMessage: '', unreadCount: 0 } : c)));
+        // The thread cache holds the messages just deleted; the next open reads the empty chat.
+        await queryClient.invalidateQueries({ queryKey: messagesQueryKey(selectedSessionId, chat.id) });
+      } else {
+        await sessionApi.deleteChat(selectedSessionId, chat.id);
+        showSuccessToast(t('chats.rowActions.deleted', { name }));
+        setChats(prev => prev.filter(c => c.id !== chat.id));
+        queryClient.removeQueries({ queryKey: messagesQueryKey(selectedSessionId, chat.id) });
+      }
+      if ((kind === 'leave' || kind === 'delete') && activeChat?.id === chat.id) setActiveChat(null);
+      setConfirmAction(null);
+    } catch (err) {
+      const failed =
+        kind === 'leave'
+          ? 'chats.group.leaveFailed'
+          : kind === 'block'
+            ? 'chats.rowActions.blockFailed'
+            : kind === 'clear'
+              ? 'chats.rowActions.clearFailed'
+              : 'chats.rowActions.deleteFailed';
+      showErrorToast(t(failed), err instanceof Error ? err.message : undefined);
+    } finally {
+      setConfirmBusy(false);
+    }
+  };
+
+  const handleCopyChatId = async () => {
+    if (!activeChat) return;
+    setRoomMenuOpen(false);
+    try {
+      await navigator.clipboard.writeText(activeChat.id);
+      showSuccessToast(t('chats.chatIdCopied'));
+    } catch (err) {
+      showErrorToast(t('chats.copyFailed'), err instanceof Error ? err.message : undefined);
+    }
+  };
+
+  // The overflow menu closes on a press outside it, on Escape, and with the chat it belongs to. Escape
+  // is taken in the capture phase and marked handled, like the emoji picker's, so the page's own
+  // handler below leaves the room open.
+  useEffect(() => {
+    setRoomMenuOpen(false);
+  }, [activeChat?.id]);
+  useEffect(() => {
+    if (!roomMenuOpen) return;
+    const closeOnOutsidePress = (event: MouseEvent) => {
+      if (!roomMenuRef.current?.contains(event.target as Node)) setRoomMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return;
+      event.preventDefault();
+      setRoomMenuOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsidePress);
+    document.addEventListener('keydown', closeOnEscape, true);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsidePress);
+      document.removeEventListener('keydown', closeOnEscape, true);
+    };
+  }, [roomMenuOpen]);
   // The channels zero-state ("not subscribed to any channels") stays keyed on the UNFILTERED list
   // below, so a non-matching search renders an empty list rather than claiming there are none.
   const filteredChannels = filterChannels(channelsQuery.data ?? [], searchQuery);
@@ -1008,13 +1335,15 @@ export function Chats() {
       if (document.querySelector('[role="dialog"], [role="menu"]')) return;
       if (activeStatusContactId !== null) setActiveStatusContactId(null);
       else if (activeChannel) setActiveChannel(null);
+      else if (activeChat && showContactInfo) setShowContactInfo(false);
       else if (activeChat) setActiveChat(null);
+      else if (showNewChat) setShowNewChat(false);
       else return;
       event.preventDefault();
     };
     document.addEventListener('keydown', closeOpenViewOnEscape);
     return () => document.removeEventListener('keydown', closeOpenViewOnEscape);
-  }, [activeStatusContactId, activeChannel, activeChat]);
+  }, [activeStatusContactId, activeChannel, activeChat, showContactInfo, showNewChat]);
 
   // Image media items for the lightbox, in render order. `getMediaSrc` reconstructs a usable src
   // from either a base64 payload or a URL — the ChatMessageView shape stores both in `data`.
@@ -1035,15 +1364,6 @@ export function Chats() {
 
   return (
     <div className="chats-page">
-      <PageHeader
-        title={t('nav.chats')}
-        subtitle={t('chats.subtitle')}
-        actions={
-          sessions.length > 0 &&
-          canWrite && <GlobalSearch currentSessionId={selectedSessionId} onHit={handleSearchHit} />
-        }
-      />
-
       {/* Real-time connection permanently dropped — let the user re-establish it instead of
           silently showing stale chats. */}
       {connectionFailed && (
@@ -1072,10 +1392,15 @@ export function Chats() {
           </p>
         </div>
       ) : (
-        <div className={`chats-layout ${activeChat || activeChannel || activeStatusGroup ? 'has-active-chat' : ''}`}>
+        <div
+          className={`chats-layout ${activeChat || activeChannel || activeStatusGroup ? 'has-active-chat' : ''} ${
+            activeChat && showContactInfo ? 'has-contact-info' : ''
+          }`}
+        >
           {/* LEFT SIDEBAR: session & chat rooms */}
           <ChatSidebar
             sessions={sessions}
+            pickerSessions={listedSessions}
             selectedSessionId={selectedSessionId}
             onSelectSession={setSelectedSessionId}
             activeTab={activeTab}
@@ -1084,9 +1409,26 @@ export function Chats() {
             onSearchQueryChange={setSearchQuery}
             onComposeStatus={() => setComposeOpen(true)}
             formatChatTime={formatChatTime}
+            messageSearch={
+              canWrite ? <GlobalSearch currentSessionId={selectedSessionId} onHit={handleSearchHit} /> : null
+            }
+            onNewChat={canWrite ? () => setShowNewChat(true) : undefined}
+            newChatPanel={
+              canWrite && showNewChat ? (
+                <NewChatPanel
+                  sessionId={selectedSessionId}
+                  onOpenChat={handleOpenNewChat}
+                  onClose={() => setShowNewChat(false)}
+                />
+              ) : null
+            }
             chatsTab={{
               loading: loadingChats,
               chats: filteredChats,
+              filter: chatFilter,
+              onFilterChange: setChatFilter,
+              rowActions,
+              archive: { count: archivedCount, showing: showArchived, onToggle: () => setShowArchived(v => !v) },
               activeChatId: activeChat?.id,
               pictures: listPics.data,
               onSelectChat: setActiveChat,
@@ -1117,34 +1459,90 @@ export function Chats() {
                   <button className="room-back" onClick={() => setActiveChat(null)} aria-label={t('common.back')}>
                     <ArrowLeft size={20} />
                   </button>
-                  <div className="room-avatar">
-                    {activePp.data ? (
-                      <img
-                        src={activePp.data}
-                        alt=""
-                        // Signed CDN URLs rotate every few hours; refetch the slice on a stale load.
-                        onError={() => activePp.refetch()}
-                      />
-                    ) : (
-                      <KindIcon kind={activeChat.kind} />
-                    )}
-                  </div>
-                  <div className="room-contact-info">
-                    <h3>{activeChat.name || activeChat.id.split('@')[0]}</h3>
-                    {/* Personal chats show the prettified phone number — local formatting for
-                        @c.us ids, engine-resolved for @lid privacy ids (which are NOT phones and
-                        must never be formatted as one). Groups fall back to a semantic label;
-                        the raw JID follows below for the technical case. */}
-                    <span className="room-contact-phone">
-                      {activePhoneText ??
-                        (activeChat.isGroup ? t('chats.groupSubtitle') : t('chats.privateContactSubtitle'))}
+                  {/* The contact itself opens the info panel, as in WhatsApp. */}
+                  <button
+                    type="button"
+                    className="room-contact"
+                    onClick={() => setShowContactInfo(open => !open)}
+                    title={t('chats.contactInfo')}
+                    aria-expanded={showContactInfo}
+                  >
+                    <ChatAvatar
+                      chatId={activeChat.id}
+                      pictureUrl={activePp.data}
+                      kind={activeChat.kind}
+                      size="sm"
+                      // Signed CDN URLs rotate every few hours; refetch the slice on a stale load.
+                      onImageError={() => activePp.refetch()}
+                    />
+                    <span className="room-contact-info">
+                      <span className="room-contact-name">{activeChatTitle}</span>
+                      {/* Personal chats show the prettified phone number — local formatting for
+                          @c.us ids, engine-resolved for @lid privacy ids (which are NOT phones and
+                          must never be formatted as one). Only under a saved name: an unnamed chat's
+                          title already is the number. The raw JID is in the contact panel. */}
+                      {activePhoneText && activeChat.name && (
+                        <span className="room-contact-phone">
+                          <bdi dir="ltr">{activePhoneText}</bdi>
+                        </span>
+                      )}
                     </span>
-                    {/* Raw JID preserved for the technical case (the gateway speaks JIDs everywhere:
-                        webhooks, message rows, lid resolution). Monospace + muted so it doesn't compete
-                        with the human-facing name/number. */}
-                    <span className="room-contact-jid" title={activeChat.id}>
-                      {activeChat.id}
-                    </span>
+                  </button>
+
+                  <div className="room-header-actions">
+                    <div className="room-menu" ref={roomMenuRef}>
+                      <button
+                        type="button"
+                        className={`icon-btn ${roomMenuOpen ? 'active' : ''}`}
+                        onClick={() => setRoomMenuOpen(open => !open)}
+                        title={t('chats.moreActions')}
+                        aria-label={t('chats.moreActions')}
+                        aria-expanded={roomMenuOpen}
+                      >
+                        <CircleEllipsis size={22} />
+                      </button>
+                      {/* A disclosure of plain buttons, not role="menu": it keeps no roving focus or arrow
+                          keys, and the role would promise them. */}
+                      {roomMenuOpen && (
+                        <div className="room-menu-popover">
+                          {/* The row's actions, then what only an open room needs. */}
+                          {chatActionItems(activeChat, rowActions, t).map(item => (
+                            <div key={item.key} className="room-menu-group">
+                              {item.separated && <hr />}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRoomMenuOpen(false);
+                                  item.run(activeChat);
+                                }}
+                              >
+                                {item.icon}
+                                {item.label}
+                              </button>
+                            </div>
+                          ))}
+                          <hr />
+                          <button type="button" onClick={() => void handleCopyChatId()}>
+                            <Copy size={16} />
+                            {t('chats.copyChatId')}
+                          </button>
+                          <button type="button" onClick={() => setActiveChat(null)}>
+                            <X size={16} />
+                            {t('chats.closeChat')}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className={`icon-btn ${showContactInfo ? 'active' : ''}`}
+                      onClick={() => setShowContactInfo(open => !open)}
+                      title={t('chats.contactInfo')}
+                      aria-label={t('chats.contactInfo')}
+                      aria-pressed={showContactInfo}
+                    >
+                      <PanelRight size={22} />
+                    </button>
                   </div>
                 </header>
 
@@ -1289,6 +1687,68 @@ export function Chats() {
               </div>
             )}
           </main>
+
+          {/* Contact panel beside the room, toggled from its header. */}
+          {activeChat && showContactInfo && (
+            <aside className="contact-info-panel" aria-label={t('chats.contactInfo')}>
+              <header className="contact-info-header">
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() => setShowContactInfo(false)}
+                  aria-label={t('common.close')}
+                  title={t('common.close')}
+                >
+                  <X size={20} />
+                </button>
+                <span>{t('chats.contactInfo')}</span>
+              </header>
+              <div className="contact-info-body">
+                <ChatAvatar
+                  chatId={activeChat.id}
+                  pictureUrl={activePp.data}
+                  kind={activeChat.kind}
+                  size="lg"
+                  onImageError={() => activePp.refetch()}
+                />
+                <h3>{activeChatTitle}</h3>
+                <p className="contact-info-sub">
+                  {activePhoneText ? (
+                    <bdi dir="ltr">{activePhoneText}</bdi>
+                  ) : activeChat.isGroup ? (
+                    t('chats.groupSubtitle')
+                  ) : (
+                    t('chats.privateContactSubtitle')
+                  )}
+                </p>
+                <dl className="contact-info-list">
+                  {activePhoneText && (
+                    <>
+                      <dt>{t('chats.phone')}</dt>
+                      <dd>
+                        <bdi dir="ltr">{activePhoneText}</bdi>
+                      </dd>
+                    </>
+                  )}
+                  {/* Raw JID preserved for the technical case (the gateway speaks JIDs everywhere:
+                      webhooks, message rows, lid resolution). */}
+                  <dt>{t('chats.chatId')}</dt>
+                  <dd className="mono">
+                    <span title={activeChat.id}>{activeChat.id}</span>
+                    <button
+                      type="button"
+                      className="icon-btn small"
+                      onClick={() => void handleCopyChatId()}
+                      title={t('chats.copyChatId')}
+                      aria-label={t('chats.copyChatId')}
+                    >
+                      <Copy size={14} />
+                    </button>
+                  </dd>
+                </dl>
+              </div>
+            </aside>
+          )}
         </div>
       )}
 
@@ -1298,6 +1758,64 @@ export function Chats() {
         onClose={() => setLightboxIndex(null)}
         onNavigate={setLightboxIndex}
       />
+
+      {groupDialogChat && sessions.some(s => s.id === selectedSessionId) && (
+        <GroupInfoDialog
+          session={sessions.find(s => s.id === selectedSessionId)!}
+          group={groupDialogChat}
+          onClose={() => setGroupDialogChat(null)}
+          onRenamed={renameChat}
+        />
+      )}
+
+      {confirmAction && (
+        <Modal
+          open
+          onClose={() => setConfirmAction(null)}
+          title={t(CONFIRM_TEXT[confirmAction.kind].title)}
+          className="confirm-modal"
+          closeLabel={t('common.close')}
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setConfirmAction(null)} disabled={confirmBusy}>
+                {t('common.cancel')}
+              </button>
+              <button className="btn-danger" onClick={() => void runConfirmedAction()} disabled={confirmBusy}>
+                {confirmBusy ? (
+                  <Loader2 className="animate-spin" size={16} />
+                ) : (
+                  t(CONFIRM_TEXT[confirmAction.kind].title)
+                )}
+              </button>
+            </>
+          }
+        >
+          <p>
+            {t(CONFIRM_TEXT[confirmAction.kind].question, {
+              name: confirmAction.chat.name || confirmAction.chat.id.split('@')[0],
+            })}
+          </p>
+          <p className="text-muted">{t(CONFIRM_TEXT[confirmAction.kind].warning)}</p>
+        </Modal>
+      )}
+
+      {muteDialogChat && (
+        <MuteChatDialog
+          chat={muteDialogChat}
+          busy={dialogBusy}
+          onMute={duration => void handleMute(muteDialogChat, duration)}
+          onClose={() => setMuteDialogChat(null)}
+        />
+      )}
+
+      {contactDialogChat && (
+        <SaveContactDialog
+          chat={contactDialogChat}
+          busy={dialogBusy}
+          onSave={(first, last) => void handleSaveContact(contactDialogChat, first, last)}
+          onClose={() => setContactDialogChat(null)}
+        />
+      )}
 
       {composeOpen && (
         <StatusComposeModal

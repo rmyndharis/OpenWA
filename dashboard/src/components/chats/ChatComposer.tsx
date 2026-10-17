@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Paperclip, Send, Smile, X } from 'lucide-react';
+import { Loader2, Plus, Send, Smile, X } from 'lucide-react';
 import { messageApi, type Chat, type MessageType } from '../../services/api';
 import { type ChatMessageView } from '../../utils/chatMessages';
 import { buildMediaSendPayload, buildOptimisticMetadata, quotedIdOf } from '../../utils/composerSend';
@@ -309,9 +309,9 @@ function ChatComposer({
 
   return (
     <>
-      {/* Attachment preview banner */}
+      {/* Composer extras: the attachment, emoji and reply panels stack above the input bar. */}
       {attachment && (
-        <div className="attachment-preview-banner">
+        <div className="composer-banner attachment-preview-banner">
           {previewUrl ? (
             <img src={previewUrl} alt={attachment.filename} className="preview-thumbnail" />
           ) : (
@@ -321,18 +321,17 @@ function ChatComposer({
             <span className="preview-filename">{attachment.filename}</span>
             <span className="preview-filesize">({(attachment.file.size / 1024).toFixed(1)} KB)</span>
           </div>
-          <button className="btn-remove-attachment" onClick={handleRemoveAttachment}>
+          <button className="btn-banner-close btn-remove-attachment" onClick={handleRemoveAttachment}>
             <X size={18} />
           </button>
         </div>
       )}
 
-      {/* Popular emojis panel */}
       {showEmojiPicker && (
         // No role="menu" here: these are plain buttons with no menuitem roles, no roving focus and
         // no arrow-key navigation, so claiming the role would promise a keyboard contract the panel
         // does not keep. Escape is handled on document instead, see the effect above.
-        <div className="chats-emoji-picker">
+        <div className="composer-banner chats-emoji-picker">
           <div className="emoji-grid">
             {popularEmojis.map(emoji => (
               <button key={emoji} type="button" className="emoji-btn" onClick={() => handleEmojiClick(emoji)}>
@@ -343,9 +342,8 @@ function ChatComposer({
         </div>
       )}
 
-      {/* Replying preview banner */}
       {replyingTo && (
-        <div className="replying-preview-banner">
+        <div className="composer-banner replying-preview-banner">
           <div className="replying-preview-content">
             <div className="replying-to-title">
               {t('chats.replyingTo', {
@@ -357,7 +355,7 @@ function ChatComposer({
               {replyingTo.type !== 'text' ? typeLabel(replyingTo.type) : replyingTo.body}
             </div>
           </div>
-          <button className="btn-close-reply" onClick={() => setReplyingTo(null)}>
+          <button className="btn-banner-close btn-close-reply" onClick={() => setReplyingTo(null)}>
             <X size={18} />
           </button>
         </div>
@@ -374,41 +372,47 @@ function ChatComposer({
             disabled={!canWrite || sending}
             className="btn-input-accessory"
             title={t('chats.attachTitle')}
+            aria-label={t('chats.attachTitle')}
           >
-            <Paperclip size={20} />
+            <Plus size={24} />
           </button>
 
-          <button
-            type="button"
-            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-            disabled={!canWrite || sending}
-            className={`btn-input-accessory ${showEmojiPicker ? 'active' : ''}`}
-            title={t('chats.emojiTitle')}
-          >
-            <Smile size={20} />
-          </button>
+          {/* The text field and the emoji toggle share one pill, as in WhatsApp. */}
+          <div className="message-input-pill">
+            <input
+              type="text"
+              placeholder={
+                canWrite
+                  ? attachment && !attachmentIsAudio
+                    ? t('chats.captionPlaceholder')
+                    : t('chats.messagePlaceholder')
+                  : t('chats.noPermission')
+              }
+              value={messageInput}
+              onChange={e => setMessageInput(e.target.value)}
+              disabled={!canWrite || sending}
+              className="message-text-input"
+            />
+            <button
+              type="button"
+              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+              disabled={!canWrite || sending}
+              className={`btn-input-accessory inside ${showEmojiPicker ? 'active' : ''}`}
+              title={t('chats.emojiTitle')}
+              aria-label={t('chats.emojiTitle')}
+            >
+              <Smile size={22} />
+            </button>
+          </div>
 
-          <input
-            type="text"
-            placeholder={
-              canWrite
-                ? attachment && !attachmentIsAudio
-                  ? t('chats.captionPlaceholder')
-                  : t('chats.messagePlaceholder')
-                : t('chats.noPermission')
-            }
-            value={messageInput}
-            onChange={e => setMessageInput(e.target.value)}
-            disabled={!canWrite || sending}
-            className="message-text-input"
-          />
           <button
             type="submit"
             disabled={!canWrite || (!messageInput.trim() && !attachment) || sending}
             className="btn-send-message"
             aria-label={t('chats.send')}
+            title={t('chats.send')}
           >
-            {sending ? <Loader2 className="animate-spin" size={24} /> : <Send size={28} strokeWidth={2.5} />}
+            {sending ? <Loader2 className="animate-spin" size={22} /> : <Send size={20} strokeWidth={2.25} />}
           </button>
         </form>
       </footer>
