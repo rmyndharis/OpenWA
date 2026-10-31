@@ -59,14 +59,13 @@ export class RedriveController {
         `instance ${instanceId} of plugin ${pluginId} is ${inst ? 'disabled' : 'deleted'}; its dead-lettered deliveries cannot be redriven`,
       );
     }
-    // Thread the authorized binding down as an explicit DLQ provenance filter. A scoped key is
-    // authorized against the instance's CURRENT sessionScope, but retained DLQ rows still carry the
-    // sessionId of whatever binding wrote them; without this filter a rebind sess-old -> sess-current
-    // lets a sess-current key replay historical sess-old rows. The filter is derived from the
-    // PERSISTED current instance (not the request body), and null means an unrestricted caller may
-    // drain every retained row — never undefined, which would silently fail open.
-    const sessionIdFilter = scoped ? inst.sessionScope : null;
-    const result = await this.redrive.redriveInstance(pluginId, instanceId, sessionIdFilter);
+    // Thread the instance's CURRENT binding down as the DLQ provenance filter, for every key. Retained DLQ
+    // rows still carry the sessionId of whatever binding wrote them; without this filter a rebind
+    // sess-old -> sess-current lets a sess-current key replay historical sess-old rows, and lets an
+    // unrestricted key replay them too, although dispatch refuses a delivery of an earlier binding, so
+    // each would be retired here and dead-lettered again. The binding is read from the PERSISTED instance
+    // (not the request body).
+    const result = await this.redrive.redriveInstance(pluginId, instanceId, inst.sessionScope);
     // A redrive can trigger real downstream sends, so every successful batch is audited with its
     // outcome counts (no payload content — the DLQ rows themselves hold those).
     void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_REDRIVEN, {

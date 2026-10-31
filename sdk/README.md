@@ -1,6 +1,6 @@
 # OpenWA SDKs
 
-This document describes SDK 0.6.0. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
+This document describes SDK 0.8.0. `setMemberLabel` (`set_member_label` in Python, `SetMemberLabel` in Go), the search `match` option, and the `thumbnailUrl` and `thumbnailBase64` fields of `customLinkPreview` require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later. The `message.receipt` and `poll.vote` webhook event names require OpenWA 0.26.0 or later.
 
 Official client libraries for [OpenWA](https://github.com/rmyndharis/OpenWA), the
 open-source WhatsApp API Gateway. OpenWA is an independent project, not
@@ -26,25 +26,25 @@ resource methods; the PHP SDK has no types layer and returns plain arrays.
 
 All five SDKs expose the same fluent resource surface:
 
-| Resource    | Methods                                                                                                                                                                                                                                                                                    |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `sessions`  | list, get, getConfig, updateConfig, getProxy, updateProxy, create, delete, start, stop, logout, forceKill, getQrCode, requestPairingCode, setOnlinePresence, stats                                                                                                                         |
-| `messages`  | list, sendText, sendImage/Video/Audio/Document/Sticker, sendLocation, sendContact, sendTemplate, sendPoll, reply, clickButton, forward, react, delete, editMessage, history, reactions, media, pin, unpin, star, votePoll, sendBulk, batchStatus, cancelBatch                              |
-| `contacts`  | list, get, check, profilePicture, profilePictures, phone, upsert, delete, block, unblock, listBlocked                                                                                                                                                                                      |
-| `groups`    | list, get, create, joinGroup, joinInfo, add/remove/promote/demoteParticipants, setSubject, setDescription, get/updateGroupSettings, leave, getPicture, setPicture, deletePicture, inviteCode, revokeInviteCode, getMembershipRequests, approveMembershipRequests, rejectMembershipRequests |
-| `webhooks`  | list, listAll, deliveryFailures, redriveDeliveryFailures, get, create, update, delete, test                                                                                                                                                                                                |
-| `chats`     | list, markRead, markUnread, archive, pin, mute, clearMessages, delete, sendState, subscribePresence, getPresence                                                                                                                                                                           |
-| `labels`    | list, get, chats, forChat, upsert, delete, addToChat, removeFromChat _(WhatsApp Business)_                                                                                                                                                                                                 |
-| `channels`  | list, get, messages, create, delete, mute, subscribe, unsubscribe, demoteAdmin, transferOwnership _(Newsletters)_                                                                                                                                                                          |
-| `catalog`   | info, products, product, sendProduct _(WhatsApp Business)_                                                                                                                                                                                                                                 |
-| `status`    | list, fromContact, media, sendText, sendImage, sendVideo, sendVoice, delete _(Stories)_                                                                                                                                                                                                    |
-| `search`    | search _(Operator)_                                                                                                                                                                                                                                                                        |
-| `templates` | list, get, create, update, delete                                                                                                                                                                                                                                                          |
-| `profile`   | setProfileName, setProfileStatus, setProfilePicture, deleteProfilePicture _(OPERATOR)_                                                                                                                                                                                                     |
-| `calls`     | rejectCall, createLink _(OPERATOR)_                                                                                                                                                                                                                                                        |
-| `media`     | conversionStatus, convertVoice _(OPERATOR)_, convertVideo _(OPERATOR)_                                                                                                                                                                                                                     |
-| `health`    | check, live, ready                                                                                                                                                                                                                                                                         |
-| `auth`      | validate (`client.auth()`; `client.Auth.Validate` in Go)                                                                                                                                                                                                                                   |
+| Resource    | Methods                                                                                                                                                                                                                                                                                                    |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sessions`  | list, get, getConfig, updateConfig, getProxy, updateProxy, create, delete, start, stop, logout, forceKill, getQrCode, requestPairingCode, setOnlinePresence, stats                                                                                                                                         |
+| `messages`  | list, sendText, sendImage/Video/Audio/Document/Sticker, sendLocation, sendContact, sendTemplate, sendPoll, reply, clickButton, forward, react, delete, editMessage, history, reactions, media, pin, unpin, star, votePoll, sendBulk, batchStatus, cancelBatch                                              |
+| `contacts`  | list, get, check, profilePicture, profilePictures, phone, upsert, delete, block, unblock, listBlocked                                                                                                                                                                                                      |
+| `groups`    | list, get, create, joinGroup, joinInfo, add/remove/promote/demoteParticipants, setSubject, setDescription, setMemberLabel, get/updateGroupSettings, leave, getPicture, setPicture, deletePicture, inviteCode, revokeInviteCode, getMembershipRequests, approveMembershipRequests, rejectMembershipRequests |
+| `webhooks`  | list, listAll, deliveryFailures, redriveDeliveryFailures, get, create, update, delete, test                                                                                                                                                                                                                |
+| `chats`     | list, markRead, markUnread, archive, pin, mute, clearMessages, delete, sendState, subscribePresence, getPresence                                                                                                                                                                                           |
+| `labels`    | list, get, chats, forChat, upsert, delete, addToChat, removeFromChat _(WhatsApp Business)_                                                                                                                                                                                                                 |
+| `channels`  | list, get, messages, create, delete, mute, subscribe, unsubscribe, demoteAdmin, transferOwnership _(Newsletters)_                                                                                                                                                                                          |
+| `catalog`   | info, products, product, sendProduct _(WhatsApp Business)_                                                                                                                                                                                                                                                 |
+| `status`    | list, fromContact, media, sendText, sendImage, sendVideo, sendVoice, delete _(Stories)_                                                                                                                                                                                                                    |
+| `search`    | search _(Operator)_                                                                                                                                                                                                                                                                                        |
+| `templates` | list, get, create, update, delete                                                                                                                                                                                                                                                                          |
+| `profile`   | setProfileName, setProfileStatus, setProfilePicture, deleteProfilePicture _(OPERATOR)_                                                                                                                                                                                                                     |
+| `calls`     | rejectCall, createLink _(OPERATOR)_                                                                                                                                                                                                                                                                        |
+| `media`     | conversionStatus, convertVoice _(OPERATOR)_, convertVideo _(OPERATOR)_                                                                                                                                                                                                                                     |
+| `health`    | check, live, ready                                                                                                                                                                                                                                                                                         |
+| `auth`      | validate (`client.auth()`; `client.Auth.Validate` in Go)                                                                                                                                                                                                                                                   |
 
 > ⚠️ Endpoints requiring an `OPERATOR`-level API key are noted in the inline
 > docs. Deliberately **not** exposed, matching `docs/18-sdk-design.md` exactly:
@@ -167,7 +167,7 @@ $result = $client->messages->sendText($session['id'], [
 echo $result['messageId'];
 ```
 
-Requires PHP 8.1+ and Guzzle 7. For testing, inject a Guzzle client whose
+Requires PHP 8.1+ and Guzzle 7.9+ or 8.x. For testing, inject a Guzzle client whose
 handler is a `MockHandler` — no global state, no network.
 
 ## Java
@@ -176,7 +176,7 @@ handler is a `MockHandler` — no global state, no network.
 <dependency>
   <groupId>com.rmyndharis</groupId>
   <artifactId>openwa</artifactId>
-  <version>0.6.0</version>
+  <version>0.8.0</version>
 </dependency>
 ```
 
@@ -277,9 +277,15 @@ testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
 - **Default timeout** is 30s (configurable). `0` turns it off in the JavaScript,
   Python and PHP clients; the Go client reads `0` as the 30s default and the Java
   builder refuses it. The JavaScript, PHP, Go and Java clients bound the whole call,
-  response body included. The Python client's is per network operation
-  (connect, read, write, pool), so a response that keeps trickling bytes is not
-  cut off. Path segments (chat / message ids) are percent-encoded; a base-URL path
+  response body included, except PHP on Guzzle 7's stream handler (below). The
+  Python client's is per network operation (connect, read, write, pool), so a
+  response that keeps trickling bytes is not cut off. On PHP, Guzzle 7's stream
+  handler (a host without `ext-curl`) bounds each wait instead of the whole call:
+  the wait for the response headers and each silence in the body, which can last
+  up to about twice the `timeout`. A body that keeps trickling bytes is therefore
+  not cut off. There a `0` still leaves PHP's `default_socket_timeout` (60s by
+  default) before the response headers, and that wait ends with a Guzzle
+  exception, not `OpenWATimeoutException`; see the PHP README. Path segments (chat / message ids) are percent-encoded; a base-URL path
   prefix (e.g. behind a proxy at `/v1`) is preserved.
 
 ## Development

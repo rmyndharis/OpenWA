@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { InfraStatus, SavedConfig, SaveConfigPayload } from '../services/api';
+import { namesBundledContainer } from '../utils/bundledHost';
 
 export interface DatabaseConfig {
   type: 'sqlite' | 'postgres';
@@ -58,6 +59,15 @@ export interface InfraConfigForm {
   updateEngineConfig: (key: keyof EngineConfig, value: string | boolean) => void;
   buildSavePayload: () => SaveConfigPayload;
 }
+
+/**
+ * The Use Built-in flag as saved. When `builtInSet` is false the config states no mode for the service: a host the
+ * environment pins decides it, the file does not select the service (the first boot writes every flag as false), or
+ * nothing is saved. What runs stands in for it then: there is no pending switch, and a save keeps sending the mode
+ * that runs.
+ */
+export const savedBuiltIn = (saved: { builtIn: boolean; builtInSet: boolean }, running: boolean): boolean =>
+  saved.builtInSet ? saved.builtIn : running;
 
 /**
  * Owns the editable infrastructure form: dbConfig/redisConfig/storageConfig/engineConfig, the
@@ -128,83 +138,72 @@ export function useInfraConfigForm(
   // their selection (#735).
   const engineHydrated = useRef(false);
   const engineTouched = useRef(false);
+  // Whether the operator has edited the database card, the storage card or the Redis switch here. Until then a
+  // selection the environment pins is the pin, not a choice, and a save leaves it out (see buildSavePayload).
+  const dbTouched = useRef(false);
+  const redisTouched = useRef(false);
+  const storageTouched = useRef(false);
+  const redisEnabledTouched = useRef(false);
+  // Whether the operator has used each Use Built-in toggle here; beside a pinned host an unused one is left out.
+  const dbBuiltInTouched = useRef(false);
+  const redisBuiltInTouched = useRef(false);
+  const storageBuiltInTouched = useRef(false);
 
   /** Whether engineConfig.type reflects a real value (seeded from the saved config or user-picked)
    * rather than the useState default — the save payload omits `type` when it doesn't. */
   const engineTypeKnown = (): boolean => engineHydrated.current || engineTouched.current;
 
-  // Seed the EDITABLE selections from live /status ONCE (the running selection), guarded so a refetch
-  // can't clobber an unsaved edit. These are also the badge sources, so on first paint they show what's
-  // actually running (#488 family).
+  // Seed the editable form ONCE, when both reads are in. The saved config (data/.env.generated) is the
+  // operator's intent, so it supplies every selection and detail field: the running process is stale from
+  // the moment a change is saved until the server restarts, and a form seeded from it writes that stale
+  // value back over the saved one on the next save of ANY field, deleting the stored settings of the
+  // service it switched away from (the engine radio below learned the same, #1082). That holds for the Use
+  // Built-in toggles too: shown from what runs, one that reads "external" invites typing an external host
+  // and credentials that the gateway drops under the stored bundled mode. What is running is reported by the
+  // badges and the pending-restart notes. Only a host, port or path nothing has saved comes from the live
+  // /status, and so does a built-in flag nothing stores. One effect once both exist also keeps the result from depending on which read settled last.
+  // Secrets are never returned, so their inputs stay empty; an empty submit preserves the stored secret on
+  // the backend (#226).
   useEffect(() => {
-    if (!infraStatus || formHydrated.current) return;
+    if (!infraStatus || !savedConfig || formHydrated.current) return;
+    formHydrated.current = true;
+    const { database, redis, queue, storage, engine } = savedConfig;
     setDbConfig(prev => ({
       ...prev,
-      type: (infraStatus.database.type as 'sqlite' | 'postgres') || 'sqlite',
-      host: infraStatus.database.host || 'localhost',
-      // builtIn reflects whether OpenWA's bundled container is actually running (live), not saved intent.
-      builtIn: infraStatus.database.builtIn,
+      type: database.type,
+      host: database.host || infraStatus.database.host || 'localhost',
+      port: database.port || prev.port,
+      username: database.username || prev.username,
+      database: database.database || prev.database,
+      schema: database.schema || prev.schema,
+      poolSize: database.poolSize,
+      sslEnabled: database.sslEnabled,
+      sslRejectUnauthorized: database.sslRejectUnauthorized,
+      builtIn: savedBuiltIn(database, infraStatus.database.builtIn),
     }));
     setRedisConfig(prev => ({
       ...prev,
-      host: infraStatus.redis.host,
-      port: String(infraStatus.redis.port),
-      builtIn: infraStatus.redis.builtIn,
+      host: redis.host || infraStatus.redis.host,
+      port: redis.port || String(infraStatus.redis.port),
+      builtIn: savedBuiltIn(redis, infraStatus.redis.builtIn),
     }));
-    setRedisEnabledState(infraStatus.redis.enabled);
+    setRedisEnabledState(redis.enabled);
+    setQueueEnabled(queue.enabled);
     setStorageConfig(prev => ({
       ...prev,
-      type: infraStatus.storage.type,
-      localPath: infraStatus.storage.path || './uploads',
-      builtIn: infraStatus.storage.builtIn,
-    }));
-    setQueueEnabled(infraStatus.queue.enabled);
-  }, [infraStatus]);
-
-  // Hydrate the editable form from the saved config (data/.env.generated) ONCE — only the detail fields
-  // /status does not expose (username, pool size, SSL flags, S3 details, host/port). The "what's
-  // running" fields (type, redis enabled, storage type, built-in) are owned by the live /status effect
-  // above. Secrets are never returned, so their inputs stay empty; an empty submit preserves the stored
-  // secret on the backend (#226).
-  useEffect(() => {
-    if (!savedConfig || formHydrated.current) return;
-    // NOTE: builtIn for db/redis/storage is owned by the live /status effect above (it reflects the
-    // actually-running bundled container), so it is intentionally NOT set here from saved intent.
-    setDbConfig(prev => ({
-      ...prev,
-      host: savedConfig.database.host || prev.host,
-      port: savedConfig.database.port || prev.port,
-      username: savedConfig.database.username || prev.username,
-      database: savedConfig.database.database || prev.database,
-      schema: savedConfig.database.schema || prev.schema,
-      poolSize: savedConfig.database.poolSize,
-      sslEnabled: savedConfig.database.sslEnabled,
-      sslRejectUnauthorized: savedConfig.database.sslRejectUnauthorized,
-    }));
-    setRedisConfig(prev => ({
-      ...prev,
-      host: savedConfig.redis.host || prev.host,
-      port: savedConfig.redis.port || prev.port,
-    }));
-    setStorageConfig(prev => ({
-      ...prev,
-      localPath: savedConfig.storage.localPath || prev.localPath,
-      s3Bucket: savedConfig.storage.s3Bucket || prev.s3Bucket,
-      s3Region: savedConfig.storage.s3Region || prev.s3Region,
-      s3Endpoint: savedConfig.storage.s3Endpoint || prev.s3Endpoint,
+      type: storage.type,
+      localPath: storage.localPath || infraStatus.storage.path || './uploads',
+      s3Bucket: storage.s3Bucket || prev.s3Bucket,
+      s3Region: storage.s3Region || prev.s3Region,
+      s3Endpoint: storage.s3Endpoint || prev.s3Endpoint,
+      builtIn: savedBuiltIn(storage, infraStatus.storage.builtIn),
     }));
     setEngineConfig(prev => ({
       ...prev,
-      headless: savedConfig.engine.headless,
-      sessionDataPath: savedConfig.engine.sessionDataPath || prev.sessionDataPath,
-      browserArgs: savedConfig.engine.browserArgs || prev.browserArgs,
+      headless: engine.headless,
+      sessionDataPath: engine.sessionDataPath || prev.sessionDataPath,
+      browserArgs: engine.browserArgs || prev.browserArgs,
     }));
-  }, [savedConfig]);
-
-  // Lock the editable form once both sources have seeded it, so later background refetches only refresh
-  // the live indicators above and never overwrite unsaved edits.
-  useEffect(() => {
-    if (infraStatus && savedConfig) formHydrated.current = true;
   }, [infraStatus, savedConfig]);
 
   // Seed the radio once from /config, and never after the operator has touched it (#735).
@@ -223,12 +222,21 @@ export function useInfraConfigForm(
     setEngineConfig(prev => (prev.type === seed ? prev : { ...prev, type: seed }));
   }, [savedConfig]);
 
-  const updateDbConfig = (key: keyof DatabaseConfig, value: string | number | boolean) =>
+  const updateDbConfig = (key: keyof DatabaseConfig, value: string | number | boolean) => {
+    dbTouched.current = true;
+    if (key === 'builtIn') dbBuiltInTouched.current = true;
     setDbConfig(prev => ({ ...prev, [key]: value }));
-  const updateRedisConfig = (key: keyof RedisConfig, value: string | boolean) =>
+  };
+  const updateRedisConfig = (key: keyof RedisConfig, value: string | boolean) => {
+    redisTouched.current = true;
+    if (key === 'builtIn') redisBuiltInTouched.current = true;
     setRedisConfig(prev => ({ ...prev, [key]: value }));
-  const updateStorageConfig = (key: keyof StorageConfig, value: string | boolean) =>
+  };
+  const updateStorageConfig = (key: keyof StorageConfig, value: string | boolean) => {
+    storageTouched.current = true;
+    if (key === 'builtIn') storageBuiltInTouched.current = true;
     setStorageConfig(prev => ({ ...prev, [key]: value }));
+  };
   const updateEngineConfig = (key: keyof EngineConfig, value: string | boolean) => {
     if (key === 'type') engineTouched.current = true;
     setEngineConfig(prev => ({ ...prev, [key]: value }));
@@ -236,27 +244,80 @@ export function useInfraConfigForm(
 
   // Disabling Redis also disables the queue, since queue processing depends on it.
   const setRedisEnabled = (enabled: boolean) => {
+    redisEnabledTouched.current = true;
     setRedisEnabledState(enabled);
     if (!enabled) setQueueEnabled(false);
   };
 
   const setRedisConnected = (connected: boolean) => setRedisConfig(prev => ({ ...prev, connected }));
 
+  // /config reports the EFFECTIVE selection, so under a pin the form shows the pinned value. Sending it back would
+  // write the pin into data/.env.generated over the stored choice, which unsetting the variable was supposed to
+  // reveal (#1082), and drop the stored settings of the mode it replaces. Untouched, it is left out, and the
+  // gateway keeps the stored selection. Any edit in the database or storage card sends it: the edited fields belong
+  // to the mode the card shows, and a stored selection of the other mode would drop them. Read at save time, like
+  // the engine pin below. A pinned host decides the built-in mode the same way, and a flag of true sent beside it
+  // writes the bundled credentials over stored ones the pinned host may still need, so an unused toggle there is
+  // left out too and the gateway keeps the stored flag, unless the form changes the selection the flag belongs to:
+  // the stored flag is the one of the selection being left then (the first boot writes it false beside SQLite). Beside
+  // a host pinned elsewhere the card shows the external server the next boot dials, so an edit in the card belongs to
+  // that server and sends the flag the card shows; left out, the gateway would apply a stored built-in mode instead.
+  const pinnedSeed = (key: string, touched: { current: boolean }) =>
+    !touched.current && !!infraStatus?.envPinned?.includes(key);
+  const editedAway = (profile: string, pinnedHost: string | undefined, touched: { current: boolean }) =>
+    touched.current && !namesBundledContainer(profile, pinnedHost);
+
   const buildSavePayload = (): SaveConfigPayload => ({
     // A bundled container never receives a typed password (the field is hidden once built-in is on,
     // but a value typed before the toggle survives in state). '' means "unchanged" on the backend.
-    database: dbConfig.builtIn ? { ...dbConfig, password: '' } : { ...dbConfig },
+    // An emptied pool size is NaN, which JSON writes as null and the backend refuses: leave it out.
+    database: {
+      ...dbConfig,
+      type: pinnedSeed('DATABASE_TYPE', dbTouched) ? undefined : dbConfig.type,
+      builtIn:
+        pinnedSeed('DATABASE_HOST', dbBuiltInTouched) &&
+        dbConfig.type === savedConfig?.database.type &&
+        !editedAway('postgres', savedConfig?.database.host, dbTouched)
+          ? undefined
+          : dbConfig.builtIn,
+      password: dbConfig.builtIn ? '' : dbConfig.password,
+      // The bundled container runs without TLS, so a built-in database is saved with SSL off (the gateway writes that
+      // too); beside a host pinned elsewhere the next boot dials that server, and the setting shown stays.
+      sslEnabled:
+        dbConfig.builtIn &&
+        !(
+          infraStatus?.envPinned?.includes('DATABASE_HOST') &&
+          !namesBundledContainer('postgres', savedConfig?.database.host)
+        )
+          ? false
+          : dbConfig.sslEnabled,
+      poolSize: Number.isInteger(dbConfig.poolSize) ? dbConfig.poolSize : undefined,
+    },
     // `connected` is runtime-only status, not persisted configuration. Keep it out of the
     // whitelisted backend DTO so a valid dashboard save cannot be rejected as an unknown field.
     redis: {
-      enabled: redisEnabled,
-      builtIn: redisConfig.builtIn,
+      enabled: pinnedSeed('REDIS_ENABLED', redisEnabledTouched) ? undefined : redisEnabled,
+      builtIn:
+        pinnedSeed('REDIS_HOST', redisBuiltInTouched) &&
+        redisEnabled === savedConfig?.redis.enabled &&
+        !editedAway('redis', savedConfig?.redis.host, redisTouched)
+          ? undefined
+          : redisConfig.builtIn,
       host: redisConfig.host,
       port: redisConfig.port,
       password: redisConfig.builtIn ? '' : redisConfig.password,
     },
     queue: { enabled: queueEnabled },
-    storage: { ...storageConfig },
+    storage: {
+      ...storageConfig,
+      type: pinnedSeed('STORAGE_TYPE', storageTouched) ? undefined : storageConfig.type,
+      builtIn:
+        pinnedSeed('S3_ENDPOINT', storageBuiltInTouched) &&
+        storageConfig.type === savedConfig?.storage.type &&
+        !editedAway('minio', savedConfig?.storage.s3Endpoint, storageTouched)
+          ? undefined
+          : storageConfig.builtIn,
+    },
     // Only send `type` once we actually know it — either the radio seeded from /config or the
     // operator picked one. If /config never resolved, engineConfig.type still holds its useState
     // default, and sending that would persist ENGINE_TYPE and silently flip the engine on the next

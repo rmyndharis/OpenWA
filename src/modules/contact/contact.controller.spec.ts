@@ -26,7 +26,7 @@ describe('ContactController', () => {
   it('findAll applies limit/offset query strings', async () => {
     service.listContacts.mockResolvedValue(contacts(50));
     const page = (await controller.findAll('s1', '5', '10')) as { id: string }[];
-    expect(service.listContacts).toHaveBeenCalledWith('s1');
+    expect(service.listContacts).toHaveBeenCalledWith('s1', 10);
     expect(page.map(c => c.id)).toEqual(['10@c.us', '11@c.us', '12@c.us', '13@c.us', '14@c.us']);
   });
 

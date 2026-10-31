@@ -1,5 +1,10 @@
+import type { Request } from 'express';
 import { GroupController } from './group.controller';
 import { GroupService } from './group.service';
+
+// The membership routes read the request to tell an empty body from one that was never parsed; the
+// body-shape cases run through real parsers in group.controller.http.spec.ts.
+const noBody = { headers: {}, body: {}, is: () => null } as unknown as Request;
 
 describe('GroupController join + settings', () => {
   const build = (service: Partial<Record<keyof GroupService, jest.Mock>>) => {
@@ -38,6 +43,23 @@ describe('GroupController join + settings', () => {
       message: 'Group settings updated',
     });
     expect(service.updateGroupSettings).toHaveBeenCalledWith('s1', 'g1', dto);
+  });
+
+  it.each(['getSettings', 'updateSettings'] as const)('%s summary names the member-add mode it carries', method => {
+    const handler = Object.getOwnPropertyDescriptor(GroupController.prototype, method)?.value as object;
+    const op = Reflect.getMetadata('swagger/apiOperation', handler) as { summary: string };
+    expect(op.summary).toBe(
+      `${method === 'getSettings' ? 'Get' : 'Update'} group settings (announce / locked / ephemeral timer / member-add mode)`,
+    );
+  });
+
+  it('PUT :groupId/member-label forwards the label and returns the success envelope', async () => {
+    const { controller, service } = build({ setGroupMemberLabel: jest.fn().mockResolvedValue(undefined) });
+    await expect(controller.setMemberLabel('s1', '120363@g.us', { label: 'Site A' })).resolves.toEqual({
+      success: true,
+      message: 'Group member label sent',
+    });
+    expect(service.setGroupMemberLabel).toHaveBeenCalledWith('s1', '120363@g.us', 'Site A');
   });
 
   it('PUT :groupId/settings propagates a service rejection (empty patch / 501 passthrough)', async () => {
@@ -107,7 +129,7 @@ describe('GroupController membership requests', () => {
     const results = [{ id: '628111@c.us', success: true, status: 200 }];
     const { controller, service } = build({ [svcMethod]: jest.fn().mockResolvedValue(results) });
 
-    await expect(controller[route]('s1', 'g1', { participants: ['628111@c.us'] })).resolves.toEqual({
+    await expect(controller[route]('s1', 'g1', { participants: ['628111@c.us'] }, noBody)).resolves.toEqual({
       success: true,
       message: `Membership requests ${verb}`,
       results,
@@ -118,7 +140,7 @@ describe('GroupController membership requests', () => {
   it('an empty body approves ALL pending requests (participants passed as undefined)', async () => {
     const { controller, service } = build({ approveGroupMembershipRequests: jest.fn().mockResolvedValue([]) });
 
-    await controller.approveMembershipRequests('s1', 'g1', {});
+    await controller.approveMembershipRequests('s1', 'g1', {}, noBody);
 
     expect(service.approveGroupMembershipRequests).toHaveBeenCalledWith('s1', 'g1', undefined);
   });
@@ -173,6 +195,17 @@ describe('GroupController OpenAPI responses', () => {
   it('names the WhatsApp 5xx on the picture 503 and not on the settings 503', () => {
     expect(responsesOf('getPicture')['503']?.description).toContain('5xx');
     expect(responsesOf('getSettings')['503']?.description).not.toContain('5xx');
+  });
+
+  // GroupSettingsDto checks each field against its own type or range and refuses an explicit null, and
+  // the engine lookup answers 400 for a session that is not started, so the 400 names all of them.
+  it('describes every 400 of the settings update', () => {
+    const description = responsesOf('updateSettings')['400']?.description ?? '';
+    for (const part of ['`ephemeralSeconds`', '0 or more', '`memberAddMode`', '`all` or `admins`', '`null`']) {
+      expect(description).toContain(part);
+    }
+    expect(description).toContain('not started');
+    expect(description).not.toContain('not a boolean');
   });
 
   it('declares the rate-limited 503 on group creation', () => {

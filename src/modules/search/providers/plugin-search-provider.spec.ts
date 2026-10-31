@@ -29,6 +29,26 @@ describe('PluginSearchProvider', () => {
     expect(dispatchSearch).toHaveBeenCalledWith({ query: { q: 'hi' }, timeoutMs: 7000 });
   });
 
+  it('keeps the host-expanded id lists out of the query a plugin receives', async () => {
+    const dispatchSearch = jest
+      .fn()
+      .mockResolvedValue({ ok: true, results: { hits: [], total: 0, tookMs: 1, provider: 'plugin:p' } });
+    const p = new PluginSearchProvider('p', 'P', fakeTransport({ dispatchSearch }), 1000);
+
+    await p.search({
+      q: 'hi',
+      chatId: '628123@c.us',
+      chatIdAliases: ['628123@c.us', '999@lid'],
+      from: '628111@c.us',
+      fromAliases: ['628111@c.us'],
+    });
+
+    expect(dispatchSearch).toHaveBeenCalledWith({
+      query: { q: 'hi', chatId: '628123@c.us', from: '628111@c.us' },
+      timeoutMs: 1000,
+    });
+  });
+
   it('search throws a 503 ServiceUnavailableException carrying the cause on ok:false', async () => {
     const transport = fakeTransport({
       dispatchSearch: jest.fn().mockResolvedValue({ ok: false, error: 'backend down' }),

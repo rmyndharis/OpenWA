@@ -43,6 +43,20 @@
  * allowlist culture of check-audit: an exclusion is a recorded decision, not a silent skip, and
  * the goal is to shrink it to zero (usually by tightening the hand type; where the CONTRACT
  * under-describes reality, fix the backend DTO decorator, regenerate, and un-exclude).
+ *
+ * An excluded pair listed in NAMES_ONLY is still compared by field NAME in both directions (not by
+ * optionality or token), so a renamed or dropped field in it fails the run. Those are the Go and Java
+ * response types whose field TYPES are deliberately looser than the contract: a plain string where the
+ * contract lists a vocabulary keeps a value the server adds later decodable and callers' string
+ * handling compiling, and a defined type or a changed pointer would be a source break for a
+ * published client. Only a pair whose every other field conforms belongs there; one that cannot be
+ * read as wire fields at all (a hand-written MarshalJSON, a client-side flag) stays whole-excluded.
+ *
+ * A mapping only gates the types somebody remembered to list, so a new DTO used to ship ungated by
+ * default. The coverage check closes that: every schema an exposed operation sends or returns
+ * (request bodies and 2xx responses, nested schemas included, the resources sdk/README.md declares
+ * unexposed left out) must be compared by at least one of the JavaScript, Python, Go and Java
+ * clients, or be recorded in UNMAPPED_SCHEMAS with a reason. The dashboard does not count towards it.
  */
 
 import { readFileSync, readdirSync, realpathSync } from 'node:fs';
@@ -81,6 +95,7 @@ const MAPPINGS = {
     EditMessageRequest: 'EditMessageDto',
     ForwardMessageRequest: 'ForwardMessageDto',
     GroupDescriptionRequest: 'GroupDescriptionDto',
+    GroupMemberLabelRequest: 'GroupMemberLabelDto',
     GroupInfo: 'GroupInfoDto',
     GroupJoinInfo: 'GroupJoinInfoDto',
     GroupMembershipRequest: 'GroupMembershipRequestDto',
@@ -143,6 +158,38 @@ const MAPPINGS = {
     WebhookFilterCondition: 'WebhookFilterConditionDto',
     WebhookRedriveResult: 'WebhookRedriveResultDto',
     WebhookResponse: 'WebhookResponseDto',
+    // Payloads that sat outside every mapping until the coverage check required one.
+    AuthValidateResponse: 'ValidateApiKeyResponseDto',
+    CatalogInfo: 'CatalogDto',
+    CatalogProduct: 'ProductDto',
+    ChannelMessageRecord: 'ChannelMessageDto',
+    ChannelRecord: 'ChannelDto',
+    ChatPresence: 'ChatPresenceResponseDto',
+    CheckNumberResponse: 'NumberCheckResponseDto',
+    ClickButtonRequest: 'ClickButtonDto',
+    ContactPhoneResponse: 'ResolvedPhoneResponseDto',
+    ContactRecord: 'ContactDto',
+    ConvertMediaInput: 'ConvertMediaDto',
+    ConvertedMedia: 'ConvertedMediaResponseDto',
+    GroupSettingsResponse: ['GroupSettingsResponseDto', 'GroupSettingsDto'],
+    HealthResponse: 'HealthCheckResponseDto',
+    JoinGroupResponse: 'GroupJoinedResponseDto',
+    LabelRecord: 'LabelDto',
+    MediaConversionAvailability: 'ConversionStatusResponseDto',
+    PaginatedProducts: 'PaginatedProductsDto',
+    ParticipantResult: 'ParticipantOperationResultDto',
+    ParticipantsResult: 'ParticipantsOperationResponseDto',
+    ProductMessageResponse: 'ProductMessageResponseDto',
+    QrCodeResponse: 'QRCodeResponseDto',
+    ReactionRecord: 'MessageReactionDto',
+    ReactionSender: 'MessageReactionSenderDto',
+    SearchResults: 'SearchResultsResponseDto',
+    SessionConfig: 'SessionConfigResponseDto',
+    SessionStatsOverview: 'SessionsOverviewResponseDto',
+    StatusMediaInput: 'StatusMediaInput',
+    StatusRecord: 'StatusDto',
+    TemplateRecord: 'TemplateResponseDto',
+    WebhookTestResult: 'WebhookTestResponseDto',
   },
   'dashboard/src/services/api.ts': {
     AccountRestriction: 'AccountRestrictionDto',
@@ -177,11 +224,11 @@ const MAPPINGS = {
  * added makes the shrink loud.
  */
 const MINIMUM_MAPPED = {
-  'sdk/javascript/src/types.ts': 85,
+  'sdk/javascript/src/types.ts': 118,
   'dashboard/src/services/api.ts': 22,
-  'sdk/python/openwa/types.py': 84,
-  'sdk/go': 81,
-  'sdk/java': 85,
+  'sdk/python/openwa/types.py': 130,
+  'sdk/go': 131,
+  'sdk/java': 135,
 };
 
 /** Known drift, deliberately not gated yet — each line is a to-adjudicate follow-up. */
@@ -197,10 +244,28 @@ const EXCLUDED = {
       'BY DESIGN: every component is `json:"-"` and MarshalJSON writes the body by hand, because the three fields need an explicit null to reset and Go cannot express "null" and "absent" through one pointer, so the harvester sees no wire fields at all',
     UpdateSessionProxyRequest:
       'BY DESIGN, same shape as UpdateSessionConfigRequest above: clearing a proxy needs an explicit null and `omitempty` on a nil pointer omits the key instead, so ProxyURL is `json:"-"` with a ClearProxyURL flag and MarshalJSON writes the body, leaving no wire fields for the harvester to see',
+    ContactRecord:
+      'Number is a *string although the contract requires it and the server always sends it; making it a string is a source break for callers that dereference it, so it waits for a breaking release. The other fields conform',
+    GroupPictureResponse:
+      'URL is a plain string although the contract types it string|null (null when the group has no picture); a JSON null decodes to the empty string, which is how callers read "no picture", and a *string would be a source break',
+    GroupSettings:
+      'memberAddMode is a plain string because this struct is also the PUT body; the defined MemberAddMode type that GroupInfo uses would be a source break for callers that assign a string. The other fields conform',
+    MembershipRequestActionRequest:
+      'BY DESIGN: `participants` carries no omitempty so that a non-nil slice always sends the key, empty included, and naming nobody stays a 400 instead of collapsing into the absent key that means every pending request',
+    StatusRecord:
+      'Type is a plain string holding text, image, video or voice; a defined type would be a source break for callers that pass it on as a string. The other fields conform',
+    AuthValidateResponse:
+      'Role is a plain string holding admin, operator or viewer; a defined type would be a source break for callers that pass it on as a string. The other fields conform',
   },
   'sdk/java': {
     UpdateSessionConfigRequest:
       'BY DESIGN: the three clear* components are client-side control flags consumed by UpdateSessionConfigRequestSerializer, which is what emits the explicit null; they never reach the wire',
+    GroupSettings:
+      'memberAddMode is a String because this record is also the PUT body; the MemberAddMode enum that GroupInfo uses would break callers that pass a string. The other components conform',
+    StatusRecord:
+      'type is a String holding text, image, video or voice; an enum would break callers that compare it as a string. The other components conform',
+    AuthValidateResponse:
+      'role is a String holding admin, operator or viewer; an enum would break callers that compare it as a string. The other components conform',
   },
   'dashboard/src/services/api.ts': {
     Webhook:
@@ -208,6 +273,43 @@ const EXCLUDED = {
     Session:
       'BY DESIGN, not drift: the wire always carries engineLoaded, but this client clears it to "unknown" after a websocket status event so the action helpers fall back to the status set — the type models client state, not the wire',
   },
+};
+
+/**
+ * Excluded pairs that are still compared by field name (see the header). Each entry must also be in
+ * EXCLUDED: the run fails on one that is not, so a retyped pair cannot keep the weaker comparison.
+ */
+const NAMES_ONLY = {
+  'sdk/go': ['ContactRecord', 'GroupPictureResponse', 'GroupSettings', 'StatusRecord', 'AuthValidateResponse'],
+  'sdk/java': ['GroupSettings', 'StatusRecord', 'AuthValidateResponse'],
+};
+
+const ACK_SHAPE =
+  'every client answers it as the shared SuccessResult {success, message?}, which spans the success-only and the success-plus-message acks, so no single schema fits it';
+const INVITE_CODE_SHAPE =
+  'both invite routes are answered as InviteCodeResponse, whose message exists on the revoke route only, so it cannot conform to either schema';
+
+/**
+ * Schemas that an exposed operation sends or returns and that no client compares, each with the
+ * reason. The coverage check fails on a schema in neither place, and on an entry here that a client
+ * now compares (or that no exposed operation uses any more), so the list cannot rot.
+ */
+const UNMAPPED_SCHEMAS = {
+  CallAckResponseDto: ACK_SHAPE,
+  ChannelAckResponseDto: ACK_SHAPE,
+  ContactAckResponseDto: ACK_SHAPE,
+  GroupAckResponseDto: ACK_SHAPE,
+  GroupInviteCodeResponseDto: INVITE_CODE_SHAPE,
+  GroupInviteCodeRevokedResponseDto: INVITE_CODE_SHAPE,
+  LabelAckResponseDto: ACK_SHAPE,
+  LivenessResponseDto:
+    'GET /health/live answers {status}, which JavaScript, Python and Go read as an inline map and Java as the HealthResponse of GET /health',
+  MessageActionResponseDto: ACK_SHAPE,
+  ProfileAckResponseDto: ACK_SHAPE,
+  SessionActionResponseDto: ACK_SHAPE,
+  SessionGroupSummaryDto:
+    'GET /groups is read as GroupSummary, the shape the create route answers, which also carries a participantsCount and an isAdmin that a listing never sends',
+  StatusDeletedResponseDto: 'every client discards the {message} body of DELETE status and returns nothing',
 };
 
 // UpdateWebhookRequest is mapped on the three clients that declare it as a named type. The
@@ -303,6 +405,51 @@ const PYTHON_MAPPING = {
   WebhookFilters: 'WebhookFiltersDto',
   WebhookRedriveResult: 'WebhookRedriveResultDto',
   WebhookResponse: 'WebhookResponseDto',
+  // Payloads that sat outside every mapping until the coverage check required one.
+  AuthValidateResponse: 'ValidateApiKeyResponseDto',
+  BatchError: 'BatchMessageErrorDto',
+  BulkOptions: 'BulkMessageOptionsDto',
+  CatalogInfo: 'CatalogDto',
+  CatalogProduct: 'ProductDto',
+  ChannelMessageRecord: 'ChannelMessageDto',
+  ChannelRecord: 'ChannelDto',
+  ChatHistoryMedia: 'ChatHistoryMediaDto',
+  ChatHistoryPoll: 'ChatHistoryPollDto',
+  ChatPresence: 'ChatPresenceResponseDto',
+  CheckNumberResponse: 'NumberCheckResponseDto',
+  ClickButtonRequest: 'ClickButtonDto',
+  ContactPhoneResponse: 'ResolvedPhoneResponseDto',
+  ContactRecord: 'ContactDto',
+  ConvertedMedia: 'ConvertedMediaResponseDto',
+  GroupSettings: ['GroupSettingsResponseDto', 'GroupSettingsDto'],
+  HealthResponse: 'HealthCheckResponseDto',
+  JoinGroupResponse: 'GroupJoinedResponseDto',
+  LabelRecord: 'LabelDto',
+  MediaConversionAvailability: 'ConversionStatusResponseDto',
+  MemoryUsage: 'SessionMemoryUsageDto',
+  MessageCall: 'ChatHistoryCallDto',
+  MessageContact: 'ChatHistoryContactDto',
+  MessageLocation: 'ChatHistoryLocationDto',
+  MessageOrder: 'ChatHistoryOrderDto',
+  MessageProduct: 'ChatHistoryProductDto',
+  PaginatedProducts: 'PaginatedProductsDto',
+  ParticipantResult: 'ParticipantOperationResultDto',
+  ParticipantsResult: 'ParticipantsOperationResponseDto',
+  ProductMessageResponse: 'ProductMessageResponseDto',
+  ProductPagination: 'ProductPaginationDto',
+  QrCodeResponse: 'QRCodeResponseDto',
+  QuotedMessage: 'ChatHistoryQuotedMessageDto',
+  ReactionRecord: 'MessageReactionDto',
+  ReactionSender: 'MessageReactionSenderDto',
+  SearchResults: 'SearchResultsResponseDto',
+  SessionConfig: 'SessionConfigResponseDto',
+  SessionStatsOverview: 'SessionsOverviewResponseDto',
+  StatusContact: 'StatusContactDto',
+  StatusMediaInput: 'StatusMediaInput',
+  StatusRecord: 'StatusDto',
+  TemplateRecord: 'TemplateResponseDto',
+  UpdateTemplateRequest: 'UpdateTemplateDto',
+  WebhookTestResult: 'WebhookTestResponseDto',
 };
 
 /** Go client pairs (wire structs across types_*.go). */
@@ -390,6 +537,55 @@ const GO_MAPPING = {
   WebhookDeliveryFailure: 'WebhookDeliveryFailureDto',
   WebhookRedriveResult: 'WebhookRedriveResultDto',
   WebhookResponse: 'WebhookResponseDto',
+  // Payloads that sat outside every mapping until the coverage check required one.
+  AuthValidateResponse: 'ValidateApiKeyResponseDto',
+  BatchError: 'BatchMessageErrorDto',
+  BulkOptions: 'BulkMessageOptionsDto',
+  CatalogInfo: 'CatalogDto',
+  CatalogProduct: 'ProductDto',
+  ChannelMessageRecord: 'ChannelMessageDto',
+  ChannelRecord: 'ChannelDto',
+  ChatHistoryMedia: 'ChatHistoryMediaDto',
+  ChatHistoryPoll: 'ChatHistoryPollDto',
+  ChatPresence: 'ChatPresenceResponseDto',
+  CheckNumberResponse: 'NumberCheckResponseDto',
+  ClickButtonRequest: 'ClickButtonDto',
+  ContactPhoneResponse: 'ResolvedPhoneResponseDto',
+  ContactRecord: 'ContactDto',
+  ConvertMediaInput: 'ConvertMediaDto',
+  ConvertedMedia: 'ConvertedMediaResponseDto',
+  GroupPictureResponse: 'GroupPictureResponseDto',
+  GroupSettings: ['GroupSettingsResponseDto', 'GroupSettingsDto'],
+  HealthResponse: 'HealthCheckResponseDto',
+  JoinGroupResponse: 'GroupJoinedResponseDto',
+  LabelRecord: 'LabelDto',
+  MediaConversionAvailability: 'ConversionStatusResponseDto',
+  MembershipRequestActionRequest: 'MembershipRequestActionDto',
+  MemoryUsage: 'SessionMemoryUsageDto',
+  MessageCall: 'ChatHistoryCallDto',
+  MessageContact: 'ChatHistoryContactDto',
+  MessageLocation: 'ChatHistoryLocationDto',
+  MessageOrder: 'ChatHistoryOrderDto',
+  MessageProduct: 'ChatHistoryProductDto',
+  PaginatedProducts: 'PaginatedProductsDto',
+  ParticipantResult: 'ParticipantOperationResultDto',
+  ParticipantsResult: 'ParticipantsOperationResponseDto',
+  ProductMessageResponse: 'ProductMessageResponseDto',
+  ProductPagination: 'ProductPaginationDto',
+  QrCodeResponse: 'QRCodeResponseDto',
+  QuotedMessage: 'ChatHistoryQuotedMessageDto',
+  ReactionRecord: 'MessageReactionDto',
+  ReactionSender: 'MessageReactionSenderDto',
+  SearchResults: 'SearchResultsResponseDto',
+  SessionConfig: 'SessionConfigResponseDto',
+  SessionStatsOverview: 'SessionsOverviewResponseDto',
+  StatusContact: 'StatusContactDto',
+  StatusListResponse: 'StatusListResponseDto',
+  StatusMediaInput: 'StatusMediaInput',
+  StatusRecord: 'StatusDto',
+  TemplateRecord: 'TemplateResponseDto',
+  UpdateTemplateRequest: 'UpdateTemplateDto',
+  WebhookTestResult: 'WebhookTestResponseDto',
 };
 
 /** Java client pairs (record components in model/*.java). */
@@ -419,6 +615,7 @@ const JAVA_MAPPING = {
   EditMessageRequest: 'EditMessageDto',
   ForwardMessageRequest: 'ForwardMessageDto',
   GroupDescriptionRequest: 'GroupDescriptionDto',
+  GroupMemberLabelRequest: 'GroupMemberLabelDto',
   GroupInfo: 'GroupInfoDto',
   GroupJoinInfo: 'GroupJoinInfoDto',
   GroupMembershipRequest: 'GroupMembershipRequestDto',
@@ -481,11 +678,61 @@ const JAVA_MAPPING = {
   WebhookDeliveryFailure: 'WebhookDeliveryFailureDto',
   WebhookRedriveResult: 'WebhookRedriveResultDto',
   WebhookResponse: 'WebhookResponseDto',
+  // Payloads that sat outside every mapping until the coverage check required one.
+  AuthValidateResponse: 'ValidateApiKeyResponseDto',
+  BatchError: 'BatchMessageErrorDto',
+  Call: 'ChatHistoryCallDto',
+  CatalogInfo: 'CatalogDto',
+  CatalogProduct: 'ProductDto',
+  ChannelMessageRecord: 'ChannelMessageDto',
+  ChannelRecord: 'ChannelDto',
+  ChatPresence: 'ChatPresenceResponseDto',
+  CheckNumberResponse: 'NumberCheckResponseDto',
+  ClickButtonRequest: 'ClickButtonDto',
+  Contact: 'ChatHistoryContactDto',
+  ContactPhoneResponse: 'ResolvedPhoneResponseDto',
+  ContactRecord: 'ContactDto',
+  ConvertMediaRequest: 'ConvertMediaDto',
+  ConvertedMedia: 'ConvertedMediaResponseDto',
+  GroupPictureResponse: 'GroupPictureResponseDto',
+  GroupSettings: ['GroupSettingsResponseDto', 'GroupSettingsDto'],
+  HealthResponse: 'HealthCheckResponseDto',
+  JoinGroupResponse: 'GroupJoinedResponseDto',
+  LabelRecord: 'LabelDto',
+  Location: 'ChatHistoryLocationDto',
+  Media: 'ChatHistoryMediaDto',
+  MediaConversionAvailability: 'ConversionStatusResponseDto',
+  MembershipRequestActionRequest: 'MembershipRequestActionDto',
+  MemoryUsage: 'SessionMemoryUsageDto',
+  Options: 'BulkMessageOptionsDto',
+  Order: 'ChatHistoryOrderDto',
+  PaginatedProducts: 'PaginatedProductsDto',
+  Pagination: 'ProductPaginationDto',
+  ParticipantResult: 'ParticipantOperationResultDto',
+  ParticipantsResult: 'ParticipantsOperationResponseDto',
+  Poll: 'ChatHistoryPollDto',
+  Product: 'ChatHistoryProductDto',
+  ProductMessageResponse: 'ProductMessageResponseDto',
+  QrCodeResponse: 'QRCodeResponseDto',
+  QuotedMessage: 'ChatHistoryQuotedMessageDto',
+  ReactionRecord: 'MessageReactionDto',
+  ReactionSender: 'MessageReactionSenderDto',
+  SearchResults: 'SearchResultsResponseDto',
+  SessionConfig: 'SessionConfigResponseDto',
+  SessionStatsOverview: 'SessionsOverviewResponseDto',
+  StatusContact: 'StatusContactDto',
+  StatusListResult: 'StatusListResponseDto',
+  StatusMediaInput: 'StatusMediaInput',
+  StatusRecord: 'StatusDto',
+  TemplateRecord: 'TemplateResponseDto',
+  UpdateTemplateRequest: 'UpdateTemplateDto',
+  WebhookTestResult: 'WebhookTestResponseDto',
 };
 
 // ── hand-type parsing (declarations follow the regular formatting of the two files) ──
 
 export function parseHandTypes(source) {
+  source = source.replace(/\r\n/g, '\n');
   const types = {};
   const parents = {};
   const iface = /export interface (\w+)(?: extends (\w+))? \{([\s\S]*?)\n\}/g;
@@ -548,25 +795,26 @@ function countUnbalanced(s) {
 
 const MAX_DEPTH = 4;
 
-/** Sort enum members the same way on both sides: numerically when every member is numeric, else
- *  lexicographically. The two token builders previously both used default .sort() (lexicographic),
- *  which ordered 10 before 2 - consistent by accident, and unable to recognize unquoted numeric
- *  unions in hand types at all, leaving numeric enums ungated.
- */
+/** Preserve JSON kinds while sorting numeric enums numerically and other enums by their encoded values. */
 const sortEnumMembers = members =>
-  members.every(m => /^-?\d+(\.\d+)?$/.test(m))
-    ? members.slice().sort((a, b) => Number(a) - Number(b))
-    : members.slice().sort();
+  members.every(member => typeof member === 'number')
+    ? members.slice().sort((a, b) => a - b)
+    : members.slice().sort((a, b) => {
+        const left = JSON.stringify(a);
+        const right = JSON.stringify(b);
+        return left < right ? -1 : left > right ? 1 : 0;
+      });
+const enumToken = members => `enum(${JSON.stringify(sortEnumMembers(members))})`;
 
 export function handToken(text, types, depth = 0) {
   const t = text.trim().replace(/;$/, '');
   if (t.endsWith('[]')) return `array<${handToken(t.slice(0, -2), types, depth)}>`;
   if (/^(string|number|boolean|unknown|any)$/.test(t)) return t;
-  const literals = [...t.matchAll(/'([^']+)'/g)].map(m => m[1]);
+  const literals = [...t.matchAll(/'([^']*)'|"([^"]*)"/g)].map(m => m[1] ?? m[2]);
   // Unquoted numeric literals (font enums like 0|1|2|6) count too.
-  const numerics = [...t.matchAll(/(?<![\w.'])(-?\d+(?:\.\d+)?)(?![\w.])/g)].map(m => m[1]);
-  if (literals.length && literals.length === t.split('|').length) return `enum(${sortEnumMembers(literals).join(',')})`;
-  if (numerics.length && numerics.length === t.split('|').length) return `enum(${sortEnumMembers(numerics).join(',')})`;
+  const numerics = [...t.matchAll(/(?<![\w.'"])(-?\d+(?:\.\d+)?)(?![\w.])/g)].map(m => Number(m[1]));
+  if (literals.length && literals.length === t.split('|').length) return enumToken(literals);
+  if (numerics.length && numerics.length === t.split('|').length) return enumToken(numerics);
   if (t.includes('|')) {
     const parts = t
       .split('|')
@@ -575,6 +823,9 @@ export function handToken(text, types, depth = 0) {
     const nullable = parts.includes('null');
     const rest = parts.filter(p => p !== 'null');
     if (nullable && rest.length === 1) return `${handToken(rest[0], types, depth)}|null`;
+    // A nullable literal union ('a' | 'b' | null) is the enum of its literals with a null arm.
+    const inner = nullable && rest.length > 1 ? handToken(rest.join(' | '), types, depth) : '';
+    if (inner.startsWith('enum(')) return `${inner}|null`;
     return `union(${rest
       .map(p => handToken(p, types, depth))
       .sort()
@@ -603,7 +854,11 @@ function baseSchemaToken(node, schemas, depth = 0) {
     const target = schemas[node.$ref.split('/').pop()];
     return depth < MAX_DEPTH ? schemaToken(target, schemas, depth + 1) : 'object';
   }
-  if (node.enum) return `enum(${sortEnumMembers(node.enum.map(String)).join(',')})`;
+  if (node.enum) {
+    // OpenAPI 3.0 lists null among the members of a nullable enum; schemaToken adds the null arm back.
+    const members = node.nullable === true ? node.enum.filter(m => m !== null) : node.enum;
+    return enumToken(members);
+  }
   if (node.type === 'array') return `array<${schemaToken(node.items, schemas, depth)}>`;
   if (node.anyOf || node.oneOf) {
     const parts = (node.anyOf ?? node.oneOf).map(n => schemaToken(n, schemas, depth + 1));
@@ -641,7 +896,21 @@ export function parseObjectToken(token) {
   const members = {};
   let depth = 0;
   let buffer = '';
+  let quoted = false;
+  let escaped = false;
   for (const ch of inner) {
+    if (quoted) {
+      buffer += ch;
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') quoted = false;
+      continue;
+    }
+    if (ch === '"') {
+      quoted = true;
+      buffer += ch;
+      continue;
+    }
     if (ch === ',' && depth === 0) {
       pushMember();
       continue;
@@ -662,9 +931,10 @@ export function parseObjectToken(token) {
 /** Fields whose both sides reduce to a primitive/enum/array/null-union get token-level diffing.
  *  `array<enum(...)>` counts: an array of enum members is exactly as comparable as a bare one, and
  *  leaving it out silently ungated every vocabulary that travels as a list, the webhook event set
- *  above all, on every client at once. */
+ *  above all, on every client at once. So does a null arm after an enum or an array: a nullable
+ *  field was skipped, and with it the vocabulary of SessionProxy.proxyType. */
 function isSimpleToken(token) {
-  return /^(string|number|boolean|unknown|any)(\|null)?$|^enum\([^)]*\)$|^array<((string|number|boolean)(\|null)?|enum\([^)]*\))>$/.test(
+  return /^(string|number|boolean|unknown|any)(\|null)?$|^enum\(\[[\s\S]*\]\)(\|null)?$|^array<((string|number|boolean)(\|null)?|enum\(\[[\s\S]*\]\))>(\|null)?$/.test(
     token,
   );
 }
@@ -672,8 +942,17 @@ function isSimpleToken(token) {
 /**
  * Compares one hand type against one schema. Returns an array of human-readable diff lines —
  * empty when the pair conforms. Exported for the spec; the CLI loop below is a thin driver.
+ * `namesOnly` keeps the field-name comparison and drops optionality and token (see NAMES_ONLY).
  */
-export function comparePair(handName, handMembers, schemaName, schema, schemas, compareOptionality = true) {
+export function comparePair(
+  handName,
+  handMembers,
+  schemaName,
+  schema,
+  schemas,
+  compareOptionality = true,
+  namesOnly = false,
+) {
   const diffs = [];
   const schemaFields = parseObjectToken(schemaToken(schema, schemas));
   for (const [field, handInfo] of Object.entries(handMembers)) {
@@ -682,6 +961,7 @@ export function comparePair(handName, handMembers, schemaName, schema, schemas, 
       diffs.push(`hand has "${field}" — contract does not`);
       continue;
     }
+    if (namesOnly) continue;
     if (compareOptionality && handInfo.optional !== sField.optional) {
       diffs.push(
         `"${field}": hand ${handInfo.optional ? 'optional' : 'required'}, contract ${sField.optional ? 'optional' : 'required'}`,
@@ -703,7 +983,9 @@ export function comparePair(handName, handMembers, schemaName, schema, schemas, 
         // "86400" for a field the contract types as a number. Those components stay `Integer`
         // here; the literal set is gated on every other client. String enums ARE modelled as Java
         // enums and keep comparing by presence.
-        if (/^enum\(-?\d+(?:\.\d+)?(?:,-?\d+(?:\.\d+)?)*\)$/.test(contract) && hand === 'number') {
+        const enumMembers = /^enum\((\[[\s\S]*\])\)$/.exec(contract)?.[1];
+        const members = enumMembers ? JSON.parse(enumMembers) : [];
+        if (hand === 'number' && members.length > 0 && members.every(value => typeof value === 'number')) {
           hand = contract;
         }
       }
@@ -728,6 +1010,7 @@ export function comparePair(handName, handMembers, schemaName, schema, schemas, 
  * TypedDict inheritance (the parent's own total flag governs its members).
  */
 export function parsePythonTypes(source) {
+  source = source.replace(/\r\n/g, '\n');
   // Join continuation lines inside unclosed brackets so multi-line Literal[...] aliases and
   // annotations parse as one token (a truncated `Literal[` is worse than no token).
   const joined = [];
@@ -845,7 +1128,9 @@ function parsePythonMembers(body) {
     const m = t.match(/^(\w+)\s*:\s*(.+)$/);
     if (!m) continue;
     let optional = false;
-    let typeText = m[2];
+    // A trailing comment would hide the NotRequired[...] wrapper and leave an unreadable type token,
+    // so the member read as required and its type went uncompared.
+    let typeText = m[2].replace(/\s+#.*$/, '');
     const notReq = typeText.match(/^NotRequired\[(.+)\]$/s);
     if (notReq) {
       optional = true;
@@ -869,13 +1154,16 @@ function pythonToken(text, resolve, depth = 0) {
   if (t.endsWith(',')) t = t.slice(0, -1).trim();
   if (depth >= 4) return 'object';
   let nullable = false;
-  if (/\|\s*None$/.test(t) || /^Optional\[/.test(t)) {
+  if (/^Optional\[/.test(t)) {
     nullable = true;
     t = t
       .replace(/^Optional\[/, '')
-      .replace(/\s*\|\s*None$/, '')
       .replace(/\]$/, '')
       .trim();
+  } else if (/\|\s*None$/.test(t)) {
+    // No bracket to strip here: the last one belongs to the type (`Literal["x"] | None`, `list[str] | None`).
+    nullable = true;
+    t = t.replace(/\s*\|\s*None$/, '').trim();
   }
   const base = (() => {
     if (t === 'str') return 'string';
@@ -889,8 +1177,8 @@ function pythonToken(text, resolve, depth = 0) {
       // members went unread fell through to a non-simple token, which comparePair then skips, so
       // the field silently stopped being gated.
       const quoted = [...lit[1].matchAll(/["']([^"']+)["']/g)].map(m => m[1]);
-      const vals = quoted.length ? quoted : [...lit[1].matchAll(/-?\d+(?:\.\d+)?/g)].map(m => m[0]);
-      if (vals.length) return `enum(${sortEnumMembers(vals).join(',')})`;
+      const vals = quoted.length ? quoted : [...lit[1].matchAll(/-?\d+(?:\.\d+)?/g)].map(m => Number(m[0]));
+      if (vals.length) return enumToken(vals);
     }
     const lst = t.match(/^(?:List|list)\[(.+)\]$/s);
     if (lst) return `array<${pythonToken(lst[1], resolve, depth + 1)}>`;
@@ -915,6 +1203,7 @@ function pythonToken(text, resolve, depth = 0) {
  * grouped per defined type produce enum tokens.
  */
 export function parseGoTypes(sources) {
+  sources = sources.map(s => s.replace(/\r\n/g, '\n'));
   const structs = {};
   const scalarAliases = {};
   const constGroups = {};
@@ -949,14 +1238,14 @@ export function parseGoTypes(sources) {
         // fonts). Reading only the quoted form left every numeric Go enum resolving to plain
         // `number`, which reports as drift against an enum schema and cannot be satisfied.
         const m = line.match(/^\s*\w+\s+(\w+)\s+=\s+(?:["']([^"']+)["']|(-?\d+(?:\.\d+)?))\s*(?:\/\/.*)?$/);
-        if (m) (constGroups[m[1]] ??= []).push(m[2] ?? m[3]);
+        if (m) (constGroups[m[1]] ??= []).push(m[2] ?? Number(m[3]));
       }
     }
   }
 
   // defined scalar types whose consts exist become enums
   for (const [tname, vals] of Object.entries(constGroups)) {
-    if (scalarAliases[tname]) scalarAliases[tname] = `enum(${sortEnumMembers([...new Set(vals)]).join(',')})`;
+    if (scalarAliases[tname]) scalarAliases[tname] = enumToken([...new Set(vals)]);
   }
 
   const expand = (typeText, depth = 0) => {
@@ -993,6 +1282,7 @@ export function parseGoTypes(sources) {
  * (the client config sets compareOptionality=false).
  */
 export function parseJavaTypes(sources) {
+  sources = sources.map(s => s.replace(/\r\n/g, '\n'));
   const records = {};
   const primMap = {
     String: 'string',
@@ -1039,7 +1329,7 @@ export function parseJavaTypes(sources) {
         // a wire member. An annotated @SerializedName("unknown") is a real member and counts above.
         if (bare && bare[1] !== 'UNKNOWN') members.push(bare[1]);
       }
-      if (members.length) enums[m[1]] = `enum(${sortEnumMembers([...new Set(members)]).join(',')})`;
+      if (members.length) enums[m[1]] = enumToken([...new Set(members)]);
     }
   }
   for (const raw of sources) {
@@ -1099,6 +1389,96 @@ export function parseJavaTypes(sources) {
   return records;
 }
 
+// ── schema coverage: nothing an exposed operation sends or returns goes unmapped by default ──
+
+/**
+ * The resources sdk/README.md declares deliberately unexposed, read from the README rather than
+ * restated here: a hand-copied second list is what drifts. Entries are kept as written, because
+ * `audit` is a whole resource while `auth/api-keys` is one path under /api/auth, next to the
+ * exposed `auth/validate`. A parenthetical is commentary on the entry before it, and its own
+ * backticks ("key validation itself is the `auth` row above") name no entry.
+ */
+export function unexposedResources(readme) {
+  const start = readme.indexOf('Deliberately **not** exposed');
+  const end = readme.indexOf('Everything else the gateway publishes', start);
+  if (start < 0 || end < 0) {
+    throw new Error(
+      'sdk/README.md: could not find the "Deliberately not exposed" paragraph, so the gates that derive their scope from it cannot run.',
+    );
+  }
+  const paragraph = readme.slice(start, end).replace(/\([^)]*\)/g, '');
+  const names = [...paragraph.matchAll(/`([^`]+)`/g)].map(m => m[1].trim());
+  if (names.length < 8) {
+    throw new Error(`sdk/README.md: parsed only ${names.length} unexposed resources, expected the full list.`);
+  }
+  return new Set(names);
+}
+
+/**
+ * Whether the README leaves a contract path unexposed: its resource is listed, or it lies under a listed
+ * path such as `auth/api-keys` (and `/api/auth/api-keys-other` does not). Shared with check-sdk-coverage.mjs.
+ */
+export function isUnexposedPath(path, unexposed) {
+  const shape = path.replace(/\{[^}]*\}/g, '*');
+  const resource = /^\/api\/sessions\/\*\/([^/]+)/.exec(shape)?.[1] ?? /^\/api\/([^/*]+)/.exec(shape)?.[1] ?? '';
+  if (unexposed.has(resource) || unexposed.has(resource.replace(/-rules$/, ''))) return true;
+  return [...unexposed].some(
+    entry => entry.includes('/') && (shape === `/api/${entry}` || shape.startsWith(`/api/${entry}/`)),
+  );
+}
+
+/**
+ * Every schema an exposed operation sends or returns, nested ones included: request bodies and 2xx
+ * responses only, so the shared error envelope is not asked for. A nested schema counts because a
+ * parent's complex field is compared by presence only, which leaves the nested shape ungated.
+ */
+export function exposedSchemas(openapi, unexposed) {
+  const seen = new Set();
+  const visit = node => {
+    if (!node || typeof node !== 'object') return;
+    if (typeof node.$ref === 'string') {
+      const name = /^#\/components\/schemas\/(.+)$/.exec(node.$ref)?.[1];
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      visit(openapi.components.schemas[name]);
+      return;
+    }
+    Object.values(node).forEach(visit);
+  };
+  for (const [path, item] of Object.entries(openapi.paths)) {
+    if (isUnexposedPath(path, unexposed)) continue;
+    for (const operation of Object.values(item)) {
+      if (!operation || typeof operation !== 'object') continue;
+      visit(operation.requestBody);
+      for (const [status, response] of Object.entries(operation.responses ?? {})) {
+        if (status.startsWith('2')) visit(response);
+      }
+    }
+  }
+  return seen;
+}
+
+/**
+ * What stands between the exposed schemas and a green run: a schema no client compares and
+ * UNMAPPED_SCHEMAS does not record, and a record that no longer describes anything.
+ */
+export function schemaCoverageProblems(exposed, compared, unmapped) {
+  const problems = [];
+  for (const name of [...exposed].sort()) {
+    if (!compared.has(name) && !(name in unmapped)) {
+      problems.push(
+        `${name} is sent or returned by the SDKs but no client compares it and UNMAPPED_SCHEMAS does not record it`,
+      );
+    }
+  }
+  for (const name of Object.keys(unmapped)) {
+    if (!exposed.has(name)) problems.push(`UNMAPPED_SCHEMAS lists ${name}, which no exposed operation uses: remove it`);
+    else if (compared.has(name))
+      problems.push(`UNMAPPED_SCHEMAS lists ${name}, which a client now compares: remove it`);
+  }
+  return problems;
+}
+
 // ── CLI driver ──
 
 // Resolved-path comparison, not a basename match: splitting on `/` finds no separator in a Windows
@@ -1134,32 +1514,40 @@ if (isDirectRun) {
       load: () => parseHandTypes(readFileSync(`${REPO_ROOT}${file}`, 'utf8')),
       mapping,
       excluded: EXCLUDED[file] ?? {},
+      namesOnly: NAMES_ONLY[file] ?? [],
       floor: MINIMUM_MAPPED[file],
       compareOptionality: true,
+      sdk: file.startsWith('sdk/'),
     })),
     {
       label: 'sdk/python/openwa/types.py',
       load: () => parsePythonTypes(readFileSync(`${REPO_ROOT}sdk/python/openwa/types.py`, 'utf8')),
       mapping: PYTHON_MAPPING,
       excluded: EXCLUDED['sdk/python/openwa/types.py'] ?? {},
+      namesOnly: NAMES_ONLY['sdk/python/openwa/types.py'] ?? [],
       floor: MINIMUM_MAPPED['sdk/python/openwa/types.py'],
       compareOptionality: true,
+      sdk: true,
     },
     {
       label: 'sdk/go (types_*.go)',
       load: () => parseGoTypes(goSources()),
       mapping: GO_MAPPING,
       excluded: EXCLUDED['sdk/go'] ?? {},
+      namesOnly: NAMES_ONLY['sdk/go'] ?? [],
       floor: MINIMUM_MAPPED['sdk/go'],
       compareOptionality: true,
+      sdk: true,
     },
     {
       label: 'sdk/java (model/*.java)',
       load: () => parseJavaTypes(javaSources()),
       mapping: JAVA_MAPPING,
       excluded: EXCLUDED['sdk/java'] ?? {},
+      namesOnly: NAMES_ONLY['sdk/java'] ?? [],
       floor: MINIMUM_MAPPED['sdk/java'],
       compareOptionality: false,
+      sdk: true,
     },
   ];
 
@@ -1171,26 +1559,38 @@ if (isDirectRun) {
     let fileCompared = 0;
     const fileResults = [];
 
-    for (const [handName, schemaName] of Object.entries(client.mapping)) {
-      if (client.excluded[handName]) continue;
+    for (const name of client.namesOnly.filter(n => !client.excluded[n])) {
+      fileResults.push(
+        `  ${name} is in NAMES_ONLY but not in EXCLUDED: remove it, or the pair is compared by name only`,
+      );
+      failures++;
+    }
+
+    for (const [handName, target] of Object.entries(client.mapping)) {
+      const namesOnly = Boolean(client.excluded[handName]) && client.namesOnly.includes(handName);
+      if (client.excluded[handName] && !namesOnly) continue;
       const hand = handTypes[handName];
-      const schema = schemas[schemaName];
       if (!hand) {
         fileResults.push(`  MISSING hand type ${handName} (declared in mapping but not found in ${client.label})`);
         failures++;
         continue;
       }
-      if (!schema) {
-        fileResults.push(`  MISSING schema ${schemaName} (declared in mapping but not in openapi.json)`);
-        failures++;
-        continue;
-      }
-      fileCompared++;
-      compared++;
-      const diffs = comparePair(handName, hand, schemaName, schema, schemas, client.compareOptionality);
-      if (diffs.length) {
-        fileResults.push(`  ${handName} ↔ ${schemaName}:`, ...diffs.map(d => `    ${d}`));
-        failures++;
+      // A list maps one hand type to several schemas: a body type that is also the response has to
+      // conform to each of them.
+      for (const schemaName of [target].flat()) {
+        const schema = schemas[schemaName];
+        if (!schema) {
+          fileResults.push(`  MISSING schema ${schemaName} (declared in mapping but not in openapi.json)`);
+          failures++;
+          continue;
+        }
+        fileCompared++;
+        compared++;
+        const diffs = comparePair(handName, hand, schemaName, schema, schemas, client.compareOptionality, namesOnly);
+        if (diffs.length) {
+          fileResults.push(`  ${handName} ↔ ${schemaName}:`, ...diffs.map(d => `    ${d}`));
+          failures++;
+        }
       }
     }
 
@@ -1208,13 +1608,27 @@ if (isDirectRun) {
     for (const line of fileResults) console.log(line);
     const excludedCount = Object.keys(client.excluded).length;
     if (excludedCount) {
-      console.log(`  (${excludedCount} excluded pair(s) with recorded reasons — see EXCLUDED in this script)`);
+      const byName = client.namesOnly.length ? `, ${client.namesOnly.length} of them still compared by field name` : '';
+      console.log(`  (${excludedCount} excluded pair(s) with recorded reasons, see EXCLUDED in this script${byName})`);
     }
   }
 
+  const exposed = exposedSchemas(openapi, unexposedResources(readFileSync(`${REPO_ROOT}sdk/README.md`, 'utf8')));
+  const comparedSchemas = new Set(
+    CLIENTS.filter(c => c.sdk)
+      .flatMap(c => Object.entries(c.mapping).filter(([handName]) => !c.excluded[handName]))
+      .flatMap(([, target]) => [target].flat()),
+  );
+  const uncovered = schemaCoverageProblems(exposed, comparedSchemas, UNMAPPED_SCHEMAS);
+  console.log(
+    `schema coverage: ${exposed.size} schemas sent or returned, ${Object.keys(UNMAPPED_SCHEMAS).length} recorded unmapped in UNMAPPED_SCHEMAS, ${uncovered.length ? 'FAILURES' : 'all covered'}`,
+  );
+  for (const line of uncovered) console.log(`  ${line}`);
+  failures += uncovered.length;
+
   console.log(
     failures
-      ? `\ncheck-contract-shapes: ${failures} failing pair(s) — the contract side wins; tighten the hand type or fix the backend DTO and regenerate.`
+      ? `\ncheck-contract-shapes: ${failures} failure(s) — the contract side wins; tighten the hand type or fix the backend DTO and regenerate.`
       : `\ncheck-contract-shapes: ${compared} pairs conform.`,
   );
   process.exit(failures ? 1 : 0);

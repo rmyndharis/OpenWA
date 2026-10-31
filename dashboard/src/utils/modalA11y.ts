@@ -6,6 +6,8 @@
  * The binder is typed against the real DOM (`Document`/`HTMLElement`); tests pass minimal fakes.
  */
 
+import { isComposingKey } from './composition.ts';
+
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -27,9 +29,15 @@ function visibleFocusables(card: HTMLElement): HTMLElement[] {
 /**
  * Wires one open dialog: locks background scroll, moves focus into the dialog, traps Tab inside it,
  * closes on Escape, and returns a cleanup that restores scroll and focus to the element that was
- * focused when the dialog opened (the trigger).
+ * focused when the dialog opened (the trigger). `initialFocus` names the element focus starts on,
+ * usually the first field; without one, or when it finds none, that is the first focusable.
  */
-export function bindModalA11y(doc: Document, card: HTMLElement, onClose: () => void): () => void {
+export function bindModalA11y(
+  doc: Document,
+  card: HTMLElement,
+  onClose: () => void,
+  initialFocus?: () => HTMLElement | null,
+): () => void {
   if (modalStack.length === 0) lockedOverflow = doc.body.style.overflow;
   doc.body.style.overflow = 'hidden';
 
@@ -43,9 +51,9 @@ export function bindModalA11y(doc: Document, card: HTMLElement, onClose: () => v
   modalStack.push(stackEntry);
 
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === 'Escape') {
-      // A nested dialog is open above this one — it owns Escape (see modalStack).
-      if (modalStack[modalStack.length - 1] !== stackEntry) return;
+    if (modalStack[modalStack.length - 1] !== stackEntry) return;
+    // An input method takes Escape to cancel the text it is composing; closing on it would drop the form.
+    if (event.key === 'Escape' && !isComposingKey(event)) {
       // Capture phase: nested widgets (selects, menus) may also listen for Escape — the dialog
       // owns dismissal while it is open.
       event.stopPropagation();
@@ -54,10 +62,18 @@ export function bindModalA11y(doc: Document, card: HTMLElement, onClose: () => v
     }
     if (event.key === 'Tab') {
       const focusables = visibleFocusables(card);
-      if (focusables.length === 0) return;
+      if (focusables.length === 0) {
+        event.preventDefault();
+        card.focus();
+        return;
+      }
       const first = focusables[0];
       const last = focusables[focusables.length - 1];
-      if (event.shiftKey && doc.activeElement === first) {
+      if (!card.contains(doc.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && (doc.activeElement === first || doc.activeElement === card)) {
+        // The card is focusable itself (a click on dialog text lands there), and Shift+Tab from it would leave.
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && doc.activeElement === last) {
@@ -69,8 +85,10 @@ export function bindModalA11y(doc: Document, card: HTMLElement, onClose: () => v
 
   doc.addEventListener('keydown', onKeyDown, true);
 
-  // Initial focus: the first visible focusable in the dialog, else the dialog card itself.
-  (visibleFocusables(card)[0] ?? card).focus();
+  // Initial focus: the element the dialog names, else the first visible focusable in it, else the card itself.
+  // The opener was recorded above, so focus a field here and not with autoFocus: React focuses an autoFocus
+  // input during the commit, before this runs, and it would be recorded as the opener and lost on close.
+  (initialFocus?.() ?? visibleFocusables(card)[0] ?? card).focus();
 
   return () => {
     const stackIndex = modalStack.indexOf(stackEntry);

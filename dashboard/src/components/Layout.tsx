@@ -18,14 +18,18 @@ import {
   Monitor,
   Menu,
   X,
-  ChevronLeft,
-  ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Languages,
+  UserCheck,
 } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { useRole, type UserRole } from '../hooks/useRole';
 import { languageOptions, resolveSupportedLanguage, rtlLanguages, type SupportedLanguage } from '../i18n';
 import { healthApi, infraApi } from '../services/api';
+import { isComposingKey } from '../utils/composition';
 import './Layout.css';
 
 interface LayoutProps {
@@ -38,6 +42,7 @@ const allNavItems = [
   { to: '/', icon: LayoutDashboard, key: 'dashboard' as const, adminOnly: false },
   { to: '/sessions', icon: Smartphone, key: 'sessions' as const, adminOnly: false },
   { to: '/chats', icon: MessageSquare, key: 'chats' as const, adminOnly: false },
+  { to: '/number-checker', icon: UserCheck, key: 'numberChecker' as const, adminOnly: false },
   { to: '/webhooks', icon: Webhook, key: 'webhooks' as const, adminOnly: false },
   { to: '/templates', icon: ClipboardList, key: 'templates' as const, adminOnly: false },
   { to: '/api-keys', icon: Key, key: 'apiKeys' as const, adminOnly: true, unscopedOnly: true },
@@ -51,14 +56,23 @@ const allNavItems = [
 
 const themeIcons = { light: Sun, dark: Moon, system: Monitor };
 
+// The phone layout switches on the query the phone styles in Layout.css sit under. A width test in script disagreed
+// with them at a fractional width: at 110% zoom the window width rounds 767.3 CSS px to 767, which the query does
+// not match, so the desktop sidebar was drawn and made inert.
+const MOBILE_QUERY = '(max-width: 767px)';
+
 export function Layout({ onLogout, userRole }: LayoutProps) {
   const { t, i18n } = useTranslation();
   const { theme, toggleTheme } = useTheme();
   const ThemeIcon = themeIcons[theme];
   const themeLabel = t(`theme.${theme}`);
-  // toggleTheme cycles light, dark, system; the button names the state a click selects.
-  const nextThemeLabel = t('theme.toggleTo', {
-    value: t(`theme.${theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light'}`),
+  // toggleTheme cycles light, dark, system. The button's name starts with the mode it shows, the words a voice user
+  // says to press it, then names the mode a click selects.
+  const themeButtonName = t('common.joinedName', {
+    first: themeLabel,
+    second: t('theme.toggleTo', {
+      value: t(`theme.${theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light'}`),
+    }),
   });
 
   const { scoped } = useRole();
@@ -68,7 +82,10 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
 
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
+  // Collapsing is a desktop preference: the phone drawer has no collapse control, so it never renders collapsed,
+  // and the flag stays as it was for when the window widens again.
+  const collapsed = isCollapsed && !isMobile;
   // Show the build-time version immediately, then replace it with the live running version from the
   // backend so a stale-built bundle can't display the wrong number. Falls back silently on error.
   const [version, setVersion] = useState(__APP_VERSION__);
@@ -77,15 +94,16 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   const [update, setUpdate] = useState<{ latest: string; url: string } | null>(null);
   const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false);
   const languageMenuRef = useRef<HTMLDivElement>(null);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    const handleResize = () => {
-      const mobile = window.innerWidth < 768;
-      setIsMobile(mobile);
-      if (!mobile) setIsMobileOpen(false);
+    const phone = window.matchMedia(MOBILE_QUERY);
+    const handleChange = () => {
+      setIsMobile(phone.matches);
+      if (!phone.matches) setIsMobileOpen(false);
     };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    phone.addEventListener('change', handleChange);
+    return () => phone.removeEventListener('change', handleChange);
   }, []);
 
   useEffect(() => {
@@ -132,6 +150,27 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
     };
   }, [isMobileOpen]);
 
+  // Escape dismisses the innermost overlay: while the language menu is open it takes the key, then the drawer does.
+  // The drawer covers the page, so it takes the key before the page's own Escape handlers (on window, in the capture
+  // phase) and keeps it from them: one press closed the drawer and the chat open behind it. A dialog renders above
+  // the drawer and keeps its own Escape, and so does a composition being committed by an IME.
+  useEffect(() => {
+    if (!isMobileOpen || isLanguageMenuOpen) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || isComposingKey(event)) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setIsMobileOpen(false);
+      // The focused link is about to slide off screen, so hand focus back to the control that opened the drawer.
+      mobileMenuButtonRef.current?.focus();
+    };
+
+    window.addEventListener('keydown', closeOnEscape, true);
+    return () => window.removeEventListener('keydown', closeOnEscape, true);
+  }, [isMobileOpen, isLanguageMenuOpen]);
+
   useEffect(() => {
     if (!isLanguageMenuOpen) return;
 
@@ -157,6 +196,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
 
   const currentLang = resolveSupportedLanguage(i18n.resolvedLanguage || i18n.language);
   const languageLabel = languageOptions.find(option => option.value === currentLang)?.compactLabel ?? 'EN';
+  const languageButtonName = t('common.joinedName', { first: languageLabel, second: t('common.changeLanguage') });
   const changeLanguage = (language: SupportedLanguage) => {
     setIsLanguageMenuOpen(false);
     void i18n.changeLanguage(language);
@@ -167,7 +207,13 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
     <div className="layout">
       {isMobile && (
         <header className="mobile-header">
-          <button className="mobile-menu-btn" onClick={toggleMobile} aria-label={t('common.expand')}>
+          <button
+            ref={mobileMenuButtonRef}
+            className="mobile-menu-btn"
+            onClick={toggleMobile}
+            aria-label={isMobileOpen ? t('common.close') : t('common.expand')}
+            aria-expanded={isMobileOpen}
+          >
             {isMobileOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
           <div className="mobile-brand">
@@ -181,43 +227,52 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
       {isMobile && isMobileOpen && <div className="sidebar-overlay" onClick={() => setIsMobileOpen(false)} />}
 
       <aside
-        className={`sidebar ${isCollapsed ? 'collapsed' : ''} ${isMobile ? 'mobile' : ''} ${isMobileOpen ? 'open' : ''}`}
+        className={`sidebar ${collapsed ? 'collapsed' : ''} ${isMobile ? 'mobile' : ''} ${isMobileOpen ? 'open' : ''}`}
+        // Off screen is not out of reach: keep the closed drawer's links out of the tab order and the reading order.
+        inert={isMobile && !isMobileOpen}
       >
         <div className="sidebar-header">
           <img src="/openwa_logo.webp" alt="OpenWA" className="sidebar-logo" />
-          {!isCollapsed && (
+          {!collapsed && (
             <div className="sidebar-brand">
               <span className="brand-name">{t('common.appName')}</span>
               <span className="brand-version">v{version}</span>
               {update && (
-                <a className="brand-update" href={update.url} target="_blank" rel="noopener noreferrer">
+                <a
+                  className="brand-update"
+                  href={update.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={t('common.updateAvailable', { version: update.latest })}
+                >
                   {t('common.updateAvailable', { version: update.latest })}
                 </a>
               )}
             </div>
           )}
-        </div>
-
-        {!isMobile && (
-          <button
-            className="collapse-toggle"
-            onClick={toggleCollapse}
-            title={isCollapsed ? t('common.expand') : t('common.collapse')}
-            aria-label={isCollapsed ? t('common.expand') : t('common.collapse')}
-          >
-            {isCollapsed ? (
-              isRtl ? (
-                <ChevronLeft size={16} />
+          {/* At the end of the header row, or under the logo on the collapsed rail. The icon is picked for the
+              reading direction, so the panel side follows the mirrored layout. */}
+          {!isMobile && (
+            <button
+              className="collapse-toggle"
+              onClick={toggleCollapse}
+              title={isCollapsed ? t('common.expand') : t('common.collapse')}
+              aria-label={isCollapsed ? t('common.expand') : t('common.collapse')}
+            >
+              {isCollapsed ? (
+                isRtl ? (
+                  <PanelRightOpen size={20} />
+                ) : (
+                  <PanelLeftOpen size={20} />
+                )
+              ) : isRtl ? (
+                <PanelRightClose size={20} />
               ) : (
-                <ChevronRight size={16} />
-              )
-            ) : isRtl ? (
-              <ChevronRight size={16} />
-            ) : (
-              <ChevronLeft size={16} />
-            )}
-          </button>
-        )}
+                <PanelLeftClose size={20} />
+              )}
+            </button>
+          )}
+        </div>
 
         <nav className="sidebar-nav">
           {navItems.map(({ to, icon: Icon, key }) => {
@@ -229,10 +284,10 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
                 className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
                 end={to === '/'}
                 onClick={handleNavClick}
-                title={isCollapsed ? label : undefined}
+                title={collapsed ? label : undefined}
               >
                 <Icon size={20} />
-                {!isCollapsed && <span>{label}</span>}
+                {!collapsed && <span>{label}</span>}
               </NavLink>
             );
           })}
@@ -243,13 +298,13 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
             <button
               className="theme-toggle-btn"
               onClick={() => setIsLanguageMenuOpen(open => !open)}
-              title={t('common.language')}
-              aria-label={t('common.language')}
+              title={languageButtonName}
+              aria-label={languageButtonName}
               aria-haspopup="menu"
               aria-expanded={isLanguageMenuOpen}
             >
               <Languages size={18} />
-              {!isCollapsed && <span>{languageLabel}</span>}
+              {!collapsed && <span>{languageLabel}</span>}
             </button>
             {isLanguageMenuOpen && (
               <div className="language-menu-list" role="menu" aria-label={t('common.language')}>
@@ -271,23 +326,23 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
             <button
               className="theme-toggle-btn"
               onClick={toggleTheme}
-              title={nextThemeLabel}
-              aria-label={nextThemeLabel}
+              title={themeButtonName}
+              aria-label={themeButtonName}
             >
               <span className="appearance-button-cue" aria-hidden="true">
                 <ThemeIcon size={16} />
               </span>
-              {!isCollapsed && <span>{themeLabel}</span>}
+              {!collapsed && <span>{themeLabel}</span>}
             </button>
           </div>
-          <button className="logout-btn" onClick={onLogout} title={isCollapsed ? t('common.logout') : undefined}>
+          <button className="logout-btn" onClick={onLogout} title={collapsed ? t('common.logout') : undefined}>
             <LogOut size={20} />
-            {!isCollapsed && <span>{t('common.logout')}</span>}
+            {!collapsed && <span>{t('common.logout')}</span>}
           </button>
         </div>
       </aside>
 
-      <main className={`main-content ${isCollapsed ? 'expanded' : ''} ${isMobile ? 'mobile' : ''}`}>
+      <main className={`main-content ${collapsed ? 'expanded' : ''} ${isMobile ? 'mobile' : ''}`}>
         <Outlet />
       </main>
     </div>

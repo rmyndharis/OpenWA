@@ -22,7 +22,7 @@ import type {
 export class ChannelsResource {
   constructor(private readonly client: OpenWAClient) {}
 
-  /** List all channels/newsletters the session is subscribed to. */
+  /** List all channels/newsletters the session is subscribed to. **whatsapp-web.js only**: Baileys answers 501. */
   list(sessionId: string): Promise<ChannelRecord[]> {
     return this.client.request<ChannelRecord[]>({
       method: 'GET',
@@ -38,7 +38,7 @@ export class ChannelsResource {
     });
   }
 
-  /** Get recent messages from a channel. */
+  /** Get recent messages from a channel. **whatsapp-web.js only**: Baileys answers 501. */
   messages(sessionId: string, channelId: string, query?: ChannelMessageQuery): Promise<ChannelMessageRecord[]> {
     return this.client.request<ChannelMessageRecord[]>({
       method: 'GET',
@@ -78,7 +78,10 @@ export class ChannelsResource {
     });
   }
 
-  /** Subscribe to a channel using its invite code. Requires an OPERATOR-level key. */
+  /**
+   * Subscribe to a channel using its invite code. Requires an OPERATOR-level key.
+   * **Baileys only**: whatsapp-web.js answers 501.
+   */
   subscribe(sessionId: string, body: SubscribeChannelRequest): Promise<ChannelRecord> {
     return this.client.request<ChannelRecord>({
       method: 'POST',

@@ -43,6 +43,19 @@ describe('WwebjsContacts.getBlockedContacts', () => {
     await expect(contacts.getBlockedContacts()).resolves.toEqual(['628333@c.us']);
   });
 
+  it('lists an id once when the blocklist holds a contact under both its LID and its phone', async () => {
+    const { contacts, client } = makeContacts();
+    // whatsapp-web.js answers a LID entry under the contact's phone id (a plain string), so the two
+    // entries read as the same id.
+    client.getBlockedContacts.mockResolvedValue([
+      { id: '628111@c.us' },
+      { id: { _serialized: '628222@c.us' } },
+      { id: { _serialized: '628111@c.us' } },
+    ]);
+
+    await expect(contacts.getBlockedContacts()).resolves.toEqual(['628111@c.us', '628222@c.us']);
+  });
+
   it('resolves [] for an empty blocklist', async () => {
     const { contacts, client } = makeContacts();
     client.getBlockedContacts.mockResolvedValue([]);
@@ -52,13 +65,16 @@ describe('WwebjsContacts.getBlockedContacts', () => {
 });
 
 describe('BaileysContacts.getBlockedContacts', () => {
-  function makeContacts(): { contacts: BaileysContacts; sock: { fetchBlocklist: jest.Mock } } {
+  function makeContacts(toNeutralJid = (jid: string): string => jid.replace('@s.whatsapp.net', '@c.us')): {
+    contacts: BaileysContacts;
+    sock: { fetchBlocklist: jest.Mock };
+  } {
     const sock = { fetchBlocklist: jest.fn() };
     const host = {
       ensureReady: jest.fn(),
       getSocket: () => sock as unknown as WASocket,
       logger,
-      toNeutralJid: (jid: string) => jid.replace('@s.whatsapp.net', '@c.us'),
+      toNeutralJid,
     };
     return { contacts: new BaileysContacts(host as never), sock };
   }
@@ -75,6 +91,16 @@ describe('BaileysContacts.getBlockedContacts', () => {
     sock.fetchBlocklist.mockResolvedValue([undefined, '628333@s.whatsapp.net']);
 
     await expect(contacts.getBlockedContacts()).resolves.toEqual(['628333@c.us']);
+  });
+
+  it('lists an id once when the blocklist holds a contact under both its LID and its phone', async () => {
+    // The session knows the pair, so both wire jids fold to the contact's phone id.
+    const { contacts, sock } = makeContacts(jid =>
+      jid === '111222333@lid' ? '628111@c.us' : jid.replace('@s.whatsapp.net', '@c.us'),
+    );
+    sock.fetchBlocklist.mockResolvedValue(['111222333@lid', '628111@s.whatsapp.net', '628999@s.whatsapp.net']);
+
+    await expect(contacts.getBlockedContacts()).resolves.toEqual(['628111@c.us', '628999@c.us']);
   });
 
   it('resolves [] for an empty blocklist', async () => {

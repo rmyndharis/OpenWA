@@ -1,6 +1,3 @@
-// archiver v8 is ESM-only; stub it so ts-jest can load the module graph.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 // Seed the well-known dev-admin-key BEFORE AppModule is imported (mirrors mcp-auth.e2e-spec.ts's
 // pattern of setting the enabling env var ahead of the import).
 process.env.ALLOW_DEV_API_KEY = 'true';

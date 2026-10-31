@@ -78,6 +78,7 @@ Start workflows when WhatsApp events occur.
 | `message.received`                                | New incoming message                          | Auto-reply, lead capture                     |
 | `message.sent`                                    | Message sent successfully                     | Delivery confirmation                        |
 | `message.ack`                                     | Delivery/read status advanced                 | Read receipts                                |
+| `message.receipt`                                 | Per-recipient group/status receipt (Baileys)  | Per-member read tracking (not in node 1.2.0) |
 | `message.failed`                                  | Outgoing message failed                       | Failure alerting                             |
 | `message.revoked`                                 | Message deleted for everyone                  | Deletion tracking                            |
 | `message.reaction`                                | Reaction added / changed / removed            | Reaction tracking                            |
@@ -91,6 +92,7 @@ Start workflows when WhatsApp events occur.
 | `session.restriction`                             | WhatsApp restricted the account, or lifted it | Pausing outreach while an account is limited |
 | `presence.update`                                 | A watched chat's online/typing state changed  | Live agent hand-off, presence-aware routing  |
 | `event.response`                                  | A guest answered a WhatsApp event (Baileys)   | RSVP and attendance tracking                 |
+| `poll.vote`                                       | A voter changed their poll answer (wwebjs)    | Surveys, check-ins and approvals             |
 | `call.accepted` / `call.rejected` / `call.missed` | A ringing call ended — **Baileys only**       | Missed-call follow-up, call logging          |
 | `group.join`                                      | Participant(s) joined a group                 | Welcome messages                             |
 | `group.leave`                                     | Participant(s) left a group                   | Churn tracking                               |

@@ -2,13 +2,21 @@ import { useEffect, useRef, useState } from 'react';
 import { infraApi } from '../services/api';
 import { restartPollAttempts } from '../utils/restartPoll';
 
+// One readiness request is given this long before it counts as a failed attempt and the next one is made; the
+// elapsed deadline of the whole wait is still what ends it.
+const READINESS_ATTEMPT_TIMEOUT_MS = 5000;
+// The restart request can take a while (a first-time enable pulls an image before it answers), but not forever:
+// the restarting view has no close button.
+const RESTART_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+
 // 'unknown': a proxy answered in the gateway's place (a 504, a Cloudflare 52x, or a 502 with no gateway
-// code), so whether the restart went through cannot be told.
+// code), or the restart request was given up on without an answer, so whether the restart went through
+// cannot be told.
 export type RestartStatus = 'idle' | 'restarting' | 'waiting' | 'success' | 'error' | 'unknown';
 
 export interface RestartOpenRequest {
   profiles: string[];
-  // The built-in profiles running now; the restart stops each one the new config no longer needs.
+  // The built-in profiles to stop: the restart stops each one the new config does not start.
   running: string[];
   dbSwitch: boolean;
   storageSwitch: boolean;
@@ -26,6 +34,8 @@ export interface RestartFlow {
   restartWarnings: string[];
   pendingProfiles: string[];
   runningProfiles: string[];
+  /** What Restart Now asks the server to stop: the running profiles the new config does not start. */
+  profilesToRemove: string[];
   dbSwitch: boolean;
   storageSwitch: boolean;
   open: (req: RestartOpenRequest) => void;
@@ -70,12 +80,14 @@ export function useRestartFlow(): RestartFlow {
   const pollTimeoutsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(false);
+  const readinessControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
     const pollTimeouts = pollTimeoutsRef.current;
     return () => {
       mountedRef.current = false;
+      readinessControllerRef.current?.abort();
       for (const handle of pollTimeouts) clearTimeout(handle);
       pollTimeouts.clear();
       if (countdownIntervalRef.current) {
@@ -120,41 +132,84 @@ export function useRestartFlow(): RestartFlow {
     if (restartStatus === 'idle') setShowRestartModal(false);
   };
 
-  const checkServerHealth = (estimatedTime: number | undefined, hasWarnings: boolean) => {
+  const checkServerHealth = (estimatedTime: number | undefined, hasWarnings: boolean, controller: AbortController) => {
     let attempts = 0;
     const maxAttempts = restartPollAttempts(estimatedTime);
+    const isCurrent = () =>
+      mountedRef.current && readinessControllerRef.current === controller && !controller.signal.aborted;
+    const settle = (status: 'success' | 'error') => {
+      if (!isCurrent()) return false;
+      controller.abort();
+      clearTimeout(deadline);
+      pollTimeoutsRef.current.delete(deadline);
+      stopCountdown();
+      setRestartCountdown(0);
+      setRestartStatus(status);
+      return true;
+    };
+    // Elapsed time also bounds a request or response body that never finishes.
+    const deadline = setTimeout(() => settle('error'), maxAttempts * 1000);
+    pollTimeoutsRef.current.add(deadline);
 
     const check = async () => {
+      if (!isCurrent()) return;
+      // Each attempt has its own signal, so one that hangs is given up on and counted, and the wait goes on.
+      const attempt = new AbortController();
+      const abortAttempt = () => attempt.abort();
+      controller.signal.addEventListener('abort', abortAttempt, { once: true });
+      const timer = setTimeout(abortAttempt, READINESS_ATTEMPT_TIMEOUT_MS);
+      pollTimeoutsRef.current.add(timer);
       try {
-        await infraApi.healthCheck();
-        stopCountdown();
-        setRestartCountdown(0);
-        setRestartStatus('success');
+        await infraApi.healthCheck(attempt.signal);
+        if (!settle('success')) return;
         // With warnings on screen the operator reloads by hand, after reading them.
-        if (!hasWarnings) schedulePollTimeout(() => window.location.reload(), 2000);
+        if (!hasWarnings) {
+          schedulePollTimeout(() => {
+            if (readinessControllerRef.current === controller) window.location.reload();
+          }, 2000);
+        }
       } catch {
+        if (!isCurrent()) return;
         attempts++;
         if (attempts < maxAttempts) schedulePollTimeout(check, 1000);
-        else setRestartStatus('error');
+        else settle('error');
+      } finally {
+        clearTimeout(timer);
+        pollTimeoutsRef.current.delete(timer);
+        controller.signal.removeEventListener('abort', abortAttempt);
       }
     };
 
     schedulePollTimeout(check, 3000);
   };
 
+  const profilesToRemove = profiles.running.filter(p => !profiles.pending.includes(p));
+
   const start = async () => {
+    readinessControllerRef.current?.abort();
+    const controller = new AbortController();
+    readinessControllerRef.current = controller;
+    const isCurrent = () =>
+      mountedRef.current && readinessControllerRef.current === controller && !controller.signal.aborted;
+    for (const handle of pollTimeoutsRef.current) clearTimeout(handle);
+    pollTimeoutsRef.current.clear();
+    stopCountdown();
     setRestartStatus('restarting');
     setRestartCountdown(30);
     setRestartTotal(30);
-
-    const profilesToRemove = profiles.running.filter(p => !profiles.pending.includes(p));
 
     // Kept outside the try: the poll deadline is derived from it, and the restart call is expected to
     // fail sometimes (the server may go down before it answers).
     let estimatedTime: number | undefined;
     let warnings: string[] = [];
+    const request = new AbortController();
+    const abortRequest = () => request.abort();
+    controller.signal.addEventListener('abort', abortRequest, { once: true });
+    const requestTimer = setTimeout(abortRequest, RESTART_REQUEST_TIMEOUT_MS);
+    pollTimeoutsRef.current.add(requestTimer);
     try {
-      const response = await infraApi.restart(profiles.pending, profilesToRemove);
+      const response = await infraApi.restart(profiles.pending, profilesToRemove, request.signal);
+      if (!isCurrent()) return;
       estimatedTime = response.estimatedTime;
       if (response.estimatedTime) {
         setRestartCountdown(response.estimatedTime);
@@ -163,6 +218,15 @@ export function useRestartFlow(): RestartFlow {
       warnings = [...(response.orchestration?.errors ?? []), ...(response.removal?.errors ?? [])];
       setRestartWarnings(warnings);
     } catch (err) {
+      if (!isCurrent()) return;
+      // Given up on after its bound: the server awaits its container work before it answers and shuts down, so it
+      // may still restart. Not a failure, and not something the poll below could settle: the old process answers.
+      if (request.signal.aborted) {
+        stopCountdown();
+        setRestartCountdown(0);
+        setRestartStatus('unknown');
+        return;
+      }
       // An HTTP status (a proxy 503 included) means no shutdown was confirmed and the old
       // process may still be serving, so a readiness poll would report a restart that never happened.
       // Only a status-less network failure is the expected sign of the server going down mid-answer.
@@ -184,8 +248,12 @@ export function useRestartFlow(): RestartFlow {
         setRestartStatus('error');
         return;
       }
+    } finally {
+      clearTimeout(requestTimer);
+      pollTimeoutsRef.current.delete(requestTimer);
+      controller.signal.removeEventListener('abort', abortRequest);
     }
-    if (!mountedRef.current) return;
+    if (!isCurrent()) return;
 
     setRestartStatus('waiting');
     stopCountdown();
@@ -199,7 +267,7 @@ export function useRestartFlow(): RestartFlow {
       });
     }, 1000);
 
-    checkServerHealth(estimatedTime, warnings.length > 0);
+    checkServerHealth(estimatedTime, warnings.length > 0, controller);
   };
 
   return {
@@ -211,6 +279,7 @@ export function useRestartFlow(): RestartFlow {
     restartWarnings,
     pendingProfiles: profiles.pending,
     runningProfiles: profiles.running,
+    profilesToRemove,
     dbSwitch,
     storageSwitch,
     open,

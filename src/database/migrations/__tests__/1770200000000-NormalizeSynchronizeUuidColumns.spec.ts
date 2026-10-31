@@ -35,6 +35,8 @@ interface SchemaOpts {
   fkConstraints?: Record<string, string[]>;
   versionNum?: number; // server_version_num (150000 = PG15, 120000 = PG12)
   extInstalled?: boolean;
+  /** A schema pgcrypto sits in that the connection's search_path does not reach. */
+  extSchema?: string;
 }
 
 function makeQueryRunner(opts: SchemaOpts) {
@@ -45,6 +47,7 @@ function makeQueryRunner(opts: SchemaOpts) {
     fkConstraints = {},
     versionNum = 150000,
     extInstalled = true,
+    extSchema,
   } = opts;
 
   const query = jest.fn((sql: string, params?: unknown[]) => {
@@ -59,6 +62,8 @@ function makeQueryRunner(opts: SchemaOpts) {
       return Promise.resolve((fkConstraints[`${table}.${column}`] ?? []).map(conname => ({ conname })));
     }
     if (/server_version_num/i.test(s)) return Promise.resolve([{ num: versionNum }]);
+    if (/to_regprocedure/i.test(s)) return Promise.resolve([{ missing: extSchema !== undefined }]);
+    if (/pg_namespace/i.test(s)) return Promise.resolve([{ schema: extSchema, path: '"$user", public' }]);
     if (/pg_extension/i.test(s)) return Promise.resolve(extInstalled ? [{ ok: 1 }] : []);
     return Promise.resolve(undefined);
   });
@@ -161,6 +166,17 @@ describe('NormalizeSynchronizeUuidColumns migration', () => {
   });
 
   // ---- the load-bearing ordering invariant (Test E) ----
+  it('on PG <= 12 refuses a pgcrypto off the search_path, naming its schema, before any conversion', async () => {
+    const qr = makeQueryRunner({
+      type: 'postgres',
+      uuidColumns: new Set(['sessions.id']),
+      versionNum: 120000,
+      extSchema: 'extensions',
+    });
+    await expect(migration.up(qr as unknown as QueryRunner)).rejects.toThrow(/schema "extensions"/);
+    expect(sqlOf(qr).some(q => /ALTER TABLE|DROP CONSTRAINT/i.test(q))).toBe(false);
+  });
+
   it('drops ALL session-FKs BEFORE converting the sessions.id PK they reference', async () => {
     const uuidCols = new Set<string>([
       ...PK_TABLES.map(t => `${t}.id`),

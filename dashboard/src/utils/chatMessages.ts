@@ -96,8 +96,10 @@ export function capMediaPayloads(list: ChatMessageView[], keep = MEDIA_PAYLOAD_C
   let payloadCount = 0;
   const retainsMedia = (message: ChatMessageView): boolean => {
     const media = message.metadata?.media;
+    // An archived marker previews only while its copy exists (mediaPath, as ChatThread checks); retention nulls it.
     return Boolean(
-      media?.data || (media?.archived && HISTORY_MEDIA_TYPES.has(message.type) && message.type !== 'document'),
+      media?.data ||
+      (media?.archived && message.mediaPath && HISTORY_MEDIA_TYPES.has(message.type) && message.type !== 'document'),
     );
   };
   for (const m of list) if (retainsMedia(m)) payloadCount++;
@@ -249,6 +251,7 @@ export interface ChatMessageView extends ChatMessage {
     media?: MessageMedia;
     quotedMessage?: { id: string; body: string };
     reactions?: Record<string, string>;
+    edited?: boolean;
     call?: { video: boolean; missed: boolean };
     buttons?: Array<{ id: string; text: string }>;
     poll?: { name: string; options: string[]; allowMultipleAnswers: boolean };
@@ -258,7 +261,8 @@ export interface ChatMessageView extends ChatMessage {
 /**
  * Metadata for a live `message.received` / `message.sent` WS payload. Prompt `buttons` arrive
  * top-level on that event (the history route never populates them) and are folded here so the
- * thread renders from `metadata.buttons`, matching persisted DB rows.
+ * thread renders from `metadata.buttons`, matching persisted DB rows. So is `edited`, set on a
+ * message edited before the gateway stored it, whose `message.edited` came while no thread held it.
  */
 export function liveMessageMetadata(msg: {
   media?: MessageMedia;
@@ -266,10 +270,12 @@ export function liveMessageMetadata(msg: {
   call?: { video: boolean; missed: boolean };
   buttons?: Array<{ id: string; text: string }>;
   poll?: { name: string; options: string[]; allowMultipleAnswers: boolean };
+  edited?: boolean;
   metadata?: ChatMessageView['metadata'];
 }): ChatMessageView['metadata'] {
-  if (msg.metadata) return msg.metadata;
+  if (msg.metadata) return msg.edited ? { ...msg.metadata, edited: true } : msg.metadata;
   const metadata: NonNullable<ChatMessageView['metadata']> = {};
+  if (msg.edited) metadata.edited = true;
   if (msg.media) metadata.media = msg.media;
   if (msg.quotedMessage) metadata.quotedMessage = msg.quotedMessage;
   if (msg.call) metadata.call = msg.call;
@@ -336,6 +342,7 @@ function mergeMessageMetadata(
     return incoming.media;
   })();
   const merged: NonNullable<ChatMessageView['metadata']> = {};
+  if (existing.edited || incoming.edited) merged.edited = true;
   if (media) merged.media = media;
   const quotedMessage = incoming.quotedMessage ?? existing.quotedMessage;
   if (quotedMessage) merged.quotedMessage = quotedMessage;
@@ -460,7 +467,8 @@ export function findRevokedIndex(list: ChatMessageView[], event: { id: string; r
 /**
  * Replace the displayed body of a cached WhatsApp message after a `message.edited` event. Both id
  * candidates are matched, for the reason given on findRevokedIndex. Returns the original array on
- * a miss.
+ * a miss, and when the event repeats the text the message already has: the gateway announces such an
+ * event but stores no edited marker for it, so labelling it here would show what a reload does not.
  */
 export function applyMessageEdit(
   list: ChatMessageView[],
@@ -468,8 +476,28 @@ export function applyMessageEdit(
 ): ChatMessageView[] {
   if (!event.messageId) return list;
   const idx = list.findIndex(byMessageId(event.messageId));
-  if (idx === -1 || list[idx].type === 'revoked') return list;
+  if (idx === -1 || list[idx].type === 'revoked' || list[idx].body === event.body) return list;
   const next = list.slice();
-  next[idx] = { ...next[idx], body: event.body };
+  next[idx] = { ...next[idx], body: event.body, metadata: { ...next[idx].metadata, edited: true } };
   return next;
+}
+
+/**
+ * The ids a read of a chat should name on an engine that acknowledges messages one by one: the incoming messages
+ * of the thread that no read has acknowledged yet, at most `max` of the newest, oldest first. An id the gateway
+ * would refuse (whitespace, or longer than 128 characters) is left out, since one of them fails the whole read.
+ */
+export function unacknowledgedIncomingIds(
+  thread: ChatMessageView[],
+  acknowledged: ReadonlySet<string>,
+  max: number,
+): string[] {
+  const ids: string[] = [];
+  for (let i = thread.length - 1; i >= 0 && ids.length < max; i--) {
+    const { direction, waMessageId } = thread[i];
+    if (direction === 'incoming' && waMessageId && /^\S{1,128}$/.test(waMessageId) && !acknowledged.has(waMessageId)) {
+      ids.push(waMessageId);
+    }
+  }
+  return ids.reverse();
 }

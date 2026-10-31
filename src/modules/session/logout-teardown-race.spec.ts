@@ -66,6 +66,15 @@ async function expectNameTeardownPending(p: Promise<unknown>): Promise<void> {
   expect(thrown?.response?.code).toBe('SESSION_NAME_TEARDOWN_PENDING');
 }
 
+/** The messages of a session are read through a query builder: every chain call returns itself, the raw read is empty. */
+const emptyMessageQuery = () => {
+  const query: Record<string, jest.Mock> = { getRawMany: jest.fn().mockResolvedValue([]) };
+  for (const name of ['select', 'addSelect', 'where', 'andWhere', 'orderBy', 'addOrderBy', 'limit']) {
+    query[name] = jest.fn().mockReturnValue(query);
+  }
+  return query;
+};
+
 describe('SessionService logout() name-scoped teardown fence', () => {
   let service: SessionService;
   // The teardown fence + lifecycle state live on the engine-lifecycle owner after the god-object
@@ -80,9 +89,15 @@ describe('SessionService logout() name-scoped teardown fence', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
       exists: jest.fn().mockResolvedValue(false),
     };
-    const messageRepository = { find: jest.fn().mockResolvedValue([]) };
+    const messageRepository = {
+      find: jest.fn().mockResolvedValue([]),
+      createQueryBuilder: jest.fn(emptyMessageQuery),
+      delete: jest.fn(),
+    };
     const manager = { delete: jest.fn().mockResolvedValue({ affected: 1 }), remove: jest.fn() };
     const dataSource: Partial<DataSource> = {
+      options: { type: 'better-sqlite3' } as DataSource['options'],
+      getRepository: jest.fn(() => messageRepository) as unknown as DataSource['getRepository'],
       transaction: jest.fn(async (cb: (m: unknown) => Promise<void>) =>
         cb(manager),
       ) as unknown as DataSource['transaction'],
@@ -125,7 +140,7 @@ describe('SessionService logout() name-scoped teardown fence', () => {
           provide: ConfigService,
           useValue: { get: jest.fn().mockImplementation(<T>(_k: string, d?: T): T => d as T) },
         },
-        { provide: LidMappingStoreService, useValue: { remember: jest.fn() } },
+        { provide: LidMappingStoreService, useValue: { remember: jest.fn(), onSecondLid: jest.fn() } },
         { provide: StatusStoreService, useValue: { ingest: jest.fn() } },
       ],
     }).compile();
@@ -268,6 +283,12 @@ describe('SessionService logout() name-scoped teardown fence', () => {
   it('old-name teardown still pending past 10s: delete rejects 409, transaction parent removal and purgeSessionData not called (unique name still reserved)', async () => {
     const manager = { delete: jest.fn().mockResolvedValue({ affected: 1 }), remove: jest.fn() };
     const dataSource: Partial<DataSource> = {
+      options: { type: 'better-sqlite3' } as DataSource['options'],
+      getRepository: jest.fn(() => ({
+        find: jest.fn().mockResolvedValue([]),
+        createQueryBuilder: jest.fn(emptyMessageQuery),
+        delete: jest.fn(),
+      })) as unknown as DataSource['getRepository'],
       transaction: jest.fn(async (cb: (m: unknown) => Promise<void>) =>
         cb(manager),
       ) as unknown as DataSource['transaction'],

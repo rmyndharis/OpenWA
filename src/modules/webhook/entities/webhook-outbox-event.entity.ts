@@ -22,6 +22,8 @@ export type WebhookOutboxState = 'pending' | 'queued' | 'dispatched' | 'failed';
 @Entity('webhook_outbox_events')
 @Index('UQ_webhook_outbox_events_webhook_key', ['webhookId', 'idempotencyKey'], { unique: true })
 @Index('IDX_webhook_outbox_events_state_createdAt', ['state', 'createdAt'])
+// A session delete removes its outbox rows by sessionId, in batches.
+@Index('IDX_webhook_outbox_events_sessionId', ['sessionId'])
 export class WebhookOutboxEvent {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

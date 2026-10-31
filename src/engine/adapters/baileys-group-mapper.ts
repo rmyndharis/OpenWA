@@ -1,6 +1,6 @@
 import type { GroupMetadata } from '@whiskeysockets/baileys';
 import { Group, GroupInfo, GroupParticipant } from '../interfaces/whatsapp-engine.interface';
-import { userPart } from '../identity/wa-id';
+import { parseWaId, userPart } from '../identity/wa-id';
 
 /**
  * Canonicalizes participant/owner JIDs to the neutral dialect (see wa-id.ts). Defaults to identity so
@@ -31,8 +31,13 @@ export function findSelfParticipant(
   selfJid: string,
   normalizeJid: NormalizeJid,
 ): GroupMetadata['participants'][number] | undefined {
-  const self = userPart(normalizeJid(selfJid));
-  return metadata.participants.find(p => userPart(preferPhoneDialect(p.id, p.phoneNumber, normalizeJid)) === self);
+  // Digits only identify a member within one kind: a lid and a phone number can read the same.
+  const self = parseWaId(normalizeJid(selfJid));
+  if (!self.userPart || (self.kind !== 'user' && self.kind !== 'lid')) return undefined;
+  return metadata.participants.find(p => {
+    const participant = parseWaId(preferPhoneDialect(p.id, p.phoneNumber, normalizeJid));
+    return participant.kind === self.kind && participant.userPart === self.userPart;
+  });
 }
 
 function isSelfAdmin(metadata: GroupMetadata, selfJid: string, normalizeJid: NormalizeJid): boolean {

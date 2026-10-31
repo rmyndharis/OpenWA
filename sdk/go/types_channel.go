@@ -31,7 +31,7 @@ type ChannelMessageRecord struct {
 	MediaURL  string `json:"mediaUrl,omitempty"`
 }
 
-// ChannelMessageQuery limits the channel message read (default 50).
+// ChannelMessageQuery limits the channel message read (default 50, max 100: a larger value is cut to 100).
 type ChannelMessageQuery struct {
 	Limit *int
 }

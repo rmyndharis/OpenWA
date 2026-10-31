@@ -9,9 +9,17 @@ import {
   MaxLength,
   IsBoolean,
   Validate,
+  Matches,
 } from 'class-validator';
-import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
-import { CHAT_ID_MAX_LENGTH, MENTIONS_DESCRIPTION, MENTIONS_MAX, MENTION_WID_MAX_LENGTH } from './send-message.dto';
+import { ToStrictArray, ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
+import {
+  CHAT_ID_MAX_LENGTH,
+  CHAT_JID_MESSAGE,
+  CHAT_JID_PATTERN,
+  MENTIONS_DESCRIPTION,
+  MENTIONS_MAX,
+  MENTION_WID_MAX_LENGTH,
+} from './send-message.dto';
 import { IsMentionWidConstraint } from './is-mention-wid.validator';
 
 export class SendTemplateMessageDto {
@@ -20,9 +28,11 @@ export class SendTemplateMessageDto {
     example: '628123456789@c.us',
     maxLength: CHAT_ID_MAX_LENGTH,
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)
+  @Matches(CHAT_JID_PATTERN, { message: CHAT_JID_MESSAGE })
   chatId!: string;
 
   @ApiPropertyOptional({
@@ -30,6 +40,7 @@ export class SendTemplateMessageDto {
     example: 'b1c2d3e4-f5a6-7890-bcde-f01234567890',
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   templateId?: string;
@@ -39,6 +50,7 @@ export class SendTemplateMessageDto {
     example: 'order-confirmation',
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   templateName?: string;
@@ -62,6 +74,7 @@ export class SendTemplateMessageDto {
     items: { type: 'string', maxLength: MENTION_WID_MAX_LENGTH },
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(MENTIONS_MAX)
   @IsString({ each: true })

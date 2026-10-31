@@ -1,6 +1,25 @@
 import { EditedMessage, IncomingMessage, MessageContact, MessageType } from '../interfaces/whatsapp-engine.interface';
-import type { SerializedWid } from '../types/whatsapp-web-js.types';
+import { readWid, type SerializedWid } from '../types/whatsapp-web-js.types';
 import { chatKind } from '../identity/wa-id';
+
+/**
+ * Bounds on an inbound poll, applied by both engines. WhatsApp itself allows 12 options of 100
+ * characters under a 255-character question; these sit well above that, so nothing a client can send
+ * is cut, while a malformed poll cannot bloat a stored row, a webhook payload or a socket frame. A poll
+ * over a bound is truncated, not dropped.
+ */
+export const POLL_MAX_OPTIONS = 32;
+export const POLL_TEXT_MAX_LENGTH = 1024;
+
+/** A poll question or option text, cut to {@link POLL_TEXT_MAX_LENGTH}. */
+export function boundPollText(text: string): string {
+  return text.slice(0, POLL_TEXT_MAX_LENGTH);
+}
+
+/** A poll's options, cut to {@link POLL_MAX_OPTIONS} entries of at most {@link POLL_TEXT_MAX_LENGTH}. */
+export function boundPollOptions(options: string[]): string[] {
+  return options.slice(0, POLL_MAX_OPTIONS).map(boundPollText);
+}
 
 /**
  * Map a whatsapp-web.js `MessageTypes` token to the engine-neutral {@link MessageType}, so no
@@ -106,7 +125,7 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
     // backport every arriving message otherwise carries `id: undefined`. The empty sentinel means
     // "received, id unreadable" and is normalized to NULL where it is persisted — never to `''`, which
     // the non-partial (sessionId, waMessageId) unique index would collide the second such message on.
-    id: msg.id._serialized ?? msg.id.$1 ?? '',
+    id: readWid(msg.id) ?? '',
     from: msg.from,
     to: msg.to,
     chatId,
@@ -162,16 +181,20 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
     };
   }
 
-  if (incoming.type === 'poll' && Array.isArray(msg.pollOptions)) {
-    const options = msg.pollOptions
-      .map(option => (typeof option === 'string' ? option : option?.name))
-      .filter((option): option is string => typeof option === 'string');
-    if (options.length) {
-      incoming.poll = {
-        name: msg.pollName ?? msg.body,
-        options,
-        allowMultipleAnswers: msg.allowMultipleAnswers === true,
-      };
+  if (incoming.type === 'poll') {
+    // The question is the body of a poll, so it is bounded with the poll.
+    incoming.body = boundPollText(incoming.body);
+    if (Array.isArray(msg.pollOptions)) {
+      const options = msg.pollOptions
+        .map(option => (typeof option === 'string' ? option : option?.name))
+        .filter((option): option is string => typeof option === 'string');
+      if (options.length) {
+        incoming.poll = {
+          name: boundPollText(msg.pollName ?? msg.body),
+          options: boundPollOptions(options),
+          allowMultipleAnswers: msg.allowMultipleAnswers === true,
+        };
+      }
     }
   }
 

@@ -93,7 +93,8 @@ describe('PluginLoaderService — per-session activation gate (hook delivery)', 
       loader.setPluginSessions('act-ext', ['sess-1', 'sess-2']);
 
       expect(plugin.activeSessions).toEqual(['sess-1', 'sess-2']);
-      expect(setSessions).toHaveBeenCalledWith('act-ext', ['sess-1', 'sess-2']);
+      // No write options: a best-effort write, as every caller but the plugin API uses.
+      expect(setSessions).toHaveBeenCalledWith('act-ext', ['sess-1', 'sess-2'], undefined);
     });
 
     it('rejects activating a global (non-session-scoped) plugin per session', () => {

@@ -3,9 +3,9 @@ package com.rmyndharis.openwa.model;
 import com.google.gson.annotations.SerializedName;
 
 /**
- * Events a webhook may subscribe to. Use {@link #ALL} to receive all. The wire
- * values are dotted lowercase strings, so each constant carries a
- * {@link SerializedName} mapping.
+ * Events a webhook may subscribe to. Use {@link #ALL} to receive all except
+ * {@link #MESSAGE_RECEIPT}, which must be named. The wire values are dotted
+ * lowercase strings, so each constant carries a {@link SerializedName} mapping.
  */
 public enum WebhookEvent {
     @SerializedName("message.received")
@@ -14,6 +14,8 @@ public enum WebhookEvent {
     MESSAGE_SENT,
     @SerializedName("message.ack")
     MESSAGE_ACK,
+    @SerializedName("message.receipt")
+    MESSAGE_RECEIPT,
     @SerializedName("message.failed")
     MESSAGE_FAILED,
     @SerializedName("message.revoked")
@@ -38,6 +40,8 @@ public enum WebhookEvent {
     PRESENCE_UPDATE,
     @SerializedName("event.response")
     EVENT_RESPONSE,
+    @SerializedName("poll.vote")
+    POLL_VOTE,
     @SerializedName("call.accepted")
     CALL_ACCEPTED,
     @SerializedName("call.rejected")

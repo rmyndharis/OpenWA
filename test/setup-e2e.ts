@@ -103,6 +103,10 @@ process.env.NODE_ENV = 'test';
 const e2eRunId = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const e2ePluginState = join(tmpdir(), `openwa-e2e-plugins-${e2eRunId}`);
 process.env.PLUGIN_STATE_DIR = e2ePluginState;
+// The package directory beside the registry, as in production. Left unset it is the checkout's
+// ./data/plugins, and the legacy ./plugins is scanned too: every boot would load and reconcile the
+// developer's real plugin tree.
+process.env.PLUGINS_DIR = join(e2ePluginState, 'plugins');
 
 // The remaining data paths. Each already carries its own knob, and leaving them unset pointed every
 // suite at the same `./data/sessions`, `./data/baileys` and `./data/media`: shared between suites

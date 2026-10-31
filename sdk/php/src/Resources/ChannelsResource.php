@@ -20,7 +20,11 @@ class ChannelsResource
         $this->http = $http;
     }
 
-    /** @return array<int,array<string,mixed>> */
+    /**
+     * List the channels the session is subscribed to. whatsapp-web.js only; Baileys answers 501.
+     *
+     * @return array<int,array<string,mixed>>
+     */
     public function list(string $sessionId): array
     {
         return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels") ?? [];
@@ -33,7 +37,7 @@ class ChannelsResource
     }
 
     /**
-     * Get recent messages from a channel.
+     * Get recent messages from a channel. whatsapp-web.js only; Baileys answers 501.
      *
      * @param array<string,mixed> $query  e.g. ['limit' => 50].
      * @return array<int,array<string,mixed>>
@@ -79,6 +83,7 @@ class ChannelsResource
     }
     /**
      * Subscribe to a channel using its invite code. Requires an OPERATOR-level key.
+     * Baileys only; whatsapp-web.js answers 501.
      *
      * @param array<string,mixed> $body  Must contain 'inviteCode'.
      * @return array<string,mixed>

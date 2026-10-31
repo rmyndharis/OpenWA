@@ -7,6 +7,9 @@ package com.rmyndharis.openwa.model;
  * query fails the field stays at its default rather than reporting "nobody is blocked", and the
  * gateway logs a warning — so a false is not proof the contact is unblocked if the link is
  * unhealthy.
+ *
+ * <p>{@code profilePicUrl} is a cached URL that only Baileys can fill (whatsapp-web.js never sets it)
+ * and it is often absent there too, so its absence does not say whether the contact has a picture.
  */
 public record ContactRecord(
     String id,

@@ -1,6 +1,9 @@
 import { globSync } from 'glob';
 import dataDataSource, { postgresDataSourceOptions, buildPostgresDataSourceOptions } from './data-source';
 
+// Keep the checkout's own .env and data/.env.generated out: the CLI data sources load them on import.
+jest.mock('./load-cli-env', () => ({ loadCliEnv: jest.fn() }));
+
 // The data CLI DataSource manages the DATA connection's migrations (session/webhook/message/
 // template/engine). It must NOT pull in the auth/audit entities — those belong to the always-SQLite
 // MAIN connection (data-source-main.ts). A broad '**' entity glob would sweep the main-owned
@@ -113,29 +116,40 @@ describe('Postgres migration connection pool timeouts', () => {
   });
 });
 
-// POSTGRES_SCHEMA: a non-public schema sets TypeORM's `schema` option AND the session search_path (via
-// pg's startup `options` param) so the project's raw, unqualified migration DDL + the typeorm_migrations
-// ledger resolve to the configured schema. The default (public) path stays byte-identical to the
-// pre-schema-selection behavior — no `options` key is added. The builder is tested directly so no
+// POSTGRES_SCHEMA: a non-public schema sets TypeORM's `schema` option AND the session search_path (by a
+// statement in the connect hook, never in the startup packet, which PgBouncer does not carry to every
+// client) so the project's raw, unqualified migration DDL + the typeorm_migrations ledger resolve to the
+// configured schema. The default (public) path sets none. The builder is tested directly so no
 // process.env mutation or module reload is needed.
 describe('PostgreSQL schema selection (POSTGRES_SCHEMA)', () => {
   // The builder returns the broad DataSourceOptions union; narrow to the postgres-specific fields
   // under test (both are optional on the union — schema only on postgres, extra on every member).
   type PgOpts = { schema?: string; extra?: Record<string, unknown> };
 
-  it('defaults schema to "public" and does NOT set a search_path when POSTGRES_SCHEMA is unset', () => {
+  /** The statements the CLI pool's connect hook issues on a fresh connection. */
+  const connectStatements = async (opts: PgOpts): Promise<string[]> => {
+    const query = jest.fn<Promise<unknown>, [{ text: string }]>().mockResolvedValue({});
+    await (opts.extra?.onConnect as (client: never) => Promise<unknown>)({ query } as never);
+    return query.mock.calls.map(([sent]) => sent.text);
+  };
+
+  it('defaults schema to "public" and does NOT set a search_path when POSTGRES_SCHEMA is unset', async () => {
     const opts = buildPostgresDataSourceOptions({}) as PgOpts;
     expect(opts.schema).toBe('public');
     expect(opts.extra?.options).toBeUndefined();
+    expect(await connectStatements(opts)).toEqual(["SET TIME ZONE 'UTC'"]);
   });
 
-  it('passes schema through and sets extra.options search_path for a non-public schema', () => {
+  it('passes schema through and sets the search_path on connect for a non-public schema', async () => {
     const opts = buildPostgresDataSourceOptions({ POSTGRES_SCHEMA: 'openwa' }) as PgOpts;
     expect(opts.schema).toBe('openwa');
-    expect(opts.extra?.options).toBe('-c search_path=openwa,public');
+    expect(opts.extra?.options).toBeUndefined();
+    expect(await connectStatements(opts)).toEqual([
+      "SET TIME ZONE 'UTC'; SELECT set_config('search_path', 'openwa,public', false)",
+    ]);
   });
 
-  it('keeps the pool timeouts under a custom schema (only adds options; never drops them or adds statement_timeout)', () => {
+  it('keeps the pool timeouts under a custom schema (never drops them or adds statement_timeout)', () => {
     const opts = buildPostgresDataSourceOptions({ POSTGRES_SCHEMA: 'openwa' }) as PgOpts;
     expect(opts.extra?.max).toBe(10);
     expect(opts.extra?.idleTimeoutMillis).toBe(30000);

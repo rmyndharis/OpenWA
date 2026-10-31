@@ -34,6 +34,12 @@ describe('SendBulkMessageDto nested media validation', () => {
     const dto = await validateBulk(imageItem({ base64: 12345 }));
     expect(dto.messages[0].content.image?.base64).toBe('12345');
   });
+
+  it.each([[true], [{ a: 1 }]])('refuses %j where a media string belongs', async value => {
+    await rejects(imageItem({ base64: value }));
+    await rejects(imageItem({ url: value }));
+    await rejects(imageItem({ base64: 'AAAA', mimetype: value }));
+  });
 });
 
 const textItem = (text: string, extra: Record<string, unknown> = {}) => ({
@@ -60,6 +66,33 @@ describe('SendBulkMessageDto recipient', () => {
   });
 });
 
+describe('SendBulkMessageDto personalized mentions', () => {
+  it.each(['{{phone}}', '{phone}', '{{ phone }}'])('accepts a mention supplied by %s', async placeholder => {
+    await accepts({
+      messages: [
+        {
+          chatId: '120363000000000000@g.us',
+          type: 'text',
+          content: { text: 'Hi @{{phone}}', mentions: [`${placeholder}@c.us`] },
+          variables: { phone: '62811' },
+        },
+      ],
+    });
+  });
+
+  it('still rejects a malformed literal mention', async () => {
+    await rejects({
+      messages: [
+        {
+          chatId: '120363000000000000@g.us',
+          type: 'text',
+          content: { text: 'Hi', mentions: ['not-a-person@c.us'] },
+        },
+      ],
+    });
+  });
+});
+
 // The url scheme is checked by the service after `variables` are applied, because a placeholder may
 // stand for the whole URL; the DTO only requires a string.
 describe('SendBulkMessageDto media url', () => {
@@ -72,6 +105,34 @@ describe('SendBulkMessageDto media url', () => {
   it('converts a numeric url next to base64 to a string', async () => {
     const dto = await validateBulk(imageItem({ base64: 'AAAA', url: 123 }));
     expect(dto.messages[0].content.image?.url).toBe('123');
+  });
+
+  // A boolean or an object is refused even next to base64, which wins when the item is sent.
+  it.each([[true], [{ a: 1 }]])('refuses %j as the url next to base64', async value => {
+    await rejects(imageItem({ base64: 'AAAA', url: value }));
+  });
+});
+
+// @ValidateNested checks an array element by element, so a nested object sent as an array passed. The
+// service then read its fields off the array: options [{...}] was stored as the defaults with the caller's
+// values dropped, and a media object in an array was only refused later, with a message about the text.
+describe('SendBulkMessageDto nested objects refuse an array', () => {
+  const options = { delayBetweenMessages: 60000, randomizeDelay: false, stopOnError: true };
+
+  it('accepts the options as an object', async () => {
+    await accepts({ ...textItem('hi'), options });
+  });
+
+  it.each([[[]], [[{}]], [[options]]])('refuses options given as an array: %j', async value => {
+    await rejects({ ...textItem('hi'), options: value });
+  });
+
+  it('refuses a message content given as an array', async () => {
+    await rejects({ messages: [{ chatId: 'c@c.us', type: 'text', content: [{ text: 'hi' }] }] });
+  });
+
+  it.each(['image', 'video', 'audio', 'document'])('refuses %s given as an array', async kind => {
+    await rejects({ messages: [{ chatId: 'c@c.us', type: kind, content: { [kind]: [{ base64: 'AAAA' }] } }] });
   });
 });
 

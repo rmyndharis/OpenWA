@@ -150,6 +150,29 @@ describe('WebhookRedriveService', () => {
     expect((await failures.findOneByOrFail({ id: row.id })).attempts).toBe(4);
   });
 
+  it('moves a cancelled replay behind other rows without discarding its retained payload', async () => {
+    const cancelled = await addFailure({ attempts: 1, payload: { id: 'cancelled' } });
+    const next = await addFailure({ attempts: 1, createdAt: new Date(Date.now() - 30_000) });
+    const deliver = delivery.redeliver.getMockImplementation()!;
+    delivery.redeliver.mockImplementation((...args) =>
+      args[3] === cancelled.idempotencyKey ? Promise.resolve('cancelled') : deliver(...args),
+    );
+
+    expect(await service.redrive({ limit: 1 })).toMatchObject({ skipped: 1, failed: 0, remaining: 2 });
+    expect(await service.redrive({ limit: 1 })).toMatchObject({ delivered: 1, skipped: 0, remaining: 1 });
+    expect(delivery.redeliver.mock.calls.map(call => call[3])).toEqual([cancelled.idempotencyKey, next.idempotencyKey]);
+    const retained = await failures
+      .createQueryBuilder('failure')
+      .addSelect('failure.payload')
+      .where('failure.id = :id', { id: cancelled.id })
+      .getOneOrFail();
+    expect(retained).toMatchObject({
+      attempts: 2,
+      payload: cancelled.payload,
+      idempotencyKey: cancelled.idempotencyKey,
+    });
+  });
+
   it('reads each retained payload only as its replay starts, never the whole batch at once', async () => {
     for (let i = 0; i < 6; i++) await addFailure({ payload: { id: `m${i}`, body: 'x'.repeat(200) } });
     const statements: string[] = [];
@@ -281,6 +304,28 @@ describe('WebhookRedriveService', () => {
     expect(delivery.redeliver.mock.calls[0][2]).toBe('session.disconnected');
   });
 
+  it('keeps opt-in events out of a wildcard subscription, so they cannot pin the head of a batch', async () => {
+    // message.receipt must be named; '*' no longer covers it. Rows left over from a time the webhook did
+    // name it would otherwise be selected, skipped without a counter change, and selected again forever.
+    await webhooks.update(primary.id, { events: ['*'] });
+    for (let i = 0; i < 3; i++) {
+      await addFailure({ event: 'message.receipt', createdAt: new Date(Date.now() - 120_000) });
+    }
+    const wanted = await addFailure({ event: 'message.received' });
+
+    expect(await service.redrive({ limit: 2 })).toMatchObject({ delivered: 1, skipped: 0, remaining: 0 });
+    expect(delivery.redeliver).toHaveBeenCalledTimes(1);
+    expect(delivery.redeliver.mock.calls[0][3]).toBe(wanted.idempotencyKey);
+  });
+
+  it('replays an opt-in event once the webhook names it', async () => {
+    await webhooks.update(primary.id, { events: ['*', 'message.receipt'] });
+    await addFailure({ event: 'message.receipt' });
+
+    expect(await service.redrive({})).toMatchObject({ delivered: 1, remaining: 0 });
+    expect(delivery.redeliver.mock.calls[0][2]).toBe('message.receipt');
+  });
+
   it('matches exact event members and ignores non-array subscriptions', async () => {
     await webhooks.update(primary.id, { events: ['message.received.extra'] });
     await addFailure();
@@ -348,7 +393,7 @@ describe('WebhookRedriveService', () => {
       .mockRejectedValueOnce(new Error('receiver failed'));
 
     expect(await service.redrive({})).toMatchObject({ redriven: 1, enqueued: 1, failed: 1, skipped: 1, remaining: 3 });
-    expect(await failures.countBy({ attempts: 4 })).toBe(1);
+    expect(await failures.countBy({ attempts: 4 })).toBe(2);
   });
 
   it('continues the batch when recording a failed replay fails', async () => {

@@ -1,8 +1,8 @@
 import { Injectable, BadRequestException, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { GroupMemberAddMode, IWhatsAppEngine, MediaInput } from '../../engine/interfaces/whatsapp-engine.interface';
-import { assertBase64WithinMediaCap, stripBase64DataUri } from '../message/media-cap.util';
-import { chatKind } from '../../engine/identity/wa-id';
+import { resolveMediaBody } from '../message/media-cap.util';
+import { chatKind, toNeutralJid } from '../../engine/identity/wa-id';
 import { isAddressableParticipant } from '../../engine/identity/wa-id';
 import { SetGroupPictureDto } from './dto/group.dto';
 import { paginate, ListOptions } from '../../common/utils/paginate';
@@ -163,6 +163,13 @@ export class GroupService {
     return this.getEngine(sessionId).setGroupDescription(groupId, description);
   }
 
+  setGroupMemberLabel(sessionId: string, groupId: string, label: string): Promise<void> {
+    this.assertGroupId(groupId);
+    // Baileys relays the label as a group message only to a jid whose domain is exactly `g.us`; any
+    // other spelling the check accepts (`120363@G.US`, a trailing space) went out as a 1:1 message.
+    return this.getEngine(sessionId).setGroupMemberLabel(toNeutralJid(groupId), label);
+  }
+
   leaveGroup(sessionId: string, groupId: string) {
     return this.getEngine(sessionId).leaveGroup(groupId);
   }
@@ -207,9 +214,15 @@ export class GroupService {
    * belongs replaced or permanently deleted the account's own avatar and answered 200, while
    * whatsapp-web.js refused the same input through requireGroupChat. Guarded here rather than in either
    * adapter so both engines agree, and so no engine ever sees the wrong kind of id.
+   *
+   * The member label uses it too: Baileys relays that label as a message to whatever jid it is given, so
+   * a 1:1 id would send a group protocol message to a person.
+   *
+   * One `@` only: the kind is read after the last one, while Baileys reads the domain after the first, so
+   * `628123456789@c.us@g.us` passed here as a group and Baileys relayed it on its 1:1 path.
    */
   private assertGroupId(groupId: string): void {
-    if (chatKind(groupId) !== 'group') {
+    if (chatKind(groupId) !== 'group' || groupId.indexOf('@') !== groupId.lastIndexOf('@')) {
       throw new BadRequestException(`${groupId} is not a group id`);
     }
   }
@@ -222,19 +235,12 @@ export class GroupService {
 
   setGroupPicture(sessionId: string, groupId: string, dto: SetGroupPictureDto): Promise<void> {
     this.assertGroupId(groupId);
-    const base64 = stripBase64DataUri(dto.base64);
-    if (!dto.url && !base64) {
-      throw new BadRequestException('Either url or base64 must be provided');
-    }
-    if (base64 && !dto.mimetype) {
-      throw new BadRequestException('mimetype is required when using base64 data');
-    }
-    assertBase64WithinMediaCap(base64);
-    const media: MediaInput = {
-      mimetype: dto.mimetype || 'image/jpeg',
-      // base64 wins over url when both are present, mirroring setProfilePicture.
-      data: base64 || dto.url!,
-    };
+    // base64 wins over url when both are present, mirroring setProfilePicture.
+    const media: MediaInput = resolveMediaBody(dto, {
+      fallbackMimetype: 'image/jpeg',
+      requireMimetypeForBase64: true,
+      checkUrl: true,
+    });
     return this.getEngine(sessionId).setGroupPicture(groupId, media);
   }
 
@@ -264,7 +270,8 @@ export class GroupService {
    * leave a silently half-applied patch behind when the ephemeral call then throws.
    *
    * A failure on the FIRST applied field propagates unchanged (nothing was applied, so the patch
-   * simply failed). A failure on a LATER field means the group is now in a mixed state, so the
+   * simply failed, except for a 503: a WhatsApp timeout can still land the change). A failure on a
+   * LATER field means the group is now in a mixed state, so the
    * error names the failed field and the ones already applied — the caller can reconcile instead
    * of guessing which subset took effect. The wrapped error keeps the underlying HTTP status, and
    * carries the underlying message only for an HTTP error; any other failure is logged here and

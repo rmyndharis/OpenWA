@@ -41,6 +41,7 @@ describe('EngineFactory', () => {
       getCached: jest.fn(),
       lidsForPhone: jest.fn().mockReturnValue([]),
       remember: jest.fn().mockResolvedValue(undefined),
+      releaseSession: jest.fn().mockResolvedValue(undefined),
     }) as unknown as LidMappingStoreService;
 
   const buildChatStateStore = (): ChatStateStoreService =>
@@ -290,6 +291,7 @@ describe('EngineFactory', () => {
     const buildBothDirFactory = (engineType: string) => {
       const sessionDataPath = path.join(tmpRoot, 'sessions');
       const authDir = path.join(tmpRoot, 'baileys');
+      const lidStore = buildLidStore();
       const factory = new EngineFactory(
         buildConfigService({
           'engine.type': engineType,
@@ -298,11 +300,12 @@ describe('EngineFactory', () => {
         }),
         noPluginLoader(),
         buildMessageStore(),
-        buildLidStore(),
+        lidStore,
         buildChatStateStore(),
       );
       return {
         factory,
+        lidStore,
         wwjsDir: wwjsAuthDir(sessionDataPath, SESSION_ID),
         baileysDir: baileysAuthDir(authDir, SESSION_ID),
       };
@@ -345,6 +348,17 @@ describe('EngineFactory', () => {
       // The healthy engine's purge still ran; the failed one is left behind (logged, never thrown).
       expect(fs.existsSync(wwjsDir)).toBe(false);
       expect(fs.existsSync(baileysDir)).toBe(true);
+    });
+
+    it("hands the deleted session's lid mappings to no session, and not for an unsafe key", async () => {
+      const { factory, lidStore } = buildBothDirFactory('baileys');
+      const { releaseSession } = lidStore as unknown as { releaseSession: jest.Mock };
+
+      await factory.purgeSessionData(SESSION_ID);
+      await factory.purgeSessionData('../baileys-evil');
+
+      expect(releaseSession).toHaveBeenCalledTimes(1);
+      expect(releaseSession).toHaveBeenCalledWith(SESSION_ID);
     });
 
     it('is a no-op (no throw) when neither auth dir exists', async () => {

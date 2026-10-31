@@ -37,9 +37,13 @@
 .filter-row select {
   height: 2.25rem;
   padding: 0 0.5rem;
+  /* The chevron takes 28px at the end (12px from the edge, 16px wide). The global 2.5rem would leave these
+     compact selects too little text, so they ask for the chevron's room and no more. */
+  padding-inline-end: 1.75rem !important;
+  text-overflow: ellipsis;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-white);
+  background-color: var(--bg-white);
   color: var(--text-primary);
   font-size: 0.8125rem;
 }
@@ -49,12 +53,20 @@
   width: 100%;
 }
 
+/* The border above outweighs the global select:focus one, which also switches the outline off. */
+.filter-row select:focus {
+  border-color: var(--focus-ring);
+}
+
+/* From 601px wide enough, with the padding above, for the longest field and operator label in every shipped
+   locale except the two or three over-long ones, which end in an ellipsis; the open list shows them whole. The
+   phone rule below replaces these bases. */
 .filter-field {
-  flex: 0 0 8.5rem;
+  flex: 0 0 10.75rem;
 }
 
 .filter-operator {
-  flex: 0 0 7rem;
+  flex: 0 0 7.75rem;
 }
 
 .filter-value {
@@ -91,6 +103,32 @@
 
 .filter-remove:hover svg {
   stroke: var(--error);
+}
+
+/* On a phone the field and the operator share the first row, and the value and the remove button the second,
+   instead of what the fixed bases above leave of one row. The 3.5rem is the 40px button, a gap and slack. */
+@media (max-width: 600px) {
+  .filter-row {
+    flex-wrap: wrap;
+  }
+
+  .filter-field,
+  .filter-operator {
+    flex: 1 1 6rem;
+  }
+
+  .filter-value {
+    flex: 1 1 calc(100% - 3.5rem);
+  }
+}
+
+/* Up to 420px two selects side by side leave the field 100px of text at 341px and 109px at 360px, which cuts
+   "Message body" in German, French, Italian, Spanish and Portuguese; the field takes the first row and the
+   operator the second. From 421px the share is 139px and holds every label the desktop bases hold. */
+@media (max-width: 420px) {
+  .filter-field {
+    flex-basis: 100%;
+  }
 }
 
 .filter-add {
@@ -139,6 +177,11 @@
   font-size: 0.8125rem;
 }
 
+/* Same weight as `.modal-body input:focus`, which switches the outline off, and later, so its border would win. */
+.filter-text input[type='text']:focus {
+  border-color: var(--focus-ring);
+}
+
 .filter-case {
   display: inline-flex;
   align-items: center;
@@ -174,7 +217,7 @@
 .enum-tag.selected {
   background: var(--primary);
   border-color: var(--primary);
-  color: #fff;
+  color: #0f172a;
 }
 
 /* Chips input with autocomplete */
@@ -235,6 +278,10 @@
   border-radius: 6px;
 }
 
+.chips-row .chips-text:focus {
+  border-color: var(--focus-ring);
+}
+
 /* keep the yes/no select compact rather than filling the value column */
 .filter-bool {
   width: auto;
@@ -263,7 +310,7 @@
   border: none;
   background: transparent;
   cursor: pointer;
-  text-align: left;
+  text-align: start;
 }
 
 .chips-suggestion:hover {
@@ -286,4 +333,11 @@
   font-weight: 600;
   font-size: 0.8125rem;
   border-top: 1px solid var(--border);
+}
+
+.chips-suggestion-note {
+  padding: 0.5rem 0.625rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--error-text);
 }

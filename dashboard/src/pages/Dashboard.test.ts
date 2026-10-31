@@ -164,6 +164,32 @@ test('a webhook read still in flight shows the placeholder, not zero webhooks', 
   assert.notEqual(statValue('Webhooks Configured'), '0');
 });
 
+// A date-only formatter put a session active a few hours ago on a bare date.
+test('a session last active a few hours ago reads in hours, not as a date', async () => {
+  webhooksStatus = 403;
+  sessionList = [{ ...READY_SESSION, lastActive: new Date(Date.now() - 5 * 3_600_000).toISOString() }];
+  renderDashboard();
+  await rtl.screen.findByText('Main');
+  assert.equal(document.querySelector('.last-active')?.textContent, '5 hours ago');
+});
+
+// The harness refuses the session statistics, as the gateway does a failed or unsent read: the count of sessions is
+// then the list's own, not a total of zero beside the rows on screen.
+test('a session list without statistics is counted by its own length', async () => {
+  sessionList = [READY_SESSION];
+  renderDashboard();
+  await rtl.screen.findByText('Main');
+  assert.equal(document.querySelector('.section-subtitle')?.textContent, 'Showing 1 of 1 sessions');
+});
+
+test('a connected session is counted without statistics, in the card and the header badge', async () => {
+  sessionList = [READY_SESSION, { ...READY_SESSION, id: 'sess-2', name: 'Spare', status: 'disconnected' }];
+  renderDashboard();
+  await rtl.screen.findByText('Main');
+  assert.equal(statValue('Connected Sessions'), '1');
+  assert.equal(document.querySelector('.status-badge')?.textContent, 'Connected');
+});
+
 test('a read-only key is offered no Disconnect', async () => {
   webhooksStatus = 403;
   sessionList = [READY_SESSION];
@@ -224,7 +250,8 @@ test('a failed first read of the sessions still shows the error', async () => {
   webhooksStatus = 200;
   sessionsStatus = 502;
   renderDashboard();
-  await rtl.screen.findByText(/Bad Gateway/);
+  const alert = await rtl.screen.findByRole('alert');
+  assert.match(alert.textContent ?? '', /Bad Gateway/);
 });
 
 test('a non-admin key never loads the chart section', async () => {

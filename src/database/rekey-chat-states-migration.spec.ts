@@ -59,6 +59,23 @@ describe('ReKeyChatStatesBySessionId migration', () => {
     expect(await states()).toEqual([{ sessionId: ALICE_ID, chatId: 'c1@c.us' }]);
   });
 
+  it('keeps a row already keyed by a session id when another session is named after that id', async () => {
+    // A database built by synchronize holds id-keyed rows before this migration ever runs.
+    await queryRunner.query(`UPDATE sessions SET "name" = ? WHERE "id" = ?`, [ALICE_ID, BOB_ID]);
+    await queryRunner.query(
+      `INSERT INTO chat_states ("sessionId", "chatId", "archived") VALUES (?, 'current@c.us', 1), ('alice', 'legacy@c.us', 1)`,
+      [ALICE_ID],
+    );
+
+    await migration.up(queryRunner);
+    await migration.up(queryRunner);
+
+    expect(await states()).toEqual([
+      { sessionId: ALICE_ID, chatId: 'current@c.us' },
+      { sessionId: ALICE_ID, chatId: 'legacy@c.us' },
+    ]);
+  });
+
   it('leaves rows of a deleted session untouched', async () => {
     await queryRunner.query(`INSERT INTO chat_states ("sessionId", "chatId") VALUES ('gone', 'c1@c.us')`);
 

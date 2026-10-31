@@ -1,6 +1,6 @@
 import { ExecutionContext, Injectable } from '@nestjs/common';
 import { normalizeIp, ThrottlerGuard, ThrottlerLimitDetail } from '@nestjs/throttler';
-import { resolveClientIp, RequestLike } from '../utils/ip';
+import { parseTrustedProxies, resolveClientIp, RequestLike } from '../utils/ip';
 import { createLogger } from '../services/logger.service';
 
 const logger = createLogger('ProxyAwareThrottlerGuard');
@@ -42,10 +42,7 @@ export class ProxyAwareThrottlerGuard extends ThrottlerGuard {
   private warnedSharedProxyBucket = false;
 
   protected getTracker(req: Record<string, unknown>): Promise<string> {
-    const trustedProxies = (process.env.TRUSTED_PROXIES || '')
-      .split(',')
-      .map(proxy => proxy.trim())
-      .filter(Boolean);
+    const trustedProxies = parseTrustedProxies(process.env.TRUSTED_PROXIES);
     // An X-Forwarded-For header with an empty TRUSTED_PROXIES is the silent self-DoS this guard
     // exists to prevent: every client collapses onto the proxy's socket address, so all traffic
     // shares ONE bucket per tier and one abuser rate-limits everyone. The header itself must stay

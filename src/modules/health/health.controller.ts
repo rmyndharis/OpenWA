@@ -13,7 +13,7 @@ import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { SlidingWindowLimiter } from '../events/ws-rate-limit';
 import { limiterKeyForIp, resolveClientIp } from '../../common/utils/ip';
-import { bearerToken } from '../../common/security/bearer-token';
+import { presentedApiKey } from '../../common/security/bearer-token';
 
 interface DependencyStatus {
   status: 'up' | 'down';
@@ -82,8 +82,7 @@ export class HealthController {
    * none presented, invalid, revoked, IP-denied — withholds the version; it never fails the check.
    */
   private async hasValidApiKey(req: Request): Promise<boolean> {
-    const xApiKey = req.headers['x-api-key'];
-    const rawKey = (typeof xApiKey === 'string' && xApiKey) || bearerToken(req.headers['authorization']);
+    const rawKey = presentedApiKey(req.headers);
     if (!rawKey) return false;
     const clientIp = resolveClientIp(req, this.configService.get<string[]>('security.trustedProxies') ?? []);
     const subject = limiterKeyForIp(clientIp);

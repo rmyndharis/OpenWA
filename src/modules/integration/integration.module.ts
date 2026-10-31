@@ -11,7 +11,7 @@ import { IngressService, IngressRouteDescriptor } from './ingress.service';
 import { IngressController } from './ingress.controller';
 import { admitIngressInstance } from './ingress-instance-limit';
 import { IngressEnqueueService, buildIngressDeadLetterRow } from './ingress-enqueue.service';
-import { IngressReconcilerService } from './ingress-reconciler.service';
+import { IngressReconcilerService, resolveIngressReconcilerOptions } from './ingress-reconciler.service';
 import { RedriveService } from './redrive.service';
 import { RedriveController } from './redrive.controller';
 import { IntegrationRetentionService } from './integration-retention.service';
@@ -93,6 +93,13 @@ if (process.env.QUEUE_ENABLED === 'true') {
           // MUST stay cheap — never call engine.initialize() here (that is the slow/blocking path bounded
           // separately by the #667/#696 init-timeout). Undefined = no live engine (stopped/deleted).
           sessionStatus: (scope: string) => registry.get(scope)?.getStatus(),
+          // A plugin the boot restore has not reached has no worker to take a delivery. A route that wants an
+          // answer is refused with a retryable 503 before anything is persisted; any other is accepted and held.
+          restorePending: (pluginId: string) => loader.isRestorePending(pluginId),
+          // Queue off: the dispatch would run inline, so the persisted row waits for the reconciler. With the
+          // reconciler off nothing would ever replay it, so the inline attempt (and its dead letter) stays.
+          deferDispatch: (pluginId: string) =>
+            ingressEnqueue.defersInlineDispatch(pluginId) && resolveIngressReconcilerOptions().intervalMs > 0,
           // Audit sink for preflight rejections (they leave no dedup/DLQ row). The Prometheus counter is
           // a separate follow-up (see plan notes); the structured log is the MVP audit surface.
           log: (event, meta) => ingressLogger.warn(event, meta),

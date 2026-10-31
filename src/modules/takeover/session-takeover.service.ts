@@ -208,7 +208,8 @@ export class SessionTakeoverService implements OnApplicationBootstrap, OnModuleD
   private isEligible(session: Session): boolean {
     // Only authenticated sessions (phone set): an engine is worth relaunching exactly when the
     // saved credentials can restore the link without a human scanning anything. A session an
-    // operator stopped stays down until an explicit start, wherever its claim lapsed.
-    return Boolean(session.phone) && TAKEOVER_STATUSES.has(session.status) && session.desiredState !== 'stopped';
+    // operator stopped, or whose delete failed part-way, stays down until an explicit start, wherever
+    // its claim lapsed.
+    return Boolean(session.phone) && TAKEOVER_STATUSES.has(session.status) && !session.desiredState;
   }
 }

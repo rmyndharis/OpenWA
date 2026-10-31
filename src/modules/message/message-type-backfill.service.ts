@@ -1,23 +1,20 @@
-import { Injectable, OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, OnApplicationBootstrap, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Message } from './entities/message.entity';
 import { createLogger } from '../../common/services/logger.service';
+import { BackfillLegacyMessageTypes1791300000000 } from '../../database/migrations/1791300000000-BackfillLegacyMessageTypes';
 
 /**
- * One-time, idempotent backfill of `messages.type` to the engine-neutral vocabulary (#265).
+ * Backfill of `messages.type` to the engine-neutral vocabulary (#265) for the one setup where no migration
+ * ever runs: a SQLite data DB under DATABASE_SYNCHRONIZE=true (the dev and e2e setup, where `migrationsRun` is
+ * false). Every other database got the same conversion once, from BackfillLegacyMessageTypes, which runs
+ * on a pool without the runtime statement timeout. Running it at every boot there meant a full scan of the
+ * unindexed `type` column on each start, ahead of the HTTP listener.
  *
- * Older incoming rows were persisted with raw whatsapp-web.js tokens (`chat`/`ptt`/`vcard`); the
- * engine now emits neutral types (`text`/`voice`/`contact`) at the adapter boundary, and the
- * dashboard chat view + message stats read these persisted rows. Without the backfill, old rows
- * render wrong (text as a `[chat]` media bubble, voice notes as document links) and stats split the
- * same kind across old/new tokens.
- *
- * This runs on startup in EVERY DB mode. A TypeORM data migration would NOT suffice: a SQLite data DB
- * under the opt-in DATABASE_SYNCHRONIZE=true (e.g. docker-compose.dev.yml) runs with `migrationsRun`
- * false, so migrations never run there. The mapping is forward-only and collision-free (the neutral targets were never valid
- * raw tokens, and passthrough kinds already match), so re-running on already-converted rows is a
- * no-op — safe to execute on every boot.
+ * The conversion is idempotent (the neutral targets were never valid raw tokens), so running it on every
+ * boot of a synchronized database is safe, and it stays a single statement in the migration, which owns it.
  */
 @Injectable()
 export class MessageTypeBackfillService implements OnApplicationBootstrap {
@@ -26,33 +23,16 @@ export class MessageTypeBackfillService implements OnApplicationBootstrap {
   constructor(
     @InjectRepository(Message, 'data')
     private readonly messageRepository: Repository<Message>,
+    @Optional()
+    private readonly configService?: ConfigService,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
-    // [legacy wwebjs token(s)] -> neutral MessageType, for the tokens mapWwebjsMessageType renames.
-    // call_log and poll_creation are left out on purpose: a pre-#265 row carries no call or poll
-    // metadata, so relabelling it would render an empty call or poll bubble.
-    const conversions: Array<{ from: string[]; to: string }> = [
-      { from: ['chat'], to: 'text' },
-      { from: ['buttons_response', 'list_response', 'template_button_reply'], to: 'text' },
-      { from: ['ptt'], to: 'voice' },
-      { from: ['vcard', 'multi_vcard'], to: 'contact' },
-    ];
+    if (this.configService?.get<boolean>('dataDatabase.synchronize', false) !== true) return;
 
-    let total = 0;
+    const runner = this.messageRepository.manager.connection.createQueryRunner();
     try {
-      for (const { from, to } of conversions) {
-        const result = await this.messageRepository.update(
-          { type: from.length === 1 ? from[0] : In(from) },
-          { type: to },
-        );
-        total += result.affected ?? 0;
-      }
-      if (total > 0) {
-        this.logger.log(`Backfilled ${total} legacy message type(s) to the neutral vocabulary`, {
-          action: 'message_type_backfill',
-        });
-      }
+      await BackfillLegacyMessageTypes1791300000000.backfill(runner);
     } catch (error) {
       // Non-fatal: new rows are already neutral; only historical rows are affected. Surface it so it
       // can be re-run (e.g. via a restart) rather than crashing boot.
@@ -61,6 +41,8 @@ export class MessageTypeBackfillService implements OnApplicationBootstrap {
         error instanceof Error ? error.stack : String(error),
         { action: 'message_type_backfill_failed' },
       );
+    } finally {
+      await runner.release();
     }
   }
 }

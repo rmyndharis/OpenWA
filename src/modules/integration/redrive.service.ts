@@ -1,6 +1,6 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
 import { IngressEvent } from './entities/ingress-event.entity';
 import { IngressEnqueueService } from './ingress-enqueue.service';
@@ -8,6 +8,7 @@ import { IngressJobData } from '../queue/processors/ingress.processor';
 import { KeyedAsyncLock } from './ordering-lock';
 import { INGRESS_DISPATCH_TIMEOUT_MS } from './integration.constants';
 import { createLogger } from '../../common/services/logger.service';
+import { isAllSessionsScope } from '../../core/plugins/plugin-activation';
 
 const REDRIVE_BATCH_SIZE = 100;
 
@@ -59,13 +60,18 @@ export class RedriveService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * `sessionScope` is the instance's CURRENT binding (null or '*' for all sessions). Only rows written under
+   * that binding are replayed or counted: dispatch refuses a delivery whose instance was bound to another
+   * session since, so a row of an earlier binding would be retired here and dead-lettered again by its job.
+   */
   redriveInstance(
     pluginId: string,
     instanceId: string,
-    sessionIdFilter: string | null,
+    sessionScope: string | null,
   ): Promise<{ redriven: number; remaining: number; batchSize: number }> {
     const run = this.lock.run(`redrive:${pluginId}:${instanceId}`, () =>
-      this.redriveBatch(pluginId, instanceId, sessionIdFilter),
+      this.redriveBatch(pluginId, instanceId, sessionScope),
     );
     this.inFlight.add(run);
     const forget = () => void this.inFlight.delete(run);
@@ -76,15 +82,16 @@ export class RedriveService implements OnModuleDestroy {
   private async redriveBatch(
     pluginId: string,
     instanceId: string,
-    sessionIdFilter: string | null,
+    sessionScope: string | null,
   ): Promise<{ redriven: number; remaining: number; batchSize: number }> {
-    const where = {
-      pluginId,
-      instanceId,
-      direction: 'inbound' as const,
-      redriven: false,
-      ...(sessionIdFilter === null ? {} : { sessionId: sessionIdFilter }),
-    };
+    const base = { pluginId, instanceId, direction: 'inbound' as const, redriven: false };
+    // A job of the all-sessions scope carries no session or '*', whichever way it was stored.
+    const where = isAllSessionsScope(sessionScope)
+      ? [
+          { ...base, sessionId: IsNull() },
+          { ...base, sessionId: '*' },
+        ]
+      : { ...base, sessionId: sessionScope as string };
     // Failed replays increment attempts and move behind never-retried rows, preventing one permanent
     // failure from livelocking the bounded window while keeping it redrivable.
     const order = { attempts: 'ASC', createdAt: 'ASC' } as const;

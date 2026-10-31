@@ -33,6 +33,28 @@ function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: 
 const ENCODED_KEY_PREFIX = 'key-';
 
 /**
+ * Thrown by a registry write that had to reach the disk and could not. The change is not applied: the
+ * in-memory entry is put back, so a restart cannot undo what the caller was told had been stored.
+ */
+export class PluginRegistryWriteError extends Error {
+  constructor(cause: unknown) {
+    const code = (cause as NodeJS.ErrnoException | undefined)?.code;
+    super(`The plugin registry could not be written${code ? ` (${code})` : ''}; the change was not applied`);
+    this.name = 'PluginRegistryWriteError';
+  }
+}
+
+/**
+ * Whether a registry write must reach the disk. An operator's change through the plugin API must: one that
+ * cannot be stored is refused. Every other write is best-effort (the entry changes, a disk fault is logged),
+ * because its caller keeps a runtime state that must apply now: the load path, runtime status, and the
+ * integration instance projection, which boot reconciliation rebuilds from the database anyway.
+ */
+export interface RegistryWriteOptions {
+  mustPersist?: boolean;
+}
+
+/**
  * Default per-plugin bound on ctx.storage writes (plugins.storageMaxBytes / PLUGIN_STORAGE_MAX_BYTES
  * overrides). The worker is not a security boundary, but an unbounded storage.set loop would still
  * fill the host disk — this is a robustness quota, not isolation.
@@ -66,6 +88,8 @@ export class PluginStorageService {
   private readonly dataDir: string;
   private readonly registryPath: string;
   private readonly maxPluginStorageBytes: number;
+  /** Bytes in each plugin's encoded key files, once a write or delete has seeded it. See assertStorageQuota. */
+  private readonly storageUsage = new Map<string, number>();
   private registry: Map<string, PluginRegistryEntry> = new Map();
 
   constructor(private readonly configService: ConfigService) {
@@ -108,7 +132,16 @@ export class PluginStorageService {
     }
   }
 
+  /** Best-effort write, for the load path and runtime status, where a disk fault must not fail the caller. */
   private saveRegistry(): void {
+    try {
+      this.writeRegistry();
+    } catch {
+      /* logged by writeRegistry */
+    }
+  }
+
+  private writeRegistry(): void {
     try {
       const dir = path.dirname(this.registryPath);
       if (!fs.existsSync(dir)) {
@@ -128,6 +161,32 @@ export class PluginStorageService {
       this.logger.error('Failed to save plugin registry', String(error), {
         action: 'registry_save_failed',
       });
+      throw error;
+    }
+  }
+
+  /**
+   * Apply a change to an entry and write it. With `mustPersist` a registry that cannot be written puts the entry
+   * back and throws PluginRegistryWriteError; without it the change stays and the write is best-effort.
+   */
+  private commitEntryChange(
+    entry: PluginRegistryEntry,
+    change: Partial<PluginRegistryEntry>,
+    { mustPersist = false }: RegistryWriteOptions = {},
+  ): void {
+    if (!mustPersist) {
+      Object.assign(entry, change, { updatedAt: new Date() });
+      this.saveRegistry();
+      return;
+    }
+    const keys = [...Object.keys(change), 'updatedAt'] as (keyof PluginRegistryEntry)[];
+    const previous = Object.fromEntries(keys.map(key => [key, entry[key]])) as Partial<PluginRegistryEntry>;
+    Object.assign(entry, change, { updatedAt: new Date() });
+    try {
+      this.writeRegistry();
+    } catch (error) {
+      Object.assign(entry, previous);
+      throw new PluginRegistryWriteError(error);
     }
   }
 
@@ -145,9 +204,17 @@ export class PluginStorageService {
     this.saveRegistry();
   }
 
+  /** Throws PluginRegistryWriteError, keeping the entry, when the registry cannot be written. */
   deletePluginEntry(pluginId: string): void {
+    const entry = this.registry.get(pluginId);
+    if (!entry) return;
     this.registry.delete(pluginId);
-    this.saveRegistry();
+    try {
+      this.writeRegistry();
+    } catch (error) {
+      this.registry.set(pluginId, entry);
+      throw new PluginRegistryWriteError(error);
+    }
   }
 
   getAllEntries(): PluginRegistryEntry[] {
@@ -177,14 +244,27 @@ export class PluginStorageService {
    * separate from setPluginStatus: `status` tracks where the runtime is right now and is reset on every
    * load, so writing intent through it would lose it on the next boot. Call this only from the
    * operator-facing enable/disable — never from the shutdown teardown, which disables every running
-   * plugin and would otherwise erase the decision on the way out.
+   * plugin and would otherwise erase the decision on the way out. Throws PluginRegistryWriteError when the
+   * decision cannot be stored.
    */
   setPluginEnabledByOperator(pluginId: string, enabled: boolean): void {
     const entry = this.registry.get(pluginId);
+    if (entry) this.commitEntryChange(entry, { enabledByOperator: enabled }, { mustPersist: true });
+  }
+
+  /**
+   * Empty an entry of what the operator set (config, session activation and per-session config, the enable
+   * decision), keeping the entry. The decision is stored as false: left absent, a lingering ENABLED status would be
+   * adopted as one at the next load. With `mustPersist`, throws PluginRegistryWriteError when it cannot be stored.
+   */
+  clearOperatorSettings(pluginId: string, opts?: RegistryWriteOptions): void {
+    const entry = this.registry.get(pluginId);
     if (entry) {
-      entry.enabledByOperator = enabled;
-      entry.updatedAt = new Date();
-      this.saveRegistry();
+      this.commitEntryChange(
+        entry,
+        { config: {}, activeSessions: undefined, sessionConfig: undefined, enabledByOperator: false },
+        opts,
+      );
     }
   }
 
@@ -197,13 +277,10 @@ export class PluginStorageService {
     return entry?.config ?? null;
   }
 
-  setPluginConfig(pluginId: string, config: Record<string, unknown>): void {
+  /** With `mustPersist`, throws PluginRegistryWriteError when the config cannot be stored. */
+  setPluginConfig(pluginId: string, config: Record<string, unknown>, opts?: RegistryWriteOptions): void {
     const entry = this.registry.get(pluginId);
-    if (entry) {
-      entry.config = config;
-      entry.updatedAt = new Date();
-      this.saveRegistry();
-    }
+    if (entry) this.commitEntryChange(entry, { config }, opts);
   }
 
   getPluginSessions(pluginId: string): string[] | null {
@@ -211,13 +288,10 @@ export class PluginStorageService {
     return entry?.activeSessions ?? null;
   }
 
-  setPluginSessions(pluginId: string, sessions: string[]): void {
+  /** With `mustPersist`, throws PluginRegistryWriteError when the activation cannot be stored. */
+  setPluginSessions(pluginId: string, sessions: string[], opts?: RegistryWriteOptions): void {
     const entry = this.registry.get(pluginId);
-    if (entry) {
-      entry.activeSessions = sessions;
-      entry.updatedAt = new Date();
-      this.saveRegistry();
-    }
+    if (entry) this.commitEntryChange(entry, { activeSessions: sessions }, opts);
   }
 
   getPluginSessionConfig(pluginId: string): Record<string, Record<string, unknown>> | null {
@@ -225,13 +299,14 @@ export class PluginStorageService {
     return entry?.sessionConfig ?? null;
   }
 
-  setPluginSessionConfig(pluginId: string, sessionConfig: Record<string, Record<string, unknown>>): void {
+  /** With `mustPersist`, throws PluginRegistryWriteError when the per-session config cannot be stored. */
+  setPluginSessionConfig(
+    pluginId: string,
+    sessionConfig: Record<string, Record<string, unknown>>,
+    opts?: RegistryWriteOptions,
+  ): void {
     const entry = this.registry.get(pluginId);
-    if (entry) {
-      entry.sessionConfig = sessionConfig;
-      entry.updatedAt = new Date();
-      this.saveRegistry();
-    }
+    if (entry) this.commitEntryChange(entry, { sessionConfig }, opts);
   }
 
   // ============================================================================
@@ -242,7 +317,8 @@ export class PluginStorageService {
    * Remove a plugin's entire data-storage directory (<dataDir>/plugins/<id>). Called on uninstall.
    * Containment-guarded exactly like the package-dir delete in the loader: an id that resolves
    * outside the storage root is refused, so only the named plugin's directory can ever be touched.
-   * Best-effort — a removal failure is logged, never thrown, so the uninstall still completes.
+   * A removal failure is logged and thrown, so the uninstall fails with its registry entry still present,
+   * already emptied of its operator settings.
    */
   deletePluginData(pluginId: string): void {
     const root = path.resolve(this.dataDir, 'plugins');
@@ -256,6 +332,7 @@ export class PluginStorageService {
     }
     try {
       fs.rmSync(dir, { recursive: true, force: true });
+      this.storageUsage.delete(pluginId);
       this.logger.debug(`Deleted plugin storage: ${pluginId}`, { pluginId, action: 'plugin_storage_deleted' });
     } catch (error) {
       this.logger.warn(`Failed to delete plugin storage for ${pluginId}`, {
@@ -263,6 +340,7 @@ export class PluginStorageService {
         action: 'plugin_storage_delete_failed',
         error: error instanceof Error ? error.message : String(error),
       });
+      throw error;
     }
   }
 
@@ -273,17 +351,29 @@ export class PluginStorageService {
    * package files must not eat its quota. The file being overwritten is excluded from the current
    * usage so replacing a large key does not count its bytes twice.
    */
-  private assertStorageQuota(pluginDataDir: string, targetPath: string, incomingBytes: number, pluginId: string): void {
-    let used = 0;
-    for (const entry of fs.readdirSync(pluginDataDir)) {
-      if (!entry.startsWith(ENCODED_KEY_PREFIX) || !entry.endsWith('.json')) continue;
-      const full = path.join(pluginDataDir, entry);
-      if (full === targetPath) continue;
-      try {
-        used += fs.statSync(full).size;
-      } catch {
-        /* vanished between readdir and stat; ignore */
-      }
+  private assertStorageQuota(
+    pluginDataDir: string,
+    targetPath: string,
+    incomingBytes: number,
+    pluginId: string,
+  ): number {
+    let replaced = 0;
+    try {
+      replaced = fs.statSync(targetPath).size;
+    } catch {
+      /* a new key */
+    }
+    // The running total is seeded by one scan and kept in step by set/delete, so a write costs one stat
+    // instead of a read of the whole directory: that read ran synchronously on the host's main thread for
+    // every write and grew with the number of keys the plugin had stored (about 50 ms per write at 20,000).
+    let total = this.storageUsage.get(pluginId) ?? this.scanStorageBytes(pluginDataDir);
+    let used = Math.max(0, total - replaced);
+    if (used + incomingBytes > this.maxPluginStorageBytes) {
+      // Files removed behind the service's back leave the total too high; confirm against the directory
+      // before refusing the write.
+      total = this.scanStorageBytes(pluginDataDir);
+      used = Math.max(0, total - replaced);
+      this.storageUsage.set(pluginId, total);
     }
     if (used + incomingBytes > this.maxPluginStorageBytes) {
       throw new Error(
@@ -292,6 +382,27 @@ export class PluginStorageService {
         } bytes (max ${this.maxPluginStorageBytes}). Delete unused keys or raise PLUGIN_STORAGE_MAX_BYTES.`,
       );
     }
+    return used;
+  }
+
+  /** Bytes held by the plugin's encoded key files, read from the directory. */
+  private scanStorageBytes(pluginDataDir: string): number {
+    let total = 0;
+    for (const entry of fs.readdirSync(pluginDataDir)) {
+      if (!entry.startsWith(ENCODED_KEY_PREFIX) || !entry.endsWith('.json')) continue;
+      try {
+        total += fs.statSync(path.join(pluginDataDir, entry)).size;
+      } catch {
+        /* vanished between readdir and stat; ignore */
+      }
+    }
+    return total;
+  }
+
+  /** Take a removed key's bytes out of the running total, if one has been seeded. */
+  private releaseStorageBytes(pluginId: string, bytes: number): void {
+    const total = this.storageUsage.get(pluginId);
+    if (total !== undefined) this.storageUsage.set(pluginId, Math.max(0, total - bytes));
   }
 
   createPluginStorage(pluginId: string): PluginStorage {
@@ -321,6 +432,8 @@ export class PluginStorageService {
       // These are package-owned files when package code and state share a directory. They must never
       // be treated as legacy plugin storage (or get/delete/set migration can read or remove code).
       if (key === 'manifest' || key === 'package') return null;
+      // A canonical encoded filename belongs to the key it decodes to, not to a legacy key spelled like it.
+      if (decodeStorageFileName(key) !== null) return null;
       const fileName = `${key}.json`;
       return isPathWithin(pluginDataDir, fileName) ? path.join(pluginDataDir, fileName) : null;
     };
@@ -354,12 +467,14 @@ export class PluginStorageService {
         }
         try {
           const payload = JSON.stringify(value, null, 2);
-          this.assertStorageQuota(pluginDataDir, filePath, Buffer.byteLength(payload, 'utf8'), pluginId);
+          const bytes = Buffer.byteLength(payload, 'utf8');
+          const usedByOtherKeys = this.assertStorageQuota(pluginDataDir, filePath, bytes, pluginId);
           // 0o600 (owner-only): a plugin-persisted secret must not land in a group/other-readable file.
           // The mode on the temp write carries through the rename; chmod is a backstop if the target
           // pre-existed (writeFileSync mode only applies on create). Mirrors saveRegistry's hardening.
           atomicWriteFileSync(filePath, payload, { mode: 0o600 });
           fs.chmodSync(filePath, 0o600);
+          this.storageUsage.set(pluginId, usedByOtherKeys + bytes);
           // Keep any legacy file in place. Encoded-first reads and de-duplicated lists ensure it cannot
           // shadow this write, while avoiding an unlink outside the service-owned key-* namespace.
           return Promise.resolve();
@@ -379,7 +494,10 @@ export class PluginStorageService {
           const candidates = legacyPath && legacyPath !== filePath ? [filePath, legacyPath] : [filePath];
           for (const candidate of candidates) {
             if (fs.existsSync(candidate)) {
+              // Only the encoded file counts toward the quota; a legacy file is never in the total.
+              const bytes = candidate === filePath ? fs.statSync(candidate).size : 0;
               fs.unlinkSync(candidate);
+              this.releaseStorageBytes(pluginId, bytes);
             }
           }
           return Promise.resolve();
@@ -403,7 +521,13 @@ export class PluginStorageService {
               files
                 .filter(f => f.endsWith('.json'))
                 .map(f => f.slice(0, -'.json'.length))
-                .map(stem => decodeStorageFileName(stem) ?? (!isPackageDir && resolveLegacyKeyPath(stem) ? stem : null))
+                .map(stem => {
+                  // A listed key must be one get/set/delete accept, so a canonical name that decodes to an
+                  // unsafe or empty key is not listed (and is not a legacy key either, see resolveLegacyKeyPath).
+                  const decoded = decodeStorageFileName(stem);
+                  if (decoded !== null) return isSafeStorageKey(decoded) ? decoded : null;
+                  return !isPackageDir && resolveLegacyKeyPath(stem) ? stem : null;
+                })
                 .filter((k): k is string => k !== null),
             ),
           );

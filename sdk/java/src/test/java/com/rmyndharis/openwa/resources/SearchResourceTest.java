@@ -1,6 +1,7 @@
 package com.rmyndharis.openwa.resources;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -11,6 +12,7 @@ import com.rmyndharis.openwa.OpenWAClient;
 import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.model.MessageDirection;
 import com.rmyndharis.openwa.model.SearchHit;
+import com.rmyndharis.openwa.model.SearchMatch;
 import com.rmyndharis.openwa.model.SearchQuery;
 import com.rmyndharis.openwa.model.SearchResults;
 import com.rmyndharis.openwa.support.MockTransport;
@@ -46,6 +48,26 @@ class SearchResourceTest {
             SearchQuery.builder().q("hi").direction(MessageDirection.INCOMING).build());
         // The enum must serialize via its @SerializedName, not the constant name.
         assertTrue(tx.lastRequest().url().contains("direction=incoming"));
+    }
+
+    @Test
+    void searchKeepsTheConstructorWithoutMatch() {
+        tx.respond(200, RESULTS);
+        SearchQuery query = new SearchQuery(
+            "hello", "s1", "c1@c.us", MessageDirection.INCOMING, "text", "6281@c.us", 1L, 2L, 10, 0);
+        assertNull(query.match());
+        assertEquals("s1", query.sessionId());
+        client.search.search(query);
+        assertTrue(tx.lastRequest().url().contains("q=hello"));
+        assertTrue(tx.lastRequest().url().contains("sessionId=s1"));
+        assertFalse(tx.lastRequest().url().contains("match="));
+    }
+
+    @Test
+    void searchSerializesMatchAsLowercaseWireValue() {
+        tx.respond(200, RESULTS);
+        client.search.search(SearchQuery.builder().q("voic").match(SearchMatch.CONTAINS).build());
+        assertTrue(tx.lastRequest().url().contains("match=contains"));
     }
 
     @Test

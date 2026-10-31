@@ -117,17 +117,22 @@ describe('Test lane partition', () => {
    * matches nothing and still exits 0, and a new spec left off the list runs nowhere. Diff each
    * workflow's list against the files on disk.
    */
+  /** Every `*.spec.ts` path the workflow's `test-postgres` job names on a run line. */
+  const postgresJobSpecs = (file: string): string[] => {
+    const workflow = yaml.load(readFileSync(join(repoRoot, '.github', 'workflows', file), 'utf8')) as {
+      jobs?: Record<string, { steps?: { run?: string }[] }>;
+    };
+    return (workflow.jobs?.['test-postgres']?.steps ?? [])
+      .flatMap(step => (step.run ?? '').split(/\s+/))
+      .filter(token => token.endsWith('.spec.ts'));
+  };
+
   it.each(['ci.yml', 'release.yml'])('runs every *.pg.spec.ts in the %s test-postgres job', file => {
     const isPgSpec = (path: string): boolean => path.endsWith('.pg.spec.ts');
     const onDisk = (readdirSync(join(repoRoot, 'src'), { recursive: true }) as string[])
       .filter(isPgSpec)
       .map(path => `src/${path.split('\\').join('/')}`);
-    const workflow = yaml.load(readFileSync(join(repoRoot, '.github', 'workflows', file), 'utf8')) as {
-      jobs?: Record<string, { steps?: { run?: string }[] }>;
-    };
-    const named = (workflow.jobs?.['test-postgres']?.steps ?? [])
-      .flatMap(step => (step.run ?? '').split(/\s+/))
-      .filter(isPgSpec);
+    const named = postgresJobSpecs(file).filter(isPgSpec);
 
     // Vacuity guard: a scan or a parse that found nothing would pass the diff below.
     expect(onDisk.length).toBeGreaterThanOrEqual(5);
@@ -137,6 +142,33 @@ describe('Test lane partition', () => {
       neverRun: onDisk.filter(path => !named.includes(path)).sort(),
       namedButAbsent: named.filter(path => !onDisk.includes(path)).sort(),
     }).toEqual({ neverRun: [], namedButAbsent: [] });
+  });
+
+  /**
+   * A spec that picks its dialect from DATABASE_TYPE is not a `*.pg.spec.ts`, so the scan above never
+   * sees it, yet its PostgreSQL half runs only in this job. Dropping it from both workflows at once
+   * leaves release-gate-parity green (the two still agree) and the scenarios silently SQLite-only. A
+   * hand-kept list cannot see a spec nobody added to it, so the list is every plain spec on disk that
+   * compares DATABASE_TYPE with postgres (`===`, `!==`, or the loose forms). A spec that reads the variable
+   * into another name first is not seen; compare it in place.
+   */
+  const dialectSwitchedSpecs = (): string[] =>
+    (readdirSync(join(repoRoot, 'src'), { recursive: true }) as string[])
+      .map(path => `src/${path.split('\\').join('/')}`)
+      .filter(path => path.endsWith('.spec.ts') && !path.endsWith('.pg.spec.ts'))
+      .filter(path => /DATABASE_TYPE\s*[!=]==?\s*['"]postgres['"]/.test(readFileSync(join(repoRoot, path), 'utf8')))
+      .sort();
+
+  it.each(['ci.yml', 'release.yml'])('runs the dialect-switched specs in the %s test-postgres job', file => {
+    const onDisk = dialectSwitchedSpecs();
+    const named = postgresJobSpecs(file).filter(path => !path.endsWith('.pg.spec.ts'));
+
+    // Vacuity guard: the scan must find the twelve specs that switch today.
+    expect(onDisk.length).toBeGreaterThanOrEqual(12);
+    expect({
+      neverRun: onDisk.filter(path => !named.includes(path)),
+      unlisted: named.filter(path => !onDisk.includes(path)).sort(),
+    }).toEqual({ neverRun: [], unlisted: [] });
   });
 
   it('names suites that exist on disk', () => {

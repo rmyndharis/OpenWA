@@ -48,7 +48,7 @@ returns a `SearchResults`:
 
 ```ts
 ctx.registerSearchProvider(async (query) => {
-  // query: SearchQuery, { q, sessionIds?, sessionId?, chatId?, direction?, type?, from?, dateFrom?, dateTo?, limit?, offset? }
+  // query: SearchQuery, { q, match?, sessionIds?, sessionId?, chatId?, direction?, type?, from?, dateFrom?, dateTo?, limit?, offset? }
   // Run your backend's query here (e.g. a Meilisearch /search call).
   return {
     hits: [...],   // SearchHit[] — see below
@@ -58,6 +58,10 @@ ctx.registerSearchProvider(async (query) => {
   };
 });
 ```
+
+`match` is `'word'` (also when absent) or `'contains'` (any part of a word, ignoring case and accents);
+treat it as your backend allows. `SEARCH_CONTAINS_ENABLED` only gates the built-in provider's trigram
+index, so a plugin receives `contains` whatever that setting says.
 
 A plugin may register **one** search handler (calling `registerSearchProvider` again replaces it; the
 host is notified once). If `onEnable` throws after registering, the host cleans up (the provider is
@@ -89,7 +93,7 @@ text (escape-then-highlight), never as HTML. Do not inject HTML.
 ## 27.3 Indexing via the `message:persisted` hook
 
 The core fires `message:persisted` for every live message (outbound on send, inbound on receive, and again
-when a stored message is revoked) — never for history backfill. Register a handler to keep your index in
+when a stored message is edited or revoked) — never for history backfill. Register a handler to keep your index in
 sync:
 
 ```ts
@@ -110,6 +114,11 @@ and treat every emission as an upsert, and your index always converges to the fi
 stored row and emits `message:persisted` again with the same `id`, an empty `body`, `type: 'revoked'` and
 null `metadata`. An upsert keyed by `id` therefore drops the deleted content from your index; do not count
 the emission as a new message.
+
+**An edit re-emits the row too.** When an edit changes a stored message's text (an engine edit, or
+`POST /messages/edit`), the core emits `message:persisted` again with the same `id`, the new `body` and
+`metadata.edited: true`. An edit that repeats the stored text, or names a message of another chat, emits
+nothing. Upsert by `id` as for every other emission.
 
 One race remains visible by design: when the engine's own-send echo wins, the redundant PENDING row is
 merged into the echo's row and then dropped. The core emits `message:persisted` for the surviving row

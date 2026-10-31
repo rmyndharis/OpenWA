@@ -63,7 +63,9 @@ export function groupTools(group: GroupService): AnyToolDescriptor[] {
     }),
     defineTool({
       name: 'GroupCreate',
-      description: 'Create a new WhatsApp group with a name and initial participants. Requires OPERATOR role.',
+      description:
+        'Create a new WhatsApp group with a name and initial participants. ' +
+        'Requires the Baileys engine; whatsapp-web.js answers 501 and a retry cannot succeed. Requires OPERATOR role.',
       tier: 'write',
       requiredRole: ApiKeyRole.OPERATOR,
       sessionScoped: true,

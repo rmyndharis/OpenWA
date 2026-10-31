@@ -1,6 +1,6 @@
 {
   "name": "openwa",
-  "version": "0.25.0",
+  "version": "0.27.0",
   "description": "Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API for WhatsApp",
   "author": "Yudhi Armyndharis & OpenWA Contributors",
   "private": true,
@@ -41,8 +41,8 @@
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "lint:fix": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
-    "test:scripts": "node --test scripts/proxy-addr.spec.js scripts/music-metadata.spec.js scripts/postinstall.spec.js scripts/patch-wwebjs-newsletter-preview.spec.js scripts/patch-wwebjs-status.spec.js scripts/patch-wwebjs-ready-sync.spec.js scripts/patch-wwebjs-participant-arity.spec.js scripts/patch-wwebjs-block.spec.js scripts/patch-wwebjs-group-description.spec.js scripts/patch-wwebjs-media-id.spec.js scripts/patch-wwebjs-send-error.spec.js scripts/patch-baileys-appstate.spec.js scripts/patch-baileys-newsletter-create.spec.js scripts/patch-baileys-pairing.spec.js scripts/baileys-pairing.integration.spec.mjs scripts/dockerfile-patchers.spec.js scripts/smoke-test-docker-proxy.spec.js scripts/check-upstream-surface.spec.mjs scripts/check-sdk-docs.spec.mjs scripts/check-audit.spec.mjs scripts/check-contract-shapes.spec.mjs scripts/check-sdk-coverage.spec.mjs scripts/cli-entrypoint-guard.spec.mjs",
-    "test:docs": "jest src/common/changelog-sections.spec.ts src/common/ci-privilege-gate.spec.ts src/common/docs-ci-jobs.spec.ts src/common/docs-coverage-policy.spec.ts src/common/docs-metrics-list.spec.ts src/common/docs-next-version.spec.ts src/common/docs-sdk-rate-limit.spec.ts src/common/openapi/docs-06-contract.spec.ts src/common/test-lane-partition.spec.ts src/config/docs-env-example.spec.ts src/config/openapi-contract.spec.ts src/config/openapi-export-pins.spec.ts src/config/wa-web-version-example-pin.spec.ts src/engine/docs-29-counts.spec.ts src/engine/docs-27-backfill-engine.spec.ts src/engine/engine-inventory-parity.spec.ts src/engine/engine-parity.spec.ts src/engine/inventory-mapping-direction.spec.ts src/engine/adapters/baileys-voice-waveform.spec.ts src/engine/adapters/wwebjs-newsletter-preview.spec.ts src/modules/audit/audit-coverage.spec.ts src/modules/auth/global-route-fence-coverage.spec.ts src/modules/auth/query-session-scope-coverage.spec.ts src/modules/docker/compose-network.spec.ts src/modules/queue/bull-board-mount-coverage.spec.ts src/common/release-gate-parity.spec.ts src/database/migrations/__tests__/migration-drift.spec.ts src/common/docs-governance.spec.ts --testPathIgnorePatterns=/node_modules/",
+    "test:scripts": "node --test scripts/proxy-addr.spec.js scripts/music-metadata.spec.js scripts/postinstall.spec.js scripts/patch-write-failure.spec.js scripts/patch-wwebjs-newsletter-preview.spec.js scripts/patch-wwebjs-status.spec.js scripts/patch-wwebjs-ready-sync.spec.js scripts/patch-wwebjs-participant-arity.spec.js scripts/patch-wwebjs-block.spec.js scripts/patch-wwebjs-group-description.spec.js scripts/patch-wwebjs-media-id.spec.js scripts/patch-wwebjs-send-error.spec.js scripts/patch-wwebjs-puppeteer.spec.js scripts/patch-baileys-appstate.spec.js scripts/patch-baileys-newsletter-create.spec.js scripts/patch-baileys-pairing.spec.js scripts/baileys-pairing.integration.spec.mjs scripts/dockerfile-patchers.spec.js scripts/check-dockerignore.spec.mjs scripts/smoke-test-docker-proxy.spec.js scripts/check-upstream-surface.spec.mjs scripts/check-sdk-docs.spec.mjs scripts/check-audit.spec.mjs scripts/check-contract-shapes.spec.mjs scripts/check-sdk-coverage.spec.mjs scripts/cli-entrypoint-guard.spec.mjs scripts/export-openapi.spec.js",
+    "test:docs": "jest src/common/changelog-sections.spec.ts src/common/ci-privilege-gate.spec.ts src/common/docs-ci-jobs.spec.ts src/common/docs-coverage-policy.spec.ts src/common/docs-metrics-list.spec.ts src/common/docs-migration-repair-advice.spec.ts src/common/docs-rollback-deleted-chats.spec.ts src/common/docs-dependabot-excerpt.spec.ts src/common/docs-failed-migration-revert.spec.ts src/common/docs-next-hazard-rows.spec.ts src/common/docs-next-version.spec.ts src/common/docs-roadmap-released-range.spec.ts src/common/docs-sdk-rate-limit.spec.ts src/common/sdk-503-not-sent-docs.spec.ts src/common/sdk-docs-server-contract.spec.ts src/common/openapi/docs-06-contract.spec.ts src/common/openapi/docs-06-chat-id-wording.spec.ts src/common/openapi/docs-06-error-statuses.spec.ts src/common/test-lane-partition.spec.ts src/config/docs-env-example.spec.ts src/config/openapi-contract.spec.ts src/config/openapi-export-pins.spec.ts src/config/wa-web-version-example-pin.spec.ts src/engine/docs-29-counts.spec.ts src/engine/docs-27-backfill-engine.spec.ts src/engine/engine-inventory-parity.spec.ts src/engine/engine-parity.spec.ts src/engine/inventory-mapping-direction.spec.ts src/engine/adapters/baileys-voice-waveform.spec.ts src/engine/adapters/wwebjs-newsletter-preview.spec.ts src/modules/audit/audit-coverage.spec.ts src/modules/auth/global-route-fence-coverage.spec.ts src/modules/auth/query-session-scope-coverage.spec.ts src/modules/docker/compose-network.spec.ts src/modules/queue/bull-board-mount-coverage.spec.ts src/common/release-gate-parity.spec.ts src/database/migrations/__tests__/migration-drift.spec.ts src/common/docs-governance.spec.ts --testPathIgnorePatterns=/node_modules/",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
@@ -68,39 +68,38 @@
     "migration:show:main:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source-main.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1149.0",
-    "@bull-board/api": "^9.10.4",
-    "@bull-board/express": "^9.10.4",
-    "@bull-board/nestjs": "^9.10.4",
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@aws-sdk/client-s3": "^3.1156.0",
+    "@bull-board/api": "^9.10.5",
+    "@bull-board/express": "^9.10.5",
+    "@bull-board/nestjs": "^9.10.5",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@nestjs/bullmq": "^11.0.5",
-    "@nestjs/common": "^11.2.7",
+    "@nestjs/common": "^11.2.8",
     "@nestjs/config": "^4.0.2",
-    "@nestjs/core": "^11.2.7",
-    "@nestjs/platform-express": "^11.2.7",
-    "@nestjs/platform-socket.io": "^11.2.7",
+    "@nestjs/core": "^11.2.8",
+    "@nestjs/platform-express": "^11.2.8",
+    "@nestjs/platform-socket.io": "^11.2.8",
     "@nestjs/serve-static": "^5.0.5",
     "@nestjs/swagger": "^11.4.7",
     "@nestjs/throttler": "^6.7.1",
     "@nestjs/typeorm": "^11.0.3",
-    "@nestjs/websockets": "^11.2.7",
+    "@nestjs/websockets": "^11.2.8",
     "@socket.io/redis-adapter": "^8.3.0",
     "@whiskeysockets/baileys": "7.0.0-rc14",
     "adm-zip": "^0.6.1",
-    "archiver": "^8.0.0",
     "audio-decode": "^2.2.3",
     "better-sqlite3": "^13.0.3",
-    "bullmq": "^6.3.13",
+    "bullmq": "^6.4.2",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "dockerode": "^5.0.1",
-    "dotenv": "^18.0.7",
+    "dotenv": "^18.0.9",
     "express": "^5.3.0",
     "helmet": "^8.3.0",
     "https-proxy-agent": "^9.1.0",
     "ioredis": "^6.0.0",
     "pg": "^8.23.1",
-    "puppeteer": "24.38.0",
+    "puppeteer": "25.16.0",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
@@ -110,7 +109,7 @@
     "socks-proxy-agent": "^10.1.0",
     "tar-stream": "3.2.0",
     "typeorm": "^1.1.2",
-    "undici": "^8.11.2",
+    "undici": "^8.12.3",
     "whatsapp-web.js": "1.34.7",
     "zod": "^4.6.7"
   },
@@ -118,8 +117,7 @@
     "@eslint/js": "^10.0.1",
     "@nestjs/cli": "^11.0.24",
     "@nestjs/schematics": "^11.0.0",
-    "@nestjs/testing": "^11.2.7",
-    "@types/archiver": "^8.0.0",
+    "@nestjs/testing": "^11.2.8",
     "@types/dockerode": "^4.0.2",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
@@ -130,18 +128,18 @@
     "@types/supertest": "^7.2.1",
     "@types/tar-stream": "^3.1.4",
     "concurrently": "^10.0.6",
-    "eslint": "^10.12.0",
+    "eslint": "^10.13.0",
     "eslint-config-prettier": "^10.0.1",
-    "eslint-plugin-prettier": "^5.5.6",
+    "eslint-plugin-prettier": "^5.5.7",
     "globals": "^17.13.0",
     "jest": "^30.5.2",
     "prettier": "^3.9.10",
     "supertest": "^7.3.1",
-    "ts-jest": "^29.4.14",
+    "ts-jest": "^29.4.15",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.71.1"
+    "typescript-eslint": "^8.72.0"
   },
   "jest": {
     "moduleFileExtensions": [
@@ -159,9 +157,19 @@
       "src/common/docs-governance\\.spec\\.ts$",
       "src/common/docs-coverage-policy\\.spec\\.ts$",
       "src/common/docs-metrics-list\\.spec\\.ts$",
+      "src/common/docs-migration-repair-advice\\.spec\\.ts$",
+      "src/common/docs-rollback-deleted-chats\\.spec\\.ts$",
+      "src/common/docs-dependabot-excerpt\\.spec\\.ts$",
+      "src/common/docs-failed-migration-revert\\.spec\\.ts$",
+      "src/common/docs-next-hazard-rows\\.spec\\.ts$",
       "src/common/docs-next-version\\.spec\\.ts$",
+      "src/common/docs-roadmap-released-range\\.spec\\.ts$",
       "src/common/docs-sdk-rate-limit\\.spec\\.ts$",
+      "src/common/sdk-503-not-sent-docs\\.spec\\.ts$",
+      "src/common/sdk-docs-server-contract\\.spec\\.ts$",
       "src/common/openapi/docs-06-contract\\.spec\\.ts$",
+      "src/common/openapi/docs-06-chat-id-wording\\.spec\\.ts$",
+      "src/common/openapi/docs-06-error-statuses\\.spec\\.ts$",
       "src/common/test-lane-partition\\.spec\\.ts$",
       "src/config/docs-env-example\\.spec\\.ts$",
       "src/config/openapi-contract\\.spec\\.ts$",
@@ -198,7 +206,6 @@
     "moduleNameMapper": {
       "^@whiskeysockets/baileys$": "<rootDir>/../test/__mocks__/@whiskeysockets/baileys.ts",
       "^@whiskeysockets/baileys/(.*)$": "<rootDir>/../test/__mocks__/@whiskeysockets/baileys.ts",
-      "^archiver$": "<rootDir>/../test/__mocks__/archiver.ts",
       "^https-proxy-agent$": "<rootDir>/../test/__mocks__/https-proxy-agent.ts",
       "^puppeteer$": "<rootDir>/../test/__mocks__/puppeteer.ts",
       "^socks-proxy-agent$": "<rootDir>/../test/__mocks__/socks-proxy-agent.ts"
@@ -209,268 +216,268 @@
     "coverageDirectory": "../coverage",
     "coverageThreshold": {
       "global": {
-        "branches": 54,
-        "functions": 68,
-        "lines": 60,
-        "statements": 61
+        "branches": 66,
+        "functions": 80,
+        "lines": 77,
+        "statements": 77
       },
       "./src/common/cache/": {
-        "branches": 34,
-        "functions": 33,
-        "lines": 42,
-        "statements": 42
+        "branches": 72,
+        "functions": 76,
+        "lines": 95,
+        "statements": 91
       },
       "./src/common/security/": {
-        "branches": 85,
+        "branches": 87,
         "functions": 95,
         "lines": 93,
         "statements": 92
       },
       "./src/common/services/": {
-        "branches": 82,
-        "functions": 91,
-        "lines": 90,
-        "statements": 88
+        "branches": 92,
+        "functions": 93,
+        "lines": 94,
+        "statements": 94
       },
       "./src/common/storage/": {
-        "branches": 75,
-        "functions": 85,
-        "lines": 84,
-        "statements": 80
+        "branches": 83,
+        "functions": 89,
+        "lines": 91,
+        "statements": 88
       },
       "./src/common/utils/": {
-        "branches": 87,
+        "branches": 90,
         "functions": 92,
-        "lines": 92,
-        "statements": 92
+        "lines": 93,
+        "statements": 93
       },
       "./src/config/": {
-        "branches": 85,
-        "functions": 92,
-        "lines": 91,
-        "statements": 91
-      },
-      "./src/core/agent-tools/": {
-        "branches": 83,
-        "functions": 86,
-        "lines": 83,
-        "statements": 83
-      },
-      "./src/core/hooks/": {
-        "branches": 84,
-        "functions": 71,
-        "lines": 86,
-        "statements": 85
-      },
-      "./src/core/plugins/": {
-        "branches": 73,
-        "functions": 76,
-        "lines": 82,
-        "statements": 81
-      },
-      "./src/database/": {
-        "branches": 69,
-        "functions": 69,
-        "lines": 72,
-        "statements": 72
-      },
-      "./src/engine/adapters/": {
-        "branches": 78,
-        "functions": 85,
-        "lines": 86,
-        "statements": 86
-      },
-      "./src/engine/identity/": {
-        "branches": 85,
-        "functions": 86,
+        "branches": 88,
+        "functions": 94,
         "lines": 94,
         "statements": 93
       },
+      "./src/core/agent-tools/": {
+        "branches": 88,
+        "functions": 86,
+        "lines": 91,
+        "statements": 91
+      },
+      "./src/core/hooks/": {
+        "branches": 86,
+        "functions": 88,
+        "lines": 91,
+        "statements": 90
+      },
+      "./src/core/plugins/": {
+        "branches": 80,
+        "functions": 81,
+        "lines": 85,
+        "statements": 84
+      },
+      "./src/database/": {
+        "branches": 73,
+        "functions": 81,
+        "lines": 82,
+        "statements": 80
+      },
+      "./src/engine/adapters/": {
+        "branches": 84,
+        "functions": 89,
+        "lines": 91,
+        "statements": 90
+      },
+      "./src/engine/identity/": {
+        "branches": 88,
+        "functions": 93,
+        "lines": 95,
+        "statements": 93
+      },
       "./src/modules/audit/": {
-        "branches": 59,
-        "functions": 45,
-        "lines": 73,
-        "statements": 70
+        "branches": 75,
+        "functions": 63,
+        "lines": 85,
+        "statements": 85
       },
       "./src/modules/auth/": {
-        "branches": 76,
-        "functions": 85,
+        "branches": 83,
+        "functions": 92,
+        "lines": 92,
+        "statements": 91
+      },
+      "./src/modules/automation/": {
+        "branches": 78,
+        "functions": 93,
+        "lines": 93,
+        "statements": 92
+      },
+      "./src/modules/chat-media/": {
+        "branches": 84,
+        "functions": 87,
+        "lines": 95,
+        "statements": 93
+      },
+      "./src/modules/contact/": {
+        "branches": 83,
+        "functions": 92,
+        "lines": 93,
+        "statements": 93
+      },
+      "./src/modules/docker/": {
+        "branches": 87,
+        "functions": 93,
+        "lines": 94,
+        "statements": 93
+      },
+      "./src/modules/events/": {
+        "branches": 84,
+        "functions": 94,
+        "lines": 93,
+        "statements": 93
+      },
+      "./src/modules/group/": {
+        "branches": 80,
+        "functions": 70,
         "lines": 86,
         "statements": 86
       },
-      "./src/modules/automation/": {
-        "branches": 67,
-        "functions": 86,
-        "lines": 83,
-        "statements": 79
-      },
-      "./src/modules/chat-media/": {
-        "branches": 75,
-        "functions": 72,
-        "lines": 84,
-        "statements": 84
-      },
-      "./src/modules/contact/": {
-        "branches": 82,
-        "functions": 92,
-        "lines": 89,
-        "statements": 88
-      },
-      "./src/modules/docker/": {
-        "branches": 84,
-        "functions": 93,
-        "lines": 92,
-        "statements": 92
-      },
-      "./src/modules/events/": {
-        "branches": 72,
-        "functions": 84,
-        "lines": 84,
-        "statements": 82
-      },
-      "./src/modules/group/": {
-        "branches": 67,
-        "functions": 65,
-        "lines": 79,
-        "statements": 79
-      },
       "./src/modules/infra/": {
-        "branches": 75,
-        "functions": 76,
-        "lines": 89,
-        "statements": 88
+        "branches": 84,
+        "functions": 83,
+        "lines": 92,
+        "statements": 91
       },
       "./src/modules/integration/": {
-        "branches": 76,
-        "functions": 83,
-        "lines": 90,
-        "statements": 89
+        "branches": 80,
+        "functions": 87,
+        "lines": 91,
+        "statements": 90
       },
       "./src/modules/mcp/": {
         "branches": 62,
-        "functions": 76,
+        "functions": 80,
         "lines": 78,
         "statements": 78
       },
       "./src/modules/media/": {
-        "branches": 69,
-        "functions": 86,
-        "lines": 89,
-        "statements": 88
+        "branches": 82,
+        "functions": 92,
+        "lines": 93,
+        "statements": 92
       },
       "./src/modules/message/": {
-        "branches": 75,
-        "functions": 66,
-        "lines": 86,
-        "statements": 85
+        "branches": 82,
+        "functions": 80,
+        "lines": 90,
+        "statements": 90
       },
       "./src/modules/metrics/": {
-        "branches": 64,
-        "functions": 58,
-        "lines": 70,
-        "statements": 67
+        "branches": 82,
+        "functions": 92,
+        "lines": 91,
+        "statements": 92
       },
       "./src/modules/plugins/": {
-        "branches": 69,
-        "functions": 64,
-        "lines": 77,
-        "statements": 76
+        "branches": 76,
+        "functions": 82,
+        "lines": 86,
+        "statements": 86
       },
       "./src/modules/queue/": {
-        "branches": 74,
-        "functions": 81,
+        "branches": 76,
+        "functions": 88,
         "lines": 95,
         "statements": 95
       },
       "./src/modules/search/": {
-        "branches": 69,
-        "functions": 86,
-        "lines": 78,
-        "statements": 78
-      },
-      "./src/modules/session/": {
-        "branches": 75,
-        "functions": 79,
-        "lines": 88,
-        "statements": 87
-      },
-      "./src/modules/stats/": {
-        "branches": 67,
-        "functions": 63,
-        "lines": 78,
-        "statements": 76
-      },
-      "./src/modules/status-store/": {
-        "branches": 79,
-        "functions": 79,
-        "lines": 92,
-        "statements": 91
-      },
-      "./src/modules/status/": {
-        "branches": 70,
-        "functions": 60,
-        "lines": 83,
-        "statements": 82
-      },
-      "./src/modules/template/": {
-        "branches": 76,
-        "functions": 87,
+        "branches": 77,
+        "functions": 90,
         "lines": 91,
         "statements": 89
       },
-      "./src/modules/webhook/": {
-        "branches": 72,
+      "./src/modules/session/": {
+        "branches": 84,
         "functions": 89,
-        "lines": 90,
-        "statements": 87
+        "lines": 93,
+        "statements": 91
+      },
+      "./src/modules/stats/": {
+        "branches": 78,
+        "functions": 84,
+        "lines": 92,
+        "statements": 92
+      },
+      "./src/modules/status-store/": {
+        "branches": 84,
+        "functions": 80,
+        "lines": 93,
+        "statements": 92
+      },
+      "./src/modules/status/": {
+        "branches": 75,
+        "functions": 61,
+        "lines": 86,
+        "statements": 86
+      },
+      "./src/modules/template/": {
+        "branches": 77,
+        "functions": 88,
+        "lines": 95,
+        "statements": 94
+      },
+      "./src/modules/webhook/": {
+        "branches": 79,
+        "functions": 91,
+        "lines": 92,
+        "statements": 91
       },
       "./src/modules/call/": {
-        "branches": 62,
-        "functions": 57,
-        "lines": 82,
-        "statements": 79
+        "branches": 66,
+        "functions": 77,
+        "lines": 95,
+        "statements": 95
       },
       "./src/modules/catalog/": {
-        "branches": 68,
-        "functions": 88,
-        "lines": 89,
-        "statements": 87
+        "branches": 80,
+        "functions": 90,
+        "lines": 95,
+        "statements": 95
       },
       "./src/modules/channel/": {
-        "branches": 73,
-        "functions": 41,
-        "lines": 76,
-        "statements": 75
+        "branches": 74,
+        "functions": 62,
+        "lines": 85,
+        "statements": 85
       },
       "./src/modules/health/": {
         "branches": 77,
-        "functions": 66,
-        "lines": 90,
-        "statements": 87
+        "functions": 81,
+        "lines": 95,
+        "statements": 95
       },
       "./src/modules/label/": {
-        "branches": 39,
-        "functions": 42,
-        "lines": 45,
-        "statements": 44
-      },
-      "./src/modules/profile/": {
         "branches": 78,
-        "functions": 84,
-        "lines": 88,
-        "statements": 85
-      },
-      "./src/modules/settings/": {
-        "branches": 50,
-        "functions": 0,
-        "lines": 85,
+        "functions": 59,
+        "lines": 80,
         "statements": 81
       },
+      "./src/modules/profile/": {
+        "branches": 68,
+        "functions": 85,
+        "lines": 95,
+        "statements": 95
+      },
+      "./src/modules/settings/": {
+        "branches": 62,
+        "functions": 50,
+        "lines": 94,
+        "statements": 95
+      },
       "./src/modules/takeover/": {
-        "branches": 74,
-        "functions": 70,
-        "lines": 85,
-        "statements": 83
+        "branches": 76,
+        "functions": 78,
+        "lines": 93,
+        "statements": 93
       }
     },
     "testEnvironment": "node",
@@ -483,9 +490,19 @@
       "src/common/docs-governance\\.spec\\.ts$",
       "src/common/docs-coverage-policy\\.spec\\.ts$",
       "src/common/docs-metrics-list\\.spec\\.ts$",
+      "src/common/docs-migration-repair-advice\\.spec\\.ts$",
+      "src/common/docs-rollback-deleted-chats\\.spec\\.ts$",
+      "src/common/docs-dependabot-excerpt\\.spec\\.ts$",
+      "src/common/docs-failed-migration-revert\\.spec\\.ts$",
+      "src/common/docs-next-hazard-rows\\.spec\\.ts$",
       "src/common/docs-next-version\\.spec\\.ts$",
+      "src/common/docs-roadmap-released-range\\.spec\\.ts$",
       "src/common/docs-sdk-rate-limit\\.spec\\.ts$",
+      "src/common/sdk-503-not-sent-docs\\.spec\\.ts$",
+      "src/common/sdk-docs-server-contract\\.spec\\.ts$",
       "src/common/openapi/docs-06-contract\\.spec\\.ts$",
+      "src/common/openapi/docs-06-chat-id-wording\\.spec\\.ts$",
+      "src/common/openapi/docs-06-error-statuses\\.spec\\.ts$",
       "src/common/test-lane-partition\\.spec\\.ts$",
       "src/config/docs-env-example\\.spec\\.ts$",
       "src/config/openapi-contract\\.spec\\.ts$",
@@ -507,7 +524,6 @@
     ]
   },
   "overrides": {
-    "@puppeteer/browsers": "3.2.1",
     "shell-quote": "^1.11.0",
     "minimatch@3": {
       "brace-expansion": "^1.1.21"
@@ -524,11 +540,12 @@
     "ip-address": "^10.7.1",
     "js-yaml": "^5.4.1",
     "fast-uri": "^3.1.8",
-    "multer": "2.4.0",
+    "multer": "2.5.0",
     "better-sqlite3": "$better-sqlite3",
     "socket.io": "$socket.io",
     "typeorm": {
       "ioredis": "$ioredis"
-    }
+    },
+    "puppeteer": "$puppeteer"
   }
 }

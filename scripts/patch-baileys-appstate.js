@@ -26,6 +26,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_BAILEYS = path.join(__dirname, '..', 'node_modules', '@whiskeysockets', 'baileys');
 const CHATS_PATH = path.join('lib', 'Socket', 'chats.js');
@@ -66,7 +67,7 @@ function applyAppStatePatch(baileysDir = DEFAULT_BAILEYS) {
         'the upstream shape changed; re-check whether the loop is still unbounded before removing this patcher',
     );
   }
-  fs.writeFileSync(file, source.replace(LOOP_FIND, LOOP_REPLACE), 'utf8');
+  writeFileAtomic(file, source.replace(LOOP_FIND, LOOP_REPLACE));
   return { note: 'bounded the app-state resync loop on an empty decode' };
 }
 

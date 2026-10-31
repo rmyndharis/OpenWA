@@ -64,7 +64,10 @@ export function replaceSession(sessions: Session[], updated: Session): Session[]
 // without that exact code — must stay generic: the request may never have reached the gateway, so
 // nothing was stopped and the "start and retry the logout" guidance would be actively wrong. The code
 // is carried on the thrown API error (see services/api.ts), not inferred from a message heuristic.
-export function classifyUnlinkError(err: unknown): 'incomplete' | 'generic' {
-  const e = err as { code?: string } | null | undefined;
-  return e?.code === 'SESSION_LOGOUT_INCOMPLETE' ? 'incomplete' : 'generic';
+// A 409 is the gateway's answer for a session with no linked device: there was nothing to unlink, the session was
+// stopped, and its message says what to do instead, which a retry of the unlink cannot change.
+export function classifyUnlinkError(err: unknown): 'incomplete' | 'notLinked' | 'generic' {
+  const e = err as { code?: string; status?: number } | null | undefined;
+  if (e?.code === 'SESSION_LOGOUT_INCOMPLETE') return 'incomplete';
+  return e?.status === 409 ? 'notLinked' : 'generic';
 }

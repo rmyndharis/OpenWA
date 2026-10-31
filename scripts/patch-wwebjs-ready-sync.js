@@ -29,6 +29,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const CLIENT_PATH = path.join('src', 'Client.js');
@@ -115,7 +116,7 @@ function applyReadySyncPatch(wwjsDir = DEFAULT_WWJS) {
     for (const edit of EDITS) {
       source = source.replace(edit.find, edit.replace);
     }
-    fs.writeFileSync(clientFile, source);
+    writeFileAtomic(clientFile, source);
     return { skipped: false, note: 'readiness marker and hasSynced level-check applied' };
   }
   throw new Error(

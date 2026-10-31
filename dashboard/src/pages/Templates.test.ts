@@ -1,6 +1,8 @@
 // Render test for the Templates page under the bare `node --test` runner, on the Sessions.test.ts
-// harness. The template list route is OPERATOR-only, so a viewer key always gets 403 there; a failed
-// read must say so instead of rendering the "no templates saved" empty state.
+// harness. The template list route is OPERATOR-only: a viewer key is not sent it (the gateway records every
+// refusal as a failed authentication) and is shown the permission state, and a 403 or any other failed read
+// must say so instead of rendering the "no templates saved" empty state. The role defaults to operator, the
+// lowest one that can read the list.
 import '../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,6 +11,7 @@ import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 let templatesStatus = 200;
+let templateReads = 0;
 let sessionsStatus = 200;
 // When set, GET /api/sessions answers only once this settles, holding the page on its first load.
 let sessionsGate: Promise<void> | null = null;
@@ -22,6 +25,9 @@ const updated: Array<{ path: string; body: string }> = [];
 const copied: string[] = [];
 // When set, a template create or update answers only once this settles, holding the save in flight.
 let saveGate: Promise<void> | null = null;
+let deleteGate: Promise<void> | null = null;
+let deleteStatus = 200;
+const deletePaths: string[] = [];
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
@@ -63,6 +69,7 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse([{ id: 'tpl-2', name: 'support-greeting', body: 'Hello' }]));
     }
     if (path === '/api/sessions/sess-1/templates') {
+      templateReads++;
       if (templatesStatus === 403) {
         return Promise.resolve(jsonResponse({ message: 'Insufficient permissions. Required: operator' }, 403));
       }
@@ -71,10 +78,15 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse(templates));
     }
     const rowMatch = /^\/api\/sessions\/sess-1\/templates\/(.+)$/.exec(path);
-    if (rowMatch) {
+    if (init?.method === 'DELETE' && rowMatch) {
       deleted.push(rowMatch[1]);
-      templates = templates.filter(t => t.id !== rowMatch[1]);
-      return Promise.resolve(jsonResponse({ success: true }));
+      deletePaths.push(path);
+      const status = deleteStatus;
+      return (deleteGate ?? Promise.resolve()).then(() => {
+        if (status !== 200) return jsonResponse({ message: 'template delete refused' }, status);
+        templates = templates.filter(t => t.id !== rowMatch[1]);
+        return jsonResponse({ success: true });
+      });
     }
     return Promise.resolve(jsonResponse({ message: `unstubbed ${path}` }, 404));
   }) as typeof fetch;
@@ -95,7 +107,7 @@ before(async () => {
     configurable: true,
     value: { writeText: (text: string) => (copied.push(text), Promise.resolve()) },
   });
-  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
   const { i18nReady } = await import('../i18n/index.ts');
   await i18nReady;
   rtl = await import('@testing-library/react');
@@ -117,7 +129,12 @@ afterEach(() => {
   updated.length = 0;
   copied.length = 0;
   saveGate = null;
-  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  deleteGate = null;
+  deleteStatus = 200;
+  deleted.length = 0;
+  deletePaths.length = 0;
+  templateReads = 0;
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
 });
 
 function renderTemplates(): void {
@@ -131,15 +148,13 @@ function renderTemplates(): void {
   );
 }
 
-// The row button exists so a template can be deleted without opening it in the editor first, and it
-// is gated on the same write permission as the editor's own delete. Both halves are pinned here.
-test('a write key can delete a template from its row, and a read-only key cannot', async () => {
+// The row button exists so a template can be deleted without opening it in the editor first.
+test('a write key can delete a template from its row', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   templatesStatus = 200;
   templates = [{ id: 'tpl-1', name: 'invoice-reminder', body: 'Hi {{name}}' }];
   deleted.length = 0;
 
-  window.sessionStorage.setItem('openwa_user_role', 'operator');
   renderTemplates();
 
   const row = (await screen.findByText('invoice-reminder')).closest('.template-list-row') as HTMLElement;
@@ -150,20 +165,25 @@ test('a write key can delete a template from its row, and a read-only key cannot
   assert.ok(within(dialog).getByText(/invoice-reminder/), 'the confirm did not name the template');
   fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
   await waitFor(() => assert.deepEqual(deleted, ['tpl-1'], 'the delete never reached the API'));
-
-  rtl.cleanup();
-  window.sessionStorage.setItem('openwa_user_role', 'viewer');
-  templates = [{ id: 'tpl-1', name: 'invoice-reminder', body: 'Hi {{name}}' }];
-  renderTemplates();
-
-  const readOnlyRow = (await screen.findByText('invoice-reminder')).closest('.template-list-row') as HTMLElement;
-  assert.equal(
-    within(readOnlyRow).queryByRole('button', { name: 'Delete' }) === null,
-    true,
-    'a read-only key was offered the row delete',
-  );
 });
 
+// A read-only key is never sent the list, so it has no row to delete from.
+test('a read-only key is shown the permission state without a list request the gateway would refuse', async () => {
+  templates = [{ id: 'tpl-1', name: 'invoice-reminder', body: 'Hi {{name}}' }];
+  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  renderTemplates();
+
+  await rtl.screen.findByText('No access to templates');
+  assert.equal(rtl.screen.queryByText('No templates saved') === null, true);
+  assert.equal(rtl.screen.queryByText('invoice-reminder') === null, true);
+
+  // A retry or a window focus would send it again; give either the time to.
+  window.dispatchEvent(new window.Event('focus'));
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(templateReads, 0, 'the viewer page asked the gateway for the template list');
+});
+
+// The key's role is what the page learned at sign-in; a 403 for a key it took for a writer is still a refusal.
 test('a 403 on the template list shows a permission state, not an empty library', async () => {
   templatesStatus = 403;
   renderTemplates();
@@ -598,4 +618,135 @@ test('a save that resolves after another template was opened keeps the editor on
 
   assert.equal(updated[1].path, '/api/sessions/sess-1/templates/tpl-2', 'the invoice text was saved over welcome');
   assert.equal(updated[1].body, 'Due tomorrow');
+});
+
+for (const replacement of ['another template', 'a new template', 'another session'] as const) {
+  test(`a completed delete keeps the draft opened in ${replacement}`, async () => {
+    const { screen, fireEvent, within, waitFor } = rtl;
+    templates = [
+      { id: 'tpl-1', name: 'welcome', body: 'Hello' },
+      { id: 'tpl-2', name: 'invoice', body: 'Due soon' },
+    ];
+    extraSessions = [{ id: 'sess-2', name: 'support-bot' }];
+    let release!: () => void;
+    deleteGate = new Promise<void>(resolve => (release = resolve));
+    renderTemplates();
+    fireEvent.click(await screen.findByText('welcome'));
+    const row = screen.getByText('welcome').closest('.template-list-row') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: 'Delete' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => assert.equal(deleted.length, 1));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    assert.equal(screen.queryByRole('dialog') === null, true);
+
+    if (replacement === 'another template') fireEvent.click(screen.getByText('invoice'));
+    else if (replacement === 'a new template') fireEvent.click(screen.getByRole('button', { name: 'New Template' }));
+    else {
+      fireEvent.change(screen.getByLabelText('Session'), { target: { value: 'sess-2' } });
+      await screen.findByText('support-greeting');
+    }
+    const name = screen.getByLabelText<HTMLInputElement>('Name');
+    const body = screen.getByLabelText<HTMLTextAreaElement>('Body');
+    assert.equal(name.disabled, false);
+    assert.equal(body.disabled, false);
+    assert.equal(screen.getByLabelText<HTMLSelectElement>('Session').disabled, false);
+    assert.equal(screen.getByRole<HTMLButtonElement>('button', { name: 'New Template' }).disabled, false);
+    fireEvent.change(name, { target: { value: 'replacement-draft' } });
+    fireEvent.change(body, { target: { value: 'Hello {{customer}}' } });
+    fireEvent.change(screen.getByLabelText('{{customer}}'), { target: { value: 'Ada' } });
+
+    release();
+    await screen.findByText('Template deleted successfully');
+    assert.equal(name.value, 'replacement-draft', 'the completed delete cleared the replacement name');
+    assert.equal(body.value, 'Hello {{customer}}', 'the completed delete cleared the replacement body');
+    assert.equal(screen.getByLabelText<HTMLInputElement>('{{customer}}').value, 'Ada');
+    assert.equal(document.querySelector('.template-preview-message pre')?.textContent, 'Hello Ada');
+    screen.getByRole('heading', { name: replacement === 'another template' ? 'Edit Template' : 'Create Template' });
+    assert.equal(
+      screen.getByLabelText<HTMLSelectElement>('Session').value,
+      replacement === 'another session' ? 'sess-2' : 'sess-1',
+    );
+    assert.deepEqual(deletePaths, ['/api/sessions/sess-1/templates/tpl-1']);
+  });
+}
+
+test('a completed delete clears the editor when it still shows the deleted template', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  templates = [{ id: 'tpl-1', name: 'welcome', body: 'Hello' }];
+  let release!: () => void;
+  deleteGate = new Promise<void>(resolve => (release = resolve));
+  renderTemplates();
+  fireEvent.click(await screen.findByText('welcome'));
+  const row = screen.getByText('welcome').closest('.template-list-row') as HTMLElement;
+  fireEvent.click(within(row).getByRole('button', { name: 'Delete' }));
+  const dialog = await screen.findByRole('dialog');
+  const confirm = within(dialog).getByRole<HTMLButtonElement>('button', { name: 'Delete' });
+  fireEvent.click(confirm);
+  await waitFor(() => assert.equal(confirm.disabled, true));
+  fireEvent.click(confirm);
+  assert.deepEqual(deleted, ['tpl-1'], 'a pending confirmation sent another delete');
+
+  release();
+  await screen.findByText('Template deleted successfully');
+  await waitFor(() => assert.equal(screen.queryByRole('dialog') === null, true));
+  assert.equal(screen.getByLabelText<HTMLInputElement>('Name').value, '');
+  assert.equal(screen.getByLabelText<HTMLTextAreaElement>('Body').value, '');
+  screen.getByRole('heading', { name: 'Create Template' });
+});
+
+test('a failed delete keeps its confirmation and draft available for retry', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  templates = [{ id: 'tpl-1', name: 'welcome', body: 'Hello' }];
+  deleteStatus = 409;
+  let release!: () => void;
+  deleteGate = new Promise<void>(resolve => (release = resolve));
+  renderTemplates();
+  fireEvent.click(await screen.findByText('welcome'));
+  const row = screen.getByText('welcome').closest('.template-list-row') as HTMLElement;
+  fireEvent.click(within(row).getByRole('button', { name: 'Delete' }));
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+  await waitFor(() => assert.equal(deleted.length, 1));
+  release();
+  await screen.findByText(/template delete refused/);
+  await waitFor(() =>
+    assert.equal(within(dialog).getByRole<HTMLButtonElement>('button', { name: 'Delete' }).disabled, false),
+  );
+  assert.equal(screen.getByLabelText<HTMLInputElement>('Name').value, 'welcome');
+  assert.equal(screen.getByLabelText<HTMLTextAreaElement>('Body').value, 'Hello');
+  screen.getByRole('heading', { name: 'Edit Template' });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+  assert.equal(screen.queryByRole('dialog') === null, true);
+});
+
+test('a completed delete does not dismiss a newer confirmation', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  templates = [
+    { id: 'tpl-1', name: 'welcome', body: 'Hello' },
+    { id: 'tpl-2', name: 'invoice', body: 'Due soon' },
+  ];
+  let release!: () => void;
+  deleteGate = new Promise<void>(resolve => (release = resolve));
+  renderTemplates();
+  await screen.findByText('welcome');
+  const firstRow = screen.getByText('welcome').closest('.template-list-row') as HTMLElement;
+  fireEvent.click(within(firstRow).getByRole('button', { name: 'Delete' }));
+  const firstDialog = await screen.findByRole('dialog');
+  fireEvent.click(within(firstDialog).getByRole('button', { name: 'Delete' }));
+  await waitFor(() => assert.equal(deleted.length, 1));
+  fireEvent.click(within(firstDialog).getByRole('button', { name: 'Close' }));
+  const secondRow = screen.getByText('invoice').closest('.template-list-row') as HTMLElement;
+  fireEvent.click(within(secondRow).getByRole('button', { name: 'Delete' }));
+  const secondDialog = await screen.findByRole('dialog');
+  assert.ok(secondDialog.textContent?.includes('invoice'));
+  release();
+  await screen.findByText('Template deleted successfully');
+  assert.equal(
+    screen.queryByRole('dialog') === secondDialog,
+    true,
+    'the earlier delete dismissed the newer confirmation',
+  );
+  assert.ok(secondDialog.textContent?.includes('invoice'));
+  assert.deepEqual(deletePaths, ['/api/sessions/sess-1/templates/tpl-1']);
 });

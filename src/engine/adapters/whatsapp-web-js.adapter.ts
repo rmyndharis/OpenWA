@@ -1,4 +1,3 @@
-import { EventEmitter } from 'events';
 import { type Client, type Message } from 'whatsapp-web.js';
 import {
   CallLinkType,
@@ -36,7 +35,6 @@ import {
   GroupJoinInfo,
 } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
-import { resolveAuthTimeoutMs } from '../engine-init-timeout';
 import { isChannelJid } from '../identity/wa-id';
 import { LidMappingStore } from '../identity/lid-mapping-store.service';
 import { createLogger } from '../../common/services/logger.service';
@@ -61,7 +59,7 @@ import { WwebjsChats } from './wwebjs-chats';
 import { WwebjsCatalog } from './wwebjs-catalog';
 import { registerWwebjsGroupEvents } from './wwebjs-group-events';
 import { WwebjsOnboardingWatcher } from './wwebjs-onboarding';
-import { WwebjsLifecycle } from './wwebjs-lifecycle';
+import { PAGE_RELOADING_MESSAGE, WwebjsLifecycle } from './wwebjs-lifecycle';
 import { WwebjsReadyReconcile } from './wwebjs-reconcile';
 import { WwebjsStuckAuth } from './wwebjs-stuck-auth';
 import { WwebjsCalls } from './wwebjs-calls';
@@ -101,39 +99,9 @@ export interface WhatsAppWebJsConfig {
 // status can import it without loading whatsapp-web.js (engine lazy-loading). The lifecycle delegate
 // imports resolveWebVersionPin for use in initialize().
 
-// resolveAuthTimeoutMs now lives in ../engine-init-timeout, next to the outer init deadline derived
-// from it: that deadline is engine-agnostic, so deriving it here made the session lifecycle import
-// this adapter just to size a timeout. Re-exported because callers still reach it through the engine
-// they are configuring.
-export { resolveAuthTimeoutMs };
+export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
+  readonly contactPhoneLookupPersistence = 'seed' as const;
 
-// extractLinkedParentJID moved to ./wwebjs-groups with the group operations; re-exported because
-// existing callers (the adapter spec) still import it from here.
-export { extractLinkedParentJID } from './wwebjs-groups';
-
-// Messaging helpers moved to ./wwebjs-messaging with the messaging operations; re-exported because
-// existing callers (the adapter spec) still import them from here.
-export { isHttpUrl, loadRemoteMedia, extractWwebjsCall, wwebjsAckToDeliveryStatus } from './wwebjs-messaging';
-
-// Proxy launch helpers moved to ./wwebjs-proxy; re-exported because existing callers (the adapter
-// spec) still import them from here.
-export { isSupportedProxyUrl, buildProxyLaunchConfig } from './wwebjs-proxy';
-
-// The onboarding-modal probe moved to ./wwebjs-onboarding with its label resolution; re-exported
-// because existing callers (the adapter spec) still import it from here.
-export { probeOnboardingModal, collectDialogDiagnostics } from './wwebjs-onboarding';
-
-// Connection lifecycle moved to ./wwebjs-lifecycle (with the navigation re-inject constants) and the
-// readiness reconciliation to ./wwebjs-reconcile; re-exported because existing callers (the adapter
-// spec) still import them from here.
-export {
-  isExecutionContextDestroyedError,
-  NAVIGATION_REINJECT_GRACE_MS,
-  NAVIGATION_EPISODE_CAP_MS,
-} from './wwebjs-lifecycle';
-export { READY_RECONCILE_TIMEOUT_MS, READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS } from './wwebjs-reconcile';
-
-export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngine {
   private readonly logger = createLogger('WhatsAppWebJsAdapter');
   // Bound concurrent inbound media downloads: each one holds the whole decrypted file in the browser
   // page and, when within the cap, its base64 in Node, so an unbounded burst could stack many multi-MB
@@ -163,9 +131,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private readonly onboardingWatcher: WwebjsOnboardingWatcher;
 
   // Connection-lifecycle state is owned by the lifecycle delegate (./wwebjs-lifecycle); these
-  // accessors alias it by reference so the host closures below — and an unmodified spec poking
-  // `adapter.client` / `adapter.status` / `adapter.tearingDown` / … through a cast — keep working
-  // byte-identically. The live-call cache below is the same pattern for ./wwebjs-calls.
+  // accessors alias it by reference so the host closures below, and a spec poking `adapter.client`,
+  // `adapter.status` or `adapter.tearingDown` through a cast, all see the delegate's state.
   private get client(): Client | null {
     return this.lifecycle.client;
   }
@@ -199,27 +166,30 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private set disconnectReported(value: boolean) {
     this.lifecycle.disconnectReported = value;
   }
-  /** Ringing call ids and their expiry, owned by the calls delegate, which uses them to announce each
-   *  call once; lifecycle teardown clears them. The adapter keeps this alias for the spec, which reads
-   *  `adapter.liveCalls` through a cast. */
-  private get liveCalls(): Map<string, number> {
-    return this.calls.liveCalls;
-  }
 
   constructor(private readonly config: WhatsAppWebJsConfig) {
-    super();
     // API-surface clusters live in ./wwebjs-* delegates; the public methods below forward to them.
     // The host is one object literal shared by every delegate, and closures (not a `this` reference)
     // keep the delegates' surface exactly this narrow. Built in the constructor, not as a field
     // initializer: `config` is a parameter property, which field initializers read before assignment.
     this.host = {
       ensureReady: () => this.ensureReady(),
-      getClient: () => this.client!,
+      // A delegate reads the client after ensureReady() and often after awaits of its own (a recipient
+      // lookup, a media fetch, a chat lookup). A teardown in that gap leaves the client set but closing,
+      // or nulls it, so readiness is checked again here: the retryable 409 instead of a closed-target or
+      // TypeError 500 that a send also counts toward the send breaker.
+      getClient: () => {
+        this.ensureReady();
+        return this.client!;
+      },
       logger: this.logger,
       isPageTransportError: error => this.isPageTransportError(error),
       reportIfPageTransportError: (error, context) => this.reportIfPageTransportError(error, context),
+      reportOnceGone: (error, context) => this.lifecycle.reportOnceGone(error, context),
       ensureNotChannelRecipient: chatId => this.ensureNotChannelRecipient(chatId),
-      getNumberId: number => this.getNumberId(number),
+      // The raw answer, `@lid` included: the send resolver addresses a migrated contact by it, while the
+      // public getNumberId reports the neutral phone id.
+      getNumberId: number => this.contacts.lookupNumberId(number),
       capInboundMediaFor: (msg, maxBytesOverride, ticket) => this.capInboundMediaFor(msg, maxBytesOverride, ticket),
       config: this.config,
       getCallbacks: () => this.callbacks,
@@ -274,7 +244,6 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       logger: this.logger,
       config: this.config,
       getCallbacks: () => this.callbacks,
-      emitState: status => this.emit('stateChanged', status),
       scheduleReadyReconcile: () => this.reconcile.scheduleReadyReconcile(),
       clearReadyReconcile: () => this.reconcile.clearReadyReconcile(),
       startOnboardingWatcher: () => this.onboardingWatcher.startOnboardingWatcher(),
@@ -446,14 +415,6 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.lifecycle.initialize();
   }
 
-  private setupEventHandlers(): void {
-    this.lifecycle.setupEventHandlers();
-  }
-
-  private attachPuppeteerLifecycleListeners(): void {
-    this.lifecycle.attachPuppeteerLifecycleListeners();
-  }
-
   private isPageTransportError(error: unknown): boolean {
     return this.lifecycle.isPageTransportError(error);
   }
@@ -508,10 +469,6 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   private clearLocalAuth(): Promise<void> {
     return this.stuckAuth.clearLocalAuth();
-  }
-
-  private reportActionRequired(reason: string): void {
-    this.onboardingWatcher.reportActionRequired(reason);
   }
 
   /**
@@ -883,6 +840,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.groups.setGroupEphemeral(groupId, durationSec);
   }
 
+  setGroupMemberLabel(groupId: string, label: string): Promise<void> {
+    return this.groups.setGroupMemberLabel(groupId, label);
+  }
+
   getGroupMembershipRequests(groupId: string): Promise<GroupMembershipRequest[]> {
     return this.groups.getGroupMembershipRequests(groupId);
   }
@@ -1003,11 +964,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // Post-READY navigation window: window.WWebJS is gone until the re-inject completes, so every
     // delegate evaluate would die as a raw TypeError 500 (and five raw send failures latch the send
     // breaker for its 15-minute cooldown). Answer the same retryable 409 the pre-READY states get,
-    // naming the reload so the operator can tell this state from a plain disconnect (#1081).
-    if (this.lifecycle.isInNavigationReinjectWindow()) {
-      throw new EngineNotReadyError(
-        'WhatsApp Web is reloading its page and the session is re-injecting. Retry in a few seconds.',
-      );
+    // naming the reload so the operator can tell this state from a plain disconnect (#1081). Past the
+    // window the same holds for a reloaded page a liveness probe has read without its helpers.
+    if (this.lifecycle.isInNavigationReinjectWindow() || this.lifecycle.isPageWithoutHelpers()) {
+      throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
     }
   }
 

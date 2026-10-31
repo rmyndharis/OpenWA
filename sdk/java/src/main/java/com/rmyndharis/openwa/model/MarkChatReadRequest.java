@@ -20,9 +20,9 @@ public record MarkChatReadRequest(String chatId, List<String> messageIds) {
 
         /**
          * Messages to acknowledge (at most 100; an empty list is refused). Baileys acknowledges
-         * individual messages, so without this only the newest received message the engine still
-         * holds in memory gets a receipt. Ignored by whatsapp-web.js, whose own sendSeen is
-         * chat-level.
+         * individual messages, so without this only the newest received message gets a receipt:
+         * the one the engine holds in memory, else the newest received one the gateway stored.
+         * Ignored by whatsapp-web.js, whose own sendSeen is chat-level.
          */
         public Builder messageIds(List<String> v) {
             this.messageIds = v;

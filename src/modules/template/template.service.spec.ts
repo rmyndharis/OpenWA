@@ -34,6 +34,7 @@ describe('TemplateService', () => {
       create: jest.fn().mockImplementation((data: Partial<Template>) => ({ id: 'tpl-uuid-1', ...data }) as Template),
       save: jest.fn().mockImplementation((tpl: Template) => Promise.resolve(tpl)),
       remove: jest.fn().mockResolvedValue(undefined),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
     sessionRepository = { exists: jest.fn().mockResolvedValue(true) };
@@ -188,10 +189,11 @@ describe('TemplateService', () => {
 
       await service.update('sess-1', 'tpl-uuid-1', { body: 'Updated body' });
 
-      expect(repository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ body: 'Updated body', name: template.name }),
-        { transaction: false },
+      expect(repository.update).toHaveBeenCalledWith(
+        { id: 'tpl-uuid-1', sessionId: 'sess-1' },
+        { body: 'Updated body' },
       );
+      expect(repository.save).not.toHaveBeenCalled();
     });
 
     it('should throw NotFoundException for an unknown template', async () => {
@@ -235,7 +237,7 @@ describe('TemplateService', () => {
 
     it('translates a duplicate-name violation on update into 409 Conflict', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockTemplate());
-      (repository.save as jest.Mock).mockRejectedValueOnce(uniqueViolation());
+      (repository.update as jest.Mock).mockRejectedValueOnce(uniqueViolation());
       await expect(service.update('sess-1', 'tpl-uuid-1', { name: 'dup' })).rejects.toThrow(ConflictException);
     });
 

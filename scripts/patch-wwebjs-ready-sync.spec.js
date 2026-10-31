@@ -96,6 +96,7 @@ test('CLI: unrecognised tree exits 1 bare and 0 under --best-effort', () => {
   fs.mkdirSync(path.join(root, 'scripts'));
   const script = path.join(root, 'scripts', 'patch-wwebjs-ready-sync.js');
   fs.copyFileSync(path.join(__dirname, 'patch-wwebjs-ready-sync.js'), script);
+  fs.copyFileSync(path.join(__dirname, 'atomic-write.js'), path.join(path.dirname(script), 'atomic-write.js'));
   const clientDir = path.join(root, 'node_modules', 'whatsapp-web.js', 'src');
   fs.mkdirSync(clientDir, { recursive: true });
   fs.writeFileSync(path.join(clientDir, 'Client.js'), 'class Client {}\n');

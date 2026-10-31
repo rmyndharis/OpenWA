@@ -1,5 +1,5 @@
 import { MessageDirection } from '../message/entities/message.entity';
-import { mutationTargetsForeignRow } from './message-mutation-guard';
+import { mutationTargetsForeignRow, mutationTargetsForeignRowPersisted } from './message-mutation-guard';
 
 const OUT = MessageDirection.OUTGOING;
 const IN = MessageDirection.INCOMING;
@@ -96,19 +96,22 @@ describe('mutationTargetsForeignRow', () => {
     }
   });
 
-  it('does not call a lid and a phone number different, since they may be one chat', () => {
-    expect(
-      mutationTargetsForeignRow({ chatId: '111@lid', direction: IN }, { kind: 'edit', chatId: direct, fromMe: false }),
-    ).toBeNull();
-    expect(
-      mutationTargetsForeignRow({ chatId: direct, direction: IN }, { kind: 'edit', chatId: '111@lid', fromMe: false }),
-    ).toBeNull();
-    expect(
-      mutationTargetsForeignRow(
-        { chatId: '111@lid', direction: IN },
-        { kind: 'edit', chatId: '222@lid', fromMe: false },
-      ),
-    ).toBe('chat');
+  it('requires a trusted pairing before a LID can change a phone-keyed row', async () => {
+    for (const kind of ['edit', 'revoke', 'reaction'] as const) {
+      const row = { chatId: direct, direction: IN };
+      const source = { kind, chatId: '111@lid', fromMe: false };
+      expect(mutationTargetsForeignRow(row, source)).toBe('chat');
+      expect(await mutationTargetsForeignRowPersisted(row, source, () => Promise.resolve(null))).toBe('chat');
+      expect(await mutationTargetsForeignRowPersisted(row, source, () => Promise.resolve('628222'))).toBe('chat');
+      expect(await mutationTargetsForeignRowPersisted(row, source, () => Promise.resolve('628111'))).toBeNull();
+      expect(
+        await mutationTargetsForeignRowPersisted(
+          { chatId: '111@lid', direction: IN },
+          { ...source, chatId: '222@lid' },
+          () => Promise.resolve('628111'),
+        ),
+      ).toBe('chat');
+    }
   });
 
   // The send routes store the chat id as the caller wrote it, in either dialect the docs give, while the

@@ -165,9 +165,14 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       session.lastActiveAt,
       session.createdAt,
       session.updatedAt,
-      // 'stopped' is the only value the column holds. A backup written before the column existed,
-      // or an unknown value, restores as NULL: eligible for auto-start and takeover, as before.
-      session.desiredState === 'stopped' ? 'stopped' : null,
+      // A failed delete's 'deleting' restores as 'stopped': no delete runs for the restored row. A
+      // backup written before the column existed, or an unknown value, restores as NULL: eligible for
+      // auto-start and takeover, as before.
+      session.desiredState === 'stopped' ||
+      session.desiredState === 'deleting' ||
+      session.desiredState === 'deleting-stopped'
+        ? 'stopped'
+        : null,
     ],
   }),
 
@@ -322,16 +327,22 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
   defineTableImporter({
     key: 'lidMappings',
     label: 'lid mapping',
-    sql: `INSERT INTO lid_mappings (lid, phone, "sessionId", "updatedAt") VALUES ($1, $2, $3, $4)`,
+    sql: `INSERT INTO lid_mappings (lid, phone, "sessionId", "updatedAt", "isReported") VALUES ($1, $2, $3, $4, $5)`,
     id: (lm: LidMappingRow) => lm.lid,
-    map: (lm: LidMappingRow) => [lm.lid, lm.phone ?? null, lm.sessionId ?? null, lm.updatedAt],
+    map: (lm: LidMappingRow) => [
+      lm.lid,
+      lm.phone ?? null,
+      lm.sessionId ?? null,
+      lm.updatedAt,
+      lm.isReported === true || lm.isReported === 1,
+    ],
   }),
 
   // Import chat states (optional; not a FK, restored as a standalone per-session cache table)
   defineTableImporter({
     key: 'chatStates',
     label: 'chat state',
-    sql: `INSERT INTO chat_states ("sessionId", "chatId", "muteEndTime", archived, pinned, observed, "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    sql: `INSERT INTO chat_states ("sessionId", "chatId", "muteEndTime", archived, pinned, observed, "deletedAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     id: (cs: ChatStateRow) => `${cs.sessionId}/${cs.chatId}`,
     map: (cs: ChatStateRow) => [
       cs.sessionId,
@@ -340,6 +351,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       cs.archived,
       cs.pinned,
       cs.observed ?? null,
+      cs.deletedAt ?? null,
       cs.updatedAt,
     ],
   }),

@@ -68,7 +68,7 @@ export function useSessionGroupsQuery(sessionId: string, enabled: boolean) {
 export function useSessionChatsQuery(sessionId: string, enabled: boolean) {
   return useQuery({
     queryKey: queryKeys.sessionChats(sessionId),
-    queryFn: () => sessionApi.getChats(sessionId),
+    queryFn: ({ signal }) => sessionApi.getChats(sessionId, signal),
     enabled: enabled && !!sessionId,
     staleTime: 60_000,
   });

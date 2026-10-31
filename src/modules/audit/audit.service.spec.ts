@@ -1,6 +1,8 @@
-import { Repository, Between } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { AuditService } from './audit.service';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
+import type { ApiKey } from '../auth/entities/api-key.entity';
+import { runWithRequestId, setRequestActor } from '../../common/services/request-context';
 
 describe('AuditService', () => {
   let service: AuditService;
@@ -56,12 +58,62 @@ describe('AuditService', () => {
     );
   });
 
-  it('logInfo/logWarn/logError map to the right severity', async () => {
+  // Most call sites fire from deep services that do not have the key in scope, so log() takes the key, the
+  // client IP and the request id from the active request. Explicit context values still win (a worker that
+  // stamps a system key, or an auth failure that only has an IP).
+  describe('log() request context', () => {
+    const storedRow = () => (repo.create.mock.calls as unknown[][])[0][0] as Partial<AuditLog>;
+
+    it('stamps the key, client IP and request id of the active request', async () => {
+      await runWithRequestId('req-1', async () => {
+        setRequestActor({ apiKeyId: 'key-1', apiKeyName: 'dashboard', ipAddress: '203.0.113.7' });
+        await service.log(AuditAction.SESSION_STARTED, { sessionId: 's1' });
+      });
+
+      expect(storedRow()).toEqual(
+        expect.objectContaining({
+          apiKeyId: 'key-1',
+          apiKeyName: 'dashboard',
+          ipAddress: '203.0.113.7',
+          metadata: { requestId: 'req-1' },
+        }),
+      );
+    });
+
+    it('lets explicit context values win, and keeps caller metadata beside the request id', async () => {
+      await runWithRequestId('req-2', async () => {
+        setRequestActor({ apiKeyId: 'key-1', apiKeyName: 'dashboard', ipAddress: '203.0.113.7' });
+        await service.log(AuditAction.SESSION_STARTED, {
+          apiKey: { id: 'key-2', name: 'worker' } as ApiKey,
+          ipAddress: '198.51.100.9',
+          metadata: { reason: 'manual' },
+        });
+      });
+
+      expect(storedRow()).toEqual(
+        expect.objectContaining({
+          apiKeyId: 'key-2',
+          apiKeyName: 'worker',
+          ipAddress: '198.51.100.9',
+          metadata: { reason: 'manual', requestId: 'req-2' },
+        }),
+      );
+    });
+
+    it('stamps nothing outside a request: no actor columns and no metadata blob', async () => {
+      await service.log(AuditAction.SESSION_STARTED, { sessionId: 's1' });
+
+      expect(storedRow()).toEqual(
+        expect.objectContaining({ apiKeyId: null, apiKeyName: null, ipAddress: null, metadata: null }),
+      );
+    });
+  });
+
+  it('logInfo/logWarn map to the right severity', async () => {
     await service.logInfo(AuditAction.API_KEY_USED);
     await service.logWarn(AuditAction.API_KEY_AUTH_FAILED);
-    await service.logError(AuditAction.MESSAGE_FAILED);
     const severities = (repo.create.mock.calls as unknown[][]).map(c => (c[0] as { severity: AuditSeverity }).severity);
-    expect(severities).toEqual([AuditSeverity.INFO, AuditSeverity.WARN, AuditSeverity.ERROR]);
+    expect(severities).toEqual([AuditSeverity.INFO, AuditSeverity.WARN]);
   });
 
   it('findAll applies provided filters with default take/skip', async () => {
@@ -74,6 +126,11 @@ describe('AuditService', () => {
         skip: 0,
       }),
     );
+  });
+
+  it('findAll narrows to one acting key when apiKeyId is given', async () => {
+    await service.findAll({ apiKeyId: 'key-1' });
+    expect(repo.findAndCount).toHaveBeenCalledWith(expect.objectContaining({ where: { apiKeyId: 'key-1' } }));
   });
 
   it('findAll breaks createdAt ties by id, so offset pages over rows written in one second cannot overlap', async () => {
@@ -94,23 +151,20 @@ describe('AuditService', () => {
     expect(arg.skip).toBe(0);
   });
 
-  it('findAll uses Between only when BOTH dates are present', async () => {
-    const start = new Date('2026-01-01T00:00:00Z');
-    const end = new Date('2026-02-01T00:00:00Z');
-    await service.findAll({ startDate: start, endDate: end, limit: 10, offset: 5 });
-    const arg = (repo.findAndCount.mock.calls as unknown[][])[0][0] as {
-      where: Record<string, unknown>;
-      take: number;
-      skip: number;
-    };
-    expect(arg.where.createdAt).toEqual(Between(start, end));
+  it('findAll passes an in-range limit and offset through to the query', async () => {
+    await service.findAll({ limit: 10, offset: 5 });
+    const arg = (repo.findAndCount.mock.calls as unknown[][])[0][0] as { take: number; skip: number };
     expect(arg.take).toBe(10);
     expect(arg.skip).toBe(5);
+  });
 
-    repo.findAndCount.mockClear();
-    await service.findAll({ startDate: start }); // only one date → no Between
-    const arg2 = (repo.findAndCount.mock.calls as unknown[][])[0][0] as { where: Record<string, unknown> };
-    expect(arg2.where.createdAt).toBeUndefined();
+  it('findAll bounds an offset past the largest safe integer, however it was written', async () => {
+    for (const offset of [2 ** 63, 1e21, Infinity]) {
+      repo.findAndCount.mockClear();
+      await service.findAll({ offset });
+      const arg = (repo.findAndCount.mock.calls as unknown[][])[0][0] as { skip: number };
+      expect(arg.skip).toBe(Number.MAX_SAFE_INTEGER);
+    }
   });
 
   it('cleanup deletes rows older than the cutoff and returns the affected count', async () => {
@@ -130,5 +184,38 @@ describe('AuditService', () => {
   it('cleanup returns 0 when the driver reports a null affected count', async () => {
     repo.delete.mockResolvedValue({ affected: null });
     expect(await service.cleanup(10)).toBe(0);
+  });
+});
+
+// The unit tests above stop at the value handed to the repository. A driver refuses an OFFSET of 2^63 or
+// more (SQLite: "datatype mismatch"), so paging is also run against a real in-memory database.
+describe('AuditService.findAll paging on a real database', () => {
+  let ds: DataSource;
+  let service: AuditService;
+
+  beforeEach(async () => {
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [AuditLog], synchronize: true });
+    await ds.initialize();
+    const repo = ds.getRepository(AuditLog);
+    service = new AuditService(repo);
+    for (const sessionId of ['s1', 's2', 's3']) {
+      await repo.save(repo.create({ action: AuditAction.SESSION_CREATED, severity: AuditSeverity.INFO, sessionId }));
+    }
+  });
+
+  afterEach(async () => {
+    await ds.destroy();
+  });
+
+  it('answers an empty page with the true total for an offset past the table, however large', async () => {
+    for (const offset of [2 ** 62, 2 ** 63, 1e21, Infinity]) {
+      await expect(service.findAll({ offset })).resolves.toEqual({ data: [], total: 3 });
+    }
+  });
+
+  it('still pages: an offset inside the table skips that many rows', async () => {
+    const { data, total } = await service.findAll({ limit: 10, offset: 2 });
+    expect(data).toHaveLength(1);
+    expect(total).toBe(3);
   });
 });

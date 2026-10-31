@@ -1,12 +1,10 @@
-// test/__mocks__/archiver.ts replaces archiver in every suite under test/; this one needs the real one.
-jest.unmock('archiver');
-
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Readable } from 'stream';
 import { ConfigService } from '@nestjs/config';
+import { StorageWalkRefusedError } from '../src/common/storage/storage-local-files';
 import { createExportStream, ExportFileSource, importFromStream } from '../src/common/storage/storage-transfer';
 import { StorageService } from '../src/common/storage/storage.service';
 
@@ -27,14 +25,31 @@ describe('Local storage export completeness', () => {
     fs.rmSync(localPath, { recursive: true, force: true });
   });
 
-  it.each(['EACCES', 'EIO'])('refuses an export and count when directory enumeration fails with %s', async code => {
+  // A permission failure is one the operator can fix, so it is refused with a typed error that names the cause and
+  // keeps the host's own error for the log.
+  it.each(['EACCES', 'EPERM'])('refuses an export and count when a directory is unreadable (%s)', async code => {
     await storage.putFile('nested/media.bin', Buffer.from('preserve this file'));
     const error = Object.assign(new Error(`Cannot enumerate storage: ${code}`), { code });
     jest.spyOn(fs.promises, 'readdir').mockRejectedValue(error);
 
+    const refusals = [
+      await storage.createExportStream().catch((e: unknown) => e),
+      await storage.getFileCount().catch((e: unknown) => e),
+    ];
+    for (const refusal of refusals) {
+      expect(refusal).toBeInstanceOf(StorageWalkRefusedError);
+      expect(refusal).toMatchObject({ message: `Storage directory cannot be read: . (${code})`, cause: error });
+    }
+    expect((await storage.getFile('nested/media.bin')).toString()).toBe('preserve this file');
+  });
+
+  it('refuses an export and count when enumeration fails with an error that is not a refusal, as it came', async () => {
+    await storage.putFile('nested/media.bin', Buffer.from('preserve this file'));
+    const error = Object.assign(new Error('Cannot enumerate storage: EIO'), { code: 'EIO' });
+    jest.spyOn(fs.promises, 'readdir').mockRejectedValue(error);
+
     await expect(storage.createExportStream()).rejects.toBe(error);
     await expect(storage.getFileCount()).rejects.toBe(error);
-    expect((await storage.getFile('nested/media.bin')).toString()).toBe('preserve this file');
   });
 
   it('refuses an export and count when an accepted key exceeds the traversal depth', async () => {
@@ -42,6 +57,7 @@ describe('Local storage export completeness', () => {
     await storage.putFile(key, Buffer.from('deep media'));
 
     expect((await storage.getFile(key)).toString()).toBe('deep media');
+    await expect(storage.createExportStream()).rejects.toBeInstanceOf(StorageWalkRefusedError);
     await expect(storage.createExportStream()).rejects.toThrow(/maximum traversal depth/);
     await expect(storage.getFileCount()).rejects.toThrow(/maximum traversal depth/);
   });
@@ -80,11 +96,10 @@ describe('Local storage export completeness', () => {
 });
 
 /**
- * The storage export runs against the real archiver here (the unit config stubs it). An export of a
- * large media store must not read every file into memory before anything consumes the archive:
- * files are opened one at a time, each only after the previous entry was written through.
+ * An export of a large media store must not read every file into memory before anything consumes the
+ * archive: files are opened one at a time, each only after the previous entry was written through.
  */
-describe('Storage export streams one file at a time (e2e, real archiver)', () => {
+describe('Storage export streams one file at a time (e2e)', () => {
   const FILE_BYTES = 1024 * 1024;
 
   const makeLogger = () => ({ warn: jest.fn(), error: jest.fn(), log: jest.fn(), debug: jest.fn() });
@@ -134,8 +149,8 @@ describe('Storage export streams one file at a time (e2e, real archiver)', () =>
     const { stats, openFile } = trackingOpener();
     const output = await createExportStream(() => Promise.resolve(files), openFile, makeLogger() as never);
 
-    // Let the background loop run as far as it can without a reader. The pipeline's own buffers (about
-    // a megabyte in archiver) absorb a file or two; everything past that has to wait for the reader.
+    // Let the background loop run as far as it can without a reader. The pipeline's own buffers absorb
+    // a file or two; everything past that has to wait for the reader.
     await new Promise(resolve => setTimeout(resolve, 300));
     expect(stats.opened).toBeLessThanOrEqual(3);
     output.destroy();

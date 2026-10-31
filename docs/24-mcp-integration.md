@@ -14,7 +14,7 @@
 | **Tool registry (`ToolDescriptor`)**                                      | ✅ Implemented | `src/core/agent-tools/tool-descriptor.ts`            |
 | **Tool invoker (auth → chat gate → validate → chat arguments → service)** | ✅ Implemented | `src/core/agent-tools/tool-invoker.ts`               |
 | **Registry service**                                                      | ✅ Implemented | `src/core/agent-tools/tool-registry.service.ts`      |
-| **Curated tool tables (51 tools)**                                        | ✅ Implemented | `src/core/agent-tools/tools/*.tools.ts`              |
+| **Curated tool tables (52 tools)**                                        | ✅ Implemented | `src/core/agent-tools/tools/*.tools.ts`              |
 | **MCP transport adapter**                                                 | ✅ Implemented | `src/modules/mcp/mcp.server.ts`                      |
 | **Opt-in module gate**                                                    | ✅ Implemented | `src/modules/mcp/mcp.module.ts`, `src/app.module.ts` |
 | **Per-key rate limiter**                                                  | ✅ Implemented | `src/modules/mcp/mcp-rate-limit.ts`                  |
@@ -85,7 +85,7 @@ flowchart TB
 flowchart LR
     Client[MCP client] -->|POST /mcp| Adapter
     subgraph Core["src/core/agent-tools (SDK-free)"]
-        Registry[ToolRegistryService<br/>51 ToolDescriptors]
+        Registry[ToolRegistryService<br/>52 ToolDescriptors]
         Invoker[invokeTool<br/>auth → chat gate → validate → chat arguments → handler]
     end
     subgraph Adapter["src/modules/mcp (SDK, opt-in)"]
@@ -133,7 +133,7 @@ The surface is an **allowlist by construction** — a capability is exposed only
 `ToolDescriptor` is written for it. There is no automatic route reflection. Each tool
 declares a `tier` (`read` | `write`) and a `requiredRole` when the call warrants one: every
 write carries its privilege level, and a read carries the role its REST twin requires. The
-reads at OPERATOR are `WebhooksList`, `WebhookFindBySession` and `WebhookFindOne`,
+reads at OPERATOR are `MessageSearch`, `WebhooksList`, `WebhookFindBySession` and `WebhookFindOne`,
 `AutomationRuleFindAll` and `AutomationRuleFindOne`, `GroupGetInviteCode` (the invite
 code is a transferable join capability, so it sits at OPERATOR like the QR endpoint), and
 `ContactCheckNumber` (each call queries WhatsApp about a third party).
@@ -141,7 +141,7 @@ code is a transferable join capability, so it sits at OPERATOR like the QR endpo
 | Domain         | Read tools                                                         | Write tools                                                                                   |
 | -------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
 | **Session**    | list, get, chats, stats, presence                                  | mark read/unread, typing, subscribe presence                                                  |
-| **Message**    | list, history, reactions                                           | send text/image/video/audio/document/location/contact/sticker/template, reply, forward, react |
+| **Message**    | list, history, reactions, search (OPERATOR)                        | send text/image/video/audio/document/location/contact/sticker/template, reply, forward, react |
 | **Contact**    | list, get, check-number (OPERATOR), resolve-phone, profile-picture | block, unblock                                                                                |
 | **Group**      | list, get, invite-code (OPERATOR)                                  | create, add participants, set subject, set description                                        |
 | **Webhook**    | list, get (OPERATOR)                                               | —                                                                                             |
@@ -154,6 +154,10 @@ code is a transferable join capability, so it sits at OPERATOR like the QR endpo
 > works on both. An agent told this can pick the right call; one that is not will read the `501` as
 > a transient failure and retry something that cannot succeed on that engine. Labels are a WhatsApp
 > Business feature throughout.
+
+> **Three more tools answer `501` on one engine**, and their descriptions say so. `MessageHistory`
+> and `MessageGetReactions` need whatsapp-web.js; on Baileys use `MessageList` for stored messages.
+> `GroupCreate` needs Baileys; whatsapp-web.js cannot create a group.
 
 **Deliberately excluded from the surface** (not exposed as tools): session lifecycle
 (create/delete/start/stop/logout/force-kill), chat delete, bulk send, message delete, message edit,
@@ -213,7 +217,7 @@ only when an agent genuinely needs to send messages / mutate state.
 ### Threat model: untrusted message content
 
 The read tools return what other WhatsApp users wrote, verbatim: message bodies and captions
-(`MessageList`, `MessageHistory`), last-message previews and chat names (`SessionGetChats`,
+(`MessageList`, `MessageHistory`, `MessageSearch`), last-message previews and chat names (`SessionGetChats`,
 `LabelListChats`), push names and contact names (`ContactFindAll`, `ContactFindOne`), and group
 subjects and descriptions (`GroupFindAll`, `GroupFindOne`). Treat any read tool that returns a name
 or message text the same way. Anyone who can message the account, or join or rename a group it is

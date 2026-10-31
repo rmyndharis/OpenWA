@@ -1,10 +1,11 @@
 import type { AnyMessageContent, WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { MediaInput, StatusPostOptions, StatusResult } from '../interfaces/whatsapp-engine.interface';
 import { BadRequestException } from '@nestjs/common';
-import { resolveMediaBuffer } from './baileys-messaging';
+import { mapSendRefusal, resolveMediaBuffer } from './baileys-messaging';
 import { describeAudio } from './baileys-audio-probe';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { BAILEYS_QUERY_BUDGET_MS } from './baileys-query-deadline';
 
 /** How long WhatsApp keeps a status up. */
 const STATUS_TTL_MS = 24 * 3_600_000;
@@ -43,18 +44,20 @@ export class BaileysStatus {
 
   /**
    * Send to `status@broadcast`. A send that fails after a stop or logout has torn its socket down is
-   * not ready (409), as a chat send is; a failure on a socket still in place propagates.
+   * not ready (409), as a chat send is; a failure on a socket still in place propagates. A proxied
+   * session's media upload gets a deadline, as a chat send's does (BaileysMessaging.uploadTimeoutMs).
    */
   private async sendStatus(
     content: AnyMessageContent,
     options: Parameters<WASocket['sendMessage']>[2],
   ): Promise<WAMessage | undefined> {
     const sock = this.sock();
+    const deadline = this.host.sessionProxyUrl() ? { mediaUploadTimeoutMs: BAILEYS_QUERY_BUDGET_MS } : {};
     try {
-      return await sock.sendMessage('status@broadcast', content, options);
+      return await sock.sendMessage('status@broadcast', content, { ...options, ...deadline });
     } catch (error) {
       if (this.host.getSocketOrNull() !== sock) throw new EngineNotReadyError();
-      throw error;
+      throw mapSendRefusal(error);
     }
   }
 

@@ -32,7 +32,10 @@ public record SendTextStatusRequest(String text, List<String> recipients, String
             return this;
         }
 
-        /** Font index supported by WhatsApp status. */
+        /**
+         * Font index supported by WhatsApp status: 0 (default), 1, 2, 6 (bold), 7, 8, 9 or 10.
+         * whatsapp-web.js honors only 0 to 7 and posts 8, 9 and 10 in the default font.
+         */
         public Builder font(Integer v) {
             this.font = v;
             return this;

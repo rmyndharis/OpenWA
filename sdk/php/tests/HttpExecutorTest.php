@@ -100,4 +100,67 @@ class HttpExecutorTest extends TestCase
         $client->request('GET', '/api/anything', ['q' => 'a b']);
         $this->assertSame('q=a%20b', $backend->lastCall()['query']);
     }
+
+    /** @dataProvider fragmentQueries */
+    public function testRawPathFragmentsDoNotAbsorbQueryParameters(
+        string $path,
+        array $query,
+        string $expectedQuery,
+        string $expectedFragment
+    ): void {
+        $mock = new \GuzzleHttp\Handler\MockHandler([new \GuzzleHttp\Psr7\Response(200, [], '[]')]);
+        $client = new \OpenWA\Client([
+            'baseUrl' => 'https://fixture.invalid/gateway',
+            'apiKey' => 'fixture-key',
+            'httpClient' => new \GuzzleHttp\Client(['handler' => \GuzzleHttp\HandlerStack::create($mock)]),
+        ]);
+        $original = serialize([$path, $query]);
+
+        $client->request('GET', $path, $query);
+
+        $request = $mock->getLastRequest();
+        $this->assertNotNull($request);
+        $uri = $request->getUri();
+        $this->assertSame('fixture.invalid', $uri->getHost());
+        $this->assertSame('/gateway/api/sessions', $uri->getPath());
+        $this->assertSame($expectedQuery, $uri->getQuery());
+        $this->assertSame($expectedFragment, $uri->getFragment());
+        $this->assertSame('/gateway/api/sessions' . ($expectedQuery === '' ? '' : '?' . $expectedQuery), $request->getRequestTarget());
+        $this->assertSame('fixture-key', $request->getHeaderLine('X-API-Key'));
+        $this->assertSame($original, serialize([$path, $query]));
+    }
+
+    public static function fragmentQueries(): array
+    {
+        return [
+            'fragment' => ['/api/sessions#tab', ['limit' => 10], 'limit=10', 'tab'],
+            'query and fragment' => ['/api/sessions?offset=0#tab', ['limit' => 10], 'offset=0&limit=10', 'tab'],
+            'question mark in fragment' => ['/api/sessions#tab?fake=1', ['limit' => 10], 'limit=10', 'tab?fake=1'],
+            'query without fragment' => ['/api/sessions?offset=0', ['limit' => 10], 'offset=0&limit=10', ''],
+            'plain path' => ['/api/sessions', ['limit' => 10], 'limit=10', ''],
+            'no additions' => ['/api/sessions#tab', [], '', 'tab'],
+            'null omitted' => ['/api/sessions?offset=0#tab', ['limit' => null], 'offset=0', 'tab'],
+            'encoded hashes' => ['/api/sessions?label=a%23b#tab', ['name' => 'x#y'], 'label=a%23b&name=x%23y', 'tab'],
+            'empty fragment and zero values' => ['/api/sessions#', ['offset' => 0, 'active' => false, 'unused' => null], 'offset=0&active=0', ''],
+        ];
+    }
+
+    public function testEncodedIdentityHashesStayInThePath(): void
+    {
+        $mock = new \GuzzleHttp\Handler\MockHandler([new \GuzzleHttp\Psr7\Response(200, [], '{}')]);
+        $client = new \OpenWA\Client([
+            'baseUrl' => 'https://fixture.invalid/gateway',
+            'apiKey' => 'fixture-key',
+            'httpClient' => new \GuzzleHttp\Client(['handler' => \GuzzleHttp\HandlerStack::create($mock)]),
+        ]);
+
+        $client->contacts->get('session#one', 'contact#two@c.us');
+
+        $request = $mock->getLastRequest();
+        $this->assertNotNull($request);
+        $this->assertSame('fixture.invalid', $request->getUri()->getHost());
+        $this->assertSame('/gateway/api/sessions/session%23one/contacts/contact%23two@c.us', $request->getRequestTarget());
+        $this->assertSame('', $request->getUri()->getQuery());
+        $this->assertSame('', $request->getUri()->getFragment());
+    }
 }

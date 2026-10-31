@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { sessionApi, type Session } from '../services/api';
 import { isValidProxyUrl } from '../utils/sessionForm';
@@ -37,6 +37,15 @@ export function useSessionCreateForm({ onCreated, onFailed }: UseSessionCreateFo
   const [useProxy, setUseProxy] = useState(false);
   const [proxyUrl, setProxyUrl] = useState('');
   const [creating, setCreating] = useState(false);
+  // Counts what turns the form into a newer draft: an edit, or the modal opening again. A create that answers after
+  // either leaves that draft alone. Closing the modal is not one, so a cancelled create still clears the form.
+  const draftEdits = useRef(0);
+  const edited =
+    <T>(set: (value: T) => void) =>
+    (value: T) => {
+      draftEdits.current += 1;
+      set(value);
+    };
 
   const resetProxyFields = () => {
     setUseProxy(false);
@@ -55,15 +64,18 @@ export function useSessionCreateForm({ onCreated, onFailed }: UseSessionCreateFo
     // Guarded here rather than only on the Create button: the name field's Enter key calls this
     // directly, so a button-only check creates a session with no proxy while the toggle says on.
     if (useProxy && !isValidProxyUrl(proxyUrl.trim())) return;
+    const submittedAt = draftEdits.current;
     try {
       setCreating(true);
       const newSession = await sessionApi.create(
         newSessionName,
         useProxy && proxyUrl.trim() ? { proxyUrl: proxyUrl.trim() } : undefined,
       );
-      setNewSessionName('');
-      resetProxyFields();
-      setShowCreateModal(false);
+      if (draftEdits.current === submittedAt) {
+        setNewSessionName('');
+        resetProxyFields();
+        setShowCreateModal(false);
+      }
       toast.success(t('sessions.create.successTitle'), t('sessions.create.successDesc', { name: newSession.name }));
       onCreated(newSession);
     } catch (err) {
@@ -77,13 +89,16 @@ export function useSessionCreateForm({ onCreated, onFailed }: UseSessionCreateFo
 
   return {
     showCreateModal,
-    setShowCreateModal,
+    setShowCreateModal: (open: boolean) => {
+      if (open) draftEdits.current += 1;
+      setShowCreateModal(open);
+    },
     newSessionName,
-    setNewSessionName,
+    setNewSessionName: edited(setNewSessionName),
     useProxy,
-    setUseProxy,
+    setUseProxy: edited(setUseProxy),
     proxyUrl,
-    setProxyUrl,
+    setProxyUrl: edited(setProxyUrl),
     creating,
     handleCreate,
   };

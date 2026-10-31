@@ -1,3 +1,6 @@
+// Spread the real fs so a test can spy on rmSync (the bare namespace is not configurable).
+jest.mock('fs', () => ({ __esModule: true, ...jest.requireActual<typeof import('fs')>('fs') }));
+
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -211,6 +214,27 @@ describe('PluginUninstaller — uninstall', () => {
     await flaky.uninstaller.uninstallPlugin('relay');
     expect(fs.existsSync(dir)).toBe(false);
     expect(storage.getPluginEntry('relay')).toBeUndefined();
+  });
+
+  it('keeps the registry entry when the package folder cannot be removed, so the uninstall can be repeated', async () => {
+    const dir = writeUserPlugin('relay');
+    plugins.set('relay', loadedUserPlugin('relay', dir));
+    seedEntry(storage, 'relay');
+    const realRm = fs.rmSync.bind(fs);
+    const rm = jest.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    });
+
+    await expect(uninstaller.uninstallPlugin('relay')).rejects.toThrow('EACCES');
+
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(storage.getPluginEntry('relay')).toBeDefined();
+
+    rm.mockImplementation(realRm);
+    await uninstaller.uninstallPlugin('relay');
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(storage.getPluginEntry('relay')).toBeUndefined();
+    rm.mockRestore();
   });
 
   // The boot scan loads a folder by its manifest id, whatever the folder is called. The repeat of a

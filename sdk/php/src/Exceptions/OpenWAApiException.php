@@ -97,7 +97,8 @@ class OpenWAApiException extends OpenWAException
     private static function retryAfter($fromBody, ?string $header): ?int
     {
         if ((is_int($fromBody) || is_float($fromBody)) && $fromBody >= 0) {
-            return (int) ceil($fromBody);
+            // Past the integer range a float cast wraps to a negative or short wait.
+            return $fromBody >= PHP_INT_MAX ? PHP_INT_MAX : (int) ceil($fromBody);
         }
         $value = trim((string) $header);
         if ($value === '') {
@@ -105,7 +106,8 @@ class OpenWAApiException extends OpenWAException
         }
         // Not ctype_digit(): ext-ctype is optional and this SDK does not require it.
         if (preg_match('/^\d+$/D', $value) === 1) {
-            return (int) $value;
+            // A numeric string of 309 digits or more converts through INF, which casts to 0.
+            return strlen(ltrim($value, '0')) > 19 ? PHP_INT_MAX : (int) $value;
         }
         $at = \DateTimeImmutable::createFromFormat('D, d M Y H:i:s \G\M\T', $value, new \DateTimeZone('UTC'));
         return $at === false ? null : max(0, $at->getTimestamp() - time());

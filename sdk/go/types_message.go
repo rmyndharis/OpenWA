@@ -23,8 +23,8 @@ type SendTextRequest struct {
 	// engines differ: whatsapp-web.js builds one in-page by default, while on Baileys a preview is
 	// OPT-IN — it needs true, because generating one is a blocking outbound fetch per URL.
 	LinkPreview *bool `json:"linkPreview,omitempty"`
-	// CustomLinkPreview attaches a preview you supply instead of one fetched from the URL. Nothing is
-	// fetched, so it works even for a URL the gateway cannot reach. Baileys only — whatsapp-web.js
+	// CustomLinkPreview attaches a preview you supply instead of one fetched from the URL. The page is
+	// not fetched, so it works even for a URL the gateway cannot reach. Baileys only — whatsapp-web.js
 	// takes a boolean and answers 501. Cannot be combined with LinkPreview=false.
 	CustomLinkPreview *CustomLinkPreview `json:"customLinkPreview,omitempty"`
 	// QuotedMessageID quotes an earlier message, turning this send into a reply. Engine-specific:
@@ -270,7 +270,7 @@ type MessageListResponse struct {
 
 // ChatHistoryMedia is the media block on a live history message.
 type ChatHistoryMedia struct {
-	Mimetype  string `json:"mimetype,omitempty"`
+	Mimetype  string `json:"mimetype"`
 	Filename  string `json:"filename,omitempty"`
 	Data      string `json:"data,omitempty"`
 	Omitted   bool   `json:"omitted,omitempty"`
@@ -279,14 +279,14 @@ type ChatHistoryMedia struct {
 
 // QuotedMessage is the quoted-message block on a live history message.
 type QuotedMessage struct {
-	ID   string `json:"id,omitempty"`
-	Body string `json:"body,omitempty"`
+	ID   string `json:"id"`
+	Body string `json:"body"`
 }
 
 // MessageLocation is the location block on a live history message.
 type MessageLocation struct {
-	Latitude    float64 `json:"latitude,omitempty"`
-	Longitude   float64 `json:"longitude,omitempty"`
+	Latitude    float64 `json:"latitude"`
+	Longitude   float64 `json:"longitude"`
 	Description string  `json:"description,omitempty"`
 	Address     string  `json:"address,omitempty"`
 	URL         string  `json:"url,omitempty"`
@@ -451,8 +451,8 @@ type BulkMessageResponse struct {
 
 // BatchError is a per-message failure in a batch result.
 type BatchError struct {
-	Code    string `json:"code,omitempty"`
-	Message string `json:"message,omitempty"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // BatchMessageStatus is one recipient's send outcome inside a batch.

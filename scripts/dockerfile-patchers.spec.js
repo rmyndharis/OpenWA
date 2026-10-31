@@ -52,6 +52,21 @@ test('every patcher is COPIED into the production stage', () => {
   assert.deepEqual(missing, [], `not copied into the image: ${missing.join(', ')}`);
 });
 
+test('every sibling module a patcher requires is COPIED into the production stage', () => {
+  // A patcher that needs ./atomic-write.js fails with MODULE_NOT_FOUND in the image build when only the
+  // patcher itself was copied. Derive the modules from the patchers' own require calls.
+  const needed = new Set(
+    patchers.flatMap(p =>
+      [...fs.readFileSync(path.join(__dirname, p), 'utf8').matchAll(/require\('\.\/([\w-]+)(?:\.js)?'\)/g)].map(
+        match => `scripts/${match[1]}.js`,
+      ),
+    ),
+  );
+  assert.ok(needed.has('scripts/atomic-write.js'), 'the fixture did not find the shared write helper');
+  const missing = [...needed].filter(file => !copied.includes(file));
+  assert.deepEqual(missing, [], `required by a patcher but not copied into the image: ${missing.join(', ')}`);
+});
+
 test('every patcher is RUN fatally after npm ci', () => {
   // The postinstall hook runs them --best-effort; the explicit run is the real gate, so a shape
   // change fails the image build instead of shipping unpatched.

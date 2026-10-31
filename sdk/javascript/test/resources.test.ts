@@ -59,6 +59,14 @@ describe('GroupsResource — exact paths and bodies', () => {
     expect(t.lastCall!.url).toContain('/invite-code/revoke');
   });
 
+  it('setMemberLabel PUTs the label to the group', async () => {
+    const t = new MockTransport().on('PUT', /\/member-label$/, { body: { success: true } });
+    await client(t).groups.setMemberLabel('s', 'g@g.us', 'Site A');
+    expect(t.lastCall!.method).toBe('PUT');
+    expect(t.lastCall!.url).toContain('/api/sessions/s/groups/g@g.us/member-label');
+    expect(t.lastCall!.body).toEqual({ label: 'Site A' });
+  });
+
   it('membership requests — list, approve, reject', async () => {
     const t = new MockTransport()
       .on('GET', /\/membership-requests$/, { body: [{ participantId: 'a@c.us', method: 'invite_link' }] })
@@ -538,5 +546,75 @@ describe('SearchResource — exact path and query forwarding', () => {
     const c = client(t);
     await c.search.search({ q: 'term', chatId: '628@c.us', direction: 'incoming' });
     expect(t.lastCall!.url).toBe('http://x/api/search?q=term&chatId=628%40c.us&direction=incoming');
+  });
+
+  it('forwards the match mode', async () => {
+    const t = new MockTransport().on('GET', /\/search$/, {
+      body: { hits: [], total: 0, tookMs: 1, provider: 'builtin-fts' },
+    });
+    await client(t).search.search({ q: 'voic', match: 'contains' });
+    expect(t.lastCall!.url).toBe('http://x/api/search?q=voic&match=contains');
+  });
+});
+
+// Eleven routes no other test calls. Each row is written from the contract (openapi.json: verb, path,
+// query and request-body keys), not read off the client, so a changed verb or a renamed body key fails here.
+describe('routes with no other test: verb, path, query and body', () => {
+  type Row = [name: string, call: (c: OpenWAClient) => Promise<unknown>, method: string, url: string, body?: unknown];
+  const rows: Row[] = [
+    ['sessions.getConfig', c => c.sessions.getConfig('s1'), 'GET', 'http://x/api/sessions/s1/config'],
+    [
+      'sessions.updateConfig',
+      c =>
+        c.sessions.updateConfig('s1', { autoRejectCalls: true, maxReconnectAttempts: null, reconnectBaseDelay: 2000 }),
+      'PATCH',
+      'http://x/api/sessions/s1/config',
+      { autoRejectCalls: true, maxReconnectAttempts: null, reconnectBaseDelay: 2000 },
+    ],
+    ['sessions.getProxy', c => c.sessions.getProxy('s1'), 'GET', 'http://x/api/sessions/s1/proxy'],
+    [
+      'sessions.updateProxy',
+      c => c.sessions.updateProxy('s1', { proxyUrl: null }),
+      'PATCH',
+      'http://x/api/sessions/s1/proxy',
+      { proxyUrl: null },
+    ],
+    [
+      'webhooks.listAll',
+      c => c.webhooks.listAll({ limit: 5, offset: 10 }),
+      'GET',
+      'http://x/api/webhooks?limit=5&offset=10',
+    ],
+    [
+      'webhooks.deliveryFailures',
+      c => c.webhooks.deliveryFailures({ sessionId: 's1', limit: 5, offset: 10 }),
+      'GET',
+      'http://x/api/webhooks/delivery-failures?sessionId=s1&limit=5&offset=10',
+    ],
+    [
+      'chats.subscribePresence',
+      c => c.chats.subscribePresence('s1', { chatId: 'a@c.us' }),
+      'POST',
+      'http://x/api/sessions/s1/presence/subscribe',
+      { chatId: 'a@c.us' },
+    ],
+    ['chats.getPresence', c => c.chats.getPresence('s1', 'a@c.us'), 'GET', 'http://x/api/sessions/s1/presence/a@c.us'],
+    ['status.fromContact', c => c.status.fromContact('s1', 'a@c.us'), 'GET', 'http://x/api/sessions/s1/status/a@c.us'],
+    ['labels.chats', c => c.labels.chats('s1', 'l1'), 'GET', 'http://x/api/sessions/s1/labels/l1/chats'],
+    [
+      'groups.joinInfo',
+      c => c.groups.joinInfo('s1', 'INVITE'),
+      'GET',
+      'http://x/api/sessions/s1/groups/join-info?code=INVITE',
+    ],
+  ];
+
+  it.each(rows)('%s', async (_name, call, method, url, body) => {
+    const t = new MockTransport().passthrough({ status: 200, body: {} });
+    await call(client(t));
+    expect(t.calls).toHaveLength(1);
+    expect(t.lastCall!.method).toBe(method);
+    expect(t.lastCall!.url).toBe(url);
+    expect(t.lastCall!.body).toEqual(body);
   });
 });

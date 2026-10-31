@@ -66,12 +66,24 @@ test('best-effort skips unknown shapes but refuses partial patches', t => {
   fs.writeFileSync(file, ACK_REPLACE);
   assert.equal(run(dir, true), 1);
 });
-test('best-effort still fails if a validated patch cannot finish writing', t => {
+test('best-effort skips and changes nothing when a validated patch cannot be written', t => {
   const dir = fixture(t);
   const write = fs.writeFileSync;
   t.mock.method(fs, 'writeFileSync', (file, data) => {
-    if (file.endsWith('messages-recv.js')) throw new Error('write failed');
+    if (file.includes('messages-recv.js')) throw new Error('write failed');
     return write(file, data);
+  });
+  assert.equal(run(dir, true), 0);
+  assert.equal(run(dir, false), 1);
+  assert.equal(isApplied(dir), false);
+  assert.ok(fs.readFileSync(path.join(dir, 'lib/Socket/socket.js'), 'utf8').includes(QR_FIND));
+});
+test('best-effort still fails if only part of a validated patch was written', t => {
+  const dir = fixture(t);
+  const rename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (to.endsWith('messages-recv.js')) throw new Error('rename failed');
+    return rename(from, to);
   });
   assert.equal(run(dir, true), 1);
   assert.equal(isApplied(dir), false);

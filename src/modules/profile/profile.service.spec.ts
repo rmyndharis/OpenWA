@@ -56,6 +56,16 @@ describe('ProfileService', () => {
       );
     });
 
+    it('rejects a url that is not an absolute http(s) URL (400), also when it reaches the service without the DTO', () => {
+      const setProfilePicture = jest.fn();
+      const svc = makeService({ setProfilePicture });
+      for (const url of ['ftp://example.com/a.jpg', 'example.com/a.jpg']) {
+        expect(() => svc.setProfilePicture('s1', { url })).toThrow(BadRequestException);
+        expect(() => svc.setProfilePicture('s1', { url })).toThrow('url must be an absolute http(s) URL');
+      }
+      expect(setProfilePicture).not.toHaveBeenCalled();
+    });
+
     it('maps a base64 body to a MediaInput (base64 wins over a stale url, #670)', async () => {
       const setProfilePicture = jest.fn().mockResolvedValue(undefined);
       await makeService({ setProfilePicture }).setProfilePicture('s1', {

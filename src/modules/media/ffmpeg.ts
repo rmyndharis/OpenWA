@@ -1,7 +1,12 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { lstat, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
+
+/** The temp directory one conversion works in: mkdtemp appends six random characters to this prefix. */
+const CONVERSION_DIR_PREFIX = 'openwa-convert-';
+const CONVERSION_DIR = /^openwa-convert-[A-Za-z0-9]{6}$/;
 
 /** A conversion that ffmpeg refused, timed out on, or produced too much output for. */
 export class FfmpegConversionError extends Error {
@@ -30,6 +35,8 @@ export interface FfmpegRunOptions {
   timeoutMs: number;
   /** Ceiling on the produced bytes. */
   maxOutputBytes: number;
+  /** Cancellation checked immediately before a process can be started. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -177,7 +184,7 @@ export async function runFfmpeg(
   encodeArgs: string[],
   options: FfmpegRunOptions,
 ): Promise<Buffer> {
-  const dir = await mkdtemp(join(tmpdir(), 'openwa-convert-'));
+  const dir = await mkdtemp(join(tmpdir(), CONVERSION_DIR_PREFIX));
   const inputPath = join(dir, `in.${inputExtension}`);
   const outputPath = join(dir, `out.${outputExtension}`);
   try {
@@ -209,6 +216,42 @@ export async function runFfmpeg(
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Remove the conversion directories a gateway killed mid-conversion left in the temp dir: SIGKILL and the
+ * OOM killer run no `finally`, and a disk-backed /tmp (a Kubernetes emptyDir) outlives the container. Only a
+ * directory at least `minAgeMs` old goes, judged by its mtime, which stops changing once ffmpeg has created its
+ * output, so a conversion still running in another process that shares the temp dir is left alone. A link or a
+ * file under the same name is never touched. Best-effort: every failure goes to `warn`, nothing is thrown.
+ */
+export async function removeStaleConversionDirs(
+  minAgeMs: number,
+  warn: (message: string, error: unknown) => void,
+  now = Date.now(),
+): Promise<number> {
+  const root = tmpdir();
+  let entries: Dirent[];
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    warn('Could not list the temp dir for leftover conversion directories', error);
+    return 0;
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    // A Dirent describes the entry itself, so a link named like a conversion directory is not a directory here.
+    if (!entry.isDirectory() || !CONVERSION_DIR.test(entry.name)) continue;
+    const dir = join(root, entry.name);
+    try {
+      if (now - (await lstat(dir)).mtimeMs < minAgeMs) continue;
+      await rm(dir, { recursive: true, force: true });
+      removed += 1;
+    } catch (error) {
+      warn(`Could not remove the leftover conversion directory ${entry.name}`, error);
+    }
+  }
+  return removed;
 }
 
 /** Process groups of the ffmpeg runs still in flight, so they can be killed when the gateway exits. */
@@ -266,6 +309,7 @@ function execute(args: string[], options: FfmpegRunOptions): Promise<void> {
     // filename with a space or a quote is data rather than syntax.
     // `detached` puts the child at the head of its own process group, so the timeout can kill
     // everything under it (see below).
+    options.signal?.throwIfAborted();
     const child = spawn(options.ffmpegPath, args, {
       stdio: ['ignore', 'ignore', 'pipe'],
       detached: true,

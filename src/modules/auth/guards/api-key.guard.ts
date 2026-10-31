@@ -23,7 +23,7 @@ import {
   ChatScopeKind,
 } from '../decorators/auth.decorators';
 import { resolveClientIp } from '../../../common/utils/ip';
-import { bearerToken } from '../../../common/security/bearer-token';
+import { presentedApiKey } from '../../../common/security/bearer-token';
 import { setRequestActor } from '../../../common/services/request-context';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/entities/audit-log.entity';
@@ -228,11 +228,8 @@ export class ApiKeyGuard implements CanActivate {
   }
 
   private extractApiKey(request: Request): string | undefined {
-    // Support both X-API-Key header and Authorization Bearer
-    const xApiKey = request.headers['x-api-key'] as string;
-    if (xApiKey) return xApiKey;
-
-    return bearerToken(request.headers['authorization']);
+    // Both the X-API-Key header and Authorization Bearer are supported.
+    return presentedApiKey(request.headers);
   }
 
   /**

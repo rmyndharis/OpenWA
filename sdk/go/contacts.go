@@ -54,7 +54,7 @@ func (s *ContactsService) ProfilePicture(ctx context.Context, sessionID, contact
 
 // ProfilePictures batch-resolves profile picture URLs for up to 50 contacts
 // in one request. The result maps each requested id to its URL (nil when the
-// lookup failed).
+// lookup failed). An id skipped after a lookup timed out is absent from the map; ask for it again.
 func (s *ContactsService) ProfilePictures(ctx context.Context, sessionID string, ids []string) (*ProfilePicturesResponse, error) {
 	var out ProfilePicturesResponse
 	q := url.Values{"ids": []string{strings.Join(ids, ",")}}

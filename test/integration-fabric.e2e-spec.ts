@@ -1,7 +1,3 @@
-// archiver v8 is ESM-only and is pulled in transitively via the @Global StorageModule when
-// AppModule boots; stub it so ts-jest (CommonJS) can load the module graph.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,6 +11,7 @@ import { json, urlencoded, Request } from 'express';
 import { AppModule } from './../src/app.module';
 import { applyGlobalValidation } from './../src/config/app-validation';
 import { PluginLoaderService } from './../src/core/plugins/plugin-loader.service';
+import { IngressReconcilerService } from './../src/modules/integration/ingress-reconciler.service';
 import { PluginInstance } from './../src/modules/integration/entities/plugin-instance.entity';
 import { IngressEvent } from './../src/modules/integration/entities/ingress-event.entity';
 import { IntegrationDeliveryFailure } from './../src/modules/integration/entities/integration-delivery-failure.entity';
@@ -64,6 +61,10 @@ describe('Integration Fabric ingress (e2e)', () => {
     },
     dedupHeader: 'x-chatwoot-delivery',
   };
+  // The same provider contract on a route that declares a response contract (an ack alone), as an adapter whose
+  // provider needs an answer now does: while its plugin is restoring, that is the one route a delivery is refused on.
+  const answeringManifestRoute = { ...ingressManifestRoute, route: 'send-sms', response: { ack: { status: 204 } } };
+  const ANSWERING_PATH = '/api/ingress/chatwoot/acct1/send-sms';
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -101,7 +102,9 @@ describe('Integration Fabric ingress (e2e)', () => {
     const realGetPlugin = loader.getPlugin.bind(loader);
     jest.spyOn(loader, 'getPlugin').mockImplementation((pluginId: string) => {
       if (pluginId === 'chatwoot') {
-        return { manifest: { ingress: [ingressManifestRoute] } } as unknown as ReturnType<typeof loader.getPlugin>;
+        return {
+          manifest: { ingress: [ingressManifestRoute, answeringManifestRoute] },
+        } as unknown as ReturnType<typeof loader.getPlugin>;
       }
       return realGetPlugin(pluginId);
     });
@@ -171,6 +174,110 @@ describe('Integration Fabric ingress (e2e)', () => {
 
     expect(res.status).toBe(401);
     expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
+  });
+
+  // A plugin the boot restore has not reached has no worker. A route without a response contract is accepted and
+  // persisted like every delivery; with the queue off the row is not dispatched at the door but left for the
+  // reconciler, which dispatches it once the plugin is up.
+  describe('while the plugin restore is pending', () => {
+    const stateRepos = () => ({
+      events: app.get<Repository<IngressEvent>>(getRepositoryToken(IngressEvent, 'data')),
+      failures: app.get<Repository<IntegrationDeliveryFailure>>(getRepositoryToken(IntegrationDeliveryFailure, 'data')),
+    });
+    const post = (path: string, deliveryId: string) =>
+      request(app.getHttpServer())
+        .post(path)
+        .set('X-Chatwoot-Signature', sig)
+        .set('X-Chatwoot-Delivery', deliveryId)
+        .set('Content-Type', 'application/json')
+        .send(raw);
+    const restoring = () => jest.spyOn(app.get(PluginLoaderService), 'isRestorePending').mockReturnValue(true);
+
+    it('accepts and persists a delivery of a route without a response contract, and the reconciler delivers it afterwards', async () => {
+      const { events, failures } = stateRepos();
+      const restore = restoring();
+      try {
+        const accepted = await post(INGRESS_PATH, 'delivery-held-1');
+
+        expect(accepted.status).toBe(202);
+        // Not dispatched into a plugin with no worker, and not dead-lettered: the row is the record of it.
+        expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
+        const held = await events.findOneByOrFail({ providerDeliveryId: 'delivery-held-1' });
+        expect(held.dispatchState).toBe('pending');
+        expect(held.dispatchAttempts).toBe(0);
+        expect(held.payload).not.toBeNull();
+        expect(await failures.countBy({ deliveryId: 'delivery-held-1' })).toBe(0);
+
+        // The provider's own retry of it is a duplicate, as for any persisted delivery.
+        expect((await post(INGRESS_PATH, 'delivery-held-1')).status).toBe(202);
+        expect(await events.countBy({ providerDeliveryId: 'delivery-held-1' })).toBe(1);
+
+        // While the restore lasts the reconciler leaves the row alone.
+        const reconciler = app.get(IngressReconcilerService);
+        const options = { intervalMs: 60_000, graceMs: 0, batchSize: 50, maxAttempts: 5 };
+        await new Promise(resolve => setTimeout(resolve, 5));
+        await reconciler.sweep(options);
+        expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
+
+        restore.mockRestore();
+        const stats = await reconciler.sweep(options);
+
+        expect(stats).toMatchObject({ scanned: 1, replayed: 1 });
+        expect(dispatchWebhookForInstance).toHaveBeenCalledTimes(1);
+        const delivered = await events.findOneByOrFail({ providerDeliveryId: 'delivery-held-1' });
+        expect(delivered.dispatchState).toBe('dispatched');
+        expect(delivered.payload).toBeNull();
+      } finally {
+        restore.mockRestore();
+      }
+    });
+
+    it('refuses a route that declares a response contract with 503 and Retry-After, stores nothing, then accepts the retry', async () => {
+      const { events, failures } = stateRepos();
+      const restore = restoring();
+      try {
+        const refused = await post(ANSWERING_PATH, 'delivery-answer-1');
+
+        expect(refused.status).toBe(503);
+        expect(refused.headers['retry-after']).toBe('5');
+        expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
+        // A stored row would answer the provider's retry with a 'duplicate' ack and lose the delivery.
+        expect(await events.countBy({ providerDeliveryId: 'delivery-answer-1' })).toBe(0);
+        expect(await failures.countBy({ deliveryId: 'delivery-answer-1' })).toBe(0);
+      } finally {
+        restore.mockRestore();
+      }
+
+      const retried = await post(ANSWERING_PATH, 'delivery-answer-1');
+
+      expect(retried.status).toBe(204);
+      expect(dispatchWebhookForInstance).toHaveBeenCalledTimes(1);
+    });
+
+    it('still dispatches at the door when the reconciler is off, since nothing would replay a held row', async () => {
+      const { events, failures } = stateRepos();
+      const original = process.env.INGRESS_RECONCILE_INTERVAL_MS;
+      process.env.INGRESS_RECONCILE_INTERVAL_MS = '0';
+      const restore = restoring();
+      dispatchWebhookForInstance.mockRejectedValueOnce(new Error('no live sandbox host for plugin chatwoot'));
+      try {
+        const res = await post(INGRESS_PATH, 'delivery-noreconcile-1');
+
+        // The inline dispatch fails and files the redrivable dead letter an operator can see.
+        expect(res.status).toBe(202);
+        expect(dispatchWebhookForInstance).toHaveBeenCalledTimes(1);
+        expect(await failures.countBy({ deliveryId: 'delivery-noreconcile-1', redriven: false })).toBe(1);
+        expect((await events.findOneByOrFail({ providerDeliveryId: 'delivery-noreconcile-1' })).dispatchAttempts).toBe(
+          1,
+        );
+      } finally {
+        restore.mockRestore();
+        if (original === undefined) delete process.env.INGRESS_RECONCILE_INTERVAL_MS;
+        else process.env.INGRESS_RECONCILE_INTERVAL_MS = original;
+        // An unused once-rejection must not reach the next test.
+        dispatchWebhookForInstance.mockReset().mockResolvedValue(undefined);
+      }
+    });
   });
 
   it('marks the persisted event dispatched once a successful inline dispatch is recorded', async () => {

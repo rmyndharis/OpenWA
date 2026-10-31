@@ -2,35 +2,9 @@
 # Everything else — anything in the application's own dependency tree, and every OS package —
 # still blocks promotion (see the image-scan job in .github/workflows/release.yml).
 
-# CVE-2026-102276 and CVE-2026-102278 (GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7): brace-expansion
-# denial of service through uncontrolled recursion, fixed upstream in 5.0.10 and 5.0.11.
-#
-# The only copy left in the image is the one bundled inside the npm CLI
-# (/usr/local/lib/node_modules/npm/node_modules/brace-expansion, 5.0.9 in npm 12.1.0, the newest
-# release and the one the Dockerfile installs). npm is never on the request path: the entrypoint
-# runs `node dist/main`, and npm is present only for the documented operator runbooks
-# (`docker compose run --rm openwa-api npm run migration:run:prod`). Reaching this code requires an
-# operator to run an npm command with an attacker-chosen glob inside the container.
-#
-# These are ID-level ignores, so they would also silence the same CVEs in the application tree,
-# which this file otherwise refuses to do. What keeps that honest is the root `overrides` entries
-# that pin brace-expansion per minimatch major (^1.1.21 under minimatch 3, ^2.1.7 under minimatch 5
-# and 9, ^5.0.12 under minimatch 10): npm cannot resolve the application tree below the fixed
-# versions, so there is no app-tree finding for these ids to hide. Raise those floors alongside any
-# future brace-expansion advisory rather than widening this list. Drop both entries once npm ships a
-# bundle with brace-expansion >= 5.0.11.
-CVE-2026-102276
-CVE-2026-102278
-
-# CVE-2026-19534 (GHSA-rfgv-xxqx-mfg5): undici denial of service, fixed upstream in 6.28.1, 7.29.1
-# and 8.10.2.
-#
-# Same shape as the entries above: the only affected copy is the one bundled inside the npm CLI
-# (/usr/local/lib/node_modules/npm/node_modules/undici, 6.28.0 in npm 12.1.0). The application tree
-# is at the fix on its own: undici is a direct dependency whose range starts at or above the fixed
-# 8.10.2, so this ID-level ignore cannot hide an application-tree finding. Drop this
-# entry once npm ships a bundle with undici >= 6.28.1.
-CVE-2026-19534
+# No ID is accepted at the moment. One goes here, above these notes, only with its reason and the
+# condition for removing it. The file stays even when empty because both scan workflows pass it to
+# the scan.
 
 # Chromium: no entry, and the two architectures are not scanned alike.
 #

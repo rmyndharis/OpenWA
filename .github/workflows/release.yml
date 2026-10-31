@@ -4,12 +4,17 @@ on:
   push:
     tags: ['v*']
 
-# Serialize ALL release runs on one global queue — deliberately not a per-tag group
+# Serialize ALL release runs in one global group, deliberately not a per-tag group
 # (`release-${{ github.ref_name }}`). The mutable channels (the X.Y minor tag and `latest`)
 # are shared state across releases: a per-tag group would let two overlapping releases complete
 # out of order, with the older build re-pointing those channels last. cancel-in-progress: false
-# so a newer tag can never abort a promotion already in flight — a half-promoted registry state
-# is worse than a queued release.
+# so a newer tag can never abort a promotion already in flight: a half-promoted registry state
+# is worse than a waiting release.
+#
+# The group is not a queue. It holds the running release and at most one pending run, and a run
+# queued behind a pending one cancels it: a tag pushed while one release runs and another waits
+# drops the waiting one, which publishes nothing until it is re-run. `queue: max` would keep up to
+# 100 runs waiting, but the actionlint release the chart job pins (1.7.12) rejects that key.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -232,17 +237,21 @@ jobs:
       # only case-folds on a real server), that the UTC pin holds across a backup round trip, a
       # retention window and a local-midnight count, that webhook failure recovery and media metadata
       # updates hold on the real server, that a send idempotency key is claimed by a unique-violation
-      # insert, and that a replace-all import runs. All eight self-skip unless DATABASE_TYPE=postgres, so
-      # they are a no-op in the default test job and only execute here against the postgres:16 service.
+      # insert, that a replace-all import runs, and that a schema-scoped backup of a schema another role
+      # owns loads into an empty database. The PostgreSQL-specific suites self-skip unless
+      # DATABASE_TYPE=postgres. Session lifetime, two-node delete, failed takeover start, lid mapping ownership, chat-media
+      # retention marker, message edit re-emission, foreign-chat receipt, API-send sender, own-sender
+      # search, the lid mapping report-source migration, merged-ack status and the two adapters' lid
+      # mapping writes use SQLite in the default test job and the postgres:16 service here.
       # TZ is deliberately not UTC, for the reason ci.yml states.
-      - name: Postgres specs (FTS + migrations + ordering + schema + UTC + recovery + idempotency + import)
+      - name: Postgres specs (every PostgreSQL-only and dialect-switched spec)
         # --runInBand: same reason the CI job passes it — both specs issue DDL against the one
         # shared service database, and jest's default file-parallelism races their catalog writes
         # (the first v0.19.0 tag failed this step on `relation "messages" already exists` over a
         # tree CI had passed minutes earlier). The lock spec's own two-migrator race is in-file
         # (Promise.all) and unaffected by runInBand. The synchronize spec additionally CREATEs and
         # DROPs a scratch database of its own, which is only safe serialized.
-        run: npx jest --runInBand src/database/migrations/__tests__/1782400000000-AddMessagesFts.pg.spec.ts src/database/migrations/__tests__/pg-boot-migrations.pg.spec.ts src/modules/message/message-list-ordering.pg.spec.ts src/database/migrations/__tests__/pg-entity-synchronize.pg.spec.ts src/database/postgres-utc.pg.spec.ts src/modules/webhook/webhook-recovery.pg.spec.ts src/modules/message/idempotency/send-idempotency.service.pg.spec.ts src/modules/infra/infra-data.import.pg.spec.ts
+        run: npx jest --runInBand src/database/migrations/__tests__/1782400000000-AddMessagesFts.pg.spec.ts src/modules/search/providers/builtin-fts.provider.contains.pg.spec.ts src/database/migrations/__tests__/pg-boot-migrations.pg.spec.ts src/modules/message/message-list-ordering.pg.spec.ts src/database/migrations/__tests__/pg-entity-synchronize.pg.spec.ts src/database/postgres-utc.pg.spec.ts src/modules/webhook/webhook-recovery.pg.spec.ts src/modules/message/idempotency/send-idempotency.service.pg.spec.ts src/modules/infra/infra-data.import.pg.spec.ts src/modules/infra/infra-data.optional-tables.pg.spec.ts src/modules/message/message-selection-restore.pg.spec.ts src/database/migrations/__tests__/scoped-backup-schema-owner.pg.spec.ts src/modules/session/session-content-lifetime.spec.ts src/modules/session/session-delete-claim.spec.ts src/modules/takeover/session-takeover-failed-adoption.spec.ts src/engine/identity/lid-mapping-store.spec.ts src/modules/chat-media/chat-media-retention-marker.spec.ts src/modules/session/message-edit-persisted.spec.ts src/modules/session/ack-foreign-chat.spec.ts src/modules/message/outgoing-row-sender.spec.ts src/modules/search/search-own-sender.spec.ts src/database/migrations/__tests__/1791400000000-AddLidMappingReportSource.spec.ts src/modules/session/message-projector.merged-ack.spec.ts src/engine/adapters/baileys.adapter.spec.ts src/engine/adapters/whatsapp-web-js.adapter.spec.ts
         env:
           TZ: Asia/Jakarta
           DATABASE_TYPE: postgres
@@ -406,7 +415,7 @@ jobs:
     # a matching container image, and a runtime boot check on both architectures (boot-smoke runs the
     # published image on amd64 + arm64). Trades a few minutes of buildx/boot latency for release
     # safety.
-    needs: [lint, test, test-postgres, dashboard, build, docker, boot-smoke, image-scan, promote, verify-published]
+    needs: [lint, test, test-postgres, dashboard, build, docker, boot-smoke, image-scan, release-tags, promote, verify-published]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -427,12 +436,7 @@ jobs:
           if [ -z "$NOTES" ]; then
             NOTES="Release v${VERSION}"
           fi
-          # Use EOF delimiter for multi-line output
-          {
-            echo "NOTES<<EOF"
-            echo "$NOTES"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/release-notes.md"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
@@ -444,11 +448,14 @@ jobs:
           token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
           tag_name: ${{ github.ref_name }}
           name: v${{ steps.version.outputs.VERSION }}
-          body: ${{ steps.changelog.outputs.NOTES }}
+          body_path: ${{ runner.temp }}/release-notes.md
           draft: false
           # Same rule as the image channels below: any tag with a '-' suffix is a prerelease, so a
-          # tag kept off X.Y and latest can never become GitHub's "Latest" release either.
+          # tag kept off X.Y and latest can never become GitHub's "Latest" release either. A stable
+          # release that did not take the `latest` image channel (a patch to an older line) is not
+          # marked Latest, which the in-app update check reads. release-tags is false for both.
           prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ needs.release-tags.outputs.latest }}
 
   # ──── Docker Image with Version Tag ───────────────────────────────
   docker:
@@ -465,6 +472,7 @@ jobs:
     outputs:
       digest: ${{ steps.build.outputs.digest }}
       tags: ${{ steps.meta.outputs.tags }}
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -700,10 +708,118 @@ jobs:
           # justification and a condition for removing it.
           trivyignores: .trivyignore
 
+  # Picks the tags promote may move. The X.Y and latest channels only ever move forward: a stable
+  # release older than what a channel already serves (a re-run of an old tag, a patch to an earlier
+  # line) leaves that channel alone and is published under the channels it still leads. A channel
+  # whose state cannot be read fails the release instead of being treated as absent; only the
+  # registry's own "manifest unknown" answer counts as absent. The lookups are anonymous pulls,
+  # made here so that the job holding the push, id-token and attestation grants issues none.
+  release-tags:
+    name: Resolve release image channels
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      packages: read
+    needs: [docker]
+    outputs:
+      tags: ${{ steps.select.outputs.tags }}
+      # Whether this release leads every `latest` channel it published to. The GitHub Release follows it,
+      # or an older line's patch release would become the Latest release the update check reads.
+      latest: ${{ steps.select.outputs.latest }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Select release tags without moving newer channels
+        id: select
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          VERSION: ${{ needs.docker.outputs.version }}
+          TAGS: ${{ needs.docker.outputs.tags }}
+        run: |
+          set -euo pipefail
+          stable='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          channel_version() {
+            local ref="$1" image config version token_url manifest_url token status
+            image="${ref%:*}"
+            if config="$(docker buildx imagetools inspect "$ref" --format '{{json .Image}}' 2>"$work/inspect.err")"; then
+              # Both published architectures must identify the same stable application version.
+              version="$(jq -er '[.["linux/amd64"].config.Labels["org.opencontainers.image.version"], ((.["linux/arm64"] // .["linux/arm64/v8"]).config.Labels["org.opencontainers.image.version"])] | if all(.[]; type == "string") and (unique | length) == 1 then .[0] else error("missing or inconsistent platform versions") end' <<< "$config")" || { echo "::error::$ref has no consistent version label on both platforms" >&2; return 1; }
+              if [[ ! "$version" =~ $stable ]]; then
+                echo "::error::$ref has no stable release version identity" >&2
+                return 1
+              fi
+              printf '%s\n' "$version"
+              return 0
+            fi
+            # A failed inspect is not evidence of absence. Only a registry 404 carrying its
+            # structured manifest/repository-not-found code permits creating a missing channel.
+            case "$image" in
+              ghcr.io/*)
+                token_url="https://ghcr.io/token?service=ghcr.io&scope=repository:${image#ghcr.io/}:pull"
+                manifest_url="https://ghcr.io/v2/${image#ghcr.io/}/manifests/${ref##*:}"
+                ;;
+              docker.io/*)
+                token_url="https://auth.docker.io/token?service=registry.docker.io&scope=repository:${image#docker.io/}:pull"
+                manifest_url="https://registry-1.docker.io/v2/${image#docker.io/}/manifests/${ref##*:}"
+                ;;
+              *) echo "::error::Unsupported release registry for $ref" >&2; return 1 ;;
+            esac
+            token="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "$token_url" | jq -er '.token // .access_token | select(type == "string" and length > 0)')" || { echo "::error::Cannot get a registry token for $ref" >&2; cat "$work/inspect.err" >&2; return 1; }
+            status="$(curl --silent --show-error --connect-timeout 10 --max-time 30 --output "$work/manifest.json" --write-out '%{http_code}' --header "Authorization: Bearer $token" --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$manifest_url")" || { echo "::error::Cannot reach the registry for $ref" >&2; cat "$work/inspect.err" >&2; return 1; }
+            if [ "$status" = 404 ] && jq -e '.errors | type == "array" and length > 0 and all(.[]; .code == "MANIFEST_UNKNOWN" or .code == "NAME_UNKNOWN")' "$work/manifest.json" >/dev/null; then
+              printf 'absent\n'
+              return 0
+            fi
+            echo "::error::Cannot determine the existing release identity for $ref (registry HTTP $status)" >&2
+            cat "$work/inspect.err" >&2
+            return 1
+          }
+          selected=()
+          latest=true
+          [[ "$REF_NAME" != *-* ]] || latest=false
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            channel="${tag##*:}"
+            if [[ "$channel" = latest || "$channel" =~ ^[0-9]+\.[0-9]+$ ]]; then
+              if [[ "$REF_NAME" == *-* ]]; then
+                echo "Skipping stable channel $tag for a prerelease"
+                continue
+              fi
+              if [[ ! "$VERSION" =~ $stable ]]; then
+                echo "::error::Cannot order release version '$VERSION': it is not a stable X.Y.Z"
+                exit 1
+              fi
+              current="$(channel_version "$tag")"
+              if [ "$current" != absent ] && [ "$(printf '%s\n' "$VERSION" "$current" | LC_ALL=C sort -V | tail -n 1)" != "$VERSION" ]; then
+                echo "Keeping $tag at newer release $current"
+                [ "$channel" != latest ] || latest=false
+                continue
+              fi
+            elif [ "$channel" != "$VERSION" ]; then
+              echo "::error::Unexpected release tag $tag for version $VERSION"
+              exit 1
+            fi
+            selected+=("$tag")
+          done <<< "$TAGS"
+          if [ "${#selected[@]}" -eq 0 ]; then
+            echo "::error::No release tags were selected"
+            exit 1
+          fi
+          {
+            echo 'tags<<RELEASE_TAGS'
+            printf '%s\n' "${selected[@]}"
+            echo 'RELEASE_TAGS'
+            echo "latest=$latest"
+          } >> "$GITHUB_OUTPUT"
+
   # Applies the release tags (X.Y.Z — plus X.Y and latest for non-prereleases) to the image
   # boot-smoke just proved can start, on BOTH registries (GHCR + Docker Hub — the tag set computed
-  # once by the docker job's metadata-action covers both, and arrives here via job outputs, so the
-  # promoted set is by construction the build's own tag set, never a re-derived pattern).
+  # once by the docker job's metadata-action covers both. release-tags drops the channels that would
+  # move backwards and hands the rest here via job outputs, so the promoted set is by construction
+  # a subset of the build's own tag set, never a re-derived pattern).
   # `imagetools create` re-points tags at the existing manifest list without rebuilding, so the
   # promoted image is bit-identical to the one tested on both registries, and its provenance and
   # SBOM attestations travel with it. Before re-pointing anything, the job records a signed
@@ -719,7 +835,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    needs: [docker, boot-smoke, image-scan]
+    needs: [docker, boot-smoke, image-scan, release-tags]
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -760,7 +876,7 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           REF_NAME: ${{ github.ref_name }}
-          TAGS: ${{ needs.docker.outputs.tags }}
+          TAGS: ${{ needs.release-tags.outputs.tags }}
           EXPECTED_DIGEST: ${{ needs.docker.outputs.digest }}
         run: |
           set -euo pipefail
@@ -882,10 +998,10 @@ jobs:
   # This job fixes both blind spots. It runs after promote (so it sees the final state, cleanup
   # included) and it never logs in, so it fails on a tag that exists but is not publicly readable —
   # which is indistinguishable from a missing tag to everyone downstream. The checked set is the
-  # docker job's own tag output (both registries), so it matches whatever was actually promoted —
-  # for a prerelease that is only the exact X.Y.Z-pre tag, with no stale expectation that `latest`
-  # or X.Y moved. Every tag must also resolve to the build's digest, so a re-pointed channel can
-  # never silently serve content other than the tested image.
+  # release-tags selection (both registries), so it matches what promote was told to move: for a
+  # prerelease that is only the exact X.Y.Z-pre tag, and a channel that already served a newer
+  # release is not expected to have moved. Every tag must also resolve to the build's digest, so a
+  # re-pointed channel can never silently serve content other than the tested image.
   verify-published:
     name: Verify published tags (anonymous)
     runs-on: ubuntu-latest
@@ -893,7 +1009,7 @@ jobs:
     # After cleanup-staging, not beside it: that job deletes registry versions, so this check has to
     # see the registry after it, and run last. It is a best-effort job, so gate on promote rather
     # than on its result.
-    needs: [docker, promote, cleanup-staging]
+    needs: [docker, release-tags, promote, cleanup-staging]
     if: always() && needs.promote.result == 'success'
     # attestations: read for `gh attestation verify` below. GH_TOKEN is an API credential for the
     # attestation lookup, not a registry login: every pull here stays anonymous.
@@ -907,7 +1023,7 @@ jobs:
       # Deliberately NO docker/login-action here. Authenticating would defeat the purpose.
       - name: Resolve every promoted tag without credentials
         env:
-          TAGS: ${{ needs.docker.outputs.tags }}
+          TAGS: ${{ needs.release-tags.outputs.tags }}
           EXPECTED_DIGEST: ${{ needs.docker.outputs.digest }}
           GH_TOKEN: ${{ github.token }}
         run: |

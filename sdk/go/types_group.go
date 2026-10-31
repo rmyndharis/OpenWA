@@ -110,8 +110,9 @@ type JoinGroupResponse struct {
 	GroupID string `json:"groupId"`
 }
 
-// GroupSettings is the announce / locked / ephemeral-timer state of a group —
-// the response of GetGroupSettings and the patch body of UpdateGroupSettings.
+// GroupSettings is the announce / locked / ephemeral-timer / member-add-mode
+// state of a group — the response of GetGroupSettings and the patch body of
+// UpdateGroupSettings.
 // Every field is a pointer: the engine may omit any of them on reads, and on
 // updates unset fields are omitted from the body so only the provided settings
 // are touched. At least one field must be set for an update — the server

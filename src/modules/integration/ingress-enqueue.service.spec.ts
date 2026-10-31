@@ -190,6 +190,47 @@ describe('IngressEnqueueService', () => {
     expect(loader.dispatchWebhookForInstance).toHaveBeenCalledWith(data);
   });
 
+  // A plugin the boot restore has not reached has no worker. With the queue on, the job waits in the queue and
+  // IngressProcessor holds it; dispatching inline is the one path that would have to run the plugin right away.
+  describe('defersInlineDispatch', () => {
+    const restoring = (ids: string[]) => {
+      loader.isRestorePending = jest.fn((id: string) => ids.includes(id));
+    };
+
+    it('defers a plugin the restore has not reached while dispatch is inline', () => {
+      restoring(['chatwoot']);
+      (config.get as jest.Mock).mockReturnValue(false);
+      const svc = new IngressEnqueueService(loader as PluginLoaderService, config as ConfigService, queue as never);
+
+      expect(svc.defersInlineDispatch('chatwoot')).toBe(true);
+      expect(svc.defersInlineDispatch('other')).toBe(false);
+    });
+
+    it('also defers when the queue is switched on but no queue instance was injected', () => {
+      restoring(['chatwoot']);
+      (config.get as jest.Mock).mockReturnValue(true);
+      const svc = new IngressEnqueueService(loader as PluginLoaderService, config as ConfigService, undefined);
+
+      expect(svc.defersInlineDispatch('chatwoot')).toBe(true);
+    });
+
+    it('does not defer when a queue takes the job', () => {
+      restoring(['chatwoot']);
+      (config.get as jest.Mock).mockReturnValue(true);
+      const svc = new IngressEnqueueService(loader as PluginLoaderService, config as ConfigService, queue as never);
+
+      expect(svc.defersInlineDispatch('chatwoot')).toBe(false);
+    });
+
+    it('does not defer once the restore is done with the plugin', () => {
+      restoring([]);
+      (config.get as jest.Mock).mockReturnValue(false);
+      const svc = new IngressEnqueueService(loader as PluginLoaderService, config as ConfigService, queue as never);
+
+      expect(svc.defersInlineDispatch('chatwoot')).toBe(false);
+    });
+  });
+
   describe('onApplicationBootstrap (queue-wiring tripwire)', () => {
     const ORIGINAL = process.env.QUEUE_ENABLED;
 

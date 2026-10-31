@@ -21,13 +21,21 @@ class LabelsResource
         $this->http = $http;
     }
 
-    /** @return array<int,array<string,mixed>> */
+    /**
+     * List all labels available in the business account. whatsapp-web.js only; Baileys answers 501.
+     *
+     * @return array<int,array<string,mixed>>
+     */
     public function list(string $sessionId): array
     {
         return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/labels") ?? [];
     }
 
-    /** @return array<string,mixed> */
+    /**
+     * Get a single label by id. whatsapp-web.js only; Baileys answers 501.
+     *
+     * @return array<string,mixed>
+     */
     public function get(string $sessionId, string $labelId): array
     {
         return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/labels/{$this->http->encodeSegment($labelId)}");
@@ -70,7 +78,11 @@ class LabelsResource
         return $this->http->request('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/labels/{$this->http->encodeSegment($labelId)}");
     }
 
-    /** @return array<int,array<string,mixed>> */
+    /**
+     * Get the labels currently applied to a chat. whatsapp-web.js only; Baileys answers 501.
+     *
+     * @return array<int,array<string,mixed>>
+     */
     public function forChat(string $sessionId, string $chatId): array
     {
         return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/labels/chat/{$this->http->encodeSegment($chatId)}") ?? [];

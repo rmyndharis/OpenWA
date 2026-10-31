@@ -115,7 +115,9 @@ public final class OpenWAClient {
      *
      * <p>A {@code String} target receives a non-JSON 2xx body as raw text — the same
      * fallback the JS/Python/PHP transports apply. For any other target the body must
-     * be JSON; a non-JSON body surfaces as a tidy {@link OpenWAError}, never a raw
+     * be JSON that fits the type; a body that is not, including valid JSON with a value
+     * the type cannot hold, surfaces as a tidy {@link OpenWAError} whose cause is the
+     * Gson failure (naming the field for a value that does not fit), never as a raw
      * Gson exception.
      */
     public <T> T request(HttpMethod method, String path, Object query, Object body, Class<T> type) {
@@ -146,7 +148,8 @@ public final class OpenWAClient {
         try {
             return gson.fromJson(text, type);
         } catch (JsonParseException e) {
-            throw new OpenWAError("Non-JSON response — " + method + " " + path);
+            // Also thrown for valid JSON that does not fit the type; the cause names the field.
+            throw new OpenWAError("Unexpected response body for " + method + " " + path, e);
         }
     }
 
@@ -163,7 +166,7 @@ public final class OpenWAClient {
             T[] arr = gson.fromJson(text, arrayType);
             return arr == null ? List.of() : List.of(arr);
         } catch (JsonParseException e) {
-            throw new OpenWAError("Non-JSON response — " + method + " " + path);
+            throw new OpenWAError("Unexpected response body for " + method + " " + path, e);
         }
     }
 

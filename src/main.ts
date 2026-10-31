@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { SwaggerModule } from '@nestjs/swagger';
 import { AppModule, DASHBOARD_DIST, dashboardServingEnabled, dashboardBuildPresent } from './app.module';
 import { ShutdownService } from './common/services/shutdown.service';
-import { LoggerService, LogLevel, createLogger } from './common/services/logger.service';
+import { applyLogLevelFromEnv, createLogger } from './common/services/logger.service';
 import {
   createSwaggerConfig,
   documentErrorResponses,
@@ -17,7 +17,9 @@ import {
 } from './config/swagger.config';
 import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './config/process-error-monitor';
 import { runBootstrapOrExit } from './config/bootstrap-fatal';
-import { validateEnv } from './config/env.validation';
+import { installStopSignalHandlers } from './config/stop-signals';
+import { s3EndpointError, validateEnv } from './config/env.validation';
+import { warnUnusableAllowedHosts } from './common/security/ssrf-guard';
 import { resolveStorageRoot } from './config/storage-root';
 import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
 import { applyGlobalValidation } from './config/app-validation';
@@ -45,12 +47,10 @@ import { prestartBuiltinDatabase } from './modules/docker/docker.service';
 let appInstance: INestApplication | undefined;
 
 async function bootstrap() {
-  // Apply the operator-configured log verbosity (LOG_LEVEL) before anything logs. Unset means INFO.
-  // A misspelling is skipped here; validateEnv below rejects it before the boot has any side effect.
-  const requestedLevel = process.env.LOG_LEVEL?.trim().toLowerCase();
-  if (requestedLevel && (Object.values(LogLevel) as string[]).includes(requestedLevel)) {
-    LoggerService.setLogLevel(requestedLevel as LogLevel);
-  }
+  // The env loader already applied LOG_LEVEL to its own lines once the env files were merged; applying
+  // it again here is a no-op that keeps the rule visible. Unset means INFO. A misspelling is skipped;
+  // validateEnv below rejects it before the boot has any side effect.
+  applyLogLevelFromEnv();
 
   // Backstop for promise rejections that escaped a local handler (e.g. a fire-and-forget engine-event
   // dispatch), including the expected engine-teardown case it downgrades to a warning (see the helper).
@@ -66,6 +66,18 @@ async function bootstrap() {
   // only once NestFactory.create awaits it, which is after the storage root is created and a built-in
   // PostgreSQL container is started; an invalid config would do both and then be reported twice.
   validateEnv(process.env);
+
+  // Reported, not refused: with S3 selected and an endpoint the client cannot use, the instance runs today on its
+  // local fallback directory, so an upgrade must not turn that into a crash loop. The Infrastructure save refuses it.
+  const s3EndpointProblem = s3EndpointError(process.env);
+  if (s3EndpointProblem) {
+    bootstrapLogger.error(
+      `${s3EndpointProblem}. Until then S3 is unavailable and media is written to the local directory.`,
+    );
+  }
+
+  // Reported at boot, where the operator reads the log, rather than at the first outbound request.
+  warnUnusableAllowedHosts();
 
   // Advisory (not enforced): an unset/blank NODE_ENV is the deliberate local-dev default, but it
   // silently degrades four controls to their dev posture (the default-secret guard, wildcard CORS,
@@ -96,6 +108,7 @@ async function bootstrap() {
     apiMasterKey: process.env.API_MASTER_KEY,
     allowDevApiKey: process.env.ALLOW_DEV_API_KEY,
     redisPassword: process.env.REDIS_PASSWORD,
+    metricsToken: process.env.METRICS_TOKEN,
   });
 
   // Advisory (not enforced): without API_KEY_PEPPER, stored API-key hashes use plain SHA-256. Enabling
@@ -190,21 +203,10 @@ async function bootstrap() {
 
   // On SIGTERM/SIGINT: drain gracefully. shutdown() flips readiness to 503 immediately (the LB stops
   // routing), keeps serving in-flight requests for a bounded grace, then runs app.close() (the SAME
-  // Nest lifecycle hooks Nest's own handler would run) and exits deterministically. A SECOND signal
-  // forces an immediate exit — a dev double-Ctrl+C, or an operator not willing to wait out a wedged
-  // teardown. The gate is a dedicated "a signal already arrived" flag, NOT isShuttingDown() (which an
-  // admin restart also sets) — so a first real signal during an admin-restart grace still drains
-  // gracefully instead of hard-exiting.
-  let signalReceived = false;
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.on(signal, () => {
-      if (signalReceived) {
-        process.exit(130);
-      }
-      signalReceived = true;
-      shutdownService.shutdown();
-    });
-  }
+  // Nest lifecycle hooks Nest's own handler would run) and exits deterministically. A repeat signal
+  // one second or more after the first forces an immediate exit (130); a repeat inside that second is
+  // the same stop request delivered twice, which npm and the Nest CLI do. See stop-signals.ts.
+  installStopSignalHandlers({ shutdown: () => shutdownService.shutdown() });
 
   // Shared production/e2e prefix and DTO validation contract.
   applyGlobalValidation(app);

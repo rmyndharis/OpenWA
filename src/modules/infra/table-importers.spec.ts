@@ -37,6 +37,9 @@ describe('sessions table importer: desiredState', () => {
     expect(sessions?.sql).toContain('"desiredState"');
     expect(sessions?.sql).toContain('$13');
     expect(mapped({ desiredState: 'stopped' })[12]).toBe('stopped');
+    // No delete runs for a restored row, so the record of one that failed part-way is a stop.
+    expect(mapped({ desiredState: 'deleting' })[12]).toBe('stopped');
+    expect(mapped({ desiredState: 'deleting-stopped' })[12]).toBe('stopped');
   });
 
   it('restores a row without the field, or with an unknown value, as eligible (NULL)', () => {

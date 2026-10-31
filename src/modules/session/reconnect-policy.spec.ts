@@ -86,7 +86,7 @@ describe('decideReconnect', () => {
       expect(d).toEqual({
         kind: 'exhausted',
         reason:
-          'Auto-reconnect is disabled (max attempts set to 0); the session was left disconnected — restart it manually.',
+          'Auto-reconnect is disabled (max attempts set to 0), so the dropped session was marked failed. Start it again manually.',
       });
     });
 

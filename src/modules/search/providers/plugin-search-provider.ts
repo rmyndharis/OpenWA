@@ -86,7 +86,12 @@ export class PluginSearchProvider implements SearchProvider {
       // Filtering an already paginated plugin response cannot enforce scoped offsets or counts.
       throw new ForbiddenException('Chat-restricted search requires the built-in search provider');
     }
-    const reply = await this.transport.dispatchSearch({ query, timeoutMs: this.timeoutMs });
+    // The expanded id lists are the built-in provider's business; a plugin keeps the query shape it was
+    // written against (`chatId` and `from` as the caller sent them).
+    const pluginQuery: SearchQuery = { ...query };
+    delete pluginQuery.chatIdAliases;
+    delete pluginQuery.fromAliases;
+    const reply = await this.transport.dispatchSearch({ query: pluginQuery, timeoutMs: this.timeoutMs });
     if (!reply.ok) throw new ServiceUnavailableException(reply.error);
     // The result shape is untrusted wire data: reject an invalid payload with an honest 502 (bad
     // upstream) instead of fabricating a 200 — or crashing the re-filter below into a 500.

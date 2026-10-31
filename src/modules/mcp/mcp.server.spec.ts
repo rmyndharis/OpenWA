@@ -588,6 +588,23 @@ describe('mountMcpServer (raw-Express request-handling path)', () => {
     expect(h.auditService.logWarn).not.toHaveBeenCalled();
   });
 
+  it('hands the SDK request cancellation signal to the tool handler', async () => {
+    const h = mount();
+    h.authService.validateApiKey.mockResolvedValue({ id: 'k1' });
+    await post(h, { jsonrpc: '2.0', id: 1 });
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+    h.tool.handler = (_input, _key, _scope, signal) => {
+      received = signal;
+      return Promise.resolve({ ok: true });
+    };
+    await toolCallback()(
+      { sessionId: 's1', to: '123', text: 'hi' },
+      { authInfo: { token: 'good-key' }, signal: controller.signal },
+    );
+    expect(received).toBe(controller.signal);
+  });
+
   // One parser for every surface that reads Authorization, so a header the REST guard accepts is
   // accepted here too and one it refuses is refused here too.
   it.each([

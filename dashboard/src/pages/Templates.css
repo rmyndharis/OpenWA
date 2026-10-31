@@ -19,6 +19,9 @@
 
 .templates-page .templates-session-select {
   min-width: 240px;
+  /* A native select is as wide as its longest option, and a percentage width does not bound the header column
+     it sits in; only max-width does. A longer session name is cut inside the select, not over the title. */
+  max-width: 20rem;
 }
 
 .templates-page .templates-workspace {
@@ -115,7 +118,7 @@
 }
 
 .templates-page .templates-search:focus-within {
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
@@ -172,6 +175,11 @@
 .templates-page .template-list-item.selected {
   border-color: var(--primary);
   background: var(--primary-soft);
+}
+
+/* The muted gray is 4.17:1 on the selected row's tint. */
+.templates-page .template-list-item.selected .template-list-meta {
+  color: var(--text-secondary);
 }
 
 .templates-page .template-list-title {
@@ -272,7 +280,7 @@
 .templates-page .template-form textarea:focus,
 .templates-page .placeholder-list input:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   background: var(--bg-white);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
@@ -419,7 +427,8 @@
   color: var(--error-text);
 }
 
-@media (max-width: 1280px) {
+/* Three columns need 1286px of viewport with the sidebar open. */
+@media (max-width: 1290px) {
   .templates-page .templates-workspace {
     grid-template-columns: 280px minmax(380px, 1fr);
   }
@@ -441,16 +450,8 @@
   }
 }
 
-@media (max-width: 900px) {
-  .templates-page {
-    padding: 1rem;
-  }
-
-  .templates-page .templates-session-select {
-    min-width: 0;
-    width: 100%;
-  }
-
+/* Stacked below 1000px: two columns need 984px of viewport with the sidebar open. */
+@media (max-width: 1000px) {
   .templates-page .templates-workspace {
     display: flex;
     flex-direction: column;
@@ -471,6 +472,24 @@
 
   .templates-page .template-preview {
     display: flex;
+  }
+}
+
+@media (max-width: 900px) {
+  .templates-page {
+    padding: 1rem;
+  }
+
+  .templates-page .templates-session-select {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+/* The page header is one column from here, so the select has no title beside it to cover. */
+@media (max-width: 768px) {
+  .templates-page .templates-session-select {
+    max-width: none;
   }
 }
 

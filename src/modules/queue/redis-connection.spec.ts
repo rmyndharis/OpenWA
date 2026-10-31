@@ -5,6 +5,8 @@ import {
   producerConnectWaitMs,
   producerReady,
   queueConnectionOptions,
+  queuePrefix,
+  queueRootOptions,
   workerConnectionOptions,
   webhookWorkerConcurrency,
 } from './redis-connection';
@@ -170,6 +172,29 @@ describe('webhookWorkerConcurrency', () => {
     expect(webhookWorkerConcurrency()).toBe(10);
     process.env = { ...ORIGINAL_ENV, INGRESS_WORKER_CONCURRENCY: '5abc' };
     expect(ingressWorkerConcurrency()).toBe(10);
+  });
+});
+
+describe('queue key prefix', () => {
+  const ORIGINAL_ENV = process.env;
+  afterEach(() => {
+    process.env = ORIGINAL_ENV;
+  });
+
+  it('leaves the prefix out when unset or blank, so BullMQ keeps its own and queued jobs survive an upgrade', () => {
+    for (const value of [undefined, '', '   ']) {
+      process.env = { ...ORIGINAL_ENV };
+      if (value === undefined) delete process.env.QUEUE_PREFIX;
+      else process.env.QUEUE_PREFIX = value;
+      expect(queuePrefix()).toBeUndefined();
+      expect(queueRootOptions()).not.toHaveProperty('prefix');
+    }
+  });
+
+  it('hands the configured prefix, trimmed, to the root options next to the producer connection', () => {
+    process.env = { ...ORIGINAL_ENV, QUEUE_PREFIX: ' staging ' };
+    expect(queuePrefix()).toBe('staging');
+    expect(queueRootOptions()).toEqual({ connection: queueConnectionOptions(), prefix: 'staging' });
   });
 });
 

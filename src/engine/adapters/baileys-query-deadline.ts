@@ -7,8 +7,9 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
  * throwing (Socket/socket.js: "Catch timeout and return undefined instead of throwing"). Callers
  * downstream of that split two ways:
  *
- *  - those that can still tell the cases apart from the value — `onWhatsApp` resolves `undefined`
- *    where a real answer is an array — and those check the value directly instead of using this;
+ *  - those that can still tell the cases apart from the value (`onWhatsApp` resolves `undefined` where
+ *    a real answer is an array, an invite-code read an absent code). They check the value, and are
+ *    bounded here all the same: Baileys' 60 s is past this budget and `session.proxyTimeoutMs`;
  *  - those that cannot, because the library discards the result. Every group and profile WRITE is
  *    in this second group: `groupLeave`, `groupUpdateSubject`, `groupSettingUpdate` and their
  *    siblings all `await groupQuery(...)` and return void, so the call resolves identically whether
@@ -40,6 +41,11 @@ export async function withQueryDeadline<T>(work: Promise<T>, timeoutMs: number, 
     // reach, since the race always assigns the timer before it can settle.
     clearTimeout(timer);
   }
+}
+
+/** {@link withQueryDeadline} for a write whose confirmation the library discards; the error names the operation. */
+export function confirmedWrite<T>(work: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+  return withQueryDeadline(work, timeoutMs, `WhatsApp did not confirm ${operation} in time`);
 }
 
 /**

@@ -1,5 +1,5 @@
 import type { GroupMetadata } from '@whiskeysockets/baileys';
-import { mapBaileysGroup, mapBaileysGroupInfo } from './baileys-group-mapper';
+import { findSelfParticipant, mapBaileysGroup, mapBaileysGroupInfo } from './baileys-group-mapper';
 const identity = (jid: string): string => jid;
 
 const meta = (over: Partial<GroupMetadata> = {}): GroupMetadata => ({
@@ -118,5 +118,31 @@ describe('mapBaileysGroupInfo', () => {
     // Self is reported in the raw protocol dialect; the normalizer folds both onto @c.us so they match.
     const normalize = (jid: string) => (jid === '111@lid' || jid === '628111@s.whatsapp.net' ? '628111@c.us' : jid);
     expect(mapBaileysGroup(m, '628111@s.whatsapp.net', normalize).isAdmin).toBe(true);
+  });
+});
+
+describe('findSelfParticipant across identity kinds', () => {
+  const phone = '628111';
+
+  it('does not take a lid member for the account because its digits match the phone number', () => {
+    const participants = [
+      { id: `${phone}@lid`, admin: 'admin' as const },
+      { id: `${phone}@s.whatsapp.net`, admin: null },
+    ];
+    const metadata = meta({ participants, announce: true });
+
+    expect(findSelfParticipant(metadata, `${phone}@s.whatsapp.net`, identity)).toBe(participants[1]);
+    expect(mapBaileysGroup(metadata, `${phone}@s.whatsapp.net`, identity).isAdmin).toBe(false);
+    expect(mapBaileysGroupInfo(metadata, identity, `${phone}@s.whatsapp.net`).isReadOnly).toBe(true);
+  });
+
+  it('does not take a phone member for the account when only its lid is known', () => {
+    const metadata = meta({ participants: [{ id: `${phone}@s.whatsapp.net`, admin: 'admin' }] });
+
+    expect(findSelfParticipant(metadata, `${phone}@lid`, identity)).toBeUndefined();
+  });
+
+  it('finds nothing for an account whose id is not known', () => {
+    expect(findSelfParticipant(meta({ participants: [{ id: '', admin: 'admin' }] }), '', identity)).toBeUndefined();
   });
 });

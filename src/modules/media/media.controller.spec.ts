@@ -90,4 +90,14 @@ describe('MediaController', () => {
       await expect(controller.conversionStatus()).resolves.toEqual({ available: true });
     });
   });
+  describe('documented responses', () => {
+    // A conversion that arrives, or is parked, after shutdown began answers 503 as well.
+    it.each(['convertVoice', 'convertVideo'] as const)('%s documents the shutdown 503', name => {
+      const responses = Reflect.getMetadata('swagger/apiResponse', handler(name)) as Record<
+        string,
+        { description: string }
+      >;
+      expect(responses['503'].description).toMatch(/shutting down/);
+    });
+  });
 });

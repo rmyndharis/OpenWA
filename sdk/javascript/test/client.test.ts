@@ -161,6 +161,21 @@ describe('OpenWAClient', () => {
     expect(t.lastCall!.url).toBe('http://localhost:2785/api/sessions?limit=5&name=x');
   });
 
+  it('puts query params before the fragment of a raw path', async () => {
+    const cases: Array<[string, string]> = [
+      ['/api/sessions#tab', '/api/sessions?name=x#tab'],
+      ['/api/sessions?limit=5#tab', '/api/sessions?limit=5&name=x#tab'],
+      ['/api/sessions#tab?fake=1', '/api/sessions?name=x#tab?fake=1'],
+      ['/api/sessions#', '/api/sessions?name=x#'],
+    ];
+    for (const [path, expected] of cases) {
+      const t = new MockTransport().passthrough({ status: 200, body: [] });
+      await client(t).request({ method: 'GET', path, query: { name: 'x' } });
+      expect(t.lastCall!.url).toBe(`http://localhost:2785${expected}`);
+      expect(new URL(t.lastCall!.url).searchParams.get('name')).toBe('x');
+    }
+  });
+
   it('maps a 404 to OpenWANotFoundError with parsed body', async () => {
     const t = new MockTransport().on('GET', '/api/sessions/missing', {
       status: 404,
@@ -325,6 +340,21 @@ describe('OpenWAClient', () => {
       expect((await fail({ status: 503, headers: { 'Retry-After': bad } })).retryAfterSeconds).toBeUndefined();
     }
 
+    // A wait is capped at 2147483 seconds, the longest a caller can pass to setTimeout (times 1000) without
+    // it firing at once, whether it comes from the header, an HTTP date or the body.
+    const ceiling = 2147483;
+    for (const huge of ['9999999999', '1'.repeat(25), '9'.repeat(400), '2147484']) {
+      expect((await fail({ status: 503, headers: { 'Retry-After': huge } })).retryAfterSeconds).toBe(ceiling);
+    }
+    expect((await fail({ status: 503, headers: { 'Retry-After': '2147483' } })).retryAfterSeconds).toBe(ceiling);
+    expect((await fail({ status: 503, headers: { 'Retry-After': '86400' } })).retryAfterSeconds).toBe(86400);
+    const farDate = await fail({ status: 503, headers: { 'Retry-After': 'Fri, 31 Dec 9999 23:59:59 GMT' } });
+    expect(farDate.retryAfterSeconds).toBe(ceiling);
+    for (const retryAfterSeconds of [1e300, 9999999999, 2147483.5]) {
+      const err = await fail({ status: 429, body: { statusCode: 429, message: 'x', retryAfterSeconds } });
+      expect(err.retryAfterSeconds).toBe(ceiling);
+    }
+
     const logout = await fail({
       status: 502,
       body: { statusCode: 502, message: 'x', code: 'SESSION_LOGOUT_INCOMPLETE' },
@@ -333,6 +363,33 @@ describe('OpenWAClient', () => {
     const plain = await fail({ status: 500, text: 'oops', contentType: 'text/plain' });
     expect(plain.code).toBeUndefined();
     expect(plain.retryAfterSeconds).toBeUndefined();
+  });
+
+  it('keeps the text of an error body that is not JSON, and names the error', async () => {
+    // A proxy in front of the gateway answers 502 with a page of its own.
+    const page = '<html>Bad Gateway</html>';
+    const t = new MockTransport().on('GET', '/api/sessions', { status: 502, text: page, contentType: 'text/html' });
+    const err = (await client(t)
+      .sessions.list()
+      .catch((e: unknown) => e)) as OpenWAApiError;
+
+    expect(err).toBeInstanceOf(OpenWAApiError);
+    expect(err.name).toBe('OpenWAApiError');
+    expect(err.status).toBe(502);
+    expect(err.body).toBe(page);
+    expect(err.message).toContain(page);
+  });
+
+  it('joins a list of validation messages into the error message', async () => {
+    const t = new MockTransport().on('POST', '/api/sessions', {
+      status: 400,
+      body: { statusCode: 400, message: ['name must be a string', 'name should not be empty'], error: 'Bad Request' },
+    });
+    const err = (await client(t)
+      .sessions.create({ name: '' })
+      .catch((e: unknown) => e)) as OpenWAApiError;
+
+    expect(err.message).toContain('name must be a string, name should not be empty');
   });
 
   it('falls back to the generic OpenWAApiError (with .status) for an unmapped status', async () => {
@@ -352,6 +409,81 @@ describe('OpenWAClient', () => {
     };
     const c = new OpenWAClient({ baseUrl: 'http://x', apiKey: 'k', fetch: abortingFetch });
     await expect(c.sessions.list()).rejects.toBeInstanceOf(OpenWATimeoutError);
+  });
+
+  it('leaves no timer running once a request has resolved or been refused', async () => {
+    // A timer left pending keeps a short script's process alive until the whole timeout has passed.
+    vi.useFakeTimers();
+    try {
+      const t = new MockTransport()
+        .on('GET', '/api/sessions/missing', {
+          status: 404,
+          body: { statusCode: 404, message: 'Session not found', error: 'Not Found' },
+        })
+        .on('GET', '/api/sessions', { body: [] });
+      const c = client(t);
+      await c.sessions.list();
+      expect(vi.getTimerCount()).toBe(0);
+
+      await expect(c.sessions.get('missing')).rejects.toBeInstanceOf(OpenWANotFoundError);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives up on a request after 30 seconds unless told otherwise', async () => {
+    vi.useFakeTimers();
+    try {
+      const unanswered: FetchLike = (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const e = new Error('aborted');
+            e.name = 'AbortError';
+            reject(e);
+          });
+        });
+      const c = new OpenWAClient({ baseUrl: 'http://x', apiKey: 'k', fetch: unanswered });
+      const outcome = c.sessions.list().then(
+        () => 'resolved',
+        (e: unknown) => e,
+      );
+      // Armed before any time passes: a client that never times out fails here instead of hanging.
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(2);
+      const err = await outcome;
+      expect(err).toBeInstanceOf(OpenWATimeoutError);
+      expect((err as OpenWATimeoutError).name).toBe('OpenWATimeoutError');
+      expect((err as OpenWATimeoutError).message).toContain('30000ms');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('warns about a remote http:// base URL, and about no other', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      new OpenWAClient({ baseUrl: 'http://gateway.example', apiKey: 'k' });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain('gateway.example');
+
+      warn.mockClear();
+      for (const baseUrl of [
+        'http://localhost:2785',
+        'http://127.0.0.1:2785',
+        'http://[::1]:2785',
+        'https://gateway.example',
+      ]) {
+        new OpenWAClient({ baseUrl, apiKey: 'k' });
+      }
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('keeps the timeout armed while reading a stalled response body', async () => {
@@ -546,6 +678,37 @@ describe('OpenWAClient', () => {
     await c.request({ method: 'GET', path: '/api/sessions', headers: { accept: 'b' } });
     expect(wire!.get('accept')).toBe('b');
     expect(wire!.get('x-trace')).toBe('keep');
+  });
+
+  it('sends the method of a raw request in upper case, whatever the caller wrote', async () => {
+    // fetch upper-cases GET, POST, PUT and DELETE itself but sends PATCH as written, and the gateway answers
+    // 400 to a lowercase method; a caller without the HttpMethod type can pass one.
+    const sent: Array<string | undefined> = [];
+    const recordingFetch: FetchLike = async (_url, init) => {
+      sent.push(init?.method);
+      return new Response('[]', { status: 200 });
+    };
+    const c = new OpenWAClient({ baseUrl: 'http://localhost', apiKey: 'k', fetch: recordingFetch });
+    for (const method of ['get', 'post', 'put', 'patch', 'delete', 'Patch', 'PATCH']) {
+      await c.request({ method: method as never, path: '/api/sessions' });
+    }
+    await c.requestBytes({ method: 'patch' as never, path: '/api/sessions' });
+    expect(sent).toEqual(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'PATCH', 'PATCH', 'PATCH']);
+  });
+
+  it('refuses a method that is not a string without leaving the request timer running', async () => {
+    // A timer left pending keeps a short script's process alive until the whole timeout has passed.
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi.fn<FetchLike>(async () => new Response('[]', { status: 200 }));
+      const c = new OpenWAClient({ baseUrl: 'http://localhost', apiKey: 'k', timeoutMs: 5000, fetch: fetchSpy });
+      await expect(c.request({ method: 5 as never, path: '/api/sessions' })).rejects.toBeInstanceOf(TypeError);
+      await expect(c.requestBytes({ method: {} as never, path: '/api/sessions' })).rejects.toBeInstanceOf(TypeError);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('calls the global fetch unbound from the client config when none is injected', async () => {

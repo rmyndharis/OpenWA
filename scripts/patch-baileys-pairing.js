@@ -15,6 +15,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { writeFilesAtomic } = require('./atomic-write');
 const DEFAULT_BAILEYS = path.join(__dirname, '..', 'node_modules', '@whiskeysockets', 'baileys');
 const QR_FIND = String.raw`    // QR gen
     ws.on('CB:iq,type:set,pair-device', async (stanza) => {
@@ -147,13 +148,9 @@ function applyPairingPatch(dir = DEFAULT_BAILEYS) {
     error.partial = items.some(item => item.state === 'applied');
     throw error;
   }
-  try {
-    for (const item of items) fs.writeFileSync(item.file, item.source.replace(item.find, item.replace));
-  } catch (error) {
-    // A failed write may have left part of either file; best-effort cannot accept that tree.
-    error.partial = true;
-    throw error;
-  }
+  // Both files are staged before the first is replaced, so a failed write leaves the tree as it was. Only
+  // a rename that fails after the first one went through leaves half a patch, and is marked partial.
+  writeFilesAtomic(items.map(item => [item.file, item.source.replace(item.find, item.replace)]));
   return { skipped: false };
 }
 function run(dir = DEFAULT_BAILEYS, bestEffort = process.argv.includes('--best-effort')) {

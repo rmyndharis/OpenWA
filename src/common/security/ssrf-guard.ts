@@ -3,6 +3,9 @@ import { lookup } from 'dns/promises';
 import { type LookupAddress, type LookupOptions } from 'dns';
 import { Agent, fetch as undiciFetch, Headers, type Dispatcher, type RequestInit, type Response } from 'undici';
 import { createProxyDispatcher } from './proxy-dispatcher';
+import { createLogger } from '../services/logger.service';
+
+const logger = createLogger('SsrfGuard');
 
 /** Thrown when an outbound URL is blocked by the SSRF guard. */
 export class SsrfBlockedError extends Error {
@@ -58,7 +61,14 @@ export function isSsrfProtectionEnabled(): boolean {
  * bypass the block. Matched case-insensitively against the URL hostname.
  */
 function getAllowedHosts(): Set<string> {
-  return new Set(
+  const entries = allowedHostEntries();
+  warnUnusableAllowedHosts(entries);
+  return new Set(entries.filter(Boolean));
+}
+
+/** The SSRF_ALLOWED_HOSTS entries in written order, blanks kept so an entry's position is the one the operator sees. */
+function allowedHostEntries(): string[] {
+  return (
     (process.env.SSRF_ALLOWED_HOSTS ?? '')
       .split(',')
       // Strip IPv6 brackets so an entry copied from a URL (e.g. "[::1]") matches the
@@ -69,8 +79,63 @@ function getAllowedHosts(): Set<string> {
           .replace(/^\[|\]$/g, '')
           .toLowerCase(),
       )
-      .filter(Boolean),
   );
+}
+
+/** What the URL parser makes of an entry used as a host, brackets stripped; null when the parser rejects it. */
+function parsedHostname(entry: string): string | null {
+  try {
+    return new URL(`http://${entry.includes(':') ? `[${entry}]` : entry}/`).hostname.replace(/^\[|\]$/g, '');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Why an entry can never equal the hostname of a URL, or undefined when it can. The reason is a shape and never the
+ * value, which may carry credentials. An IP address has to be written the way the URL parser prints it: `http://127.1/`
+ * is compared as `127.0.0.1`, so the entry `127.1` (or `0:0:0:0:0:0:0:1` for `::1`) is never equal.
+ */
+function unusableAllowedHostReason(entry: string): string | undefined {
+  if (entry.includes('@') || entry.includes('://')) return 'a scheme or credentials';
+  if (entry.includes('*')) return 'a wildcard';
+  if (/[/?#]/.test(entry)) return 'a path';
+  if (/^[^:]+:\d*$/.test(entry)) return 'a port';
+  const parsed = parsedHostname(entry);
+  if (parsed === null) return 'a value the URL parser rejects';
+  return parsed === entry ? undefined : 'a spelling the URL parser rewrites';
+}
+
+let warnedUnusableHosts = '';
+
+/** The most entries one warning lists, so a long list of unusable entries cannot flood the log. */
+const MAX_LISTED_UNUSABLE_HOSTS = 20;
+
+/**
+ * An entry is compared with the hostname of the URL, so one the check above names never matches, and the refusal it
+ * was meant to lift only says the destination is not allowed. Name such entries once, by position and reason, at most
+ * MAX_LISTED_UNUSABLE_HOSTS of them, and count the rest.
+ */
+export function warnUnusableAllowedHosts(entries: readonly string[] = allowedHostEntries()): void {
+  const listed: string[] = [];
+  let unusable = 0;
+  entries.forEach((entry, index) => {
+    const reason = entry ? unusableAllowedHostReason(entry) : undefined;
+    if (!reason) return;
+    unusable++;
+    if (listed.length < MAX_LISTED_UNUSABLE_HOSTS) listed.push(`entry ${index + 1} (${reason})`);
+  });
+  const more = unusable - listed.length;
+  const key = more > 0 ? `${listed.join(', ')}; ${more} more are not listed` : listed.join(', ');
+  if (key === warnedUnusableHosts) return;
+  warnedUnusableHosts = key;
+  if (unusable > 0) {
+    logger.warn(
+      'SSRF_ALLOWED_HOSTS entries must be a bare host name or an IP address written as the URL parser prints it ' +
+        `(127.0.0.1, ::1); these never match and are ignored: ${key}` +
+        (more > 0 ? ` (the list shows at most ${MAX_LISTED_UNUSABLE_HOSTS})` : ''),
+    );
+  }
 }
 
 // IPv4 ranges that must never be reachable by an outbound webhook (SSRF targets). Membership is

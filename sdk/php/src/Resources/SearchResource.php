@@ -30,8 +30,12 @@ class SearchResource
      * into the query string). Numeric filters are passed through as-is; the
      * gateway coerces and validates them server-side.
      *
+     * `match` is `word` (the server default: whole words) or `contains` (any
+     * part of a word, ignoring case and accents; needs a term of 3+ characters).
+     *
      * @param array{
      *     q:string,
+     *     match?:'word'|'contains'|null,
      *     sessionId?:string|null,
      *     chatId?:string|null,
      *     direction?:string|null,

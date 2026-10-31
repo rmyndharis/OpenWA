@@ -5,13 +5,16 @@ import {
   HttpStatus,
   InternalServerErrorException,
   NotImplementedException,
+  PayloadTooLargeException,
   ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { lastValueFrom, of, throwError } from 'rxjs';
 import { EngineNotReadyError } from '../../../common/errors/engine-not-ready.error';
 import { markEngineSendFailure } from '../../../common/errors/engine-send-failure';
-import { EngineNotSentError } from '../../../common/errors/engine-not-sent.error';
+import { EngineNotSentError, markNothingSent } from '../../../common/errors/engine-not-sent.error';
+import { EngineThrottledError } from '../../../common/errors/engine-throttled.error';
+import { EngineTransportError } from '../../../common/errors/engine-transport.error';
 import { SendIdempotencyInterceptor, sendFailureProvesNothingSent } from './send-idempotency.interceptor';
 import { hashSendRequest, SendIdempotencyService } from './send-idempotency.service';
 
@@ -152,6 +155,13 @@ describe('SendIdempotencyInterceptor', () => {
     expect(store.markFailed).not.toHaveBeenCalled();
   });
 
+  it('releases the key when WhatsApp rate-limited the request before it ran', async () => {
+    const error = markEngineSendFailure(new EngineThrottledError('WhatsApp rate-limited the send (code 429)'));
+    await expect(run(contextFor({ 'idempotency-key': 'k-1' }), () => throwError(() => error))).rejects.toBe(error);
+    expect(store.release).toHaveBeenCalledWith('row-1');
+    expect(store.markFailed).not.toHaveBeenCalled();
+  });
+
   it('still answers the send when recording its outcome fails', async () => {
     store.complete.mockRejectedValue(new Error('db down'));
 
@@ -180,6 +190,20 @@ describe('sendFailureProvesNothingSent', () => {
     ['string', false],
   ])('%p -> %p', (error, expected) => {
     expect(sendFailureProvesNothingSent(error)).toBe(expected);
+  });
+
+  // Media the engine could not fetch or read is refused before anything reaches WhatsApp: the proof
+  // outranks the engine-stage marker, and the error keeps its own status.
+  it.each([new BadRequestException(), new PayloadTooLargeException(), new InternalServerErrorException()])(
+    'frees the key for an engine-stage %p raised before anything was sent',
+    error => {
+      expect(sendFailureProvesNothingSent(markEngineSendFailure(markNothingSent(error)))).toBe(true);
+    },
+  );
+
+  it('frees the key for a WhatsApp rate limit, which turned the request away, but not for a timeout', () => {
+    expect(sendFailureProvesNothingSent(markEngineSendFailure(new EngineThrottledError('rate limited')))).toBe(true);
+    expect(sendFailureProvesNothingSent(markEngineSendFailure(new EngineTransportError('timed out')))).toBe(false);
   });
 
   it('treats 501 as a refusal', () => {

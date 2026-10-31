@@ -5,6 +5,40 @@ import { plainToInstance } from 'class-transformer';
 import { GLOBAL_VALIDATION_OPTIONS } from '../../../config/app-validation';
 import { CreateSessionDto } from './create-session.dto';
 
+// docs/06: the session name is 3 to 50 characters of ASCII letters, digits and hyphens.
+describe('CreateSessionDto name validation', () => {
+  const failing = (name: unknown): string[] =>
+    validateSync(
+      plainToInstance(CreateSessionDto, { name }, GLOBAL_VALIDATION_OPTIONS.transformOptions),
+      GLOBAL_VALIDATION_OPTIONS,
+    ).map(error => error.property);
+
+  it.each([
+    ['the shortest name, 3 characters', 'abc'],
+    ['the longest name, 50 characters', 'a'.repeat(50)],
+    ['letters, digits and hyphens', 'My-Bot-01'],
+  ])('accepts %s', (_label, name) => {
+    expect(failing(name)).toEqual([]);
+  });
+
+  it.each([
+    ['2 characters', 'ab'],
+    ['51 characters', 'a'.repeat(51)],
+    ['an empty name', ''],
+    ['an underscore', 'my_bot'],
+    ['a space', 'my bot'],
+    ['a dot', 'my.bot'],
+    ['a non-ASCII letter', 'bot-é'],
+    ['an object instead of a string', { value: 'abc' }],
+  ])('rejects %s', (_label, name) => {
+    expect(failing(name)).toEqual(['name']);
+  });
+
+  it('rejects a missing name', () => {
+    expect(failing(undefined)).toEqual(['name']);
+  });
+});
+
 describe('CreateSessionDto proxyUrl validation', () => {
   const errs = (proxyUrl: string): ReturnType<typeof validateSync> =>
     validateSync(plainToInstance(CreateSessionDto, { name: 'my-bot', proxyUrl }));

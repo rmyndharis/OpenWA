@@ -6,6 +6,12 @@ namespace OpenWA\Http;
 
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Exception\ConnectTimeoutException;
+use GuzzleHttp\Exception\NetworkTimeoutException;
+use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Exception\ResponseException;
+use GuzzleHttp\Exception\ResponseTimeoutException;
+use GuzzleHttp\Psr7\Request;
 use OpenWA\Exceptions\OpenWAApiException;
 use OpenWA\Exceptions\OpenWAException;
 use OpenWA\Exceptions\OpenWATimeoutException;
@@ -26,7 +32,7 @@ class HttpExecutor
      * var_dump, var_export, an (array) cast and a framework's dumper all read properties, and both are
      * bearer-equivalent (a header often carries the credential of a proxy in front of the gateway).
      *
-     * @var \WeakMap<HttpExecutor,array{apiKey:string,headers:array<string,string>}>|null
+     * @var \WeakMap<HttpExecutor,array{apiKey:string,headers:array<string,string|list<string>>}>|null
      */
     private static ?\WeakMap $secrets = null;
 
@@ -37,7 +43,7 @@ class HttpExecutor
     private array $headerNames;
 
     /**
-     * @param array<string,string> $defaultHeaders Applied UNDER the auth/JSON headers
+     * @param array<string,scalar|null|non-empty-array<array-key,scalar|null>> $defaultHeaders Applied UNDER the auth/JSON headers
      *                                             (which always win), on every request.
      */
     public function __construct(
@@ -48,6 +54,10 @@ class HttpExecutor
         #[\SensitiveParameter] array $defaultHeaders = []
     ) {
         self::checkDefaultHeaders($defaultHeaders);
+        $defaultHeaders = array_map(
+            static fn ($value) => is_array($value) ? array_map('strval', array_values($value)) : (string) $value,
+            $defaultHeaders
+        );
         $this->timeout = $timeout;
         self::$secrets ??= new \WeakMap();
         self::$secrets[$this] = ['apiKey' => $apiKey, 'headers' => $defaultHeaders];
@@ -68,7 +78,7 @@ class HttpExecutor
      * Public so that the client can run it before it builds an executor, whose constructor frame holds the
      * key and, before PHP 8.2, shows its first characters in a trace.
      *
-     * A number, a boolean or null is sent as its text and a list as several values, as the stack does.
+     * A number, a boolean or null is sent as its text and a non-empty list as several values.
      *
      * @param array<mixed> $headers
      *
@@ -81,6 +91,9 @@ class HttpExecutor
                 throw new OpenWAException(
                     'OpenWA Client: defaultHeaders has a header name that is not a valid HTTP token'
                 );
+            }
+            if ($value === []) {
+                throw new OpenWAException(sprintf('OpenWA Client: defaultHeaders value for "%s" must be text or a non-empty list', $name));
             }
             foreach (is_array($value) ? $value : [$value] as $each) {
                 if (is_scalar($each) || $each === null) {
@@ -145,13 +158,24 @@ class HttpExecutor
      * @param array<string,mixed>  $query   Query parameters (null values skipped).
      * @param mixed|null           $body    JSON-serializable request body.
      *
+     * @param bool                 $allowText Return a 2xx body that is not JSON as its text. Off for the typed
+     *                                        resources, whose callers expect an array: they get an exception that
+     *                                        names the request, not a TypeError from the return type.
+     *
      * @return mixed Decoded JSON, or null for empty/204 responses.
      *
      * @throws OpenWAApiException  On any non-2xx response (typed subclass).
      * @throws OpenWATimeoutException On timeout.
+     * @throws OpenWAException On a 2xx body that is not JSON, unless $allowText.
      */
-    public function request(string $method, string $path, array $query = [], $body = null, ?string $idempotencyKey = null)
-    {
+    public function request(
+        string $method,
+        string $path,
+        array $query = [],
+        $body = null,
+        ?string $idempotencyKey = null,
+        bool $allowText = false
+    ) {
         $response = $this->send($method, $path, $query, $body, $idempotencyKey);
 
         $text = (string) $response->getBody();
@@ -160,7 +184,13 @@ class HttpExecutor
         }
 
         $decoded = json_decode($text, true);
-        return $decoded === null && json_last_error() !== JSON_ERROR_NONE ? $text : $decoded;
+        if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
+            if (!$allowText) {
+                throw new OpenWAException("OpenWA: non-JSON response for {$method} {$path}");
+            }
+            return $text;
+        }
+        return $decoded;
     }
 
     /**
@@ -197,6 +227,8 @@ class HttpExecutor
      */
     private function send(string $method, string $path, array $query, $body, ?string $idempotencyKey = null): ResponseInterface
     {
+        // Guzzle 7 upper-cased the method itself; Guzzle 8 sends it as written, and the gateway refuses "get".
+        $method = strtoupper($method);
         if ($idempotencyKey !== null && preg_match('/\A[\x21-\x7E]{1,255}\z/', $idempotencyKey) !== 1) {
             throw new \InvalidArgumentException('Idempotency-Key must contain 1-255 visible ASCII characters');
         }
@@ -211,6 +243,8 @@ class HttpExecutor
         $secrets = (self::$secrets ?? new \WeakMap())[$this] ?? ['apiKey' => '', 'headers' => []];
         $options = [
             'http_errors' => false,
+            // These APIs consume the whole body, so read failures must occur inside the transport catch.
+            'stream' => false,
             // Per-request options override injected Guzzle client defaults, so the SDK's configured
             // timeout is enforced consistently on both default and caller-supplied clients.
             'timeout' => $this->timeout,
@@ -230,6 +264,12 @@ class HttpExecutor
                 'Accept' => 'application/json',
             ]),
         ];
+        // Guzzle 8's stream handler also stops a connection that stays silent for 60 s (read_timeout, 0 disables
+        // it), which would cut off a longer timeout or none. Guzzle 7 reads the option differently (0 and
+        // fractions end reads at once), so only 8 is told; cURL handlers ignore it.
+        if (ClientInterface::MAJOR_VERSION >= 8) {
+            $options['read_timeout'] = $this->timeout;
+        }
         if ($idempotencyKey !== null) {
             $options['headers']['Idempotency-Key'] = $idempotencyKey;
         }
@@ -238,22 +278,31 @@ class HttpExecutor
         $url = $this->baseUrl . $path;
         $query = array_filter($query, fn ($v) => $v !== null);
         if ($query !== []) {
-            $url .= (str_contains($path, '?') ? '&' : '?') . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+            $parts = explode('#', $url, 2);
+            $url = $parts[0] . (str_contains($parts[0], '?') ? '&' : '?') . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+            if (isset($parts[1])) {
+                $url .= '#' . $parts[1];
+            }
         }
         if ($body !== null) {
             $options['json'] = $body;
         }
 
+        $started = hrtime(true);
         try {
             $response = $this->http->request($method, $url, $options);
+        } catch (ConnectTimeoutException | NetworkTimeoutException | ResponseTimeoutException $e) {
+            throw new OpenWATimeoutException($this->timeout);
         } catch (ConnectException $e) {
-            // cURL error 28 (CURLE_OPERATION_TIMEDOUT) is the canonical timeout
-            // signal, surfaced via the handler context. We check errno first
-            // (locale- and version-independent) and fall back to message matching
-            // for transports that don't populate the context (e.g. stream handler).
-            $errno = $e->getHandlerContext()['errno'] ?? null;
+            // Guzzle 7 exposes cURL errno 28 in the context; custom transports may only supply a message.
+            $errno = method_exists($e, 'getHandlerContext') ? ($e->getHandlerContext()['errno'] ?? null) : null;
             $isTimeout = $errno === 28 || str_contains($e->getMessage(), 'timed out');
-            if ($isTimeout) {
+            if ($isTimeout || $this->failedAfterTimeout($e, $started)) {
+                throw new OpenWATimeoutException($this->timeout);
+            }
+            throw $e;
+        } catch (RequestException $e) {
+            if ($this->failedAfterTimeout($e, $started)) {
                 throw new OpenWATimeoutException($this->timeout);
             }
             throw $e;
@@ -262,11 +311,41 @@ class HttpExecutor
         $status = $response->getStatusCode();
         // Treat any non-2xx as an error, including 3xx: redirects are deliberately not followed (so
         // the API key is never re-sent to the target), making an unfollowed 3xx unusable rather than
-        // a success. Matches the JS (`!res.ok`) and Python (`>= 300`) transports.
-        if ($status >= 300) {
+        // a success.
+        if ($status < 200 || $status >= 300) {
             throw $this->buildApiException($response, $method, $path);
         }
+        // Guzzle 7's stream handler returns a body cut before its Content-Length as if it were whole, where cURL
+        // and Guzzle 8 raise a TransferException, so raise one too. A HEAD or 204 answer carries no body; every
+        // handler drops the Content-Length of a body it decoded (gzip), so that one is not compared either.
+        $declared = $response->getHeaderLine('Content-Length');
+        $size = $response->getBody()->getSize();
+        if ($method !== 'HEAD' && $status !== 204 && $size !== null && preg_match('/\A\d+\z/', $declared) === 1
+            && $size < (int) $declared) {
+            throw new RequestException(
+                sprintf('OpenWA: %s %s: the response ended after %d of %s bytes', $method, $path, $size, $declared),
+                new Request($method, $url)
+            );
+        }
         return $response;
+    }
+
+    /**
+     * Guzzle's stream handler (a host without ext-curl) reports a gateway that stays silent past the timeout
+     * as a plain ConnectException (before the headers, Guzzle 7) or a RequestException without a response
+     * (before the headers on Guzzle 8, in the middle of the body on Guzzle 7): no errno, no timeout text.
+     * Such a failure is a timeout when it took at least the whole timeout. cURL failures carry their own
+     * "cURL error" text and are left alone, and a timeout of 0 (no bound) never matches.
+     *
+     * The start is hrtime(true), an int on 64-bit PHP and a float on 32-bit PHP.
+     */
+    private function failedAfterTimeout(\Throwable $e, int|float $startedNs): bool
+    {
+        return $this->timeout > 0
+            && (hrtime(true) - $startedNs) / 1e9 >= $this->timeout
+            && !str_starts_with($e->getMessage(), 'cURL error')
+            && !$e instanceof ResponseException
+            && !(method_exists($e, 'hasResponse') && $e->hasResponse());
     }
 
     private function buildApiException(ResponseInterface $response, string $method, string $path): OpenWAApiException

@@ -13,6 +13,18 @@ describe('CreateCallLinkDto', () => {
     await expect(through({ type: 'video', startTime })).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  // The global pipe converts by declared type, so a boolean would otherwise read as the number 1.
+  it.each([true, false, '', ' ', 'soon'])('rejects startTime %p with a 400', async startTime => {
+    await expect(through({ type: 'video', startTime })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('accepts a start time sent as a numeric string', async () => {
+    await expect(through({ type: 'video', startTime: '1800000000000' })).resolves.toEqual({
+      type: 'video',
+      startTime: 1_800_000_000_000,
+    });
+  });
+
   it('accepts the largest valid Date', async () => {
     await expect(through({ type: 'video', startTime: 8_640_000_000_000_000 })).resolves.toEqual({
       type: 'video',

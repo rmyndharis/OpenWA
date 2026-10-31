@@ -63,15 +63,18 @@ export const utcTimestampTypes = {
 };
 
 const SET_SESSION_UTC = "SET TIME ZONE 'UTC'";
+/** The pin's budget when no connect timeout is configured, or when it is 0 (the pool's timer off). */
+const DEFAULT_CONNECTION_TIMEOUT_MS = 10_000;
 
 /**
  * Pin a pooled session to UTC, through pg-pool's own connect hook.
  *
  * A statement on the connection itself, rather than the startup `options` parameter: `options` is not
  * guaranteed to survive the path to the server (a pooler may drop it, and PgBouncer refuses the startup
- * packet outright unless it is listed in `ignore_startup_parameters`), and on this connection it is
- * already spoken for by the search_path of a non-public schema. pg-pool awaits this hook for every
- * client it opens, the first one during `DataSource.initialize()` included, so none can start unpinned.
+ * packet outright unless it is listed in `ignore_startup_parameters`). The other session settings the data
+ * connection needs ride in the same statement for the same reason (see {@link PostgresSessionSettings}).
+ * pg-pool awaits this hook for every client it opens, the first one during `DataSource.initialize()`
+ * included and every one it opens after a lost connection, so none can start unpinned.
  *
  * The hook rather than a `Client` subclass that pins inside its own `connect`, because the pool owns two
  * things a subclass cannot reach. It attaches the client's `error` listener BEFORE calling the hook, so
@@ -82,22 +85,69 @@ const SET_SESSION_UTC = "SET TIME ZONE 'UTC'";
  *
  * `connectionTimeoutMillis` does NOT cover this statement: pg-pool clears that timer once the socket
  * is connected, before it invokes the hook, so a server that accepts the connection and then never
- * answers holds the acquire until the statement's own failure. Nothing else in the pool bounds it.
+ * answers would hold the acquire, and a boot waiting on it, for good. The statement therefore carries its
+ * own `query_timeout`: its rejection makes the pool end the client, and no other statement is limited by it.
  */
-const pinSessionToUtc = (client: ClientBase): Promise<unknown> => client.query(SET_SESSION_UTC);
+const pinSessionToUtc = (
+  client: ClientBase,
+  timeoutMs = DEFAULT_CONNECTION_TIMEOUT_MS,
+  text = SET_SESSION_UTC,
+): Promise<unknown> => {
+  // Held in a variable: @types/pg omits `query_timeout`, which the driver reads, so a literal fails the excess check.
+  const query = { text, query_timeout: timeoutMs };
+  return client.query(query);
+};
+
+/**
+ * Session settings of a data connection pool, set by statement on connect with the zone, never in the
+ * startup packet: PgBouncer refuses `statement_timeout` there even in session mode, and does not give a
+ * startup `search_path` to every client it hands a server connection.
+ */
+export interface PostgresSessionSettings {
+  /** As pg treated the startup value: a falsy one sets nothing, so a role or database default applies. */
+  statementTimeoutMs?: number;
+  /** The whole search_path value, such as `openwa,public`. */
+  searchPath?: string;
+}
+
+function sessionStatements({ statementTimeoutMs, searchPath }: PostgresSessionSettings): string {
+  const statements = [SET_SESSION_UTC];
+  const timeout = parseInt(String(statementTimeoutMs ?? ''), 10);
+  if (timeout) statements.push(`SET statement_timeout = ${timeout}`);
+  // set_config keeps the value's text as the startup parameter gave it, which SET would reformat.
+  if (searchPath) statements.push(`SELECT set_config('search_path', '${searchPath.replace(/'/g, "''")}', false)`);
+  return statements.join('; ');
+}
 
 /**
  * The `extra` block that pins a postgres data connection to UTC, for both entry points (the runtime
- * module and the migration CLI data source).
+ * module and the migration CLI data source), with the pool's other session settings when given.
  *
  * The input direction is a side effect rather than a returned value: pg serialises a bound Date through
  * a module-level `prepareValue`, which reads this flag from the package defaults and has no per-client
  * form. Setting it here keeps it next to the two halves it belongs with, and ahead of any connection
  * built from the returned block.
  */
-export function postgresUtcExtra(): { types: typeof utcTimestampTypes; onConnect: typeof pinSessionToUtc } {
+export function postgresUtcExtra(
+  connectionTimeoutMillis?: number,
+  settings: PostgresSessionSettings = {},
+): {
+  types: typeof utcTimestampTypes;
+  onConnect: (client: ClientBase) => Promise<unknown>;
+} {
   pgDefaults.parseInputDatesAsUTC = true;
-  return { types: utcTimestampTypes, onConnect: pinSessionToUtc };
+  const timeoutMs =
+    connectionTimeoutMillis && Number.isFinite(connectionTimeoutMillis) && connectionTimeoutMillis > 0
+      ? connectionTimeoutMillis
+      : DEFAULT_CONNECTION_TIMEOUT_MS;
+  const text = sessionStatements(settings);
+  return {
+    types: utcTimestampTypes,
+    onConnect:
+      timeoutMs === DEFAULT_CONNECTION_TIMEOUT_MS && text === SET_SESSION_UTC
+        ? pinSessionToUtc
+        : client => pinSessionToUtc(client, timeoutMs, text),
+  };
 }
 
 /**

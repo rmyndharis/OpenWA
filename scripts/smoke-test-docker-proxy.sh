@@ -54,7 +54,7 @@ echo ""
 echo "==> Verifying the proxy permits the read operations orchestration needs (from openwa-api)..."
 # openwa-api is the only container that can reach docker-proxy:2375 (internal network), so
 # the ACL is exercised from inside it. Node's global fetch (Node 18+) avoids a curl dependency.
-for endpoint in _ping containers/json info images/json volumes; do
+for endpoint in _ping containers/json images/json volumes; do
   CODE=$(docker exec openwa-api node -e "fetch('http://docker-proxy:2375/$endpoint').then(r=>console.log(r.status)).catch(()=>console.log(0))" 2>/dev/null || echo 0)
   if [ "$CODE" != "200" ]; then
     echo "FAIL: GET /$endpoint via proxy returned HTTP $CODE (expected 200)" >&2

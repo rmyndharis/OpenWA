@@ -6,7 +6,7 @@ import { Repository } from 'typeorm';
 import { createLogger } from '../../common/services/logger.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { chatKind } from '../../engine/identity/wa-id';
-import { evaluateFilters } from '../webhook/filters/filter-evaluator';
+import { evaluateFilters, prepareFilterLidResolver } from '../webhook/filters/filter-evaluator';
 import { PLUGIN_MESSAGE_PORT, type PluginMessagePort } from '../../core/plugins/plugin-host-ports';
 import { AutomationRule } from './entities/automation-rule.entity';
 import { Session } from '../session/entities/session.entity';
@@ -103,7 +103,9 @@ export class AutomationRulesService {
       cooldownSeconds: dto.cooldownSeconds ?? 60,
       enabled: dto.enabled ?? true,
     });
-    return this.ruleRepository.save(rule);
+    // No transaction of its own: on SQLite's single shared connection the rollback of a foreign key failure (the
+    // session deleted since the check above) would discard what other callers wrote while it was open.
+    return this.ruleRepository.save(rule, { transaction: false });
   }
 
   async findAll(sessionId: string): Promise<AutomationRule[]> {
@@ -122,12 +124,21 @@ export class AutomationRulesService {
 
   async update(sessionId: string, id: string, dto: UpdateAutomationRuleDto): Promise<AutomationRule> {
     const rule = await this.findOne(sessionId, id);
-    if (dto.name !== undefined) rule.name = dto.name;
-    if (dto.replyText !== undefined) rule.replyText = dto.replyText;
-    if (dto.conditions !== undefined) rule.conditions = dto.conditions;
-    if (dto.cooldownSeconds !== undefined) rule.cooldownSeconds = dto.cooldownSeconds;
-    if (dto.enabled !== undefined) rule.enabled = dto.enabled;
-    return this.ruleRepository.save(rule);
+    const patch: Partial<Pick<AutomationRule, 'name' | 'replyText' | 'conditions' | 'cooldownSeconds' | 'enabled'>> =
+      {};
+    if (dto.name !== undefined) patch.name = dto.name;
+    if (dto.replyText !== undefined) patch.replyText = dto.replyText;
+    if (dto.conditions !== undefined) patch.conditions = dto.conditions;
+    if (dto.cooldownSeconds !== undefined) patch.cooldownSeconds = dto.cooldownSeconds;
+    if (dto.enabled !== undefined) patch.enabled = dto.enabled;
+    if (Object.keys(patch).length === 0) return rule;
+
+    // A conditional UPDATE of the carried fields, not save() of the entity read above: save() would
+    // write back stale values of every column this request did not touch (switching a rule off could
+    // be undone by an overlapping edit) and re-insert a rule a concurrent DELETE removed.
+    const result = await this.ruleRepository.update({ id, sessionId }, patch);
+    if (!result.affected) throw new NotFoundException(`Automation rule ${id} not found`);
+    return this.findOne(sessionId, id);
   }
 
   async remove(sessionId: string, id: string): Promise<void> {
@@ -170,9 +181,12 @@ export class AutomationRulesService {
     }
     if (rules.length === 0) return;
 
-    // Same lid->phone resolution the webhook filter match uses, so a phone-valued sender condition
-    // matches a lid-addressed sender identically in both places.
-    const resolveLid = (jid: string): string | null => this.lidMappingStore?.resolveLid(jid) ?? null;
+    const resolveLid = await prepareFilterLidResolver(
+      rules.map(rule => rule.conditions),
+      'message.received',
+      message,
+      this.lidMappingStore ? lids => this.lidMappingStore!.phonesForLidsPersisted(lids) : undefined,
+    );
 
     // Resolved the way the `kind` filter field resolves it, so the guard and a kind condition agree.
     const kind = typeof message.kind === 'string' && message.kind ? message.kind : chatKind(chatId);

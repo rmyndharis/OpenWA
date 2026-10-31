@@ -32,6 +32,7 @@
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isUnexposedPath, unexposedResources } from './check-contract-shapes.mjs';
 
 // fileURLToPath, not URL.pathname: the latter stays percent-encoded, so a checkout under a path
 // containing a space resolves to a directory that does not exist and every read here fails with
@@ -168,26 +169,6 @@ const SDKS = [
 ];
 
 /**
- * The resources sdk/README.md declares deliberately unexposed, read from the README rather than
- * restated here: a hand-copied second list is the thing this whole line of work keeps finding.
- */
-function excludedResources() {
-  const readme = readFileSync(join(root, 'sdk/README.md'), 'utf8');
-  const start = readme.indexOf('Deliberately **not** exposed');
-  const end = readme.indexOf('Everything else the gateway publishes', start);
-  if (start < 0 || end < 0) {
-    throw new Error('sdk/README.md: could not find the "Deliberately not exposed" paragraph — the gate cannot derive its exclusion list.');
-  }
-  const names = [...readme.slice(start, end).matchAll(/`([^`]+)`/g)].map((m) => m[1].split('/')[0].trim());
-  if (names.length < 8) throw new Error(`sdk/README.md: parsed only ${names.length} excluded resources, expected the full list.`);
-  return new Set(names);
-}
-
-// The resource a path belongs to: the segment after `/api/`, or after a session id.
-const resourceOf = (path) =>
-  /^\/api\/sessions\/\*\/([^/]+)/.exec(path)?.[1] ?? /^\/api\/([^/*]+)/.exec(path)?.[1] ?? '';
-
-/**
  * A harvested path whose final segment is a wildcard MAY cover its concrete siblings: the client
  * reaches that family through one builder with the last segment as a variable (`send-${type}`).
  * The forward gate makes the same concession explicitly.
@@ -206,15 +187,14 @@ const covers = (built, path) => {
   return isRouteNameFamily(family) && built.families.has(family);
 };
 
-const excluded = excludedResources();
+// Read the way the shape gate reads it (entries as written, a parenthetical ignored, `auth/api-keys` a path
+// prefix): cutting every entry to its first segment made all of /api/auth unexposed, key validation included.
+const excluded = unexposedResources(readFileSync(join(root, 'sdk/README.md'), 'utf8'));
 const contract = [...new Set(Object.keys(JSON.parse(readFileSync(join(root, 'openapi.json'), 'utf8')).paths).map(normalize))];
 /** Every shape the contract publishes, including the excluded resources — a wildcard is explained by
  *  a by-id route whether or not the SDKs are asked to expose it. */
 const contractShapes = new Set(contract);
-const inScope = contract.filter((p) => {
-  const resource = resourceOf(p);
-  return !excluded.has(resource) && !excluded.has(resource.replace(/-rules$/, ''));
-});
+const inScope = contract.filter((p) => !isUnexposedPath(p, excluded));
 
 const errors = [];
 const built = {};

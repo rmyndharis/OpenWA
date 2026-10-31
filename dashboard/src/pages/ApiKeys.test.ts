@@ -31,6 +31,8 @@ let createBody: Record<string, unknown> | undefined;
 let createGate: Promise<void> | undefined;
 let updateBodies: Record<string, unknown>[] = [];
 let updateStatus = 200;
+let updateGate: Promise<void> | undefined;
+const updatePaths: string[] = [];
 
 function installFetchStub(): void {
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -44,10 +46,12 @@ function installFetchStub(): void {
     }
     if (init?.method === 'PUT' && path.startsWith('/api/auth/api-keys/')) {
       updateBodies.push(JSON.parse(String(init.body)));
-      if (updateStatus === 409) {
-        return Promise.resolve(jsonResponse({ message: 'Cannot remove the last active admin key' }, 409));
-      }
-      return Promise.resolve(jsonResponse(billingBot));
+      updatePaths.push(path);
+      const status = updateStatus;
+      return (updateGate ?? Promise.resolve()).then(() => {
+        if (status === 409) return jsonResponse({ message: 'Cannot remove the last active admin key' }, 409);
+        return jsonResponse(billingBot);
+      });
     }
     if (path === '/api/auth/api-keys') {
       if (listStatus !== 200) {
@@ -85,6 +89,8 @@ afterEach(() => {
   createGate = undefined;
   updateBodies = [];
   updateStatus = 200;
+  updateGate = undefined;
+  updatePaths.length = 0;
   window.sessionStorage.removeItem('openwa_api_key');
 });
 
@@ -184,6 +190,66 @@ test('a create sends the IP allow-list, chats and expiry only when filled in', a
   });
 });
 
+// The gateway takes ASCII digits only; a number typed with an Arabic or Persian keyboard is sent as the same number.
+test('a create folds native digits in the chat list and sends the ASCII chat id', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const create = await openCreate();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'crm-bot' } });
+  fireEvent.change(screen.getByLabelText('Chat access (optional)'), {
+    target: {
+      value: '\u0666\u0662\u0668\u0661\u0662\u0663\u0664\n\u06f1\u06f2\u06f0\u06f3\u06f6\u06f3\u06f0\u06f0\u06f0@g.us',
+    },
+  });
+  assert.equal(screen.queryByText(/Not a chat ID or phone number/) === null, true);
+  assert.equal(create.disabled, false);
+  fireEvent.click(create);
+  await waitFor(() => assert.ok(createBody));
+  assert.deepEqual(createBody, {
+    name: 'crm-bot',
+    role: 'operator',
+    allowedSessions: [],
+    allowedChats: ['6281234@c.us', '120363000@g.us'],
+  });
+});
+
+test('a native digit entry that is no chat id is still refused and names the folded value', async () => {
+  const { screen, fireEvent } = rtl;
+  const create = await openCreate();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'crm-bot' } });
+  fireEvent.change(screen.getByLabelText('Chat access (optional)'), { target: { value: '\u0661\u0662\u0663\u0664' } });
+  assert.equal(create.disabled, true);
+  screen.getByText('Not a chat ID or phone number: 1234');
+});
+
+// An @lid entry also admits the number mapped to it, which WhatsApp may later give to someone else.
+test('the chat field says what an @lid entry admits, only while one is listed', async () => {
+  const { screen, fireEvent } = rtl;
+  const create = await openCreate();
+  const chats = screen.getByLabelText('Chat access (optional)');
+  const lidHint = /An @lid entry also admits the phone number currently mapped to it/;
+  fireEvent.change(chats, { target: { value: '6281234\n120363000@g.us' } });
+  assert.equal(screen.queryByText(lidHint) === null, true, 'no hint without an @lid entry');
+  assert.equal(chats.getAttribute('aria-describedby'), null);
+
+  fireEvent.change(chats, { target: { value: '6281234\n99887766554433@LID' } });
+  const hint = screen.getByText(lidHint);
+  assert.ok(hint.id);
+  assert.equal(chats.getAttribute('aria-describedby'), hint.id);
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'crm-bot' } });
+  assert.equal(create.disabled, false, 'the hint does not block the create');
+});
+
+test('an edit in native digits for the chat already stored sends nothing', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const save = await openEdit({ ...billingBot, allowedChats: ['6281234@c.us'] });
+  fireEvent.change(screen.getByLabelText('Chat access (optional)'), {
+    target: { value: '\u0666\u0662\u0668\u0661\u0662\u0663\u0664' },
+  });
+  fireEvent.click(save);
+  await waitFor(() => assert.equal(screen.queryByRole('button', { name: 'Save' }) === null, true));
+  assert.deepEqual(updateBodies, []);
+});
+
 // The key exists once the request lands; a modal closed meanwhile would leave its one-time secret
 // unseen and pop it up on the next Create API Key click.
 test('the create modal stays open until the request settles and then shows the secret', async () => {
@@ -203,6 +269,22 @@ test('the create modal stays open until the request settles and then shows the s
   screen.getByRole('dialog');
   release();
   await screen.findByText('owa_k1_new');
+});
+
+// The secret is shown once: closing the dialog that shows it drops it, and the next Create opens the form.
+test('closing the dialog that shows a new key drops the secret, and Create opens the form again', async () => {
+  const { screen, fireEvent } = rtl;
+  const create = await openCreate();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'crm-bot' } });
+  fireEvent.click(create);
+  await screen.findByText('owa_k1_new');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  assert.equal(screen.queryByRole('dialog') === null, true, 'the dialog stayed open');
+  fireEvent.click(screen.getByRole('button', { name: 'Create API Key' }));
+  assert.equal(screen.queryByText('owa_k1_new') === null, true, 'the previous secret is shown again');
+  assert.equal(screen.getByLabelText<HTMLInputElement>('Name').value, '');
+  assert.ok(screen.getByRole('button', { name: 'Create' }));
 });
 
 // The gateway counts an emoji, with or without its presentation selector, as one character.
@@ -638,4 +720,94 @@ test('a chat list past the gateway limit blocks Create and says how many it hold
 
   fireEvent.change(screen.getByLabelText('Chat access (optional)'), { target: { value: '6281234' } });
   await rtl.waitFor(() => assert.equal(create.disabled, false));
+});
+
+for (const dismissal of ['Cancel', 'Close'] as const) {
+  test(`a completed key update keeps the editor opened after ${dismissal}`, async () => {
+    const { screen, fireEvent, within, waitFor, act } = rtl;
+    keyList = [billingBot, { ...billingBot, id: 'key-2', name: 'support-bot', keyPrefix: 'owa_k1cd' }];
+    let release!: () => void;
+    updateGate = new Promise<void>(resolve => (release = resolve));
+    renderApiKeys();
+    await screen.findByText('owa_k1ab****');
+    const firstRow = screen.getByText('billing-bot').closest('tr') as HTMLElement;
+    fireEvent.click(within(firstRow).getByTitle('Edit access'));
+    const firstDialog = await screen.findByRole('dialog');
+    fireEvent.change(within(firstDialog).getByLabelText('Role'), { target: { value: 'viewer' } });
+    fireEvent.click(within(firstDialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => assert.equal(updateBodies.length, 1));
+    fireEvent.click(within(firstDialog).getByRole('button', { name: dismissal }));
+    assert.equal(screen.queryByRole('dialog') === null, true);
+
+    const secondRow = screen.getByText('support-bot').closest('tr') as HTMLElement;
+    fireEvent.click(within(secondRow).getByTitle('Edit access'));
+    const secondDialog = await screen.findByRole('dialog');
+    within(secondDialog).getByText('support-bot');
+    assert.equal(within(secondDialog).getByLabelText<HTMLSelectElement>('Role').disabled, true);
+    await act(async () => {
+      release();
+      await updateGate;
+    });
+    await waitFor(() => assert.equal(queryClient!.isMutating(), 0));
+    assert.equal(
+      screen.queryByRole('dialog') === secondDialog,
+      true,
+      'the completed key update closed the replacement editor',
+    );
+    within(secondDialog).getByText('support-bot');
+    assert.equal(within(secondDialog).getByLabelText<HTMLSelectElement>('Role').value, 'operator');
+    assert.deepEqual(updatePaths, ['/api/auth/api-keys/key-1']);
+    assert.deepEqual(updateBodies, [{ role: 'viewer' }]);
+  });
+}
+
+test('a successful key update closes its own editor after the response settles', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  let release!: () => void;
+  updateGate = new Promise<void>(resolve => (release = resolve));
+  const save = await openEdit(billingBot);
+  fireEvent.change(screen.getByLabelText('Role'), { target: { value: 'viewer' } });
+  fireEvent.click(save);
+  await waitFor(() => assert.equal(updateBodies.length, 1));
+  assert.equal(screen.getByLabelText<HTMLSelectElement>('Role').disabled, true);
+  assert.equal(save.disabled, true);
+  fireEvent.click(save);
+  assert.equal(updateBodies.length, 1, 'a pending save sent another update');
+  release();
+  await waitFor(() => assert.equal(screen.queryByRole('dialog') === null, true));
+  assert.deepEqual(updatePaths, ['/api/auth/api-keys/key-1']);
+  assert.deepEqual(updateBodies, [{ role: 'viewer' }]);
+});
+
+test('cancelling an unsaved key edit closes it without an update', async () => {
+  const { screen, fireEvent, within } = rtl;
+  await openEdit(billingBot);
+  fireEvent.change(screen.getByLabelText('Role'), { target: { value: 'viewer' } });
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+  assert.equal(screen.queryByRole('dialog') === null, true);
+  assert.deepEqual(updateBodies, []);
+});
+
+test('a refused delayed key update keeps the draft available for retry and cancellation', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  updateStatus = 409;
+  let release!: () => void;
+  updateGate = new Promise<void>(resolve => (release = resolve));
+  const save = await openEdit({ ...billingBot, role: 'admin' });
+  const dialog = screen.getByRole('dialog');
+  fireEvent.change(within(dialog).getByLabelText('Role'), { target: { value: 'viewer' } });
+  fireEvent.click(save);
+  await waitFor(() => assert.equal(updateBodies.length, 1));
+  assert.equal(within(dialog).getByLabelText<HTMLSelectElement>('Role').disabled, true);
+  assert.equal(save.disabled, true);
+  release();
+  await screen.findByText('Cannot remove the last active admin key');
+  await waitFor(() => assert.equal(save.disabled, false));
+  assert.equal(screen.getByRole('dialog') === dialog, true);
+  assert.equal(within(dialog).getByLabelText<HTMLSelectElement>('Role').value, 'viewer');
+  assert.equal(within(dialog).getByLabelText<HTMLSelectElement>('Role').disabled, false);
+  assert.deepEqual(updatePaths, ['/api/auth/api-keys/key-1']);
+  assert.deepEqual(updateBodies, [{ role: 'viewer' }]);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+  assert.equal(screen.queryByRole('dialog') === null, true);
 });

@@ -45,7 +45,9 @@ export class ChannelService {
 
   /** Create a channel. The account owns it, which is what makes deleting it possible later. */
   createChannel(sessionId: string, name: string, description?: string) {
-    return this.getEngine(sessionId).createChannel(name, description);
+    // The DTO lets a JSON null through as "no description". whatsapp-web.js echoes a non-undefined one back in
+    // the created channel, which would answer `"description": null` for a field typed as an optional string.
+    return this.getEngine(sessionId).createChannel(name, description ?? undefined);
   }
 
   /**

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePhoneFromJid, formatPhoneForDisplay } from './formatPhone.ts';
+import { parsePhoneFromJid, formatPhoneForDisplay, isolateNumber, chatTitle } from './formatPhone.ts';
 
 test('parsePhoneFromJid extracts digits from a personal @c.us JID', () => {
   assert.equal(parsePhoneFromJid('628123456789@c.us'), '628123456789');
@@ -59,9 +59,45 @@ test('formatPhoneForDisplay accepts a raw JID as input (delegates to parsePhoneF
 });
 
 test('formatPhoneForDisplay picks the country code by its ITU prefix: 3 digits, and 1 for +7', () => {
-  assert.equal(formatPhoneForDisplay('971501234567'), '+971 501 23 4567');
+  assert.equal(formatPhoneForDisplay('971501234567'), '+971 501 234 567');
   assert.equal(formatPhoneForDisplay('2348012345678'), '+234 801 234 5678');
   assert.equal(formatPhoneForDisplay('8801712345678'), '+880 171 234 5678');
   assert.equal(formatPhoneForDisplay('79161234567'), '+7 916 123 4567');
   assert.equal(formatPhoneForDisplay('447911123456'), '+44 791 112 3456');
+});
+
+test('formatPhoneForDisplay never leaves a group shorter than three digits (#1940)', () => {
+  assert.equal(formatPhoneForDisplay('4915733344455'), '+49 157 3334 4455');
+  assert.equal(formatPhoneForDisplay('6281770008896'), '+62 817 7000 8896');
+  assert.equal(formatPhoneForDisplay('5511987654321'), '+55 119 8765 4321');
+  assert.equal(formatPhoneForDisplay('6591234567'), '+65 9123 4567');
+  assert.equal(formatPhoneForDisplay('85291234567'), '+852 9123 4567');
+  assert.equal(formatPhoneForDisplay('62812345678'), '+62 812 345 678');
+  // Five digits after the code cannot be split into threes and fours, so they stay one group.
+  assert.equal(formatPhoneForDisplay('29012345'), '+290 12345');
+  for (let length = 6; length <= 15; length++) {
+    const groups = formatPhoneForDisplay(`62${'8'.repeat(length)}`)!
+      .split(' ')
+      .slice(1);
+    assert.equal(groups.join('').length, length);
+    assert.ok(
+      groups.every(group => group.length === 3 || group.length === 4),
+      `${length} digits: ${groups.join(' ')}`,
+    );
+  }
+});
+
+test('isolateNumber keeps a number one left-to-right run inside a right-to-left sentence', () => {
+  const lri = String.fromCodePoint(0x2066);
+  const pdi = String.fromCodePoint(0x2069);
+  assert.equal(isolateNumber('+49 170 123 4 5678'), `${lri}+49 170 123 4 5678${pdi}`);
+});
+
+test('chatTitle is the name, else the isolated number of a phone id, else the digits of any other id', () => {
+  assert.equal(chatTitle({ id: '15550001111@c.us', name: 'Alice' }), 'Alice');
+  assert.equal(chatTitle({ id: '15550001111@c.us', name: '' }), isolateNumber('+1 555 000 1111'));
+  assert.equal(chatTitle({ id: '628123456789@s.whatsapp.net' }), isolateNumber('+62 812 345 6789'));
+  // A privacy id and a group id are digits too, and no phone number.
+  assert.equal(chatTitle({ id: '262813461250071@lid', name: '' }), '262813461250071');
+  assert.equal(chatTitle({ id: '120363000000000001@g.us', name: '' }), '120363000000000001');
 });

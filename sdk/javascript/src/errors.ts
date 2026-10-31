@@ -35,7 +35,8 @@ export class OpenWAApiError extends OpenWAError {
   readonly code?: string;
   /**
    * Seconds to wait before retrying: the body's `retryAfterSeconds` when present, else the
-   * `Retry-After` response header (seconds or an HTTP date). Undefined when neither is sent.
+   * `Retry-After` response header (seconds or an HTTP date). Undefined when neither is sent. A longer
+   * wait is reported as 2147483 (about 24.8 days), the most `setTimeout` accepts once multiplied by 1000.
    */
   readonly retryAfterSeconds?: number;
   /** The response headers, when the error came from a response. */
@@ -111,19 +112,30 @@ export class OpenWARateLimitError extends OpenWAApiError {}
 export class OpenWANotImplementedError extends OpenWAApiError {}
 
 /**
- * 503 Service Unavailable — a transport failure, not a refusal. The gateway answers this when the
- * engine did not confirm the operation in time: WhatsApp never replied, the socket was down, or the
- * request budget ran out. **Retryable**, but a catalog 503 can persist because WhatsApp may never
- * answer that query, so bound any retry.
+ * 503 Service Unavailable: the gateway could not complete the request right now. The path to
+ * WhatsApp failed (WhatsApp never replied, the socket was down, or the request budget ran out), the
+ * gateway is draining or short of a dependency, or, on Baileys, WhatsApp itself throttled (code 429)
+ * or timed out (code 408) the request; a throttle or timeout names its code in the message.
+ * **Retryable**, but back off and retry later instead of at once: repeating a throttled request
+ * straight away prolongs the throttle. A catalog 503 can persist because WhatsApp may never answer
+ * that query, so bound any retry.
  *
- * Not every 503 is safe to repeat blindly: the non-idempotent sends (group create, channel create,
- * media send) are deliberately left unbounded by the gateway so a slow WhatsApp reply never answers
- * one, and in a multi-node deployment a forward that fails before reaching the owner node answers
- * 503. A 503 from the owner itself is relayed unchanged and means the engine did not confirm, so a
- * bounded write such as a group, channel, contact or profile change may still have been applied;
- * re-read the state before repeating it. A forward that fails after the request was sent answers
- * 502 or 504 instead (a plain `OpenWAApiError`): the owner may already have carried it out, so do
- * not repeat a non-idempotent send on those unchecked.
+ * On a send or a single write, a throttle turned the request away before it ran, so nothing was
+ * sent or applied. A send also sent nothing when its recipient lookup failed, its connection closed
+ * before the message was written, or its media or preview image URL could not be fetched through
+ * the session's proxy. Each of these frees a keyed send's `Idempotency-Key` for the retry. A group
+ * settings update with several fields applies them one at a time, so a 503 on a later field, a
+ * throttle included, leaves the earlier ones applied; the message lists them after
+ * `already applied:`, so re-read the settings before retrying, or send one field per request. Any
+ * other timeout proves nothing: the write may still have been applied, and a keyed send keeps its key
+ * taken. The non-idempotent sends (group create, channel create, media send) are deliberately left
+ * unbounded by the gateway so a slow WhatsApp reply never answers one, and in a multi-node
+ * deployment a forward that fails before reaching the owner node answers 503. A 503 from the owner
+ * itself is relayed unchanged and keeps its meaning, so a bounded write such as a group, channel,
+ * contact or profile change that timed out may still have been applied; re-read the state before
+ * repeating it. A forward that fails after the request was sent answers 502 or 504 instead (a plain
+ * `OpenWAApiError`): the owner may already have carried it out, so do not repeat a non-idempotent
+ * send on those unchecked.
  */
 export class OpenWAServiceUnavailableError extends OpenWAApiError {}
 
@@ -172,14 +184,24 @@ export function classifyApiError(
  * date, clamped at 0.
  */
 function retryAfterSeconds(fromBody: unknown, header: string | null | undefined): number | undefined {
-  if (typeof fromBody === 'number' && Number.isFinite(fromBody) && fromBody >= 0) return Math.ceil(fromBody);
+  if (typeof fromBody === 'number' && Number.isFinite(fromBody) && fromBody >= 0) {
+    return capSeconds(Math.ceil(fromBody));
+  }
   const value = header?.trim();
   if (!value) return undefined;
-  if (/^\d+$/.test(value)) return Number(value);
+  // A digit string past Number's range reads as Infinity, which the cap brings back to the ceiling.
+  if (/^\d+$/.test(value)) return capSeconds(Number(value));
   // Date.parse also accepts '-5' or '1.5' as a past date, which would read as "retry now".
   if (!/^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value)) return undefined;
   const at = Date.parse(value);
-  return Number.isNaN(at) ? undefined : Math.max(0, Math.ceil((at - Date.now()) / 1000));
+  return Number.isNaN(at) ? undefined : capSeconds(Math.max(0, Math.ceil((at - Date.now()) / 1000)));
+}
+
+/** setTimeout fires at once for a delay over 2^31-1 ms, so a longer wait would turn `seconds * 1000` into a retry now. */
+const MAX_RETRY_AFTER_SECONDS = 2_147_483;
+
+function capSeconds(seconds: number): number {
+  return Math.min(seconds, MAX_RETRY_AFTER_SECONDS);
 }
 
 /**

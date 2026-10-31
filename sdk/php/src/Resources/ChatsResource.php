@@ -85,8 +85,9 @@ class ChatsResource
     }
 
     /**
-     * Archive or unarchive a chat. A false `success` means the engine declined — on Baileys a chat
-     * with no known history cannot be archived.
+     * Archive or unarchive a chat. A false `success` means the engine declined — on Baileys an id
+     * the session knows no chat for. A known chat with no message in memory or stored is archived
+     * without one.
      *
      * @param array<string,mixed> $body chatId and archive (bool).
      * @return array<string,mixed>

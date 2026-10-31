@@ -107,10 +107,12 @@ export interface BaileysStoredMessageRow {
   createdAt: string;
 }
 
-// The persisted lid->phone resolution cache. Not a FK to sessions (provenance only), so the import's
+// The persisted lid->phone resolution cache. sessionId names the session whose negative may clear the
+// phone; it is not a FK to sessions, so the import's
 // `DELETE FROM sessions` never clears it — it must be exported + re-inserted explicitly or a
 // backup→restore into a fresh DB loses the whole cache (it self-heals via re-lookup, but lossily).
 export interface LidMappingRow {
+  isReported?: boolean | number;
   lid: string;
   phone: string | null;
   sessionId: string | null;
@@ -126,6 +128,8 @@ export interface ChatStateRow {
   pinned: boolean | number;
   // Absent from an archive taken before the column existed; null reads as its set fields observed.
   observed?: string | null;
+  // Epoch ms WhatsApp deleted the chat; absent from an archive taken before the column existed.
+  deletedAt?: number | null;
   updatedAt: string;
 }
 

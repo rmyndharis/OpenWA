@@ -52,6 +52,19 @@ export class ChatState {
   @Column({ type: 'varchar', nullable: true })
   observed!: string | null;
 
+  /**
+   * Epoch MILLISECONDS WhatsApp deleted the chat (on the phone, or through the API), else null. WhatsApp
+   * keeps nothing of a deleted chat while the gateway keeps its stored messages, so the row stays with
+   * its state reset and this set: a message from before it neither keys a chat write nor brings the chat
+   * back. A later message re-creates the chat on WhatsApp, and the row goes.
+   */
+  @Column({
+    type: 'bigint',
+    nullable: true,
+    transformer: { to: (v: number | null) => v, from: (v: string | null) => (v == null ? null : Number(v)) },
+  })
+  deletedAt!: number | null;
+
   @UpdateDateColumn()
   updatedAt!: Date;
 }

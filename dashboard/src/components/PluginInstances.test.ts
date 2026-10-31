@@ -113,4 +113,54 @@ test('the created view shows an auto-generated verify token with a copy button',
   const token = within(dialog).getByText('auto-verify-token-4567');
   assert.ok(token.closest('.pi-secret')?.querySelector('button'), 'no copy button next to the verify token');
   within(dialog).getByText('Verify token');
+  const create = calls.find(c => c.method === 'POST' && c.path === BASE);
+  assert.ok(create, 'expected an instance create request');
+  assert.equal((create.body as { secret?: string }).secret, undefined);
+});
+
+test('invalid instance secrets show the matching localized length guidance', async () => {
+  const { default: i18n, supportedLanguages } = await import('../i18n/index.ts');
+  const { screen, fireEvent } = rtl;
+  const errors = [
+    ['ASCII over maximum', 'x'.repeat(513), 'common.fieldTooLong', { max: 512, count: 513 }],
+    ['padded astral over maximum', `  ${'\u{1F600}'.repeat(513)}  `, 'common.fieldTooLong', { max: 512, count: 513 }],
+    ['presentation over maximum', '\u2764\uFE0F'.repeat(513), 'common.fieldTooLong', { max: 512, count: 513 }],
+    ['ASCII below minimum', 'x'.repeat(15), 'plugins.instances.errors.invalidSecret', undefined],
+    ['astral below minimum', '\u{1F600}'.repeat(8), 'plugins.instances.errors.invalidSecret', undefined],
+  ] as const;
+
+  try {
+    for (const language of supportedLanguages) {
+      await i18n.changeLanguage(language);
+      renderInstances();
+      fireEvent.click(await screen.findByRole('button', { name: i18n.t('plugins.instances.create') }));
+      fireEvent.change(screen.getByLabelText(i18n.t('plugins.instances.form.instanceId')), {
+        target: { value: 'acct2' },
+      });
+      const secret = screen.getByLabelText(i18n.t('plugins.instances.form.secret'));
+      for (const [label, value, key, options] of errors) {
+        fireEvent.change(secret, { target: { value } });
+        fireEvent.click(screen.getByRole('button', { name: i18n.t('common.create') }));
+        const expected = i18n.t(key, options);
+        assert.equal(screen.getByText(expected).textContent, expected, `${language}: ${label}`);
+        if (key === 'common.fieldTooLong') {
+          assert.match(expected, /512/, language);
+          assert.match(expected, /513/, language);
+          assert.doesNotMatch(expected, /\{\{|\}\}/, language);
+        }
+        assert.equal(
+          calls.some(c => c.method === 'POST' && c.path === BASE),
+          false,
+          `${language}: ${label}`,
+        );
+      }
+      rtl.cleanup();
+      queryClient?.clear();
+      calls.length = 0;
+    }
+  } finally {
+    rtl.cleanup();
+    queryClient?.clear();
+    await i18n.changeLanguage('en');
+  }
 });

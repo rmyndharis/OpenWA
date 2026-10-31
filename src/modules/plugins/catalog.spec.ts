@@ -1,4 +1,4 @@
-import { compareSemver, annotateCatalog, CatalogEntry } from './catalog';
+import { compareSemver, annotateCatalog, isCatalogEntry, CatalogEntry } from './catalog';
 
 describe('compareSemver', () => {
   it('orders by major, minor, then patch', () => {
@@ -60,5 +60,59 @@ describe('annotateCatalog', () => {
       [{ id: 'faq-bot', version: '1.0.0-rc.1' }],
     );
     expect(rcToRc[0].updateAvailable).toBe(false);
+  });
+});
+
+describe('annotateCatalog with null optional fields', () => {
+  it('omits a null optional field, as the published schema has it absent or a string', () => {
+    const [entry] = annotateCatalog(
+      [
+        {
+          id: 'a',
+          name: 'A',
+          version: '1.0.0',
+          description: null,
+          keywords: null,
+          download: null,
+          stars: null,
+        } as never,
+      ],
+      [],
+    );
+    expect(entry).not.toHaveProperty('description');
+    expect(entry).not.toHaveProperty('keywords');
+    expect(entry).not.toHaveProperty('download');
+    // Unknown extra fields are passed through as they came.
+    expect(entry).toHaveProperty('stars', null);
+    expect(entry).toMatchObject({ id: 'a', installed: false, updateAvailable: false });
+  });
+});
+
+describe('isCatalogEntry', () => {
+  const ok = { id: 'a', name: 'A', version: '1.0.0' };
+
+  it('accepts the required fields alone, optional fields of the right type and unknown extras', () => {
+    expect(isCatalogEntry(ok)).toBe(true);
+    expect(isCatalogEntry({ ...ok, description: 'd', keywords: ['x'], download: 'https://x/a.zip', stars: 5 })).toBe(
+      true,
+    );
+  });
+
+  it('treats a null optional field as absent', () => {
+    expect(isCatalogEntry({ ...ok, homepage: null, testedOpenWAVersion: null, keywords: null })).toBe(true);
+  });
+
+  it.each([
+    null,
+    5,
+    [],
+    { ...ok, id: '' },
+    { ...ok, name: undefined },
+    { ...ok, version: 1 },
+    { ...ok, author: {} },
+    { ...ok, keywords: 'x' },
+    { ...ok, keywords: [1] },
+  ])('rejects %j', value => {
+    expect(isCatalogEntry(value)).toBe(false);
   });
 });

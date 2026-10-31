@@ -38,6 +38,8 @@
     "optional": "opcional",
     "fieldTooLong": "Limite de {{max}} caracteres (agora {{count}}).",
     "language": "Idioma",
+    "changeLanguage": "Mudar idioma",
+    "joinedName": "{{first}}, {{second}}",
     "back": "Voltar",
     "next": "Próximo",
     "previous": "Anterior",
@@ -64,6 +66,7 @@
     "dashboard": "Painel",
     "sessions": "Sessões",
     "chats": "Chats",
+    "numberChecker": "Verificador de números",
     "webhooks": "Webhooks",
     "apiKeys": "Chaves API",
     "messageTester": "Testador de mensagens",
@@ -73,6 +76,7 @@
     "templates": "Modelos"
   },
   "chats": {
+    "edited": "Editado",
     "media": {
       "location": "Localização",
       "call": "Chamada",
@@ -173,6 +177,16 @@
       "backgroundColor": "Cor de fundo",
       "font": "Fonte",
       "fontDefault": "Padrão",
+      "fonts": {
+        "system": "Sistema",
+        "systemText": "Texto do sistema",
+        "script": "Manuscrita",
+        "bold": "Negrito",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "ou",
       "post": "Publicar",
       "posted": "Status publicado",
@@ -196,7 +210,8 @@
       "delete": "Erro ao excluir a mensagem",
       "clickButton": "Erro ao clicar no botão",
       "fileTooLarge": "O arquivo é muito grande (máx. 18 MB)",
-      "searchHitSessionNotReady": "A sessão desta mensagem não está conectada"
+      "searchHitSessionNotReady": "A sessão desta mensagem não está conectada",
+      "searchHitChatNotListed": "Não foi possível encontrar a conversa desta mensagem na lista"
     },
     "loadMessagesError": "Não foi possível carregar as mensagens. Verifique os registros do servidor.",
     "messageStatus": {
@@ -205,6 +220,144 @@
       "delivered": "Entregue",
       "read": "Lido",
       "failed": "Falhou"
+    },
+    "today": "Hoje",
+    "switchSession": "Trocar sessão",
+    "searchMessages": "Pesquisar mensagens",
+    "clearSearch": "Limpar pesquisa",
+    "filters": {
+      "label": "Filtrar chats",
+      "all": "Todas",
+      "unread": "Não lidas",
+      "direct": "Conversas 1:1",
+      "groups": "Grupos",
+      "unknown": "Desconhecidos"
+    },
+    "noFilterResults": "Nenhuma conversa corresponde a este filtro",
+    "contactInfo": "Dados do contato",
+    "moreActions": "Mais ações",
+    "copyChatId": "Copiar ID da conversa",
+    "chatIdCopied": "ID da conversa copiado",
+    "copyFailed": "Não foi possível copiar para a área de transferência",
+    "closeChat": "Fechar conversa",
+    "phone": "Número de telefone",
+    "chatId": "ID da conversa",
+    "newChat": {
+      "title": "Nova conversa",
+      "searchPlaceholder": "Buscar nome ou número com código do país",
+      "startWithNumber": "Iniciar conversa com {{number}}",
+      "contacts": "Contatos",
+      "noContacts": "Nenhum contato encontrado",
+      "loadingContacts": "Carregando contatos...",
+      "contactsError": "Não foi possível carregar os contatos",
+      "checking": "Verificando número...",
+      "notOnWhatsApp": "{{number}} não está registrado no WhatsApp",
+      "checkFailed": "Não foi possível verificar o número",
+      "numberHint": "Digite os números com o código do país, ex.: +55 11 91234-5678"
+    },
+    "newGroup": {
+      "title": "Novo grupo",
+      "namePlaceholder": "Nome do grupo",
+      "participantsPlaceholder": "Buscar participantes ou digitar um número",
+      "addNumber": "Adicionar {{number}}",
+      "selected": "{{count}} selecionados",
+      "create": "Criar grupo",
+      "created": "Grupo \"{{name}}\" criado",
+      "createFailed": "Não foi possível criar o grupo",
+      "removeParticipant": "Remover {{name}}"
+    },
+    "sessionPicker": {
+      "searchPlaceholder": "Pesquisar sessões...",
+      "noMatch": "Nenhuma sessão corresponde",
+      "addTitle": "Vincular outro número",
+      "addHint": "Crie uma sessão e vincule-a com um código QR"
+    },
+    "group": {
+      "info": "Dados do grupo",
+      "leave": "Sair do grupo",
+      "leaveConfirm": "Sair do grupo \"{{name}}\"?",
+      "left": "Você saiu de \"{{name}}\"",
+      "leaveFailed": "Não foi possível sair do grupo",
+      "editTitle": "Editar grupo",
+      "tabInfo": "Info",
+      "tabParticipants": "Participantes",
+      "managedBy": "Gerenciado via {{session}}",
+      "notAdmin": "Sem permissão de admin via {{session}}",
+      "name": "Nome do grupo",
+      "picture": "Foto do grupo",
+      "pictureHint": "Clique neste campo para escolher uma nova foto do grupo.",
+      "readOnlyHint": "Somente admins do grupo podem alterá-lo.",
+      "description": "Descrição",
+      "descriptionPlaceholder": "Descrição do grupo (opcional)",
+      "save": "Salvar alterações",
+      "saved": "Grupo atualizado",
+      "saveFailed": "Não foi possível salvar o grupo",
+      "loadFailed": "Não foi possível carregar os dados do grupo",
+      "participantCount": "Participantes: {{count}}",
+      "admin": "Admin",
+      "owner": "Criador",
+      "makeAdmin": "Tornar admin",
+      "removeAdmin": "Remover admin",
+      "remove": "Remover",
+      "removeConfirm": "Remover {{name}} do grupo?",
+      "add": "Adicionar",
+      "addPlaceholder": "Adicione um número com código do país",
+      "memberActionFailed": "A ação falhou",
+      "leaveWarning": "Você deixará de receber as mensagens do grupo, e só um admin poderá adicioná-lo de novo."
+    },
+    "rowActions": {
+      "actionsFor": "Ações para {{name}}",
+      "markUnread": "Marcar como não lida",
+      "markUnreadFailed": "Não foi possível marcar a conversa como não lida",
+      "clear": "Limpar conversa",
+      "clearConfirm": "Apagar todas as mensagens da conversa com {{name}}?",
+      "clearWarning": "A conversa continua na lista. O gateway também apaga a cópia salva das mensagens, com as mídias; exporte o histórico antes se precisar dele.",
+      "cleared": "Conversa com {{name}} limpa",
+      "clearFailed": "Não foi possível limpar a conversa",
+      "delete": "Apagar conversa",
+      "deleteConfirm": "Apagar a conversa com {{name}}?",
+      "deleteWarning": "A conversa sai da lista, e o gateway apaga a cópia salva das mensagens, com as mídias.",
+      "deleted": "Conversa com {{name}} apagada",
+      "deleteFailed": "Não foi possível apagar a conversa",
+      "saveContact": "Salvar contato",
+      "renameContact": "Renomear contato",
+      "firstName": "Nome",
+      "lastName": "Sobrenome (opcional)",
+      "contactSaved": "Contato salvo",
+      "contactSaveFailed": "Não foi possível salvar o contato",
+      "pin": "Fixar conversa",
+      "unpin": "Desafixar conversa",
+      "pinFailed": "Não foi possível fixar a conversa. O WhatsApp permite no máximo três conversas fixadas.",
+      "unpinFailed": "Não foi possível desafixar a conversa",
+      "pinnedLabel": "Fixada",
+      "mute": "Silenciar notificações",
+      "unmute": "Reativar notificações",
+      "mutedLabel": "Silenciada",
+      "muteTitle": "Silenciar \"{{name}}\"",
+      "muteHint": "Os outros participantes não sabem que você silenciou a conversa. Você ainda é notificado quando for mencionado.",
+      "muteFailed": "Não foi possível alterar as notificações",
+      "archive": "Arquivar conversa",
+      "unarchive": "Desarquivar conversa",
+      "archived": "Conversa arquivada",
+      "unarchived": "Conversa desarquivada",
+      "archiveFailed": "Não foi possível alterar o arquivo",
+      "archivedEntry": "Arquivadas",
+      "archivedTitle": "Conversas arquivadas",
+      "archiveEmpty": "Nenhuma conversa arquivada",
+      "declined": "O WhatsApp recusou a alteração.",
+      "block": "Bloquear contato",
+      "unblock": "Desbloquear contato",
+      "blockConfirm": "Bloquear {{name}}?",
+      "blockWarning": "Contatos bloqueados não podem mais ligar nem enviar mensagens para você.",
+      "blocked": "{{name}} bloqueado",
+      "unblocked": "{{name}} desbloqueado",
+      "blockFailed": "Não foi possível alterar o bloqueio",
+      "muteFor": {
+        "8h": "8 horas",
+        "1w": "1 semana",
+        "always": "Sempre"
+      },
+      "saveContactUnavailable": "Precisa de um número de telefone conhecido: esta conversa tem só um ID de privacidade (@lid)."
     }
   },
   "errorBoundary": {
@@ -465,6 +618,7 @@
       "badge_many": "{{count}} filtros",
       "addCondition": "Adicionar condição",
       "removeCondition": "Remover condição",
+      "removeValue": "Remover {{value}}",
       "caseSensitive": "Diferenciar maiúsculas",
       "contactPlaceholder": "Número ou ID do WhatsApp...",
       "textPlaceholder": "Texto a pesquisar...",
@@ -514,6 +668,7 @@
       "updateFailed": "Erro ao atualizar o webhook: {{message}}",
       "testOk": "Teste de webhook bem-sucedido. Status: {{status}}",
       "testFailed": "Teste de webhook falhou: {{message}}",
+      "testStatus": "o receptor respondeu HTTP {{status}}",
       "testError": "Erro ao testar o webhook: {{message}}"
     },
     "actions": {
@@ -525,6 +680,7 @@
       "message.received": "Quando uma mensagem é recebida",
       "message.sent": "Quando uma mensagem é enviada",
       "message.ack": "Quando o status de entrega ou leitura de uma mensagem muda",
+      "message.receipt": "Cada destinatário que recebe, lê ou reproduz uma mensagem de grupo ou status que você enviou (somente Baileys; não incluído em *)",
       "message.failed": "Quando a entrega de uma mensagem enviada falha",
       "message.revoked": "Quando uma mensagem é apagada para todos",
       "message.reaction": "Quando uma reação é adicionada, alterada ou removida",
@@ -537,6 +693,7 @@
       "session.restriction": "Quando o WhatsApp restringe a conta ou remove uma restrição",
       "presence.update": "Quando um chat inscrito fica online, digita ou fica offline",
       "event.response": "Quando um convidado responde a um evento do WhatsApp (vai, não vai, talvez)",
+      "poll.vote": "Quando alguém marca ou desmarca opções de uma enquete (whatsapp-web.js)",
       "group.join": "Quando participantes entram em um grupo ou são adicionados",
       "group.leave": "Quando participantes saem de um grupo ou são removidos",
       "group.update": "Quando o nome, a descrição ou as configurações de um grupo mudam",
@@ -546,7 +703,7 @@
       "call.rejected": "Quando uma chamada é recusada",
       "call.missed": "Quando uma chamada não é atendida",
       "status.received": "Quando um contato publica um status",
-      "all": "Todos os eventos"
+      "all": "Todos os eventos, exceto message.receipt, que precisa ser indicado explicitamente"
     },
     "auth": {
       "title": "Autenticação de entrega",
@@ -583,6 +740,7 @@
     "modalTitle": "Criar chave API",
     "createdTitle": "Chave API criada",
     "createdHint": "Copie esta chave agora. Você não poderá vê-la novamente.",
+    "copyKey": "Copiar chave",
     "namePlaceholder": "ex.: Chave de produção",
     "nameTooShort": "Use pelo menos 3 caracteres.",
     "rolesTitle": "Referência de funções",
@@ -660,6 +818,7 @@
     "chats": {
       "label": "Acesso a chats (opcional)",
       "hint": "Um chat por linha: um ID de grupo terminado em @g.us, um ID de contato terminado em @c.us ou @lid, ou um número de telefone. Deixe em branco para todos os chats. Uma chave restrita a chats só pode usar as rotas abertas a esse tipo de chave; o acesso dela pelo WebSocket de eventos e pelo MCP fica limitado a esses chats.",
+      "lidHint": "Uma entrada @lid também admite o número de telefone associado a ela no momento. Se esse número passar para outra pessoa, esta chave pode alcançá-la: revise a chave quando um contato mudar de número.",
       "invalid": "Não é um ID de chat nem um número de telefone: {{value}}",
       "tooMany": "Chats demais ({{count}}): uma chave pode listar no máximo {{max}}."
     },
@@ -797,6 +956,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} enviados",
     "groupSendCancelled": "{{count}}, cancelados",
     "groupSendStopped": "{{count}}, interrompido após HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, interrompido: o gateway não respondeu",
     "response": {
       "timestamp": "Data/Hora",
       "messageId": "ID da mensagem",
@@ -807,6 +967,7 @@
     },
     "sendFailed": "Erro ao enviar a mensagem",
     "notOnWhatsApp": "Este número não está registrado no WhatsApp",
+    "tooLong": "Mais de {{max}} dígitos não é um único número de telefone. Digite apenas um número.",
     "batch": {
       "status": {
         "pending": "Pendente",
@@ -869,6 +1030,126 @@
       "copied": "Nome do modelo copiado"
     },
     "sessionSelect": "Sessão"
+  },
+  "numberChecker": {
+    "subtitle": "Verifique de forma silenciosa se números de telefone têm contas ativas no WhatsApp, sem enviar mensagens",
+    "zeroMessages": "Zero mensagens enviadas",
+    "noSession": {
+      "title": "Nenhuma sessão do WhatsApp ativa e conectada.",
+      "desc": "Para verificar números de telefone, o OpenWA requer pelo menos uma sessão autenticada.",
+      "goToSessions": "Ir para Sessões"
+    },
+    "tabs": {
+      "single": "Verificação individual",
+      "bulk": "Verificador de números em massa"
+    },
+    "session": {
+      "label": "Sessão do WhatsApp",
+      "none": "Nenhuma sessão pronta disponível",
+      "hint": "As consultas são feitas por meio desta conta do WhatsApp conectada."
+    },
+    "single": {
+      "title": "Verificar uma conta",
+      "phoneLabel": "Número de telefone",
+      "phonePlaceholder": "ex.: 919876543210 ou 6281234567890",
+      "check": "Verificar",
+      "checking": "Verificando...",
+      "tooLong": "Mais de {{max}} dígitos não é um único número de telefone. Verifique um número por vez.",
+      "autoPrefix": "Adicionar automaticamente o prefixo <strong>+91</strong> a números de 10 dígitos (números de 12 dígitos permanecem como estão)",
+      "silent": "<strong>Totalmente silencioso:</strong> esta consulta é feita diretamente no registro de contas do WhatsApp. O contato não recebe notificação, som nem mensagem.",
+      "resultTitle": "Resultado da verificação",
+      "querying": "Consultando os servidores do WhatsApp...",
+      "empty": "Informe um número de telefone e clique em \"Verificar\" para ver o status do número no WhatsApp."
+    },
+    "preview": {
+      "prefixed": "Será verificado como: <strong>+{{number}}</strong> (10 dígitos → prefixo 91 adicionado automaticamente)",
+      "kept": "Será verificado como: <strong>+{{number}}</strong> (12 dígitos → mantido como está)",
+      "digits": "Será verificado como: <strong>+{{number}}</strong> ({{digits}} dígitos)"
+    },
+    "prefixHint": {
+      "single": "O +91 é adicionado a números de 10 dígitos e a números de 11 dígitos com 0 inicial. Números com + ou 00 permanecem como foram digitados.",
+      "bulk": "O +91 é adicionado a números de 10 dígitos (ex.: 96...) e a números de 11 dígitos com 0 inicial. Números com + ou 00 permanecem como foram digitados.",
+      "off": "Os números são verificados como foram digitados, apenas com os dígitos, então inclua o código do país."
+    },
+    "result": {
+      "registered": "Registrado no WhatsApp",
+      "notRegistered": "Não registrado",
+      "avatarAlt": "Avatar",
+      "status": "Status",
+      "active": "Conta ativa",
+      "none": "Nenhuma conta encontrada",
+      "jid": "JID do WhatsApp",
+      "copyJid": "Copiar JID",
+      "copy": "Copiar",
+      "copied": "Copiado",
+      "checkedAt": "Hora da verificação",
+      "openTester": "Ir para o testador de mensagens"
+    },
+    "recent": {
+      "title": "Verificações recentes",
+      "clear": "Limpar histórico"
+    },
+    "table": {
+      "phone": "Número de telefone",
+      "status": "Status no WhatsApp",
+      "id": "ID do WhatsApp",
+      "time": "Hora"
+    },
+    "status": {
+      "registered": "Registrado",
+      "unregistered": "Não registrado",
+      "notRegistered": "Não registrado",
+      "failed": "Falhou"
+    },
+    "bulk": {
+      "title": "Verificador de números em massa",
+      "delayLabel": "Intervalo seguro entre consultas (ms)",
+      "delay1": "1000 ms / 1 s (recomendado)",
+      "delay2": "2000 ms / 2 s (mais seguro)",
+      "delay3": "3000 ms / 3 s (seguro para alto volume)",
+      "delayHint": "Tempo de espera entre as consultas para ficar abaixo do limite de taxa do gateway (padrão: 100 por minuto). O lote é interrompido se o gateway recusar novas consultas.",
+      "countryRule": "Regra de código de país",
+      "autoPrefix": "Adicionar automaticamente o prefixo <strong>+91</strong> (Índia) a números de 10 dígitos",
+      "numbersLabel": "Números a verificar (um por linha ou separados por vírgula)",
+      "numbersHint": "Cole números de telefone com o código do país, um por linha ou separados por vírgula. Até {{max}} números por lote.",
+      "parsed": "<strong>{{count}}</strong> número único identificado",
+      "parsed_other": "<strong>{{count}}</strong> números únicos identificados",
+      "parsed_many": "<strong>{{count}}</strong> números únicos identificados",
+      "tenDigitAdded": "({{ten}} de dez dígitos → +91 adicionado)",
+      "tenDigitAddedPreserved": "({{ten}} de dez dígitos → +91 adicionado, {{twelve}} de doze dígitos sem alteração)",
+      "tooMany": "Números demais: {{parsed}} identificados, no máximo {{max}} por lote. Remova {{excess}} para iniciar.",
+      "tooLong": "Ignorados, mais de {{max}} dígitos (não é um único número): {{count}}. Coloque cada número em uma linha.",
+      "start": "Iniciar verificação em lote",
+      "stop": "Parar verificação",
+      "export": "Exportar resultados (CSV)",
+      "exportHint": "O arquivo contém todos os dígitos. Uma planilha pode mostrar números longos como 9.19612E+11 ou remover um zero à esquerda; importe o arquivo e defina a coluna Phone Number como Texto para mantê-los como estão.",
+      "stoppedTitle": "Lote interrompido",
+      "checked": "Verificados",
+      "remaining": "Restantes",
+      "all": "Todos"
+    },
+    "stopped": {
+      "reason409": "A sessão não está conectada",
+      "reason429": "O limite de taxa do gateway foi atingido",
+      "reason503": "O WhatsApp não respondeu a uma consulta",
+      "reasonOther": "O gateway recusou uma consulta",
+      "partial": "{{reason}} (HTTP {{status}}). A verificação parou no número {{attempted}} de {{total}}; {{count}} número não foi enviado. Tente novamente mais tarde.",
+      "partial_other": "{{reason}} (HTTP {{status}}). A verificação parou no número {{attempted}} de {{total}}; {{count}} números não foram enviados. Tente novamente mais tarde.",
+      "partial_many": "{{reason}} (HTTP {{status}}). A verificação parou no número {{attempted}} de {{total}}; {{count}} números não foram enviados. Tente novamente mais tarde.",
+      "noAnswer": "O gateway não respondeu. A verificação parou no número {{attempted}} de {{total}}. Tente novamente mais tarde.",
+      "last": "{{reason}} (HTTP {{status}}). A última consulta falhou. Tente novamente mais tarde."
+    },
+    "toast": {
+      "enterNumber": "Informe um número de telefone para verificar.",
+      "noSession": "Nenhuma sessão do WhatsApp pronta.",
+      "checkFailed": "Falha na verificação",
+      "unknownError": "Erro de consulta desconhecido",
+      "lookupFailed": "Falha na consulta",
+      "enterNumbers": "Informe números de telefone válidos (um por linha ou separados por vírgula).",
+      "completed": "Verificação concluída: {{count}} número.",
+      "completed_other": "Verificação concluída: {{count}} números.",
+      "completed_many": "Verificação concluída: {{count}} números."
+    }
   },
   "infrastructure": {
     "title": "Infraestrutura",
@@ -961,6 +1242,7 @@
       "successTitle": "✅ Servidor pronto",
       "errorTitle": "❌ Erro ao reiniciar",
       "idleDesc": "A configuração foi salva em <code>.env.generated</code>.<br/>É necessário reiniciar o servidor para aplicar as alterações.",
+      "stopsContainers": "A reinicialização também vai parar estes contêineres integrados, que mantêm seus dados e não são excluídos:",
       "later": "Reiniciar depois",
       "now": "Reiniciar agora",
       "restartingMsg": "Reiniciando servidor... {{count}}s",
@@ -975,7 +1257,10 @@
       "saveFailed": "Erro ao salvar"
     },
     "envPinNote": "Fixado pela variável de ambiente {{name}}: este é o valor em execução; as alterações do painel não serão aplicadas até que essa variável seja removida.",
+    "envPinFlagNote": "Fixado pela variável de ambiente {{name}}: enquanto valer true e este serviço estiver em uso, o contêiner integrado é iniciado a cada inicialização do servidor, mesmo com esta opção desativada.",
     "pendingRestartNote": "Salvo, mas ainda não aplicado: reinicie o servidor para que esta alteração tenha efeito.",
+    "pendingBuiltInNote": "Salvo, mas ainda não aplicado: o servidor está usando um serviço externo agora, e uma reinicialização o trocará para o contêiner integrado.",
+    "pendingExternalNote": "Salvo, mas ainda não aplicado: o servidor está usando o contêiner integrado agora, e uma reinicialização o trocará para um serviço externo.",
     "migration": {
       "title": "Atenção: isso altera o backend de dados",
       "dbWarning": "O novo banco de dados começa vazio. Baixe agora um backup dos seus dados atuais (enquanto ainda estiver no banco de dados anterior) e restaure-o após reiniciar.",
@@ -1066,6 +1351,7 @@
       "installed": "Plugin instalado",
       "installFailed": "Erro na instalação",
       "uninstalled": "Plugin desinstalado",
+      "uninstalledWithWarning": "Plugin desinstalado, com um aviso",
       "uninstallFailed": "Erro ao desinstalar",
       "enableFailedTitle": "Falha ao ativar",
       "disableFailedTitle": "Falha ao desativar",

@@ -7,11 +7,7 @@ import { BaileysStoredMessage } from './baileys-stored-message.entity';
 import { BaileysMessageStore } from '../types/baileys.types';
 import { createLogger } from '../../common/services/logger.service';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
-
-function positiveIntFromEnv(name: string, fallback: number): number {
-  const parsed = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
+import { positiveIntFromEnv } from '../../common/utils/env-int';
 
 /**
  * True when a write failed because the parent `sessions` row is absent (a foreign-key violation),

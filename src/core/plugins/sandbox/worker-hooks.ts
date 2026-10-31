@@ -24,6 +24,7 @@ export interface WorkerHookContext {
 export interface WorkerHookResult {
   continue: boolean;
   data?: unknown;
+  error?: Error;
 }
 
 export type WorkerHookHandler = (ctx: WorkerHookContext) => Promise<WorkerHookResult> | WorkerHookResult;
@@ -93,13 +94,17 @@ export class WorkerHookRegistry {
           source: message.source,
           timestamp: new Date(),
         });
-        // Same rule as the host chain: a result the event cannot use is skipped, so an earlier handler's
-        // rewrite (a redaction) survives a later handler of this plugin returning null.
-        if (result.data !== undefined && (accept?.(result.data) ?? true)) data = result.data;
+        // Same rules as the host chain: a result that reports an error, or that the event cannot use, is
+        // skipped, so an earlier handler's rewrite (a redaction) survives a later handler of this plugin
+        // returning null or failing.
+        if (result.error === undefined && result.data !== undefined && (accept?.(result.data) ?? true)) {
+          data = result.data;
+        }
         if (!result.continue) {
           shouldContinue = false;
           break;
         }
+        if (result.error) throw result.error;
       } catch (error) {
         // A handler error must not break the chain (mirrors the host hook manager). Report the FIRST
         // failure to the host so a throwing hook is visible to the operator instead of failing open

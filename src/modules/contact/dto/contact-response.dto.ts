@@ -8,8 +8,9 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 export class ContactDto {
   @ApiProperty({
     description:
-      "Contact id in the active engine's native format. On Baileys this is frequently an `@lid` " +
-      'rather than a phone-number JID; use GET /contacts/{contactId}/phone to resolve one.',
+      'Contact id in the neutral form both engines return (`<phone>@c.us`, never `@s.whatsapp.net`). On ' +
+      'Baileys this is frequently an `@lid` rather than a phone-number JID; use GET /contacts/{contactId}/phone ' +
+      'to resolve one.',
     example: '628123456789@c.us',
   })
   id!: string;
@@ -26,7 +27,13 @@ export class ContactDto {
   })
   pushName?: string;
 
-  @ApiProperty({ description: 'MSISDN digits, without a leading + or any separators.', example: '628123456789' })
+  @ApiProperty({
+    description:
+      'MSISDN digits, without a leading + or any separators, for a `<phone>@c.us` contact. For a `<lid>@lid` ' +
+      "contact it depends on the engine: Baileys carries the phone's digits when the phone is known and an empty " +
+      "string when it is not; whatsapp-web.js carries the lid's digits, which are not a phone number.",
+    example: '628123456789',
+  })
   number!: string;
 
   @ApiProperty({ description: "Whether the entry exists in the account's addressbook.", example: true })
@@ -59,8 +66,8 @@ export class ProfilePicturesResponseDto {
   @ApiProperty({
     description:
       'Map of the requested contact ids to their picture URL. An id resolves to null when the ' +
-      'contact has no picture, hides it, or its individual lookup failed — a per-id failure does ' +
-      'not fail the batch. Ids beyond the first 50 are not looked up and are absent from the map.',
+      'contact has no picture, hides it, or its lookup failed. Ids beyond the first 50, and ids skipped ' +
+      'after a lookup timed out, are absent from the map: ask for them again.',
     example: { '628123456789@c.us': 'https://pps.whatsapp.net/v/t61.24694-24/12345_678_910_n.jpg' },
     additionalProperties: { type: 'string', nullable: true },
   })
@@ -80,7 +87,9 @@ export class NumberCheckResponseDto {
   @ApiProperty({
     type: String,
     nullable: true,
-    description: "The canonical chat id in the engine's native format, or null when the number is not registered.",
+    description:
+      'The chat id WhatsApp holds for the number, in the neutral `<phone>@c.us` form on both engines ' +
+      '(it can differ from the digits supplied), or null when the number is not registered.',
     example: '628123456789@c.us',
   })
   whatsappId!: string | null;

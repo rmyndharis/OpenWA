@@ -5,7 +5,7 @@ package openwa
 // HealthResponse is the /health payload.
 type HealthResponse struct {
 	Status    string `json:"status"`
-	Timestamp string `json:"timestamp,omitempty"`
+	Timestamp string `json:"timestamp"`
 	Version   string `json:"version,omitempty"`
 }
 
@@ -74,7 +74,7 @@ type UpdateTemplateRequest struct {
 type LabelRecord struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
-	HexColor string `json:"hexColor,omitempty"`
+	HexColor string `json:"hexColor"`
 }
 
 // AddLabelRequest applies a label to a chat.

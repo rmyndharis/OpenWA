@@ -1,13 +1,23 @@
+import { isDeepStrictEqual } from 'node:util';
 import { Injectable, OnApplicationBootstrap } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
+import { sessionScopeKey } from '../../core/plugins/plugin-activation';
 import { Session } from '../session/entities/session.entity';
 import { PluginInstanceService } from './plugin-instance.service';
 import { PluginInstance } from './entities/plugin-instance.entity';
+import type { PluginConfigField } from '../../core/plugins/plugin.interfaces';
 import { createLogger } from '../../common/services/logger.service';
+
+/** Whether a config field is a secret, or holds one at any depth. */
+const holdsSecret = (field: PluginConfigField | undefined): boolean =>
+  !!field &&
+  (field.secret === true || Object.values(field.properties ?? {}).some(holdsSecret) || holdsSecret(field.items));
+
+const isDefined = (value: unknown): boolean => value != null && value !== '';
 
 /**
  * Owns the provisioning bridge that makes a persisted plugin instance's config reach the ingress
@@ -105,15 +115,14 @@ export class ScopeBindingService implements OnApplicationBootstrap {
   async resyncAfterImport(
     previous: ReadonlyArray<{ pluginId: string; sessionScope: string | null; enabled: boolean }>,
   ): Promise<void> {
-    const scopeKey = (scope: string | null): string => (!scope || scope === '*' ? '*' : scope);
     const bound = new Set(
       (await this.instances.listAll())
         .filter(row => row.enabled)
-        .map(row => `${row.pluginId}\u0000${scopeKey(row.sessionScope)}`),
+        .map(row => `${row.pluginId}\u0000${sessionScopeKey(row.sessionScope)}`),
     );
     const retired = new Map<string, { pluginId: string; sessionScope: string | null }>();
     for (const row of previous) {
-      const key = `${row.pluginId}\u0000${scopeKey(row.sessionScope)}`;
+      const key = `${row.pluginId}\u0000${sessionScopeKey(row.sessionScope)}`;
       if (row.enabled && !bound.has(key)) retired.set(key, row);
     }
     for (const { pluginId, sessionScope } of retired.values()) {
@@ -176,15 +185,22 @@ export class ScopeBindingService implements OnApplicationBootstrap {
    * instance row would silently overwrite that operator choice — and bind the plugin to the row's
    * scope even when that session has since been deleted, leaving it activated for nothing. So the boot
    * path only ever ADDS the row's scope; it removes nothing.
+   *
+   * `previousConfig` is what an enabled wildcard instance contributed to the base config before the change
+   * being applied. The base config merges, so a secret that the instance no longer defines (activation) or
+   * no longer contributes at all (teardown) would otherwise stay in it; see retractedSecrets.
    */
   async applyScopeBinding(
     pluginId: string,
     scope: string | null,
     config: Record<string, unknown>,
     activate: boolean,
-    opts: { additive?: boolean } = {},
+    opts: { additive?: boolean; previousConfig?: Record<string, unknown> | null } = {},
   ): Promise<void> {
     try {
+      // A global (sessionScoped: false) plugin has no session activation or per-session config, and the loader
+      // refuses both; dispatch layers each instance's own row for it. Only a wildcard's base config applies.
+      const globalPlugin = this.loader.getPlugin(pluginId)?.manifest.sessionScoped === false;
       if (!scope || scope === '*') {
         // 'all sessions' → base config + activate ['*']. The merged base config cannot be cleanly torn
         // down (updatePluginConfig merges, so one instance's keys aren't separable), but the '*'
@@ -192,10 +208,16 @@ export class ScopeBindingService implements OnApplicationBootstrap {
         // enabled instance still binds a wildcard/null scope — otherwise disabling/deleting a wildcard
         // instance would leave the plugin firing on every session with stale config.
         if (activate) {
-          this.loader.updatePluginConfig(pluginId, config);
-          this.loader.setPluginSessions(pluginId, ['*']);
+          this.loader.updatePluginConfig(pluginId, {
+            ...(await this.retractedSecrets(pluginId, config, opts.previousConfig)),
+            ...config,
+          });
+          if (!globalPlugin) this.loader.setPluginSessions(pluginId, ['*']);
           return;
         }
+        const retracted = await this.retractedSecrets(pluginId, {}, opts.previousConfig);
+        if (Object.keys(retracted).length > 0) this.loader.updatePluginConfig(pluginId, retracted);
+        if (globalPlugin) return;
         const rows = await this.instances.list(pluginId);
         const anyWildcardLeft = rows.some(i => i.enabled && (!i.sessionScope || i.sessionScope === '*'));
         if (!anyWildcardLeft) {
@@ -207,6 +229,7 @@ export class ScopeBindingService implements OnApplicationBootstrap {
         }
         return;
       }
+      if (globalPlugin) return;
       // Concrete scope → per-session config + toggle that session in activeSessions. Mirror the
       // wildcard path's retirement guard in BOTH directions: runtime state a still-ENABLED sibling
       // instance depends on must survive this instance's change. The controller persists the row
@@ -261,5 +284,41 @@ export class ScopeBindingService implements OnApplicationBootstrap {
         metadata: { pluginId, scope, bridgeError: String(err) },
       });
     }
+  }
+
+  /**
+   * What to write over the base config to take back the secrets `previous` held and `config` no longer
+   * defines (none, for a teardown). The wildcard projection only merges, so on its own it cannot delete a
+   * key: a secret the operator revoked, or one of an instance that was disabled, deleted or moved off the
+   * wildcard scope, would stay in the base config, in registry.json and in the config of every hook and
+   * ingress delivery. A key is taken back only while the base config still holds the value the instance
+   * put there. It is written as the value another enabled wildcard instance still defines (the last by id,
+   * as boot reconciliation replays them), else as null, which is how a removed top-level secret is stored
+   * there. Siblings are read only when a secret was actually removed.
+   */
+  private async retractedSecrets(
+    pluginId: string,
+    config: Record<string, unknown>,
+    previous: Record<string, unknown> | null | undefined,
+  ): Promise<Record<string, unknown>> {
+    const before = previous ?? {};
+    const plugin = this.loader.getPlugin(pluginId);
+    const properties = plugin?.manifest.configSchema?.properties ?? {};
+    const removed = Object.keys(before).filter(
+      key =>
+        holdsSecret(properties[key]) &&
+        isDefined(before[key]) &&
+        !isDefined(config[key]) &&
+        // Only what this instance put there: a value set on the plugin since, or one a sibling projected
+        // after it, is not the instance's to take back.
+        isDeepStrictEqual(plugin?.config[key], before[key]),
+    );
+    if (removed.length === 0) return {};
+    const siblings = (await this.instances.list(pluginId))
+      .filter(row => row.enabled && (!row.sessionScope || row.sessionScope === '*'))
+      .sort((a, b) => String(a.instanceId).localeCompare(String(b.instanceId)));
+    return Object.fromEntries(
+      removed.map(key => [key, siblings.findLast(row => isDefined(row.config?.[key]))?.config?.[key] ?? null]),
+    );
   }
 }

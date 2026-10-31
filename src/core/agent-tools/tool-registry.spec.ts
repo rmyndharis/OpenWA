@@ -52,6 +52,7 @@ describe('v1 tool surface snapshot', () => {
       'MessageList',
       'MessageHistory',
       'MessageGetReactions',
+      'MessageSearch',
       'MessageSendText',
       'MessageSendImage',
       'MessageSendVideo',
@@ -96,6 +97,6 @@ describe('v1 tool surface snapshot', () => {
     const actualNames = [...allAgentTools({} as never)].map(t => t.name).sort();
 
     expect(actualNames).toEqual(expected);
-    expect(expected).toHaveLength(51);
+    expect(expected).toHaveLength(52);
   });
 });

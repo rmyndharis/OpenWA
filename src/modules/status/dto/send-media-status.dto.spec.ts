@@ -1,7 +1,9 @@
 import 'reflect-metadata';
+import { BadRequestException, ValidationPipe } from '@nestjs/common';
+import { GLOBAL_VALIDATION_OPTIONS } from '../../../config/app-validation';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { SendImageStatusDto, SendVideoStatusDto } from './send-media-status.dto';
+import { SendImageStatusDto, SendVideoStatusDto, SendVoiceStatusDto } from './send-media-status.dto';
 
 describe('SendImageStatusDto recipients validation', () => {
   const valid = { image: { url: 'https://example.com/i.png' }, recipients: ['6281@c.us'] };
@@ -87,6 +89,23 @@ describe('SendVideoStatusDto recipients validation', () => {
   });
 });
 
+// @ValidateNested checks an array element by element, so a media source sent as [] or [{...}] passed.
+describe('status media sources refuse an array', () => {
+  const source = { url: 'https://example.com/m.bin' };
+
+  it.each([
+    ['image', SendImageStatusDto],
+    ['video', SendVideoStatusDto],
+    ['audio', SendVoiceStatusDto],
+  ] as const)('%s as an object is accepted and as an array is refused', async (key, Dto) => {
+    const failed = async (value: unknown) =>
+      (await validate(plainToInstance(Dto as new () => object, { [key]: value }))).some(e => e.property === key);
+    expect(await failed(source)).toBe(false);
+    expect(await failed([source])).toBe(true);
+    expect(await failed([])).toBe(true);
+  });
+});
+
 // Both engines fetch only a string that starts with http(s):// and decode anything else as base64.
 describe('status media url', () => {
   it('accepts only an absolute http(s) url', async () => {
@@ -114,5 +133,35 @@ describe('status media url', () => {
     const emptyBase64 = { image: { base64: 'data:image/jpeg;base64,', mimetype: 'image/jpeg', url: 'cdn/banner.jpg' } };
     const refused = await validate(plainToInstance(SendImageStatusDto, emptyBase64));
     expect(refused.some(e => e.property === 'image')).toBe(true);
+  });
+});
+
+describe('status media precedence through the global validation options', () => {
+  const pipe = new ValidationPipe(GLOBAL_VALIDATION_OPTIONS);
+
+  it.each([
+    ['image', SendImageStatusDto],
+    ['video', SendVideoStatusDto],
+    ['audio', SendVoiceStatusDto],
+  ] as const)('%s ignores an empty unused URL and validates the selected source', async (key, Dto) => {
+    const through = (media: unknown) => pipe.transform({ [key]: media }, { type: 'body', metatype: Dto });
+    for (const base64 of ['QUJD', 'data:image/png;base64,QUJD']) {
+      await expect(through({ base64, url: '', mimetype: 'image/png' })).resolves.toBeDefined();
+      await expect(through({ base64, url: 'unused/path', mimetype: 'image/png' })).resolves.toBeDefined();
+    }
+    await expect(through({ url: 'https://example.com/media' })).resolves.toBeDefined();
+    for (const media of [
+      {},
+      { url: '' },
+      { url: 'unused/path' },
+      { base64: 'data:image/png;base64,', url: 'unused/path' },
+      { base64: 'QUJD', url: null },
+      { base64: 'QUJD', url: {} },
+      { base64: 'QUJD', url: false },
+      { base64: [] },
+      { base64: {} },
+    ]) {
+      await expect(through(media)).rejects.toBeInstanceOf(BadRequestException);
+    }
   });
 });

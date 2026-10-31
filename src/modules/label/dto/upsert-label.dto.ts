@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
-import { ToStrictNumber } from '../../../common/utils/strict-boolean';
+import { ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 
 /**
  * The body of a label create-or-update. The id is the path parameter, not a field: WhatsApp keys the
@@ -14,6 +14,7 @@ export class UpsertLabelDto {
     maxLength: 100,
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MinLength(1)
   // WhatsApp's own label editor caps names well below this; the bound exists so a runaway payload

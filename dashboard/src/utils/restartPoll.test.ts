@@ -41,7 +41,7 @@ const read = (path: string): string => readFileSync(new URL(path, import.meta.ur
 
 test('the restart poll targets readiness, not a ping that survives the drain', () => {
   const api = read('../services/api.ts');
-  const healthCheck = api.split('\n').find(line => line.trimStart().startsWith('healthCheck: () =>'));
+  const healthCheck = api.split('  healthCheck:')[1]?.split('\n  //')[0];
   assert.ok(healthCheck, 'infraApi.healthCheck not found — update this guard, do not delete it');
   assert.match(
     healthCheck,

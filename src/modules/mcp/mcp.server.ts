@@ -15,11 +15,11 @@ import { UnresolvedApiKeyException, type AuthService } from '../auth/auth.servic
 import { allowUnauthenticatedAuditRow } from '../audit/auth-failure-audit-limiter';
 import type { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
-import { handleToolError, jsonToolResult, smartToolResult } from './tool-result';
+import { handleToolError, smartToolResult } from './tool-result';
 import type { KeyRateLimiter } from './mcp-rate-limit';
-import { limiterKeyForIp, resolveClientIp } from '../../common/utils/ip';
+import { limiterKeyForIp, parseTrustedProxies, resolveClientIp } from '../../common/utils/ip';
 import { resolveBodyLimit } from '../../config/bootstrap-security';
-import { bearerToken } from '../../common/security/bearer-token';
+import { presentedApiKey } from '../../common/security/bearer-token';
 
 const logger = createLogger('McpServer');
 
@@ -39,12 +39,7 @@ export interface McpRequestContext {
  * cannot disagree on what the credential is (the SDK's own header copy joins duplicate headers).
  */
 function extractApiKey(headers: Record<string, string | string[] | undefined> = {}): string | undefined {
-  const xApiKey = headers['x-api-key'];
-  if (xApiKey) {
-    return Array.isArray(xApiKey) ? xApiKey[0] : xApiKey;
-  }
-  const auth = headers['authorization'];
-  return bearerToken(Array.isArray(auth) ? auth[0] : auth);
+  return presentedApiKey(headers);
 }
 
 /**
@@ -77,10 +72,7 @@ export function auditMcpAuthFailure(
 
 /** Read TRUSTED_PROXIES once as a list (shared by the pre-auth throttle and the audit IP resolver). */
 function readTrustedProxies(): string[] {
-  return (process.env.TRUSTED_PROXIES ?? '')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
+  return parseTrustedProxies(process.env.TRUSTED_PROXIES);
 }
 
 /** Resolve the trusted-proxy-aware client IP + HTTP method/path for an audit record. */
@@ -143,10 +135,9 @@ function buildServer(
             // as auth failures. Best-effort; success and non-auth errors skip this.
             error => auditMcpAuthFailure(auditService, error, reqContext),
             chatScope,
+            extra.signal,
           );
-          return tool.resultDisposition === 'json'
-            ? jsonToolResult(result as object)
-            : smartToolResult(result as object);
+          return smartToolResult(result as object);
         } catch (error) {
           return handleToolError(error);
         }

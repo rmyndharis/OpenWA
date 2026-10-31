@@ -24,6 +24,8 @@ import type { AnyToolDescriptor } from './tool-descriptor';
  * allowed, a tool the chat-restricted key may not run, or a chat argument outside
  * its allowlist). Schema validation errors and handler errors do not reach this
  * callback. Re-thrown after it.
+ * @param signal Optional cancellation signal (the MCP client went away or cancelled the request), handed
+ * to the handler so a long call can stop.
  */
 export async function invokeTool(
   tool: AnyToolDescriptor,
@@ -33,6 +35,7 @@ export async function invokeTool(
   onAuthenticated?: (apiKeyId: string) => void,
   onAuthFailure?: (error: unknown) => void,
   chatScope?: ChatScopeService,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   // AUTH PHASE — every rejection here is an authentication/authorization failure (the MCP analog of the
   // REST ApiKeyGuard's authorize()). Wrapped so onAuthFailure can record the audit trail at the boundary.
@@ -112,5 +115,5 @@ export async function invokeTool(
   }
   // The single cast the erasure needs, placed next to the parse that justifies it: `input` is
   // whatever this tool's own `inputSchema` just accepted, which is exactly what its handler declares.
-  return tool.handler(input as never, apiKey, chatScope);
+  return tool.handler(input as never, apiKey, chatScope, signal);
 }

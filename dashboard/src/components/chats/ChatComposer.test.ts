@@ -82,11 +82,11 @@ afterEach(() => {
 
 after(() => rtl.cleanup());
 
-function Harness() {
+function Harness({ reply = null }: { reply?: ChatMessageView | null }) {
   const [messageInput, setMessageInput] = useState('');
   const [attachment, setAttachment] = useState<StagedAttachment | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [replyingTo, setReplyingTo] = useState<ChatMessageView | null>(null);
+  const [replyingTo, setReplyingTo] = useState<ChatMessageView | null>(reply);
   return createElement(ChatComposer, {
     selectedSessionId: 'sess-1',
     activeChat: chat,
@@ -147,4 +147,28 @@ test('sending while a replacement pick is still being read sends neither file an
     'new.pdf',
     'the replacement pick was dropped',
   );
+});
+
+test('the attachment and reply banners name the buttons that close them', async () => {
+  const { screen, fireEvent, act } = rtl;
+  const reply = {
+    id: 'm1',
+    waMessageId: 'wamid.1',
+    chatId: chat.id,
+    body: 'see you at noon',
+    type: 'text',
+    direction: 'incoming',
+    status: 'read',
+    timestamp: 1_700_000_000,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  } as ChatMessageView;
+  const { container } = rtl.render(wrap(createElement(Harness, { reply })));
+  const file = new window.File(['%PDF-1.4 stub'], 'contract.pdf', { type: 'application/pdf' });
+  fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } });
+  await act(async () => heldReads[0]());
+
+  fireEvent.click(screen.getByRole('button', { name: 'Remove file' }));
+  assert.equal(container.querySelector('.attachment-preview-banner') === null, true, 'the file stayed staged');
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  assert.equal(container.querySelector('.replying-preview-banner') === null, true, 'the reply stayed open');
 });

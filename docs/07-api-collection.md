@@ -32,7 +32,7 @@ Sessions · Messages · Webhooks · Groups · Contacts · Chats · Labels · Cha
 
 All examples assume `BASE` and `API_KEY` are exported (see 07.1). Paths are prefixed with `/api`.
 
-The `:sessionId` path segment is always the session **UUID** returned by `POST /api/sessions` — never the session name. Session routes (07.3) use `:id` for that same UUID; everywhere else `:id` is a different resource's id — a template, webhook, API key or plugin — and never a session. Export the session UUID once alongside the other variables:
+The `:sessionId` path segment is always the session **UUID** returned by `POST /api/sessions`, never the session name. The session routes in 07.3 use the same `:sessionId`; `:id` elsewhere is always another resource's id (a template, webhook, API key or plugin), never a session. Export the session UUID once alongside the other variables:
 
 ```bash
 export SESSION_ID=8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a
@@ -185,7 +185,7 @@ curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/force-kill
 
 #### POST /api/sessions/:sessionId/pairing-code
 
-Request an 8-char pairing code via phone number (OPERATOR). On whatsapp-web.js, request a code only for a number you are prepared to re-link: a request for a number that already has a linked session has been observed to end with WhatsApp revoking that device. Baileys was not affected in the same tests; link by QR when a session of that number must stay up.
+Request an 8-char pairing code via phone number (OPERATOR). On whatsapp-web.js, request a code only for a number you are prepared to re-link: a request for a number that already has a linked session has been observed to end with WhatsApp revoking that device. The gateway answers `409` for a number that is the stored phone of another of its sessions, and cannot see a link made elsewhere. Baileys was not affected in the same tests and is not refused; link by QR when a session of that number must stay up.
 
 ```bash
 curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/pairing-code" \
@@ -243,8 +243,9 @@ curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/chats/read
   -d '{ "chatId": "1234567890@c.us", "messageIds": ["3EB0C767D26B8A3F1A2B"] }'
 ```
 
-`messageIds` is optional and holds up to 100 ids. Omit it and only the newest received message the engine
-still holds in memory is acknowledged, which on Baileys leaves the earlier messages of a burst unread.
+`messageIds` is optional and holds up to 100 ids. Omit it and only the newest received message is
+acknowledged: the one the engine holds in memory, else, on Baileys after a restart, the newest received
+message the gateway stored. On Baileys that leaves the earlier messages of a burst unread.
 
 #### POST /api/sessions/:sessionId/chats/unread
 
@@ -278,7 +279,7 @@ curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/chats/arch
 
 #### POST /api/sessions/:sessionId/chats/mute
 
-Mute a chat until an epoch-**milliseconds** timestamp, or send `"muteUntil":null` to unmute (OPERATOR).
+Mute a chat until an epoch-**milliseconds** timestamp (at most `9007199254740991`; a larger one is a `400`), or send `"muteUntil":null` to unmute (OPERATOR).
 
 ```bash
 curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/chats/mute" \
@@ -797,6 +798,17 @@ curl -X PUT "$BASE/api/sessions/$SESSION_ID/groups/120363021234567890@g.us/descr
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{ "description": "Internal coordination group." }'
+```
+
+#### PUT /api/sessions/:sessionId/groups/:groupId/member-label
+
+Set this account's member label in the group, up to 30 UTF-16 code units (an emoji outside the Basic Multilingual Plane counts as two); an empty string clears it (OPERATOR, Baileys only: whatsapp-web.js answers `501`).
+
+```bash
+curl -X PUT "$BASE/api/sessions/$SESSION_ID/groups/120363021234567890@g.us/member-label" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "label": "Site A Management" }'
 ```
 
 #### POST /api/sessions/:sessionId/groups/:groupId/leave
@@ -1739,7 +1751,8 @@ cannot be widened via the query. See doc 26 for the provider contract.
 Search messages across sessions. `q` is required (non-empty after trim); optional filters are
 `sessionId`, `chatId`, `direction` (`incoming` | `outgoing`), `type`, `from`, `dateFrom`/`dateTo`
 (epoch ms), plus `limit` (default 50, clamped to `SEARCH_LIMIT_MAX` = 100) and `offset` (at most
-100000). `q` is at most 1000 characters and 32 words, and a longer one answers `400`. A key restricted to
+100000). `match` is `word` (the default, whole words) or `contains` (any part of a word, ignoring case
+and accents), which answers `501` unless the server sets `SEARCH_CONTAINS_ENABLED=true` and `400` without a term of 3 or more characters or with more than 64 characters in its terms. `q` is at most 1000 characters and 32 words with no NUL character, and any other answers `400`. A key restricted to
 selected chats gets `403` for a `chatId` outside its list and for a plugin search provider. Hit
 `snippet` fields carry `<mark>` highlight markers — render them as text, never as HTML.
 

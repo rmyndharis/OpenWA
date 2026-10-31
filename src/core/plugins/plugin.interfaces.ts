@@ -140,7 +140,7 @@ export interface PluginConfigField {
   default?: unknown;
   enum?: unknown[]; // when present (any scalar type), the field renders as a <select>
   required?: boolean;
-  secret?: boolean; // sensitive value (e.g. API key): masked on read, preserved on an unchanged write
+  secret?: boolean; // sensitive (e.g. API key): masked on read, kept on an unchanged write, removed by null
   // Validation hints, surfaced as HTML input attributes (advisory — not hard-enforced server-side):
   min?: number; // number: value bound; string/textarea: minLength; array: min rows
   max?: number; // number: value bound; string/textarea: maxLength; array: max rows
@@ -288,7 +288,9 @@ export interface PluginIngressRoute {
    * mints a fresh delivery id on each retry attempt, so its retries would otherwise never dedup.
    * Byte-identical bodies collapse within `INGRESS_DEDUP_RETENTION_DAYS`; a provider whose retries
    * legitimately differ in the body (a fresh timestamp or nonce inside the signed payload) keeps
-   * the default, since `body` would then dedup nothing.
+   * the default, since `body` would then dedup nothing. When the body is empty the hash also covers
+   * the method and the query string, so query-borne deliveries stay apart; a delivery with neither
+   * a body nor a query has one id per route, and its repeats collapse.
    */
   dedupOn?: 'header' | 'body';
   /** Optional synchronous-response contract (host-side preflight + ack). Additive; absent = today's

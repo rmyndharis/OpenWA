@@ -269,6 +269,16 @@ test('English backup hint says which credentials the export leaves out and which
   );
 });
 
+test("English '*' event description names the one event the wildcard leaves out", () => {
+  const all = i18n.t('webhooks.eventDescriptions.all', { lng: 'en' });
+  assert.match(
+    all,
+    /except message\.receipt/,
+    `the '*' description does not say it leaves out message.receipt: "${all}"`,
+  );
+  assert.ok(!/^all events$/i.test(all), `the '*' description claims every event: "${all}"`);
+});
+
 test('English start teardown-pending copy is a retryable warning, not an error', () => {
   const title = i18n.t('sessions.start.teardownPendingTitle', { lng: 'en' });
   const body = i18n.t('sessions.start.teardownPending', { lng: 'en' });

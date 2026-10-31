@@ -32,7 +32,10 @@ public record UpdateWebhookRequest(
             return this;
         }
 
-        /** Events to subscribe to. Use {@link WebhookEvent#ALL} to receive all. */
+        /**
+         * Events to subscribe to. Use {@link WebhookEvent#ALL} to receive all except
+         * {@link WebhookEvent#MESSAGE_RECEIPT}, which must be named.
+         */
         public Builder events(List<WebhookEvent> v) {
             this.events = v;
             return this;

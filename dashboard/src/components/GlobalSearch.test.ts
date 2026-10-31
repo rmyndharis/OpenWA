@@ -316,6 +316,8 @@ test('clicking the input after a pick or Escape shows the results again', async 
   fireEvent.click(input);
   assert.ok(await screen.findByRole('listbox'), 'clicking the input after a pick did not reopen the results');
 
+  fireEvent.keyDown(input, { key: 'Escape', keyCode: 229 });
+  assert.ok(screen.queryByRole('listbox'), 'an Escape the input method processed closed the results');
   fireEvent.keyDown(input, { key: 'Escape' });
   assert.ok(!screen.queryByRole('listbox'), 'Escape left the results open');
   fireEvent.click(input);
@@ -378,4 +380,19 @@ test('Escape with focus on "more" closes the results and is consumed', async () 
   // Unconsumed, the key would reach the Chats page handler and close the open conversation instead.
   assert.equal(fireEvent.keyDown(more, { key: 'Escape' }), false, 'Escape on "more" was not consumed');
   assert.ok(!screen.queryByRole('listbox'), 'Escape on "more" left the results open');
+});
+
+test('a hit shows its chat id and time as isolated runs, so a right-to-left page keeps them readable', async () => {
+  const { screen, act } = rtl;
+  rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
+  const input = screen.getByRole('textbox');
+  await typeAndWaitForRequest(input, 'alice');
+  await act(async () => pending.get('alice')!(['alice replied']));
+  const meta = (await screen.findByRole('listbox')).querySelector('.global-search-hit-meta');
+  assert.ok(meta, 'the hit has no meta line');
+  // A <bdi> takes its direction from its own text, so the Latin id and the digits stay in order inside Arabic or Hebrew text.
+  assert.deepEqual(
+    [...meta.querySelectorAll('bdi')].map(run => run.textContent),
+    ['chat-1@c.us', new Date(1_767_225_600 * 1000).toLocaleString()],
+  );
 });

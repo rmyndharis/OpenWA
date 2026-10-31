@@ -127,6 +127,7 @@ function KeyLimitFields({
   // A datetime-local with a blank segment reports value '', like an empty field, so only badInput says
   // there are leftover segments to clear.
   const [partialExpiry, setPartialExpiry] = useState(false);
+  const lidHintId = normalizeChatScope(chats).some(entry => /@lid$/i.test(entry)) ? `${idPrefix}-chats-lid` : undefined;
   return (
     <>
       <label htmlFor={`${idPrefix}-ips`}>{t('apiKeys.ips.label')}</label>
@@ -153,6 +154,7 @@ function KeyLimitFields({
             spellCheck={false}
             value={chats}
             disabled={disabled}
+            aria-describedby={lidHintId}
             onChange={e => onChange({ chats: e.target.value })}
           />
           {errors.chat !== null && (
@@ -166,6 +168,11 @@ function KeyLimitFields({
             </span>
           )}
           <span className="key-field-hint">{t('apiKeys.chats.hint')}</span>
+          {lidHintId && (
+            <span id={lidHintId} className="key-field-hint">
+              {t('apiKeys.chats.lidHint')}
+            </span>
+          )}
         </>
       )}
       <label htmlFor={`${idPrefix}-expires`}>{t('apiKeys.expiry.label')}</label>
@@ -291,18 +298,23 @@ export function ApiKeys() {
     }
   };
 
+  const editVisit = useRef<object | null>(null);
+
   const openEdit = (apiKey: ApiKey) => {
+    editVisit.current = {};
     setEditingKey(apiKey);
     setEditDraft(apiKeyDraft(apiKey));
   };
 
   const closeEdit = () => {
+    editVisit.current = null;
     setEditingKey(null);
     setEditDraft(null);
   };
 
   const handleSave = async () => {
     if (!editingKey || !editDraft || !canSave) return;
+    const visit = editVisit.current;
     // A stored expiry left as it is is not sent (see apiKeyPatch), so one past this browser's max (set
     // from another time zone or through the API) does not block an unrelated change.
     const expiryUntouched = editDraft.expires !== '' && editDraft.expires === toDateTimeLocal(editingKey.expiresAt);
@@ -318,7 +330,7 @@ export function ApiKeys() {
         return;
       }
       await updateMutation.mutateAsync({ id: editingKey.id, data });
-      closeEdit();
+      if (editVisit.current === visit) closeEdit();
     } catch (err) {
       console.error('Failed to update key:', err);
       toast.error(t('apiKeys.edit.title'), err instanceof Error ? err.message : t('common.unknownError'));
@@ -394,7 +406,12 @@ export function ApiKeys() {
         }),
         columnHelper.accessor('role', {
           header: () => t('apiKeys.columns.role'),
-          cell: info => <span className="permission-badge">{info.getValue()}</span>,
+          // The list keys on the API value; the badge names it as the role selects below do.
+          cell: info => (
+            <span className="permission-badge">
+              {t(`apiKeys.roles.${info.getValue()}`, { defaultValue: info.getValue() })}
+            </span>
+          ),
         }),
         columnHelper.accessor('allowedSessions', {
           id: 'sessions',
@@ -582,7 +599,12 @@ export function ApiKeys() {
                 >
                   {createdKey}
                 </code>
-                <button className="btn-primary" onClick={() => void handleCopy(createdKey, 'modal')}>
+                <button
+                  className="btn-primary"
+                  onClick={() => void handleCopy(createdKey, 'modal')}
+                  aria-label={t('apiKeys.copyKey')}
+                  title={t('apiKeys.copyKey')}
+                >
                   {copied === 'modal' ? <Check size={16} /> : <Copy size={16} />}
                 </button>
               </div>

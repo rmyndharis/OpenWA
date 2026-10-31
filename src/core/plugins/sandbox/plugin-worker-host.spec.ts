@@ -884,6 +884,88 @@ describe('PluginWorkerHost', () => {
       expect(ch.sent).toContainEqual({ kind: 'cap-result', id: 4, ok: true, result: true });
       ch.crash(); // drains the pending dispatch and its timer
     });
+
+    // A handler slower than the host's hook timeout keeps running in the worker, and what it sends from
+    // there names the dispatch that timed out. Honouring that claim only until the timeout let the send
+    // run outside the guard, fire message:sending again and dispatch the same slow handler once more.
+    describe('a handler that outlives the host timeout', () => {
+      const fakeTimers = (): void => {
+        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+      };
+      const guardedResult = async (ch: FakeChannel, id: number, inFlight: string[]): Promise<unknown> => {
+        ch.reply({ kind: 'cap', id, verb: 'messages.sendText', args: [], inFlight });
+        await flush();
+        await flush();
+        const reply = ch.sent.find(m => m.kind === 'cap-result' && m.id === id);
+        return reply && reply.kind === 'cap-result' && reply.ok ? reply.result : reply;
+      };
+      const build = () => {
+        const hm = new HookManager();
+        const ch = new FakeChannel();
+        hm.register('moderation', SENDING, () => Promise.resolve({ continue: false }));
+        const capDispatcher = async (): Promise<unknown> => (await hm.execute(SENDING, {}, { source: 'cap' })).continue;
+        const host = new PluginWorkerHost(ch, capDispatcher, undefined, undefined, undefined, (events, run) =>
+          hm.runInFlight(events as HookEvent[], run),
+        );
+        const dispatch = (event: string) => host.dispatchHook({ event, data: {}, source: 'test', timeoutMs: 5000 });
+        return { ch, dispatch, host };
+      };
+
+      afterEach(() => jest.useRealTimers());
+
+      it('keeps guarding its capability calls after the timeout, until the worker answers', async () => {
+        fakeTimers();
+        const { ch, dispatch } = build();
+        const timedOut = dispatch('message:sending');
+        await jest.advanceTimersByTimeAsync(5000);
+        await expect(timedOut).resolves.toEqual({ continue: true });
+
+        // The late send still short-circuits (true), rather than running the veto chain (false).
+        await expect(guardedResult(ch, 1, ['message:sending'])).resolves.toBe(true);
+
+        // The handler finally returns: the claim is given back, and the same call is no longer guarded.
+        const hook = ch.sent.find(m => m.kind === 'hook');
+        ch.reply({ kind: 'hook-result', id: hook?.kind === 'hook' ? hook.id : -1, continue: true });
+        await expect(guardedResult(ch, 2, ['message:sending'])).resolves.toBe(false);
+        ch.crash();
+      });
+
+      it('gives the claim back when the worker exits', async () => {
+        fakeTimers();
+        const { ch, dispatch } = build();
+        const timedOut = dispatch('message:sending');
+        await jest.advanceTimersByTimeAsync(5000);
+        await timedOut;
+        await expect(guardedResult(ch, 1, ['message:sending'])).resolves.toBe(true);
+
+        ch.crash();
+
+        // Nothing honours a claim on a dead worker's behalf: a call that still arrives runs the chain.
+        await expect(guardedResult(ch, 2, ['message:sending'])).resolves.toBe(false);
+      });
+
+      it('holds a bounded number of late claims, giving the oldest back first', async () => {
+        fakeTimers();
+        const { ch, dispatch, host } = build();
+        const first = dispatch('message:sending');
+        await jest.advanceTimersByTimeAsync(5000);
+        await first;
+        await expect(guardedResult(ch, 1, ['message:sending'])).resolves.toBe(true);
+
+        // 32 more timed-out dispatches of another event push the first one past the bound.
+        for (let i = 0; i < 32; i++) {
+          const next = dispatch('message:sent');
+          await jest.advanceTimersByTimeAsync(5000);
+          await next;
+        }
+
+        await expect(guardedResult(ch, 2, ['message:sending'])).resolves.toBe(false);
+        // The waiter of a dispatch whose claim was given back goes with it: an answer that late is ignored,
+        // and one entry per timed-out dispatch would otherwise pile up for as long as the worker lives.
+        expect((host as unknown as { hookPending: Map<number, unknown> }).hookPending.size).toBe(32);
+        ch.crash();
+      });
+    });
   });
 
   describe('post-crash dead-check (fail-fast, no stall)', () => {
@@ -1137,5 +1219,172 @@ describe('PluginWorkerHost', () => {
       jest.advanceTimersByTime(PROBE_MS * 2);
       expect(onUnresponsive).not.toHaveBeenCalled();
     });
+  });
+});
+
+// The text a worker reports is whatever its code posts. The router keeps only a string, capped in length, and a
+// fixed marker for anything else, before the value is used to build an Error, a log line or a health note.
+describe('the text a worker reports in a result', () => {
+  const MARKER = '[non-string worker value]';
+  const tick = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+  // Each level holds the level below twice: written out by String() it is 2 ** levels pieces.
+  const diamond = (levels: number): unknown => {
+    let value: unknown = [];
+    for (let level = 0; level < levels; level++) value = [value, value];
+    return structuredClone(value);
+  };
+  const withTextOf = (calls: { count: number }): unknown => ({
+    toString: (): string => {
+      calls.count++;
+      return 'password=value-text';
+    },
+  });
+  const webhook = () => ({
+    instanceId: 'i',
+    route: 'r',
+    method: 'POST',
+    headers: {},
+    query: {},
+    body: '{}',
+    rawBody: '{}',
+    verified: true,
+    deliveryId: 'd1',
+    timeoutMs: 1000,
+  });
+  const sentOf = <K extends HostToWorkerMessage['kind']>(ch: FakeChannel, kind: K): { id: number } =>
+    ch.sent.find(message => message.kind === kind) as unknown as { id: number };
+
+  // One scenario per kind: it posts the worker's reply carrying `value` as the text and returns what the host settled.
+  const scenarios: Array<[string, (ch: FakeChannel, value: unknown) => Promise<string | undefined>]> = [
+    [
+      "an 'error' before ready",
+      async (ch, value) => {
+        const host = new PluginWorkerHost(ch);
+        const loading = host.load('/p/index.js');
+        ch.reply({ kind: 'error', error: value as string });
+        return loading.then(
+          () => undefined,
+          (error: Error) => error.message,
+        );
+      },
+    ],
+    [
+      'a failed lifecycle-result',
+      async (ch, value) => {
+        const host = new PluginWorkerHost(ch);
+        void host.load('/p/index.js');
+        ch.reply({ kind: 'ready' });
+        const running = host.runLifecycle('onEnable');
+        ch.reply({ kind: 'lifecycle-result', id: lastLifecycle(ch).id, ok: false, error: value as string });
+        return running.then(
+          () => undefined,
+          (error: Error) => error.message,
+        );
+      },
+    ],
+    [
+      'a hook-result with an error',
+      async (ch, value) => {
+        const host = new PluginWorkerHost(ch);
+        const dispatched = host.dispatchHook({
+          event: 'message:received',
+          data: {},
+          source: 'Engine',
+          timeoutMs: 1000,
+        });
+        ch.reply({ kind: 'hook-result', id: sentOf(ch, 'hook').id, continue: true, error: value as string });
+        return (await dispatched).error;
+      },
+    ],
+    [
+      'a webhook-result with an error',
+      async (ch, value) => {
+        const host = new PluginWorkerHost(ch);
+        const dispatched = host.dispatchWebhook(webhook());
+        ch.reply({ kind: 'webhook-result', id: sentOf(ch, 'webhook').id, status: 500, error: value as string });
+        return (await dispatched).error;
+      },
+    ],
+    [
+      'a failed search-result',
+      async (ch, value) => {
+        const host = new PluginWorkerHost(ch);
+        const dispatched = host.dispatchSearch({ query: { q: 'x' }, timeoutMs: 1000 });
+        ch.reply({ kind: 'search-result', id: sentOf(ch, 'search').id, ok: false, error: value as string });
+        const result = await dispatched;
+        return result.ok ? undefined : result.error;
+      },
+    ],
+    [
+      'a health-result with a message',
+      async (ch, value) => {
+        const host = new PluginWorkerHost(ch);
+        const checked = host.healthCheck(1000);
+        ch.reply({ kind: 'health-result', id: sentOf(ch, 'health-check').id, healthy: true, message: value as string });
+        return (await checked).message;
+      },
+    ],
+  ];
+
+  it.each(scenarios)('keeps a fixed marker for a nested array shared at every level in %s', async (_name, run) => {
+    const started = Date.now();
+    const text = await run(new FakeChannel(), diamond(22));
+
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(text).toBe(MARKER);
+  });
+
+  it.each(scenarios)('does not ask an object for its own text in %s', async (_name, run) => {
+    const calls = { count: 0 };
+
+    const text = await run(new FakeChannel(), withTextOf(calls));
+
+    expect(text).toBe(MARKER);
+    expect(calls.count).toBe(0);
+  });
+
+  it.each(scenarios)('keeps a string of 8192 characters and cuts a longer one in %s', async (_name, run) => {
+    const kept = await run(new FakeChannel(), 'x'.repeat(8192));
+    const cut = await run(new FakeChannel(), 'x'.repeat(100_000));
+    const short = await run(new FakeChannel(), 'short text');
+
+    expect(kept).toBe('x'.repeat(8192));
+    expect(cut).toBe(`${'x'.repeat(8192)}…[truncated]`);
+    expect(short).toBe('short text');
+  });
+
+  it('still resolves a webhook-result without an error as ok, with a null error read as none', async () => {
+    const ch = new FakeChannel();
+    const host = new PluginWorkerHost(ch);
+    const dispatched = host.dispatchWebhook(webhook());
+
+    ch.reply({ kind: 'webhook-result', id: sentOf(ch, 'webhook').id, status: 200, error: null as unknown as string });
+
+    await expect(dispatched).resolves.toMatchObject({ ok: true, status: 200, error: undefined });
+  });
+
+  it('keeps a worker error that is not text out of the exit message too', () => {
+    const ch = new FakeChannel();
+    const onExit = jest.fn();
+    new PluginWorkerHost(ch, undefined, undefined, undefined, undefined, undefined, undefined, undefined, onExit);
+
+    ch.reply({ kind: 'error', error: diamond(22) as string });
+    ch.crash(1);
+
+    expect(onExit).toHaveBeenCalledWith(1, false, MARKER);
+  });
+
+  it('answers a capability request whose verb is not text with an error, without building text from it', async () => {
+    const ch = new FakeChannel();
+    const dispatcher = jest.fn();
+    const calls = { count: 0 };
+    new PluginWorkerHost(ch, dispatcher);
+
+    ch.reply({ kind: 'cap', id: 7, verb: withTextOf(calls) as string, args: [] });
+    await tick();
+
+    expect(ch.last()).toEqual({ kind: 'cap-result', id: 7, ok: false, error: MARKER });
+    expect(dispatcher).not.toHaveBeenCalled();
+    expect(calls.count).toBe(0);
   });
 });

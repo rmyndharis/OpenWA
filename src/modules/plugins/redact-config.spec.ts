@@ -61,6 +61,44 @@ describe('restoreSecretConfig', () => {
     expect(restoreSecretConfig({ apiKey: SECRET_SENTINEL }, {}, schema)).not.toHaveProperty('apiKey');
     expect(restoreSecretConfig({ apiKey: '' }, undefined, schema)).not.toHaveProperty('apiKey');
   });
+
+  // A retired or leaked credential has to be removable. Only an explicit null does it: a client that
+  // echoes a blank for a secret it never held (a templated config with an unset variable) must not
+  // wipe the stored one.
+  it('removes a stored secret on an explicit null, and only on null', () => {
+    const stored = { apiKey: 'real-secret', endpoint: 'https://old' };
+    const merged = { mergedOverStored: true };
+
+    // A result that replaces the stored config just loses the key.
+    expect(restoreSecretConfig({ apiKey: null, endpoint: 'https://new' }, stored, schema)).toEqual({
+      endpoint: 'https://new',
+    });
+    // One that is merged over it has to carry the null, or the merge would put the stored value back.
+    expect(restoreSecretConfig({ apiKey: null, endpoint: 'https://new' }, stored, schema, merged)).toEqual({
+      apiKey: null,
+      endpoint: 'https://new',
+    });
+    for (const options of [{}, merged]) {
+      expect(restoreSecretConfig({ apiKey: '' }, stored, schema, options)).toEqual({ apiKey: 'real-secret' });
+      expect(restoreSecretConfig({ apiKey: SECRET_SENTINEL }, stored, schema, options)).toEqual({
+        apiKey: 'real-secret',
+      });
+      expect(restoreSecretConfig({ endpoint: 'https://new' }, stored, schema, options)).toEqual({
+        endpoint: 'https://new',
+      });
+    }
+  });
+
+  it('drops a null secret when nothing is stored, rather than persisting a null', () => {
+    for (const options of [{}, { mergedOverStored: true }]) {
+      expect(restoreSecretConfig({ apiKey: null }, {}, schema, options)).not.toHaveProperty('apiKey');
+      expect(restoreSecretConfig({ apiKey: null }, undefined, schema, options)).not.toHaveProperty('apiKey');
+    }
+  });
+
+  it('leaves a null in a non-secret field to the ordinary merge', () => {
+    expect(restoreSecretConfig({ endpoint: null }, { endpoint: 'https://old' }, schema)).toEqual({ endpoint: null });
+  });
 });
 
 // v0.7 richer schema: secrets can live inside a nested object or in each row of an array-of-rows,
@@ -125,6 +163,43 @@ describe('restoreSecretConfig (nested)', () => {
         nestedSchema,
       ),
     ).toEqual({ provider: { apiKey: 'real', region: 'eu' } });
+  });
+
+  // The nested object replaces the stored one whole, even where the top level is merged over the stored
+  // config, so dropping the key is what removes the secret.
+  it('removes a nested-object secret on an explicit null and keeps its sibling', () => {
+    for (const options of [{}, { mergedOverStored: true }]) {
+      expect(
+        restoreSecretConfig(
+          { provider: { apiKey: null, region: 'eu' } },
+          { provider: { apiKey: 'real', region: 'us' } },
+          nestedSchema,
+          options,
+        ),
+      ).toEqual({ provider: { region: 'eu' } });
+    }
+  });
+
+  it('removes one row secret of an array-of-rows on an explicit null and keeps the others', () => {
+    expect(
+      restoreSecretConfig(
+        {
+          endpoints: [
+            { url: 'a', token: null },
+            { url: 'b', token: SECRET_SENTINEL },
+          ],
+        },
+        {
+          endpoints: [
+            { url: 'a', token: 'real1' },
+            { url: 'b', token: 'real2' },
+          ],
+        },
+        nestedSchema,
+      ),
+    ).toEqual({
+      endpoints: [{ url: 'a' }, { url: 'b', token: 'real2' }],
+    });
   });
 
   it('restores per-row array-of-rows secrets, keeping genuinely-new ones', () => {
@@ -335,6 +410,50 @@ describe('restoreSecretConfig (scalar-secret array)', () => {
     expect(restoreSecretConfig({ keys: ['k2', 'k3'] }, { keys: ['k1', 'k2', 'k3'] }, scalarSecretArraySchema)).toEqual({
       keys: ['k2', 'k3'],
     });
+  });
+
+  // A cleared row reaches the host as null (JSON turns the form's undefined into null inside an array).
+  // As for a secret property, null is the removal and every other blank keeps the stored value. The row
+  // stays in place, so the length is unchanged and the masked rows still bind by position.
+  it('removes the secret of a row sent as null and keeps the others by position', () => {
+    const stored = { keys: ['k1', 'k2', 'k3'] };
+
+    for (const [incoming, expected] of [
+      [
+        [SECRET_SENTINEL, null, SECRET_SENTINEL],
+        ['k1', 'k3'],
+      ],
+      [
+        [null, SECRET_SENTINEL, SECRET_SENTINEL],
+        ['k2', 'k3'],
+      ],
+      [
+        [SECRET_SENTINEL, SECRET_SENTINEL, null],
+        ['k1', 'k2'],
+      ],
+    ] as const) {
+      expect(restoreSecretConfig({ keys: [...incoming] }, stored, scalarSecretArraySchema)).toEqual({
+        keys: [...expected],
+      });
+      expect(
+        restoreSecretConfig({ keys: [...incoming] }, stored, scalarSecretArraySchema, { mergedOverStored: true }),
+      ).toEqual({ keys: [...expected] });
+    }
+  });
+
+  it('removes every secret of a list sent as nulls, and stores a new one beside a removed one', () => {
+    const stored = { keys: ['k1', 'k2'] };
+
+    expect(restoreSecretConfig({ keys: [null, null] }, stored, scalarSecretArraySchema)).toEqual({ keys: [] });
+    expect(restoreSecretConfig({ keys: [null, 'brand-new'] }, stored, scalarSecretArraySchema)).toEqual({
+      keys: ['brand-new'],
+    });
+  });
+
+  it('keeps the stored secret of a row sent blank, so only null removes it', () => {
+    expect(
+      restoreSecretConfig({ keys: [SECRET_SENTINEL, ''] }, { keys: ['k1', 'k2'] }, scalarSecretArraySchema),
+    ).toEqual({ keys: ['k1', 'k2'] });
   });
 });
 

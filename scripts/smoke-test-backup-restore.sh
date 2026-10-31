@@ -7,7 +7,7 @@
 #   (c) backup -> restore roundtrip via sqlite3 .backup (skipped with a notice when the host
 #       has no sqlite3 — everything else still runs)
 #   (d) the cp fallback writes a CONSISTENCY-WARNING marker into the archive, restore warns
-#       but continues, and restore --strict refuses
+#       but continues, and restore --strict refuses it before writing anything
 #   (e) the archive min-content check rejects (and deletes) an archive missing a required DB
 #   (f) data/.env.generated supplies paths the environment does not, and restore reads the archive's copy
 #   (g) PLUGIN_STATE_DIR plugin state is archived and restored at the configured root
@@ -68,6 +68,46 @@
 #       staging copy is removed after a backup that succeeds and one that fails
 #   (al) a tar that fails part way exits non-zero and leaves no archive in BACKUP_DIR, so a truncated
 #       file cannot pass for the newest backup
+#   (am) restore refuses an OPENWA_DATA_DIR that is ., ./, .., ../, /, the working directory, a parent of
+#       it, a link to it, the home directory or a parent of it, before it reads the archive; and, behind
+#       a cp that stops at /, //, /., /./, /.. and a link to / with or without a trailing .., or a link
+#       whose target ends in one, or a link to / whose name is not valid UTF-8 (the / cases are skipped
+#       where a user can write /); on a filesystem that ignores case, the workspace's parent typed in
+#       other case
+#   (an) restore refuses to empty a state dir that is ., ./, .., ../, /, a link to / with or without a
+#       trailing .. or through a link whose target ends in one, or whose name is not valid UTF-8, the
+#       working directory (also through such a link), the data dir, the home directory or a directory
+#       around the workspace, the data dir or the home directory, before it replaces anything (the
+#       data-dir safety snapshot is taken first; the / cases are skipped where a user can write /); on a
+#       filesystem that ignores case or Unicode form, the workspace's parent typed in another spelling
+#   (ao) restore refuses an archive member named ../x, a/../x, a/.. or /x before it extracts anything
+#   (ap) a restore over files other users can read leaves the databases, the admin key and
+#       .env.generated at mode 600
+#   (aq) a restore removes the -wal, -shm and -journal of every database it replaces, beside the file a
+#       link points at and beside the link's own name, and an external database's are kept in its
+#       snapshot
+#   (ar) restore refuses a MAIN_DATABASE_NAME, DATABASE_NAME or BOOTSTRAP_KEY_FILE that is /, //, /., a
+#       link to /, one of those followed by .. or a link whose target ends in one, or a link to / whose
+#       name is not valid UTF-8, ahead of the writability check a non-root user would stop at (skipped
+#       where a user can write /)
+#   (as) restore refuses a MAIN_DATABASE_NAME, DATABASE_NAME or BOOTSTRAP_KEY_FILE that names an
+#       existing directory (the workspace's parent, the data dir, another directory, a link to one),
+#       before it copies, writes into or changes the mode of it
+#   (at) restore refuses a path from the archive's .env.generated that leads out of the data dir (outside
+#       it, through .., a link or a link that does not resolve, or inside or around a directory refilled
+#       from the archive) before it copies anything, and restores there when the environment or ./.env
+#       sets that key; a default reached through the operator's link is still followed
+#   (av) a PostgreSQL POSTGRES_SCHEMA other than public, from the environment, ./.env or .env.generated, is
+#       dumped alone with its search extensions, and pgcrypto only when it lives in that schema, behind a prelude
+#       that drops none of them with CASCADE, for the DATABASE_URL branch too, and named in database.schema; public
+#       keeps the whole-database dump, and the scoped one creates its trigram index last, after the schema grants;
+#       a name the app refuses, a pg_dump older than 14, a failed pgcrypto probe, or a failed dump fails the
+#       backup, the first three before it dumps anything; restore prints the schema load, with the roles that can load
+#       it, the extensions' owner and
+#       the way past another deployment's trigram index, only for a marked archive, in one transaction either way,
+#       and refuses a marker naming an invalid schema
+#   (aw) restore stops before it writes anything when the dump opens with \restrict and the psql on PATH is too old
+#       to read it, and otherwise, with no psql on PATH too, names the psql versions the load needs
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -120,7 +160,7 @@ db_fingerprint() {
 # to shadow tar (simulating an incomplete archive) without touching the real scripts.
 populate_shim() {
   shim_dir="$1"
-  tools="env bash sh cp mv tar gzip mktemp date rm sed mkdir ls cat chmod grep printf uname dirname tr tail"
+  tools="env bash sh cp mv tar gzip mktemp date rm sed mkdir ls cat chmod grep printf uname dirname tr tail awk"
   if [ "${2:-}" = "with-sqlite3" ]; then
     tools="$tools sqlite3"
   fi
@@ -257,17 +297,23 @@ fi
 if [ "$(cat "$D/dst/data/main.sqlite")" != "d-main" ]; then
   fail "(d) fallback archive did not restore the main DB"
 fi
+# Into a target of its own: over $D/dst, which the restore above filled, the live-target guard would
+# refuse this run as well, and a --strict that did nothing would still pass.
+mkdir -p "$D/strict"
 set +e
-OUT_DS="$(cd "$D/dst" && "$RESTORE" "$ARCHIVE_D" --strict 2>&1)"
+OUT_DS="$(cd "$D/strict" && "$RESTORE" "$ARCHIVE_D" --strict 2>&1)"
 RC_DS=$?
 set -e
 if [ "$RC_DS" -eq 0 ]; then
   fail "(d) restore --strict exited 0 on a marked archive"
 fi
-if ! printf '%s' "$OUT_DS" | grep -q -- '--strict'; then
-  fail "(d) --strict refusal message is not explicit"
+if ! printf '%s' "$OUT_DS" | grep -q -- 'ERROR: --strict given'; then
+  fail "(d) --strict refusal message is not explicit: $OUT_DS"
 fi
-pass "(d) fallback marker written, restore warns and continues, --strict refuses"
+if [ -n "$(ls -A "$D/strict")" ]; then
+  fail "(d) the --strict refusal left files in the target: $(ls -A "$D/strict")"
+fi
+pass "(d) fallback marker written, restore warns and continues, --strict refuses before writing anything"
 
 echo ""
 echo "==> (e) archive min-content check rejects an incomplete archive"
@@ -316,13 +362,13 @@ echo "==> (f) data/.env.generated supplies paths the environment does not"
 # alone then archives the abandoned file and exits 0 — a backup that only reveals itself as wrong
 # during a restore. A missing default would at least fail loudly; a stale one does not.
 F="$WORK/f"
-mkdir -p "$F/state" "$F/live" "$F/data" "$F/extract" "$F/restore/state"
-make_fixture "$F/live/auth.sqlite" "foxtrot-live-main"
-make_fixture "$F/live/store.sqlite" "foxtrot-live-data"
+mkdir -p "$F/state/live" "$F/data" "$F/extract" "$F/restore"
+make_fixture "$F/state/live/auth.sqlite" "foxtrot-live-main"
+make_fixture "$F/state/live/store.sqlite" "foxtrot-live-data"
 make_fixture "$F/data/main.sqlite" "STALE-main"
 make_fixture "$F/data/openwa.sqlite" "STALE-data"
 printf 'DATABASE_TYPE=sqlite\nMAIN_DATABASE_NAME=%s\nDATABASE_NAME=%s\n' \
-  "$F/live/auth.sqlite" "$F/live/store.sqlite" >"$F/state/.env.generated"
+  "$F/state/live/auth.sqlite" "$F/state/live/store.sqlite" >"$F/state/.env.generated"
 (
   cd "$F"
   OPENWA_DATA_DIR="$F/state" BACKUP_DIR="$F/out" "$BACKUP" >/dev/null
@@ -338,21 +384,22 @@ fi
 # restore.sh must read the same layer, from the file in effect AFTER the restore: the archive's
 # .env.generated replaces the target's, so databases placed where the target's old file pointed
 # would be ones the restored app never opens. Here the live databases are gone, as in a disaster
-# recovery, and the target's own file still names other paths.
-rm -f "$F/live/auth.sqlite" "$F/live/store.sqlite"
+# recovery, and the data dir's own file now names other paths. (at) covers an archive path outside
+# the data dir.
+rm -f "$F/state/live/auth.sqlite" "$F/state/live/store.sqlite"
 printf 'DATABASE_TYPE=sqlite\nMAIN_DATABASE_NAME=%s\nDATABASE_NAME=%s\n' \
-  "$F/restore/auth.sqlite" "$F/restore/store.sqlite" >"$F/restore/state/.env.generated"
+  "$F/state/other/auth.sqlite" "$F/state/other/store.sqlite" >"$F/state/.env.generated"
 (
   cd "$F/restore"
-  OPENWA_DATA_DIR="$F/restore/state" "$RESTORE" "$ARCHIVE_F" >/dev/null
+  OPENWA_DATA_DIR="$F/state" "$RESTORE" "$ARCHIVE_F" >/dev/null
 )
-if [ "$(db_fingerprint "$F/live/auth.sqlite")" != "foxtrot-live-main" ]; then
+if [ "$(db_fingerprint "$F/state/live/auth.sqlite")" != "foxtrot-live-main" ]; then
   fail "(f) restore ignored the MAIN_DATABASE_NAME in the archive's data/.env.generated"
 fi
-if [ "$(db_fingerprint "$F/live/store.sqlite")" != "foxtrot-live-data" ]; then
+if [ "$(db_fingerprint "$F/state/live/store.sqlite")" != "foxtrot-live-data" ]; then
   fail "(f) restore ignored the DATABASE_NAME in the archive's data/.env.generated"
 fi
-if [ -e "$F/restore/auth.sqlite" ] || [ -e "$F/restore/store.sqlite" ]; then
+if [ -e "$F/state/other/auth.sqlite" ] || [ -e "$F/state/other/store.sqlite" ]; then
   fail "(f) restore wrote the databases where the replaced data/.env.generated pointed"
 fi
 # An explicit environment value must still win — that is the app's precedence, not ours to change.
@@ -999,7 +1046,7 @@ if [ "$(id -u)" -ne 0 ]; then
     rm -f "$U/live/$f"
     expect_untouched "$f"
   done
-  pass "(u) an unwritable state or database target stops the restore before anything is written"
+  pass "(u) an unwritable state or database target stops the restore before it replaces anything"
 else
   echo "SKIP: (u) running as root, which ignores the permission bits this case relies on"
 fi
@@ -1924,7 +1971,7 @@ restore_ah() {
   printf '%b' "${1:-}" >"$AH/dst/.env"
   OUT_AH="$(cd "$AH/dst" && env "${@:2}" "$RESTORE" "$(ls "$AH"/out/openwa-backup-*.tar.gz)" 2>&1)" ||
     fail "(ah) the restore failed: $OUT_AH"
-  printf '%s' "$(sed -n 's/.*database\.sql | \(.*\)psql -v ON_ERROR_STOP=1.*/\1/p' <<<"$OUT_AH")"
+  printf '%s' "$(sed -n 's/.*database\.sql | \(.*\)psql --single-transaction -v ON_ERROR_STOP=1.*/\1/p' <<<"$OUT_AH")"
   if grep -q "verify-full needs the server's CA: set PGSSLROOTCERT" <<<"$OUT_AH"; then printf '+ca'; fi
   if grep -q 'could not be read from the configuration' <<<"$OUT_AH"; then printf '+unread'; fi
   if grep -q '\[config\] ERROR' <<<"$OUT_AH"; then printf '+error'; fi
@@ -2275,6 +2322,876 @@ if [ -n "$(ls -A "$AL/out" 2>/dev/null || true)" ]; then
   fail "(al) a truncated archive was left behind: $(ls -A "$AL/out")"
 fi
 pass "(al) a failed tar exits non-zero and leaves nothing in BACKUP_DIR"
+
+# tree_digest <dir>: every path and file checksum below <dir>, apart from the restore's own safety
+# snapshots (<name>.pre-restore-<time>). A refusal in the snapshot pass can leave such snapshots behind: one
+# of the data dir, taken first, and one of each external target checked before the refused one. The data dir
+# the restore creates when there is none is not pruned, so the cases below start with one.
+tree_digest() {
+  (
+    cd "$1"
+    find . -name '*.pre-restore-*' -prune -o -print
+    find . -name '*.pre-restore-*' -prune -o -type f -exec cksum {} +
+  ) | LC_ALL=C sort | cksum
+}
+
+# refused_restore <root> <label> <message> <dir> <archive> [VAR=value ...]: restore.sh run from <dir>
+# with a home directory of its own and --force, so the live-target guard cannot be what refuses. It has
+# to exit 1 saying <message> and leave everything below <root> as it was.
+refused_restore() {
+  local root="$1" label="$2" message="$3" dir="$4" archive="$5" before
+  shift 5
+  before="$(tree_digest "$root")"
+  set +e
+  OUT="$(cd "$dir" && env HOME="$root/home" "$@" "$RESTORE" "$archive" --force 2>&1)"
+  RC=$?
+  set -e
+  if [ "$RC" -ne 1 ]; then
+    fail "($label) restore exited $RC instead of refusing: $OUT"
+  fi
+  if ! printf '%s' "$OUT" | grep -qF -- "$message"; then
+    fail "($label) the refusal does not say '$message': $OUT"
+  fi
+  if [ "$(tree_digest "$root")" != "$before" ]; then
+    fail "($label) the refused restore changed the files below $root"
+  fi
+}
+
+# The / cases matter most: a restore run as root in the container (docker exec) is the one that would
+# take the container's root. They run only where a check that broke would not act on / itself, which
+# holds while / cannot be written: the run then stops at its writability check, or at the first copy.
+# The exception is a data dir that is a link to /, whose safety snapshot lands in the link's own
+# directory, so the (am) cases that name a root spelling put a cp ahead of the real one that stops at
+# any source resolving to / (see am_root below).
+ROOT_SAFE=0
+if [ "$(id -u)" -ne 0 ] && [ ! -w / ]; then
+  ROOT_SAFE=1
+fi
+
+echo ""
+echo "==> (am) restore refuses an unsafe OPENWA_DATA_DIR before it reads the archive"
+# The data dir is replaced wholesale, so one that is the working directory, a parent of it, the home
+# directory or a bare relative spelling would take its neighbours with it. The checks compare resolved
+# paths: a link to the working directory is refused like the directory itself.
+AM="$WORK/am"
+mkdir -p "$AM/src/data/sessions/session-s1" "$AM/work" "$AM/home"
+make_fixture "$AM/src/data/main.sqlite" "am-main"
+make_fixture "$AM/src/data/openwa.sqlite" "am-data"
+printf 'am-session\n' >"$AM/src/data/sessions/session-s1/marker"
+(
+  cd "$AM/src"
+  BACKUP_DIR="$AM/out" "$BACKUP" >/dev/null
+)
+ARCHIVE_AM="$(ls "$AM"/out/openwa-backup-*.tar.gz)"
+printf 'am-keep\n' >"$AM/work/keep.txt"
+ln -s work "$AM/alias"
+AM_WORKSPACE='must not be the workspace or one of its parent directories'
+# am_refused: a refused_restore that must also stop before the archive is read, which restore.sh says in
+# its first line of progress.
+am_refused() {
+  refused_restore "$@"
+  if printf '%s' "$OUT" | grep -q 'Extracting'; then
+    fail "($2) the restore read the archive before it refused: $OUT"
+  fi
+}
+am_refused "$AM" "am: ." 'refusing unsafe OPENWA_DATA_DIR target: .' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=.
+am_refused "$AM" "am: ./" 'refusing unsafe OPENWA_DATA_DIR target: ./' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=./
+am_refused "$AM" "am: .." 'refusing unsafe OPENWA_DATA_DIR target: ..' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=..
+am_refused "$AM" "am: ../" 'refusing unsafe OPENWA_DATA_DIR target: ../' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=../
+am_refused "$AM" "am: working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/work"
+am_refused "$AM" "am: parent of the working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM"
+am_refused "$AM" "am: link to the working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/alias"
+if [ -d "$WORK/AM" ]; then
+  # The temp filesystem ignores case: the workspace's parent typed in other case is the same directory.
+  am_refused "$AM" "am: parent of the working directory in other case" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$WORK/AM"
+fi
+am_refused "$AM" "am: home directory" 'must not be the user home directory' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/home"
+# A parent of the home directory holds it, and every other home under it, as the workspace's parent holds the
+# workspace. The home is outside the workspace here, so the workspace check is not what refuses it.
+mkdir -p "$AM/homes/u"
+printf 'am-keep\n' >"$AM/homes/keep.txt"
+am_refused "$AM" "am: parent of the home directory" 'must not be the user home directory or one of its parent directories' \
+  "$AM/work" "$ARCHIVE_AM" HOME="$AM/homes/u" OPENWA_DATA_DIR="$AM/homes"
+pass "(am) an OPENWA_DATA_DIR that is ., ./, .., ../, the workspace, a parent of it, a link to it, the home directory or a parent of it is refused"
+if [ "$ROOT_SAFE" -eq 1 ]; then
+  am_refused "$AM" "am: /" 'refusing unsafe OPENWA_DATA_DIR target: /' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=/
+  pass "(am) / is refused as OPENWA_DATA_DIR"
+  # Every other spelling of the root gets past the literal list. Were it not refused, the restore would
+  # snapshot the data dir with cp -pRH, that is copy / into a directory inside it, until the disk is
+  # full. So these runs have a cp first on PATH that stops at a source resolving to /, with exit 97 and
+  # no copy at all, and a refusal that failed to come would show as that exit.
+  REAL_CP="$(command -v cp)"
+  mkdir -p "$AM/cpguard"
+  cat >"$AM/cpguard/cp" <<EOF
+#!/bin/sh
+for arg in "\$@"; do
+  case "\$arg" in -*) continue ;; esac
+  real="\$(cd -P "\$arg" 2>/dev/null && pwd -P)"
+  if [ -n "\$real" ] && [ -z "\$(printf %s "\$real" | tr -d /)" ]; then
+    echo "cp: not copying the root directory (\$arg)" >&2
+    exit 97
+  fi
+done
+exec "$REAL_CP" "\$@"
+EOF
+  chmod +x "$AM/cpguard/cp"
+  # The shell passes over a cp it cannot run, on a noexec temp dir for one, and takes the real one, so
+  # show that the restore will find this cp (in a new shell, as the restore is: this one has cp hashed) and
+  # that it stops at /. The probe's destination can never be created, which keeps even a broken guard from
+  # copying anything.
+  if [ "$(PATH="$AM/cpguard:$PATH" sh -c 'command -v cp')" != "$AM/cpguard/cp" ]; then
+    fail "(am) the cp that guards the root cases cannot be run from $AM/cpguard"
+  fi
+  if "$AM/cpguard/cp" -pR / /dev/null/probe >/dev/null 2>&1; then
+    fail "(am) the cp that guards the root cases did not stop at /"
+  else
+    [ $? -eq 97 ] || fail "(am) the cp that guards the root cases did not stop at /"
+  fi
+  # A link to /, followed by .., is / to the kernel: it resolves the link before it takes the parent. A
+  # resolution that folds the .. first reads the directory holding the link, so the links sit in a directory of
+  # their own that no other check refuses (not above the working directory, say). The spellings go through a
+  # second link to that link, and through a link to the directory holding it.
+  mkdir -p "$AM/links"
+  ln -s / "$AM/links/rootlink"
+  ln -s rootlink "$AM/links/rootlink2"
+  ln -s "$AM/links" "$AM/links/self"
+  # The target of a link can end in a link plus ..: the kernel takes that to /, where a reading that folds the
+  # .. inside the target first takes it for the directory holding the link.
+  ln -s rootlink/.. "$AM/links/up"
+  ln -s up "$AM/links/up2"
+  am_root() {
+    am_refused "$AM" "am: $1" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" PATH="$AM/cpguard:$PATH" OPENWA_DATA_DIR="$2"
+  }
+  am_root "//" //
+  am_root "/." /.
+  am_root "/./" /./
+  am_root "/.." /..
+  am_root "link to /" "$AM/links/rootlink"
+  am_root "link to / and .." "$AM/links/rootlink/.."
+  am_root "link to a link to / and .." "$AM/links/rootlink2/.."
+  am_root "link to a directory holding a link to / and .." "$AM/links/self/rootlink/.."
+  # A name that is not valid UTF-8 is read back by node with replacement characters, so no path comparison finds
+  # the link; only the identity of the directory it names does. Skipped where the filesystem refuses such a name
+  # (APFS does).
+  BAD_LINK="$WORK/badlinks/$(printf 'bad\377name')"
+  mkdir -p "$WORK/badlinks"
+  ln -s / "$BAD_LINK" 2>/dev/null || BAD_LINK=""
+  if [ -n "$BAD_LINK" ]; then
+    am_refused "$AM" "am: link to / with a name that is not valid UTF-8" 'refusing unsafe OPENWA_DATA_DIR target' \
+      "$AM/work" "$ARCHIVE_AM" PATH="$AM/cpguard:$PATH" OPENWA_DATA_DIR="$BAD_LINK"
+  else
+    echo "SKIP: (am) the link to / with a name that is not valid UTF-8, which needs a filesystem that accepts one"
+  fi
+  am_root "link whose target is a link to / and .." "$AM/links/up"
+  am_root "link to a link whose target is a link to / and .." "$AM/links/up2"
+  pass "(am) //, /., /./, /.., links to / and links whose target ends in a link to / plus .. are refused as OPENWA_DATA_DIR, before the archive is read"
+else
+  echo "SKIP: (am) the / case, which needs a user who cannot write /"
+fi
+
+echo ""
+echo "==> (an) restore refuses to empty a broad state directory, before it replaces anything"
+# A state dir is emptied before it is refilled. One setting that names the working directory, the data
+# dir, the home directory or a directory around the workspace or the data dir would take unrelated
+# files with it, so the snapshot pass refuses each. That pass starts once the data-dir safety snapshot
+# is taken and ./data exists, and ends before anything is replaced. The checks overlap, so each case pins
+# the message of its own check: a check that was deleted would otherwise be covered by its neighbour.
+AN="$WORK/an"
+mkdir -p "$AN/work/data" "$AN/home" "$AN/vol/data"
+for keep in "$AN/work" "$AN/work/data" "$AN/home" "$AN/vol/data"; do
+  printf 'an-keep\n' >"$keep/keep.txt"
+done
+AN_BROAD='refusing to replace broad whatsapp-web.js sessions target'
+refused_restore "$AN" "an: working directory" "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/work"
+refused_restore "$AN" "an: data dir" "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/work/data"
+refused_restore "$AN" "an: home directory" "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/home"
+refused_restore "$AN" "an: around the workspace" 'whatsapp-web.js sessions target that contains the workspace' \
+  "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN"
+refused_restore "$AN" "an: around the data dir" 'whatsapp-web.js sessions target that contains the data directory' \
+  "$AN/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AN/vol/data" SESSION_DATA_PATH="$AN/vol"
+# The same for a parent of the home directory, with the home outside the workspace and the data dir.
+mkdir -p "$AN/homes/u"
+printf 'an-keep\n' >"$AN/homes/keep.txt"
+refused_restore "$AN" "an: around the home directory" 'whatsapp-web.js sessions target that contains the user home directory' \
+  "$AN/work" "$ARCHIVE_AM" HOME="$AN/homes/u" SESSION_DATA_PATH="$AN/homes"
+# The workspace reached through a link whose target goes down a link and back up: the kernel ends in the working
+# directory, where a reading that folds the .. inside the target ends in a directory beside the links.
+mkdir -p "$AN/work/q/x" "$AN/z/y"
+ln -s "$AN/work/q/x" "$AN/z/y/dl"
+ln -s dl/../.. "$AN/z/y/ws"
+refused_restore "$AN" "an: workspace through a link whose target has .. after a link" "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" \
+  SESSION_DATA_PATH="$AN/z/y/ws"
+# A filesystem that ignores case, or Unicode form, reaches one directory under several spellings, and the checks
+# compare the kernel's own spelling with the working directory's. The parent of the workspace, typed in another
+# case; and typed composed (e with acute) where the directory was made decomposed. Skipped where the temp
+# filesystem tells those apart.
+if [ -d "$WORK/AN" ]; then
+  refused_restore "$AN" "an: parent of the workspace in other case" 'whatsapp-web.js sessions target that contains the workspace' \
+    "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$WORK/AN"
+else
+  echo "SKIP: (an) the other-case spelling, which needs a filesystem that ignores case"
+fi
+AU="$WORK/au"
+AU_DECOMPOSED="$AU/caf$(printf 'e\314\201')"
+AU_COMPOSED="$AU/caf$(printf '\303\251')"
+mkdir -p "$AU_DECOMPOSED/work/data" "$AU/home"
+printf 'au-keep\n' >"$AU_DECOMPOSED/work/data/keep.txt"
+if [ -d "$AU_COMPOSED/work" ]; then
+  refused_restore "$AU" "an: parent of the workspace in other Unicode form" 'whatsapp-web.js sessions target that contains the workspace' \
+    "$AU_DECOMPOSED/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AU_COMPOSED"
+else
+  echo "SKIP: (an) the other-Unicode-form spelling, which needs a filesystem that ignores Unicode form"
+fi
+AN_UNSAFE='refusing to replace unsafe whatsapp-web.js sessions target'
+# Past a directory that does not exist nothing can be a link, and the kernel cannot walk through it at all, so
+# a .. there is plain text and is folded: this one is the data dir.
+refused_restore "$AN" "an: missing dir and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/work/data/missing/.."
+for literal in . ./ .. ../; do
+  refused_restore "$AN" "an: $literal" "$AN_UNSAFE: $literal" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$literal"
+done
+pass "(an) a state dir that is ., ./, .., ../, the workspace, the data dir, the home directory or around the workspace, the data dir or the home directory is refused"
+if [ "$ROOT_SAFE" -eq 1 ]; then
+  refused_restore "$AN" "an: /" 'refusing to replace unsafe whatsapp-web.js sessions target: /' \
+    "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH=/
+  mkdir -p "$AN/rootlink" "$AN/work/data/sub"
+  ln -s / "$AN/rootlink/root"
+  ln -s root "$AN/rootlink/root2"
+  ln -s root/.. "$AN/rootlink/up"
+  ln -s up "$AN/rootlink/up2"
+  ln -s / "$AN/work/data/sub/rootlink"
+  # Only the resolved comparison sees / behind a link; the literal check never matches it. With .. after the
+  # link, the kernel takes the parent of what the link points at, so <link>/.. is /, which is what the find
+  # that empties the target acts on; a resolution that folds .. first reads the link's own directory. The last
+  # spelling is a link inside the data dir, whose folded form lies under it and so would not be snapshotted.
+  refused_restore "$AN" "an: link to /" "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/rootlink/root"
+  refused_restore "$AN" "an: link to / and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/rootlink/root/.."
+  refused_restore "$AN" "an: link to a link to / and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" \
+    SESSION_DATA_PATH="$AN/rootlink/root2/.."
+  refused_restore "$AN" "an: link to / in the data dir and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" \
+    SESSION_DATA_PATH="$AN/work/data/sub/rootlink/.."
+  refused_restore "$AN" "an: link whose target is a link to / and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" \
+    SESSION_DATA_PATH="$AN/rootlink/up"
+  if [ -n "${BAD_LINK:-}" ]; then
+    refused_restore "$AN" "an: link to / with a name that is not valid UTF-8" "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" \
+      SESSION_DATA_PATH="$BAD_LINK"
+  fi
+  refused_restore "$AN" "an: link to a link whose target is a link to / and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" \
+    SESSION_DATA_PATH="$AN/rootlink/up2"
+  pass "(an) / and a link to / with or without a trailing .. are refused as a state dir"
+else
+  echo "SKIP: (an) the / cases, which need a user who cannot write /"
+fi
+
+echo ""
+echo "==> (ao) restore refuses an archive member that could land outside the staging directory"
+# backup.sh never writes such a name, so one in an archive is hand-made. The listing is checked before
+# anything is extracted, because a restore must not rest on what tar happens to do with the name: GNU
+# tar and bsdtar both refuse a .. member and strip a leading /.
+AO="$WORK/ao"
+mkdir -p "$AO/stage/a" "$AO/work" "$AO/home" "$AO/abs"
+tar -xzf "$ARCHIVE_AM" -C "$AO/stage"
+printf 'ao-escape\n' >"$AO/escape.txt"
+printf 'ao-inner\n' >"$AO/stage/b.txt"
+printf 'ao-abs\n' >"$AO/abs/member.txt"
+# -P keeps the names as given, which is how a hostile archive carries them.
+(
+  cd "$AO/stage"
+  tar -czPf "$AO/dotdot.tar.gz" . ../escape.txt
+  tar -czPf "$AO/inner.tar.gz" . a/../b.txt
+  tar -czPf "$AO/abs.tar.gz" . "$AO/abs/member.txt"
+)
+# A file cannot be named a/.. on disk, and a directory of that name is listed as a/../, so rename one
+# while archiving. GNU tar spells that --transform and bsdtar -s, and each refuses the other's flag.
+tar -czPf "$AO/dotdot-end.tar.gz" -C "$AO/stage" --transform 's,^b\.txt$,a/..,' b.txt 2>/dev/null ||
+  tar -czPf "$AO/dotdot-end.tar.gz" -C "$AO/stage" -s ',^b\.txt$,a/..,' b.txt
+if ! tar -tzf "$AO/dotdot-end.tar.gz" 2>/dev/null | grep -qx 'a/\.\.'; then
+  fail "(ao) could not build an archive with a member named a/.."
+fi
+refused_restore "$AO" "ao: ../x" 'unsafe path in backup archive: ../escape.txt' "$AO/work" "$AO/dotdot.tar.gz"
+refused_restore "$AO" "ao: a/../x" 'unsafe path in backup archive: a/../b.txt' "$AO/work" "$AO/inner.tar.gz"
+refused_restore "$AO" "ao: a/.." 'unsafe path in backup archive: a/..' "$AO/work" "$AO/dotdot-end.tar.gz"
+refused_restore "$AO" "ao: /x" "unsafe path in backup archive: $AO/abs/member.txt" "$AO/work" "$AO/abs.tar.gz"
+pass "(ao) an archive member named ../x, a/../x, a/.. or /x is refused from the listing"
+
+echo ""
+echo "==> (ap) a restore over files other users can read leaves them at mode 600"
+# cp onto an existing file keeps the mode that file had, so a restore over an install whose files were
+# made 644 (a copy, a chmod -R, a foreign umask) would leave the plaintext admin key and the databases
+# readable by every local user unless it tightens them itself. A fresh target cannot show it: the files
+# arrive at 600 there anyway.
+AP="$WORK/ap"
+mkdir -p "$AP/src/data" "$AP/live/data"
+make_fixture "$AP/src/data/main.sqlite" "ap-archive-main"
+make_fixture "$AP/src/data/openwa.sqlite" "ap-archive-data"
+printf 'ap-archive-key\n' >"$AP/src/data/.api-key"
+printf 'LOG_LEVEL=info\n' >"$AP/src/data/.env.generated"
+(
+  cd "$AP/src"
+  BACKUP_DIR="$AP/out" "$BACKUP" >/dev/null
+)
+ARCHIVE_AP="$(ls "$AP"/out/openwa-backup-*.tar.gz)"
+make_fixture "$AP/live/data/main.sqlite" "ap-live-main"
+make_fixture "$AP/live/data/openwa.sqlite" "ap-live-data"
+printf 'ap-live-key\n' >"$AP/live/data/.api-key"
+printf 'LOG_LEVEL=debug\n' >"$AP/live/data/.env.generated"
+chmod 644 "$AP/live/data/main.sqlite" "$AP/live/data/openwa.sqlite" "$AP/live/data/.api-key" "$AP/live/data/.env.generated"
+(
+  cd "$AP/live"
+  "$RESTORE" "$ARCHIVE_AP" --force >/dev/null
+)
+if [ "$(db_fingerprint "$AP/live/data/main.sqlite")" != "ap-archive-main" ] ||
+  [ "$(cat "$AP/live/data/.api-key")" != "ap-archive-key" ] ||
+  [ "$(cat "$AP/live/data/.env.generated")" != "LOG_LEVEL=info" ]; then
+  fail "(ap) the restore did not replace the files it was meant to tighten"
+fi
+for f in main.sqlite openwa.sqlite .api-key .env.generated; do
+  if [ -z "$(find "$AP/live/data/$f" -maxdepth 0 -perm 600)" ]; then
+    fail "(ap) the restored $f is not mode 600"
+  fi
+done
+pass "(ap) the databases, the admin key and .env.generated come back at mode 600 over looser files"
+
+echo ""
+echo "==> (aq) every sidecar of a replaced database goes, and an external database's are snapshotted"
+# SQLite replays a -journal, and reads a -shm, beside whatever main file it finds, so the old install's
+# must not outlive the restore: a hot journal would roll the restored file back to the old rows. (q) holds
+# a real -wal; these are plain files, which is all the clean-up looks at. The snapshot has to keep them
+# for the same reason, or restoring it back would lose the rollback they carry. The external database
+# is a link, so its sidecars sit beside the file it points at, where SQLite names them. A leftover under
+# the link's own name goes too.
+AQ="$WORK/aq"
+mkdir -p "$AQ/src/data" "$AQ/live/data" "$AQ/ext" "$AQ/real"
+make_fixture "$AQ/src/data/main.sqlite" "aq-archive-main"
+make_fixture "$AQ/src/data/openwa.sqlite" "aq-archive-data"
+(
+  cd "$AQ/src"
+  BACKUP_DIR="$AQ/out" "$BACKUP" >/dev/null
+)
+ARCHIVE_AQ="$(ls "$AQ"/out/openwa-backup-*.tar.gz)"
+make_fixture "$AQ/real/auth.sqlite" "aq-live-main"
+ln -s "$AQ/real/auth.sqlite" "$AQ/ext/auth.sqlite"
+make_fixture "$AQ/live/data/openwa.sqlite" "aq-live-data"
+for db in "$AQ/real/auth.sqlite" "$AQ/live/data/openwa.sqlite"; do
+  for sfx in -wal -shm -journal; do
+    printf 'aq-stale%s\n' "$sfx" >"$db$sfx"
+  done
+done
+for sfx in -wal -shm -journal; do
+  printf 'aq-beside-link%s\n' "$sfx" >"$AQ/ext/auth.sqlite$sfx"
+done
+(
+  cd "$AQ/live"
+  MAIN_DATABASE_NAME="$AQ/ext/auth.sqlite" "$RESTORE" "$ARCHIVE_AQ" --force >/dev/null
+)
+for db in "$AQ/real/auth.sqlite" "$AQ/ext/auth.sqlite" "$AQ/live/data/openwa.sqlite"; do
+  for sfx in -wal -shm -journal; do
+    if [ -e "$db$sfx" ]; then
+      fail "(aq) the old install's $(basename "$db")$sfx survived the restore"
+    fi
+  done
+done
+if [ "$(db_fingerprint "$AQ/ext/auth.sqlite")" != "aq-archive-main" ] ||
+  [ "$(db_fingerprint "$AQ/live/data/openwa.sqlite")" != "aq-archive-data" ]; then
+  fail "(aq) the databases were not restored"
+fi
+for sfx in -wal -shm -journal; do
+  if [ "$(cat "$AQ"/ext/auth.sqlite.pre-restore-*"$sfx" 2>/dev/null || true)" != "aq-stale$sfx" ]; then
+    fail "(aq) the snapshot of the external database lost its $sfx"
+  fi
+  if [ "$(cat "$AQ"/live/data.pre-restore-*/openwa.sqlite"$sfx" 2>/dev/null || true)" != "aq-stale$sfx" ]; then
+    fail "(aq) the data-dir snapshot lost the data store's $sfx"
+  fi
+done
+pass "(aq) -wal, -shm and -journal are cleared from both databases and kept in their snapshots"
+
+echo ""
+echo "==> (ar) restore refuses a database or key file that resolves to /"
+# restore_db and restore_admin_key snapshot their target with cp -pRH, so a root user whose target is / would
+# copy the filesystem into a directory inside it. A non-root user is stopped by the writability check, which
+# is why the refusal has to come before it, and why these runs, like the root spellings in (am), have the cp
+# that stops at / ahead on PATH (created there, so they run only where (am) does).
+if [ "$ROOT_SAFE" -eq 1 ]; then
+  AR="$WORK/ar"
+  mkdir -p "$AR/work/data" "$AR/home"
+  printf 'ar-keep\n' >"$AR/work/data/keep.txt"
+  mkdir -p "$AR/links"
+  ln -s / "$AR/links/rootlink"
+  ln -s rootlink "$AR/links/rootlink2"
+  ln -s rootlink/.. "$AR/links/up"
+  ln -s up "$AR/links/up2"
+  for target in 'MAIN_DATABASE_NAME auth/audit DB' 'DATABASE_NAME data store' 'BOOTSTRAP_KEY_FILE admin key (BOOTSTRAP_KEY_FILE)'; do
+    ar_var="${target%% *}"
+    ar_label="${target#* }"
+    for ar_spelling in / // /. "$AR/links/rootlink" "$AR/links/rootlink/.." "$AR/links/rootlink2/.." "$AR/links/up" "$AR/links/up2" ${BAD_LINK:+"$BAD_LINK"}; do
+      refused_restore "$AR" "ar: $ar_var=$ar_spelling" "refusing to replace broad $ar_label target" "$AR/work" "$ARCHIVE_AP" \
+        PATH="$AM/cpguard:$PATH" OPENWA_DATA_DIR="$AR/work/data" "$ar_var=$ar_spelling"
+    done
+  done
+  pass "(ar) MAIN_DATABASE_NAME, DATABASE_NAME and BOOTSTRAP_KEY_FILE as /, //, /., links to / and links whose target ends in a link to / plus .. are refused"
+else
+  echo "SKIP: (ar) the / cases, which need a user who cannot write /"
+fi
+
+echo ""
+echo "==> (as) restore refuses a database or key file target that is a directory"
+# These targets are files. A directory there was copied whole into the safety snapshot, received the file inside
+# it, and then lost its search bit to the chmod 0600 that follows a database or key file, so the workspace's own
+# parent could become untraversable for its owner. tree_digest does not see a mode, so it is read separately.
+AS="$WORK/as"
+mkdir -p "$AS/top/proj/data" "$AS/other/sub" "$AS/home"
+printf 'as-keep\n' >"$AS/top/keep.txt"
+printf 'as-keep\n' >"$AS/other/keep.txt"
+ln -s other "$AS/otherlink"
+dir_mode() {
+  for bit in 400 200 100 040 020 010 004 002 001; do
+    if [ -n "$(find "$1/." -maxdepth 0 -perm -"$bit")" ]; then printf 1; else printf 0; fi
+  done
+}
+for target in 'MAIN_DATABASE_NAME auth/audit DB' 'DATABASE_NAME data store' 'BOOTSTRAP_KEY_FILE admin key (BOOTSTRAP_KEY_FILE)'; do
+  as_var="${target%% *}"
+  as_label="${target#* }"
+  for as_dir in "$AS/top" "$AS/top/proj/data" "$AS/other" "$AS/otherlink"; do
+    as_mode="$(dir_mode "$as_dir")"
+    refused_restore "$AS" "as: $as_var=${as_dir#"$AS"/}" "refusing to replace $as_label target that is a directory" "$AS/top/proj" "$ARCHIVE_AP" \
+      OPENWA_DATA_DIR="$AS/top/proj/data" "$as_var=$as_dir"
+    if [ "$(dir_mode "$as_dir")" != "$as_mode" ]; then
+      fail "(as: $as_var=${as_dir#"$AS"/}) the refused restore changed the mode of the directory: $as_mode to $(dir_mode "$as_dir")"
+    fi
+  done
+done
+pass "(as) MAIN_DATABASE_NAME, DATABASE_NAME and BOOTSTRAP_KEY_FILE naming a directory are refused before anything is copied or changed"
+
+echo ""
+echo "==> (at) a path from the archive's .env.generated stays in the data dir unless the operator names the key"
+# The archive's own .env.generated says where the restore empties directories and writes files, and the archive
+# need not be one the operator made. A path it names that leads out of the data dir, through .., a link, a link
+# that does not resolve, or a directory the restore refills from the archive, is refused before anything is
+# copied, unless the environment or ./.env sets that key. A default, which the operator's own link may lead
+# elsewhere, is still followed.
+AT="$WORK/at"
+mkdir -p "$AT/src/data/sessions/session-1" "$AT/src/data/baileys/b1" "$AT/src/data/media" "$AT/src/data/plugins/p1" \
+  "$AT/work/data/sessions/old" "$AT/home/.ssh" "$AT/victim" "$AT/stage"
+make_fixture "$AT/src/data/main.sqlite" "at-main"
+make_fixture "$AT/src/data/openwa.sqlite" "at-data"
+printf 'at-session\n' >"$AT/src/data/sessions/session-1/marker"
+printf 'at-baileys\n' >"$AT/src/data/baileys/b1/creds.json"
+printf 'at-media\n' >"$AT/src/data/media/a.jpg"
+printf '{}\n' >"$AT/src/data/plugins/p1/manifest.json"
+printf 'at-key\n' >"$AT/src/data/.api-key"
+(
+  cd "$AT/src"
+  BACKUP_DIR="$AT/out" "$BACKUP" >/dev/null 2>&1
+)
+ARCHIVE_AT="$(ls "$AT"/out/openwa-backup-*.tar.gz)"
+printf 'at-keep\n' >"$AT/work/data/keep.txt"
+printf 'at-precious\n' >"$AT/victim/precious.txt"
+# at_archive <name> <.env.generated text> [<name in sessions/> <link target>]: the backup.sh archive above with that
+# .env.generated, and a link planted in its sessions/ when asked.
+at_archive() {
+  rm -rf "${AT:?}/stage" && mkdir -p "$AT/stage"
+  tar -xzf "$ARCHIVE_AT" -C "$AT/stage"
+  printf '%b' "$2" >"$AT/stage/.env.generated"
+  if [ -n "${3:-}" ]; then
+    ln -s "$4" "$AT/stage/sessions/$3"
+  fi
+  tar -czf "$AT/$1.tar.gz" -C "$AT/stage" .
+}
+# at_refused <label> <message> <archive> [VAR=value ...]: refused like refused_restore, and before the data-dir
+# safety snapshot, the first copy a restore makes.
+at_refused() {
+  local label="$1" message="$2" archive="$3"
+  shift 3
+  refused_restore "$AT" "$label" "$message" "$AT/work" "$archive" OPENWA_DATA_DIR="$AT/work/data" "$@"
+  if printf '%s' "$OUT" | grep -q 'Snapshotting' || [ -n "$(find "$AT" -name '*.pre-restore-*' -print -quit)" ]; then
+    fail "($label) the restore took a snapshot before it refused: $OUT"
+  fi
+}
+AT_OUT="from the archive's .env.generated is not inside the data directory"
+for at_key in MAIN_DATABASE_NAME DATABASE_NAME SESSION_DATA_PATH BAILEYS_AUTH_DIR STORAGE_LOCAL_PATH PLUGINS_DIR \
+  PLUGIN_STATE_DIR BOOTSTRAP_KEY_FILE; do
+  at_archive outside "$at_key=$AT/victim/x\n"
+  at_refused "at: $at_key outside" "$at_key $AT_OUT" "$AT/outside.tar.gz"
+done
+at_archive key "BOOTSTRAP_KEY_FILE=$AT/home/.ssh/authorized_keys\n"
+at_refused "at: key file in another directory" "BOOTSTRAP_KEY_FILE $AT_OUT" "$AT/key.tar.gz"
+at_archive dotdot 'SESSION_DATA_PATH=./data/../../victim\n'
+at_refused "at: .. out of the data dir" "SESSION_DATA_PATH $AT_OUT" "$AT/dotdot.tar.gz"
+at_archive sibling 'SESSION_DATA_PATH=./data-sessions\n'
+at_refused "at: a sibling named like the data dir" "SESSION_DATA_PATH $AT_OUT" "$AT/sibling.tar.gz"
+ln -s "$AT/victim" "$AT/work/data/lnk"
+at_archive link 'SESSION_DATA_PATH=./data/lnk\n'
+at_refused "at: link out of the data dir" "SESSION_DATA_PATH $AT_OUT" "$AT/link.tar.gz"
+# A copy onto a link that does not resolve creates the file the link names, wherever that is.
+ln -s "$AT/home/.ssh/authorized_keys" "$AT/work/data/dangling"
+at_archive dangling 'BOOTSTRAP_KEY_FILE=./data/dangling\n'
+at_refused "at: link that does not resolve" "BOOTSTRAP_KEY_FILE from the archive's .env.generated goes through a link that does not resolve" \
+  "$AT/dangling.tar.gz"
+rm -f "$AT/work/data/lnk" "$AT/work/data/dangling"
+# The sessions refilled from the archive bring their links along before the key file is written, and before a
+# directory the environment names under them is emptied.
+at_archive nested 'SESSION_DATA_PATH=./data/s\nBOOTSTRAP_KEY_FILE=./data/s/k\n' k "$AT/home/.ssh/authorized_keys"
+at_refused "at: key file inside the refilled sessions" \
+  "BOOTSTRAP_KEY_FILE from the archive's .env.generated puts the BOOTSTRAP_KEY_FILE target inside the SESSION_DATA_PATH directory" \
+  "$AT/nested.tar.gz"
+at_archive around 'SESSION_DATA_PATH=./data/x\n' b "$AT/victim"
+at_refused "at: sessions around the environment's Baileys dir" \
+  "SESSION_DATA_PATH from the archive's .env.generated puts the BAILEYS_AUTH_DIR target inside the SESSION_DATA_PATH directory" \
+  "$AT/around.tar.gz" BAILEYS_AUTH_DIR="$AT/work/data/x/b"
+# (f)'s archive, from backup.sh, keeps its databases in its own data dir, which is not this one.
+at_refused "at: (f)'s databases into another data dir" "MAIN_DATABASE_NAME $AT_OUT" "$ARCHIVE_F"
+if [ -e "$AT/home/.ssh/authorized_keys" ] || [ "$(ls -A "$AT/victim")" != precious.txt ]; then
+  fail "(at) a refused restore wrote outside the data dir"
+fi
+pass "(at) a path from the archive's .env.generated that leads out of the data dir is refused before anything is copied"
+# The same paths, named by the operator, are restored there.
+at_archive elsewhere "SESSION_DATA_PATH=$AT/elsewhere\n"
+(cd "$AT/work" && HOME="$AT/home" OPENWA_DATA_DIR="$AT/env/data" SESSION_DATA_PATH="$AT/elsewhere" \
+  "$RESTORE" "$AT/elsewhere.tar.gz" >/dev/null 2>&1) || fail "(at) restore with SESSION_DATA_PATH in the environment failed"
+if [ "$(cat "$AT/elsewhere/session-1/marker" 2>/dev/null || true)" != "at-session" ]; then
+  fail "(at) the sessions did not land at the SESSION_DATA_PATH the environment names"
+fi
+mkdir -p "$AT/dotenv"
+printf 'SESSION_DATA_PATH=%s\n' "$AT/elsewhere-dotenv" >"$AT/dotenv/.env"
+(cd "$AT/dotenv" && HOME="$AT/home" "$RESTORE" "$AT/elsewhere.tar.gz" >/dev/null 2>&1) ||
+  fail "(at) restore with SESSION_DATA_PATH in ./.env failed"
+if [ "$(cat "$AT/elsewhere-dotenv/session-1/marker" 2>/dev/null || true)" != "at-session" ]; then
+  fail "(at) the sessions did not land at the SESSION_DATA_PATH ./.env names"
+fi
+# With both of its keys set, (f)'s archive restores where they point.
+mkdir -p "$AT/other/data"
+(cd "$AT/other" && HOME="$AT/home" MAIN_DATABASE_NAME="$AT/other/auth.sqlite" DATABASE_NAME="$AT/other/store.sqlite" \
+  "$RESTORE" "$ARCHIVE_F" >/dev/null 2>&1) || fail "(at) restore of (f)'s archive with both keys in the environment failed"
+if [ "$(db_fingerprint "$AT/other/auth.sqlite")" != "foxtrot-live-main" ]; then
+  fail "(at) the database did not land where the environment names it"
+fi
+# A default the dashboard writes, through the operator's link to another disk, is followed as before.
+mkdir -p "$AT/disk/sessions" "$AT/linked/data"
+printf 'at-disk-old\n' >"$AT/disk/sessions/old"
+ln -s "$AT/disk/sessions" "$AT/linked/data/sessions"
+at_archive default 'SESSION_DATA_PATH=./data/sessions\nSTORAGE_LOCAL_PATH=./data/media\n'
+(cd "$AT/linked" && HOME="$AT/home" "$RESTORE" "$AT/default.tar.gz" >/dev/null 2>&1) ||
+  fail "(at) restore of the dashboard's default paths through a linked sessions dir failed"
+if [ ! -L "$AT/linked/data/sessions" ] || [ "$(cat "$AT/disk/sessions/session-1/marker" 2>/dev/null || true)" != "at-session" ]; then
+  fail "(at) the default sessions dir was not refilled through the operator's link"
+fi
+pass "(at) the environment, ./.env and the defaults still decide where the restore writes"
+
+echo ""
+echo "==> (au) a file the restore writes is never put on a directory it refills from the archive"
+# A copy onto a directory goes into it, under the file's own name, through any link the archive left there under
+# that name. Both ways out of the data dir that the strict-descendant rule above does not see: a path from the
+# archive that is the key file and the sessions dir at once, and a sessions dir that is a file the restore writes
+# at a fixed name after the trees, such as .env.generated and database.sql.
+# The restores above that succeeded left their safety snapshots; at_refused looks for a new one.
+find "${AT:?}" -name '*.pre-restore-*' -prune -exec rm -rf {} +
+at_archive same 'SESSION_DATA_PATH=./data/shared\nBOOTSTRAP_KEY_FILE=./data/shared\n' .api-key "$AT/victim/precious.txt"
+at_refused "au: key file on the refilled sessions" \
+  "BOOTSTRAP_KEY_FILE from the archive's .env.generated puts the BOOTSTRAP_KEY_FILE target on the SESSION_DATA_PATH directory" \
+  "$AT/same.tar.gz"
+at_archive generated 'SESSION_DATA_PATH=./data/.env.generated\n' .env.generated "$AT/victim/precious.txt"
+at_refused "au: sessions on the generated configuration" \
+  "SESSION_DATA_PATH from the archive's .env.generated puts the .env.generated target on the SESSION_DATA_PATH directory" \
+  "$AT/generated.tar.gz"
+at_archive dump 'SESSION_DATA_PATH=./data/database.sql\n' database.sql "$AT/victim/precious.txt"
+rm -rf "${AT:?}/stage" && mkdir -p "$AT/stage"
+tar -xzf "$AT/dump.tar.gz" -C "$AT/stage"
+printf 'select 1;\n' >"$AT/stage/database.sql"
+tar -czf "$AT/dump.tar.gz" -C "$AT/stage" .
+at_refused "au: sessions on the PostgreSQL dump" \
+  "SESSION_DATA_PATH from the archive's .env.generated puts the database.sql target on the SESSION_DATA_PATH directory" \
+  "$AT/dump.tar.gz"
+if [ "$(cat "$AT/victim/precious.txt")" != "at-precious" ]; then
+  fail "(au) a refused restore wrote through a link the archive planted"
+fi
+pass "(au) a file written after the trees cannot land on a directory the archive's configuration names"
+
+echo ""
+echo "==> (av) a PostgreSQL schema other than public is dumped alone, and restore loads it into its database"
+# A POSTGRES_SCHEMA database may hold other applications' schemas, which the app's role need not be able to
+# read: pg_dump over the whole database then failed the backup, or archived and later restored theirs too.
+# The shim records pg_dump's arguments; the PostgreSQL-gated spec loads a real dump.
+AV="$WORK/av"
+mkdir -p "$AV/data" "$AV/bin"
+make_fixture "$AV/data/main.sqlite" "av-main"
+cat >"$AV/bin/pg_dump" <<EOF
+#!/bin/sh
+if [ "\$1" = --version ]; then
+  v="\${AV_PG_DUMP_VERSION:-17.6 (Debian 17.6-1.pgdg13+1)}"
+  # AV_PG_WRAPPER: Debian's pg_wrapper, which runs the local 13 cluster's client unless -h names a host, and the
+  # newest installed client, 17, when it does.
+  if [ -n "\${AV_PG_WRAPPER:-}" ]; then
+    v="13.23 (Debian 13.23-2.pgdg13+2)"
+    for a in "\$@"; do
+      if [ "\$a" = -h ]; then v="17.11 (Debian 17.11-1.pgdg13+1)"; fi
+    done
+  fi
+  echo "pg_dump (PostgreSQL) \$v"
+  exit 0
+fi
+# The schema-only probe for pgcrypto prints AV_PGCRYPTO, a CREATE EXTENSION line, when it is set.
+if [ "\$1" = --schema-only ]; then
+  printf '%s|' "\$@" >"$AV/pg_dump-probe-args"
+  [ -z "\${AV_PROBE_FAIL:-}" ] || exit 1
+  echo '-- probe'
+  [ -z "\${AV_PGCRYPTO:-}" ] || echo "\$AV_PGCRYPTO"
+  exit 0
+fi
+printf '%s|' "\$@" >"$AV/pg_dump-args"
+echo '-- dump'
+# In pg_dump's order: the trigram index, the schema grants, the closing \unrestrict. AV_QUOTE quotes the schema, as
+# pg_dump does a keyword.
+s=public
+[ "\$1" != -n ] || s="\$2"
+[ -z "\${AV_QUOTE:-}" ] || s="\"\$s\""
+echo "CREATE INDEX idx_messages_body_trgm ON \$s.messages USING gin (\$s.openwa_unaccent(body) \$s.gin_trgm_ops);"
+echo "GRANT ALL ON SCHEMA \$s TO app;"
+printf '%s\\n' '\\unrestrict key'
+[ -z "\${AV_DUMP_FAIL:-}" ] || exit 1
+EOF
+chmod +x "$AV/bin/pg_dump"
+# backup_av <.env content> <.env.generated content> [VAR=value...]: run a backup, leaving pg_dump's arguments in
+# $AV/pg_dump-args (the pgcrypto probe's in $AV/pg_dump-probe-args) and the archive in $AV/out; prints the exit
+# status.
+backup_av() {
+  printf '%b' "$1" >"$AV/.env"
+  printf '%b' "$2" >"$AV/data/.env.generated"
+  rm -rf "$AV/out" "$AV/pg_dump-args" "$AV/pg_dump-probe-args"
+  set +e
+  OUT_AV="$(cd "$AV" && env "${@:3}" PATH="$AV/bin:$PATH" BACKUP_DIR="$AV/out" "$BACKUP" 2>&1)"
+  local rc=$?
+  set -e
+  printf '%s' "$rc"
+}
+AV_PG='DATABASE_TYPE=postgres\nDATABASE_HOST=db\nDATABASE_USERNAME=app\nDATABASE_NAME=shared\n'
+AV_SCOPED="-n|openwa_s|--no-comments|-e|plpgsql|-e|pg_trgm|-e|unaccent|-h|db|-p|5432|-U|app|shared|"
+for AV_FROM in env dotenv generated; do
+  case "$AV_FROM" in
+    env) rc="$(backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s)" ;;
+    dotenv) rc="$(backup_av 'POSTGRES_SCHEMA=openwa_s\n' "$AV_PG")" ;;
+    generated) rc="$(backup_av '' "${AV_PG}POSTGRES_SCHEMA=openwa_s\n")" ;;
+  esac
+  [ "$rc" -eq 0 ] || fail "(av) the backup with POSTGRES_SCHEMA from $AV_FROM failed: $OUT_AV"
+  if [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "$AV_SCOPED" ]; then
+    fail "(av) POSTGRES_SCHEMA from $AV_FROM did not scope the dump: $(cat "$AV/pg_dump-args" 2>&1)"
+  fi
+  if [ "$(cat "$AV/pg_dump-probe-args" 2>/dev/null || true)" != \
+    "--schema-only|-n|openwa_s|-e|plpgsql|-e|pgcrypto|-h|db|-p|5432|-U|app|shared|" ]; then
+    fail "(av) POSTGRES_SCHEMA from $AV_FROM did not probe its schema for pgcrypto: $(cat "$AV/pg_dump-probe-args" 2>&1)"
+  fi
+done
+ARCHIVE_AV="$AV/scoped.tar.gz"
+cp "$(ls "$AV"/out/openwa-backup-*.tar.gz)" "$ARCHIVE_AV"
+if [ "$(tar -xzOf "$ARCHIVE_AV" ./database.schema)" != openwa_s ]; then
+  fail "(av) the archive does not name the dumped schema in database.schema"
+fi
+AV_SQL="$(tar -xzOf "$ARCHIVE_AV" ./database.sql)"
+# The trigram index expression runs as the table owner, which pg_dump grants USAGE on a schema another role owns
+# only in its closing ACL pass, so the scoped dump creates that index last, quoted name or not; nothing else moves.
+AV_INDEX='CREATE INDEX idx_messages_body_trgm ON openwa_s.messages USING gin (openwa_s.openwa_unaccent(body) openwa_s.gin_trgm_ops);'
+if ! grep -q "ALTER SCHEMA %I RENAME TO %I', 'openwa_s'" <<<"$AV_SQL" ||
+  [ "$(tail -n 4 <<<"$AV_SQL" | tr '\n' '|')" != "-- dump|GRANT ALL ON SCHEMA openwa_s TO app;|\\unrestrict key|$AV_INDEX|" ]; then
+  fail "(av) the schema dump does not start with the prelude that moves the schema aside and end with its index: $AV_SQL"
+fi
+rc="$(backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s AV_QUOTE=1)"
+if [ "$rc" -ne 0 ] || [ "$(tar -xzOf "$(ls "$AV"/out/openwa-backup-*.tar.gz)" ./database.sql | tail -n 2 | tr '\n' '|')" != \
+  "\\unrestrict key|${AV_INDEX//openwa_s./\"openwa_s\".}|" ]; then
+  fail "(av) a quoted schema name kept the trigram index before the grants (rc $rc): $OUT_AV"
+fi
+# The dump goes through a filter, and a pg_dump that fails still fails the backup, leaving no archive.
+backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s AV_DUMP_FAIL=1 >"$AV/rc"
+rc="$(cat "$AV/rc")"
+if [ "$rc" -eq 0 ] || ls "$AV"/out/openwa-backup-* >/dev/null 2>&1; then
+  fail "(av) a scoped pg_dump that failed did not fail the backup (rc $rc): $OUT_AV"
+fi
+# Another schema may use the extensions that move aside: the prelude drops them without CASCADE, so that use fails
+# the load instead of going with them, and drops the copy's own trigram index first. Without pgcrypto in the
+# schema it leaves pgcrypto alone.
+if grep -q CASCADE <<<"$AV_SQL" ||
+  ! grep -q "DROP INDEX IF EXISTS %I.%I', aside, 'idx_messages_body_trgm'" <<<"$AV_SQL" ||
+  ! grep -q "WHERE extname IN ('pg_trgm', 'unaccent') AND" <<<"$AV_SQL"; then
+  fail "(av) the prelude drops the extensions with CASCADE, or not the copy's trigram index first: $AV_SQL"
+fi
+# The DATABASE_URL branch is scoped the same way.
+rc="$(backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s DATABASE_URL=postgres://app@db/shared)"
+if [ "$rc" -ne 0 ] ||
+  [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "-n|openwa_s|--no-comments|-e|plpgsql|-e|pg_trgm|-e|unaccent|postgres://app@db/shared|" ] ||
+  [ "$(cat "$AV/pg_dump-probe-args" 2>/dev/null || true)" != "--schema-only|-n|openwa_s|-e|plpgsql|-e|pgcrypto|postgres://app@db/shared|" ]; then
+  fail "(av) DATABASE_URL did not get the scoped dump (rc $rc): $(cat "$AV/pg_dump-args" "$AV/pg_dump-probe-args" 2>&1)"
+fi
+# On PostgreSQL 12 and older the migrations create pgcrypto in the schema for the id defaults: pg_dump's CREATE
+# EXTENSION line names the schema, quoted or not, and the dump and its prelude then carry pgcrypto, the prelude
+# dropping the copy's defaults that call it first. One in another schema stays out, as the app on 13 and newer
+# never uses it, and a probe that fails stops the backup before anything is archived.
+for AV_LINE in 'CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA openwa_s;' \
+  'CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA "openwa_s";'; do
+  rc="$(backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s AV_PGCRYPTO="$AV_LINE")"
+  AV_SQL="$(tar -xzOf "$(ls "$AV"/out/openwa-backup-*.tar.gz 2>/dev/null)" ./database.sql 2>/dev/null || true)"
+  if [ "$rc" -ne 0 ] ||
+    [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "-n|openwa_s|--no-comments|-e|plpgsql|-e|pg_trgm|-e|unaccent|-e|pgcrypto|-h|db|-p|5432|-U|app|shared|" ] ||
+    ! grep -q "WHERE extname IN ('pg_trgm', 'unaccent', 'pgcrypto') AND" <<<"$AV_SQL" ||
+    ! grep -q "ALTER TABLE %I.%I ALTER COLUMN %I DROP DEFAULT', aside" <<<"$AV_SQL" || grep -q CASCADE <<<"$AV_SQL"; then
+    fail "(av) pgcrypto in the schema ($AV_LINE) did not reach the dump and its prelude (rc $rc): $(cat "$AV/pg_dump-args" 2>&1)"
+  fi
+done
+for AV_LINE in 'CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;' \
+  'CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA openwa_s_old;'; do
+  rc="$(backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s AV_PGCRYPTO="$AV_LINE")"
+  if [ "$rc" -ne 0 ] || [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "$AV_SCOPED" ]; then
+    fail "(av) pgcrypto in another schema ($AV_LINE) reached the dump (rc $rc): $(cat "$AV/pg_dump-args" 2>&1)"
+  fi
+done
+backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s AV_PROBE_FAIL=1 >"$AV/rc"
+rc="$(cat "$AV/rc")"
+if [ "$rc" -eq 0 ] || [ -e "$AV/pg_dump-args" ] || ls "$AV"/out/openwa-backup-* >/dev/null 2>&1; then
+  fail "(av) a failed pgcrypto probe did not stop the backup before the dump (rc $rc): $OUT_AV"
+fi
+# The scoped dump names its extensions with -e, which pg_dump has had since 14. An older client, or one whose
+# version cannot be read, stops the backup before it dumps or writes an archive, with a message naming 14; the
+# whole-database dump of public does not need it.
+for AV_OLD in 13.23 9.6.24 unknown; do
+  backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s AV_PG_DUMP_VERSION="$AV_OLD" >"$AV/rc"
+  rc="$(cat "$AV/rc")"
+  if [ "$rc" -eq 0 ] || [ -e "$AV/pg_dump-args" ] || ls "$AV"/out/openwa-backup-* >/dev/null 2>&1 ||
+    ! grep -q 'needs pg_dump 14 or newer' <<<"$OUT_AV"; then
+    fail "(av) pg_dump $AV_OLD did not stop the scoped backup before the dump (rc $rc): $OUT_AV"
+  fi
+done
+# The version is the one the dump runs with: read with the dump's arguments, as pg_wrapper picks the client by them.
+# A host argument gets the newer client, which the dump then uses; a DATABASE_URL leaves the cluster's 13, refused.
+rc="$(backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s AV_PG_WRAPPER=1)"
+if [ "$rc" -ne 0 ] || [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "$AV_SCOPED" ]; then
+  fail "(av) the client pg_wrapper runs for the dump's host was not the one checked (rc $rc): $(cat "$AV/pg_dump-args" 2>&1)"
+fi
+backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s AV_PG_WRAPPER=1 DATABASE_URL=postgres://app@db/shared >"$AV/rc"
+rc="$(cat "$AV/rc")"
+if [ "$rc" -eq 0 ] || [ -e "$AV/pg_dump-args" ] || ls "$AV"/out/openwa-backup-* >/dev/null 2>&1 ||
+  ! grep -q 'needs pg_dump 14 or newer' <<<"$OUT_AV" || ! grep -q 'reports: pg_dump (PostgreSQL) 13.23' <<<"$OUT_AV"; then
+  fail "(av) the cluster's pg_dump 13 under a DATABASE_URL did not stop the scoped backup (rc $rc): $OUT_AV"
+fi
+rc="$(backup_av '' "$AV_PG" AV_PG_DUMP_VERSION=13.23)"
+if [ "$rc" -ne 0 ] || [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "-h|db|-p|5432|-U|app|shared|" ]; then
+  fail "(av) pg_dump 13 did not keep the whole-database dump of public (rc $rc): $(cat "$AV/pg_dump-args" 2>&1)"
+fi
+# public, spelled out or left to the default, keeps the whole-database dump and no marker.
+for AV_PUBLIC in 'POSTGRES_SCHEMA=public\n' 'POSTGRES_SCHEMA=\n' ''; do
+  rc="$(backup_av '' "${AV_PG}${AV_PUBLIC}")"
+  if [ "$rc" -ne 0 ] || [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "-h|db|-p|5432|-U|app|shared|" ] ||
+    tar -tzf "$(ls "$AV"/out/openwa-backup-*.tar.gz)" | grep -qx './database.schema'; then
+    fail "(av) a public schema ('$AV_PUBLIC') did not keep the whole-database dump (rc $rc): $(cat "$AV/pg_dump-args" 2>&1)"
+  fi
+done
+ARCHIVE_AV_WHOLE="$AV/whole.tar.gz"
+cp "$(ls "$AV"/out/openwa-backup-*.tar.gz)" "$ARCHIVE_AV_WHOLE"
+# The whole-database dump is pg_dump's output as written, its trigram index included.
+if [ "$(tar -xzOf "$ARCHIVE_AV_WHOLE" ./database.sql | tr '\n' '|')" != \
+  "-- dump|${AV_INDEX//openwa_s/public}|GRANT ALL ON SCHEMA public TO app;|\\unrestrict key|" ]; then
+  fail "(av) the whole-database dump is not pg_dump's output as written: $(tar -xzOf "$ARCHIVE_AV_WHOLE" ./database.sql)"
+fi
+# A name the app refuses, which pg_dump would fold or read as a pattern, and a line the scripts cannot parse,
+# stop the backup before pg_dump starts.
+for AV_BAD in 'POSTGRES_SCHEMA=OpenWA\n' 'POSTGRES_SCHEMA=openwa?\n' 'POSTGRES_SCHEMA=pg_openwa\n' \
+  'POSTGRES_SCHEMA="openwa_s" # note\n'; do
+  rc="$(backup_av '' "${AV_PG}${AV_BAD}")"
+  if [ "$rc" -eq 0 ] || [ -e "$AV/pg_dump-args" ] || ls "$AV"/out/openwa-backup-* >/dev/null 2>&1; then
+    fail "(av) POSTGRES_SCHEMA line '$AV_BAD' reached pg_dump or produced an archive (rc $rc): $OUT_AV"
+  fi
+done
+# restore.sh prints the in-place load for a marked archive and today's empty-database load for one without the
+# marker, both in one transaction.
+restore_av() {
+  rm -rf "$AV/dst" && mkdir -p "$AV/dst"
+  OUT_AV="$(cd "$AV/dst" && "$RESTORE" "$1" 2>&1)" || fail "(av) the restore of $1 failed: $OUT_AV"
+}
+restore_av "$ARCHIVE_AV"
+if ! grep -q 'dump of schema openwa_s (POSTGRES_SCHEMA) present' <<<"$OUT_AV" ||
+  grep -q 'EMPTY database' <<<"$OUT_AV" || ! grep -q 'psql --single-transaction -v ON_ERROR_STOP=1' <<<"$OUT_AV"; then
+  fail "(av) restore did not print the schema load for a marked archive: $OUT_AV"
+fi
+# Dropping extensions that live in the schema takes their owner, and another OpenWA deployment's trigram index on
+# them refuses the load until that index is dropped: the printed text names both, and pgcrypto, which the dump
+# carries only when it lived in the schema. The dump gives the schema's objects to the app's role before it grants
+# that role CREATE on a schema another role owns, which only a superuser's load gets past: the text says so.
+if ! grep -q 'when pg_trgm and unaccent live in that schema, owns them' <<<"$OUT_AV" ||
+  ! grep -q 'dump carries it, which it does only when pgcrypto lived in that schema' <<<"$OUT_AV" ||
+  ! grep -q 'drop that index and load again' <<<"$OUT_AV" ||
+  ! grep -q 'When another role owns the schema, only a superuser can' <<<"$OUT_AV"; then
+  fail "(av) restore did not name the owners the load needs or the way past another deployment's trigram index: $OUT_AV"
+fi
+restore_av "$ARCHIVE_AV_WHOLE"
+if ! grep -q 'load it into an EMPTY database' <<<"$OUT_AV" || grep -q 'dump of schema' <<<"$OUT_AV" ||
+  ! grep -q 'psql --single-transaction -v ON_ERROR_STOP=1' <<<"$OUT_AV"; then
+  fail "(av) restore did not keep the whole-database load for an unmarked archive: $OUT_AV"
+fi
+# A marker naming a schema the app refuses stops the restore before anything is written.
+rm -rf "$AV/stage" && mkdir -p "$AV/stage"
+tar -xzf "$ARCHIVE_AV" -C "$AV/stage"
+printf 'x; DROP TABLE y\n' >"$AV/stage/database.schema"
+tar -czf "$AV/badmarker.tar.gz" -C "$AV/stage" .
+rm -rf "$AV/dst" && mkdir -p "$AV/dst"
+set +e
+OUT_AV="$(cd "$AV/dst" && "$RESTORE" "$AV/badmarker.tar.gz" 2>&1)"
+rc=$?
+set -e
+if [ "$rc" -eq 0 ] || [ -e "$AV/dst/data/main.sqlite" ] || ! grep -q "database.schema does not name" <<<"$OUT_AV"; then
+  fail "(av) a marker naming an invalid schema did not stop the restore (rc $rc): $OUT_AV"
+fi
+pass "(av) a non-public POSTGRES_SCHEMA is dumped alone with its extensions and restored into its own database"
+
+echo ""
+printf '%s\n' "==> (aw) a psql on PATH that cannot read the dump's \\restrict stops the restore before anything is written"
+# pg_dump from 13.22, 14.19, 15.14, 16.10 and 17.6 on opens a plain dump with \restrict, which an older psql, and every
+# 12, stops at with "invalid command \restrict", loading nothing. The psql shim reports AW_PSQL as its version.
+AW="$WORK/aw"
+mkdir -p "$AW/bin" "$AW/stage" "$AW/nopsql"
+cat >"$AW/bin/psql" <<'EOF'
+#!/bin/sh
+echo "psql (PostgreSQL) $AW_PSQL"
+EOF
+chmod +x "$AW/bin/psql"
+tar -xzf "$ARCHIVE_AV_WHOLE" -C "$AW/stage"
+{ printf '%s\n' '--' '-- PostgreSQL database dump' '--' '' '\restrict key' && cat "$AW/stage/database.sql"; } >"$AW/dump.sql"
+mv "$AW/dump.sql" "$AW/stage/database.sql"
+tar -czf "$AW/restricted.tar.gz" -C "$AW/stage" .
+# aw_restore <archive> <PATH> [VAR=value...]: a restore into an empty directory, its output left in OUT_AW and its
+# exit status in rc.
+aw_restore() {
+  rm -rf "$AW/dst" && mkdir -p "$AW/dst"
+  set +e
+  OUT_AW="$(cd "$AW/dst" && env "${@:3}" PATH="$2" "$RESTORE" "$1" 2>&1)"
+  rc=$?
+  set -e
+}
+AW_NEEDS='psql 13.22, 14.19, 15.14, 16.10, 17.6 or newer (no 12)'
+for AW_OLD in 12.22 13.21 14.18 15.13 16.9 17.5 9.6.24 'unknown build'; do
+  aw_restore "$AW/restricted.tar.gz" "$AW/bin:$PATH" AW_PSQL="$AW_OLD"
+  if [ "$rc" -eq 0 ] || [ -e "$AW/dst/data" ] ||
+    ! grep -qF "which this psql cannot read: psql (PostgreSQL) $AW_OLD" <<<"$OUT_AW" ||
+    ! grep -qF "the load needs $AW_NEEDS; nothing has been restored yet" <<<"$OUT_AW"; then
+    fail "(aw) psql $AW_OLD did not stop the restore before anything was written (rc $rc): $OUT_AW"
+  fi
+done
+# A psql that reads it, or none on PATH (the load may run elsewhere), restores and names the versions with the load.
+populate_shim "$AW/nopsql"
+for tool in node find basename printenv readlink; do
+  ln -sf "$(command -v "$tool")" "$AW/nopsql/$tool"
+done
+for AW_NEW in 13.22 14.19 15.14 16.10 17.6 18.0 '16.10 (Ubuntu 16.10-0ubuntu0.24.04.1)' 19devel none; do
+  if [ "$AW_NEW" = none ]; then
+    aw_restore "$AW/restricted.tar.gz" "$AW/nopsql"
+  else
+    aw_restore "$AW/restricted.tar.gz" "$AW/bin:$PATH" AW_PSQL="$AW_NEW"
+  fi
+  if [ "$rc" -ne 0 ] || [ ! -f "$AW/dst/data/main.sqlite" ] ||
+    ! grep -qF "(the load needs $AW_NEEDS: the dump opens with \\restrict" <<<"$OUT_AW"; then
+    fail "(aw) psql $AW_NEW did not restore the archive and name the versions its load needs (rc $rc): $OUT_AW"
+  fi
+done
+# A dump without \restrict, from an older pg_dump, loads with any psql.
+aw_restore "$ARCHIVE_AV_WHOLE" "$AW/bin:$PATH" AW_PSQL=12.22
+if [ "$rc" -ne 0 ] || [ ! -f "$AW/dst/data/main.sqlite" ] || grep -q 'the load needs' <<<"$OUT_AW"; then
+  fail "(aw) a dump without \\restrict was refused or named a psql it does not need (rc $rc): $OUT_AW"
+fi
+pass "(aw) restore refuses a psql that cannot read the dump's \\restrict and names the versions that can"
 
 echo ""
 echo "All smoke tests passed!"

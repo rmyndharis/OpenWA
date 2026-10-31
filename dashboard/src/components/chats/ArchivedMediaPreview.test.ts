@@ -98,7 +98,7 @@ test('a failed fetch falls back to the download button instead of a broken previ
     }),
   );
   await rtl.waitFor(() => assert.ok(container.querySelector('button.message-media-omitted')));
-  assert.equal(container.querySelector('img'), null);
+  assert.equal(container.querySelectorAll('img').length, 0);
   assert.deepEqual(created, [], 'no object URL is made for a failed fetch');
 });
 
@@ -255,7 +255,7 @@ test('an archived audio player reports its arrival so a bottom-pinned thread sta
     }),
   );
   await rtl.waitFor(() => assert.ok(container.querySelector('audio.chat-audio-media'), 'audio did not render'));
-  assert.equal(reports, 1, 'the thread is told once that the placeholder became a player');
+  await rtl.waitFor(() => assert.equal(reports, 1, 'the thread is told once that the placeholder became a player'));
 });
 
 test('previews mounted together start their fetches apart, so a burst stays under the gateway throttle', async () => {

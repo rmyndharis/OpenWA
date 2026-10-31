@@ -61,6 +61,20 @@ test('cancel() drops pending calls so nothing fires late', t => {
   assert.deepEqual(sent, []);
 });
 
+test('drop(key) drops that key only, so the other keys still fire', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sent: string[] = [];
+  const coalescer = createTrailingCoalescer<string>(key => sent.push(key), 750);
+
+  coalescer.call('chat-A');
+  coalescer.call('chat-B');
+  coalescer.drop('chat-A');
+  coalescer.drop('chat-C');
+
+  t.mock.timers.tick(10_000);
+  assert.deepEqual(sent, ['chat-B']);
+});
+
 test('flush() fires every pending key immediately (unmount/navigation does not lose the call)', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const sent: string[] = [];

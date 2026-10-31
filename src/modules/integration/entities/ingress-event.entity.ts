@@ -54,6 +54,9 @@ export class IngressEvent {
   // and it stays pending until INGRESS_DEDUP_RETENTION_DAYS prunes it.
   // `method` is the request's HTTP method, so a replay reaches the handler as the live attempt did. Rows
   // written before it was persisted lack it, and dispatch falls back to 'POST' for them.
+  // `admission.verified` is what the host decided when it accepted the request (false on a route that
+  // authenticates nothing); a replay or retry hands the handler that verdict, not the route's current scheme.
+  // Rows written before it was persisted lack it, and dispatch reads the route as it stands.
   @Column({ type: jsonColumnType(), nullable: true })
   payload!: {
     headers: Record<string, string>;
@@ -61,6 +64,7 @@ export class IngressEvent {
     body: string;
     rawBody: string;
     method?: string;
+    admission?: { verified: boolean };
   } | null;
 
   // sha256 hex of the rawBody, written at recordOrSkip. Survives payload retirement so operators can

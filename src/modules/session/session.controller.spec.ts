@@ -407,6 +407,49 @@ describe('SessionController findAll name filter', () => {
   });
 });
 
+// GET /sessions/stats/overview names no :sessionId, so the guard has nothing to scope it against and the
+// key's allowlist handed to the service is the whole fence: without it a key confined to one session reads
+// the gateway-wide totals and status distribution.
+describe('SessionController getStats scope', () => {
+  const stats = {
+    total: 1,
+    active: 0,
+    ready: 1,
+    disconnected: 0,
+    byStatus: { ready: 1 },
+    memoryUsage: { heapUsed: 1, heapTotal: 2, rss: 3 },
+  };
+  let sessionService: { getStats: jest.Mock };
+  let controller: SessionController;
+
+  beforeEach(() => {
+    sessionService = { getStats: jest.fn().mockResolvedValue(stats) };
+    controller = new SessionControllerClass(
+      sessionService as unknown as SessionService,
+      { logInfo: jest.fn() } as unknown as AuditService,
+      new ChatScopeService(),
+    );
+  });
+
+  it("hands the key's allowedSessions to the service and returns its answer", async () => {
+    const apiKey = { allowedSessions: ['sess-uuid-1', 'sess-uuid-2'] } as unknown as ApiKey;
+
+    await expect(controller.getStats(apiKey)).resolves.toBe(stats);
+
+    expect(sessionService.getStats).toHaveBeenCalledTimes(1);
+    expect(sessionService.getStats).toHaveBeenCalledWith(['sess-uuid-1', 'sess-uuid-2']);
+  });
+
+  it('hands over no scope for a key without an allowlist, or for no key', async () => {
+    await controller.getStats({ allowedSessions: null } as unknown as ApiKey);
+    await controller.getStats(undefined);
+
+    // null, undefined and [] all mean "every session" to the service; any list would narrow the totals.
+    const scopes = sessionService.getStats.mock.calls.map((call: unknown[]) => call[0] ?? []);
+    expect(scopes).toEqual([[], []]);
+  });
+});
+
 // The pin route forwards a boolean the engine can refuse. The value worth pinning is that the
 // engine's `false` reaches the caller: WhatsApp caps pinned chats at three, and a controller that
 // hard-coded `{ success: true }` would report a refused pin as done.
@@ -444,6 +487,186 @@ describe('SessionController — pinChat', () => {
     await controller.pinChat('sess-uuid-1', { chatId: '628123@c.us', pin: false });
 
     expect(sessionService.pinChat).toHaveBeenCalledWith('sess-uuid-1', '628123@c.us', false);
+  });
+});
+
+// The chat-action routes are one line each, so what they can get wrong is the mapping: which request field
+// reaches which service argument, and whether the engine's own answer reaches the caller. API spec says
+// `success: false` is a real outcome on Baileys, and a route that hard-coded success would report a chat it
+// could not archive as archived.
+describe('SessionController: chat actions map the request to the service', () => {
+  const ID = 'sess-uuid-1';
+  const CHAT = '628123@c.us';
+  type Mocks = Record<
+    | 'sendSeen'
+    | 'markUnread'
+    | 'clearChatMessages'
+    | 'archiveChat'
+    | 'deleteChat'
+    | 'subscribeToPresence'
+    | 'setOnlinePresence'
+    | 'sendChatState'
+    | 'requestPairingCode',
+    jest.Mock
+  >;
+  let sessionService: Mocks;
+  let controller: SessionController;
+
+  beforeEach(() => {
+    sessionService = {
+      sendSeen: jest.fn().mockResolvedValue(true),
+      markUnread: jest.fn().mockResolvedValue(true),
+      clearChatMessages: jest.fn().mockResolvedValue(true),
+      archiveChat: jest.fn().mockResolvedValue(true),
+      deleteChat: jest.fn().mockResolvedValue(true),
+      subscribeToPresence: jest.fn().mockResolvedValue(undefined),
+      setOnlinePresence: jest.fn().mockResolvedValue(undefined),
+      sendChatState: jest.fn().mockResolvedValue(undefined),
+      requestPairingCode: jest.fn(),
+    };
+    controller = new SessionControllerClass(
+      sessionService as unknown as SessionService,
+      { logInfo: jest.fn() } as unknown as AuditService,
+      new ChatScopeService(),
+    );
+  });
+
+  // The service answers true, then false, so a route that hard-codes either one fails.
+  it.each<[string, keyof Mocks, (c: SessionController) => Promise<{ success: boolean }>, unknown[]]>([
+    [
+      'markChatRead',
+      'sendSeen',
+      c => c.markChatRead(ID, { chatId: CHAT, messageIds: ['A1', 'B2'] }),
+      [ID, CHAT, ['A1', 'B2']],
+    ],
+    ['markChatUnread', 'markUnread', c => c.markChatUnread(ID, { chatId: CHAT }), [ID, CHAT]],
+    ['clearChatMessages', 'clearChatMessages', c => c.clearChatMessages(ID, CHAT), [ID, CHAT]],
+    ['archiveChat', 'archiveChat', c => c.archiveChat(ID, { chatId: CHAT, archive: false }), [ID, CHAT, false]],
+    ['deleteChat', 'deleteChat', c => c.deleteChat(ID, { chatId: CHAT }), [ID, CHAT]],
+  ])('%s forwards its request and reports the engine outcome, declined included', async (_route, method, run, args) => {
+    await expect(run(controller)).resolves.toEqual({ success: true });
+    expect(sessionService[method]).toHaveBeenCalledWith(...args);
+
+    sessionService[method].mockResolvedValue(false);
+    await expect(run(controller)).resolves.toEqual({ success: false });
+  });
+
+  it('archiveChat forwards archive:true as well', async () => {
+    await controller.archiveChat(ID, { chatId: CHAT, archive: true });
+
+    expect(sessionService.archiveChat).toHaveBeenCalledWith(ID, CHAT, true);
+  });
+
+  it('markChatRead leaves the message ids undefined when none are sent, which means the newest message', async () => {
+    await controller.markChatRead(ID, { chatId: CHAT });
+
+    expect(sessionService.sendSeen).toHaveBeenCalledWith(ID, CHAT, undefined);
+  });
+
+  it('subscribeToPresence forwards the chat id and answers success', async () => {
+    await expect(controller.subscribeToPresence(ID, { chatId: CHAT })).resolves.toEqual({ success: true });
+
+    expect(sessionService.subscribeToPresence).toHaveBeenCalledWith(ID, CHAT);
+  });
+
+  it.each([true, false])('setOnlinePresence forwards available:%s', async available => {
+    await expect(controller.setOnlinePresence(ID, { available })).resolves.toEqual({ success: true });
+
+    expect(sessionService.setOnlinePresence).toHaveBeenCalledWith(ID, available);
+  });
+
+  it.each(['typing', 'recording', 'paused'] as const)('sendChatState forwards the %s state', async state => {
+    await expect(controller.sendChatState(ID, { chatId: CHAT, state })).resolves.toEqual({ success: true });
+
+    expect(sessionService.sendChatState).toHaveBeenCalledWith(ID, CHAT, state);
+  });
+
+  it('requestPairingCode asks for a code for the number in the request and returns the answer', async () => {
+    const answer = { pairingCode: 'ABCD1234', status: SessionStatus.QR_READY };
+    sessionService.requestPairingCode.mockResolvedValue(answer);
+
+    await expect(controller.requestPairingCode(ID, { phoneNumber: '628123456789' })).resolves.toBe(answer);
+
+    expect(sessionService.requestPairingCode).toHaveBeenCalledWith(ID, '628123456789');
+  });
+});
+
+// Delete, QR and config write their record only after the service resolves, and the content is what makes
+// the record usable: the name has to be read before the row is gone, the QR record names the session, and a
+// config patch is only meaningful next to the state it merged into.
+describe('SessionController: delete, QR and config routes write their record', () => {
+  const ID = 'sess-uuid-1';
+  let sessionService: { findOne: jest.Mock; delete: jest.Mock; getQRCode: jest.Mock; updateConfig: jest.Mock };
+  let auditService: { logInfo: jest.Mock };
+  let controller: SessionController;
+
+  beforeEach(() => {
+    sessionService = {
+      findOne: jest.fn().mockResolvedValue({ id: ID, name: 'my-bot' }),
+      delete: jest.fn().mockResolvedValue(undefined),
+      getQRCode: jest.fn(),
+      updateConfig: jest.fn(),
+    };
+    auditService = { logInfo: jest.fn().mockResolvedValue(undefined) };
+    controller = new SessionControllerClass(
+      sessionService as unknown as SessionService,
+      auditService as unknown as AuditService,
+      new ChatScopeService(),
+    );
+  });
+
+  it('delete records SESSION_DELETED with the name it read before the row went', async () => {
+    await controller.delete(ID);
+
+    expect(sessionService.delete).toHaveBeenCalledWith(ID);
+    expect(auditService.logInfo).toHaveBeenCalledTimes(1);
+    expect(auditService.logInfo).toHaveBeenCalledWith(AuditAction.SESSION_DELETED, {
+      sessionId: ID,
+      sessionName: 'my-bot',
+    });
+    expect(sessionService.findOne.mock.invocationCallOrder[0]).toBeLessThan(
+      sessionService.delete.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('delete forwards a refusal verbatim and records nothing', async () => {
+    const refused = new ConflictException('Another node holds this session');
+    sessionService.delete.mockRejectedValue(refused);
+
+    await expect(controller.delete(ID)).rejects.toBe(refused);
+    expect(auditService.logInfo).not.toHaveBeenCalled();
+  });
+
+  it('getQRCode returns the code and records SESSION_QR_GENERATED for the session', async () => {
+    const qr = { qrCode: 'data:image/png;base64,AAAA', status: SessionStatus.QR_READY };
+    sessionService.getQRCode.mockResolvedValue(qr);
+
+    await expect(controller.getQRCode(ID)).resolves.toBe(qr);
+
+    expect(auditService.logInfo).toHaveBeenCalledTimes(1);
+    expect(auditService.logInfo).toHaveBeenCalledWith(AuditAction.SESSION_QR_GENERATED, { sessionId: ID });
+  });
+
+  it('getQRCode forwards the not-ready 400 verbatim and records nothing', async () => {
+    const notReady = new BadRequestException('QR code not ready');
+    sessionService.getQRCode.mockRejectedValue(notReady);
+
+    await expect(controller.getQRCode(ID)).rejects.toBe(notReady);
+    expect(auditService.logInfo).not.toHaveBeenCalled();
+  });
+
+  it('updateConfig records the resulting config rather than the request', async () => {
+    const resulting = { autoRejectCalls: true, maxReconnectAttempts: 5, reconnectBaseDelay: 2000 };
+    sessionService.updateConfig.mockResolvedValue(resulting);
+
+    await expect(controller.updateConfig(ID, { autoRejectCalls: true })).resolves.toBe(resulting);
+
+    expect(sessionService.updateConfig).toHaveBeenCalledWith(ID, { autoRejectCalls: true });
+    expect(auditService.logInfo).toHaveBeenCalledTimes(1);
+    expect(auditService.logInfo).toHaveBeenCalledWith(AuditAction.SESSION_CONFIG_UPDATED, {
+      sessionId: ID,
+      metadata: resulting,
+    });
   });
 });
 

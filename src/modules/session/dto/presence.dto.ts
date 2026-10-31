@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
-import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
-import { CHAT_ID_MAX_LENGTH } from '../../message/dto/send-message.dto';
+import { ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
+import { CHAT_ID_MAX_LENGTH, CHAT_JID_MESSAGE, CHAT_JID_PATTERN } from '../../message/dto/send-message.dto';
 
 export class SetOwnPresenceDto {
   @ApiProperty({
@@ -17,17 +17,16 @@ export class SetOwnPresenceDto {
 export class SubscribePresenceDto {
   @ApiProperty({
     maxLength: CHAT_ID_MAX_LENGTH,
-    description: "Chat ID in the active engine's native format (e.g. 1234567890@c.us on whatsapp-web.js)",
+    description: 'Chat ID in the neutral form the gateway returns, on either engine (e.g. 1234567890@c.us)',
     example: '1234567890@c.us',
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)
   // Same engine-neutral structural check the other chat-scoped DTOs use: localpart@host, no
   // whitespace, so a different engine's JID scheme is accepted and the adapter normalises further.
-  @Matches(/^[^\s@]+@[^\s@]+$/, {
-    message: 'chatId must be a valid chat JID in the form localpart@host',
-  })
+  @Matches(CHAT_JID_PATTERN, { message: CHAT_JID_MESSAGE })
   chatId!: string;
 }
 

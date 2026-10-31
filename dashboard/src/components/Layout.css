@@ -12,6 +12,8 @@
   flex-direction: column;
   position: fixed;
   height: 100vh;
+  /* The dynamic viewport excludes a phone browser's collapsing toolbar; the line above is the fallback. */
+  height: 100dvh;
   z-index: 100;
   transition:
     width 0.3s ease,
@@ -26,14 +28,16 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 1.5rem;
-  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 1.5rem;
   min-height: 72px;
 }
 
 .sidebar.collapsed .sidebar-header {
+  /* On the collapsed rail the header stacks: the logo, and the expand control under it. */
+  flex-direction: column;
   justify-content: center;
-  padding: 1.5rem 1rem;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
 }
 
 .sidebar-logo {
@@ -53,6 +57,10 @@
   flex-direction: column;
   overflow: hidden;
   white-space: nowrap;
+  /* The clip reaches 4px past the text, where the update link's focus ring (2px, offset 2px) is drawn; the margin
+     takes the padding back, so nothing moves. */
+  padding: 4px;
+  margin: -4px;
 }
 
 .brand-name {
@@ -67,12 +75,17 @@
   font-weight: 500;
   letter-spacing: 0.02em;
   color: var(--text-muted);
-  opacity: 0.7;
   margin-top: 1px;
 }
 
+/* Beside the collapse button the brand has about 123px: a longer notice (the Telugu one is about 138px) ends in an
+   ellipsis instead of being cut silently, and its title and accessible name keep the whole text. */
 .brand-update {
   align-self: flex-start;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
   margin-top: 2px;
   padding: 1px 6px;
   border-radius: var(--radius);
@@ -88,40 +101,38 @@
 }
 
 /* Collapse Toggle Button - Circular design at edge */
+/* Collapse control: a ghost button at the end of the header row. */
 .collapse-toggle {
-  position: absolute;
-  right: -14px;
-  top: 36px;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: var(--bg-white);
-  border: 1px solid var(--border);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-inline-start: auto;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   cursor: pointer;
-  color: var(--text-secondary);
-  transition: all 0.2s;
-  z-index: 101;
-  padding: 0;
+  transition:
+    background 0.2s,
+    color 0.2s;
 }
 
 .collapse-toggle:hover {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: white;
-  box-shadow: 0 4px 12px rgba(37, 211, 102, 0.3);
+  background: var(--bg-light);
+  color: var(--text-primary);
 }
 
-.collapse-toggle svg {
-  width: 16px;
-  height: 16px;
+.collapse-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .sidebar.collapsed .collapse-toggle {
-  right: -14px;
+  margin-inline-start: 0;
 }
 
 .sidebar-nav {
@@ -249,6 +260,11 @@
   border-radius: var(--radius);
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
   z-index: 120;
+  /* The menu grows upward from the footer, so it may be as tall as the window less the footer (up to 186px in
+     Arabic) and a margin. */
+  max-height: calc(100vh - 13rem);
+  max-height: calc(100dvh - 13rem);
+  overflow-y: auto;
 }
 
 .language-menu-item {
@@ -282,6 +298,8 @@
   right: auto;
   left: calc(100% + 0.5rem);
   bottom: 0;
+  max-height: calc(100vh - 9rem);
+  max-height: calc(100dvh - 9rem);
 }
 
 .logout-btn {
@@ -314,7 +332,9 @@
   width: calc(100% - 260px);
   background: var(--bg-light);
   min-height: 100vh;
-  overflow-x: hidden;
+  /* clip, not hidden: hidden makes this the scroll container that a sticky child (the Plugins status rail)
+     sticks to, and it never scrolls. */
+  overflow-x: clip;
   transition:
     margin-left 0.3s ease,
     width 0.3s ease;
@@ -334,6 +354,8 @@
   display: none;
 }
 
+/* Layout.tsx switches to the phone layout on this same query (MOBILE_QUERY), so the drawer markup and these styles
+   agree at every width, a fractional one included. */
 @media (max-width: 767px) {
   .mobile-header {
     display: flex;
@@ -347,7 +369,8 @@
     padding: 0 1rem;
     background: var(--bg-white);
     border-bottom: 1px solid var(--border);
-    z-index: 90;
+    /* Above the overlay (95) so the menu button, the close control while the drawer is open, is not dimmed. */
+    z-index: 96;
   }
 
   .mobile-menu-btn {
@@ -384,14 +407,26 @@
     font-size: 1rem;
   }
 
+  /* The drawer starts under the header (56px, as the header and the page scroller's padding) so it never covers the
+     menu button. */
   .sidebar.mobile {
     transform: translateX(-100%);
     width: 280px;
-    box-shadow: 2px 0 20px rgba(0, 0, 0, 0.1);
+    top: 56px;
+    height: calc(100vh - 56px);
+    height: calc(100dvh - 56px);
   }
 
+  /* The menu grows upward from the footer, so it gives up the header strip the drawer no longer spans. */
+  .sidebar.mobile .language-menu-list {
+    max-height: calc(100vh - 13rem - 56px);
+    max-height: calc(100dvh - 13rem - 56px);
+  }
+
+  /* The shadow belongs to the open drawer: on the closed one it would reach past the screen edge. */
   .sidebar.mobile.open {
     transform: translateX(0);
+    box-shadow: 2px 0 20px rgba(0, 0, 0, 0.1);
   }
 
   .sidebar-overlay {
@@ -417,8 +452,9 @@
     width: 100%;
     padding-top: 56px;
     height: 100vh;
+    height: 100dvh;
+    min-height: 0;
     overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
   }
 
   .collapse-toggle {
@@ -430,11 +466,6 @@
 [dir='rtl'] .sidebar {
   border-right: none;
   border-left: 1px solid var(--border);
-}
-
-[dir='rtl'] .collapse-toggle {
-  right: auto;
-  left: -14px;
 }
 
 [dir='rtl'] .language-menu-item {
@@ -466,10 +497,10 @@
 
   [dir='rtl'] .sidebar.mobile {
     transform: translateX(100%);
-    box-shadow: -2px 0 20px rgba(0, 0, 0, 0.1);
   }
 
   [dir='rtl'] .sidebar.mobile.open {
     transform: translateX(0);
+    box-shadow: -2px 0 20px rgba(0, 0, 0, 0.1);
   }
 }

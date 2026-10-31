@@ -1,7 +1,7 @@
 import { type Client, type GroupNotification } from 'whatsapp-web.js';
 import { type EngineEventCallbacks, GroupEvent } from '../interfaces/whatsapp-engine.interface';
 import { type createLogger } from '../../common/services/logger.service';
-import { SerializedWid } from '../types/whatsapp-web-js.types';
+import { SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 
 /**
  * Interpret the on/off value a group settings notification carries in `body` ('on'/'true' → true,
@@ -58,7 +58,7 @@ export function wwebjsGroupRecipientIds(notification: GroupNotification): string
     .map(entry => {
       if (typeof entry === 'string') return entry;
       const wid = entry as SerializedWid | undefined;
-      return wid?._serialized ?? wid?.$1 ?? '';
+      return readWid(wid) ?? '';
     })
     .filter(id => id.length > 0);
 }

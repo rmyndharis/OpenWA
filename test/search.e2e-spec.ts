@@ -1,7 +1,3 @@
-// archiver v8 is ESM-only and is pulled in transitively via the @Global StorageModule when
-// AppModule boots; stub it so ts-jest (CommonJS) can load the module graph (same as other e2e specs).
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 // Seed the well-known dev-admin-key (ApiKeyRole.ADMIN, so it satisfies @RequireRole(OPERATOR))
 // BEFORE AppModule is imported, mirroring integration-instance.e2e-spec.ts's env-first pattern.
 process.env.ALLOW_DEV_API_KEY = 'true';
@@ -112,6 +108,14 @@ describe('GET /api/search (e2e)', () => {
     await request(app.getHttpServer()).get('/api/search?q=hello').expect(401);
   });
 
+  it('answers 501 naming SEARCH_CONTAINS_ENABLED for match=contains while the setting is off (default)', async () => {
+    const res = await request(app.getHttpServer())
+      .get('/api/search?q=hello&match=contains')
+      .set('X-API-Key', 'dev-admin-key')
+      .expect(501);
+    expect((res.body as { message: string }).message).toContain('SEARCH_CONTAINS_ENABLED=true');
+  });
+
   it('returns an empty result page (not 501) for a non-matching term', async () => {
     const res = await request(app.getHttpServer())
       .get('/api/search?q=zzzznomatch')
@@ -131,6 +135,62 @@ describe('GET /api/search (e2e)', () => {
     expect(() => app.get(SearchService)).not.toThrow();
     const registry = app.get(SearchProviderRegistry);
     expect(registry.active()?.id).toBe('builtin-fts');
+  });
+});
+
+/**
+ * SEARCH_CONTAINS_ENABLED=true over the whole stack: the provider starts its trigram build only once the
+ * HTTP listener is up (HttpAdapterHost.listen$), so this instance listens on an ephemeral port, and
+ * match=contains turns from 501 into hits when the build completes.
+ */
+describe('GET /api/search?match=contains with SEARCH_CONTAINS_ENABLED=true (e2e)', () => {
+  let app: INestApplication<App>;
+  const previous = process.env.SEARCH_CONTAINS_ENABLED;
+
+  beforeAll(async () => {
+    process.env.SEARCH_CONTAINS_ENABLED = 'true';
+    const moduleFixture = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    app = moduleFixture.createNestApplication();
+    applyGlobalValidation(app);
+    await app.init();
+    const dataSource = app.get<DataSource>(getDataSourceToken('data'));
+    await new AddMessagesFts1782400000000().up(dataSource.createQueryRunner());
+    await app.get<Repository<Message>>(getRepositoryToken(Message, 'data')).insert({
+      sessionId: 'sess-search-2',
+      chatId: 'chat-2@c.us',
+      from: 'carol@c.us',
+      to: 'bot@c.us',
+      body: 'Your Invoice is attached',
+      type: 'text',
+      direction: MessageDirection.INCOMING,
+      timestamp: 1700000002000,
+    });
+    await app.listen(0);
+  });
+
+  afterAll(async () => {
+    if (previous === undefined) delete process.env.SEARCH_CONTAINS_ENABLED;
+    else process.env.SEARCH_CONTAINS_ENABLED = previous;
+    try {
+      await app?.close();
+    } catch {
+      /* ignore teardown-only multi-datasource quirk */
+    }
+  });
+
+  it('finds part of a word once the build that followed listen() completes', async () => {
+    const search = () =>
+      request(app.getHttpServer()).get('/api/search?q=voic&match=contains').set('X-API-Key', 'dev-admin-key');
+    let res = await search();
+    for (let attempt = 0; res.status === 501 && attempt < 100; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      res = await search();
+    }
+
+    expect(res.status).toBe(200);
+    const body = res.body as { hits: Array<{ sessionId: string; snippet: string }> };
+    expect(body.hits.map(h => h.sessionId)).toEqual(['sess-search-2']);
+    expect(body.hits[0].snippet).toContain('In<mark>voic</mark>e');
   });
 });
 

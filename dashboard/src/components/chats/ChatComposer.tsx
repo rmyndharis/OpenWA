@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Paperclip, Send, Smile, X } from 'lucide-react';
+import { Loader2, Plus, Send, Smile, X } from 'lucide-react';
 import { messageApi, type Chat, type MessageType } from '../../services/api';
 import { type ChatMessageView } from '../../utils/chatMessages';
+import { chatTitle } from '../../utils/formatPhone';
 import { buildMediaSendPayload, buildOptimisticMetadata, quotedIdOf } from '../../utils/composerSend';
 import { messagesQueryKey, useChatMessagesActions, upsertCachedMessage } from '../../hooks/useChatMessages';
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import type { ScrollDirection } from '../../utils/scrollDecision';
+import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
+import { isComposingKey } from '../../utils/composition';
 
 // Map an attachment MIME type to the neutral MessageType for the optimistic outgoing bubble, so the
 // placeholder matches what the backend will persist (e.g. a PDF is `document`, not `application`).
@@ -18,11 +21,6 @@ const messageTypeFromMime = (mimetype: string): MessageType => {
   if (mimetype.startsWith('audio/')) return 'audio';
   return 'document';
 };
-
-// Client pre-check before base64-encoding an upload, same cap as the message tester: base64
-// inflates ~1.33x, so ~18 MiB raw stays under the backend's default 25 MiB body limit and the
-// pick fails here with a toast instead of OOMing the tab on the FileReader.
-export const MEDIA_UPLOAD_MAX_BYTES = 18 * 1024 * 1024;
 
 /** A picked-but-unsent file, staged until send, removal, or a move to another chat. */
 export interface StagedAttachment {
@@ -40,6 +38,8 @@ interface ChatComposerProps {
   onMessageAppended: (direction: ScrollDirection) => void;
   /** Moves the chat to the top of the sidebar, if `sessionId` is still the session on screen. */
   onSent: (sessionId: string, chatId: string, snippet: string, sentAt: number) => void;
+  /** A send was confirmed: the placeholder `tempId` is now the thread row keyed `key` (its waMessageId ?? id). */
+  onSendConfirmed?: (tempId: string, key: string) => void;
   messageInput: string;
   setMessageInput: Dispatch<SetStateAction<string>>;
   attachment: StagedAttachment | null;
@@ -59,6 +59,7 @@ function ChatComposer({
   setReplyingTo,
   onMessageAppended,
   onSent,
+  onSendConfirmed,
   messageInput,
   setMessageInput,
   attachment,
@@ -111,7 +112,7 @@ function ChatComposer({
   useEffect(() => {
     if (!showEmojiPicker) return;
     const dismissOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return;
+      if (event.key !== 'Escape' || isComposingKey(event) || event.defaultPrevented) return;
       if (document.querySelector('[role="dialog"], [role="menu"]')) return;
       event.preventDefault();
       setShowEmojiPicker(false);
@@ -122,6 +123,9 @@ function ChatComposer({
 
   // References
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textInputRef = useRef<HTMLInputElement | null>(null);
+  // How the Send button was last pressed: the pointerdown's pointerType ('touch' for a tap), '' after a key on it.
+  const sendPressRef = useRef('');
 
   // Popular emojis
   const popularEmojis = [
@@ -210,6 +214,13 @@ function ChatComposer({
     const textToSend = messageInput.trim();
     if (!textToSend && !attachment) return;
 
+    // With focus in the composer form, the field takes it before the Send button disables (it does once the text is
+    // cleared): the browser drops focus from a disabled control to the page, and the next message would be typed
+    // nowhere. Skipped when focus is outside the form, or when the Send button was last pressed by a tap: a tap focuses
+    // the button in Chromium, and a focused field raises a phone's keyboard.
+    const field = textInputRef.current;
+    if (sendPressRef.current !== 'touch' && field?.form?.contains(document.activeElement)) field.focus();
+
     // Text that cannot travel with an audio file stays in the input to be sent as its own message.
     if (!attachmentIsAudio) setMessageInput('');
     setSending(true);
@@ -293,6 +304,7 @@ function ChatComposer({
         status: 'sent',
       };
       upsertCachedMessage(queryClient, sendKey, reconciled, { dropId: tempId });
+      onSendConfirmed?.(tempId, reconciled.waMessageId ?? reconciled.id);
 
       // Update sidebar chat list (move active chat to the top with the new snippet)
       // Named by the type the bubble uses, not the MIME major type: a PDF is a document, not "application".
@@ -309,9 +321,9 @@ function ChatComposer({
 
   return (
     <>
-      {/* Attachment preview banner */}
+      {/* Composer extras: the attachment, emoji and reply panels stack above the input bar. */}
       {attachment && (
-        <div className="attachment-preview-banner">
+        <div className="composer-banner attachment-preview-banner">
           {previewUrl ? (
             <img src={previewUrl} alt={attachment.filename} className="preview-thumbnail" />
           ) : (
@@ -321,18 +333,21 @@ function ChatComposer({
             <span className="preview-filename">{attachment.filename}</span>
             <span className="preview-filesize">({(attachment.file.size / 1024).toFixed(1)} KB)</span>
           </div>
-          <button className="btn-remove-attachment" onClick={handleRemoveAttachment}>
+          <button
+            className="btn-banner-close btn-remove-attachment"
+            onClick={handleRemoveAttachment}
+            aria-label={t('messageTester.removeFile')}
+          >
             <X size={18} />
           </button>
         </div>
       )}
 
-      {/* Popular emojis panel */}
       {showEmojiPicker && (
         // No role="menu" here: these are plain buttons with no menuitem roles, no roving focus and
         // no arrow-key navigation, so claiming the role would promise a keyboard contract the panel
         // does not keep. Escape is handled on document instead, see the effect above.
-        <div className="chats-emoji-picker">
+        <div className="composer-banner chats-emoji-picker">
           <div className="emoji-grid">
             {popularEmojis.map(emoji => (
               <button key={emoji} type="button" className="emoji-btn" onClick={() => handleEmojiClick(emoji)}>
@@ -343,21 +358,23 @@ function ChatComposer({
         </div>
       )}
 
-      {/* Replying preview banner */}
       {replyingTo && (
-        <div className="replying-preview-banner">
+        <div className="composer-banner replying-preview-banner">
           <div className="replying-preview-content">
             <div className="replying-to-title">
               {t('chats.replyingTo', {
-                name:
-                  replyingTo.direction === 'outgoing' ? t('chats.you') : activeChat.name || activeChat.id.split('@')[0],
+                name: replyingTo.direction === 'outgoing' ? t('chats.you') : chatTitle(activeChat),
               })}
             </div>
             <div className="replying-to-body">
               {replyingTo.type !== 'text' ? typeLabel(replyingTo.type) : replyingTo.body}
             </div>
           </div>
-          <button className="btn-close-reply" onClick={() => setReplyingTo(null)}>
+          <button
+            className="btn-banner-close btn-close-reply"
+            onClick={() => setReplyingTo(null)}
+            aria-label={t('common.close')}
+          >
             <X size={18} />
           </button>
         </div>
@@ -374,41 +391,55 @@ function ChatComposer({
             disabled={!canWrite || sending}
             className="btn-input-accessory"
             title={t('chats.attachTitle')}
+            aria-label={t('chats.attachTitle')}
           >
-            <Paperclip size={20} />
+            <Plus size={24} />
           </button>
 
-          <button
-            type="button"
-            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-            disabled={!canWrite || sending}
-            className={`btn-input-accessory ${showEmojiPicker ? 'active' : ''}`}
-            title={t('chats.emojiTitle')}
-          >
-            <Smile size={20} />
-          </button>
+          {/* The text field and the emoji toggle share one pill, as in WhatsApp. */}
+          <div className="message-input-pill">
+            <input
+              type="text"
+              placeholder={
+                canWrite
+                  ? attachment && !attachmentIsAudio
+                    ? t('chats.captionPlaceholder')
+                    : t('chats.messagePlaceholder')
+                  : t('chats.noPermission')
+              }
+              value={messageInput}
+              onChange={e => setMessageInput(e.target.value)}
+              // Never disabled by a send: it holds focus through it, and handleSend refuses a second send meanwhile.
+              disabled={!canWrite}
+              ref={textInputRef}
+              className="message-text-input"
+            />
+            <button
+              type="button"
+              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+              disabled={!canWrite || sending}
+              className={`btn-input-accessory inside ${showEmojiPicker ? 'active' : ''}`}
+              title={t('chats.emojiTitle')}
+              aria-label={t('chats.emojiTitle')}
+            >
+              <Smile size={22} />
+            </button>
+          </div>
 
-          <input
-            type="text"
-            placeholder={
-              canWrite
-                ? attachment && !attachmentIsAudio
-                  ? t('chats.captionPlaceholder')
-                  : t('chats.messagePlaceholder')
-                : t('chats.noPermission')
-            }
-            value={messageInput}
-            onChange={e => setMessageInput(e.target.value)}
-            disabled={!canWrite || sending}
-            className="message-text-input"
-          />
           <button
             type="submit"
             disabled={!canWrite || (!messageInput.trim() && !attachment) || sending}
+            onPointerDown={e => {
+              sendPressRef.current = e.pointerType;
+            }}
+            onKeyDown={() => {
+              sendPressRef.current = '';
+            }}
             className="btn-send-message"
             aria-label={t('chats.send')}
+            title={t('chats.send')}
           >
-            {sending ? <Loader2 className="animate-spin" size={24} /> : <Send size={28} strokeWidth={2.5} />}
+            {sending ? <Loader2 className="animate-spin" size={22} /> : <Send size={20} strokeWidth={2.25} />}
           </button>
         </form>
       </footer>

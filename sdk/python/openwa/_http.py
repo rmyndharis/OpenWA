@@ -251,8 +251,9 @@ class HttpExecutor:
             raise OpenWATimeoutError(self._timeout or 0) from e
         # Treat any non-2xx as an error, including 3xx: redirects are deliberately not followed
         # (so the API key is never re-sent to the target), which makes an unfollowed 3xx unusable
-        # rather than a success. Matches the JS transport's `!res.ok`.
-        if res.status_code >= 300:
+        # rather than a success. A final 1xx from a custom transport is no more usable. Matches the JS
+        # transport's `!res.ok`.
+        if not 200 <= res.status_code < 300:
             context = f"{method} {path}"
             raise OpenWAApiError.from_response(
                 res.status_code, res.text, context, headers=res.headers, reason=res.reason_phrase

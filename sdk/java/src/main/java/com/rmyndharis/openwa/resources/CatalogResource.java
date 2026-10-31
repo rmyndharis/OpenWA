@@ -26,13 +26,19 @@ public final class CatalogResource {
         this.client = client;
     }
 
-    /** Get the business catalog info, or {@code null} when the account has no catalog. */
+    /**
+     * Get the business catalog info, or {@code null} when the account has no catalog. Baileys only;
+     * whatsapp-web.js answers {@code 501}.
+     */
     public CatalogInfo info(String sessionId) {
         return client.request(
             HttpMethod.GET, "/api/sessions/" + encodeSegment(sessionId) + "/catalog", null, null, CatalogInfo.class);
     }
 
-    /** List catalog products. Returns a {@code { products, pagination }} page. */
+    /**
+     * List catalog products. Returns a {@code { products, pagination }} page. Baileys only;
+     * whatsapp-web.js answers {@code 501}.
+     */
     public PaginatedProducts products(String sessionId, CatalogProductsQuery query) {
         return client.request(
             HttpMethod.GET,
@@ -42,7 +48,10 @@ public final class CatalogResource {
             PaginatedProducts.class);
     }
 
-    /** Get a single product by id, or {@code null} when no product in the catalog carries that id. */
+    /**
+     * Get a single product by id, or {@code null} when no product in the catalog carries that id.
+     * Baileys only; whatsapp-web.js answers {@code 501}.
+     */
     public CatalogProduct product(String sessionId, String productId) {
         return client.request(
             HttpMethod.GET,
@@ -52,7 +61,10 @@ public final class CatalogResource {
             CatalogProduct.class);
     }
 
-    /** Send a product message. Requires an OPERATOR-level key. Shares the messages path. */
+    /**
+     * Send a product message. Requires an OPERATOR-level key. Shares the messages path. Baileys only;
+     * whatsapp-web.js answers {@code 501}.
+     */
     public ProductMessageResponse sendProduct(String sessionId, SendProductRequest body) {
         return client.request(
             HttpMethod.POST,

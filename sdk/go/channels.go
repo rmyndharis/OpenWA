@@ -10,7 +10,7 @@ func (s *ChannelsService) base(sessionID string) string {
 	return "/api/sessions/" + pathEscape(sessionID) + "/channels"
 }
 
-// List returns channels for a session.
+// List returns channels for a session. whatsapp-web.js only; Baileys answers 501.
 func (s *ChannelsService) List(ctx context.Context, sessionID string) ([]ChannelRecord, error) {
 	var out []ChannelRecord
 	err := s.client.do(ctx, "GET", s.base(sessionID), nil, nil, &out)
@@ -27,7 +27,7 @@ func (s *ChannelsService) Get(ctx context.Context, sessionID, channelID string) 
 	return &out, nil
 }
 
-// Messages returns recent messages from a channel.
+// Messages returns recent messages from a channel. whatsapp-web.js only; Baileys answers 501.
 func (s *ChannelsService) Messages(ctx context.Context, sessionID, channelID string, query *ChannelMessageQuery) ([]ChannelMessageRecord, error) {
 	var out []ChannelMessageRecord
 	err := s.client.do(ctx, "GET", s.base(sessionID)+"/"+pathEscape(channelID)+"/messages", valuesOf(query), nil, &out)
@@ -68,6 +68,7 @@ func (s *ChannelsService) Mute(ctx context.Context, sessionID, channelID string,
 }
 
 // Subscribe subscribes to a channel by invite code. Requires an OPERATOR-level key.
+// Baileys only; whatsapp-web.js answers 501.
 func (s *ChannelsService) Subscribe(ctx context.Context, sessionID string, body SubscribeChannelRequest) (*ChannelRecord, error) {
 	var out ChannelRecord
 	err := s.client.do(ctx, "POST", s.base(sessionID)+"/subscribe", nil, body, &out)

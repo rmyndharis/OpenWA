@@ -1207,6 +1207,7 @@ func TestWebhookEventWireValues(t *testing.T) {
 		EventMessageReceived:      "message.received",
 		EventMessageSent:          "message.sent",
 		EventMessageAck:           "message.ack",
+		EventMessageReceipt:       "message.receipt",
 		EventMessageFailed:        "message.failed",
 		EventMessageRevoked:       "message.revoked",
 		EventMessageReaction:      "message.reaction",
@@ -1219,6 +1220,7 @@ func TestWebhookEventWireValues(t *testing.T) {
 		EventSessionRestriction:   "session.restriction",
 		EventPresenceUpdate:       "presence.update",
 		EventEventResponse:        "event.response",
+		EventPollVote:             "poll.vote",
 		EventCallAccepted:         "call.accepted",
 		EventCallRejected:         "call.rejected",
 		EventCallMissed:           "call.missed",
@@ -1777,13 +1779,56 @@ func TestRequestLogRedactsBaseURLPassword(t *testing.T) {
 // A Do path that already carries a query string keeps it; the query values are appended with "&"
 // rather than a second "?", which the server would read as part of the first value.
 func TestDoPathWithQueryAppendsQueryValues(t *testing.T) {
-	rt := &recordTransport{status: 200, body: `[]`}
+	for _, tc := range []struct{ path, want string }{
+		{"/api/sessions", "name=x&tag=a&tag=b"},
+		{"/api/sessions?limit=5", "limit=5&name=x&tag=a&tag=b"},
+		{"/api/sessions#client", "name=x&tag=a&tag=b"},
+		{"/api/sessions?limit=5#client", "limit=5&name=x&tag=a&tag=b"},
+		{"/api/sessions#client?x=1", "name=x&tag=a&tag=b"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			rt := &recordTransport{status: 200, body: `[]`}
+			c, err := New("https://api.example.com/prefix", "k", WithTransport(rt))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Do(context.Background(), "GET", tc.path, url.Values{"name": {"x"}, "tag": {"a", "b"}}, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			if got := rt.lastReq.URL.RawQuery; got != tc.want {
+				t.Errorf("query = %q, want %q", got, tc.want)
+			}
+			if got := rt.lastReq.URL.EscapedPath(); got != "/prefix/api/sessions" {
+				t.Errorf("path = %q, want the base URL prefix preserved", got)
+			}
+		})
+	}
+}
+
+// net/http sends the method as written and the gateway answers 400 to a lowercase one, so Do upper-cases
+// it. The idempotency header and the retry policy compare the upper-case names too.
+func TestDoSendsTheMethodInUpperCase(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{}`}
 	c := newTestClient(t, rt)
-	if err := c.Do(context.Background(), "GET", "/api/sessions?limit=5", url.Values{"name": {"x"}}, nil, nil); err != nil {
+	for _, tc := range []struct{ given, want string }{
+		{"get", "GET"}, {"post", "POST"}, {"put", "PUT"}, {"patch", "PATCH"}, {"delete", "DELETE"},
+		{"Patch", "PATCH"}, {"PATCH", "PATCH"},
+	} {
+		rt.lastReq = nil
+		if err := c.Do(context.Background(), tc.given, "/api/x", nil, nil, nil); err != nil {
+			t.Fatalf("Do(%q): %v", tc.given, err)
+		}
+		if got := rt.lastReq.Method; got != tc.want {
+			t.Errorf("Do(%q): the transport saw %q, want %q", tc.given, got, tc.want)
+		}
+	}
+
+	ctx := WithIdempotencyKey(context.Background(), "k1")
+	if err := c.Do(ctx, "post", "/api/sessions/s/messages/send-text", nil, map[string]string{"chatId": "x"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := rt.lastReq.URL.RawQuery; got != "limit=5&name=x" {
-		t.Errorf("query = %q, want %q", got, "limit=5&name=x")
+	if got := rt.lastReq.Header.Get("Idempotency-Key"); got != "k1" {
+		t.Errorf("a lowercase post to a send route sent Idempotency-Key %q, want %q", got, "k1")
 	}
 }
 
@@ -1921,6 +1966,296 @@ func TestRetryKeepsIdempotencyKey(t *testing.T) {
 	for _, key := range keys {
 		if key != "stable" {
 			t.Fatalf("keys: %v", keys)
+		}
+	}
+}
+
+// The status font ids are the wire values of the Baileys protocol's ExtendedTextMessage.FontType. The
+// constants carry the protocol's names; the first-release names for the same ids stay as deprecated
+// aliases so existing code keeps compiling and sending the same numbers.
+func TestStatusFontConstants(t *testing.T) {
+	cases := []struct {
+		name string
+		got  StatusFont
+		want int
+	}{
+		{"SYSTEM", StatusFontDefault, 0},
+		{"SYSTEM_TEXT", StatusFontSystemText, 1},
+		{"FB_SCRIPT", StatusFontFBScript, 2},
+		{"SYSTEM_BOLD", StatusFontBold, 6},
+		{"MORNINGBREEZE_REGULAR", StatusFontMorningBreezeRegular, 7},
+		{"CALISTOGA_REGULAR", StatusFontCalistogaRegular, 8},
+		{"EXO2_EXTRABOLD", StatusFontExo2ExtraBold, 9},
+		{"COURIERPRIME_BOLD", StatusFontCourierPrimeBold, 10},
+	}
+	for _, c := range cases {
+		if int(c.got) != c.want {
+			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
+		}
+	}
+
+	aliases := []struct {
+		name string
+		old  StatusFont
+		want StatusFont
+	}{
+		{"StatusFontSerif", StatusFontSerif, StatusFontSystemText},
+		{"StatusFontNorican", StatusFontNorican, StatusFontFBScript},
+		{"StatusFontOswald", StatusFontOswald, StatusFontMorningBreezeRegular},
+		{"StatusFontDamion", StatusFontDamion, StatusFontCalistogaRegular},
+		{"StatusFontMorningbreeze", StatusFontMorningbreeze, StatusFontExo2ExtraBold},
+		{"StatusFontBryndan", StatusFontBryndan, StatusFontCourierPrimeBold},
+	}
+	for _, a := range aliases {
+		if a.old != a.want {
+			t.Errorf("%s = %d, want the wire value %d it always had", a.name, a.old, a.want)
+		}
+	}
+
+	body, err := json.Marshal(SendTextStatusRequest{Text: "hi", Font: Ptr(StatusFontCourierPrimeBold)})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(body), `"font":10`) {
+		t.Errorf("font did not marshal as a bare number: %s", body)
+	}
+}
+
+func TestReservedCharactersStayInTypedPathSegment(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{}`}
+	c := newTestClient(t, rt)
+	if _, err := c.Contacts.Get(context.Background(), "s", "a/b?c#d"); err != nil {
+		t.Fatal(err)
+	}
+	if got := rt.lastReq.URL.EscapedPath(); got != "/api/sessions/s/contacts/a%2Fb%3Fc%23d" {
+		t.Errorf("escaped path = %q", got)
+	}
+	if rt.lastReq.URL.RawQuery != "" || rt.lastReq.URL.Fragment != "" {
+		t.Errorf("the ID moved into query or fragment: %s", rt.lastReq.URL)
+	}
+}
+
+func TestNon2xxResponsesDoNotDecodeSuccess(t *testing.T) {
+	for _, status := range []int{101, 199, 200, 204, 299, 300, 503} {
+		for _, kind := range []string{"json", "bytes"} {
+			t.Run(fmt.Sprintf("%d/%s", status, kind), func(t *testing.T) {
+				body := `{"ok":true}`
+				if status == 204 {
+					body = ""
+				}
+				c := newTestClient(t, &recordTransport{status: status, body: body})
+				var parsed map[string]any
+				var raw []byte
+				var out any = &parsed
+				if kind == "bytes" {
+					out = &raw
+				}
+				err := c.Do(context.Background(), "GET", "/api/x", nil, nil, out)
+				if status < 200 || status >= 300 {
+					var apiErr *APIError
+					if !errors.As(err, &apiErr) || apiErr.StatusCode != status {
+						t.Errorf("error = %v, want APIError with status %d", err, status)
+					}
+					if parsed != nil || raw != nil {
+						t.Error("an error response decoded a success body")
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				} else if status == 204 {
+					if parsed != nil || len(raw) != 0 {
+						t.Error("204 should keep an empty body")
+					}
+				} else if kind == "json" && parsed["ok"] != true {
+					t.Errorf("decoded JSON = %v", parsed)
+				} else if kind == "bytes" && string(raw) != body {
+					t.Errorf("decoded bytes = %q, want %q", raw, body)
+				}
+			})
+		}
+	}
+}
+
+func TestRetryAfterDurationBounds(t *testing.T) {
+	const longest = time.Duration(1<<63 - 1)
+	for _, tc := range []struct {
+		name, header string
+		want         time.Duration
+		valid        bool
+	}{
+		{"zero", "0", 0, true},
+		{"small", "2", 2 * time.Second, true},
+		{"positive sign", "+2", 2 * time.Second, true},
+		{"negative zero", "-0", 0, true},
+		{"leading zeroes", strings.Repeat("0", 80) + "2", 2 * time.Second, true},
+		{"last whole second", "9223372036", 9223372036000000000, true},
+		{"overflow boundary", "9223372037", longest, true},
+		{"max integer", "9223372036854775807", longest, true},
+		{"oversized integer", strings.Repeat("9", 80), longest, true},
+		{"oversized positive integer", "+" + strings.Repeat("9", 80), longest, true},
+		{"negative", "-1", 0, false},
+		{"oversized negative integer", "-" + strings.Repeat("9", 80), 0, false},
+		{"fraction", "0.25", 0, false},
+		{"invalid suffix after overflow", strings.Repeat("9", 80) + "x", 0, false},
+		{"invalid", "soon", 0, false},
+		{"sign only", "+", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, valid := retryAfterHeader(http.Header{"Retry-After": {tc.header}})
+			if got != tc.want || valid != tc.valid {
+				t.Errorf("duration = %s, valid = %v; want %s, %v", got, valid, tc.want, tc.valid)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name, body string
+		want       time.Duration
+	}{
+		{"small body", `{"retryAfterSeconds":2}`, 2 * time.Second},
+		{"fractional body", `{"retryAfterSeconds":0.25}`, 250 * time.Millisecond},
+		{"zero body overrides header", `{"retryAfterSeconds":0}`, 0},
+		{"negative body uses header", `{"retryAfterSeconds":-1}`, 7 * time.Second},
+		{"missing body delay uses header", `{}`, 7 * time.Second},
+		{"wrong body type uses header", `{"retryAfterSeconds":"2"}`, 7 * time.Second},
+		{"large body overrides header", `{"retryAfterSeconds":1e20}`, longest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseAPIError(429, []byte(tc.body), "GET /x", http.Header{"Retry-After": {"7"}})
+			if got.RetryAfter != tc.want {
+				t.Errorf("RetryAfter = %s, want %s", got.RetryAfter, tc.want)
+			}
+		})
+	}
+}
+
+func TestRetryDoesNotResendBeforeOversizedRetryAfter(t *testing.T) {
+	for _, status := range []int{429, 503} {
+		for _, header := range []string{"9223372037", strings.Repeat("9", 80)} {
+			for _, respect := range []bool{true, false} {
+				t.Run(fmt.Sprintf("%d/%s/respect=%v", status, header, respect), func(t *testing.T) {
+					var calls int32
+					rt := RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+						if atomic.AddInt32(&calls, 1) == 1 {
+							return &http.Response{StatusCode: status, Header: http.Header{"Retry-After": {header}}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: req}, nil
+						}
+						return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: req}, nil
+					})
+					c := newTestClient(t, rt, WithTimeout(500*time.Millisecond), WithRetry(RetryPolicy{
+						MaxRetries: 1, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, RespectRetryAfter: respect,
+					}))
+					err := c.Do(context.Background(), "GET", "/api/x", nil, nil, nil)
+					if !respect {
+						if err != nil || calls != 2 {
+							t.Errorf("disabled Retry-After: error = %v, calls = %d", err, calls)
+						}
+						return
+					}
+					var apiErr *APIError
+					if !errors.As(err, &apiErr) || apiErr.StatusCode != status || apiErr.RetryAfter <= 0 || calls != 1 {
+						t.Errorf("error = %v, calls = %d; want the first response without a retry", err, calls)
+					}
+				})
+			}
+		}
+	}
+}
+
+type responseReadErrorBody struct {
+	reads, closed int
+}
+
+func (b *responseReadErrorBody) Read(p []byte) (int, error) {
+	b.reads++
+	return copy(p, `{"code":`), io.ErrUnexpectedEOF
+}
+
+func (b *responseReadErrorBody) Close() error {
+	b.closed++
+	return nil
+}
+
+func TestRetryPreservesResponseBodyReadError(t *testing.T) {
+	for _, status := range []int{200, 429} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			body := &responseReadErrorBody{}
+			var calls int32
+			c := newTestClient(t, RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				atomic.AddInt32(&calls, 1)
+				return &http.Response{StatusCode: status, Header: http.Header{"Retry-After": {"3600"}}, Body: body, Request: req}, nil
+			}), WithTimeout(500*time.Millisecond), WithRetry(DefaultRetryPolicy()))
+			err := c.Do(context.Background(), "GET", "/api/x", nil, nil, nil)
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Errorf("error = %v, want preserved io.ErrUnexpectedEOF", err)
+			}
+			if calls != 1 || body.reads != 1 || body.closed != 1 {
+				t.Errorf("calls = %d, reads = %d, closes = %d; want one each", calls, body.reads, body.closed)
+			}
+		})
+	}
+}
+
+func TestRetryPreservesResponseBodyTimeout(t *testing.T) {
+	for _, status := range []int{200, 429} {
+		for _, callerDeadline := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/caller=%v", status, callerDeadline), func(t *testing.T) {
+				var calls int32
+				started := make(chan struct{}, 1)
+				finished := make(chan struct{}, 1)
+				release := make(chan struct{})
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					atomic.AddInt32(&calls, 1)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(status)
+					_, _ = w.Write([]byte(`{"code":`))
+					w.(http.Flusher).Flush()
+					select {
+					case started <- struct{}{}:
+					default:
+					}
+					select {
+					case <-r.Context().Done():
+					case <-release:
+					}
+					select {
+					case finished <- struct{}{}:
+					default:
+					}
+				}))
+				t.Cleanup(srv.Close)
+				t.Cleanup(func() { close(release) })
+				ctx := context.Background()
+				wantTimeout := 125 * time.Millisecond
+				opts := []Option{WithRetry(DefaultRetryPolicy())}
+				if callerDeadline {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, wantTimeout)
+					defer cancel()
+					wantTimeout = 0
+				} else {
+					opts = append(opts, WithTimeout(wantTimeout))
+				}
+				c, err := New(srv.URL, "k", opts...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = c.Do(ctx, "GET", "/api/x", nil, nil, nil)
+				select {
+				case <-started:
+				default:
+					t.Fatal("the response body was not flushed")
+				}
+				var te *TimeoutError
+				if !errors.As(err, &te) || te.Timeout != wantTimeout {
+					t.Errorf("error = %v, want a TimeoutError with budget %s", err, wantTimeout)
+				}
+				if got := atomic.LoadInt32(&calls); got != 1 {
+					t.Errorf("calls = %d, want one", got)
+				}
+				select {
+				case <-finished:
+				case <-time.After(2 * time.Second):
+					t.Error("cancellation did not release the server handler")
+				}
+			})
 		}
 	}
 }

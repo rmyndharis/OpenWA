@@ -90,6 +90,52 @@ test('a chat list qualifies a bare phone number the way the gateway stores it', 
   assert.deepEqual(normalizeChatScope('1234'), ['1234']);
 });
 
+// The gateway takes ASCII digits only, so what an operator types in the digits of their own script is folded first.
+const inScript = (text: string, zero: number) =>
+  text.replace(/\d/g, digit => String.fromCodePoint(zero + Number(digit)));
+const ZEROS = { arabicIndic: 0x0660, persian: 0x06f0, devanagari: 0x0966, telugu: 0x0c66, fullWidth: 0xff10 };
+
+test('a chat list folds the digits of any script before it qualifies a number', () => {
+  for (const [script, zero] of Object.entries(ZEROS)) {
+    const number = inScript('6281234', zero);
+    assert.deepEqual(normalizeChatScope(number), ['6281234@c.us'], script);
+    assert.deepEqual(normalizeChatScope(` ${number}@c.us \n${number}\n6281234`), ['6281234@c.us'], script);
+    assert.equal(invalidChatEntry(normalizeChatScope(number)), null, script);
+  }
+});
+
+test('a chat list folds native digits inside a group, a contact, a lid and a device id', () => {
+  const ids = ['120363000-1700000000@g.us', '6281234@c.us', '123456@lid', '6281234:1@s.whatsapp.net'];
+  assert.deepEqual(normalizeChatScope(ids.map(id => inScript(id, ZEROS.persian)).join('\n')), ids);
+});
+
+test('a chat list reads a number of mixed scripts and drops direction marks around it', () => {
+  assert.deepEqual(normalizeChatScope(`62${inScript('81234', ZEROS.arabicIndic)}`), ['6281234@c.us']);
+  assert.deepEqual(normalizeChatScope(`\u200e${inScript('6281234', ZEROS.arabicIndic)}\u200f`), ['6281234@c.us']);
+});
+
+test('an entry that is not a chat id after folding is still refused', () => {
+  const short = normalizeChatScope(inScript('1234', ZEROS.arabicIndic));
+  assert.deepEqual(short, ['1234']);
+  assert.equal(invalidChatEntry(short), '1234');
+  const letters = normalizeChatScope(`${inScript('1234567', ZEROS.devanagari)}x@c.us`);
+  assert.equal(invalidChatEntry(letters), '1234567x@c.us');
+  // A circled digit is not a decimal digit: left as typed for the gateway to refuse.
+  const circled = normalizeChatScope(`\u24606281234`);
+  assert.equal(invalidChatEntry(circled), circled[0]);
+  // A plus is refused for ASCII input and stays refused.
+  assert.equal(invalidChatEntry(normalizeChatScope('+6281234')), '+6281234');
+});
+
+test('a draft in native digits patches exactly as the same draft in ASCII digits', () => {
+  const key = { role: 'operator', allowedChats: ['6281234@c.us'] };
+  const draft = apiKeyDraft(key);
+  const native = (chats: string) => apiKeyPatch(key, { ...draft, chats: inScript(chats, ZEROS.persian) });
+  assert.deepEqual(native('6281234'), {});
+  assert.deepEqual(native('6281234\n62812349'), apiKeyPatch(key, { ...draft, chats: '6281234\n62812349' }));
+  assert.deepEqual(native('6281234\n62812349'), { allowedChats: ['6281234@c.us', '62812349@c.us'] });
+});
+
 test('an expiry round-trips through the datetime-local value in local time', () => {
   const local = toDateTimeLocal('2027-03-04T05:06:59.000Z');
   assert.match(local, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);

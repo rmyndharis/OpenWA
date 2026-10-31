@@ -11,7 +11,7 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IngressUrl } from '../ingress-url';
-import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
+import { ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
 
 // Safe charset: the instanceId goes unencoded into the ingress URL path and the `<pluginId>:<instanceId>` row id.
 const INSTANCE_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -23,6 +23,7 @@ export class CreateInstanceDto {
     pattern: INSTANCE_ID_PATTERN.source,
     example: 'chatwoot-prod-1',
   })
+  @ToStrictString()
   @IsString()
   @Matches(INSTANCE_ID_PATTERN, { message: 'instanceId must match ^[a-zA-Z0-9_-]{1,64}$' })
   instanceId!: string;
@@ -34,6 +35,7 @@ export class CreateInstanceDto {
     example: '8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a',
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @IsNotEmpty({ message: 'sessionScope must not be empty (omit it for all sessions)' })
   @MaxLength(256)
@@ -45,6 +47,7 @@ export class CreateInstanceDto {
     example: 'a1b2c3d4e5f6',
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(512)
   verifyToken?: string;
@@ -61,6 +64,7 @@ export class CreateInstanceDto {
     example: 'super-secret-provider-webhook-key',
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MinLength(16, { message: 'secret must be at least 16 characters' })
   @MaxLength(512)
@@ -174,6 +178,6 @@ export class RedriveResultDto {
   @ApiProperty({ description: 'Dead-lettered deliveries still retained after this batch.', example: 75 })
   remaining!: number;
 
-  @ApiProperty({ description: 'The bounded batch size this call processed.', example: 25 })
+  @ApiProperty({ description: 'The bounded batch size this call processed.', example: 100 })
   batchSize!: number;
 }

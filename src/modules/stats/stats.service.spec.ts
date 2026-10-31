@@ -275,6 +275,103 @@ describe('StatsService time-series + hourly activity on SQLite (end-to-end regre
     expect(totals.sent).toBe(2);
     expect(totals.received).toBe(1);
   });
+
+  const addSession = () =>
+    ds
+      .getRepository(Session)
+      .save(ds.getRepository(Session).create({ id: 's1', name: 'n', status: SessionStatus.READY, config: {} }));
+
+  /** Moves a seeded row's createdAt, which the column stamps with the insert time. */
+  const backdate = (id: string, at: Date) => ds.getRepository(Message).update(id, { createdAt: at });
+
+  // "Top chats" means the busiest chats: ASC would return the ten quietest and a larger cap a hundred. Chat k
+  // holds k messages, so every count differs and the two quietest chats are the ones that drop out.
+  it('topChats are the ten busiest chats, busiest first, in the overall and the per-session query', async () => {
+    await addSession();
+    for (let k = 1; k <= 12; k++) {
+      for (let i = 0; i < k; i++) await seedMessage({ chatId: `chat${k}@c.us` });
+    }
+    const busiest = [12, 11, 10, 9, 8, 7, 6, 5, 4, 3];
+
+    const overall = (await service.getMessageStats('24h')).topChats;
+    expect(overall.map(c => c.messageCount)).toEqual(busiest);
+    expect(overall[0].chatId).toBe('chat12@c.us');
+
+    const perSession = (await service.getSessionStats('s1')).topChats;
+    expect(perSession.map(c => c.count)).toEqual(busiest);
+    expect(perSession[0].chatId).toBe('chat12@c.us');
+  });
+
+  // SQLite keeps no statistics, so GROUP BY m.chatId made it read the whole table in chatId index order for a
+  // window of a few rows (3.2 s over 59k messages, on the event loop). The window must be read through the
+  // createdAt index and the table never scanned.
+  it('the overall top chats read the createdAt window through its index, never the whole table', async () => {
+    await addSession();
+    for (let i = 0; i < 40; i++) await seedMessage({ chatId: `chat${i % 8}@c.us` });
+    const seen: Array<[string, unknown[]]> = [];
+    const query = ds.manager.query.bind(ds.manager);
+    jest.spyOn(ds.manager, 'query').mockImplementation(((sql: string, params?: unknown[]) => {
+      seen.push([sql, params ?? []]);
+      return query(sql, params);
+    }) as never);
+
+    await service.getMessageStats('24h');
+
+    expect(seen).toHaveLength(1);
+    const [sql, params] = seen[0];
+    const plan = await ds.query<Array<{ detail: string }>>(`EXPLAIN QUERY PLAN ${sql}`, params);
+    const details = plan.map(row => row.detail);
+    expect(details.some(d => /USING (COVERING )?INDEX IDX_messages_createdAt/.test(d))).toBe(true);
+    expect(details.filter(d => /^SCAN (messages|m)\b/.test(d))).toEqual([]);
+  });
+
+  // Today starts at local midnight, so it must differ from the all-time count. A row two days old is before
+  // midnight in every time zone.
+  it('counts only the rows since local midnight as today, overall and per session', async () => {
+    await addSession();
+    await seedMessage({ direction: MessageDirection.OUTGOING });
+    await seedMessage({ direction: MessageDirection.INCOMING });
+    const old = await seedMessage({ direction: MessageDirection.OUTGOING });
+    await backdate(old.id, new Date(Date.now() - 48 * 60 * 60 * 1000));
+
+    const overview = await service.getOverview();
+    expect(overview.messages).toMatchObject({ sent: 2, received: 1, today: { sent: 1, received: 1 } });
+    expect((await service.getSessionStats('s1')).messages).toMatchObject({ sent: 2, received: 1, today: 2 });
+  });
+
+  it('buckets the 24h series by hour, oldest first, split by direction', async () => {
+    await addSession();
+    const base = Date.now();
+    const at = (hoursAgo: number) => new Date(base - hoursAgo * 60 * 60 * 1000);
+    for (const [hoursAgo, direction] of [
+      [2, MessageDirection.OUTGOING],
+      [2, MessageDirection.OUTGOING],
+      [2, MessageDirection.INCOMING],
+      [5, MessageDirection.INCOMING],
+    ] as const) {
+      await backdate((await seedMessage({ direction })).id, at(hoursAgo));
+    }
+    const hour = (d: Date) => `${d.toISOString().slice(0, 13).replace('T', ' ')}:00:00`;
+
+    expect((await service.getMessageStats('24h')).timeSeries).toEqual([
+      { timestamp: hour(at(5)), sent: 0, received: 1 },
+      { timestamp: hour(at(2)), sent: 2, received: 1 },
+    ]);
+  });
+
+  it('buckets the 7d series by day, oldest first', async () => {
+    await addSession();
+    const base = Date.now();
+    const at = (daysAgo: number) => new Date(base - daysAgo * 24 * 60 * 60 * 1000);
+    await backdate((await seedMessage({ direction: MessageDirection.OUTGOING })).id, at(3));
+    await backdate((await seedMessage({ direction: MessageDirection.INCOMING })).id, at(1));
+    const day = (d: Date) => d.toISOString().slice(0, 10);
+
+    expect((await service.getMessageStats('7d')).timeSeries).toEqual([
+      { timestamp: day(at(3)), sent: 1, received: 0 },
+      { timestamp: day(at(1)), sent: 0, received: 1 },
+    ]);
+  });
 });
 
 describe('StatsService aggregate memo (in-process TTL)', () => {
@@ -436,6 +533,41 @@ describe('StatsService aggregate memo (in-process TTL)', () => {
       );
     const recomputed = await service.getSessionStats('s1');
     expect(recomputed.session.name).toBe('n1-recreated');
+  });
+
+  // getSessionStats drops the in-flight entry of a session that has just been deleted. The computation that
+  // was already running must then not write its result back, or a session created again under the same id
+  // would be served the deleted one's snapshot for the rest of the TTL.
+  it('does not write a dropped in-flight computation back into the memo', async () => {
+    const service = makeService(30000);
+    let release!: () => void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const load = jest.spyOn(service as unknown as Loaders, 'loadSessionStats').mockImplementationOnce(async () => {
+      await held;
+      return { session: { id: 's1', name: 'deleted-session', status: SessionStatus.READY } };
+    });
+
+    const inFlight = service.getSessionStats('s1');
+    while (load.mock.calls.length === 0) {
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
+    }
+
+    await ds.getRepository(Session).delete('s1');
+    await expect(service.getSessionStats('s1')).rejects.toThrow(NotFoundException);
+    release();
+    await inFlight;
+
+    await ds
+      .getRepository(Session)
+      .save(
+        ds.getRepository(Session).create({ id: 's1', name: 'n1-recreated', status: SessionStatus.READY, config: {} }),
+      );
+    expect((await service.getSessionStats('s1')).session.name).toBe('n1-recreated');
+    expect(load).toHaveBeenCalledTimes(2);
   });
 
   it('bounds every cross-session aggregate with a createdAt range predicate the standalone index serves', async () => {

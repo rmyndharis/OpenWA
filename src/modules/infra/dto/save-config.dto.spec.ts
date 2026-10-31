@@ -88,3 +88,38 @@ describe('SaveConfigDto strict coercion', () => {
     expect(instance.database?.poolSize).toBe(25);
   });
 });
+
+// @ValidateNested checks an array element by element, so a section sent as [] or [{...}] passed validation.
+describe('SaveConfigDto sections refuse an array', () => {
+  const SECTIONS = Object.keys(SECTION_BASE);
+
+  it.each(SECTIONS)('%s as an object is accepted', async section => {
+    const { errors } = await run({ [section]: SECTION_BASE[section] });
+    expect(errors).toHaveLength(0);
+  });
+
+  it.each(SECTIONS.flatMap(section => [[section, []] as const, [section, [SECTION_BASE[section]]] as const]))(
+    '%s as an array (%j) is refused',
+    async (section, value) => {
+      const { errors } = await run({ [section]: value });
+      expect(errors.map(e => e.property)).toEqual([section]);
+    },
+  );
+});
+
+// A section without its type keeps the stored selection (applyDatabaseSection, applyStorageSection), so the page can
+// leave out a type the environment pins. A type that is sent is still held to the enum.
+describe('SaveConfigDto section types', () => {
+  it.each(['database', 'storage'])('%s may leave its type out', async section => {
+    const { errors } = await run({ [section]: { builtIn: false } });
+    expect(errors).toHaveLength(0);
+  });
+
+  it.each([
+    ['database', 'mysql'],
+    ['storage', 'ftp'],
+  ])('%s refuses a type outside the enum (%s)', async (section, type) => {
+    const { errors } = await run({ [section]: { type } });
+    expect(errors.map(e => e.property)).toEqual([section]);
+  });
+});

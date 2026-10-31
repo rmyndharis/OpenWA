@@ -8,9 +8,10 @@
 #   - sessions/     — whatsapp-web.js LocalAuth session data
 #   - baileys/      — Baileys engine authentication state
 #   - media/        — the local media dir (STORAGE_LOCAL_PATH), archived whenever it exists. Under
-#                     STORAGE_TYPE=s3 it holds only media the app could not write to the bucket
-#                     (unreachable, or no credentials); the bucket's contents are not archived and
-#                     need a backup of their own
+#                     STORAGE_TYPE=s3 it holds media the app could not write to the bucket
+#                     (unreachable, or no credentials) and, after a move from local storage, the
+#                     old local media until docs/14 Storage Migration Step 6 cleans it up;
+#                     the bucket's contents are not archived and need a backup of their own
 #   - plugin-packages/ — installed plugin packages from PLUGINS_DIR
 #   - plugin-state/    — registry and persisted ctx.storage state under PLUGIN_STATE_DIR/plugins
 #                        (default: <data dir>/plugins)
@@ -38,6 +39,12 @@
 #                     data dir)
 #   BOOTSTRAP_KEY_FILE  the plaintext admin key to archive (default: <data dir>/.api-key)
 #                     These paths resolve through the same layers as the databases.
+#   POSTGRES_SCHEMA   for postgres: a schema other than public is dumped alone (the database may hold
+#                     other applications' schemas), with the pg_trgm and unaccent extensions, and
+#                     pgcrypto when it lives in that schema (PostgreSQL 12 and older), behind a prelude
+#                     that moves an existing copy of the schema aside on load; database.schema in the
+#                     archive names it. That dump needs pg_dump 14 or newer (the image ships 17), which
+#                     the run checks first. public dumps the whole database, as before.
 #   For postgres: DATABASE_URL, or DATABASE_HOST/PORT/USERNAME/PASSWORD/NAME
 #                     DATABASE_URL is read by this script only (the app uses the DATABASE_* keys)
 #                     and wins over them when set. It is passed to pg_dump as an argument, which
@@ -213,6 +220,98 @@ backup_sqlite() {
   fi
 }
 
+# pg_schema_prelude <schema> [pgcrypto] - the SQL a schema-scoped dump starts with. Loaded into a database
+# that already holds the schema (the one the dump came from), it moves that schema aside as
+# <schema>_pre_restore_<time>, and drops pg_trgm and unaccent when they moved with it, and pgcrypto when the
+# dump carries it, with what the copy hangs on them: its trigram index on pg_trgm, and the column defaults
+# that call pgcrypto's gen_random_uuid() (PostgreSQL 12 and older). The dump can then create them in the
+# schema again, where its own defaults call them by name. Not CASCADE: extensions are per database, so an
+# object in another schema may use these, and it then fails the load, which changes nothing, rather than
+# going with them. In an empty database it does nothing. The name was checked with openwa_pg_schema_valid,
+# so it needs no quoting here.
+pg_schema_prelude() {
+  local extensions="'pg_trgm', 'unaccent'"
+  if [ -n "${2:-}" ]; then
+    extensions="$extensions, '$2'"
+  fi
+  cat <<EOF
+-- Added by backup.sh: this dump holds schema $1 only. An existing $1 is moved aside before it loads.
+DO \$openwa\$
+DECLARE
+  aside text := left('$1', 36) || '_pre_restore_' || to_char(clock_timestamp(), 'YYYYMMDDHH24MISS');
+  ext text;
+  col record;
+BEGIN
+  IF to_regnamespace('$1') IS NOT NULL THEN
+    EXECUTE format('ALTER SCHEMA %I RENAME TO %I', '$1', aside);
+    FOR ext IN SELECT extname FROM pg_extension
+      WHERE extname IN ($extensions) AND extnamespace = to_regnamespace(aside) LOOP
+      IF ext = 'pg_trgm' THEN
+        EXECUTE format('DROP INDEX IF EXISTS %I.%I', aside, 'idx_messages_body_trgm');
+      ELSIF ext = 'pgcrypto' THEN
+        FOR col IN SELECT DISTINCT c.relname, a.attname FROM pg_attrdef d
+          JOIN pg_class c ON c.oid = d.adrelid AND c.relnamespace = to_regnamespace(aside)
+          JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+          JOIN pg_depend f ON f.classid = 'pg_attrdef'::regclass AND f.objid = d.oid
+            AND f.refclassid = 'pg_proc'::regclass
+          JOIN pg_depend m ON m.classid = 'pg_proc'::regclass AND m.objid = f.refobjid AND m.deptype = 'e'
+            AND m.refclassid = 'pg_extension'::regclass
+          JOIN pg_extension e ON e.oid = m.refobjid AND e.extname = 'pgcrypto' LOOP
+          EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN %I DROP DEFAULT', aside, col.relname, col.attname);
+        END LOOP;
+      END IF;
+      EXECUTE format('DROP EXTENSION %I', ext);
+    END LOOP;
+  END IF;
+END
+\$openwa\$;
+EOF
+}
+
+# pg_dump_data <connection arguments...> - the data store's dump: the whole database for the public
+# schema, else POSTGRES_SCHEMA alone (PG_DUMP_SCHEMA) behind its prelude, with the extensions the app's
+# search index uses. plpgsql always matches, so the list never fails pg_dump where the others are absent.
+# pgcrypto joins them only when it lives in that schema: on PostgreSQL 12 and older the migrations create
+# it there, and the id defaults call its gen_random_uuid() by that schema's name. From 13 the function is
+# core and the app never uses pgcrypto, so one in another schema stays out, and a load into an empty
+# database does not need that schema. A schema-only probe over the same connection reads where it lives
+# from pg_dump's CREATE EXTENSION line; a failed probe fails the backup.
+# No comments: COMMENT ON EXTENSION needs the extension's owner even where CREATE EXTENSION IF NOT EXISTS
+# skipped one that exists, and the app writes no comment of its own.
+pg_dump_data() {
+  if [ -z "$PG_DUMP_SCHEMA" ]; then
+    pg_dump "$@"
+    return
+  fi
+  # The scoped dump names its extensions with -e, which pg_dump has had since 14: an older client stops at
+  # "unrecognized option" once the dump starts, so it is refused before anything is dumped. The version is read
+  # with the dump's own arguments, which pg_dump ignores after --version: Debian's pg_wrapper picks the client by
+  # them (the newest installed for -h, the local cluster's without). stdout is the dump, so messages go to stderr.
+  local version major_re='\) ([0-9]+)'
+  version="$(pg_dump --version "$@" 2>&1 || true)"
+  if ! [[ "$version" =~ $major_re ]] || [ "${BASH_REMATCH[1]}" -lt 14 ]; then
+    log "ERROR: POSTGRES_SCHEMA=$PG_DUMP_SCHEMA is dumped with pg_dump --extension, which needs pg_dump 14 or newer" >&2
+    log "       (the image ships 17); this one reports: $version" >&2
+    exit 1
+  fi
+  local probe extensions=(-e plpgsql -e pg_trgm -e unaccent) pgcrypto=""
+  probe="$(pg_dump --schema-only -n "$PG_DUMP_SCHEMA" -e plpgsql -e pgcrypto "$@")"
+  if grep -Eqx "CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA \"?$PG_DUMP_SCHEMA\"?;" <<<"$probe"; then
+    pgcrypto=pgcrypto
+    extensions+=(-e pgcrypto)
+  fi
+  pg_schema_prelude "$PG_DUMP_SCHEMA" "$pgcrypto"
+  # The trigram index moves to the end. It is built as the table owner, its expression calls unaccent in this
+  # schema, and when another role owns the schema pg_dump grants that owner USAGE on it only in its closing ACL
+  # pass, so in pg_dump's place the index stopped every load with "permission denied for schema". pg_dump writes
+  # it on one line, the name quoted only when it is a keyword. pipefail keeps a failed pg_dump fatal.
+  pg_dump -n "$PG_DUMP_SCHEMA" --no-comments "${extensions[@]}" "$@" | awk -v s="$PG_DUMP_SCHEMA" '
+    index($0, "CREATE INDEX idx_messages_body_trgm ON " s ".messages USING gin ") == 1 ||
+      index($0, "CREATE INDEX idx_messages_body_trgm ON \"" s "\".messages USING gin ") == 1 { held = $0; next }
+    { print }
+    END { if (held != "") print held }'
+}
+
 # Members the finished archive MUST contain (relative tar paths). A run that cannot stage any of
 # them has already failed hard above; the post-archive min-content check below is the last gate
 # against shipping an archive that would "restore" into a fresh-empty install.
@@ -226,6 +325,19 @@ if [ "$DATABASE_TYPE" = "postgres" ]; then
   if ! command -v pg_dump >/dev/null 2>&1; then
     log "ERROR: DATABASE_TYPE=postgres but pg_dump is not installed"
     exit 1
+  fi
+  # The app keeps its tables, ledger and search_path in POSTGRES_SCHEMA. A schema other than public may
+  # share its database with other applications, whose schemas this role need not be able to read, so it
+  # is dumped alone, and database.schema names it for restore.sh. public keeps the whole-database dump.
+  PG_SCHEMA="$(openwa_resolve POSTGRES_SCHEMA public)"
+  PG_DUMP_SCHEMA=""
+  if [ "$PG_SCHEMA" != public ]; then
+    if ! openwa_pg_schema_valid "$PG_SCHEMA"; then
+      log "ERROR: POSTGRES_SCHEMA=$PG_SCHEMA is not a schema name the app accepts: a lower-case letter or underscore,"
+      log "       then lower-case letters, digits or underscores, at most 63 characters, not starting with pg_"
+      exit 1
+    fi
+    PG_DUMP_SCHEMA="$PG_SCHEMA"
   fi
   # libpq defaults to sslmode=prefer, which falls back to plaintext and accepts any certificate, so
   # the dump sent the database password past the TLS check the app makes. Apply the app's check:
@@ -265,7 +377,7 @@ if [ "$DATABASE_TYPE" = "postgres" ]; then
   fi
   DATABASE_URL_RESOLVED="$(openwa_resolve DATABASE_URL '')"
   if [ -n "$DATABASE_URL_RESOLVED" ]; then
-    pg_dump "$DATABASE_URL_RESOLVED" >"$STAGE/database.sql"
+    pg_dump_data "$DATABASE_URL_RESOLVED" >"$STAGE/database.sql"
   else
     # Same layered resolution as the paths above: a dashboard-provisioned Postgres keeps its
     # connection details in <data dir>/.env.generated, never in the operator's shell. Each is
@@ -276,9 +388,13 @@ if [ "$DATABASE_TYPE" = "postgres" ]; then
     PG_PORT="$(openwa_resolve DATABASE_PORT 5432)"
     PG_USER="$(openwa_resolve DATABASE_USERNAME openwa)"
     PG_NAME="$(openwa_resolve DATABASE_NAME openwa)"
-    PGPASSWORD="$PG_PASSWORD" pg_dump -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" "$PG_NAME" >"$STAGE/database.sql"
+    PGPASSWORD="$PG_PASSWORD" pg_dump_data -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" "$PG_NAME" >"$STAGE/database.sql"
   fi
   REQUIRED_MEMBERS+=("./database.sql")
+  if [ -n "$PG_DUMP_SCHEMA" ]; then
+    printf '%s\n' "$PG_DUMP_SCHEMA" >"$STAGE/database.schema"
+    REQUIRED_MEMBERS+=("./database.schema")
+  fi
 else
   log "Backing up data store ($DATA_DB)"
   backup_sqlite "$DATA_DB" "$STAGE/openwa.sqlite"

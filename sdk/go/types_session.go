@@ -56,12 +56,18 @@ type MuteChannelRequest struct {
 	Mute bool `json:"mute"`
 }
 
-// CustomLinkPreview is a caller-supplied link preview. Nothing is fetched for these.
+// CustomLinkPreview is a caller-supplied link preview. The page is not fetched; only ThumbnailURL,
+// when set, is.
 type CustomLinkPreview struct {
 	URL string `json:"url"`
 	// Title is required — WhatsApp will not render a preview without one.
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
+	// ThumbnailURL is the preview image as an http(s) URL, fetched under the media SSRF rules; it
+	// renders the large card. At most 5 MiB.
+	ThumbnailURL string `json:"thumbnailUrl,omitempty"`
+	// ThumbnailBase64 is the preview image as base64, at most 5 MiB decoded. Wins over ThumbnailURL.
+	ThumbnailBase64 string `json:"thumbnailBase64,omitempty"`
 }
 
 // UpsertLabelRequest is a label create-or-update body. The id travels in the path, because WhatsApp
@@ -256,12 +262,13 @@ type SessionStatsOverview struct {
 	Active       int            `json:"active"`
 	Ready        int            `json:"ready"`
 	Disconnected int            `json:"disconnected"`
-	ByStatus     map[string]int `json:"byStatus,omitempty"`
+	ByStatus     map[string]int `json:"byStatus"`
 	MemoryUsage  MemoryUsage    `json:"memoryUsage"`
 }
 
 // SessionConfig is a session's effective runtime configuration. A nil MaxReconnectAttempts means
-// unlimited — not unset.
+// unlimited — not unset. AutoRejectCalls works on Baileys only: whatsapp-web.js stores the flag but
+// cannot reject a call, so calls keep ringing there.
 type SessionConfig struct {
 	AutoRejectCalls      bool `json:"autoRejectCalls"`
 	MaxReconnectAttempts *int `json:"maxReconnectAttempts"`
@@ -269,8 +276,9 @@ type SessionConfig struct {
 }
 
 // UpdateSessionConfigRequest is a partial update of a session's config, merged in any session state
-// with no restart, re-link or QR scan. AutoRejectCalls applies immediately; MaxReconnectAttempts and
-// ReconnectBaseDelay apply on the next start.
+// with no restart, re-link or QR scan. AutoRejectCalls applies immediately, on Baileys only (whatsapp-web.js
+// stores the flag but cannot reject a call); MaxReconnectAttempts and ReconnectBaseDelay apply on the
+// next start.
 //
 // The route needs THREE states per field, not two: a key that is absent leaves the value unchanged, a
 // key sent as explicit null clears it back to the default, and a value sets it. A `*int` with

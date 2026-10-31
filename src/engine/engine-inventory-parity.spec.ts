@@ -131,6 +131,21 @@ function registeredEvents(engine: Engine): Set<string> {
   return new Set([...adapterSourcesWithStrings(engine).matchAll(/\.on\(\s*'([a-zA-Z][a-zA-Z_.-]*)'/g)].map(m => m[1]));
 }
 
+function isReachedThroughHandle(symbol: string, engine: Engine, sources: string[]): boolean {
+  const files = sources.map(f => f.replace(/\s+/g, ' '));
+  const code = files.join(' ');
+  const handle =
+    engine === 'wwjs'
+      ? String.raw`(?:\bthis\.client\(\)|\b\w*[Cc]lient\b)`
+      : String.raw`(?:\bthis\.sock\(\)|\bgetSocket\(\)|\bsocket\b|\b\w*[Ss]ock\b)`;
+  const s = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (new RegExp(`${handle}[^;{}]{0,90}?\\.\\s*${s}\\s*[(<.,)\\]]`).test(code)) return true;
+  // Computed dispatch supplies the method name as a literal in the same file.
+  const dispatch = new RegExp(`${handle}\\s*\\[\\s*\\w+\\s*\\]\\s*\\(`);
+  const literal = new RegExp(`['"\`]${s}['"\`]`);
+  return files.some(f => dispatch.test(f) && literal.test(f));
+}
+
 describe('engine inventory (docs/29 §29.5) — drift invariants', () => {
   // Guards against a parser that silently stops matching: an empty or short parse would make every
   // invariant below vacuously true. The expected sizes are the gated snapshot's, not magic numbers.
@@ -178,6 +193,21 @@ describe('engine inventory (docs/29 §29.5) — drift invariants', () => {
     expect(registeredEvents('wwjs').size).toBeGreaterThanOrEqual(10);
   });
 
+  it.each(['addChatLabel', 'removeChatLabel'])('recognizes %s on a captured socket only for Baileys', symbol => {
+    const source = `const socket = this.sock!; socket.${symbol}(jid, labelId);`;
+    expect(isReachedThroughHandle(symbol, 'baileys', [source])).toBe(true);
+    expect(isReachedThroughHandle(symbol, 'wwjs', [source])).toBe(false);
+    for (const unrelated of [
+      `this.${symbol}(jid, labelId);`,
+      `store.${symbol}(jid, labelId);`,
+      `socketStore.${symbol}(jid, labelId);`,
+      `const socket = this.sock!; store.${symbol}(jid, labelId);`,
+      `const message = '${symbol}';`,
+    ]) {
+      expect(isReachedThroughHandle(symbol, 'baileys', [unrelated])).toBe(false);
+    }
+  });
+
   describe.each<Engine>(['baileys', 'wwjs'])('%s', engine => {
     it('every ✅/⚙️ exposure mark has the symbol somewhere in adapter CODE, not just a comment', () => {
       const code = adapterSourcesWithStrings(engine);
@@ -197,7 +227,7 @@ describe('engine inventory (docs/29 §29.5) — drift invariants', () => {
      *
      * So this asks the stronger question: is the symbol reached THROUGH a library handle? The
      * handle shapes are taken from what the adapters actually do — `this.sock()`/`this.client()`,
-     * `getSocket()`, and any socket/client-shaped local (`sock`, `sourceSock`, `client`) — and a
+     * `getSocket()`, and any socket/client-shaped local (`sock`, `sourceSock`, `socket`, `client`), and a
      * member may be a reference rather than a call, since `updateMediaMessage` is passed as one.
      * Casts are tolerated: `(this.client() as unknown as BusinessClient).getLabels()` is a real
      * call, and so is computed dispatch, `this.client()[op](…)` with the name supplied as a literal
@@ -208,26 +238,15 @@ describe('engine inventory (docs/29 §29.5) — drift invariants', () => {
      * is held to the opposite: the symbol must not be reached, so the disclaimer cannot go stale.
      */
     it('every ✅/⚙️ exposure mark is reached through a library handle, not just named', () => {
-      const files = adapterFileSources(engine).map(f => f.replace(/\s+/g, ' '));
-      const code = files.join(' ');
-      const handle =
-        engine === 'wwjs'
-          ? String.raw`(?:\bthis\.client\(\)|\b\w*[Cc]lient\b)`
-          : String.raw`(?:\bthis\.sock\(\)|\bgetSocket\(\)|\b\w*[Ss]ock\b)`;
-      const reached = (symbol: string): boolean => {
-        const s = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        if (new RegExp(`${handle}[^;{}]{0,90}?\\.\\s*${s}\\s*[(<.,)\\]]`).test(code)) return true;
-        // computed dispatch through the handle, with the method name supplied as a literal in that file
-        const dispatch = new RegExp(`${handle}\\s*\\[\\s*\\w+\\s*\\]\\s*\\(`);
-        const literal = new RegExp(`['"\`]${s}['"\`]`);
-        return files.some(f => dispatch.test(f) && literal.test(f));
-      };
+      const files = adapterFileSources(engine);
       const disclaimed = (row: Row): boolean => row.exposure.includes(`not \`Client.${row.symbol}\``);
 
       const marked = readInventory(engine).filter(r => r.exposure.startsWith('✅') || r.exposure.startsWith('⚙️'));
       // Guard the selector: an empty or tiny set would make the assertion vacuous.
       expect(marked.length).toBeGreaterThan(30);
-      expect(marked.filter(r => reached(r.symbol) === disclaimed(r)).map(r => r.symbol)).toEqual([]);
+      expect(
+        marked.filter(r => isReachedThroughHandle(r.symbol, engine, files) === disclaimed(r)).map(r => r.symbol),
+      ).toEqual([]);
     });
 
     it('every interface method named in a ✅ exposure cell is `supported` for this engine', () => {

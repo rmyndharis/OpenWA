@@ -29,7 +29,11 @@
 #   PLUGIN_STATE_DIR  root whose plugins/ holds the plugin registry and ctx.storage (default: the
 #                     data dir)
 #   BOOTSTRAP_KEY_FILE  where the plaintext admin key goes (default: <data dir>/.api-key)
-#                     These paths resolve through the same layers as the databases.
+#                     These paths resolve through the same layers as the databases. One that
+#                     comes from the archive's .env.generated has to stay in the data dir, unless it
+#                     is the default: the restore stops at one that leads elsewhere, naming the key,
+#                     before it copies anything. Set the key in the environment or ./.env to restore
+#                     outside the data dir.
 #   OPENWA_RESTORE_SNAPSHOT_DIR
 #                     where the safety snapshots go (default: next to the data dir, and next to
 #                     each target outside it); needed when a parent is read-only, as in the
@@ -79,22 +83,36 @@ DATA_DIR="${OPENWA_DATA_DIR:-./data}"
 RESTORE_TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 RESOLVED_CWD="$(pwd -P)"
 
-# Resolve symlinks in the nearest existing ancestor as well as lexical '..' segments. This matters for
-# destructive targets such as /mount-link/sessions: path.resolve alone would not reveal that mount-link
-# points at the workspace, home directory, or another broad protected target.
+# Resolve a path the way the kernel does: left to right, following every symlink and applying each '..' to
+# the physical directory reached so far. Folding '..' lexically first would read <link to />/.. as the link's
+# parent directory when the kernel resolves it to /, and a guard on that value would pass what it must refuse.
+# Each step is the kernel's own realpath (fs.realpathSync.native). The JavaScript one folds a '..' inside a
+# link's target lexically, so a link to <link to />/.. would read as the directory holding it, and it keeps
+# the case and Unicode form as typed on a filesystem that ignores both. The part past the first component
+# that does not exist cannot hold a link, so '..' there is plain text. This matters for destructive targets
+# such as /mount-link/sessions: path.resolve alone would not reveal that mount-link points at the
+# workspace, home directory, or another broad protected target.
 resolve_path() {
   node -e '
     const fs = require("fs");
     const path = require("path");
-    let current = path.resolve(process.argv[1]);
+    const raw = process.argv[1];
+    const absolute = raw.startsWith("/") ? raw : process.cwd() + "/" + raw;
+    let physical = "/";
     const missing = [];
-    while (!fs.existsSync(current)) {
-      const parent = path.dirname(current);
-      if (parent === current) break;
-      missing.unshift(path.basename(current));
-      current = parent;
+    for (const segment of absolute.split("/")) {
+      if (segment === "" || segment === ".") continue;
+      if (missing.length > 0) {
+        if (segment === "..") missing.pop();
+        else missing.push(segment);
+      } else if (segment === "..") {
+        physical = path.dirname(physical);
+      } else {
+        const next = path.join(physical, segment);
+        if (fs.existsSync(next)) physical = fs.realpathSync.native(next);
+        else missing.push(segment);
+      }
     }
-    const physical = fs.existsSync(current) ? fs.realpathSync(current) : current;
     console.log(path.join(physical, ...missing));
   ' "$1"
 }
@@ -110,22 +128,58 @@ case "$DATA_DIR" in
     exit 1
     ;;
 esac
+# The trailing / comes off the prefix wherever a resolved directory is matched as one: the root resolves to
+# "/", "$dir"/* is then //*, which no path matches, and every spelling of / that the list above misses
+# (//, /., /./, /.. or a link to /) would be taken for a directory the workspace is not under. Trimmed, the
+# pattern is /*, so the root is refused here as a parent of the workspace. The / is kept inside the quotes:
+# bash 5 does not match "${dir%/}"/* against anything when the trim leaves nothing, and bash 3 does.
 case "$RESOLVED_CWD/" in
-  "$RESOLVED_DATA_DIR"/*)
+  "${RESOLVED_DATA_DIR%/}/"*)
     log "ERROR: OPENWA_DATA_DIR must not be the workspace or one of its parent directories: $DATA_DIR"
     exit 1
     ;;
 esac
-if [ "$RESOLVED_DATA_DIR" = "$RESOLVED_USER_HOME" ]; then
-  log "ERROR: OPENWA_DATA_DIR must not be the user home directory: $DATA_DIR"
+# The root directory under a name no path comparison recognises is refused by identity: a bind mount of /, or
+# a link whose name is not valid UTF-8, which node reads back with replacement characters so that the
+# resolution above misses it. test -ef compares device and inode, as the kernel does.
+if [ "$DATA_DIR" -ef / ]; then
+  log "ERROR: refusing unsafe OPENWA_DATA_DIR target: $DATA_DIR"
   exit 1
 fi
+# The home directory, or a parent of it, holds every other home under it as the workspace's parent holds the
+# workspace, so the data dir is refused when it is either.
+case "$RESOLVED_USER_HOME/" in
+  "${RESOLVED_DATA_DIR%/}/"*)
+    log "ERROR: OPENWA_DATA_DIR must not be the user home directory or one of its parent directories: $DATA_DIR"
+    exit 1
+    ;;
+esac
 
 # refuse_unwritable <path> <label>: stop in the snapshot phase, before the first database is replaced.
 refuse_unwritable() {
   log "ERROR: cannot write the $2 target: $1"
   log "       nothing has been restored yet; fix its permissions or point the setting at a writable path, then re-run"
   exit 1
+}
+
+# refuse_root_target <path> <label>: a database or key file that resolves to / (//, /., a link to /) is
+# snapshotted with cp -pRH, which copies the whole filesystem into a directory inside it, and a root user can
+# write there. Checked first in the snapshot phase, ahead of the writability test a non-root user stops at.
+refuse_root_target() {
+  if [ "$(resolve_path "$1")" = / ] || [ "$1" -ef / ]; then
+    log "ERROR: refusing to replace broad $2 target: $1"
+    exit 1
+  fi
+}
+
+# refuse_directory_target <path> <label>: a database or key file is a file. Given a directory (the workspace's
+# parent, say, from a typo in a path) the restore copied it whole into the safety snapshot, wrote the file
+# inside it, and then took the search bit off it with the chmod 0600 that follows a database or key file.
+refuse_directory_target() {
+  if [ -d "$1" ]; then
+    log "ERROR: refusing to replace $2 target that is a directory: $1"
+    exit 1
+  fi
 }
 
 replace_tree() {
@@ -139,19 +193,25 @@ replace_tree() {
       ;;
   esac
   resolved_target="$(resolve_path "$target_dir")"
-  if [ "$resolved_target" = "/" ] || [ "$resolved_target" = "$RESOLVED_CWD" ] || [ "$resolved_target" = "$RESOLVED_DATA_DIR" ] || [ "$resolved_target" = "$RESOLVED_USER_HOME" ]; then
+  if [ "$resolved_target" = "/" ] || [ "$target_dir" -ef / ] || [ "$resolved_target" = "$RESOLVED_CWD" ] || [ "$resolved_target" = "$RESOLVED_DATA_DIR" ] || [ "$resolved_target" = "$RESOLVED_USER_HOME" ]; then
     log "ERROR: refusing to replace broad $label target: $target_dir"
     exit 1
   fi
   case "$RESOLVED_CWD/" in
-    "$resolved_target"/*)
+    "${resolved_target%/}/"*)
       log "ERROR: refusing to replace $label target that contains the workspace: $target_dir"
       exit 1
       ;;
   esac
   case "$RESOLVED_DATA_DIR/" in
-    "$resolved_target"/*)
+    "${resolved_target%/}/"*)
       log "ERROR: refusing to replace $label target that contains the data directory: $target_dir"
+      exit 1
+      ;;
+  esac
+  case "$RESOLVED_USER_HOME/" in
+    "${resolved_target%/}/"*)
+      log "ERROR: refusing to replace $label target that contains the user home directory: $target_dir"
       exit 1
       ;;
   esac
@@ -190,7 +250,7 @@ snapshot_external() {
   target="$1"
   external_snapshot=""
   case "$(resolve_path "$target")" in
-    "$RESOLVED_DATA_DIR"/*) return 0 ;;
+    "${RESOLVED_DATA_DIR%/}/"*) return 0 ;;
   esac
   [ -e "$target" ] || return 0
   snapshot_dir="${OPENWA_RESTORE_SNAPSHOT_DIR:-$(dirname "$target")}"
@@ -217,6 +277,8 @@ snapshot_external() {
 restore_db() {
   resolved_db="$(resolve_path "$2")"
   if [ "$PHASE" = snapshot ]; then
+    refuse_root_target "$2" "$3"
+    refuse_directory_target "$2" "$3"
     openwa_writable "$2" || refuse_unwritable "$2" "$3"
     for db in "$2" "$resolved_db"; do
       for sfx in -wal -shm -journal; do
@@ -283,7 +345,9 @@ trap 'rm -rf "$STAGE"' EXIT
 
 log "Extracting $ARCHIVE"
 # Refuse archive path names that could escape STAGE. This restore command accepts archives produced by
-# backup.sh; path validation is an additional traversal guard, not a general untrusted-tar verifier.
+# backup.sh and installs their keys, plugins and configuration as they are; it is not a general
+# untrusted-tar verifier. Where it writes does not rest on the archive, though: a member name that could
+# escape STAGE is refused here, and a path from its .env.generated that leads out of the data dir below.
 while IFS= read -r entry; do
   case "$entry" in
     /* | ../* | */../* | */..)
@@ -294,12 +358,57 @@ while IFS= read -r entry; do
 done < <(tar -tzf "$ARCHIVE")
 tar -xzf "$ARCHIVE" -C "$STAGE"
 
+# backup.sh names the schema of a dump that holds one PostgreSQL schema only (POSTGRES_SCHEMA other than
+# public) in database.schema, and that dump loads differently: into the database the app uses, never in
+# place of it. An archive without the file holds the whole database and restores as it always has. The
+# name goes into the printed SQL, so one the app would refuse stops the restore before anything is written.
+PG_DUMP_SCHEMA=""
+if [ -f "$STAGE/database.sql" ] && [ -f "$STAGE/database.schema" ]; then
+  PG_DUMP_SCHEMA="$(tr -d '\r\n' <"$STAGE/database.schema")"
+  if ! openwa_pg_schema_valid "$PG_DUMP_SCHEMA"; then
+    log "ERROR: the archive's database.schema does not name a PostgreSQL schema the app accepts: $PG_DUMP_SCHEMA"
+    exit 1
+  fi
+fi
+
+# pg_dump from 13.22, 14.19, 15.14, 16.10 and 17.6 on (the image ships 17) opens a plain dump with \restrict, a psql
+# meta-command no older psql knows, and no 12: such a psql stops there with "invalid command \restrict" and loads
+# nothing. The printed load runs the psql on PATH, so one that cannot read this dump stops the restore before
+# anything is written. Only the psql on PATH is checked, read without the load's arguments (Debian's
+# pg_wrapper may pick another client by them); with none, the printed text names the versions.
+psql_reads_restrict() {
+  local re='\) ([0-9]+)\.?([0-9]*)'
+  [[ $1 =~ $re ]] || return 1
+  local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]:-0}"
+  case "$major" in
+    13) [ "$minor" -ge 22 ] ;;
+    14) [ "$minor" -ge 19 ] ;;
+    15) [ "$minor" -ge 14 ] ;;
+    16) [ "$minor" -ge 10 ] ;;
+    17) [ "$minor" -ge 6 ] ;;
+    *) [ "$major" -ge 18 ] ;;
+  esac
+}
+PSQL_RESTRICT=""
+if [ -f "$STAGE/database.sql" ] && grep -q '^\\restrict ' "$STAGE/database.sql"; then
+  PSQL_RESTRICT="psql 13.22, 14.19, 15.14, 16.10, 17.6 or newer (no 12)"
+  if command -v psql >/dev/null 2>&1; then
+    PSQL_VERSION="$(psql --version 2>&1 || true)"
+    if ! psql_reads_restrict "$PSQL_VERSION"; then
+      log "ERROR: the archive's PostgreSQL dump opens with \\restrict, which this psql cannot read: $PSQL_VERSION"
+      log "       the load needs $PSQL_RESTRICT; nothing has been restored yet. Install a newer"
+      log "       PostgreSQL client or put one first on PATH (the image ships 17), then re-run"
+      exit 1
+    fi
+  fi
+fi
+
 # Targets resolve exactly like the app: an explicit environment value, then ./.env, then the
 # dashboard's .env.generated, else the app's ./data defaults under OPENWA_DATA_DIR. They may
-# legitimately live outside it. The archive's .env.generated replaces the target's further down, so
-# when it carries one, that copy is the third layer: the restored app reads its paths, and state
-# placed where the replaced file pointed would never be opened. Resolved before anything is
-# validated or written.
+# legitimately live outside it, where the environment or ./.env says so (see archive_target). The
+# archive's .env.generated replaces the target's further down, so when it carries one, that copy is
+# the third layer: the restored app reads its paths, and state placed where the replaced file
+# pointed would never be opened. Resolved before anything is validated or written.
 if [ -f "$STAGE/.env.generated" ]; then
   OPENWA_GENERATED_ENV="$STAGE/.env.generated"
   log "Paths not set in the environment or ./.env come from the archive's .env.generated."
@@ -337,6 +446,113 @@ for member in sessions baileys media plugin-packages plugin-state; do
     log "       re-take the backup with this version of backup.sh, or extract the archive and restore by hand"
     exit 1
   fi
+done
+
+# The environment and ./.env are the operator's own; the archive's .env.generated is not, yet the paths it names
+# are where the restore empties directories and writes files. Such a path has to lie inside the data dir as the
+# kernel resolves it, unless it is where the app goes without it (a default, which the operator's own links may
+# lead elsewhere). Inside the data dir, two ways out remain closed: a link that does not resolve, which a copy
+# follows wherever it points, and a target inside or around a directory refilled from the archive, whose links
+# are in place before the other target is written. Setting the key in the environment or ./.env lifts this.
+from_archive() {
+  [ "$OPENWA_GENERATED_ENV" = "$STAGE/.env.generated" ] && [ -z "$(printenv "$1" 2>/dev/null || true)" ] &&
+    ! openwa_env_file_value ./.env "$1" >/dev/null 2>&1 &&
+    openwa_env_file_value "$OPENWA_GENERATED_ENV" "$1" >/dev/null 2>&1
+}
+
+refuse_archive_path() {
+  log "ERROR: $1 from the archive's .env.generated $3: $2"
+  log "       nothing has been restored yet; to restore there, set $1 in the environment or ./.env and re-run"
+  exit 1
+}
+
+TARGET_KEYS=()
+TARGET_PATHS=()
+TARGET_KINDS=()
+TARGET_CHOSEN=()
+# archive_target <key> <path> <file|dir> <default>...: note a target the restore replaces, refusing it when the
+# archive's .env.generated chose it and it leads out of the data dir.
+archive_target() {
+  local key="$1" path="$2" kind="$3" resolved chosen=0 p
+  shift 3
+  resolved="$(resolve_path "$path")"
+  if from_archive "$key"; then
+    chosen=1
+    for p in "$@"; do
+      [ "$resolved" != "$(resolve_path "$p")" ] || chosen=0
+    done
+  fi
+  if [ "$chosen" -eq 1 ]; then
+    case "$resolved" in
+      "${RESOLVED_DATA_DIR%/}/"?*) ;;
+      *) refuse_archive_path "$key" "$path" "is not inside the data directory" ;;
+    esac
+    p="$path"
+    while [ ! -e "$p" ]; do
+      [ ! -L "$p" ] || refuse_archive_path "$key" "$path" "goes through a link that does not resolve ($p)"
+      p="$(dirname "$p")"
+    done
+  fi
+  TARGET_KEYS+=("$key")
+  TARGET_PATHS+=("$resolved")
+  TARGET_KINDS+=("$kind")
+  TARGET_CHOSEN+=("$chosen")
+}
+if [ -f "$STAGE/main.sqlite" ]; then
+  archive_target MAIN_DATABASE_NAME "$MAIN_DB" file "${DATA_DIR%/}/main.sqlite"
+fi
+if [ -f "$STAGE/openwa.sqlite" ]; then
+  archive_target DATABASE_NAME "$DATA_DB" file "${DATA_DIR%/}/openwa.sqlite"
+fi
+if [ -d "$STAGE/sessions" ]; then
+  archive_target SESSION_DATA_PATH "$SESSIONS_DIR" dir "$DATA_DIR/sessions"
+fi
+if [ -d "$STAGE/baileys" ]; then
+  archive_target BAILEYS_AUTH_DIR "$BAILEYS_DIR" dir "$DATA_DIR/baileys"
+fi
+# A leftover ./uploads stays where the app itself keeps media (openwa_media_dir), so it counts as a default.
+if [ -d "$STAGE/media" ]; then
+  archive_target STORAGE_LOCAL_PATH "$MEDIA_DIR" dir "$DATA_DIR/media" ./uploads
+fi
+if [ -d "$STAGE/plugin-packages" ]; then
+  archive_target PLUGINS_DIR "$PLUGIN_PACKAGES_DIR" dir "$DATA_DIR/plugins"
+fi
+if [ -d "$STAGE/plugin-state" ]; then
+  archive_target PLUGIN_STATE_DIR "$PLUGIN_STATE_DIR" dir "$DATA_DIR/plugins"
+fi
+if [ -f "$STAGE/.api-key" ]; then
+  archive_target BOOTSTRAP_KEY_FILE "$ADMIN_KEY_FILE" file "$DATA_DIR/.api-key"
+fi
+# Written into the data dir after the trees, at fixed names, so no key moves them. A refilled tree can still
+# stand on one of them, and a copy onto a directory goes into it, through any link the archive put there.
+for fixed in .env.generated database.sql; do
+  if [ -f "$STAGE/$fixed" ]; then
+    TARGET_KEYS+=("$fixed")
+    TARGET_PATHS+=("$(resolve_path "$DATA_DIR/$fixed")")
+    TARGET_KINDS+=(file)
+    TARGET_CHOSEN+=(0)
+  fi
+done
+i=0
+while [ "$i" -lt "${#TARGET_KEYS[@]}" ]; do
+  j=0
+  while [ "$j" -lt "${#TARGET_KEYS[@]}" ]; do
+    if [ "${TARGET_KINDS[j]}" = dir ] && [ "${TARGET_CHOSEN[i]}${TARGET_CHOSEN[j]}" != 00 ]; then
+      where=""
+      case "${TARGET_PATHS[i]}" in
+        "${TARGET_PATHS[j]%/}/"?*) where=inside ;;
+        "${TARGET_PATHS[j]}") [ "${TARGET_KINDS[i]}" != file ] || where=on ;;
+      esac
+      if [ -n "$where" ]; then
+        key="${TARGET_KEYS[i]}"
+        [ "${TARGET_CHOSEN[i]}" -eq 1 ] || key="${TARGET_KEYS[j]}"
+        refuse_archive_path "$key" "${TARGET_PATHS[i]}" \
+          "puts the ${TARGET_KEYS[i]} target $where the ${TARGET_KEYS[j]} directory, which is refilled from the archive"
+      fi
+    fi
+    j=$((j + 1))
+  done
+  i=$((i + 1))
 done
 
 # A backup taken without sqlite3 .backup carries this marker: the database snapshots were
@@ -445,6 +661,8 @@ restore_targets() {
 # with the other targets: it may be the only plaintext copy of a key the replaced main.sqlite accepts.
 restore_admin_key() {
   if [ "$PHASE" = snapshot ]; then
+    refuse_root_target "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
+    refuse_directory_target "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
     openwa_writable "$ADMIN_KEY_FILE" || refuse_unwritable "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
     snapshot_external "$ADMIN_KEY_FILE"
     return
@@ -476,9 +694,29 @@ fi
 
 if [ -f "$STAGE/database.sql" ]; then
   cp "$STAGE/database.sql" "$DATA_DIR/database.sql"
-  log "Postgres dump present: load it into an EMPTY database, as docs/11-operational-runbooks.md"
-  log "(Restore from Backup, step 3) shows for the built-in openwa-postgres container. For an external"
-  log "server, with DATABASE_URL set to your own URL for that database:"
+  if [ -n "$PG_DUMP_SCHEMA" ]; then
+    log "Postgres dump of schema $PG_DUMP_SCHEMA (POSTGRES_SCHEMA) present. It holds that schema only: load it into"
+    log "the database the app uses, without renaming or recreating it, as the app's role, or a member of it, that may"
+    log "create schemas and extensions there and, when pg_trgm and unaccent live in that schema, owns them (the role"
+    log "that created them: the app's own, or the one an earlier load ran as), or as a superuser. The same goes for"
+    log "pgcrypto when the dump carries it, which it does only when pgcrypto lived in that schema (PostgreSQL 12 or"
+    log "older, where the app creates it there for its ids). When another role owns the schema, only a superuser can"
+    log "load it: the dump gives what is in it to the app's role before it grants that role CREATE on the schema."
+    log "After ALTER SCHEMA $PG_DUMP_SCHEMA OWNER TO <the app's role>, a new backup loads as that role. Other schemas"
+    log "in that database are left alone, and a schema $PG_DUMP_SCHEMA"
+    log "already in it is first moved aside as ${PG_DUMP_SCHEMA}_pre_restore_<time>, rows and all; pg_trgm and"
+    log "unaccent, when they live in it, are dropped from the copy with its trigram index (idx_messages_body_trgm), and"
+    log "such a pgcrypto with the copy's id column defaults, so the dump can create them again. A load that"
+    log "stops at 'cannot drop extension' means another schema uses them, and its DETAIL lines name what. When that"
+    log "is another OpenWA deployment's idx_messages_body_trgm, drop that index and load again: that deployment's"
+    log "contains search then reads its whole messages table until its next start builds the index again, and"
+    log "answers 501 while it builds. Drop anything else named first and recreate it after the load. One"
+    log "transaction: a load that fails changes nothing. With DATABASE_URL set to your own URL for that database:"
+  else
+    log "Postgres dump present: load it into an EMPTY database, as docs/11-operational-runbooks.md"
+    log "(Restore from Backup, step 3) shows for the built-in openwa-postgres container. For an external"
+    log "server, with DATABASE_URL set to your own URL for that database:"
+  fi
   # psql defaults to sslmode=prefer, which falls back to plaintext and takes any certificate, so the
   # printed command asks for the TLS mode the app uses. The restore is already done: a TLS line the
   # scripts cannot parse leaves the check on rather than stopping it.
@@ -495,7 +733,7 @@ if [ -f "$STAGE/database.sql" ]; then
       fi
     fi
   fi
-  log "  sed '/^SET transaction_timeout = 0;\$/d' $DATA_DIR/database.sql | ${PSQL_SSL}psql -v ON_ERROR_STOP=1 \"\$DATABASE_URL\""
+  log "  sed '/^SET transaction_timeout = 0;\$/d' $DATA_DIR/database.sql | ${PSQL_SSL}psql --single-transaction -v ON_ERROR_STOP=1 \"\$DATABASE_URL\""
   if [ -n "$PSQL_UNREAD" ]; then
     log "($PSQL_UNREAD could not be read from the configuration, so the command takes the stricter setting)"
   fi
@@ -505,6 +743,9 @@ if [ -f "$STAGE/database.sql" ]; then
     log "and a system CA store, which the image lacks)"
   fi
   log "(sed drops a setting this image's pg_dump 17 writes and PostgreSQL 16 rejects)"
+  if [ -n "$PSQL_RESTRICT" ]; then
+    log "(the load needs $PSQL_RESTRICT: the dump opens with \\restrict, where an older one stops and loads nothing)"
+  fi
 fi
 
 log "Restore complete. Start the app and confirm an existing API key still authenticates."

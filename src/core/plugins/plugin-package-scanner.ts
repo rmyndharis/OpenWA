@@ -10,7 +10,7 @@ import {
   warnUnauthenticatedIngressRoutes,
   warnUnsignedTimestampRoutes,
 } from './plugin.interfaces';
-import { validatePluginManifest } from './plugin-manifest';
+import { dropMalformedConfigFields, validatePluginManifest } from './plugin-manifest';
 import { PluginStorageService } from './plugin-storage.service';
 import { seedConfigDefaults } from './config-defaults.util';
 import { resolvePluginMainPath, pluginUpdateStagingDirName } from './plugin-paths';
@@ -76,17 +76,15 @@ export class PluginPackageScanner {
   ) {}
 
   /**
-   * The loader's onModuleInit: load built-in plugins (programmatic registration point), then every
-   * user plugin package found on disk — the configured directory first, the legacy tree in addition —
+   * The loader's onModuleInit: load every user plugin package found on disk — the configured directory first, the legacy tree in addition —
    * and report registry entries whose code the scan did not find.
    */
   scanAtBoot(): void {
-    // Load built-in plugins first (synchronous registration)
-    this.loadBuiltInPlugins();
-
-    // Then load user plugins if directory exists
+    // Packages this scan found on disk but could not load, already logged with their reason.
+    const failedLoads = new Set<string>();
+    // User plugins, if the directory exists. Built-in plugins register themselves programmatically.
     if (fs.existsSync(this.pluginsDir)) {
-      this.loadPluginsFromDirectory(this.pluginsDir);
+      this.loadPluginsFromDirectory(this.pluginsDir, failedLoads);
     }
 
     // COMPATIBILITY PATH — hosts that installed plugins before the package dir moved under <dataDir>.
@@ -106,7 +104,7 @@ export class PluginPackageScanner {
           `volume is destroyed on the next container recreate.`,
         { action: 'plugins_legacy_dir', legacyDir: this.legacyPluginsDir, pluginsDir: this.pluginsDir },
       );
-      this.loadPluginsFromDirectory(this.legacyPluginsDir);
+      this.loadPluginsFromDirectory(this.legacyPluginsDir, failedLoads);
     }
 
     this.logger.log(`Loaded ${this.plugins.size} plugins`, {
@@ -114,7 +112,7 @@ export class PluginPackageScanner {
       count: this.plugins.size,
     });
 
-    this.warnOnRegistryEntriesWithoutCode();
+    this.warnOnRegistryEntriesWithoutCode(failedLoads);
   }
 
   /**
@@ -125,30 +123,26 @@ export class PluginPackageScanner {
    * makes the divergence self-diagnosing.
    *
    * Built-ins are excluded: they are registered programmatically at bootstrap (after this runs) and
-   * never have a package directory at all.
+   * never have a package directory at all. So is a package that is there but failed to load: its code
+   * is not missing, and a reinstall is refused for the reason already logged.
    */
-  private warnOnRegistryEntriesWithoutCode(): void {
-    const orphaned = this.pluginStorage.getAllEntries().filter(e => !e.builtIn && !this.plugins.has(e.id));
+  private warnOnRegistryEntriesWithoutCode(failedLoads: ReadonlySet<string>): void {
+    const orphaned = this.pluginStorage
+      .getAllEntries()
+      .filter(e => !e.builtIn && !this.plugins.has(e.id) && !failedLoads.has(e.id));
     if (orphaned.length === 0) return;
 
     const missingDir = fs.existsSync(this.pluginsDir) ? '' : ' (that directory does not exist)';
     this.logger.warn(
       `The plugin registry lists ${orphaned.length} installed plugin(s) with no loaded code in ` +
-        `${this.pluginsDir}${missingDir}: ${orphaned.map(e => e.id).join(', ')}. Their config and stored ` +
-        `data are intact — reinstall them, or set PLUGINS_DIR to the directory that holds their code.`,
+        `${this.pluginsDir}${missingDir}: ${orphaned.map(e => e.id).join(', ')}. Reinstall them, or set ` +
+        `PLUGINS_DIR to the directory that holds their code. Their config and stored data are kept, except ` +
+        `for an entry an unfinished uninstall left behind, which holds no config; repeat that uninstall.`,
       { action: 'plugin_registry_without_code', count: orphaned.length, pluginsDir: this.pluginsDir },
     );
   }
 
-  private loadBuiltInPlugins(): void {
-    // Built-in plugins are registered programmatically
-    // This will be used by Phase 4 to register engine plugins
-    this.logger.debug('Built-in plugins loading point (Phase 4)', {
-      action: 'builtin_plugins_init',
-    });
-  }
-
-  private loadPluginsFromDirectory(dir: string): void {
+  private loadPluginsFromDirectory(dir: string, failedLoads: Set<string>): void {
     // Reconcile any interrupted-update leftovers BEFORE scanning, so a crash mid-swap can't make a
     // plugin silently vanish while its registry entry still claims it is installed.
     this.recoverInterruptedUpdates(dir);
@@ -183,10 +177,14 @@ export class PluginPackageScanner {
               `or add a manifest.json if it is meant to load.`,
             { pluginPath, action: 'manifest_missing' },
           );
-          this.pluginStorage.deletePluginEntry(entry.name);
-          this.logger.log(`Pruned stale registry entry for removed built-in plugin: ${entry.name}`, {
-            action: 'registry_ghost_pruned',
-          });
+          try {
+            this.pluginStorage.deletePluginEntry(entry.name);
+            this.logger.log(`Pruned stale registry entry for removed built-in plugin: ${entry.name}`, {
+              action: 'registry_ghost_pruned',
+            });
+          } catch {
+            // Logged by the storage service; the entry is pruned on a later boot. A disk fault must not stop the scan.
+          }
           continue;
         }
 
@@ -207,7 +205,8 @@ export class PluginPackageScanner {
         } else if (registryEntry) {
           this.logger.warn(
             `Plugin ${entry.name} is installed but its code is missing from ${pluginPath} (no manifest.json) ` +
-              `while its stored data is still there. Reinstall it — its config and stored data are kept. ` +
+              `while its stored data is still there. Reinstall it: its config and stored data are kept, unless ` +
+              `an uninstall stopped part-way and left the entry with no config, in which case repeat that uninstall. ` +
               `Plugin code kept outside the data volume does not survive a container recreate.`,
             { pluginPath, pluginId: entry.name, action: 'plugin_code_missing' },
           );
@@ -239,6 +238,14 @@ export class PluginPackageScanner {
         // re-enables it (ensureRegistryEntry resets the status on a successful load). No-op when
         // no entry exists (a hand-placed dir that never loaded).
         this.pluginStorage.setPluginStatus(entry.name, PluginStatus.ERROR);
+        // Keyed by folder and by manifest id, which differ for a hand-placed folder.
+        failedLoads.add(entry.name);
+        try {
+          const { id } = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { id?: unknown };
+          if (typeof id === 'string') failedLoads.add(id);
+        } catch {
+          // A manifest that does not parse names no id; the folder name stands for it.
+        }
       }
     }
   }
@@ -309,6 +316,7 @@ export class PluginPackageScanner {
     // manifest the installer would have rejected loads anyway and only fails (or worse, runs
     // unexpected code) at enable time.
     validatePluginManifest(manifest);
+    dropMalformedConfigFields(manifest.configSchema);
 
     // Anchor `main` inside THIS on-disk directory: the lexical check above is forward-slash only,
     // so a platform-separator escape (e.g. Windows-style `..\x`) would slip past it — resolve and

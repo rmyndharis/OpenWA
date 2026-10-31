@@ -1,6 +1,3 @@
-// archiver v8 is ESM-only (pulled in transitively via @Global StorageModule); stub for ts-jest CJS.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -94,6 +91,42 @@ describe('Chat-restricted API keys (e2e)', () => {
   it('admits the allowed chat', async () => {
     expect((await get(`/api/sessions/${sessionId}/contacts/${ALLOWED}`, chatKey)).status).not.toBe(403);
   });
+
+  // Default deny answers 403 on the key's OWN chat as well when a mark is lost, and a refusal on another
+  // chat is a 403 either way, so the cases above cannot tell a marked route from an unmarked one. Each row
+  // shows both halves: the allowed chat gets past the fence, and another chat is refused by the chat
+  // check (not the blanket refusal), which also shows the route exists and the fence reads that field.
+  const admitsAllowedAndRefusesOther = async (route: string, body: (chatId: string) => object) => {
+    const send = (chatId: string) =>
+      request(app.getHttpServer())
+        .post(`/api/sessions/${sessionId}/${route}`)
+        .set('X-API-Key', chatKey)
+        .send(body(chatId));
+
+    expect((await send(ALLOWED)).status).not.toBe(403);
+
+    const refused = await send(OTHER).expect(403);
+    expect((refused.body as { message: string }).message).toBe('API key not authorized for this chat');
+  };
+
+  it.each<[string, (chatId: string) => object]>([
+    ['messages/send-text', chatId => ({ chatId, text: 'hi' })],
+    ['messages/reply', chatId => ({ chatId, quotedMessageId: 'wamid.quoted', text: 'hi' })],
+    ['messages/send-bulk', chatId => ({ messages: [{ chatId, text: 'hi' }] })],
+    ['messages/react', chatId => ({ chatId, messageId: 'wamid.target', emoji: 'ok' })],
+    ['chats/read', chatId => ({ chatId })],
+    ['chats/mute', chatId => ({ chatId, muteUntil: 1_800_000_000_000 })],
+  ])('POST %s admits the allowed chat and refuses another', admitsAllowedAndRefusesOther);
+
+  // Forward names two chats and the fence reads both. With one chat in both fields, a guard that stopped
+  // reading either field would still pass, so each row varies one field and keeps the allowed chat in the
+  // other: a chat outside the allowlist as the source, and as the destination.
+  it.each<[string, (chatId: string) => object]>([
+    ['fromChatId', chatId => ({ fromChatId: chatId, toChatId: ALLOWED, messageId: 'wamid.source' })],
+    ['toChatId', chatId => ({ fromChatId: ALLOWED, toChatId: chatId, messageId: 'wamid.source' })],
+  ])('POST messages/forward admits the allowed chat and refuses another in %s', (_field, body) =>
+    admitsAllowedAndRefusesOther('messages/forward', body),
+  );
 
   it('reads stored messages only for a chat it names', async () => {
     const path = `/api/sessions/${sessionId}/messages`;

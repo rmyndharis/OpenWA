@@ -111,11 +111,13 @@ class MessagesResource:
     def history(
         self, session_id: str, chat_id: str, query: MessageHistoryQuery | None = None
     ) -> List[ChatHistoryMessage]:
+        """Read a chat's message history live from WhatsApp. whatsapp-web.js only; Baileys answers 501."""
         return self._http.request(
             "GET", f"/api/sessions/{quote_segment(session_id)}/messages/{quote_segment(chat_id)}/history", query=query
         )
 
     def reactions(self, session_id: str, chat_id: str, message_id: str) -> List[ReactionRecord]:
+        """Get the reactions on a message. whatsapp-web.js only; Baileys answers 501."""
         return self._http.request(
             "GET", f"/api/sessions/{quote_segment(session_id)}/messages/{quote_segment(chat_id)}/{quote_segment(message_id)}/reactions"
         )

@@ -1,4 +1,5 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
+import { assertPgcryptoOnSearchPath } from '../pgcrypto-search-path';
 
 /**
  * Adds the `gen_random_uuid()::varchar` DEFAULT to the two Integration Fabric tables whose `id` columns
@@ -48,6 +49,7 @@ export class AddIntegrationUuidDefaults1782300000000 implements MigrationInterfa
           );
         }
       }
+      await assertPgcryptoOnSearchPath(queryRunner, versionNum);
     }
 
     for (const table of this.tables) {

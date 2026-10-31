@@ -1,7 +1,12 @@
-import { BadRequestException, Injectable, OnApplicationShutdown, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  OnApplicationShutdown,
+  OnModuleInit,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { isUUID } from 'class-validator';
 import { Repository } from 'typeorm';
 import { createLogger } from '../../common/services/logger.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -15,11 +20,15 @@ import {
   FfmpegSpawnError,
   killRunningConversions,
   probeFfmpeg,
+  removeStaleConversionDirs,
   runFfmpeg,
   videoEncodeArgs,
   voiceEncodeArgs,
 } from './ffmpeg';
 import type { ConvertMediaDto } from './dto/convert-media.dto';
+
+/** Youngest leftover conversion directory the start-up sweep removes. */
+const STALE_CONVERSION_DIR_MIN_AGE_MS = 60 * 60 * 1000;
 
 /** What a conversion produced, in the same url-or-base64 vocabulary the send endpoints speak. */
 export interface ConvertedMedia {
@@ -32,7 +41,7 @@ export interface ConvertedMedia {
 }
 
 @Injectable()
-export class MediaConversionService implements OnApplicationShutdown {
+export class MediaConversionService implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = createLogger('MediaConversionService');
   /**
    * Result of the binary probe. Only a successful probe is kept: a failure can be a timeout or a
@@ -46,6 +55,7 @@ export class MediaConversionService implements OnApplicationShutdown {
    * request holds only its own body, and at most the cap's worth of inputs sit in heap at once.
    */
   private readonly ffmpegGate: ConcurrencyLimiter;
+  private readonly shutdown = new AbortController();
 
   constructor(
     private readonly configService: ConfigService,
@@ -58,11 +68,25 @@ export class MediaConversionService implements OnApplicationShutdown {
   }
 
   /**
+   * Clear what a previous process killed mid-conversion left in the temp dir. Not awaited, so a slow or
+   * failing temp dir never holds up the boot. Twice the conversion timeout, and never under an hour, is older
+   * than any conversion still running under the same settings in a process that shares the temp dir.
+   */
+  onModuleInit(): void {
+    const timeoutMs = this.configService.get<number>('mediaConversion.timeoutMs', 60_000);
+    void removeStaleConversionDirs(Math.max(STALE_CONVERSION_DIR_MIN_AGE_MS, 2 * timeoutMs), (message, error) =>
+      this.logger.warn(message, { error: String(error) }),
+    );
+  }
+
+  /**
    * Kill the detached ffmpeg groups still running. Nest's own signal handler re-raises the signal
    * once its hooks finish, so the process dies from it without ever emitting `exit`; this hook runs
    * on that path and on `app.close()`.
    */
   onApplicationShutdown(): void {
+    this.shutdown.abort();
+    this.ffmpegGate.close();
     killRunningConversions();
   }
 
@@ -85,8 +109,10 @@ export class MediaConversionService implements OnApplicationShutdown {
 
   /** Whether conversion is both switched on and actually runnable on this host. */
   async isAvailable(): Promise<boolean> {
-    if (!this.configService.get<boolean>('mediaConversion.enabled', false)) return false;
-    return this.probeOnce();
+    if (this.shutdown.signal.aborted || !this.configService.get<boolean>('mediaConversion.enabled', false))
+      return false;
+    const available = await this.probeOnce();
+    return available && !this.shutdown.signal.aborted;
   }
 
   private async convert(
@@ -96,6 +122,7 @@ export class MediaConversionService implements OnApplicationShutdown {
     encodeArgs: string[],
     outputMimetype: string,
   ): Promise<ConvertedMedia> {
+    this.assertRunning();
     await this.assertAvailable();
 
     try {
@@ -103,8 +130,11 @@ export class MediaConversionService implements OnApplicationShutdown {
       // base64 body, held for each request that had not yet reached a slot, would stack 50 MiB a request
       // in heap while the gate answers 503 only after the downloads finished.
       const { input, output } = await this.ffmpegGate.run(async () => {
+        this.assertRunning();
         const loaded = await this.resolveInput(sessionId, dto);
+        this.assertRunning();
         const converted = await runFfmpeg(loaded, 'bin', outputExtension, encodeArgs, {
+          signal: this.shutdown.signal,
           ffmpegPath: this.configService.get<string>('mediaConversion.ffmpegPath', 'ffmpeg'),
           timeoutMs: this.configService.get<number>('mediaConversion.timeoutMs', 60_000),
           maxOutputBytes: this.configService.get<number>('mediaConversion.maxOutputBytes', 50 * 1024 * 1024),
@@ -114,6 +144,7 @@ export class MediaConversionService implements OnApplicationShutdown {
       this.logger.log('Media converted', { inputBytes: input.length, outputBytes: output.length, outputMimetype });
       return { base64: output.toString('base64'), mimetype: outputMimetype, bytes: output.length };
     } catch (error) {
+      this.assertRunning();
       if (error instanceof Error && error.message === 'ConcurrencyLimiter queue full') {
         throw new ServiceUnavailableException('Media conversion is busy — retry shortly');
       }
@@ -149,21 +180,21 @@ export class MediaConversionService implements OnApplicationShutdown {
     if (this.engines.has(sessionId)) {
       return this.engines.proxyUrl(sessionId);
     }
-    // Ids are generated uuids, so anything else matches no row; asking Postgres would raise on the
-    // cast instead of answering "no session".
-    if (!isUUID(sessionId)) {
-      return undefined;
-    }
+    // Ids are varchar, and a restored session can keep a safe non-uuid id. A NUL cannot be bound by
+    // PostgreSQL, so it answers "no session" instead of raising.
+    if (sessionId.includes('\0')) return undefined;
     const session = await this.sessionRepository.findOne({ where: { id: sessionId }, select: { proxyUrl: true } });
     return session?.proxyUrl ?? undefined;
   }
 
   /** Read the caller's media into memory, honouring the same caps and SSRF guard as a send. */
   private async resolveInput(sessionId: string, dto: ConvertMediaDto): Promise<Buffer> {
-    if (dto.base64) {
+    // Stripped first: a bare `data:...;base64,` prefix holds no bytes, so a url beside it is used.
+    const base64 = stripBase64DataUri(dto.base64);
+    if (base64) {
       // Checked before decoding, so an oversized payload is refused without allocating it.
-      assertBase64WithinMediaCap(dto.base64);
-      const data = Buffer.from(stripBase64DataUri(dto.base64) ?? '', 'base64');
+      assertBase64WithinMediaCap(base64);
+      const data = Buffer.from(base64, 'base64');
       if (data.length === 0) throw new BadRequestException('base64 did not decode to any bytes');
       return data;
     }
@@ -193,6 +224,12 @@ export class MediaConversionService implements OnApplicationShutdown {
       }
     }
     throw new BadRequestException('Either url or base64 must be provided');
+  }
+
+  private assertRunning(): void {
+    if (this.shutdown.signal.aborted) {
+      throw new ServiceUnavailableException('Media conversion is shutting down');
+    }
   }
 
   private async assertAvailable(): Promise<void> {

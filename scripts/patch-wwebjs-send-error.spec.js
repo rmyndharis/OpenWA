@@ -102,6 +102,7 @@ test('fails the CLI on an unknown shape without --best-effort, and only warns wi
   const script = path.join(root, 'scripts', 'patch-wwebjs-send-error.js');
   fs.mkdirSync(path.dirname(script));
   fs.copyFileSync(path.join(__dirname, 'patch-wwebjs-send-error.js'), script);
+  fs.copyFileSync(path.join(__dirname, 'atomic-write.js'), path.join(path.dirname(script), 'atomic-write.js'));
   const client = path.join(root, 'node_modules', 'whatsapp-web.js', 'src', 'Client.js');
   fs.mkdirSync(path.dirname(client), { recursive: true });
   fs.writeFileSync(client, 'not the shape\n');

@@ -97,7 +97,7 @@ describe('ConversationMappingService', () => {
     // lid 111 -> phone 628999. A 1:1 chat's neutral id flips from `111@lid` to `628999@c.us` once the
     // mapping is learned, so a takeover recorded under either form has to govern the other. The store is
     // real but its cache is empty, as for a mapping past the preload cap or evicted: only the table has it.
-    const table = [{ lid: '111', phone: '628999' }];
+    const table = [{ lid: '111', phone: '628999', isReported: true }];
     const lidStore = new LidMappingStoreService({
       find: ({ where }: { where: { lid?: FindOperator<string>; phone?: FindOperator<string> } }) =>
         Promise.resolve(table.filter(r => inList(r.lid, where.lid) && inList(r.phone, where.phone))),
@@ -133,6 +133,20 @@ describe('ConversationMappingService', () => {
     it('does not match another person', async () => {
       await human('111@lid');
       expect(await service.findHandoverForChat('sess-1', '628000@c.us')).toBeNull();
+    });
+
+    it('does not share takeover decisions through an unreported phone alias', async () => {
+      table[0].isReported = false;
+      try {
+        await human('111@lid');
+        expect(await service.findHandoverForChat('sess-1', '628999@c.us')).toBeNull();
+        await bot('628999@c.us', 'convC');
+        expect((await row('628999@c.us'))!.handoverState).toBe('bot');
+        await service.setHandover((await row('628999@c.us'))!.id, 'bot');
+        expect((await row('111@lid'))!.handoverState).toBe('human');
+      } finally {
+        table[0].isReported = true;
+      }
     });
 
     const row = (chatId: string) =>
@@ -174,7 +188,7 @@ describe('ConversationMappingService', () => {
     it('a hand-back reaches a row whose form was paired after the takeover', async () => {
       await human('111@lid');
       await bot('628999@c.us', 'convC'); // inherits the takeover
-      table.push({ lid: '333', phone: '628999' }); // another lid for the number is learned meanwhile
+      table.push({ lid: '333', phone: '628999', isReported: true }); // another lid for the number is learned meanwhile
       try {
         await service.setHandover((await row('628999@c.us'))!.id, 'bot');
         expect((await row('111@lid'))!.handoverState).toBe('bot');
@@ -185,7 +199,7 @@ describe('ConversationMappingService', () => {
     });
 
     it('a decision on one lid of a number reaches its sibling lid and the phone-form row', async () => {
-      table.push({ lid: '222', phone: '628999' });
+      table.push({ lid: '222', phone: '628999', isReported: true });
       try {
         await bot('111@lid', 'convB');
         await bot('222@lid', 'convD');

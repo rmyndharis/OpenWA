@@ -98,10 +98,9 @@ class MessagesResource
     /** @return array<string,mixed> */
     public function sendTemplate(string $sessionId, array $body, ?string $idempotencyKey = null): array
     {
-        // vars is a map: an empty PHP array would serialize as a JSON list [] and be rejected by the
-        // gateway's object validation. Cast the empty map to stdClass so it encodes as {}.
-        if (isset($body['vars']) && $body['vars'] === []) {
-            $body['vars'] = new \stdClass();
+        // Encode maps as objects without assigning through caller-held references.
+        if (isset($body['vars']) && is_array($body['vars'])) {
+            $body = array_merge($body, ['vars' => (object) $body['vars']]);
         }
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-template", [], $body, $idempotencyKey);
     }
@@ -165,6 +164,7 @@ class MessagesResource
     }
 
     /**
+     * Read a chat's message history live from WhatsApp. whatsapp-web.js only; Baileys answers 501.
      * Poll messages include poll.name, poll.options, and poll.allowMultipleAnswers when available.
      * @param array<string,mixed> $query
      * @return array<int,array<string,mixed>>
@@ -174,7 +174,11 @@ class MessagesResource
         return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/{$this->http->encodeSegment($chatId)}/history", $query) ?? [];
     }
 
-    /** @return array<int,array<string,mixed>> */
+    /**
+     * Get the reactions on a message. whatsapp-web.js only; Baileys answers 501.
+     *
+     * @return array<int,array<string,mixed>>
+     */
     public function reactions(string $sessionId, string $chatId, string $messageId): array
     {
         return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/{$this->http->encodeSegment($chatId)}/{$this->http->encodeSegment($messageId)}/reactions") ?? [];
@@ -238,12 +242,19 @@ class MessagesResource
     /** @return array<string,mixed> */
     public function sendBulk(string $sessionId, array $body): array
     {
-        // variables inside each item is a map: an empty PHP array would serialize as a JSON list []
-        // and be rejected by the gateway's object validation, like headers/vars on the other sends.
-        foreach ($body['messages'] ?? [] as $i => $item) {
-            if (is_array($item) && isset($item['variables']) && $item['variables'] === []) {
-                $body['messages'][$i]['variables'] = new \stdClass();
-            }
+        // Rebuild each array layer so referenced maps, items and lists stay untouched.
+        if (isset($body['messages']) && is_array($body['messages'])) {
+            $body = array_merge($body, [
+                'messages' => array_map(static function ($item) {
+                    if (is_array($item) && isset($item['variables']) && is_array($item['variables'])) {
+                        return array_merge($item, ['variables' => (object) $item['variables']]);
+                    }
+                    return $item;
+                }, $body['messages']),
+            ]);
+        }
+        if (isset($body['options']) && is_array($body['options'])) {
+            $body = array_merge($body, ['options' => (object) $body['options']]);
         }
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-bulk", [], $body);
     }

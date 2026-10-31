@@ -38,6 +38,8 @@
     "optional": "可选",
     "fieldTooLong": "最多 {{max}} 个字符（当前 {{count}} 个）。",
     "language": "语言",
+    "changeLanguage": "切换语言",
+    "joinedName": "{{first}}，{{second}}",
     "back": "返回",
     "next": "下一步",
     "previous": "上一步",
@@ -62,6 +64,7 @@
     "dashboard": "仪表盘",
     "sessions": "会话",
     "chats": "聊天",
+    "numberChecker": "号码检查",
     "webhooks": "Webhooks",
     "templates": "模板",
     "apiKeys": "API 密钥",
@@ -71,6 +74,7 @@
     "logs": "日志"
   },
   "chats": {
+    "edited": "已编辑",
     "media": {
       "location": "位置",
       "call": "通话",
@@ -169,6 +173,16 @@
       "backgroundColor": "背景颜色",
       "font": "字体",
       "fontDefault": "默认",
+      "fonts": {
+        "system": "系统",
+        "systemText": "系统文本",
+        "script": "手写体",
+        "bold": "粗体",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "或",
       "post": "发布",
       "posted": "状态已发布",
@@ -191,7 +205,8 @@
       "delete": "删除消息失败",
       "clickButton": "点击按钮失败",
       "fileTooLarge": "文件过大（最大 18 MB）",
-      "searchHitSessionNotReady": "此消息所属的会话未连接"
+      "searchHitSessionNotReady": "此消息所属的会话未连接",
+      "searchHitChatNotListed": "在列表中找不到此消息所属的聊天"
     },
     "loadMessagesError": "无法加载消息。请检查服务器日志。",
     "messageStatus": {
@@ -200,6 +215,144 @@
       "delivered": "已送达",
       "read": "已读",
       "failed": "发送失败"
+    },
+    "today": "今天",
+    "switchSession": "切换会话",
+    "searchMessages": "搜索消息",
+    "clearSearch": "清除搜索",
+    "filters": {
+      "label": "筛选聊天",
+      "all": "全部",
+      "unread": "未读",
+      "direct": "单聊",
+      "groups": "群组",
+      "unknown": "未知"
+    },
+    "noFilterResults": "没有符合此筛选条件的聊天",
+    "contactInfo": "联系人信息",
+    "moreActions": "更多操作",
+    "copyChatId": "复制聊天 ID",
+    "chatIdCopied": "已复制聊天 ID",
+    "copyFailed": "无法复制到剪贴板",
+    "closeChat": "关闭聊天",
+    "phone": "电话号码",
+    "chatId": "聊天 ID",
+    "newChat": {
+      "title": "新聊天",
+      "searchPlaceholder": "搜索姓名或带国家代码的号码",
+      "startWithNumber": "开始与 {{number}} 聊天",
+      "contacts": "联系人",
+      "noContacts": "未找到联系人",
+      "loadingContacts": "正在加载联系人...",
+      "contactsError": "无法加载联系人",
+      "checking": "正在检查号码...",
+      "notOnWhatsApp": "{{number}} 未注册 WhatsApp",
+      "checkFailed": "无法检查该号码",
+      "numberHint": "请输入带国家代码的号码，例如 +86 138 0013 8000"
+    },
+    "newGroup": {
+      "title": "新建群组",
+      "namePlaceholder": "群组名称",
+      "participantsPlaceholder": "搜索参与者或输入号码",
+      "addNumber": "添加 {{number}}",
+      "selected": "已选择 {{count}} 个",
+      "create": "创建群组",
+      "created": "已创建群组“{{name}}”",
+      "createFailed": "无法创建群组",
+      "removeParticipant": "移除 {{name}}"
+    },
+    "sessionPicker": {
+      "searchPlaceholder": "搜索会话...",
+      "noMatch": "没有匹配的会话",
+      "addTitle": "关联其他号码",
+      "addHint": "创建会话并通过二维码关联"
+    },
+    "group": {
+      "info": "群组信息",
+      "leave": "退出群组",
+      "leaveConfirm": "要退出群组“{{name}}”吗？",
+      "left": "已退出“{{name}}”",
+      "leaveFailed": "无法退出群组",
+      "editTitle": "编辑群组",
+      "tabInfo": "信息",
+      "tabParticipants": "成员",
+      "managedBy": "通过 {{session}} 管理",
+      "notAdmin": "在 {{session}} 中不是管理员",
+      "name": "群组名称",
+      "picture": "群组头像",
+      "pictureHint": "点击此处选择新的群组头像。",
+      "readOnlyHint": "只有群管理员可以修改此群组。",
+      "description": "描述",
+      "descriptionPlaceholder": "群组描述（可选）",
+      "save": "保存更改",
+      "saved": "群组已更新",
+      "saveFailed": "无法保存群组",
+      "loadFailed": "无法加载群组信息",
+      "participantCount": "成员：{{count}}",
+      "admin": "管理员",
+      "owner": "创建者",
+      "makeAdmin": "设为管理员",
+      "removeAdmin": "取消管理员",
+      "remove": "移除",
+      "removeConfirm": "要将 {{name}} 移出群组吗？",
+      "add": "添加",
+      "addPlaceholder": "添加带国家代码的号码",
+      "memberActionFailed": "操作失败",
+      "leaveWarning": "退出后将不再收到该群消息，只有群管理员可以重新添加你。"
+    },
+    "rowActions": {
+      "actionsFor": "{{name}} 的操作",
+      "markUnread": "标为未读",
+      "markUnreadFailed": "无法将聊天标为未读",
+      "clear": "清空聊天",
+      "clearConfirm": "要删除与 {{name}} 的聊天中的所有消息吗？",
+      "clearWarning": "聊天仍保留在列表中。网关也会删除其保存的消息副本（含媒体）；如需保留，请先导出记录。",
+      "cleared": "已清空与 {{name}} 的聊天",
+      "clearFailed": "无法清空聊天",
+      "delete": "删除聊天",
+      "deleteConfirm": "要删除与 {{name}} 的聊天吗？",
+      "deleteWarning": "聊天将从列表中移除，网关会删除其保存的消息副本（含媒体）。",
+      "deleted": "已删除与 {{name}} 的聊天",
+      "deleteFailed": "无法删除聊天",
+      "saveContact": "保存联系人",
+      "renameContact": "重命名联系人",
+      "firstName": "名",
+      "lastName": "姓（可选）",
+      "contactSaved": "联系人已保存",
+      "contactSaveFailed": "无法保存联系人",
+      "pin": "置顶聊天",
+      "unpin": "取消置顶",
+      "pinFailed": "无法置顶聊天。WhatsApp 最多允许置顶三个聊天。",
+      "unpinFailed": "无法取消置顶",
+      "pinnedLabel": "已置顶",
+      "mute": "静音通知",
+      "unmute": "取消静音",
+      "mutedLabel": "已静音",
+      "muteTitle": "静音“{{name}}”",
+      "muteHint": "其他参与者不会知道你已将聊天静音。被提及时你仍会收到通知。",
+      "muteFailed": "无法更改通知设置",
+      "archive": "归档聊天",
+      "unarchive": "取消归档",
+      "archived": "聊天已归档",
+      "unarchived": "聊天已取消归档",
+      "archiveFailed": "无法更改归档",
+      "archivedEntry": "已归档",
+      "archivedTitle": "已归档的聊天",
+      "archiveEmpty": "没有已归档的聊天",
+      "declined": "WhatsApp 拒绝了此更改。",
+      "block": "屏蔽联系人",
+      "unblock": "取消屏蔽",
+      "blockConfirm": "要屏蔽 {{name}} 吗？",
+      "blockWarning": "被屏蔽的联系人将无法再给你打电话或发消息。",
+      "blocked": "已屏蔽 {{name}}",
+      "unblocked": "已取消屏蔽 {{name}}",
+      "blockFailed": "无法更改屏蔽状态",
+      "muteFor": {
+        "8h": "8 小时",
+        "1w": "1 周",
+        "always": "始终"
+      },
+      "saveContactUnavailable": "需要已知的电话号码：此聊天只有隐私 ID（@lid）。"
     }
   },
   "errorBoundary": {
@@ -459,6 +612,7 @@
       "badge_other": "{{count}} 个筛选条件",
       "addCondition": "添加条件",
       "removeCondition": "移除条件",
+      "removeValue": "移除 {{value}}",
       "caseSensitive": "区分大小写",
       "contactPlaceholder": "号码或 WhatsApp ID...",
       "textPlaceholder": "要匹配的文本...",
@@ -508,6 +662,7 @@
       "updateFailed": "更新 Webhook 失败：{{message}}",
       "testOk": "Webhook 测试成功！状态：{{status}}",
       "testFailed": "Webhook 测试失败：{{message}}",
+      "testStatus": "接收端返回 HTTP {{status}}",
       "testError": "测试 Webhook 失败：{{message}}"
     },
     "actions": {
@@ -519,6 +674,7 @@
       "message.received": "收到消息时",
       "message.sent": "发送消息时",
       "message.ack": "消息的送达或已读状态变化时",
+      "message.receipt": "你发送的群组或状态消息被每位接收者送达、阅读或播放时（仅 Baileys；不包含在 * 中）",
       "message.failed": "发出的消息投递失败时",
       "message.revoked": "消息被撤回时",
       "message.reaction": "添加、更改或移除回应时",
@@ -531,6 +687,7 @@
       "session.restriction": "WhatsApp 限制账号或解除限制时",
       "presence.update": "已订阅的聊天上线、正在输入或下线时",
       "event.response": "嘉宾回复 WhatsApp 活动邀请时（参加、不参加、可能参加）",
+      "poll.vote": "有人在投票中选择或取消选项时（whatsapp-web.js）",
       "group.join": "有成员加入或被添加到群组时",
       "group.leave": "有成员退出或被移出群组时",
       "group.update": "群组名称、描述或设置变化时",
@@ -540,7 +697,7 @@
       "call.rejected": "来电被拒接时",
       "call.missed": "来电未接听时",
       "status.received": "联系人发布状态时",
-      "all": "所有事件"
+      "all": "除 message.receipt 外的所有事件（message.receipt 须明确指定）"
     },
     "auth": {
       "title": "投递认证",
@@ -627,6 +784,7 @@
     "modalTitle": "创建 API 密钥",
     "createdTitle": "API 密钥已创建",
     "createdHint": "请立即复制此密钥。之后将无法再次查看。",
+    "copyKey": "复制密钥",
     "namePlaceholder": "例如：Production Key",
     "nameTooShort": "请至少输入 3 个字符。",
     "rolesTitle": "角色参考",
@@ -704,6 +862,7 @@
     "chats": {
       "label": "聊天访问（可选）",
       "hint": "每行一个聊天：以 @g.us 结尾的群组 ID、以 @c.us 或 @lid 结尾的联系人 ID，或电话号码。留空则允许所有聊天。受聊天限制的密钥只能使用对此类密钥开放的路由；通过事件 WebSocket 和 MCP 的访问也仅限于这些聊天。",
+      "lidHint": "@lid 条目也会放行当前映射到它的电话号码。如果该号码转给了他人，此密钥就能触及对方：联系人更换号码时，请检查此密钥。",
       "invalid": "不是聊天 ID 或电话号码：{{value}}",
       "tooMany": "聊天过多（{{count}}）：一个密钥最多可列出 {{max}} 个。"
     },
@@ -841,6 +1000,7 @@
     "groupsSentSummary": "已发送 {{sent}}/{{total}}",
     "groupSendCancelled": "{{count}} 个，已取消",
     "groupSendStopped": "{{count}} 个，在 HTTP {{status}} 后停止",
+    "groupSendStoppedNoAnswer": "{{count}} 个，已停止：网关未响应",
     "response": {
       "timestamp": "时间戳",
       "messageId": "消息 ID",
@@ -851,6 +1011,7 @@
     },
     "sendFailed": "发送消息失败",
     "notOnWhatsApp": "该号码未在 WhatsApp 注册",
+    "tooLong": "超过 {{max}} 位数字不是一个电话号码。请只输入一个号码。",
     "batch": {
       "status": {
         "pending": "等待中",
@@ -862,6 +1023,123 @@
       "progress": "已发送 {{sent}}/{{total}} · {{failed}} 失败 · {{pending}} 待发送",
       "cancel": "取消批次",
       "cancelling": "取消中..."
+    }
+  },
+  "numberChecker": {
+    "subtitle": "静默验证电话号码是否拥有有效的 WhatsApp 账号，无需发送任何消息",
+    "zeroMessages": "零消息发送",
+    "noSession": {
+      "title": "没有已连接的 WhatsApp 会话。",
+      "desc": "要检查电话号码，OpenWA 至少需要一个已通过验证的会话。",
+      "goToSessions": "前往会话"
+    },
+    "tabs": {
+      "single": "单个检查",
+      "bulk": "批量号码检查"
+    },
+    "session": {
+      "label": "WhatsApp 会话",
+      "none": "没有就绪的会话",
+      "hint": "查询将通过此已连接的 WhatsApp 账号发出。"
+    },
+    "single": {
+      "title": "检查单个账号",
+      "phoneLabel": "电话号码",
+      "phonePlaceholder": "例如：919876543210 或 6281234567890",
+      "check": "检查",
+      "checking": "正在检查...",
+      "tooLong": "超过 {{max}} 位数字不是一个电话号码。请一次检查一个号码。",
+      "autoPrefix": "为 10 位号码自动添加前缀 <strong>+91</strong>（12 位号码保持原样）",
+      "silent": "<strong>完全静默：</strong>此检查直接查询 WhatsApp 的号码注册信息，对方不会收到任何通知、提示音或消息。",
+      "resultTitle": "验证结果",
+      "querying": "正在查询 WhatsApp 服务器...",
+      "empty": "输入电话号码并点击“检查”，即可查看其 WhatsApp 状态。"
+    },
+    "preview": {
+      "prefixed": "将以 <strong>+{{number}}</strong> 检查（10 位数字 → 已自动添加前缀 91）",
+      "kept": "将以 <strong>+{{number}}</strong> 检查（12 位数字 → 保持原样）",
+      "digits": "将以 <strong>+{{number}}</strong> 检查（{{digits}} 位数字）"
+    },
+    "prefixHint": {
+      "single": "为 10 位号码，以及以 0 开头的 11 位号码添加 +91。以 + 或 00 开头的号码保持原样。",
+      "bulk": "为 10 位号码（例如 96...），以及以 0 开头的 11 位号码添加 +91。以 + 或 00 开头的号码保持原样。",
+      "off": "号码按输入内容原样检查，仅保留数字，因此请包含国家/地区代码。"
+    },
+    "result": {
+      "registered": "已在 WhatsApp 注册",
+      "notRegistered": "未注册",
+      "avatarAlt": "头像",
+      "status": "状态",
+      "active": "有效账号",
+      "none": "未找到账号",
+      "jid": "WhatsApp JID",
+      "copyJid": "复制 JID",
+      "copy": "复制",
+      "copied": "已复制",
+      "checkedAt": "检查时间",
+      "openTester": "前往消息测试器"
+    },
+    "recent": {
+      "title": "最近检查记录",
+      "clear": "清除历史记录"
+    },
+    "table": {
+      "phone": "电话号码",
+      "status": "WhatsApp 状态",
+      "id": "WhatsApp ID",
+      "time": "时间"
+    },
+    "status": {
+      "registered": "已注册",
+      "unregistered": "未注册",
+      "notRegistered": "未注册",
+      "failed": "失败"
+    },
+    "bulk": {
+      "title": "批量号码检查",
+      "delayLabel": "安全间隔延迟（毫秒）",
+      "delay1": "1000 毫秒 / 1 秒（推荐）",
+      "delay2": "2000 毫秒 / 2 秒（更安全）",
+      "delay3": "3000 毫秒 / 3 秒（大批量更安全）",
+      "delayHint": "每次查询之间会等待一段时间，以免超出网关的请求限制（默认每分钟 100 次）。如果网关拒绝后续查询，本次批量检查将停止。",
+      "countryRule": "国家/地区代码规则",
+      "autoPrefix": "为 10 位号码自动添加前缀 <strong>+91</strong>（印度）",
+      "numbersLabel": "待检查号码（每行一个，或用逗号分隔）",
+      "numbersHint": "粘贴带国家/地区代码的电话号码，每行一个，或用逗号分隔。每次最多 {{max}} 个号码。",
+      "parsed": "已识别 <strong>{{count}}</strong> 个不重复号码",
+      "parsed_other": "已识别 <strong>{{count}}</strong> 个不重复号码",
+      "tenDigitAdded": "（{{ten}} 个 10 位号码 → 已添加 +91）",
+      "tenDigitAddedPreserved": "（{{ten}} 个 10 位号码 → 已添加 +91，{{twelve}} 个 12 位号码原样保留）",
+      "tooMany": "号码过多：已识别 {{parsed}} 个，每次最多 {{max}} 个。请删减 {{excess}} 个后再开始。",
+      "tooLong": "已忽略，超过 {{max}} 位数字（不是一个号码）：{{count}}。请每行只写一个号码。",
+      "start": "开始批量检查",
+      "stop": "停止检查",
+      "export": "导出结果（CSV）",
+      "exportHint": "文件包含每一位数字。电子表格可能把长号码显示为 9.19612E+11，或去掉开头的 0；请导入该文件，并将 Phone Number 列设为文本，以保持原样。",
+      "stoppedTitle": "批量检查已停止",
+      "checked": "已检查",
+      "remaining": "剩余",
+      "all": "全部"
+    },
+    "stopped": {
+      "reason409": "会话未连接",
+      "reason429": "已达到网关的速率限制",
+      "reason503": "WhatsApp 未响应查询",
+      "reasonOther": "网关拒绝了一次查询",
+      "partial": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 个号码处停止（共 {{total}} 个），其余 {{count}} 个号码未查询。请稍后重试。",
+      "partial_other": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 个号码处停止（共 {{total}} 个），其余 {{count}} 个号码未查询。请稍后重试。",
+      "noAnswer": "网关未响应。已在第 {{attempted}} 个号码处停止（共 {{total}} 个）。请稍后重试。",
+      "last": "{{reason}}（HTTP {{status}}）。最后一次查询失败。请稍后重试。"
+    },
+    "toast": {
+      "enterNumber": "请输入要检查的电话号码。",
+      "noSession": "没有就绪的 WhatsApp 会话。",
+      "checkFailed": "检查失败",
+      "unknownError": "未知的查询错误",
+      "lookupFailed": "查询失败",
+      "enterNumbers": "请输入有效的电话号码（每行一个，或用逗号分隔）。",
+      "completed": "已完成 {{count}} 个号码的检查。",
+      "completed_other": "已完成 {{count}} 个号码的检查。"
     }
   },
   "infrastructure": {
@@ -955,6 +1233,7 @@
       "successTitle": "✅ 服务器就绪",
       "errorTitle": "❌ 重启失败",
       "idleDesc": "配置已保存到 <code>.env.generated</code>。<br/>需要重启服务器才能应用更改。",
+      "stopsContainers": "重启还会停止以下内置容器，它们会连同数据一起保留，不会被删除：",
       "later": "稍后重启",
       "now": "立即重启",
       "restartingMsg": "服务器正在重启... {{count}} 秒",
@@ -969,7 +1248,10 @@
       "saveFailed": "保存失败"
     },
     "envPinNote": "已由环境变量 {{name}} 锁定 —— 此为当前运行值；在取消该变量之前，仪表盘的更改不会生效。",
+    "envPinFlagNote": "已由环境变量 {{name}} 锁定：只要其值为 true 且此服务正在使用，即使此开关已关闭，内置容器仍会在每次服务器启动时启动。",
     "pendingRestartNote": "已保存，但尚未生效 —— 请重启服务器以应用此更改。",
+    "pendingBuiltInNote": "已保存，但尚未生效：服务器当前使用外部服务，重启后将切换为内置容器。",
+    "pendingExternalNote": "已保存，但尚未生效：服务器当前使用内置容器，重启后将切换为外部服务。",
     "migration": {
       "title": "请注意 —— 此操作将更改数据后端",
       "dbWarning": "新数据库将从空白状态开始。请立即（在仍使用旧数据库时）下载当前数据的备份，然后在重启后恢复。",
@@ -1060,6 +1342,7 @@
       "installed": "插件已安装",
       "installFailed": "安装失败",
       "uninstalled": "插件已卸载",
+      "uninstalledWithWarning": "插件已卸载，但有警告",
       "uninstallFailed": "卸载失败",
       "enableFailedTitle": "启用失败",
       "disableFailedTitle": "停用失败",

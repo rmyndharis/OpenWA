@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.gson.Gson;
+import java.net.URI;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -72,6 +73,30 @@ class HttpTest {
         assertEquals(
             "http://h/m?a=1&limit=50",
             Http.buildUrl("http://h", "/m?a=1", new Query(null, 50, null), gson));
+    }
+
+    @Test
+    void buildUrlAppendsQueryBeforeFragment() {
+        String[][] cases = {
+            {"/m#part", "limit=50", "part"},
+            {"/m?a=1#part", "a=1&limit=50", "part"},
+            {"/m#part?x=2", "limit=50", "part?x=2"}
+        };
+        for (String[] row : cases) {
+            URI uri = URI.create(Http.buildUrl("https://h/v1", row[0], new Query(null, 50, null), gson));
+            assertEquals("h", uri.getRawAuthority(), row[0]);
+            assertEquals("/v1/m", uri.getRawPath(), row[0]);
+            assertEquals(row[1], uri.getRawQuery(), row[0]);
+            assertEquals(row[2], uri.getRawFragment(), row[0]);
+        }
+    }
+
+    @Test
+    void buildUrlLeavesFragmentAloneWhenNoQueryValuesAreAdded() {
+        String original = "https://h/v1/m?a=1#part?x=2";
+        assertEquals(original, Http.buildUrl("https://h/v1", "/m?a=1#part?x=2", null, gson));
+        assertEquals(original, Http.buildUrl("https://h/v1", "/m?a=1#part?x=2", Map.of(), gson));
+        assertEquals(original, Http.buildUrl("https://h/v1", "/m?a=1#part?x=2", new Query(null, null, null), gson));
     }
 
     @Test

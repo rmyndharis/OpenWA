@@ -1,4 +1,9 @@
-import { validatePluginManifest, RESERVED_PLUGIN_IDS, INSTALLABLE_TYPES } from './plugin-manifest';
+import {
+  dropMalformedConfigFields,
+  validatePluginManifest,
+  RESERVED_PLUGIN_IDS,
+  INSTALLABLE_TYPES,
+} from './plugin-manifest';
 
 /**
  * The shared manifest contract enforced identically at install time (parsePluginPackage) and at
@@ -125,5 +130,46 @@ describe('validatePluginManifest', () => {
       expect(() => validatePluginManifest({ ...valid, minOpenWAVersion: '0.0.1' })).not.toThrow();
       expect(() => validatePluginManifest({ ...valid, minOpenWAVersion: '999.0.0' })).toThrow(/requires OpenWA/);
     });
+  });
+});
+
+describe('dropMalformedConfigFields', () => {
+  it('drops a property or an items entry that is not a field object, at any depth', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        name: { type: 'string', title: 'Name' },
+        gone: null,
+        word: 'text',
+        list: [],
+        outer: { type: 'object', properties: { key: { type: 'string', secret: true }, inner: 5 } },
+        rows: { type: 'array', items: { type: 'object', properties: { url: { type: 'string' }, bad: null } } },
+        tags: { type: 'array', items: null },
+        odd: { type: 'object', properties: 'none' },
+      },
+    };
+
+    dropMalformedConfigFields(schema);
+
+    expect(schema).toEqual({
+      type: 'object',
+      properties: {
+        name: { type: 'string', title: 'Name' },
+        outer: { type: 'object', properties: { key: { type: 'string', secret: true } } },
+        rows: { type: 'array', items: { type: 'object', properties: { url: { type: 'string' } } } },
+        tags: { type: 'array' },
+        odd: { type: 'object' },
+      },
+    });
+  });
+
+  it('leaves a well-formed schema as it is and ignores an absent or non-object schema', () => {
+    const schema = { type: 'object', properties: { url: { type: 'string', default: 'https://a.example' } } };
+    const copy = structuredClone(schema);
+
+    dropMalformedConfigFields(schema);
+    for (const value of [undefined, null, 'x', []]) dropMalformedConfigFields(value);
+
+    expect(schema).toEqual(copy);
   });
 });

@@ -52,6 +52,9 @@ import { PageHeader } from '../components/PageHeader';
 import { CustomSelect } from '../components/CustomSelect';
 import { Modal } from '../components/Modal';
 import './Sessions.css';
+import { formatLastActive, formatSessionStatus } from '../utils/sessionDisplay';
+import { normalizePhoneText } from '../utils/phone';
+import { isComposingKey } from '../utils/composition';
 
 /**
  * The hover title for a restriction: the engine's own cause token, plus when enforcement ends if
@@ -65,6 +68,22 @@ function restrictionTitle(restriction: AccountRestriction, t: TFunction): string
   }
   return parts.join(' · ');
 }
+
+// The most digits a phone number has. A longer paste is kept whole and refused, never cut to a number nobody typed.
+const PAIRING_PHONE_MAX_DIGITS = 15;
+// What a number may be written with besides its digits: a plus, spaces (a no-break space included), hyphens, dots and
+// parentheses. The plus comes first, but may follow an opening parenthesis, as in "(+62) 812-3456-7890".
+const PHONE_FORMATTING = /^[\s(]*\+?[\d\s().-]*$/;
+// A number written that way is read to its digits. Any other text (a letter, an extension, a sentence around the
+// number) is kept as pasted and refused, since joining its digit groups would make a number nobody typed.
+const readPairingPhone = (text: string) => {
+  const normalized = normalizePhoneText(text);
+  return PHONE_FORMATTING.test(normalized.trim()) ? normalized.replace(/\D/g, '') : normalized;
+};
+const pairingPhoneRefused = (text: string) => {
+  const normalized = normalizePhoneText(text);
+  return !PHONE_FORMATTING.test(normalized.trim()) || normalized.replace(/\D/g, '').length > PAIRING_PHONE_MAX_DIGITS;
+};
 
 export function Sessions() {
   const { t } = useTranslation();
@@ -80,6 +99,8 @@ export function Sessions() {
   // The full-page spinner belongs to the FIRST load only (see fetchSessions).
   const initialLoadDone = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  // Whether the last list read failed. `error` also carries a refused create, which says nothing about the list.
+  const [listFailed, setListFailed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   // Only the id: the detail modal renders the row as it is in `sessions` now, so a status push or a
@@ -169,6 +190,7 @@ export function Sessions() {
       // The list is current again, so an error left by an earlier failed read (or a create, whose toast
       // already reported it) no longer describes the page, and the recovery retry is available again.
       setError(null);
+      setListFailed(false);
       retriedThisConnect.current = false;
       // Keep the shared React Query cache (read by the Dashboard via useSessionsQuery /
       // useSessionStatsQuery) in sync after this page's mutations reload local state — otherwise the
@@ -184,6 +206,7 @@ export function Sessions() {
       if (request < listApplied.current) return sessionsRef.current;
       listReadFailed.current = true;
       setError(err instanceof Error ? err.message : t('sessions.create.errorDefault'));
+      setListFailed(true);
       return [];
     } finally {
       initialLoadDone.current = true;
@@ -330,6 +353,11 @@ export function Sessions() {
           void fetchSessions();
           dismissQrForSession(event.sessionId);
           toast.error(t('sessions.toasts.failedTitle'), t('sessions.toasts.failedDesc'));
+        } else if (event.status === 'initializing' && prev?.status === 'qr_ready') {
+          // The wait to be linked ended with its connection (on Baileys also a pairing code left unused for five
+          // minutes), and the session registers again with a new QR. Neither the QR nor a pairing code on screen can
+          // link any more. From authenticating the code was used, and the modal closes on the ready that follows.
+          clearQrCodeForSession(event.sessionId);
         }
       },
       [toast, t, fetchSessions, queryClient, dismissQrForSession, clearQrCodeForSession, updateSessions],
@@ -497,9 +525,9 @@ export function Sessions() {
   const proxySessionId = proxySession?.id ?? null;
   // Cancel stays enabled while a save runs, so a save that answers after its modal closed must neither
   // close nor unlock whichever proxy modal is open by then.
-  const proxyOpenId = useRef<string | null>(null);
+  const proxyVisit = useRef(0);
   useEffect(() => {
-    proxyOpenId.current = proxySessionId;
+    proxyVisit.current += 1;
     setProxySaving(false);
     setProxyInfo(null);
     setProxyEnabled(false);
@@ -527,6 +555,7 @@ export function Sessions() {
       });
     return () => {
       cancelled = true;
+      proxyVisit.current += 1;
     };
     // Only the session being edited belongs in here. `t` and `toast` are recreated on every render of
     // their providers (ToastContext hands out a fresh object literal), so listing them re-runs this
@@ -549,6 +578,7 @@ export function Sessions() {
     }
     setProxyUrlError(null);
     const id = proxySession.id;
+    const visit = proxyVisit.current;
     setProxySaving(true);
     try {
       if (!proxyEnabled) {
@@ -562,11 +592,11 @@ export function Sessions() {
         return;
       }
       toast.success(t('sessions.proxy.saveSuccessTitle'), t('sessions.proxy.saveSuccess'));
-      if (proxyOpenId.current === id) setProxySession(null);
+      if (proxyVisit.current === visit) setProxySession(null);
     } catch (err) {
       toast.error(t('sessions.proxy.saveError'), err instanceof Error ? err.message : t('common.unknownError'));
     } finally {
-      if (proxyOpenId.current === id) setProxySaving(false);
+      if (proxyVisit.current === visit) setProxySaving(false);
     }
   };
 
@@ -622,11 +652,16 @@ export function Sessions() {
       // The error response carries no Session body, so re-fetch authoritative state regardless of
       // how we classify the toast — phone:null/status come from the list endpoint.
       await fetchSessions();
-      if (classifyUnlinkError(err) === 'incomplete') {
+      const kind = classifyUnlinkError(err);
+      if (kind === 'incomplete') {
         // 502 + SESSION_LOGOUT_INCOMPLETE — the session stopped locally but the unlink operation is
         // incomplete. Surface the server's specific message/retry guidance as a warning, not an error.
         const msg = err instanceof Error && err.message ? err.message : t('sessions.unlink.incomplete');
         toast.warning(t('sessions.unlink.incompleteTitle'), msg);
+      } else if (kind === 'notLinked') {
+        // 409: the session has no linked device, so there was nothing to unlink. The gateway's message says it was
+        // stopped and to start or delete it instead.
+        toast.error(t('sessions.unlink.failedTitle'), err instanceof Error ? err.message : t('sessions.unlink.failed'));
       } else {
         // A reverse-proxy 502 (bare or JSON without the exact code) may never have reached the
         // gateway, so nothing was stopped — generic failure, not retry guidance.
@@ -638,17 +673,10 @@ export function Sessions() {
     }
   };
 
-  const formatLastActive = (date?: string | null) => {
-    if (!date) return t('common.never');
-    const diff = Date.now() - new Date(date).getTime();
-    if (diff < 60000) return t('common.justNow');
-    if (diff < 3600000) return t('common.minAgo', { count: Math.floor(diff / 60000) });
-    return new Date(date).toLocaleDateString();
-  };
-
-  const formatStatus = (status: string) => t(`sessionStatus.${status}`, { defaultValue: status });
-
+  const pairingPhoneInvalid = pairingPhoneRefused(phoneNumber);
   const filteredSessions = filterSessions(sessions, searchQuery, statusFilter);
+  // A failed read says nothing about how many sessions there are: with none held, the banner is the only message.
+  const listUnknown = listFailed && sessions.length === 0;
   const existingSessionNames = sessions.map(s => s.name);
   // Empty is a disabled button, not a message: the form stays quiet until the user types something.
   const nameIssues = newSessionName ? sessionNameIssues(newSessionName, existingSessionNames) : [];
@@ -720,6 +748,7 @@ export function Sessions() {
               { value: 'inactive', label: t('sessions.filter.inactive') },
               { value: 'connecting', label: t('sessions.filter.connecting') },
             ]}
+            ariaLabel={t('sessions.details.status')}
           />
         </div>
       </div>
@@ -730,7 +759,7 @@ export function Sessions() {
             background: 'rgba(239, 68, 68, 0.12)',
             padding: '1rem',
             borderRadius: '8px',
-            color: 'var(--error)',
+            color: 'var(--error-text)',
             marginBottom: '1rem',
           }}
         >
@@ -765,7 +794,7 @@ export function Sessions() {
               const value = e.target.value.toLowerCase().replace(/\s+/g, '-');
               setNewSessionName(value);
             }}
-            onKeyDown={e => e.key === 'Enter' && !createDisabled && handleCreate()}
+            onKeyDown={e => e.key === 'Enter' && !isComposingKey(e.nativeEvent) && !createDisabled && handleCreate()}
           />
           <p className="input-hint">
             <Trans i18nKey="sessions.create.hint" components={{ code: <code /> }} />
@@ -890,12 +919,32 @@ export function Sessions() {
                       className="pairing-input"
                       type="tel"
                       inputMode="numeric"
-                      maxLength={15}
                       placeholder={t('sessions.pairing.phonePlaceholder')}
                       value={phoneNumber}
-                      onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
-                      onKeyDown={e => e.key === 'Enter' && handleGeneratePairingCode()}
+                      // A composition in progress is left as typed, since rewriting it garbles what the IME commits;
+                      // it is read when the composition ends. Pasted and directly typed text is read at once.
+                      // No native maxLength: it counts the separators of a pasted "+62 812-3456-7890" and cuts it
+                      // short. A paste of more than 15 digits, or with other characters, is kept and refused below.
+                      aria-invalid={pairingPhoneInvalid || undefined}
+                      aria-describedby={pairingPhoneInvalid ? 'pairing-phone-error' : undefined}
+                      onChange={e =>
+                        setPhoneNumber(
+                          (e.nativeEvent as InputEvent).isComposing ? e.target.value : readPairingPhone(e.target.value),
+                        )
+                      }
+                      onCompositionEnd={e => setPhoneNumber(readPairingPhone(e.currentTarget.value))}
+                      onKeyDown={e =>
+                        e.key === 'Enter' &&
+                        !isComposingKey(e.nativeEvent) &&
+                        !pairingPhoneInvalid &&
+                        handleGeneratePairingCode()
+                      }
                     />
+                    {pairingPhoneInvalid && (
+                      <p id="pairing-phone-error" className="input-error" role="alert">
+                        {t('sessions.pairing.invalidPhone')}
+                      </p>
+                    )}
                     <p className="input-hint" style={{ marginBottom: '1.5rem' }}>
                       {t('sessions.pairing.phoneHint')}
                     </p>
@@ -908,7 +957,7 @@ export function Sessions() {
                       {requestingPairing ? (
                         <>
                           <Loader2 className="animate-spin" size={16} />
-                          <span style={{ marginLeft: '0.5rem' }}>{t('sessions.pairing.generating')}</span>
+                          <span style={{ marginInlineStart: '0.5rem' }}>{t('sessions.pairing.generating')}</span>
                         </>
                       ) : (
                         t('sessions.pairing.generateButton')
@@ -976,7 +1025,9 @@ export function Sessions() {
             </div>
             <div className="detail-item">
               <span className="detail-label">{t('sessions.details.status')}</span>
-              <span className={`status-badge ${selectedSession.status}`}>{formatStatus(selectedSession.status)}</span>
+              <span className={`status-badge ${selectedSession.status}`}>
+                {formatSessionStatus(t, selectedSession.status)}
+              </span>
             </div>
             <div className="detail-item">
               <span className="detail-label">{t('sessions.details.sessionId')}</span>
@@ -1224,7 +1275,7 @@ export function Sessions() {
       )}
 
       <div className="sessions-grid">
-        {filteredSessions.length === 0 ? (
+        {filteredSessions.length === 0 && !listUnknown ? (
           <div className="empty-state">
             <QrCode size={48} />
             <h3>{t('sessions.empty.title')}</h3>
@@ -1235,7 +1286,7 @@ export function Sessions() {
             <div key={session.id} className="session-card">
               <div className="card-header">
                 <h3 title={session.name}>{session.name}</h3>
-                <span className={`status-pill ${session.status}`}>{formatStatus(session.status)}</span>
+                <span className={`status-pill ${session.status}`}>{formatSessionStatus(t, session.status)}</span>
               </div>
 
               {awaitsPairing(session) ? (
@@ -1266,7 +1317,7 @@ export function Sessions() {
                   </div>
                   <div className="info-row">
                     <span className="info-label">{t('sessions.card.lastActive')}</span>
-                    <span className="info-value">{formatLastActive(session.lastActive)}</span>
+                    <span className="info-value">{formatLastActive(t, session.lastActive)}</span>
                   </div>
                   {(session.status === 'failed' || session.status === 'action_required') && session.lastError ? (
                     <div className="info-row session-error">

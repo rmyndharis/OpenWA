@@ -40,6 +40,8 @@
     "optional": "optionnel",
     "fieldTooLong": "Limité à {{max}} caractères ({{count}} actuellement).",
     "language": "Langue",
+    "changeLanguage": "Changer de langue",
+    "joinedName": "{{first}}, {{second}}",
     "back": "Retour",
     "next": "Suivant",
     "previous": "Précédent",
@@ -64,6 +66,7 @@
     "dashboard": "Tableau de bord",
     "sessions": "Sessions",
     "chats": "Discussions",
+    "numberChecker": "Vérificateur de numéros",
     "webhooks": "Webhooks",
     "templates": "Templates",
     "apiKeys": "Clés API",
@@ -73,6 +76,7 @@
     "logs": "Journaux"
   },
   "chats": {
+    "edited": "Modifié",
     "media": {
       "location": "Localisation",
       "call": "Appel",
@@ -173,6 +177,16 @@
       "backgroundColor": "Couleur de fond",
       "font": "Police",
       "fontDefault": "Par défaut",
+      "fonts": {
+        "system": "Système",
+        "systemText": "Texte système",
+        "script": "Manuscrite",
+        "bold": "Gras",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "ou",
       "post": "Publier",
       "posted": "Statut publié",
@@ -196,7 +210,8 @@
       "delete": "Échec de la suppression du message",
       "clickButton": "Échec du clic sur le bouton",
       "fileTooLarge": "Le fichier est trop volumineux (max 18 Mo)",
-      "searchHitSessionNotReady": "La session de ce message n'est pas connectée"
+      "searchHitSessionNotReady": "La session de ce message n'est pas connectée",
+      "searchHitChatNotListed": "La discussion de ce message est introuvable dans la liste"
     },
     "loadMessagesError": "Impossible de charger les messages. Vérifiez les journaux du serveur.",
     "messageStatus": {
@@ -205,6 +220,144 @@
       "delivered": "Remis",
       "read": "Lu",
       "failed": "Échec"
+    },
+    "today": "Aujourd'hui",
+    "switchSession": "Changer de session",
+    "searchMessages": "Rechercher des messages",
+    "clearSearch": "Effacer la recherche",
+    "filters": {
+      "label": "Filtrer les discussions",
+      "all": "Tous",
+      "unread": "Non lus",
+      "direct": "Discussions 1:1",
+      "groups": "Groupes",
+      "unknown": "Inconnus"
+    },
+    "noFilterResults": "Aucune discussion ne correspond à ce filtre",
+    "contactInfo": "Infos du contact",
+    "moreActions": "Plus d’actions",
+    "copyChatId": "Copier l’ID de la discussion",
+    "chatIdCopied": "ID de la discussion copié",
+    "copyFailed": "Impossible de copier dans le presse-papiers",
+    "closeChat": "Fermer la discussion",
+    "phone": "Numéro de téléphone",
+    "chatId": "ID de la discussion",
+    "newChat": {
+      "title": "Nouvelle discussion",
+      "searchPlaceholder": "Rechercher un nom ou un numéro avec indicatif",
+      "startWithNumber": "Démarrer une discussion avec {{number}}",
+      "contacts": "Contacts",
+      "noContacts": "Aucun contact trouvé",
+      "loadingContacts": "Chargement des contacts...",
+      "contactsError": "Impossible de charger les contacts",
+      "checking": "Vérification du numéro...",
+      "notOnWhatsApp": "{{number}} n'est pas inscrit sur WhatsApp",
+      "checkFailed": "Impossible de vérifier le numéro",
+      "numberHint": "Saisissez les numéros avec l'indicatif du pays, p. ex. +33 6 12 34 56 78"
+    },
+    "newGroup": {
+      "title": "Nouveau groupe",
+      "namePlaceholder": "Nom du groupe",
+      "participantsPlaceholder": "Rechercher des participants ou saisir un numéro",
+      "addNumber": "Ajouter {{number}}",
+      "selected": "{{count}} sélectionné(s)",
+      "create": "Créer le groupe",
+      "created": "Groupe « {{name}} » créé",
+      "createFailed": "Impossible de créer le groupe",
+      "removeParticipant": "Retirer {{name}}"
+    },
+    "sessionPicker": {
+      "searchPlaceholder": "Rechercher des sessions...",
+      "noMatch": "Aucune session ne correspond",
+      "addTitle": "Associer un autre numéro",
+      "addHint": "Créez une session et associez-la avec un code QR"
+    },
+    "group": {
+      "info": "Infos du groupe",
+      "leave": "Quitter le groupe",
+      "leaveConfirm": "Quitter le groupe « {{name}} » ?",
+      "left": "Vous avez quitté « {{name}} »",
+      "leaveFailed": "Impossible de quitter le groupe",
+      "editTitle": "Modifier le groupe",
+      "tabInfo": "Infos",
+      "tabParticipants": "Participants",
+      "managedBy": "Géré via {{session}}",
+      "notAdmin": "Pas administrateur via {{session}}",
+      "name": "Nom du groupe",
+      "picture": "Photo du groupe",
+      "pictureHint": "Cliquez sur ce champ pour choisir une nouvelle photo de groupe.",
+      "readOnlyHint": "Seuls les administrateurs du groupe peuvent le modifier.",
+      "description": "Description",
+      "descriptionPlaceholder": "Description du groupe (facultatif)",
+      "save": "Enregistrer les modifications",
+      "saved": "Groupe mis à jour",
+      "saveFailed": "Impossible d’enregistrer le groupe",
+      "loadFailed": "Impossible de charger les infos du groupe",
+      "participantCount": "Participants : {{count}}",
+      "admin": "Admin",
+      "owner": "Créateur",
+      "makeAdmin": "Nommer administrateur",
+      "removeAdmin": "Retirer l’administration",
+      "remove": "Retirer",
+      "removeConfirm": "Retirer {{name}} du groupe ?",
+      "add": "Ajouter",
+      "addPlaceholder": "Ajoutez un numéro avec l’indicatif du pays",
+      "memberActionFailed": "L’action a échoué",
+      "leaveWarning": "Vous ne recevrez plus ses messages, et seul un administrateur du groupe pourra vous rajouter."
+    },
+    "rowActions": {
+      "actionsFor": "Actions pour {{name}}",
+      "markUnread": "Marquer comme non lu",
+      "markUnreadFailed": "Impossible de marquer la discussion comme non lue",
+      "clear": "Vider la discussion",
+      "clearConfirm": "Supprimer tous les messages de la discussion avec {{name}} ?",
+      "clearWarning": "La discussion reste dans la liste. La passerelle supprime aussi sa copie enregistrée des messages, médias compris ; exportez l’historique avant si vous en avez besoin.",
+      "cleared": "Discussion avec {{name}} vidée",
+      "clearFailed": "Impossible de vider la discussion",
+      "delete": "Supprimer la discussion",
+      "deleteConfirm": "Supprimer la discussion avec {{name}} ?",
+      "deleteWarning": "La discussion disparaît de la liste et la passerelle supprime sa copie enregistrée des messages, médias compris.",
+      "deleted": "Discussion avec {{name}} supprimée",
+      "deleteFailed": "Impossible de supprimer la discussion",
+      "saveContact": "Enregistrer le contact",
+      "renameContact": "Renommer le contact",
+      "firstName": "Prénom",
+      "lastName": "Nom (facultatif)",
+      "contactSaved": "Contact enregistré",
+      "contactSaveFailed": "Impossible d’enregistrer le contact",
+      "pin": "Épingler la discussion",
+      "unpin": "Désépingler la discussion",
+      "pinFailed": "Impossible d’épingler la discussion. WhatsApp autorise au plus trois discussions épinglées.",
+      "unpinFailed": "Impossible de désépingler la discussion",
+      "pinnedLabel": "Épinglée",
+      "mute": "Mettre en sourdine",
+      "unmute": "Réactiver les notifications",
+      "mutedLabel": "En sourdine",
+      "muteTitle": "Mettre « {{name}} » en sourdine",
+      "muteHint": "Les autres participants ne savent pas que vous avez mis la discussion en sourdine. Vous êtes toujours averti quand on vous mentionne.",
+      "muteFailed": "Impossible de modifier les notifications",
+      "archive": "Archiver la discussion",
+      "unarchive": "Désarchiver la discussion",
+      "archived": "Discussion archivée",
+      "unarchived": "Discussion désarchivée",
+      "archiveFailed": "Impossible de modifier l’archive",
+      "archivedEntry": "Archivées",
+      "archivedTitle": "Discussions archivées",
+      "archiveEmpty": "Aucune discussion archivée",
+      "declined": "WhatsApp a refusé la modification.",
+      "block": "Bloquer le contact",
+      "unblock": "Débloquer le contact",
+      "blockConfirm": "Bloquer {{name}} ?",
+      "blockWarning": "Les contacts bloqués ne peuvent plus vous appeler ni vous envoyer de messages.",
+      "blocked": "{{name}} bloqué",
+      "unblocked": "{{name}} débloqué",
+      "blockFailed": "Impossible de modifier le blocage",
+      "muteFor": {
+        "8h": "8 heures",
+        "1w": "1 semaine",
+        "always": "Toujours"
+      },
+      "saveContactUnavailable": "Nécessite un numéro de téléphone connu : cette discussion n’a qu’un identifiant de confidentialité (@lid)."
     }
   },
   "errorBoundary": {
@@ -465,6 +618,7 @@
       "badge_many": "{{count}} filtres",
       "addCondition": "Ajouter une condition",
       "removeCondition": "Supprimer la condition",
+      "removeValue": "Retirer {{value}}",
       "caseSensitive": "Sensible à la casse",
       "contactPlaceholder": "Numéro ou identifiant WhatsApp...",
       "textPlaceholder": "Texte à rechercher...",
@@ -514,6 +668,7 @@
       "updateFailed": "Échec de la mise à jour du webhook : {{message}}",
       "testOk": "Test du webhook réussi ! Statut : {{status}}",
       "testFailed": "Test du webhook échoué : {{message}}",
+      "testStatus": "le destinataire a répondu HTTP {{status}}",
       "testError": "Impossible de tester le webhook : {{message}}"
     },
     "actions": {
@@ -525,6 +680,7 @@
       "message.received": "Lorsqu'un message est reçu",
       "message.sent": "Lorsqu'un message est envoyé",
       "message.ack": "Lorsque l'état de remise ou de lecture d'un message change",
+      "message.receipt": "Chaque destinataire qui reçoit, lit ou écoute un message de groupe ou de statut que vous avez envoyé (Baileys uniquement ; non inclus dans *)",
       "message.failed": "Lorsqu'un message sortant n'a pas pu être remis",
       "message.revoked": "Lorsqu'un message est supprimé pour tout le monde",
       "message.reaction": "Lorsqu'une réaction est ajoutée, modifiée ou retirée",
@@ -537,6 +693,7 @@
       "session.restriction": "Lorsque WhatsApp restreint le compte ou lève une restriction",
       "presence.update": "Lorsqu'un chat suivi passe en ligne, écrit ou se déconnecte",
       "event.response": "Lorsqu'un invité répond à un événement WhatsApp (participe, ne participe pas, peut-être)",
+      "poll.vote": "Lorsqu'un participant coche ou décoche des options d'un sondage (whatsapp-web.js)",
       "group.join": "Lorsque des participants rejoignent un groupe ou y sont ajoutés",
       "group.leave": "Lorsque des participants quittent un groupe ou en sont retirés",
       "group.update": "Lorsque le nom, la description ou les paramètres d'un groupe changent",
@@ -546,7 +703,7 @@
       "call.rejected": "Lorsqu'un appel est refusé",
       "call.missed": "Lorsqu'un appel reste sans réponse",
       "status.received": "Lorsqu'un contact publie un statut",
-      "all": "Tous les événements"
+      "all": "Tous les événements sauf message.receipt, qui doit être indiqué explicitement"
     },
     "auth": {
       "title": "Authentification des livraisons",
@@ -633,6 +790,7 @@
     "modalTitle": "Créer une clé API",
     "createdTitle": "Clé API créée",
     "createdHint": "Copiez cette clé maintenant. Vous ne pourrez plus la revoir.",
+    "copyKey": "Copier la clé",
     "namePlaceholder": "ex : Clé de Production",
     "nameTooShort": "Utilisez au moins 3 caractères.",
     "rolesTitle": "Référence des rôles",
@@ -710,6 +868,7 @@
     "chats": {
       "label": "Accès aux discussions (facultatif)",
       "hint": "Une discussion par ligne : un ID de groupe se terminant par @g.us, un ID de contact se terminant par @c.us ou @lid, ou un numéro de téléphone. Laissez vide pour toutes les discussions. Une clé limitée à des discussions ne peut utiliser que les routes ouvertes à ce type de clé ; son accès par le WebSocket des événements et MCP reste limité à ces discussions.",
+      "lidHint": "Une entrée @lid admet aussi le numéro de téléphone qui lui est actuellement associé. Si ce numéro passe à quelqu'un d'autre, cette clé peut l'atteindre : vérifiez la clé quand un contact change de numéro.",
       "invalid": "Ni un ID de discussion ni un numéro de téléphone : {{value}}",
       "tooMany": "Trop de discussions ({{count}}) : une clé peut en lister au plus {{max}}."
     },
@@ -847,6 +1006,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} envoyés",
     "groupSendCancelled": "{{count}}, annulés",
     "groupSendStopped": "{{count}}, arrêté après HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, arrêté : la passerelle n'a pas répondu",
     "response": {
       "timestamp": "Horodatage",
       "messageId": "ID du message",
@@ -857,6 +1017,7 @@
     },
     "sendFailed": "Échec de l'envoi du message",
     "notOnWhatsApp": "Ce numéro n'est pas enregistré sur WhatsApp",
+    "tooLong": "Plus de {{max}} chiffres ne forment pas un seul numéro. Saisissez un seul numéro.",
     "batch": {
       "status": {
         "pending": "En attente",
@@ -868,6 +1029,126 @@
       "progress": "Envoyés {{sent}} sur {{total}} · {{failed}} échoués · {{pending}} en attente",
       "cancel": "Annuler le lot",
       "cancelling": "Annulation..."
+    }
+  },
+  "numberChecker": {
+    "subtitle": "Vérifiez discrètement si des numéros de téléphone ont un compte WhatsApp actif, sans envoyer de message",
+    "zeroMessages": "Aucun message envoyé",
+    "noSession": {
+      "title": "Aucune session WhatsApp active n'est connectée.",
+      "desc": "Pour vérifier des numéros de téléphone, OpenWA nécessite au moins une session authentifiée.",
+      "goToSessions": "Aller aux sessions"
+    },
+    "tabs": {
+      "single": "Vérification individuelle",
+      "bulk": "Vérification en masse"
+    },
+    "session": {
+      "label": "Session WhatsApp",
+      "none": "Aucune session prête disponible",
+      "hint": "Les requêtes passent par ce compte WhatsApp connecté."
+    },
+    "single": {
+      "title": "Vérifier un compte",
+      "phoneLabel": "Numéro de téléphone",
+      "phonePlaceholder": "ex. : 919876543210 ou 6281234567890",
+      "check": "Vérifier",
+      "checking": "Vérification...",
+      "tooLong": "Plus de {{max}} chiffres ne forment pas un seul numéro. Vérifiez un numéro à la fois.",
+      "autoPrefix": "Préfixer automatiquement par <strong>+91</strong> les numéros à 10 chiffres (les numéros à 12 chiffres restent inchangés)",
+      "silent": "<strong>Totalement silencieux :</strong> cette requête interroge directement le registre des numéros enregistrés de WhatsApp. Le contact ne reçoit ni notification, ni son, ni message.",
+      "resultTitle": "Résultat de la vérification",
+      "querying": "Interrogation des serveurs WhatsApp...",
+      "empty": "Saisissez un numéro de téléphone et cliquez sur « Vérifier » pour voir son statut WhatsApp."
+    },
+    "preview": {
+      "prefixed": "Numéro à vérifier : <strong>+{{number}}</strong> (10 chiffres → préfixe 91 ajouté automatiquement)",
+      "kept": "Numéro à vérifier : <strong>+{{number}}</strong> (12 chiffres → conservé tel quel)",
+      "digits": "Numéro à vérifier : <strong>+{{number}}</strong> ({{digits}} chiffres)"
+    },
+    "prefixHint": {
+      "single": "Ajoute +91 aux numéros à 10 chiffres et à ceux à 11 chiffres commençant par 0. Les numéros avec + ou 00 restent tels que saisis.",
+      "bulk": "Ajoute +91 aux numéros à 10 chiffres (par exemple 96...) et à ceux à 11 chiffres commençant par 0. Les numéros avec + ou 00 restent tels que saisis.",
+      "off": "Les numéros sont vérifiés tels que saisis, chiffres uniquement : indiquez donc l'indicatif du pays."
+    },
+    "result": {
+      "registered": "Enregistré sur WhatsApp",
+      "notRegistered": "Non enregistré",
+      "avatarAlt": "Avatar",
+      "status": "Statut",
+      "active": "Compte actif",
+      "none": "Aucun compte trouvé",
+      "jid": "JID WhatsApp",
+      "copyJid": "Copier le JID",
+      "copy": "Copier",
+      "copied": "Copié",
+      "checkedAt": "Vérifié à",
+      "openTester": "Aller au testeur de messages"
+    },
+    "recent": {
+      "title": "Vérifications récentes",
+      "clear": "Effacer l'historique"
+    },
+    "table": {
+      "phone": "Numéro de téléphone",
+      "status": "Statut WhatsApp",
+      "id": "ID WhatsApp",
+      "time": "Heure"
+    },
+    "status": {
+      "registered": "Enregistré",
+      "unregistered": "Non enregistré",
+      "notRegistered": "Non enregistré",
+      "failed": "Échec"
+    },
+    "bulk": {
+      "title": "Vérification de numéros en masse",
+      "delayLabel": "Délai de sécurité entre les vérifications (ms)",
+      "delay1": "1000 ms / 1 s (recommandé)",
+      "delay2": "2000 ms / 2 s (très sûr)",
+      "delay3": "3000 ms / 3 s (sûr pour les gros volumes)",
+      "delayHint": "Attend entre chaque vérification pour rester sous la limite de requêtes de la passerelle (100 par minute par défaut). La vérification s'arrête si la passerelle refuse d'autres requêtes.",
+      "countryRule": "Règle d'indicatif du pays",
+      "autoPrefix": "Préfixer automatiquement par <strong>+91</strong> (Inde) les numéros à 10 chiffres",
+      "numbersLabel": "Numéros à vérifier (un par ligne ou séparés par des virgules)",
+      "numbersHint": "Collez des numéros de téléphone avec l'indicatif du pays, un par ligne ou séparés par des virgules. {{max}} numéros maximum par exécution.",
+      "parsed": "<strong>{{count}}</strong> numéro unique détecté",
+      "parsed_other": "<strong>{{count}}</strong> numéros uniques détectés",
+      "parsed_many": "<strong>{{count}}</strong> numéros uniques détectés",
+      "tenDigitAdded": "({{ten}} à dix chiffres → +91 ajouté)",
+      "tenDigitAddedPreserved": "({{ten}} à dix chiffres → +91 ajouté, {{twelve}} à douze chiffres sans changement)",
+      "tooMany": "Trop de numéros : {{parsed}} détectés, {{max}} maximum par exécution. Retirez-en {{excess}} pour démarrer.",
+      "tooLong": "Ignorés, plus de {{max}} chiffres (pas un seul numéro) : {{count}}. Mettez chaque numéro sur sa propre ligne.",
+      "start": "Démarrer la vérification par lot",
+      "stop": "Arrêter la vérification",
+      "export": "Exporter les résultats (CSV)",
+      "exportHint": "Le fichier contient tous les chiffres. Un tableur peut afficher les longs numéros sous la forme 9.19612E+11 ou supprimer un zéro initial ; importez le fichier et réglez la colonne Phone Number sur Texte pour les conserver tels quels.",
+      "stoppedTitle": "Lot arrêté",
+      "checked": "Vérifiés",
+      "remaining": "Restants",
+      "all": "Tous"
+    },
+    "stopped": {
+      "reason409": "La session n'est pas connectée",
+      "reason429": "La limite de requêtes de la passerelle a été atteinte",
+      "reason503": "WhatsApp n'a pas répondu à une requête",
+      "reasonOther": "La passerelle a refusé une requête",
+      "partial": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéro n'a pas été vérifié. Réessayez plus tard.",
+      "partial_other": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéros n'ont pas été vérifiés. Réessayez plus tard.",
+      "partial_many": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéros n'ont pas été vérifiés. Réessayez plus tard.",
+      "noAnswer": "La passerelle n'a pas répondu. Arrêt au numéro {{attempted}} sur {{total}}. Réessayez plus tard.",
+      "last": "{{reason}} (HTTP {{status}}). La dernière requête a échoué. Réessayez plus tard."
+    },
+    "toast": {
+      "enterNumber": "Veuillez saisir un numéro de téléphone à vérifier.",
+      "noSession": "Aucune session WhatsApp prête disponible.",
+      "checkFailed": "Échec de la vérification",
+      "unknownError": "Erreur inconnue lors de la requête",
+      "lookupFailed": "Échec de la requête",
+      "enterNumbers": "Veuillez saisir des numéros de téléphone valides (un par ligne ou séparés par des virgules).",
+      "completed": "Vérification de {{count}} numéro terminée.",
+      "completed_other": "Vérification de {{count}} numéros terminée.",
+      "completed_many": "Vérification de {{count}} numéros terminée."
     }
   },
   "infrastructure": {
@@ -961,6 +1242,7 @@
       "successTitle": "✅ Serveur prêt",
       "errorTitle": "❌ Échec du redémarrage",
       "idleDesc": "La configuration a été enregistrée dans <code>.env.generated</code>.<br/>Un redémarrage du serveur est nécessaire pour appliquer les modifications.",
+      "stopsContainers": "Le redémarrage arrêtera aussi ces conteneurs intégrés, qui gardent leurs données et ne sont pas supprimés :",
       "later": "Redémarrer plus tard",
       "now": "Redémarrer maintenant",
       "restartingMsg": "Redémarrage du serveur... {{count}}s",
@@ -975,7 +1257,10 @@
       "saveFailed": "Échec de l'enregistrement"
     },
     "envPinNote": "Défini par la variable d'environnement {{name}} — c'est la valeur en cours d'exécution ; les modifications du tableau de bord ne s'appliqueront pas tant que cette variable n'est pas supprimée.",
+    "envPinFlagNote": "Défini par la variable d'environnement {{name}} : tant qu'elle vaut true et que ce service est utilisé, le conteneur intégré est lancé à chaque démarrage du serveur, même si cet interrupteur est désactivé.",
     "pendingRestartNote": "Enregistré, mais pas encore appliqué — redémarrez le serveur pour que cette modification prenne effet.",
+    "pendingBuiltInNote": "Enregistré, mais pas encore appliqué : le serveur utilise actuellement un service externe, et un redémarrage le basculera vers le conteneur intégré.",
+    "pendingExternalNote": "Enregistré, mais pas encore appliqué : le serveur utilise actuellement le conteneur intégré, et un redémarrage le basculera vers un service externe.",
     "migration": {
       "title": "Attention — cela change le backend de données",
       "dbWarning": "La nouvelle base de données démarre vide. Téléchargez dès maintenant une sauvegarde de vos données actuelles (tant que vous êtes encore sur l'ancienne base de données), puis restaurez-la après le redémarrage.",
@@ -1066,6 +1351,7 @@
       "installed": "Plugin installé",
       "installFailed": "Échec de l'installation",
       "uninstalled": "Plugin désinstallé",
+      "uninstalledWithWarning": "Plugin désinstallé, avec un avertissement",
       "uninstallFailed": "Échec de la désinstallation",
       "enableFailedTitle": "Échec de l'activation",
       "disableFailedTitle": "Échec de la désactivation",

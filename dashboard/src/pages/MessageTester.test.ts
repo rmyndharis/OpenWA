@@ -144,9 +144,12 @@ function groupJsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
+// How the first text send fails: an HTTP status, a fetch that never gets an answer, or a 201 with no message id.
+type FirstSendFailure = number | 'unreachable' | 'unconfirmed' | 'vetoed';
+
 function stubGroupGateway(
   groups: { id: string; name?: string }[],
-  refuseFirstWith?: number,
+  refuseFirstWith?: FirstSendFailure,
 ): { textSends: string[]; imageBodies: { chatId: string; url?: string; caption?: string }[] } {
   const previousFetch = globalThis.fetch;
   restoreFetch = () => {
@@ -168,7 +171,15 @@ function stubGroupGateway(
       const { chatId } = JSON.parse(String(init?.body)) as { chatId: string };
       textSends.push(chatId);
       if (refuseFirstWith && textSends.length === 1) {
-        return Promise.resolve(groupJsonResponse({ message: 'Too many requests' }, refuseFirstWith));
+        if (refuseFirstWith === 'unreachable') return Promise.reject(new TypeError('Failed to fetch'));
+        if (refuseFirstWith === 'unconfirmed') return Promise.resolve(groupJsonResponse({ timestamp: 1 }, 201));
+        // A plugin that vetoes one chat's send: the gateway answers 400 for that chat alone.
+        if (refuseFirstWith === 'vetoed') {
+          return Promise.resolve(groupJsonResponse({ message: 'Message sending blocked by plugin' }, 400));
+        }
+        const message =
+          refuseFirstWith === 400 ? "Session 's1' is not active. Start the session first." : 'Too many requests';
+        return Promise.resolve(groupJsonResponse({ message }, refuseFirstWith));
       }
       return Promise.resolve(groupJsonResponse({ messageId: `m${textSends.length}`, timestamp: 1 }, 201));
     }
@@ -258,6 +269,122 @@ test('a 409 (engine not ready) stops the run, since every group would fail alike
 
   await rtl.screen.findByText('1, stopped after HTTP 409');
   assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
+test('a 400 (the session is not active) stops the run, since every group would fail alike', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    400,
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  await rtl.screen.findByText('1, stopped after HTTP 400');
+  assert.ok(rtl.screen.getByText(/is not active/, { selector: 'li' }));
+  assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
+// The same 400 status, but about one chat: that group fails by itself and the others are still sent.
+test('a 400 that blocks one group fails that group and the run goes on', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    'vetoed',
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  // The run waits 3 seconds between groups, so the second send comes after that.
+  await rtl.screen.findByText('1/2 sent', {}, { timeout: 8000 });
+  assert.deepEqual(gateway.textSends, ['g1@g.us', 'g2@g.us']);
+  assert.ok(rtl.screen.getByText(/blocked by plugin/, { selector: 'li' }));
+  assert.equal(rtl.screen.queryByText(/stopped/) === null, true);
+});
+
+test('a gateway that does not answer stops the run, and the notice says so', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    'unreachable',
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  await rtl.screen.findByText('1, stopped: the gateway did not answer');
+  assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
+// The page's own "no message id" failure has no HTTP status either, but the gateway did answer.
+test('a send answered without a message id fails that group and the run goes on', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    'unconfirmed',
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  // The run waits 3 seconds between groups, so the second send comes after that.
+  await rtl.screen.findByText('1/2 sent', {}, { timeout: 8000 });
+  assert.deepEqual(gateway.textSends, ['g1@g.us', 'g2@g.us']);
+  assert.ok(rtl.screen.getByText(/Failed to send message/, { selector: 'li' }));
+  assert.equal(rtl.screen.queryByText(/stopped/) === null, true);
+});
+
+test('a 502 from a reverse proxy stops the run, since the gateway behind it is down', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    502,
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  await rtl.screen.findByText('1, stopped after HTTP 502');
+  assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
+// The list is read from a textarea that holds up to 2 MiB, so it is parsed when the list changes, not on every render.
+test('the recipient list is parsed when it changes, not on every other keystroke', async () => {
+  stubGroupGateway([]);
+  window.sessionStorage.setItem('openwa_user_role', 'admin');
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  const { container } = rtl.render(
+    createElement(QueryClientProvider, { client }, createElement(RoleProvider, null, createElement(MessageTester))),
+  );
+  await rtl.screen.findByRole('option', { name: /Main/ });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Bulk' }));
+
+  // Count the phone normalization of the list: a textarea value read replaces other patterns in the same text.
+  const list = '628111222333\n628222333444';
+  const fullWidth = /[\uFF01-\uFF5E]/g;
+  let normalizations = 0;
+  const replace = RegExp.prototype[Symbol.replace];
+  RegExp.prototype[Symbol.replace] = function (this: RegExp, text: string, replacement: unknown): string {
+    if (text === list && this.source === fullWidth.source && this.flags === fullWidth.flags) normalizations++;
+    return Reflect.apply(replace, this, [text, replacement]) as string;
+  };
+  try {
+    type(container, '#mt-11', list);
+    assert.ok(rtl.screen.getByText(/Recipients: 2$/));
+    const afterList = normalizations;
+    assert.ok(afterList >= 1, 'the list was not normalized');
+    for (const text of ['a', 'ab', 'abc']) type(container, '#mt-12', text);
+    assert.equal(normalizations, afterList);
+  } finally {
+    RegExp.prototype[Symbol.replace] = replace;
+  }
 });
 
 test('an empty message or a media type with no file or URL keeps Send disabled', async () => {
@@ -874,4 +1001,299 @@ test('Send stays disabled while a batch cancel is in flight, so its answer canno
     await new Promise(resolve => setTimeout(resolve, 20));
   });
   assert.equal(sendButton().disabled, false);
+});
+
+for (const mode of ['text', 'forward'] as const) {
+  for (const change of ['replace key', 'sign out', 'unmount', 'sign in again'] as const) {
+    test(`a pending ${mode} lookup cannot dispatch after ${change}`, async () => {
+      let release!: (response: Response) => void;
+      const pending = new Promise<Response>(resolve => {
+        release = resolve;
+      });
+      const writes: { key: string | null; body: unknown }[] = [];
+      let lookups = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/sessions')) return jsonResponse([{ id: 's1', name: 'Main', status: 'ready' }]);
+        if (url.includes('/contacts/check/')) {
+          lookups++;
+          if (mode === 'text' || lookups === 2) return pending;
+          return jsonResponse({ number: '15550000001', exists: true, whatsappId: 'primary@lid' });
+        }
+        if (url.includes('/messages/')) {
+          writes.push({ key: new Headers(init?.headers).get('X-API-Key'), body: JSON.parse(String(init?.body)) });
+          return jsonResponse({ messageId: 'sent', timestamp: 1 });
+        }
+        return jsonResponse([]);
+      }) as typeof fetch;
+      sessionStorage.setItem('openwa_api_key', 'original-key');
+      sessionStorage.setItem('openwa_user_role', 'operator');
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
+      const tree = () =>
+        createElement(QueryClientProvider, { client }, createElement(RoleProvider, null, createElement(MessageTester)));
+      const view = rtl.render(tree());
+      await rtl.screen.findByRole('option', { name: /Main/ });
+      type(view.container, '#mt-13', '15550000001');
+      if (mode === 'forward') {
+        rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+        type(view.container, '#mt-9', '15550000002');
+        type(view.container, '#mt-10', 'original-message');
+      } else type(view.container, '#mt-2', 'hello');
+      await rtl.waitFor(() => assert.equal(sendButton().disabled, false));
+      rtl.fireEvent.click(sendButton());
+      await rtl.waitFor(() => assert.equal(lookups, mode === 'text' ? 1 : 2));
+      if (change === 'replace key') sessionStorage.setItem('openwa_api_key', 'replacement-key');
+      if (change === 'sign out') sessionStorage.removeItem('openwa_api_key');
+      if (change === 'unmount' || change === 'sign in again') view.unmount();
+      if (change === 'sign in again') {
+        sessionStorage.removeItem('openwa_api_key');
+        sessionStorage.setItem('openwa_api_key', 'original-key');
+        client.clear();
+        rtl.render(tree());
+        await rtl.screen.findByRole('option', { name: /Main/ });
+      }
+      await rtl.act(async () => {
+        release(jsonResponse({ number: '15550000002', exists: true, whatsappId: 'destination@lid' }));
+        await new Promise(resolve => setImmediate(resolve));
+      });
+      assert.deepEqual(writes, [], 'the abandoned lookup issued a write');
+      client.clear();
+      sessionStorage.removeItem('openwa_api_key');
+    });
+  }
+}
+
+// The recipient and a forward target are resolved through the number check, which takes ASCII digits only.
+for (const [script, zero] of [
+  ['Arabic-Indic', 0x0660],
+  ['full-width', 0xff10],
+] as const) {
+  test(`a recipient and a forward target typed in ${script} digits are looked up as ASCII digits`, async () => {
+    const checked: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/sessions')) return jsonResponse([{ id: 's1', name: 'Main', status: 'ready' }]);
+      if (path.includes('/contacts/check/')) {
+        const number = path.split('/contacts/check/')[1];
+        checked.push(number);
+        return jsonResponse({ number, exists: true, whatsappId: `${number}@c.us` });
+      }
+      if (path.includes('/messages/')) return jsonResponse({ messageId: 'sent', timestamp: 1 });
+      return jsonResponse([]);
+    }) as typeof fetch;
+    sessionStorage.setItem('openwa_api_key', 'original-key');
+    sessionStorage.setItem('openwa_user_role', 'operator');
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
+    const view = rtl.render(
+      createElement(QueryClientProvider, { client }, createElement(RoleProvider, null, createElement(MessageTester))),
+    );
+    try {
+      await rtl.screen.findByRole('option', { name: /Main/ });
+      const native = (ascii: string) => [...ascii].map(d => String.fromCharCode(zero + Number(d))).join('');
+      type(view.container, '#mt-13', native('15550000001'));
+      rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+      type(view.container, '#mt-9', native('15550000002'));
+      type(view.container, '#mt-10', 'original-message');
+      await rtl.waitFor(() => assert.equal(sendButton().disabled, false));
+      rtl.fireEvent.click(sendButton());
+      await rtl.waitFor(() => assert.equal(checked.length, 2));
+      assert.deepEqual(checked, ['15550000001', '15550000002']);
+    } finally {
+      client.clear();
+      sessionStorage.removeItem('openwa_api_key');
+    }
+  });
+}
+
+// A space inside a number is formatting, so two numbers pasted with a space between them read as one run of digits.
+// No phone number has more than 15, so such a run is refused before the number check rather than looked up or split.
+for (const field of ['recipient', 'forward target'] as const) {
+  test(`a ${field} longer than any phone number is refused without a lookup or a send`, async () => {
+    const checked: string[] = [];
+    const sent: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/sessions')) return jsonResponse([{ id: 's1', name: 'Main', status: 'ready' }]);
+      if (path.includes('/contacts/check/')) {
+        const number = path.split('/contacts/check/')[1];
+        checked.push(number);
+        return jsonResponse({ number, exists: true, whatsappId: `${number}@c.us` });
+      }
+      if (path.includes('/messages/')) {
+        sent.push(path);
+        return jsonResponse({ messageId: 'sent', timestamp: 1 });
+      }
+      return jsonResponse([]);
+    }) as typeof fetch;
+    sessionStorage.setItem('openwa_api_key', 'original-key');
+    sessionStorage.setItem('openwa_user_role', 'operator');
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
+    const view = rtl.render(
+      createElement(QueryClientProvider, { client }, createElement(RoleProvider, null, createElement(MessageTester))),
+    );
+    try {
+      await rtl.screen.findByRole('option', { name: /Main/ });
+      const joined = '628111222333 628222333444';
+      // A formatted number of 13 digits is still one number.
+      type(view.container, '#mt-13', field === 'recipient' ? joined : '+62 812 3456 7890');
+      if (field === 'recipient') {
+        type(view.container, '#mt-2', 'hello');
+      } else {
+        rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+        type(view.container, '#mt-9', joined);
+        type(view.container, '#mt-10', 'original-message');
+      }
+      await rtl.waitFor(() => assert.equal(sendButton().disabled, false));
+      rtl.fireEvent.click(sendButton());
+      // The refusal names its reason: the number was never looked up, so nothing is said about its registration.
+      await rtl.screen.findByText('More than 15 digits is not one phone number. Enter one number.');
+      assert.deepEqual(checked, field === 'recipient' ? [] : ['6281234567890'], 'the joined digits were looked up');
+      assert.deepEqual(sent, [], 'a message was sent');
+    } finally {
+      client.clear();
+      sessionStorage.removeItem('openwa_api_key');
+    }
+  });
+}
+
+test('an unchanged actor sends to canonical personal and forward destinations', async () => {
+  const writes: { path: string; key: string | null; body: unknown }[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith('/sessions')) return jsonResponse([{ id: 's1', name: 'Main', status: 'ready' }]);
+    if (path.includes('/contacts/check/'))
+      return jsonResponse({
+        number: '15550000001',
+        exists: true,
+        whatsappId: path.endsWith('2') ? 'destination@lid' : 'primary@lid',
+      });
+    if (path.includes('/messages/')) {
+      writes.push({ path, key: new Headers(init?.headers).get('X-API-Key'), body: JSON.parse(String(init?.body)) });
+      return jsonResponse({ messageId: 'sent', timestamp: 1 });
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+  sessionStorage.setItem('openwa_api_key', 'original-key');
+  sessionStorage.setItem('openwa_user_role', 'operator');
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
+  const view = rtl.render(
+    createElement(QueryClientProvider, { client }, createElement(RoleProvider, null, createElement(MessageTester))),
+  );
+  await rtl.screen.findByRole('option', { name: /Main/ });
+  type(view.container, '#mt-13', '15550000001');
+  type(view.container, '#mt-2', 'hello');
+  rtl.fireEvent.click(sendButton());
+  await rtl.waitFor(() => assert.equal(writes.length, 1));
+  await rtl.waitFor(() => assert.equal(sendButton().disabled, false));
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+  type(view.container, '#mt-9', '15550000002');
+  type(view.container, '#mt-10', 'original-message');
+  rtl.fireEvent.click(sendButton());
+  await rtl.waitFor(() => assert.equal(writes.length, 2));
+  assert.equal(writes[0].key, 'original-key');
+  assert.deepEqual(writes[0].body, { chatId: 'primary@lid', text: 'hello' });
+  assert.equal(writes[1].key, 'original-key');
+  assert.deepEqual(writes[1].body, {
+    fromChatId: 'primary@lid',
+    toChatId: 'destination@lid',
+    messageId: 'original-message',
+  });
+  client.clear();
+  sessionStorage.removeItem('openwa_api_key');
+});
+
+test('replacing the key stops a sequential group send and releases the composer', async () => {
+  sessionStorage.setItem('openwa_api_key', 'original-key');
+  const gateway = stubGroupGateway([
+    { id: 'g1@g.us', name: 'Family' },
+    { id: 'g2@g.us', name: 'Work' },
+  ]);
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+  await rtl.waitFor(() => assert.equal(gateway.textSends.length, 1));
+  sessionStorage.setItem('openwa_api_key', 'replacement-key');
+  await rtl.waitFor(() => assert.equal(sendMessageButton().disabled, false), { timeout: 4000 });
+  assert.deepEqual(gateway.textSends, ['g1@g.us']);
+  assert.equal(field(window.document.body, '#mt-2').matches(':disabled'), false);
+  assert.equal(rtl.screen.queryByText('Success'), null);
+  sessionStorage.removeItem('openwa_api_key');
+});
+
+test('an old lookup cannot complete a new operation after signing in with the same key', async () => {
+  const releases: ((response: Response) => void)[] = [];
+  const writes: unknown[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/sessions')) return jsonResponse([{ id: 's1', name: 'Main', status: 'ready' }]);
+    if (url.includes('/contacts/check/'))
+      return new Promise<Response>(resolve => {
+        releases.push(resolve);
+      });
+    if (url.endsWith('/messages/send-text')) {
+      writes.push(JSON.parse(String(init?.body)));
+      return jsonResponse({ messageId: 'new-operation', timestamp: 1 });
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+  sessionStorage.setItem('openwa_api_key', 'same-key');
+  sessionStorage.setItem('openwa_user_role', 'operator');
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
+  const render = () =>
+    rtl.render(
+      createElement(QueryClientProvider, { client }, createElement(RoleProvider, null, createElement(MessageTester))),
+    );
+  const start = async (view: ReturnType<typeof render>, content: string) => {
+    await rtl.screen.findByRole('option', { name: /Main/ });
+    type(view.container, '#mt-13', '15550000001');
+    type(view.container, '#mt-2', content);
+    rtl.fireEvent.click(sendButton());
+  };
+  const original = render();
+  await start(original, 'old operation');
+  await rtl.waitFor(() => assert.equal(releases.length, 1));
+  original.unmount();
+  client.clear();
+  sessionStorage.removeItem('openwa_api_key');
+  sessionStorage.setItem('openwa_api_key', 'same-key');
+  const current = render();
+  await start(current, 'new operation');
+  await rtl.waitFor(() => assert.equal(releases.length, 2));
+  const resolved = () => jsonResponse({ number: '15550000001', exists: true, whatsappId: 'canonical@lid' });
+  await rtl.act(async () => {
+    releases[0](resolved());
+    await new Promise(resolve => setImmediate(resolve));
+  });
+  assert.deepEqual(writes, []);
+  assert.equal(
+    (current.container.querySelector('.send-btn') as HTMLButtonElement).disabled,
+    true,
+    'the old completion unlocked the new operation',
+  );
+  await rtl.act(async () => {
+    releases[1](resolved());
+    await new Promise(resolve => setImmediate(resolve));
+  });
+  assert.deepEqual(writes, [{ chatId: 'canonical@lid', text: 'new operation' }]);
+  assert.ok(rtl.screen.getByText('new-operation'));
+  client.clear();
+  sessionStorage.removeItem('openwa_api_key');
+});
+
+// A phone number or chat id typed into a plain text field is laid out right to left in an Arabic or Hebrew
+// page: "+62 812 3456 7890" reads "7890 3456 812 62+" and "15550001111@c.us" splits around the at sign. The
+// dashboard forces left to right on tel inputs only, so a phone field is a tel input and the fields that
+// take a chat id or a mixed list say dir="ltr" themselves.
+test('phone fields are tel inputs and id fields are left to right', async () => {
+  stubGateway();
+  renderTesterAsWriter();
+  await rtl.screen.findByRole('option', { name: /Main/ });
+  const attr = (id: string, name: string): string | null => byId(id).getAttribute(name);
+
+  assert.equal(attr('mt-13', 'type'), 'tel');
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Contact' }));
+  assert.equal(attr('mt-7', 'type'), 'tel');
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+  for (const id of ['mt-17', 'mt-9', 'mt-10']) assert.equal(attr(id, 'dir'), 'ltr', id);
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Bulk' }));
+  assert.equal(attr('mt-11', 'dir'), 'ltr');
 });

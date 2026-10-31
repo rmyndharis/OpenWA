@@ -13,39 +13,64 @@ import {
   Min,
   Max,
   ArrayMaxSize,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { Validate } from 'class-validator';
-import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
 import {
   BATCH_ID_MAX_LENGTH,
   CHAT_ID_MAX_LENGTH,
+  CHAT_JID_MESSAGE,
+  CHAT_JID_PATTERN,
   MENTIONS_DESCRIPTION,
   MENTIONS_MAX,
   MENTION_WID_MAX_LENGTH,
   MESSAGE_TEXT_MAX_LENGTH,
 } from './send-message.dto';
-import { IsMentionWidConstraint } from './is-mention-wid.validator';
+import { isMentionWid } from './is-mention-wid.validator';
 import { BatchMessageStatus, BatchStatus } from '../entities/message-batch.entity';
+import { templateVariableNames } from '../../../common/utils/template-render';
+
+/**
+ * A bulk mention is a WID or a placeholder that the item's `variables` fill in, so one batch can tag a
+ * different participant per item. The rendered value is checked as a WID when the item runs.
+ */
+@ValidatorConstraint({ name: 'isBulkMentionWid', async: false })
+class IsBulkMentionWidConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    return typeof value === 'string' && (isMentionWid(value) || templateVariableNames(value).length > 0);
+  }
+
+  defaultMessage(): string {
+    return 'each mentions entry must be an individual WID or contain a template placeholder';
+  }
+}
 
 class BulkMediaDto {
   @ApiPropertyOptional({ description: 'Media URL (http/https)' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   url?: string;
 
   @ApiPropertyOptional({ description: 'Base64-encoded media data' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   base64?: string;
 
   @ApiPropertyOptional({ description: 'Media MIME type' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   mimetype?: string;
 
   @ApiPropertyOptional({ description: 'Filename (documents only)' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   filename?: string;
 
@@ -59,6 +84,7 @@ class BulkMediaDto {
 export class BulkMessageContentDto {
   @ApiPropertyOptional({ description: 'Text content for text messages', maxLength: MESSAGE_TEXT_MAX_LENGTH })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(MESSAGE_TEXT_MAX_LENGTH)
   text?: string;
@@ -68,30 +94,35 @@ export class BulkMessageContentDto {
   // object pass straight through and are persisted verbatim.
   @ApiPropertyOptional({ description: 'Image URL or base64', type: BulkMediaDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => BulkMediaDto)
   image?: BulkMediaDto;
 
   @ApiPropertyOptional({ description: 'Video URL or base64', type: BulkMediaDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => BulkMediaDto)
   video?: BulkMediaDto;
 
   @ApiPropertyOptional({ description: 'Audio URL or base64', type: BulkMediaDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => BulkMediaDto)
   audio?: BulkMediaDto;
 
   @ApiPropertyOptional({ description: 'Document URL or base64', type: BulkMediaDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => BulkMediaDto)
   document?: BulkMediaDto;
 
   @ApiPropertyOptional({ description: 'Caption for media messages', maxLength: 1024 })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(1024)
   caption?: string;
@@ -107,19 +138,22 @@ export class BulkMessageContentDto {
     items: { type: 'string', maxLength: MENTION_WID_MAX_LENGTH },
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(MENTIONS_MAX)
   @IsString({ each: true })
   @MaxLength(MENTION_WID_MAX_LENGTH, { each: true })
-  @Validate(IsMentionWidConstraint, { each: true })
+  @Validate(IsBulkMentionWidConstraint, { each: true })
   mentions?: string[];
 }
 
 class BulkMessageItemDto {
   @ApiProperty({ description: 'Recipient chat ID', example: '628123456789@c.us', maxLength: CHAT_ID_MAX_LENGTH })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)
+  @Matches(CHAT_JID_PATTERN, { message: CHAT_JID_MESSAGE })
   chatId!: string;
 
   @ApiProperty({ description: 'Message type', enum: ['text', 'image', 'video', 'audio', 'document'] })
@@ -127,6 +161,7 @@ class BulkMessageItemDto {
   type!: 'text' | 'image' | 'video' | 'audio' | 'document';
 
   @ApiProperty({ description: 'Message content based on type' })
+  @IsObject()
   @ValidateNested()
   @Type(() => BulkMessageContentDto)
   content!: BulkMessageContentDto;
@@ -172,6 +207,7 @@ export class SendBulkMessageDto {
     maxLength: BATCH_ID_MAX_LENGTH,
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(BATCH_ID_MAX_LENGTH)
   batchId?: string;
@@ -182,6 +218,7 @@ export class SendBulkMessageDto {
     type: [BulkMessageItemDto],
     maxItems: BULK_MESSAGES_MAX,
   })
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(BULK_MESSAGES_MAX)
   @ValidateNested({ each: true })
@@ -190,6 +227,7 @@ export class SendBulkMessageDto {
 
   @ApiPropertyOptional({ description: 'Batch processing options' })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => BulkMessageOptionsDto)
   options?: BulkMessageOptionsDto;

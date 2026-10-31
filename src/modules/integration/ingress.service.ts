@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { throttlerMessage } from '@nestjs/throttler';
-import { safeEqualStr, verifyIngressSignature } from './ingress-signature';
+import { verifyIngressSignature } from './ingress-signature';
+import { constantTimeEqual } from '../../common/security/constantTimeEqual';
 import { PluginIngressRoute } from '../../core/plugins/plugin.interfaces';
 import { IngressJobData } from '../queue/processors/ingress.processor';
 import type { EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
-import { evaluatePreflight } from './ingress-preflight';
+import { evaluatePreflight, pluginRestoringRejection } from './ingress-preflight';
 import { renderAck } from './ingress-ack';
 import type { IngressAdmission } from './ingress-instance-limit';
 import { parseBodyLimitBytes } from '../../config/inflight-body-budget';
@@ -49,13 +50,7 @@ export interface IngressDeps {
       pluginId: string;
       providerDeliveryId: string;
       route: string;
-      payload: {
-        headers: Record<string, string>;
-        query: Record<string, string>;
-        body: string;
-        rawBody: string;
-        method?: string;
-      };
+      payload: IngressJobData['payload'] & { method?: string };
       payloadHash: string;
       sessionId: string | null;
     }): Promise<boolean>;
@@ -68,6 +63,16 @@ export interface IngressDeps {
   // field read); MUST NOT call engine.initialize() or any blocking call. Absent (pure unit tests) → the
   // session-alive check skips (passes) rather than false-rejecting.
   sessionStatus?: (scope: string) => EngineStatus | undefined;
+  // Optional host-side probe: whether the boot restore has yet to finish with this plugin. A delivery for
+  // such a plugin on a route that declares a response contract is refused with a retryable 503 in the
+  // preflight stage, since no worker can take it yet. O(1) (a Set lookup). Absent in pure unit tests: every
+  // plugin counts as restored.
+  restorePending?: (pluginId: string) => boolean;
+  // Optional host-side probe: whether a delivery that was just persisted must not be dispatched yet. True for a
+  // plugin the boot restore has not reached while dispatch runs inline (queue off), where there is no worker
+  // to run it in; the row then stays 'pending' for the reconciler. Absent in pure unit tests: every delivery
+  // is dispatched.
+  deferDispatch?: (pluginId: string) => boolean;
   // Optional structured sink for preflight rejections, so operators can audit deliveries that were
   // rejected host-side (and therefore leave no dedup/DLQ row). Absent in pure unit tests.
   log?: (event: string, meta: Record<string, unknown>) => void;
@@ -119,7 +124,7 @@ export class IngressService {
       const token = req.query[route.challenge.tokenParam];
       const echo = req.query[route.challenge.echoParam];
       // Constant-time compare (mirrors the signature path) so the verify token can't be probed by timing.
-      if (token && instance.verifyToken && safeEqualStr(token, instance.verifyToken)) {
+      if (token && instance.verifyToken && constantTimeEqual(token, instance.verifyToken)) {
         return { status: 200, body: echo ?? '' };
       }
       return { status: 403, body: 'challenge failed' };
@@ -182,13 +187,20 @@ export class IngressService {
     // cannot probe liveness) and BEFORE the dedup persist (so a 5xx-rejected delivery never writes a
     // dedup row that would swallow the provider's retry as a 200 'duplicate' — the dedup trap). A
     // rejection leaves no dedup/DLQ row, so log it for operator audit.
-    const preflight = evaluatePreflight(route, instance.sessionScope, this.deps.sessionStatus);
+    // A route that declares a response contract wants its answer now, so a plugin the boot restore has not
+    // reached yet is refused in the same stage. Any other route is accepted and persisted below like every
+    // delivery: the queue holds its job until the plugin is up, or the reconciler dispatches the row.
+    const preflight =
+      route.response && this.deps.restorePending?.(req.pluginId)
+        ? pluginRestoringRejection()
+        : evaluatePreflight(route, instance.sessionScope, this.deps.sessionStatus);
     if (preflight) {
       this.deps.log?.('ingress_preflight_rejected', {
         pluginId: req.pluginId,
         instanceId: req.instanceId,
         route: req.route,
         status: preflight.status,
+        reason: preflight.body,
         sessionScope: instance.sessionScope,
       });
       // Returned whole, so a rejection's headers reach the wire. Re-packing the two fields dropped the
@@ -220,6 +232,9 @@ export class IngressService {
     // A shared-secret route carries the instance secret itself in its declared header, and an hmac
     // route's declared header carries a signature that is only useful to re-send the same body.
     const payload = {
+      // Every authenticating scheme has passed by here; a `none` route authenticates nothing. Recorded now
+      // because a plugin update can change the scheme before a queued or replayed delivery runs.
+      admission: { verified: route.signature.scheme !== 'none' },
       headers: redactSensitiveHeaders(
         req.headers,
         route.signature.scheme === 'shared-secret' || route.signature.scheme === 'hmac-sha256'
@@ -255,6 +270,9 @@ export class IngressService {
       sessionId: instance.sessionScope,
     });
     if (!isNew) return ack; // already persisted/acked; a retry gets the route's ack, not enqueued again
+    // Persisted and acked: dispatching it now would run the plugin inline where there is no worker to run it in.
+    // The row stays 'pending', which is where a crash here would leave it too, and the reconciler dispatches it.
+    if (this.deps.deferDispatch?.(req.pluginId)) return ack;
 
     // Best-effort conversation id for P1 ordering. Never throws — a malformed body just yields undefined.
     const providerConversationId = extractConversationId(route.conversationId, req.headers, req.rawBody);
@@ -299,10 +317,17 @@ const MAX_DELIVERY_ID_LENGTH = 255;
  * Derives a DETERMINISTIC delivery id when the provider sends no dedup header, so a provider retry of
  * the same delivery dedups instead of being treated as new. A random UUID would silently disable both
  * the persist-dedup and BullMQ's jobId idempotency, causing duplicate downstream WhatsApp sends. Keyed
- * on pluginId + instanceId + route + rawBody ONLY — never a server timestamp, which would defeat dedup.
+ * on pluginId + instanceId + route + rawBody, plus the method and query when the body is empty; never a
+ * server timestamp, which would defeat dedup.
  */
 function deriveDeliveryId(req: IngressRequest): string {
-  return createHash('sha256').update([req.pluginId, req.instanceId, req.route, req.rawBody].join('\0')).digest('hex');
+  const parts = [req.pluginId, req.instanceId, req.route, req.rawBody];
+  // A delivery carried in the query string (a GET callback, a bodiless POST) is identified by its query: the
+  // empty body alone gave every one of them the same id, so all but the first were acked and dropped. Only that
+  // case adds it, so every other delivery keeps the id it had. Sorted by code point, not locale: the id is stored.
+  const query = Object.entries(req.query).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  if (req.rawBody === '' && query.length > 0) parts.push(req.method, JSON.stringify(query));
+  return createHash('sha256').update(parts.join('\0')).digest('hex');
 }
 
 /**
@@ -323,8 +348,15 @@ export function extractConversationId(
   if (spec.jsonPointer) {
     try {
       let node: unknown = JSON.parse(rawBody);
-      for (const seg of spec.jsonPointer.split('/').filter(Boolean)) {
-        node = (node as Record<string, unknown>)?.[seg];
+      // RFC 6901: an empty token is a key, `~1` and `~0` stand for `/` and `~`, and an array takes only an
+      // index. A pointer written without its leading slash keeps resolving as it did.
+      const path = spec.jsonPointer.startsWith('/') ? spec.jsonPointer.slice(1) : spec.jsonPointer;
+      for (const token of path.split('/')) {
+        if (/~(?:[^01]|$)/.test(token)) return undefined;
+        const key = token.replace(/~1/g, '/').replace(/~0/g, '~');
+        if (node === null || typeof node !== 'object' || !Object.hasOwn(node, key)) return undefined;
+        if (Array.isArray(node) && !/^(0|[1-9][0-9]*)$/.test(key)) return undefined;
+        node = (node as Record<string, unknown>)[key];
       }
       // Only a scalar is a usable conversation key — an object/array would stringify to junk.
       if (typeof node === 'string') return node;
@@ -351,6 +383,7 @@ const SENSITIVE_INGRESS_HEADERS = new Set([
   'x-signature',
   'x-signature-ed25519',
   'x-webhook-signature',
+  'webhook-signature',
 ]);
 
 export function redactSensitiveHeaders(

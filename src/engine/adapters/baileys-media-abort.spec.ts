@@ -55,6 +55,7 @@ function build(
     getOnMessageEdited: () => undefined,
     getOnMessageReaction: () => undefined,
     getOnMessageAck: () => undefined,
+    getOnMessageReceipt: () => undefined,
     getOnGroupEvent: () => undefined,
     getOnCall: () => undefined,
     getOnPresenceUpdate: () => undefined,

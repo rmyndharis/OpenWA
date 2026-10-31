@@ -5,7 +5,10 @@ import { retryThrottled } from './fetchAllPages.ts';
 // preview near the viewport, so the fetches start 125 ms apart (8 a second) rather than all at once;
 // otherwise the newest previews are the ones refused and stay download buttons for good. A 429 that
 // still arrives (a lower configured limit, another tab) is retried like fetchAllPages retries a page.
+// So is a 503: on S3 the gateway refuses a download at once while 50 are open, and a place frees as soon
+// as one of them ends. Any other failure is not retried.
 const START_GAP_MS = 125;
+const RETRIED_STATUSES = [429, 503];
 let lastStart = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 const waiting: Array<() => void> = [];
@@ -47,8 +50,12 @@ function waitForTurn(signal: AbortSignal): Promise<void> {
 }
 
 export function loadArchivedMedia<T>(signal: AbortSignal, load: () => Promise<T>, retryDelayMs = 1000): Promise<T> {
-  return retryThrottled(async () => {
-    await waitForTurn(signal);
-    return load();
-  }, retryDelayMs);
+  return retryThrottled(
+    async () => {
+      await waitForTurn(signal);
+      return load();
+    },
+    retryDelayMs,
+    RETRIED_STATUSES,
+  );
 }

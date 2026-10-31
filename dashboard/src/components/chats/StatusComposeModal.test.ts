@@ -26,6 +26,9 @@ class CountingFileReader {
 const posted: unknown[] = [];
 // Contact-list reads, each answered with a 429.
 let contactReads = 0;
+// While set, a contact read is answered with an empty list, so a test that only looks at the form leaves no retry
+// or request timer behind.
+let emptyContacts = false;
 
 before(async () => {
   const { installJsdomGlobals } = await import('../../test-helpers/jsdom.ts');
@@ -34,6 +37,8 @@ before(async () => {
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).includes('/contacts')) {
       contactReads += 1;
+      if (emptyContacts)
+        return Promise.resolve(new Response('[]', { headers: { 'Content-Type': 'application/json' } }));
       return Promise.resolve(
         new Response(JSON.stringify({ statusCode: 429, message: 'Too Many Requests' }), {
           status: 429,
@@ -90,6 +95,7 @@ afterEach(() => {
   holdReads = false;
   posted.length = 0;
   contactReads = 0;
+  emptyContacts = false;
   queryClient.clear();
 });
 
@@ -200,4 +206,83 @@ test('status text and caption are bounded by Post, not truncated by UTF-16 units
   fireEvent.change(caption, { target: { value: '\u{1F600}'.repeat(1025) } });
   assert.equal(post.disabled, true, 'a caption over 1024 characters can be posted');
   assert.ok(regions.includes(screen.getByText('Limited to 1024 characters (1025 now).')));
+});
+
+// The recipient search matches a number against the ASCII digits of a contact, whatever script it is typed in.
+test('a number typed in native digits finds a recipient by its number', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const stubbed = globalThis.fetch;
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify([
+          { id: '628123456789@c.us', name: 'Ben', number: '628123456789', isMyContact: true, isBlocked: false },
+          { id: '491701234567@c.us', name: 'Anna', number: '491701234567', isMyContact: true, isBlocked: false },
+        ]),
+        { headers: { 'Content-Type': 'application/json' } },
+      ),
+    )) as typeof fetch;
+  try {
+    render('baileys');
+    await screen.findByText('Anna');
+    const search = document.getElementById('scm-6') as HTMLInputElement;
+    fireEvent.change(search, { target: { value: '٦٢٨١٢٣' } });
+    await waitFor(() => assert.equal(screen.queryByText('Anna'), null));
+    assert.ok(screen.getByText('Ben'));
+  } finally {
+    globalThis.fetch = stubbed;
+  }
+});
+
+// The ids are the protocol's FontType enum; the picker names them as the protocol does instead of showing bare numbers.
+const fontOptions = () =>
+  [...(document.getElementById('scm-3') as HTMLSelectElement).options].map(o => [o.value, o.textContent]);
+
+test('the font picker names every id after the protocol, on Baileys', async () => {
+  emptyContacts = true;
+  render('baileys');
+  // Let the contact read land first: an answer arriving after the next test's cache clear leaves a timer behind.
+  await rtl.screen.findByText('No contacts found');
+  assert.deepEqual(fontOptions(), [
+    ['', 'Default'],
+    ['0', 'System'],
+    ['1', 'System text'],
+    ['2', 'Script'],
+    ['6', 'Bold'],
+    ['7', 'Morning Breeze'],
+    ['8', 'Calistoga'],
+    ['9', 'Exo 2'],
+    ['10', 'Courier Prime'],
+  ]);
+});
+
+test('whatsapp-web.js is not offered the ids it posts in the default font', () => {
+  render('whatsapp-web.js');
+  assert.deepEqual(
+    fontOptions().map(([value]) => value),
+    ['', '0', '1', '2', '6', '7'],
+  );
+});
+
+test('a picked font is posted under its own id', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  render();
+  fireEvent.change(document.getElementById('scm-1') as HTMLTextAreaElement, { target: { value: 'hello' } });
+  fireEvent.change(document.getElementById('scm-3') as HTMLSelectElement, { target: { value: '2' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Post' }));
+  await waitFor(() => assert.equal(posted.length, 1));
+  assert.equal((posted[0] as { font?: number }).font, 2);
+});
+
+// Text or Image is a choice between two toggle buttons; which one is chosen is exposed, not only drawn.
+test('the status kind toggle says which kind is chosen', () => {
+  const { screen, fireEvent } = rtl;
+  render();
+  const text = screen.getByRole('button', { name: 'Text' });
+  const image = screen.getByRole('button', { name: 'Image' });
+  assert.equal(text.getAttribute('aria-pressed'), 'true', 'the chosen kind is not exposed as pressed');
+  assert.equal(image.getAttribute('aria-pressed'), 'false');
+  fireEvent.click(image);
+  assert.equal(image.getAttribute('aria-pressed'), 'true');
+  assert.equal(text.getAttribute('aria-pressed'), 'false');
 });

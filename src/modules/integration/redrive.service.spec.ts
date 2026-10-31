@@ -173,63 +173,40 @@ describe('RedriveService', () => {
     expect(events.update).not.toHaveBeenCalled(); // nothing was delivered, so the event row stays as-is
   });
 
-  it('queries only non-redriven inbound rows for the instance and returns 0 when none are found', async () => {
+  it('queries only non-redriven inbound rows of the current binding and returns 0 when none are found', async () => {
     (repo.find as jest.Mock).mockResolvedValue([]);
     const svc = makeSvc();
 
-    const res = await svc.redriveInstance('p', 'i', null);
+    const res = await svc.redriveInstance('p', 'i', 'sess-current');
 
+    // The binding enters BOTH the find() and the count() query: rows of an earlier binding neither consume
+    // the batch nor leak through `remaining`, since dispatch refuses them and a replay would only fail again.
     expect(repo.find).toHaveBeenCalledWith({
-      where: { pluginId: 'p', instanceId: 'i', direction: 'inbound', redriven: false },
+      where: { pluginId: 'p', instanceId: 'i', direction: 'inbound', redriven: false, sessionId: 'sess-current' },
       order: { attempts: 'ASC', createdAt: 'ASC' },
       take: 100,
+    });
+    expect(repo.count).toHaveBeenCalledWith({
+      where: { pluginId: 'p', instanceId: 'i', direction: 'inbound', redriven: false, sessionId: 'sess-current' },
     });
     expect(res.redriven).toBe(0);
     expect(ingressEnqueue.enqueue).not.toHaveBeenCalled();
     expect(repo.update).not.toHaveBeenCalled();
   });
 
-  it('filters the DLQ batch by the session provenance so a rebind cannot replay foreign historical rows', async () => {
-    // After an instance is rebound sess-old -> sess-current, a key scoped to sess-current must NOT
-    // replay retained rows that still carry sessionId 'sess-old'. The authorized binding is threaded
-    // in as a concrete filter that enters BOTH the find() and count() query — foreign rows neither
-    // consume the batch nor leak through `remaining`.
+  it.each([null, '*'])('takes a row with no session or "*" for an instance bound to all sessions (%s)', async scope => {
     (repo.find as jest.Mock).mockResolvedValue([]);
     const svc = makeSvc();
 
-    await svc.redriveInstance('p', 'i', 'sess-current');
+    await svc.redriveInstance('p', 'i', scope);
 
-    expect(repo.find).toHaveBeenCalledWith({
-      where: {
-        pluginId: 'p',
-        instanceId: 'i',
-        direction: 'inbound',
-        redriven: false,
-        sessionId: 'sess-current',
-      },
-      order: { attempts: 'ASC', createdAt: 'ASC' },
-      take: 100,
-    });
-    const [countCall] = (repo.count as jest.Mock).mock.calls[0] as [{ where: Record<string, unknown> }];
-    expect(countCall.where).toMatchObject({ sessionId: 'sess-current' });
-  });
-
-  it('leaves the sessionId predicate ABSENT for an unrestricted (null) caller so legacy/null-session rows stay replayable', async () => {
-    // null means the caller is unrestricted: the DLQ is drained across every sessionId, including
-    // legacy rows written before sessionId provenance existed (sessionId null). The where object must
-    // NOT carry a sessionId key at all — emitting `sessionId: null` would exclude those legacy rows.
-    (repo.find as jest.Mock).mockResolvedValue([]);
-    const svc = makeSvc();
-
-    await svc.redriveInstance('p', 'i', null);
-
-    expect(repo.find).toHaveBeenCalledWith({
-      where: { pluginId: 'p', instanceId: 'i', direction: 'inbound', redriven: false },
-      order: { attempts: 'ASC', createdAt: 'ASC' },
-      take: 100,
-    });
-    const [countArg] = (repo.count as jest.Mock).mock.calls[0] as [{ where: Record<string, unknown> }];
-    expect(countArg.where).not.toHaveProperty('sessionId');
+    const base = { pluginId: 'p', instanceId: 'i', direction: 'inbound', redriven: false };
+    const where = [
+      { ...base, sessionId: expect.objectContaining({ _type: 'isNull' }) as unknown },
+      { ...base, sessionId: '*' },
+    ];
+    expect(repo.find).toHaveBeenCalledWith({ where, order: { attempts: 'ASC', createdAt: 'ASC' }, take: 100 });
+    expect(repo.count).toHaveBeenCalledWith({ where });
   });
 
   it('falls back to the failure row id as deliveryId when deliveryId is null', async () => {

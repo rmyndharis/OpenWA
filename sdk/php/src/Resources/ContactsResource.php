@@ -55,7 +55,7 @@ class ContactsResource
      * Batch-resolve profile picture URLs for up to 50 contacts in one request.
      *
      * @param list<string> $ids
-     * @return array{pictures: array<string,?string>} Map of contact id → URL (null when a lookup fails).
+     * @return array{pictures: array<string,?string>} Map of contact id → URL (null when a lookup fails). An id skipped after a lookup timed out is absent from the map; ask for it again.
      */
     public function profilePictures(string $sessionId, array $ids): array
     {

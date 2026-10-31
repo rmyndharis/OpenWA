@@ -1,4 +1,12 @@
-import { normalizeIp, ipMatches, limiterKeyForIp, resolveClientIp, isIpOrCidrEntry, invalidTrustedProxies } from './ip';
+import {
+  normalizeIp,
+  ipMatches,
+  limiterKeyForIp,
+  resolveClientIp,
+  isIpOrCidrEntry,
+  invalidTrustedProxies,
+  parseTrustedProxies,
+} from './ip';
 
 describe('normalizeIp', () => {
   it('strips an IPv4-mapped IPv6 prefix', () => {
@@ -139,5 +147,19 @@ describe('resolveClientIp', () => {
     expect(resolveClientIp(req('10.0.0.2', '203.0.113.99, 198.51.100.7, 10.0.0.9'), ['10.0.0.0/8'])).toBe(
       '198.51.100.7',
     );
+  });
+});
+
+describe('parseTrustedProxies', () => {
+  it('splits on commas, trims each entry and drops blanks', () => {
+    expect(parseTrustedProxies(' 10.0.0.1, 172.18.0.0/16 ,, fd00::/8 ')).toEqual([
+      '10.0.0.1',
+      '172.18.0.0/16',
+      'fd00::/8',
+    ]);
+  });
+
+  it.each([undefined, '', '  ', ' , , '])('reads %p as no proxies', raw => {
+    expect(parseTrustedProxies(raw)).toEqual([]);
   });
 });

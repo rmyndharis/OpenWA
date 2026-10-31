@@ -14,8 +14,7 @@ import type { Session } from './entities/session.entity';
  * would vacuously approve.
  */
 describe('SessionProxyInterceptor', () => {
-  // A real UUID: the interceptor refuses to route malformed ids (they cannot name a session, and a
-  // raw uuid-column lookup on Postgres would 500 before the route pipe could answer 400).
+  // Exercise both UUID ids and the safe string ids accepted by data import.
   const SID = '3f8d1c2a-4b6e-4f0d-9a7c-2e5b8d1f6a3c';
 
   const row = (over: Partial<Session> = {}): Partial<Session> => ({
@@ -105,12 +104,18 @@ describe('SessionProxyInterceptor', () => {
     // force local execution on a non-owner (a stop() here writes DISCONNECTED while the owner's
     // engine stays up). The refusal doubles as the loop guard — a marked request is never
     // forwarded again, it is answered with a retryable conflict instead.
-    it('refuses (409) a request already marked forwarded that lands on a live non-owner', async () => {
-      const req = request({ headers: { [FORWARDED_HEADER]: 'peer-node', 'x-api-key': 'k' } });
-      const { interceptor, context, next, handle } = build({ req });
-      await expect(interceptor.intercept(context, next)).rejects.toMatchObject({ status: 409 });
-      expect(handle).not.toHaveBeenCalled();
-    });
+    it.each([SID, 'legacy-session'])(
+      'refuses a marked request for session %s that lands on a live non-owner',
+      async sessionId => {
+        const req = request({
+          params: { sessionId },
+          headers: { [FORWARDED_HEADER]: 'peer-node', 'x-api-key': 'k' },
+        });
+        const { interceptor, context, next, handle } = build({ req, row: row({ id: sessionId }) });
+        await expect(interceptor.intercept(context, next)).rejects.toMatchObject({ status: 409 });
+        expect(handle).not.toHaveBeenCalled();
+      },
+    );
 
     it('executes a forwarded request locally when this node hosts (or may host) the session', async () => {
       const req = request({ headers: { [FORWARDED_HEADER]: 'peer-node', 'x-api-key': 'k' } });
@@ -124,9 +129,16 @@ describe('SessionProxyInterceptor', () => {
       expect(await ranLocally(await unowned.interceptor.intercept(unowned.context, unowned.next))).toBe(true);
     });
 
-    it('skips routing for a malformed id — the route pipe answers 400, not a raw uuid-column query', async () => {
-      const req = request({ params: { sessionId: 'not-a-uuid' } });
-      const { interceptor, context, next, findOne } = build({ req });
+    it('handles an unknown string id locally after looking up its owner', async () => {
+      const req = request({ params: { sessionId: 'missing-session' } });
+      const { interceptor, context, next, findOne } = build({ req, row: null });
+      expect(await ranLocally(await interceptor.intercept(context, next))).toBe(true);
+      expect(findOne).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'missing-session' } }));
+    });
+
+    it('handles an id containing NUL locally without querying its owner', async () => {
+      const req = request({ params: { sessionId: 'session\0name' } });
+      const { interceptor, context, next, findOne } = build({ req, row: null });
       expect(await ranLocally(await interceptor.intercept(context, next))).toBe(true);
       expect(findOne).not.toHaveBeenCalled();
     });
@@ -188,13 +200,17 @@ describe('SessionProxyInterceptor', () => {
       seen = [];
     });
 
-    it('relays method, path, query, body and auth to the owner, and the owner’s answer back', async () => {
+    it.each([SID, 'legacy-session'])('relays a send for session %s and the owner response', async sessionId => {
       const req = request({
+        params: { sessionId },
         method: 'POST',
-        originalUrl: `/api/sessions/${SID}/messages/send-text?trace=1`,
+        originalUrl: `/api/sessions/${sessionId}/messages/send-text?trace=1`,
         body: { chatId: '628@c.us', text: 'halo' },
       });
-      const { interceptor, context, next, handle, res } = build({ req, row: row({ nodeUrl: serverUrl }) });
+      const { interceptor, context, next, handle, res, findOne } = build({
+        req,
+        row: row({ id: sessionId, nodeUrl: serverUrl }),
+      });
 
       const result = await interceptor.intercept(context, next);
       // The response was written directly, so nothing may flow to the route handler. The observable
@@ -202,10 +218,11 @@ describe('SessionProxyInterceptor', () => {
       // which rejects on an empty one and logged an ERROR for every successful forward.
       expect(await lastValueFrom(result)).toBeUndefined();
       expect(handle).not.toHaveBeenCalled();
+      expect(findOne).toHaveBeenCalledWith(expect.objectContaining({ where: { id: sessionId } }));
 
       expect(seen).toHaveLength(1);
       expect(seen[0].method).toBe('POST');
-      expect(seen[0].url).toBe(`/api/sessions/${SID}/messages/send-text?trace=1`);
+      expect(seen[0].url).toBe(`/api/sessions/${sessionId}/messages/send-text?trace=1`);
       expect(seen[0].headers['x-api-key']).toBe('k-123');
       expect(seen[0].headers[FORWARDED_HEADER]).toBe('me');
       expect(JSON.parse(seen[0].body)).toEqual({ chatId: '628@c.us', text: 'halo' });

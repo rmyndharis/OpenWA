@@ -1,6 +1,6 @@
 # OpenWA Java SDK
 
-This document describes SDK 0.6.0. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
+This document describes SDK 0.8.0. `groups.setMemberLabel`, the `match` field of `SearchQuery`, and the `thumbnailUrl` and `thumbnailBase64` components of `CustomLinkPreview` require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later. The `message.receipt` and `poll.vote` webhook event names require OpenWA 0.26.0 or later.
 
 Official Java client for [OpenWA](https://github.com/rmyndharis/OpenWA), the
 open-source WhatsApp API Gateway. OpenWA is an independent project, not
@@ -19,14 +19,14 @@ Java 17+, one runtime dependency ([Gson](https://github.com/google/gson)).
 <dependency>
   <groupId>com.rmyndharis</groupId>
   <artifactId>openwa</artifactId>
-  <version>0.6.0</version>
+  <version>0.8.0</version>
 </dependency>
 ```
 
 **Gradle**
 
 ```groovy
-implementation 'com.rmyndharis:openwa:0.6.0'
+implementation 'com.rmyndharis:openwa:0.8.0'
 ```
 
 ## Quickstart
@@ -123,11 +123,11 @@ try {
 | `OpenWAConflictError`           | 409  | Conflicting state, typically engine not ready, or an idempotency outcome (see `code()`) |
 | `OpenWARateLimitError`          | 429  | Rate limited                                                                            |
 | `OpenWANotImplementedError`     | 501  | Active engine does not support the call                                                 |
-| `OpenWAServiceUnavailableError` | 503  | Engine did not confirm in time                                                          |
+| `OpenWAServiceUnavailableError` | 503  | Could not complete now: transport failure, draining, or WhatsApp throttle or timeout    |
 | `OpenWAApiError`                | —    | Any other non-2xx (carries `.status()`)                                                 |
 | `OpenWATimeoutError`            | —    | Request exceeded the configured timeout                                                 |
 
-All extend `OpenWAError` (a `RuntimeException`). 503 is transient, but a catalog 503 can persist because WhatsApp may never answer that query, so bound any retry. A 429 from the global rate limiter lifts when its window expires (seconds for the per-second tier, up to an hour for the hourly tier by default), and `retryAfterSeconds()` carries its `Retry-After` header. A 429 whose `code()` is `"SEND_PACING_LIMITED"` is usually not transient: do not retry it before `retryAfterSeconds()`, which then comes from the body: a few seconds when only sends still in flight caused it, the rest of the failure breaker's cooldown (`SEND_PACING_BREAKER_COOLDOWN_MS`, 15 minutes by default) after a run of send failures, otherwise up to the next UTC day. `headers()` returns the response headers. A 503 does not prove a write was never carried out: the engine answers it when WhatsApp did not confirm in time, and the change may still have been applied, so re-read the state before repeating it. In a routed deployment a forward that fails before reaching the owner node answers 503, one that fails after the request reached it answers 502 or 504, and a 503 from the owner itself is relayed unchanged.
+All extend `OpenWAError` (a `RuntimeException`). 503 means the gateway could not complete the request right now: the path to WhatsApp failed, the gateway is draining or short of a dependency, or, on Baileys, WhatsApp throttled (code 429) or timed out (code 408) the request. Back off and retry later instead of at once, because repeating a throttled request straight away prolongs the throttle; a catalog 503 can persist because WhatsApp may never answer that query, so bound any retry. A 429 from the global rate limiter lifts when its window expires (seconds for the per-second tier, up to an hour for the hourly tier by default), and `retryAfterSeconds()` carries its `Retry-After` header. A 429 whose `code()` is `"SEND_PACING_LIMITED"` is usually not transient: do not retry it before `retryAfterSeconds()`, which then comes from the body: a few seconds when only sends still in flight caused it, the rest of the failure breaker's cooldown (`SEND_PACING_BREAKER_COOLDOWN_MS`, 15 minutes by default) after a run of send failures, otherwise up to the next UTC day. `headers()` returns the response headers. A 503 does not always prove a write was never carried out: when WhatsApp timed out, the change may still have been applied, so re-read the state before repeating it. A throttle on a send or a single write was turned away before it ran, so nothing was sent or applied; a send also sent nothing when its recipient lookup failed, its connection closed before the message was written, or its media or preview image URL could not be fetched through the session's proxy. Each of these frees a keyed send's `Idempotency-Key`. A group settings update with several fields applies them one at a time, so a 503 on a later field, a throttle included, leaves the earlier ones applied; its message lists them after `already applied:`, so re-read the settings before retrying, or send one field per request. In a routed deployment a forward that fails before reaching the owner node answers 503, one that fails after the request reached it answers 502 or 504, and a 503 from the owner itself is relayed unchanged.
 
 ## Receiving webhooks
 
@@ -215,7 +215,7 @@ before tagging rather than tagging to see what happens.
 Cutting a release:
 
 1. Bump `<version>` in `pom.xml` and land it on `main`.
-2. Tag that commit `java-sdk-v<version>` (e.g. `java-sdk-v0.6.0`) and push the
+2. Tag that commit `java-sdk-v<version>` (e.g. `java-sdk-v0.8.0`) and push the
    tag. The SDK has its own version line — the monorepo's `v*` tags are the app
    version and never trigger an SDK publish.
 3. The workflow builds, signs, and publishes; Central syncs within a few hours.

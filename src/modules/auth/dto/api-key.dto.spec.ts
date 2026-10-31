@@ -60,4 +60,24 @@ describe('API key DTO contract', () => {
     expect(await errors(ALLOWED_CHATS_MAX)).toEqual([]);
     expect(await errors(ALLOWED_CHATS_MAX + 1)).toEqual(['allowedChats']);
   });
+
+  // An empty list is "no restriction" for these three fields, and class-transformer turned an object into an
+  // empty list, so a map sent by mistake created a key that reached every chat, session and address.
+  it.each([CreateApiKeyDto, UpdateApiKeyDto])('refuses a restriction list of %p given as an object', async dto => {
+    for (const field of ['allowedChats', 'allowedSessions', 'allowedIps']) {
+      for (const value of [{}, { '628111@c.us': true }]) {
+        const errors = (await validate(plainToInstance(dto, { name: 'probe', [field]: value }))).map(e => e.property);
+        expect(errors).toEqual([field]);
+      }
+    }
+  });
+
+  it.each([CreateApiKeyDto, UpdateApiKeyDto])(
+    'still takes the restriction lists of %p as lists, empty ones too',
+    async dto => {
+      const body = { name: 'probe', allowedChats: ['628111@c.us'], allowedSessions: [], allowedIps: ['10.0.0.0/8'] };
+      expect(await validate(plainToInstance(dto, body))).toEqual([]);
+      expect(plainToInstance(dto, body).allowedSessions).toEqual([]);
+    },
+  );
 });

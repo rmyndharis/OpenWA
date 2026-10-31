@@ -40,7 +40,10 @@ and read back with an await in between; the reservation map is the only synchron
 **Defense:** the INITIALIZING row is written and its promise tracked
 (`session-engine-lifecycle.service.ts`, `initializeEngine`); a retiring control awaits the
 pending write before deciding what it is retiring.
-**Pinned by:** `session.service.spec.ts` (the stop/delete-during-start teardown cases).
+**Pinned by:** `session-initial-status-commit-order.spec.ts`, where the INITIALIZING update commits only
+after stop, logout, forceKill and delete have begun, and each verb's own write must still land last
+(it fails if the verbs stop awaiting the pending write). `session-initial-status-retirement.spec.ts`
+pins the other half: a late INITIALIZING reply announces nothing once its engine has retired.
 
 ### INV-3 — Ownership is re-validated by object identity, not by session id
 
@@ -61,16 +64,21 @@ case: whatsapp-web.js only starts it in `inject()`, after the page has loaded.
 force-destroyed + status DISCONNECTED + 504 to the caller. The eviction, the recorded error and the
 DISCONNECTED write apply only while that engine is still the live one: a stale deadline (a stop +
 start replaced it mid-init) force-destroys its own engine and 504s, and leaves the replacement alone.
+The DISCONNECTED write also lands only on a row whose `nodeId` is this node's or empty: a deadline that
+fires while the teardown of a lease lost during the init is still running leaves the row to the peer
+that adopted it (INV-6).
 A REAL rejection is NOT treated as a timeout: it propagates so `start()` records FAILED with the
 reason.
 **Pinned by:** `session.service.spec.ts` (start failure-path cases; the timeout/rejection
-split lives in `session.service.spec.ts`'s init-timeout describes).
+split lives in `session.service.spec.ts`'s init-timeout describes);
+`session-init-timeout-after-lease-loss.spec.ts` for the lost lease.
 **Do not "simplify" the two paths into one** — the distinction is why a bad proxy config returns
 FAILED + reason while an init that never completes returns 504 + eviction.
 
 ### INV-5 — Delete racing a start re-purges auth directories after init resolves
 
-**Interleaving:** delete runs (purges dirs, removes the session row and its child rows in one
+**Interleaving:** delete runs (purges dirs, removes the session's messages, outbox rows and
+delivery failures in batches, then the session row and its other child rows in one
 transaction); the in-flight start's `initialize()` resolves and re-creates the auth dir; a phantom
 session lingers on disk.
 **Defense:** the post-init guards in `start()` (`session-engine-controls.ts`) and `executeReconnect`
@@ -88,14 +96,32 @@ stop/delete lands during start() (no resurrection to READY)'.
 **Interleaving:** node A holds session X's lease; node B adopts it after A's lease lapses; a
 stale in-flight write from A would clobber B's status.
 **Defense:** on lease loss, `stopOrphanEngines` destroys local engines; the session row is the
-owning node's alone (`session.service.ts` boot path). The one exception is the takeover sweep's
-`markLapsedDisconnected`, which marks a row disconnected only under the predicate it read (same
-`nodeId`, same status, lease expired more than two TTLs ago, and for a `qr_ready` row still no
-phone), so a row B has claimed, or a pairing that completed meanwhile, matches nothing. A `qr_ready`
-row with a phone is never marked: the adoption sweep would take the resulting disconnected row over.
+owning node's alone (`session.service.ts` boot path). Four writes are exceptions, each under a
+predicate. The takeover sweep's `markLapsedDisconnected` marks a row disconnected only under the
+predicate it read (same `nodeId`, same status, lease expired more than two TTLs ago, and for a
+`qr_ready` row still no phone), so a row B has claimed, or a pairing that completed meanwhile, matches
+nothing. A `qr_ready` row with a phone is never marked: the adoption sweep would take the resulting
+disconnected row over. And a start or reconnect whose post-init read finds its claim gone retires the
+engine it launched through `retireLaunchedEngine` (`session-engine-controls.ts`): the engine's own
+DISCONNECTED report is held back, because the in-memory ownership it is fenced on still lists the
+session until the next heartbeat, and the verb writes DISCONNECTED only on a row whose `nodeId` is this
+node's or empty, so a row B has claimed keeps B's status. The init deadline's DISCONNECTED (INV-4) is
+written under that same predicate: it can fire while `stopOrphanEngines` is still tearing the engine
+down, after B adopted the row. Last, a start that fails or is refused with no engine left here (a
+takeover adoption whose launch fails, say) releases its claim and then writes DISCONNECTED only on a
+row that no node holds and that still has an active status: a row no node holds is revisited by
+neither `markLapsedDisconnected` nor the adoption sweep, so the READY a vanished node left on it would
+otherwise stand until a boot, and any claim since sets `nodeId`, so a row B claimed matches nothing.
 **Pinned by:** `src/modules/takeover/session-takeover.service.spec.ts` +
-`session-ownership.service.spec.ts` + `session-ownership-status-fence.spec.ts` + the real-database
-predicate spec for `markLapsedDisconnected` in `src/modules/session/session.service.spec.ts`.
+`session-ownership.service.spec.ts` + `session-ownership-status-fence.spec.ts` +
+`session-failed-write-ownership-fence.spec.ts` for the FAILED writers outside the wiring + the real-database
+predicate spec for `markLapsedDisconnected` in `src/modules/session/session.service.spec.ts` +
+`session-retired-start-leaves-peer-row.spec.ts` for the retired launch +
+`session-init-timeout-after-lease-loss.spec.ts` for the init deadline +
+`src/modules/takeover/session-takeover-failed-adoption.spec.ts` for the failed start. That
+`stopOrphanEngines` itself writes no row is pinned by `session-delete-claim.spec.ts` ('retires an old
+local engine after a peer takes over and a fresh claim fails with SQL error %s'), where the peer's
+claimed row must still read as the peer's own start left it.
 
 ### INV-7 — FAILED sessions are deliberately NOT adopted by takeover
 
@@ -116,7 +142,9 @@ the session name, and `start()`, `delete()` and `executeReconnect` wait for it t
 `awaitPendingTeardown` (bounded at 10 s and fail-closed: a timeout is a 409 for `start()`/`delete()`
 and a failed attempt for a reconnect), so no new engine or purge races the rm.
 **Pinned by:** `logout-teardown-race.spec.ts`, which enumerates that fence's interleavings. Read it
-before touching anything in the logout/forceKill path.
+before touching anything in the logout/forceKill path. The `executeReconnect` wait is pinned by
+`session-delete-claim.spec.ts` ('keeps a reconnect awaiting teardown when the old start returns from
+its %s').
 
 ### INV-9 — The reconnect loop bounds itself: backoff with jitter, clamp ≤ 5 min and ≤ setTimeout's 32-bit range, alert every 5 consecutive attempts
 
@@ -133,7 +161,8 @@ the clamps exist because a naive `delay * 2^attempt` reaches values
 
 **Why:** ten Chromium instances launching simultaneously on boot would hold the HTTP port closed
 for minutes; detaching from bootstrap means the API answers while engines warm.
-**Pinned by:** `session.service.spec.ts` (boot auto-start ordering/staggering cases).
+**Pinned by:** `session.service.spec.ts` (boot auto-start ordering/staggering cases; the stagger by
+'waits the full throttle between two auto-started launches').
 
 ---
 
@@ -142,14 +171,14 @@ for minutes; detaching from bootstrap means the API answers while engines warm.
 Every transition has a known, enumerated set of writers. When debugging a status surprise, find the
 writer before anything else:
 
-| Transition                      | Writers                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| → `INITIALIZING`                | `initializeEngine` (persisted before `initialize()`)                                                                                                                                                                                                                                                                                                                              |
-| → `QR_READY` / `AUTHENTICATING` | engine callbacks (wired in the lifecycle delegate), via the registry's liveness check                                                                                                                                                                                                                                                                                             |
-| → `READY`                       | `handleEngineReady` (also drops a recorded failure reason, see INV-7's rationale comment)                                                                                                                                                                                                                                                                                         |
-| → `DISCONNECTED`                | init-timeout eviction, graceful stop, logout, forceKill, a delete whose teardown fence times out, the engine `onDisconnected` callback and the liveness watchdog (`handleEngineDisconnected`), the boot reset, a backup import (active rows restored as disconnected), engine-reported `DISCONNECTED` via `onStateChanged`, the takeover sweep's `markLapsedDisconnected` (INV-6) |
-| → `ACTION_REQUIRED`             | engine-reported `ACTION_REQUIRED` via `onStateChanged` (ownership-fenced status write; the whatsapp-web.js onboarding-modal fallback), and `onActionRequired` records the reason                                                                                                                                                                                                  |
-| → `FAILED`                      | five terminal paths only, all ownership-fenced: see below                                                                                                                                                                                                                                                                                                                         |
+| Transition                      | Writers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| → `INITIALIZING`                | `initializeEngine` (persisted before `initialize()`), engine-reported `INITIALIZING` via `onStateChanged` (ownership-fenced; Baileys while connecting and through its own reconnect after a drop)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| → `QR_READY` / `AUTHENTICATING` | engine callbacks (wired in the lifecycle delegate), via the registry's liveness check                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| → `READY`                       | `handleEngineReady` (also drops a recorded failure reason, see INV-7's rationale comment), engine-reported `READY` via `onStateChanged` (ownership-fenced; both engines report it next to `onReady`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| → `DISCONNECTED`                | init-timeout eviction (own or unowned row only, INV-4), graceful stop, logout, forceKill, a delete whose teardown fence times out, the engine `onDisconnected` callback and the liveness watchdog (`handleEngineDisconnected`), the boot reset, a backup import (active rows restored as disconnected), engine-reported `DISCONNECTED` via `onStateChanged`, the takeover sweep's `markLapsedDisconnected` (INV-6), a start or reconnect retiring the engine it launched (`retireLaunchedEngine`, own or unowned row only, INV-6), a failed or refused start that left no engine here, on the row it released (still-active status only, INV-6), a start whose transient-failure retry shutdown refused (`session.service.ts` hands a `FAILED` row it may claim back as `DISCONNECTED` for the next boot) |
+| → `ACTION_REQUIRED`             | engine-reported `ACTION_REQUIRED` via `onStateChanged` (ownership-fenced status write; the whatsapp-web.js onboarding-modal fallback), and `onActionRequired` records the reason                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| → `FAILED`                      | five terminal paths only, all ownership-fenced: see below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 `FAILED` is the one worth spelling out, because it is terminal (neither the boot reset nor the
 takeover sweep resumes a FAILED row, INV-7) and because more than one path reaches it:
@@ -168,7 +197,9 @@ What still holds, and is load-bearing, is the narrower claim: no reconnect ATTEM
 Only the exhaustion of the whole chain does. A loop that marked each failed attempt would turn every
 transient network blip into an operator-visible terminal state and defeat INV-7's signal. All five
 paths are fenced on `ownsSession`, so a dying generation cannot park a peer's session in a status
-nothing resets automatically.
+nothing resets automatically. The two wiring paths (2 and 3) share one fence, pinned by
+`session-ownership-status-fence.spec.ts`; the other three are pinned by
+`session-failed-write-ownership-fence.spec.ts`, which drives the real lifecycle.
 
 ## 31.3 Comments that exist because the obvious fix is wrong
 

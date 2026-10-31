@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +45,45 @@ test('a run through a symlinked path still reports', () => {
       encoding: 'utf8',
     });
     assert.match(run.stdout + run.stderr, /SDK contract coverage/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the key validation route is required of every SDK, the key management routes are not', () => {
+  // sdk/README.md lists `auth/api-keys` as unexposed and says key validation itself is exposed. The scope used to
+  // cut every entry to its first segment, which made all of /api/auth unexposed, so an SDK without its auth()
+  // method kept the gate green. The gate runs on a copy of the sources it reads, with the PHP auth() emptied.
+  const repo = fileURLToPath(new URL('..', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'sdk-coverage-copy-'));
+  try {
+    for (const path of [
+      'scripts/check-sdk-coverage.mjs',
+      'scripts/check-contract-shapes.mjs',
+      'openapi.json',
+      'sdk/README.md',
+      'sdk/javascript/src',
+      'sdk/python/openwa',
+      'sdk/php/src',
+      'sdk/java/src/main',
+      'sdk/go',
+    ]) {
+      cpSync(join(repo, path), join(dir, path), { recursive: true });
+    }
+    const run = () =>
+      spawnSync(process.execPath, [join(dir, 'scripts', 'check-sdk-coverage.mjs')], { encoding: 'utf8' });
+    const whole = run();
+    assert.equal(whole.status, 0, whole.stdout + whole.stderr);
+
+    const client = join(dir, 'sdk', 'php', 'src', 'Client.php');
+    const source = readFileSync(client, 'utf8');
+    const call = "return $this->http->request('POST', '/api/auth/validate') ?? [];";
+    assert.ok(source.includes(call), 'the PHP auth() call has moved: move this anchor');
+    writeFileSync(client, source.replace(call, 'return [];'));
+    const without = run();
+    assert.equal(without.status, 1, without.stdout + without.stderr);
+    assert.match(without.stderr, /\/api\/auth\/validate .*built by no method in: php/);
+    assert.doesNotMatch(without.stderr, /\/api\/auth\/api-keys/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

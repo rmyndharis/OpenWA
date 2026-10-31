@@ -1,6 +1,6 @@
 # rmyndharis/openwa
 
-This document describes SDK 0.6.0. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
+This document describes SDK 0.8.0. `groups->setMemberLabel` and the `match` search key require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
 
 Official PHP SDK for [OpenWA](https://github.com/rmyndharis/OpenWA), the open-source WhatsApp API Gateway. OpenWA is an independent project, not affiliated with or endorsed by WhatsApp or Meta.
 
@@ -12,7 +12,7 @@ A synchronous client built on [Guzzle](https://docs.guzzlephp.org/), PSR-4 autol
 composer require rmyndharis/openwa
 ```
 
-Requires PHP 8.1+ and Guzzle 7. The namespace is `OpenWA\`.
+Requires PHP 8.1+ and Guzzle 7.9+ or 8.x. The namespace is `OpenWA\`.
 
 ## Usage
 
@@ -51,6 +51,12 @@ $client = new Client([
 ]);
 ```
 
+The SDK `timeout` (30 seconds by default) applies to every request, including those sent through an injected client, and overrides that client's own `timeout`. On Guzzle 8 it is also sent as `read_timeout`, the idle bound of Guzzle's stream handler (the one in use when ext-curl is missing, or when you inject a `StreamHandler`), so it replaces a `read_timeout` set on the injected client, and `0` removes that bound. The SDK has no separate idle-timeout setting: a stricter idle bound means a lower `timeout`, which also limits the whole call except on Guzzle 7's stream handler, where it bounds each wait instead (see [Errors](#errors)). cURL handlers ignore `read_timeout`, and Guzzle 7 leaves the injected client's value alone.
+
+Responses are buffered even when an injected client sets `stream` to `true`, so JSON, binary and error bodies share the same read-failure handling.
+
+The optional `defaultHeaders` map accepts strings, scalar values, null, and non-empty lists of those values. Numbers, booleans, and null are converted to text. An empty list is rejected by header name before any request is sent because Guzzle 8 cannot represent a header with zero values. Use `''` for an empty header value.
+
 ## Messaging
 
 > Voice notes: pass `'ptt' => true` to `sendAudio` to send a real WhatsApp voice note (PTT). Supply `audio/ogg; codecs=opus` audio for reliable playback; the server defaults the mimetype to that when `ptt` is set without one.
@@ -59,21 +65,51 @@ $client = new Client([
 
 A non-2xx response throws a typed `OpenWA\Exceptions\OpenWAApiException` subclass —
 `OpenWAAuthException` (401), `OpenWAForbiddenException` (403), `OpenWANotFoundException` (404),
-`OpenWAConflictException` (409), `OpenWARateLimitException` (429),
-`OpenWANotImplementedException` (501), `OpenWAServiceUnavailableException` (503) — each
-exposing `getStatus()` and the parsed `getBody()`. A timeout throws `OpenWATimeoutException`.
-503 is transient, but a catalog 503 can persist because WhatsApp may never answer that query,
-so bound any retry. A 429 from the global rate limiter lifts when its window expires (seconds for
-the per-second tier, up to an hour for the hourly tier by default), and `getRetryAfterSeconds()`
-carries its `Retry-After` header. A 429 whose `getErrorCode()` is `"SEND_PACING_LIMITED"` is usually
-not transient: do not retry it before `getRetryAfterSeconds()`, which then comes from the body: a
-few seconds when only sends still in flight caused it, the rest of the failure breaker's cooldown
+`OpenWAConflictException` (409), `OpenWARateLimitException` (429), `OpenWANotImplementedException`
+(501), `OpenWAServiceUnavailableException` (503) — each exposing `getStatus()` and the parsed
+`getBody()`. A timeout throws `OpenWATimeoutException`. 503 means the gateway could not complete the
+request right now: the path to WhatsApp failed, the gateway is draining or short of a dependency,
+or, on Baileys, WhatsApp throttled (code 429) or timed out (code 408) the request. Back off and
+retry later instead of at once, because repeating a throttled request straight away prolongs the
+throttle; a catalog 503 can persist because WhatsApp may never answer that query, so bound any
+retry. A 429 from the global rate limiter lifts when its window expires (seconds for the per-second
+tier, up to an hour for the hourly tier by default), and `getRetryAfterSeconds()` carries its
+`Retry-After` header. A 429 whose `getErrorCode()` is `"SEND_PACING_LIMITED"` is usually not
+transient: do not retry it before `getRetryAfterSeconds()`, which then comes from the body: a few
+seconds when only sends still in flight caused it, the rest of the failure breaker's cooldown
 (`SEND_PACING_BREAKER_COOLDOWN_MS`, 15 minutes by default) after a run of send failures, otherwise
-up to the next UTC day. `getHeaders()` returns the response headers. A 503 does not prove a write
-was never carried out: the engine answers it when WhatsApp did not confirm in time, and the change
-may still have been applied, so re-read the state before repeating it. In a routed deployment a
+up to the next UTC day. `getHeaders()` returns the response headers. A 503 does not always prove a
+write was never carried out: when WhatsApp timed out, the change may still have been applied, so
+re-read the state before repeating it. A throttle on a send or a single write was turned away before
+it ran, so nothing was sent or applied; a send also sent nothing when its recipient lookup failed,
+its connection closed before the message was written, or its media or preview image URL could not be
+fetched through the session's proxy. Each of these frees a keyed send's `Idempotency-Key`. A group
+settings update with several fields applies them one at a time, so a 503 on a later field, a
+throttle included, leaves the earlier ones applied; its message lists them after `already applied:`,
+so re-read the settings before retrying, or send one field per request. In a routed deployment a
 forward that fails before reaching the owner node answers 503, one that fails after the request
 reached it answers 502 or 504, and a 503 from the owner itself is relayed unchanged.
+
+Guzzle's stream handler, which Guzzle uses on a host without `ext-curl`, throws a plain Guzzle exception
+when a gateway stays silent past the timeout, before the response headers on either Guzzle major and, on
+Guzzle 7, in the middle of the body, where a silence can last up to about twice the `timeout` before it
+is cut off. On Guzzle 7 that handler bounds each wait, not the whole call, so a body that keeps trickling
+bytes is not cut off and arrives however long it takes; cURL, and Guzzle 8's stream handler, bound the
+whole call. The SDK turns such a failure into `OpenWATimeoutException` when it has no
+response and lasted at least the whole `timeout`, so a failure of that length from another cause, such as a
+slow name-resolution error, is reported as a timeout too. A `timeout` of `0` has no bound to compare with, and
+on Guzzle 7 the wait for the response headers is still ended by PHP's `default_socket_timeout` (60 seconds by
+default), which surfaces as a `GuzzleHttp\Exception\ConnectException`: catch
+`GuzzleHttp\Exception\TransferException` as well as `OpenWATimeoutException` if the application sets
+`timeout` to `0` on such a host.
+
+A body that ends before the `Content-Length` it declares, such as a media download the gateway cut off
+when its store failed mid-read, is a failed transfer raised as a `GuzzleHttp\Exception\TransferException`:
+cURL and Guzzle 8 raise their own, and on Guzzle 7's stream handler, which returns such a body as if it
+were whole, the SDK raises a `RequestException` naming the request and the byte counts. That handler
+still returns two cut bodies without an error, because neither carries a length to compare with: a
+chunked body (the gateway sends a `Content-Length` with media whenever the store reports a size) and a
+compressed body the application asked for with its own `Accept-Encoding` default header.
 
 ```php
 use OpenWA\Exceptions\OpenWANotFoundException;
@@ -123,8 +159,10 @@ monorepo — Composer needs `composer.json` at a repository root and does not
 support subdirectories. Two workflows keep that mirror correct:
 
 - [`split-php-sdk.yml`](../../.github/workflows/split-php-sdk.yml) syncs the
-  mirror's `main` on every push that touches `sdk/php/**`, which is what
-  Packagist's `dev-main` follows.
+  mirror's `main` on every push to `main` that touches `sdk/php/**`, which is
+  what Packagist's `dev-main` follows. A run started from another branch
+  mirrors nothing, and a run whose `sdk/php` content is no longer that of the
+  current `main` leaves the mirror to the newer run.
 - [`php-sdk-release.yml`](../../.github/workflows/php-sdk-release.yml) cuts a
   versioned release by pushing a **tag** to the mirror. Packagist derives
   versions from that repository's tags, so a tag in this monorepo alone
@@ -139,7 +177,7 @@ Cutting a release:
 1. If the minor line changes, update `extra.branch-alias.dev-main` in
    `composer.json` (e.g. `0.1.x-dev` → `0.2.x-dev`) and land it on `main`. The
    release workflow refuses to publish when the alias does not match the tag.
-2. Tag that commit `php-sdk-v<version>` (e.g. `php-sdk-v0.6.0`) and push the
+2. Tag that commit `php-sdk-v<version>` (e.g. `php-sdk-v0.8.0`) and push the
    tag. The SDK has its own version line — the monorepo's `v*` tags are the app
    version and never trigger an SDK release.
 3. The workflow runs the test suite, then tags the mirror `<version>` (no `v`

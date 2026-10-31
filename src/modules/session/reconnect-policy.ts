@@ -93,7 +93,7 @@ export function decideReconnect(
       kind: 'exhausted',
       reason:
         state.maxAttempts === 0
-          ? 'Auto-reconnect is disabled (max attempts set to 0); the session was left disconnected — restart it manually.'
+          ? 'Auto-reconnect is disabled (max attempts set to 0), so the dropped session was marked failed. Start it again manually.'
           : `Reconnection failed after ${state.attempts} attempts — restart the session.`,
     };
   }

@@ -1,3 +1,4 @@
+import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 import {
   BadRequestException,
   HttpException,
@@ -6,9 +7,10 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { SendPacingService, SEND_PACING_LIMITED, countsTowardSendBreaker } from './send-pacing.service';
-import { EnginePageError } from '../../common/errors/engine-page.error';
+import { EnginePageError, RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { computeSendPacingConfig, type SendPacingConfig } from './send-pacing.config';
 import { getSendPacingRefusals, resetSendPacingRefusals } from '../../common/metrics/send-pacing-metrics';
@@ -84,6 +86,15 @@ const expectPacingRefusal = async (promise: Promise<unknown>): Promise<Record<st
 
 describe('SendPacingService', () => {
   beforeEach(() => resetSendPacingRefusals());
+
+  it('settles an admission only once', async () => {
+    const { service } = build({ warmupSchedule: [1] });
+    const settle = await service.assertSendAllowed('s1', 'first@c.us', { whilePreparing: true });
+    settle?.(true);
+    settle?.();
+
+    await expectPacingRefusal(service.assertSendAllowed('s1', 'second@c.us'));
+  });
 
   describe('when disabled', () => {
     // The disabled path must cost nothing and change nothing — a deployment that has not opted in
@@ -328,7 +339,7 @@ describe('send paths consult the governor', () => {
 
     // The recipient must reach the governor too: without it the cold-reachout rule has nothing to
     // classify and silently degrades to the overall cap.
-    expect(pacing.assertSendAllowed).toHaveBeenCalledWith('s1', 'c@c.us');
+    expect(pacing.assertSendAllowed).toHaveBeenCalledWith('s1', 'c@c.us', { whilePreparing: true });
     // The ordering decision, pinned: a paced-out send is never offered to plugins, so no
     // `message:sending` fires and nothing is persisted or sent.
     expect(hookManager.execute).not.toHaveBeenCalled();
@@ -421,7 +432,15 @@ describe('send paths consult the governor', () => {
       pacing as never,
     );
 
-    await (service as unknown as { processBatch: (id: string) => Promise<void> }).processBatch('b1');
+    await (
+      service as unknown as {
+        processBatch: (id: string, reserved: boolean, lifetime: SessionWriteScope) => Promise<void>;
+      }
+    ).processBatch(
+      'b1',
+      false,
+      captureSessionWrites((service as unknown as { batchRepository: object }).batchRepository, 's1'),
+    );
 
     expect(pacing.assertSendAllowed).toHaveBeenCalledWith('s1', 'c@c.us', { untilSettled: true });
     expect(hookManager.execute).not.toHaveBeenCalledWith('message:sending', expect.anything(), expect.anything());
@@ -605,12 +624,17 @@ describe('countsTowardSendBreaker', () => {
     ['a disconnected engine (503)', new ServiceUnavailableException('engine not connected')],
     ['a malformed request (400)', new BadRequestException('recipients is required')],
     ['an unknown message id (404)', new NotFoundException('message not found')],
+    [
+      'a send whose recipient lookup did not answer (500 RecipientLookupUnansweredError)',
+      new RecipientLookupUnansweredError({ name: 'Error', message: 'No LID for user' }, new Error('No LID for user')),
+    ],
   ])('does not count %s', (_label, error) => {
     expect(countsTowardSendBreaker(error)).toBe(false);
   });
 
   it.each([
     ['a WhatsApp refusal (403 EngineRefusedError)', new EngineRefusedError('not allowed to send here')],
+    ['a WhatsApp rate limit (503 EngineThrottledError)', new EngineThrottledError('WhatsApp rate-limited the send')],
     ['a raw engine error', new Error('ack error 500')],
     ['a server-side fault', new InternalServerErrorException('boom')],
     [

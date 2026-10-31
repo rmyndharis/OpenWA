@@ -2,6 +2,7 @@ package openwa
 
 import (
 	"context"
+	"net/url"
 	"testing"
 )
 
@@ -25,6 +26,27 @@ func TestIdempotencyKeyReachesOnlyRoutesThatHonorIt(t *testing.T) {
 		{"do on a keyed route", func() error {
 			return c.Do(ctx, "POST", "/api/sessions/s/messages/send-text", nil, map[string]string{}, nil)
 		}, "order-1"},
+		{"do with a query in the path", func() error {
+			return c.Do(ctx, "POST", "/api/sessions/s/messages/send-text?x=1", nil, map[string]string{}, nil)
+		}, "order-1"},
+		{"do with a fragment", func() error {
+			return c.Do(ctx, "POST", "/api/sessions/s/messages/send-text#client", nil, map[string]string{}, nil)
+		}, "order-1"},
+		{"do with a query and fragment", func() error {
+			return c.Do(ctx, "POST", "/api/sessions/s/messages/send-text?x=1#client", nil, map[string]string{}, nil)
+		}, "order-1"},
+		{"do with separate query values", func() error {
+			return c.Do(ctx, "POST", "/api/sessions/s/messages/send-text", url.Values{"x": {"1"}}, map[string]string{}, nil)
+		}, "order-1"},
+		{"do on a bulk route with a query", func() error {
+			return c.Do(ctx, "POST", "/api/sessions/s/messages/send-bulk?x=1", nil, map[string]string{}, nil)
+		}, ""},
+		{"do on a product route with a fragment", func() error {
+			return c.Do(ctx, "POST", "/api/sessions/s/messages/send-product#client", nil, map[string]string{}, nil)
+		}, ""},
+		{"do with a non-POST method", func() error {
+			return c.Do(ctx, "GET", "/api/sessions/s/messages/send-text?x=1", nil, nil, nil)
+		}, ""},
 		{"do on another route", func() error { return c.Do(ctx, "POST", "/api/sessions/s/groups", nil, map[string]string{}, nil) }, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

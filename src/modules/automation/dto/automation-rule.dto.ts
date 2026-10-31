@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, plainToInstance } from 'class-transformer';
 import { IsBoolean, IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min, ValidateIf } from 'class-validator';
-import { ToStrictBoolean, ToStrictNumber } from '../../../common/utils/strict-boolean';
+import { ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 import { MaxCodePoints } from '../../../common/validation/max-code-points';
 import { NoNulCharacter } from '../../../common/validation/no-nul-character';
 import { MESSAGE_TEXT_MAX_LENGTH } from '../../message/dto/send-message.dto';
@@ -27,6 +27,7 @@ const COOLDOWN_DESCRIPTION =
 
 export class CreateAutomationRuleDto {
   @ApiProperty({ description: 'Display name for the rule', example: 'Greet new enquiries', maxLength: 100 })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxCodePoints(100)
@@ -38,6 +39,7 @@ export class CreateAutomationRuleDto {
     example: 'Thanks for reaching out — we reply within the hour.',
     maxLength: MESSAGE_TEXT_MAX_LENGTH,
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(MESSAGE_TEXT_MAX_LENGTH)
@@ -73,6 +75,7 @@ export class UpdateAutomationRuleDto {
   @ApiPropertyOptional({ description: 'Display name for the rule', maxLength: 100 })
   // Not @IsOptional on the NOT NULL columns: that also skips null, which then reaches save() as a 500.
   @ValidateIf((o: UpdateAutomationRuleDto) => o.name !== undefined)
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxCodePoints(100)
@@ -84,6 +87,7 @@ export class UpdateAutomationRuleDto {
     maxLength: MESSAGE_TEXT_MAX_LENGTH,
   })
   @ValidateIf((o: UpdateAutomationRuleDto) => o.replyText !== undefined)
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(MESSAGE_TEXT_MAX_LENGTH)

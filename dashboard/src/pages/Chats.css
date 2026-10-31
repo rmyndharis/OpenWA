@@ -1,69 +1,549 @@
 .chats-page {
-  padding: 2rem;
+  /* Chat palette. Light values follow WhatsApp Web; the dark set below swaps them as a whole, so the rules
+     further down never need a theme branch of their own. */
+  --chat-panel: var(--bg-white);
+  --chat-panel-header: #f0f2f5;
+  --chat-hover: #f5f6f6;
+  --chat-active: #f0f2f5;
+  --chat-divider: #e9edef;
+  --chat-wallpaper: #efeae2;
+  --chat-wallpaper-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240' fill='none' stroke='rgba%2884,72,56,0.07%29' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E %3Cpath d='M22 30h40a8 8 0 0 1 8 8v20a8 8 0 0 1-8 8H38l-12 10v-10h-4a8 8 0 0 1-8-8V38a8 8 0 0 1 8-8z'/%3E %3Cpath d='M150 40c0-7 9-11 14-5 5-6 14-2 14 5 0 9-14 17-14 17s-14-8-14-17z'/%3E %3Cpath d='M205 120l5 11 12 2-9 8 2 12-10-6-10 6 2-12-9-8 12-2z'/%3E %3Crect x='30' y='150' width='40' height='30' rx='6'/%3E%3Ccircle cx='50' cy='165' r='8'/%3E%3Cpath d='M40 150l4-6h12l4 6'/%3E %3Cpath d='M120 130l46-18-18 46-8-20z'/%3E%3Cpath d='M140 138l8-8'/%3E %3Ccircle cx='120' cy='210' r='12'/%3E%3Cpath d='M114 214c2 3 10 3 12 0'/%3E%3Cpath d='M115 206h.1M125 206h.1'/%3E %3Cpath d='M190 200h30M190 210h20M184 192h42v28h-42z'/%3E %3Cpath d='M90 70l6 6 12-12'/%3E%3Ccircle cx='99' cy='70' r='14'/%3E %3Cpath d='M200 70a10 10 0 1 1-1-8'/%3E%3Cpath d='M60 110h.1M70 110h.1M80 110h.1'/%3E %3C/svg%3E");
+  --chat-bubble-in: #ffffff;
+  --chat-bubble-out: #d9fdd3;
+  --chat-bubble-text: #111b21;
+  /* Text tokens clear WCAG AA (4.5:1) on every surface they land on: the list rows (resting, hover,
+     active) and both bubbles. theme-contrast.test.ts checks each pair. */
+  --chat-meta: #54656f;
+  --chat-meta-out: #54656f;
+  --chat-pill: #ffffff;
+  --chat-pill-active-bg: #d9fdd3;
+  --chat-pill-active-text: #017561;
+  --chat-accent: #00a884;
+  --chat-accent-text: #017561;
+  --chat-accent-hover: #008f6f;
+  --chat-quote-accent: #06cf9c;
+  --chat-link: #0271a6;
+  --chat-link-out: #026c9e;
+  /* The WhatsApp read blue is 2.13:1 on the outgoing bubble; this one clears 3:1 for the icon there. Read
+     and delivered also differ in aria-label and title, never by colour alone. */
+  --chat-tick-read: #1f8fc4;
+  --chat-icon: #54656f;
+  --chat-shadow-bubble: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+  /* A group sender's name on the incoming bubble (ChatThread picks one per sender): each hue clears 4.5:1 there, so
+     the dark set below lightens every one of them. */
+  --chat-sender-1: #d03c6b;
+  --chat-sender-2: #7756ff;
+  --chat-sender-3: #097cb5;
+  --chat-sender-4: #188556;
+  --chat-sender-5: #b06000;
+  --chat-sender-6: #c0392b;
+  --chat-sender-7: #0e7c86;
+  --chat-sender-8: #8e44ad;
+
   width: 100%;
-  height: calc(100vh - 4rem);
+  height: 100vh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+}
+
+[data-theme='dark'] .chats-page {
+  --chat-panel: #111b21;
+  --chat-panel-header: #202c33;
+  --chat-hover: #202c33;
+  --chat-active: #2a3942;
+  --chat-divider: #222d34;
+  --chat-wallpaper: #0b141a;
+  --chat-wallpaper-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240' fill='none' stroke='rgba%28255,255,255,0.045%29' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E %3Cpath d='M22 30h40a8 8 0 0 1 8 8v20a8 8 0 0 1-8 8H38l-12 10v-10h-4a8 8 0 0 1-8-8V38a8 8 0 0 1 8-8z'/%3E %3Cpath d='M150 40c0-7 9-11 14-5 5-6 14-2 14 5 0 9-14 17-14 17s-14-8-14-17z'/%3E %3Cpath d='M205 120l5 11 12 2-9 8 2 12-10-6-10 6 2-12-9-8 12-2z'/%3E %3Crect x='30' y='150' width='40' height='30' rx='6'/%3E%3Ccircle cx='50' cy='165' r='8'/%3E%3Cpath d='M40 150l4-6h12l4 6'/%3E %3Cpath d='M120 130l46-18-18 46-8-20z'/%3E%3Cpath d='M140 138l8-8'/%3E %3Ccircle cx='120' cy='210' r='12'/%3E%3Cpath d='M114 214c2 3 10 3 12 0'/%3E%3Cpath d='M115 206h.1M125 206h.1'/%3E %3Cpath d='M190 200h30M190 210h20M184 192h42v28h-42z'/%3E %3Cpath d='M90 70l6 6 12-12'/%3E%3Ccircle cx='99' cy='70' r='14'/%3E %3Cpath d='M200 70a10 10 0 1 1-1-8'/%3E%3Cpath d='M60 110h.1M70 110h.1M80 110h.1'/%3E %3C/svg%3E");
+  --chat-bubble-in: #202c33;
+  --chat-bubble-out: #005c4b;
+  --chat-bubble-text: #e9edef;
+  --chat-meta: #9aa8b0;
+  --chat-meta-out: #c2d6cf;
+  --chat-accent-text: #1fbf95;
+  --chat-pill: #202c33;
+  --chat-pill-active-bg: #0a332c;
+  --chat-pill-active-text: #1fbf95;
+  --chat-link: #53bdeb;
+  --chat-link-out: #9edaf5;
+  --chat-tick-read: #53bdeb;
+  --chat-icon: #aebac1;
+  --chat-shadow-bubble: 0 1px 0.5px rgba(11, 20, 26, 0.4);
+  --chat-sender-1: #dc7093;
+  --chat-sender-2: #987eff;
+  --chat-sender-3: #0c9be2;
+  --chat-sender-4: #1ea76b;
+  --chat-sender-5: #dd7900;
+  --chat-sender-6: #dd7469;
+  --chat-sender-7: #12a2b0;
+  --chat-sender-8: #b57dcc;
+}
+
+/* System-dark twin: the default 'system' theme removes data-theme entirely, so the explicit rule above
+   never matches on a dark OS. :not([data-theme='light']) keeps an explicit light choice in control. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .chats-page {
+    --chat-panel: #111b21;
+    --chat-panel-header: #202c33;
+    --chat-hover: #202c33;
+    --chat-active: #2a3942;
+    --chat-divider: #222d34;
+    --chat-wallpaper: #0b141a;
+    --chat-wallpaper-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240' fill='none' stroke='rgba%28255,255,255,0.045%29' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E %3Cpath d='M22 30h40a8 8 0 0 1 8 8v20a8 8 0 0 1-8 8H38l-12 10v-10h-4a8 8 0 0 1-8-8V38a8 8 0 0 1 8-8z'/%3E %3Cpath d='M150 40c0-7 9-11 14-5 5-6 14-2 14 5 0 9-14 17-14 17s-14-8-14-17z'/%3E %3Cpath d='M205 120l5 11 12 2-9 8 2 12-10-6-10 6 2-12-9-8 12-2z'/%3E %3Crect x='30' y='150' width='40' height='30' rx='6'/%3E%3Ccircle cx='50' cy='165' r='8'/%3E%3Cpath d='M40 150l4-6h12l4 6'/%3E %3Cpath d='M120 130l46-18-18 46-8-20z'/%3E%3Cpath d='M140 138l8-8'/%3E %3Ccircle cx='120' cy='210' r='12'/%3E%3Cpath d='M114 214c2 3 10 3 12 0'/%3E%3Cpath d='M115 206h.1M125 206h.1'/%3E %3Cpath d='M190 200h30M190 210h20M184 192h42v28h-42z'/%3E %3Cpath d='M90 70l6 6 12-12'/%3E%3Ccircle cx='99' cy='70' r='14'/%3E %3Cpath d='M200 70a10 10 0 1 1-1-8'/%3E%3Cpath d='M60 110h.1M70 110h.1M80 110h.1'/%3E %3C/svg%3E");
+    --chat-bubble-in: #202c33;
+    --chat-bubble-out: #005c4b;
+    --chat-bubble-text: #e9edef;
+    --chat-meta: #9aa8b0;
+    --chat-meta-out: #c2d6cf;
+    --chat-accent-text: #1fbf95;
+    --chat-pill: #202c33;
+    --chat-pill-active-bg: #0a332c;
+    --chat-pill-active-text: #1fbf95;
+    --chat-link: #53bdeb;
+    --chat-link-out: #9edaf5;
+    --chat-tick-read: #53bdeb;
+    --chat-icon: #aebac1;
+    --chat-shadow-bubble: 0 1px 0.5px rgba(11, 20, 26, 0.4);
+    --chat-sender-1: #dc7093;
+    --chat-sender-2: #987eff;
+    --chat-sender-3: #0c9be2;
+    --chat-sender-4: #1ea76b;
+    --chat-sender-5: #dd7900;
+    --chat-sender-6: #dd7469;
+    --chat-sender-7: #12a2b0;
+    --chat-sender-8: #b57dcc;
+  }
+}
+
+/* Read by screen readers only: the page and the open room keep their headings without showing them. */
+.chats-page .visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .chats-page .chats-layout {
   display: flex;
   flex: 1;
   min-height: 0;
-  background: var(--bg-white);
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  background: var(--chat-panel);
   overflow: hidden;
-  box-shadow: var(--shadow-md, 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06));
-  height: calc(100vh - 12rem);
-  margin-top: 1rem;
+  box-shadow: var(--shadow-md);
+}
+
+/* Shared round icon button (header actions, panel close, copy). */
+.chats-page .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--chat-icon);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.chats-page .icon-btn:hover,
+.chats-page .icon-btn.active {
+  background: color-mix(in srgb, var(--chat-icon) 14%, transparent);
+}
+
+.chats-page .icon-btn.small {
+  width: 28px;
+  height: 28px;
 }
 
 /* =============================================================================
    SIDEBAR: Left Column
    ============================================================================= */
 .chats-page .chats-sidebar {
-  width: 320px;
-  border-inline-end: 1px solid var(--border);
+  width: 380px;
+  min-width: 300px;
+  max-width: 40%;
   display: flex;
   flex-direction: column;
-  background: var(--bg-white);
+  background: var(--chat-panel);
+  border-inline-end: 1px solid var(--chat-divider);
+  /* Gives way, down to its minimum, when the room beside it would be narrower than its composer (see .chats-room). */
+  flex-shrink: 1;
+  min-height: 0;
+  /* The session picker hangs from the column (see .session-picker). */
+  position: relative;
+}
+
+/* As high as the room header beside it. Layout.css gives the dashboard's own .sidebar-header a 72px minimum, which
+   this one, of the same class name, would otherwise take. */
+.chats-page .sidebar-header {
+  height: 64px;
+  min-height: 0;
+  padding-block: 0;
+  padding-inline: 1rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--chat-divider);
+  box-sizing: border-box;
   flex-shrink: 0;
 }
 
-.chats-page .sidebar-header-box {
-  padding: 1.25rem;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
+/* Session switcher: the selected account in the header, opening a searchable list of every session. */
+.chats-page .session-switcher {
+  min-width: 0;
 }
 
-.chats-page .session-select-group {
+.chats-page .session-switcher-btn {
   display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-}
-
-.chats-page .session-selector {
-  width: 100%;
-  padding: 0.625rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius, 8px);
-  background: var(--bg-light);
+  align-items: center;
+  gap: 0.75rem;
+  max-width: 100%;
+  min-width: 0;
+  padding-block: 0.25rem;
+  padding-inline: 0.25rem 0.5rem;
+  margin-inline-start: -0.25rem;
+  background: transparent;
+  border: none;
+  border-radius: 12px;
   color: var(--text-primary);
-  font-size: 0.875rem;
-  font-weight: 500;
-  outline: none;
+  text-align: start;
   cursor: pointer;
-  transition: all 0.2s;
 }
 
-.chats-page .session-selector:focus {
-  border-color: var(--primary);
-  background: var(--bg-white);
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
+.chats-page .session-switcher-btn:hover {
+  background: var(--chat-hover);
+}
+
+.chats-page .session-switcher-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.chats-page .session-avatar {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--chat-accent) 12%, var(--chat-panel));
+  border: 1px solid color-mix(in srgb, var(--chat-accent) 25%, transparent);
+  color: var(--chat-accent-text);
+  font-weight: 600;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.chats-page .session-avatar.sm {
+  width: 44px;
+  height: 44px;
+  font-size: 0.9375rem;
+}
+
+.chats-page .session-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.chats-page .session-avatar.add {
+  border-style: solid;
+}
+
+/* Ready, on its way and down differ in shape as well as in colour: a dot, a ring and a square. The colours are the
+   status text twins, which hold 3:1 against the panel-coloured ring around the mark in every theme (the base green
+   and amber were 2.28:1 and 2.15:1 on white). */
+.chats-page .session-status-dot {
+  position: absolute;
+  top: -1px;
+  inset-inline-end: -1px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--success-text);
+  border: 2px solid var(--chat-panel);
+}
+
+.chats-page .session-status-dot.pending {
+  background: var(--chat-panel);
+  box-shadow: inset 0 0 0 2px var(--warning-text);
+}
+
+.chats-page .session-status-dot.down {
+  border-radius: 2px;
+  background: var(--error-text);
+}
+
+/* Forced colours paint each mark in the page colour and drop the inset ring, which would leave bare outlines; the marks
+   are drawn in the system colours instead. */
+@media (forced-colors: active) {
+  .chats-page .session-status-dot,
+  .chats-page .session-status-dot.down {
+    forced-color-adjust: none;
+    background: CanvasText;
+    border-color: Canvas;
+  }
+
+  .chats-page .session-status-dot.pending {
+    background: Canvas;
+    box-shadow: inset 0 0 0 2px CanvasText;
+  }
+}
+
+.chats-page .session-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.3;
+}
+
+/* Cut by its own direction and hugging the start edge, as a chat name is (see .chat-item-name). */
+.chats-page .session-name {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.chats-page .session-phone {
+  font-size: 0.875rem;
+  color: var(--chat-meta);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chats-page .session-flag {
+  margin-inline-end: 0.3em;
+  flex-shrink: 0;
+}
+
+/* The number is cut by its own box. The line around it keeps the page direction, so in an Arabic page its
+   ellipsis took the number's first digits ("...9 151 123 4 5678"); the isolate, written left to right, cuts its
+   last ones instead, and the flag stays whole beside it. */
+.chats-page .session-phone-line {
+  display: inline-flex;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+.chats-page .session-phone-line > bdi {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* In the picker the account's name comes first; it is the part that gives way, so the number stays whole. */
+.chats-page .session-phone.with-push-name {
+  display: flex;
+  min-width: 0;
+}
+
+.chats-page .session-phone.with-push-name > bdi {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chats-page .session-phone.with-push-name > .session-push-name-sep {
+  flex-shrink: 0;
+  white-space: pre;
+}
+
+.chats-page .session-phone.with-push-name > .session-phone-line {
+  flex-shrink: 0;
+}
+
+.chats-page .session-chevron {
+  color: var(--chat-icon);
+  flex-shrink: 0;
+  margin-inline-start: 0.5rem;
+  transition: transform 0.15s;
+}
+
+.chats-page .session-chevron.open {
+  transform: rotate(180deg);
+}
+
+/* The open list. The chat layout clips what runs past its bottom edge, so the list is placed against the list column
+   (under its 64px header, at the switcher's start edge) and capped by the column's height: the sessions scroll inside
+   it, and the search row and the pairing link stay in reach on a short window or a phone held sideways. */
+.chats-page .session-picker {
+  position: absolute;
+  top: calc(64px + 0.25rem);
+  inset-inline-start: 0.75rem;
+  z-index: 30;
+  width: min(360px, calc(100vw - 2rem));
+  max-height: calc(100% - 64px - 0.75rem);
+  display: flex;
+  flex-direction: column;
+  background: var(--chat-panel);
+  border: 1px solid var(--chat-divider);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.chats-page .session-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding-block: 0.875rem;
+  padding-inline: 1rem;
+  border-bottom: 1px solid var(--chat-divider);
+  color: var(--chat-meta);
+}
+
+/* The field draws no outline of its own; the row underlines it instead. */
+.chats-page .session-picker-search:focus-within {
+  color: var(--focus-ring);
+  box-shadow: inset 0 -2px 0 var(--focus-ring);
+}
+
+.chats-page .session-picker-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  font-size: 1rem;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.chats-page .session-picker-search input::placeholder {
+  color: var(--chat-meta);
+}
+
+.chats-page .session-picker-list {
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.chats-page .session-picker-option,
+.chats-page .session-picker-add {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding-block: 0.625rem;
+  padding-inline: 0.75rem;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.chats-page .session-picker-option:hover:not(:disabled),
+.chats-page .session-picker-option:focus-visible,
+.chats-page .session-picker-add:hover,
+.chats-page .session-picker-add:focus-visible {
+  background: var(--chat-hover);
+}
+
+/* The hover tint alone is too faint to show keyboard focus (about 1.1:1 against the panel), so focus keeps a
+   ring, drawn inside so the scrolling list does not clip it. */
+.chats-page .session-picker-option:focus-visible,
+.chats-page .session-picker-add:focus-visible,
+.chats-page .chat-row-menu-popover button:focus-visible,
+.chats-page .room-menu-popover button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.chats-page .session-picker-option:disabled {
+  cursor: not-allowed;
+}
+
+.chats-page .session-picker-option:disabled .session-name {
+  color: var(--chat-meta);
+}
+
+.chats-page .session-check {
+  margin-inline-start: auto;
+  color: var(--chat-accent-text);
+  flex-shrink: 0;
+}
+
+.chats-page .session-picker-empty {
+  padding-block: 1rem;
+  padding-inline: 0.75rem;
+  color: var(--chat-meta);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+.chats-page .session-picker-add {
+  border-top: 1px solid var(--chat-divider);
+  border-radius: 0;
+  padding-block: 0.875rem;
+  padding-inline: 1rem;
+}
+
+.chats-page .session-picker-add .session-name {
+  font-weight: 600;
+}
+
+.chats-page .session-picker-add-chevron {
+  margin-inline-start: auto;
+  color: var(--chat-icon);
+  flex-shrink: 0;
+}
+
+[dir='rtl'] .chats-page .session-picker-add-chevron {
+  transform: scaleX(-1);
+}
+
+.chats-page .sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  flex-shrink: 0;
+}
+
+/* Full-text message search (collapsible). The input's own minimum would push the scope toggle out of a
+   narrow list. */
+.chats-page .sidebar-message-search {
+  padding-block: 0.75rem 0;
+  padding-inline: 1rem;
+}
+
+.chats-page .sidebar-message-search .global-search-input {
+  min-width: 0;
+}
+
+.chats-page .sidebar-header-box {
+  padding-block: 0.75rem 0;
+  padding-inline: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex-shrink: 0;
 }
 
 /* Chats / Channels / Status segmented control */
@@ -71,20 +551,20 @@
   display: flex;
   gap: 4px;
   padding: 4px;
-  background: var(--bg-light);
-  border: 1px solid var(--border);
-  border-radius: var(--radius, 8px);
+  background: var(--chat-panel-header);
+  border-radius: 10px;
 }
 
 .chats-page .chats-tab {
   flex: 1;
   padding: 6px 8px;
   border: none;
-  border-radius: 6px;
+  border-radius: 7px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--chat-meta);
   cursor: pointer;
   font-size: 0.8125rem;
+  font-weight: 500;
   transition:
     background 0.15s ease,
     color 0.15s ease;
@@ -95,49 +575,108 @@
 }
 
 .chats-page .chats-tab.active {
-  background: var(--bg-card);
+  background: var(--chat-panel);
   color: var(--text-primary);
   font-weight: 600;
-  box-shadow: var(--shadow-sm, 0 1px 2px 0 rgba(0, 0, 0, 0.05));
+  box-shadow: var(--chat-shadow-bubble);
 }
 
+/* Search box (sidebar and new-chat panel) */
 .chats-page .chat-search-input {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.625rem 0.75rem;
-  background: var(--bg-light);
-  border: 1px solid var(--border);
-  border-radius: var(--radius, 8px);
+  gap: 0.625rem;
+  padding-block: 0;
+  padding-inline: 0.875rem;
+  height: 40px;
+  background: var(--chat-panel);
+  border: 1px solid var(--chat-divider);
+  border-radius: 10px;
+  color: var(--chat-meta);
+  box-sizing: border-box;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
 .chats-page .chat-search-input svg {
-  color: var(--text-muted);
   flex-shrink: 0;
+}
+
+.chats-page .chat-search-input:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
 }
 
 .chats-page .chat-search-input input {
   flex: 1;
+  min-width: 0;
   border: none;
   background: none;
-  font-size: 0.875rem;
+  font-size: 0.9375rem;
   color: var(--text-primary);
   outline: none;
 }
 
-.chats-page .chat-search-input:focus-within {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-soft);
+.chats-page .chat-search-input input::placeholder {
+  color: var(--chat-meta);
 }
 
+/* Filter pills */
+.chats-page .chat-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-block: 0.75rem;
+  padding-inline: 1rem;
+  flex-shrink: 0;
+}
+
+.chats-page .chat-filter-pill {
+  flex-shrink: 0;
+  padding-block: 0.375rem;
+  padding-inline: 0.875rem;
+  background: var(--chat-pill);
+  border: 1px solid var(--chat-divider);
+  border-radius: 999px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--chat-meta);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.chats-page .chat-filter-pill:hover {
+  background: var(--chat-hover);
+}
+
+/* Heavier as well as tinted, so the chosen filter does not stand out by colour alone. */
+.chats-page .chat-filter-pill.active {
+  background: var(--chat-pill-active-bg);
+  border-color: transparent;
+  color: var(--chat-pill-active-text);
+  font-weight: 600;
+}
+
+/* Lists */
 .chats-page .chats-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  padding-block: 0 0.5rem;
+  padding-inline: 0.5rem;
 }
 
-/* Custom Scrollbar for chats list */
+/* The Channels and Status tabs have no filter row; the list keeps its distance from the search box. */
+.chats-page .sidebar-header-box + .chats-list {
+  padding-block-start: 0.5rem;
+}
+
 .chats-page .chats-list::-webkit-scrollbar,
 .chats-page .room-messages::-webkit-scrollbar {
   width: 6px;
@@ -145,7 +684,7 @@
 
 .chats-page .chats-list::-webkit-scrollbar-thumb,
 .chats-page .room-messages::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: color-mix(in srgb, var(--chat-meta) 35%, transparent);
   border-radius: 3px;
 }
 
@@ -161,42 +700,79 @@
   align-items: center;
   justify-content: center;
   padding: 3rem 1.5rem;
-  color: var(--text-muted);
+  color: var(--chat-meta);
   font-size: 0.875rem;
   gap: 0.5rem;
+  text-align: center;
+}
+
+.chats-page .btn-secondary[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 .chats-page .chat-item-card {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--border);
+  gap: 0.875rem;
+  padding-block: 0.625rem;
+  padding-inline: 0.75rem;
+  border-radius: 10px;
   cursor: pointer;
-  transition: background 0.15s ease;
   user-select: none;
+  transition: background 0.12s;
+}
+
+/* The new-chat panel's rows are buttons: they take the row's look, not the global button's. */
+.chats-page button.chat-item-card {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
 }
 
 .chats-page .chat-item-card:hover {
-  background: var(--bg-light);
+  background: var(--chat-hover);
 }
 
 .chats-page .chat-item-card.active {
-  background: rgba(34, 197, 94, 0.08);
+  background: var(--chat-active);
 }
 
+.chats-page .chat-item-card:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.chats-page .chat-item-card:disabled {
+  cursor: progress;
+  opacity: 0.75;
+}
+
+/* Avatars */
 .chats-page .chat-avatar {
-  width: 44px;
-  height: 44px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
-  background: var(--bg-light);
-  border: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
   flex-shrink: 0;
   overflow: hidden;
+  background: var(--chat-hover);
+  color: var(--chat-icon);
+}
+
+.chats-page .chat-avatar.avatar-sm {
+  width: 44px;
+  height: 44px;
+}
+
+.chats-page .chat-avatar.avatar-lg {
+  width: 120px;
+  height: 120px;
 }
 
 .chats-page .chat-avatar img {
@@ -206,61 +782,124 @@
   display: block;
 }
 
-.chats-page .chat-item-card.active .chat-avatar {
-  background: var(--bg-white);
-  color: var(--primary-text);
-  border-color: rgba(34, 197, 94, 0.3);
+/* The glyph shows the chat's kind, so each tone's colour holds the 3:1 of a graphic on its pastel and, in dark mode, on
+   the 18 percent of itself mixed into the panel; theme-contrast.test.ts checks every tone in both. */
+.chats-page .avatar-tone-blue {
+  background: #e3ebff;
+  color: #5070d7;
+}
+
+.chats-page .avatar-tone-orange {
+  background: #fde8dc;
+  color: #cf6728;
+}
+
+.chats-page .avatar-tone-pink {
+  background: #fde3ee;
+  color: #d4467e;
+}
+
+.chats-page .avatar-tone-brown {
+  background: #f3e9dc;
+  color: #a1743f;
+}
+
+.chats-page .avatar-tone-violet {
+  background: #ede4fb;
+  color: #875ed3;
+}
+
+.chats-page .avatar-tone-teal {
+  background: #daf3ee;
+  color: #1e9581;
+}
+
+[data-theme='dark'] .chats-page .chat-avatar[class*='avatar-tone-'] {
+  background: color-mix(in srgb, currentColor 18%, #111b21);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .chats-page .chat-avatar[class*='avatar-tone-'] {
+    background: color-mix(in srgb, currentColor 18%, #111b21);
+  }
+}
+
+.chats-page .action-avatar {
+  background: var(--chat-accent);
+  color: #0f172a;
 }
 
 .chats-page .chat-item-info {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.125rem;
   min-width: 0; /* Ensures text truncation works */
 }
 
-.chats-page .chat-item-top {
+.chats-page .chat-item-top,
+.chats-page .chat-item-bottom {
   display: flex;
-  justify-content: flex-start;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: 0.5rem;
 }
 
+.chats-page .chat-item-bottom {
+  justify-content: space-between;
+}
+
+/* Text that is cut with an ellipsis takes its direction from its own characters (unicode-bidi: plaintext).
+   Under an inherited direction the ellipsis eats the wrong end of a name written the other way round: a
+   Latin name in an Arabic page lost its first letters and kept its last ("...hi Armyndharis").
+   The same property aligns the text by its own direction, so a box that a flex column stretches across its
+   width would put a Latin name at the left edge of an Arabic page while its siblings sit at the right. Those
+   boxes hug the start edge instead (align-self: flex-start, capped by max-width so the ellipsis still shows). */
 .chats-page .chat-item-name {
-  font-size: 0.9375rem;
+  font-size: 1rem;
   font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+}
+
+/* In the New chat list the name and the number are direct children of a stretched column; in the chat list
+   they sit in rows that are as wide as their text, which needs nothing. */
+.chats-page .chat-item-info > .chat-item-name,
+.chats-page .chat-item-info > .chat-item-snippet {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.chats-page .action-row .chat-item-name {
+  font-weight: 500;
 }
 
 .chats-page .chat-item-time {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: 0.8125rem;
+  color: var(--chat-meta);
   flex-shrink: 0;
   margin-inline-start: auto;
 }
 
-.chats-page .chat-item-bottom {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.chats-page .chat-item-card.unread .chat-item-time {
+  color: var(--chat-accent-text);
+  font-weight: 600;
 }
 
 .chats-page .chat-item-snippet {
-  font-size: 0.8125rem;
-  color: var(--text-muted);
+  font-size: 0.875rem;
+  color: var(--chat-meta);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 180px;
+  unicode-bidi: plaintext;
+  min-width: 0;
 }
 
 .chats-page .chat-item-snippet .no-message {
   font-style: italic;
-  opacity: 0.6;
 }
 
 .chats-page .chat-unread-badge {
@@ -270,23 +909,775 @@
   box-sizing: border-box;
   height: 20px;
   min-width: 20px;
-  padding: 0 6px;
-  background: var(--primary);
-  color: white;
+  padding-block: 0;
+  padding-inline: 6px;
+  background: var(--chat-accent);
+  /* White is 3.03:1 on the accent green; the slate text is 5.89:1. */
+  color: #0f172a;
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1;
   border-radius: 999px;
-  box-shadow: 0 2px 4px rgba(34, 197, 94, 0.3);
+  flex-shrink: 0;
 }
 
 .chats-page .chat-kind-badge {
   font-size: 0.7rem;
-  padding: 0 6px;
+  padding-block: 0;
+  padding-inline: 6px;
   border-radius: 8px;
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
+  border: 1px solid var(--chat-divider);
+  color: var(--chat-meta);
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.chats-page .status-compose-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  width: 100%;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.chats-page .chats-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+/* Group rows: the chevron beside the time, shown on hover, on keyboard focus and while its list is open. Its
+   room is kept clear on every group row, so the time does not move when it appears. */
+.chats-page .chat-item-wrap {
+  position: relative;
+}
+
+.chats-page .chat-item-wrap.has-menu .chat-item-top {
+  padding-inline-end: 1.75rem;
+}
+
+.chats-page .chat-row-menu {
+  position: absolute;
+  top: 0.5rem;
+  inset-inline-end: 0.5rem;
+}
+
+.chats-page .chat-row-menu-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--chat-divider);
+  border-radius: 8px;
+  background: var(--chat-panel);
+  color: var(--chat-icon);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.chats-page .chat-item-wrap:hover .chat-row-menu-trigger,
+.chats-page .chat-row-menu.open .chat-row-menu-trigger,
+.chats-page .chat-row-menu-trigger:focus-visible {
+  opacity: 1;
+}
+
+.chats-page .chat-row-menu-trigger:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* A touch screen has no hover to reveal the trigger, so it stays visible there. */
+@media (hover: none) {
+  .chats-page .chat-row-menu-trigger {
+    opacity: 1;
+  }
+}
+
+.chats-page .chat-row-menu-popover {
+  position: absolute;
+  top: calc(100% + 0.375rem);
+  inset-inline-end: 0;
+  z-index: 30;
+  min-width: 240px;
+  padding: 0.375rem;
+  display: flex;
+  flex-direction: column;
+  background: var(--chat-panel);
+  border: 1px solid var(--chat-divider);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+}
+
+.chats-page .chat-row-menu-popover button {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding-block: 0.625rem;
+  padding-inline: 0.75rem;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chats-page .chat-row-menu-popover button:hover,
+.chats-page .chat-row-menu-popover button:focus-visible {
+  background: var(--chat-hover);
+}
+
+.chats-page .chat-row-menu-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.chats-page .chat-action-label {
+  display: flex;
+  flex-direction: column;
+  white-space: normal;
+}
+
+.chats-page .chat-action-label small {
+  max-width: 16rem;
+  font-size: 0.75rem;
+  color: var(--chat-meta);
+}
+
+.chats-page .chat-row-menu-popover button:disabled,
+.chats-page .room-menu-popover button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.chats-page .chat-row-menu-popover button:disabled:hover,
+.chats-page .room-menu-popover button:disabled:hover {
+  background: transparent;
+}
+
+.chats-page .chat-row-menu-popover hr {
+  width: 100%;
+  margin-block: 0.25rem;
+  border: none;
+  border-top: 1px solid var(--chat-divider);
+}
+
+/* Leave-group confirmation: the confirm-modal shape the Sessions page uses. */
+.chats-page .confirm-modal {
+  max-width: 420px;
+}
+
+.chats-page .confirm-modal .modal-body p {
+  margin: 0 0 0.5rem;
+}
+
+.chats-page .confirm-modal .text-muted {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.chats-page .chat-item-flags {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--chat-meta);
+  flex-shrink: 0;
+  margin-inline-start: auto;
+}
+
+.chats-page .chat-item-flags + .chat-unread-badge {
+  margin-inline-start: 0.25rem;
+}
+
+/* The archive's entry at the head of the chat list, and the way back from its view. */
+.chats-page .chat-archive-entry {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  width: 100%;
+  padding-block: 0.75rem;
+  padding-inline: 1.5rem 0.75rem;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 500;
+  text-align: start;
+  cursor: pointer;
+}
+
+.chats-page .chat-archive-entry svg {
+  color: var(--chat-accent-text);
+}
+
+.chats-page .chat-archive-entry:hover {
+  background: var(--chat-hover);
+}
+
+.chats-page .chat-archive-count {
+  margin-inline-start: auto;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--chat-accent-text);
+}
+
+/* The room's menu lists the row's actions too: its groups stack, and dividers part them. */
+.chats-page .room-menu-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.chats-page .room-menu-popover hr {
+  width: 100%;
+  margin-block: 0.25rem;
+  border: none;
+  border-top: 1px solid var(--chat-divider);
+}
+
+/* Mute and save-contact dialogs (confirm-modal cards). */
+.chats-page .chat-dialog-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  border: none;
+}
+
+.chats-page .chat-dialog-options label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.chats-page .chat-dialog-options input {
+  accent-color: var(--chat-accent);
+  width: 18px;
+  height: 18px;
+}
+
+.chats-page .chat-dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.chats-page .chat-dialog-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chats-page .chat-dialog-form input {
+  padding-block: 0.625rem;
+  padding-inline: 0.875rem;
+  border: 1px solid var(--chat-divider);
+  border-radius: 10px;
+  background: var(--chat-panel-header);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 400;
+  outline: none;
+}
+
+.chats-page .chat-dialog-form input:focus {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
+}
+
+.chats-page .chat-dialog-form .text-muted {
+  margin: 0;
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+}
+
+/* =============================================================================
+   GROUP INFO DIALOG (the global .modal card, inside the page)
+   ============================================================================= */
+.chats-page .group-info-modal {
+  max-width: 680px;
+}
+
+.chats-page .group-info-title {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.chats-page .group-info-tile {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #5fd17b, var(--chat-accent));
+  /* Dark on both ends of the green: white was 1.93:1 on the light one. */
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.chats-page .group-info-heading {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chats-page .group-info-subtitle {
+  font-size: 1rem;
+  font-weight: 400;
+  color: var(--chat-meta);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chats-page .group-info-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding-block: 1rem 0;
+  padding-inline: 1.5rem;
+}
+
+.chats-page .group-info-toolbar .chats-tabs {
+  flex: none;
+}
+
+.chats-page .group-info-toolbar .chats-tab {
+  padding-block: 0.5rem;
+  padding-inline: 0.875rem;
+  font-size: 0.9375rem;
+}
+
+.chats-page .group-info-toolbar .icon-btn {
+  margin-inline-start: auto;
+}
+
+.chats-page .group-info-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-block: 0.5rem;
+  padding-inline: 0.875rem;
+  border-radius: 10px;
+  border: 1px solid var(--chat-divider);
+  background: var(--chat-panel-header);
+  color: var(--chat-meta);
+  font-size: 0.9375rem;
+}
+
+.chats-page .group-info-badge.admin {
+  border-color: color-mix(in srgb, var(--chat-accent) 35%, transparent);
+  background: color-mix(in srgb, var(--chat-accent) 10%, var(--chat-panel));
+  color: var(--chat-pill-active-text);
+}
+
+.chats-page .group-info-state {
+  display: flex;
+  justify-content: center;
+  padding: 2rem;
+  color: var(--chat-meta);
+}
+
+.chats-page .group-info-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.chats-page .group-info-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chats-page .group-info-field .required {
+  color: var(--error-text);
+}
+
+.chats-page .group-info-field input,
+.chats-page .group-info-field textarea,
+.chats-page .group-info-add input {
+  width: 100%;
+  box-sizing: border-box;
+  padding-block: 0.75rem;
+  padding-inline: 1rem;
+  border: 1px solid var(--chat-divider);
+  border-radius: 10px;
+  background: var(--chat-panel-header);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 400;
+  outline: none;
+}
+
+.chats-page .group-info-field textarea {
+  resize: vertical;
+  min-height: 7rem;
+}
+
+/* The global --text-muted placeholder is 4.24:1 on the light --chat-panel-header these fields are filled with. */
+.chats-page .group-info-field input::placeholder,
+.chats-page .group-info-field textarea::placeholder,
+.chats-page .group-info-add input::placeholder {
+  color: var(--chat-meta);
+}
+
+.chats-page .group-info-field input:focus,
+.chats-page .group-info-field textarea:focus,
+.chats-page .group-info-add input:focus {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
+}
+
+.chats-page .group-info-field input:disabled,
+.chats-page .group-info-field textarea:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.chats-page .group-info-picture {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1rem;
+  border: 1px solid var(--chat-divider);
+  border-radius: 12px;
+  background: var(--chat-panel-header);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 400;
+  text-align: start;
+  cursor: pointer;
+}
+
+.chats-page .group-info-picture:hover:not(:disabled) {
+  border-color: var(--chat-accent);
+}
+
+.chats-page .group-info-picture:disabled {
+  cursor: default;
+}
+
+.chats-page .group-info-picture .chat-avatar {
+  width: 96px;
+  height: 96px;
+  background: var(--chat-panel);
+  border: 1px solid var(--chat-divider);
+}
+
+.chats-page .group-info-members {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.chats-page .group-info-add {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.chats-page .group-info-add button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+}
+
+.chats-page .group-info-count {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--chat-meta);
+}
+
+.chats-page .group-info-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chats-page .group-info-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-block: 0.5rem;
+  border-bottom: 1px solid var(--chat-divider);
+}
+
+.chats-page .group-info-member {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+/* The name and the number hug the start edge, as a chat name does (see .chat-item-name): stretched across the column,
+   a Latin name (by its own direction) and the number (isolated left to right) sat at the left edge of an Arabic
+   page, away from the avatar and the names beside them. */
+.chats-page .group-info-member .name {
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.chats-page .group-info-member .number {
+  font-size: 0.8125rem;
+  color: var(--chat-meta);
+  align-self: flex-start;
+}
+
+.chats-page .group-info-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-block: 0.125rem;
+  padding-inline: 0.5rem;
+  border-radius: 999px;
+  background: var(--chat-pill-active-bg);
+  color: var(--chat-pill-active-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.chats-page .group-info-actions {
+  display: flex;
+  gap: 0.125rem;
+  flex-shrink: 0;
+}
+
+.chats-page .icon-btn.danger:hover {
+  color: var(--error-text);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+/* =============================================================================
+   NEW CHAT / NEW GROUP PANEL (sidebar sub-view)
+   ============================================================================= */
+.chats-page .new-chat-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chats-page .new-chat-header {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-block: 0;
+  padding-inline: 0.75rem;
+  border-bottom: 1px solid var(--chat-divider);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.chats-page .new-chat-search {
+  margin-block: 0.75rem 0;
+  margin-inline: 1rem;
+  flex-shrink: 0;
+}
+
+/* The clear button at the end of a search field: a small icon button whose block margin keeps it inside the
+   height of the line, so the field does not grow when it appears. */
+.chats-page .search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-block: -0.5rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--chat-meta);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.chats-page .search-clear:hover {
+  background: var(--chat-hover);
+  color: var(--text-primary);
+}
+
+.chats-page .search-clear:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.chats-page .new-chat-hint {
+  margin-block: 0.375rem 0;
+  margin-inline: 1rem;
+  font-size: 0.8125rem;
+  color: var(--chat-meta);
+}
+
+.chats-page .new-chat-list {
+  padding-block-start: 0.5rem;
+}
+
+.chats-page .new-chat-section-label {
+  padding-block: 0.875rem 0.375rem;
+  padding-inline: 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--chat-accent-text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chats-page .select-check {
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  border: 2px solid color-mix(in srgb, var(--chat-meta) 60%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Content on the accent fill is dark: white on it is 3.03:1 (see contrast-pairs.test.ts). */
+.chats-page .select-check.checked {
+  background: var(--chat-accent);
+  border-color: var(--chat-accent);
+  color: #0f172a;
+}
+
+.chats-page .new-group-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding-block: 0.875rem 0;
+  padding-inline: 1rem;
+  flex-shrink: 0;
+}
+
+.chats-page .new-group-name {
+  height: 42px;
+  padding-block: 0;
+  padding-inline: 0.875rem;
+  border: none;
+  border-bottom: 2px solid var(--chat-divider);
+  background: transparent;
+  font-size: 1rem;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.chats-page .new-group-name:focus {
+  border-bottom-color: var(--focus-ring);
+}
+
+.chats-page .new-group-name::placeholder {
+  color: var(--chat-meta);
+}
+
+.chats-page .participant-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  max-height: 96px;
+  overflow-y: auto;
+}
+
+.chats-page .participant-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-block: 0.25rem;
+  padding-inline: 0.75rem 0.25rem;
+  background: var(--chat-active);
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+
+.chats-page .participant-chip button {
+  display: flex;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--chat-meta);
+  cursor: pointer;
+}
+
+.chats-page .participant-chip button:hover {
+  background: color-mix(in srgb, var(--chat-icon) 14%, transparent);
+}
+
+.chats-page .new-group-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-block: 0.75rem;
+  padding-inline: 1rem;
+  border-top: 1px solid var(--chat-divider);
+  flex-shrink: 0;
+}
+
+.chats-page .new-group-count {
+  font-size: 0.875rem;
+  color: var(--chat-meta);
+}
+
+.chats-page .new-group-create {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding-block: 0.5rem;
+  padding-inline: 1rem;
+  background: var(--chat-accent);
+  border: none;
+  border-radius: 999px;
+  color: #0f172a;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chats-page .new-group-create:hover:not(:disabled) {
+  /* Lighter, not darker: the darker hover green leaves the slate text at 4.39:1. */
+  background: color-mix(in srgb, var(--chat-accent) 88%, #ffffff);
+}
+
+.chats-page .new-group-create:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* =============================================================================
@@ -294,11 +1685,15 @@
    ============================================================================= */
 .chats-page .chats-room {
   flex: 1;
-  min-width: 0;
+  /* The composer's floor: the footer's padding, the attach button, the pill (its padding, border and gap, the input's
+     64px and the emoji button) and the send button, with the gaps between them. Narrower, the pill shrank below its
+     controls and the emoji button slid under the send button, as it did with the contact panel open beside the room
+     and the navigation expanded at 1201 to 1240px; the list column gives way instead. */
+  min-width: 262px;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-light);
+  background: var(--chat-wallpaper);
 }
 
 .chats-page .chats-room-placeholder {
@@ -309,28 +1704,29 @@
   justify-content: center;
   padding: 3rem;
   text-align: center;
-  color: var(--text-muted);
+  color: var(--chat-meta);
+  background: var(--chat-panel-header);
+  border-bottom: 6px solid var(--chat-accent);
 }
 
 .chats-page .placeholder-icon {
   margin-bottom: 1.5rem;
-  opacity: 0.3;
-  color: var(--text-secondary);
+  opacity: 0.35;
 }
 
 .chats-page .chats-room-placeholder h2 {
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: 1.5rem;
+  font-weight: 300;
   color: var(--text-primary);
   /* Reset the global h2 eyebrow treatment: this is an empty-state title, not a section label. */
   text-transform: none;
   letter-spacing: -0.01em;
-  margin: 0 0 0.375rem;
+  margin: 0 0 0.5rem;
 }
 
 .chats-page .chats-room-placeholder p {
   font-size: 0.9375rem;
-  max-width: 380px;
+  max-width: 420px;
   margin: 0;
 }
 
@@ -340,17 +1736,22 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  /* The room menu hangs from the room (see .room-menu-popover). */
+  position: relative;
 }
 
-.chats-page .room-header {
-  height: 70px;
-  background: var(--bg-white);
-  border-bottom: 1px solid var(--border);
-  padding: 0 1.5rem;
+.chats-page .room-header,
+.chats-page .chats-room-header {
+  height: 64px;
+  background: var(--chat-panel-header);
+  border-bottom: 1px solid var(--chat-divider);
+  padding-block: 0;
+  padding-inline: 1rem 0.75rem;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
   box-sizing: border-box;
+  flex-shrink: 0;
 }
 
 /* Back-to-list control: only needed in the single-pane mobile layout; hidden on the two-pane desktop. */
@@ -366,77 +1767,129 @@
   margin-inline-start: -0.5rem;
   background: transparent;
   border: none;
-  border-radius: 8px;
-  color: var(--text-secondary);
+  border-radius: 50%;
+  color: var(--chat-icon);
   cursor: pointer;
   flex-shrink: 0;
 }
 
 .chats-page .room-back:hover {
-  background: var(--bg-light);
-  color: var(--text-primary);
+  background: color-mix(in srgb, var(--chat-icon) 14%, transparent);
 }
 
-.chats-page .room-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: var(--bg-light);
-  border: 1px solid var(--border);
+.chats-page .room-contact {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
-  color: var(--text-secondary);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.chats-page .room-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
+  gap: 0.875rem;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: start;
+  color: inherit;
 }
 
 .chats-page .room-contact-info {
   display: flex;
   flex-direction: column;
-  gap: 0.125rem;
   min-width: 0;
+  line-height: 1.25;
 }
 
-.chats-page .room-contact-info h3 {
+.chats-page .room-contact-name {
   font-size: 1rem;
   font-weight: 600;
   color: var(--text-primary);
-  margin: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
-/* Prettified phone (or "Group" / "Private contact" label for non-personal JIDs). Primary subtitle
-   line directly under the name — what an operator reads first. */
+/* The number under the name is isolated left to right in the markup (<bdi dir="ltr">), so the line keeps the page
+   direction and sits at the start edge with the name. It stays on one line in a narrow room, cut by its own isolate
+   as the session number is (see .session-phone-line): its last digits give way, in either page direction, and the
+   whole number is in its title. */
 .chats-page .room-contact-phone {
+  display: flex;
+  min-width: 0;
   font-size: 0.8125rem;
-  color: var(--text-muted);
-  line-height: 1.2;
+  color: var(--chat-meta);
 }
 
-/* Raw JID preserved for technical use (lid resolution, webhook payloads, group ids). Muted mono,
-   below the phone, truncated to keep the header compact — the full value is in the title tooltip. */
-.chats-page .room-contact-jid {
-  font-size: 0.6875rem;
-  color: var(--text-muted);
-  font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
-  opacity: 0.7;
-  white-space: nowrap;
+.chats-page .room-contact-phone > bdi {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+.chats-page .room-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+/* The chat layout clips what runs past its bottom edge, so the menu is placed against the room rather than its button:
+   6px under the button, which the 64px header centres (40px tall, 12px from the top), and at the button's end edge,
+   which the header's end padding, the contact panel button and the gap between them keep from the room's. Capped by
+   the room's height, the entries scroll inside it on a short window or a phone held sideways, as the session
+   picker's do. */
+.chats-page .room-menu-popover {
+  position: absolute;
+  top: calc(64px - 6px);
+  inset-inline-end: calc(0.75rem + 40px + 0.25rem);
+  max-height: calc(100% - 64px + 6px - 0.75rem);
+  overflow-y: auto;
+  z-index: 30;
+  min-width: 200px;
+  padding: 0.375rem;
+  display: flex;
+  flex-direction: column;
+  background: var(--chat-panel);
+  border: 1px solid var(--chat-divider);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+}
+
+.chats-page .room-menu-popover button {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding-block: 0.625rem;
+  padding-inline: 0.75rem;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: start;
+  white-space: nowrap;
+}
+
+.chats-page .room-menu-popover button:hover,
+.chats-page .room-menu-popover button:focus-visible {
+  background: var(--chat-hover);
+}
+
+.chats-page .room-menu-popover svg {
+  color: var(--chat-icon);
+}
+
+/* =============================================================================
+   THREAD
+   ============================================================================= */
 .chats-page .room-messages {
   flex: 1;
+  min-height: 0;
+  /* Load-bearing on every side: the older-page pill is lifted into the top padding, and the width its
+     failure text is measured against assumes 1.5rem inline (see .messages-loading-older). */
   padding: 1.5rem;
   overflow-y: auto;
   /* Chrome/Firefox already adjust scrollTop on their own when content is prepended above the
@@ -446,54 +1899,50 @@
   overflow-anchor: none;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  background-image: radial-gradient(var(--border) 1px, transparent 0);
-  background-size: 24px 24px;
+  /* The space between two bubbles of one run; a new run adds its own margin. The older-page pill and the
+     scroll-to-bottom button take it back in their margins. */
+  gap: 2px;
+  background-color: var(--chat-wallpaper);
+  background-image: var(--chat-wallpaper-pattern);
+  background-size: 240px 240px;
   position: relative;
   /* The failure indicator's text is set against the width of the thread (the container query below), not the
-     viewport: beside the list at an 890px viewport its client width is 244px, narrower than the 286px of a
-     320px phone. */
+     viewport: beside the list at an 890px viewport its client width is narrower than a phone's. */
   container-type: inline-size;
 }
 
-/* Floating scroll-to-bottom button. Sits at the bottom-right of the messages pane (not the footer)
-   so it overlays the conversation without stealing input-bar space. It is the last child of the
-   scroller and sticky, not absolute: an absolute child of the scroller moves with the content, so it
-   sat at the bottom of the first screen of the thread, off screen whenever it was shown. In flow it
-   would add its own height and one flex gap to the thread, which the negative margin takes back, so
-   the scroll height is the same with and without it (the gap is the 0.75rem of .room-messages). The
-   right edge is the scroller's padding, clear of the scrollbar. It sits below a bubble's actions menu
-   (z-index 5), which it would otherwise cover: it is later in the DOM, and the Delete icon of a message
-   near the bottom edge of the pane lies under it. */
+/* Floating scroll-to-bottom button. It is the last child of the scroller and sticky, not absolute: an
+   absolute child of the scroller moves with the content, so it sat at the bottom of the first screen of
+   the thread, off screen whenever it was shown. In flow it would add its own height and one flex gap to
+   the thread, which the negative margin takes back, so the scroll height is the same with and without it.
+   It sits below a bubble's actions menu (z-index 5), which it would otherwise cover: it is later in the
+   DOM, and the Delete icon of a message near the bottom edge of the pane lies under it. */
 .chats-page .scroll-to-bottom-btn {
   position: sticky;
-  bottom: 1rem;
+  bottom: 0.75rem;
   align-self: flex-end;
   flex: none;
-  margin-top: calc(-40px - 0.75rem);
+  margin-top: calc(-42px - 2px);
   z-index: 4;
-  width: 40px;
-  height: 40px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-white);
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  background: var(--chat-bubble-in);
+  color: var(--chat-icon);
+  border: none;
+  box-shadow: 0 2px 6px rgba(11, 20, 26, 0.2);
   cursor: pointer;
   transition:
-    background 0.15s,
     color 0.15s,
     transform 0.1s;
   padding: 0;
 }
 
 .chats-page .scroll-to-bottom-btn:hover {
-  background: var(--bg-light);
-  color: var(--primary-text);
-  border-color: var(--primary);
+  color: var(--chat-accent-text);
 }
 
 .chats-page .scroll-to-bottom-btn:active {
@@ -506,7 +1955,7 @@
   align-items: center;
   justify-content: center;
   flex: 1;
-  color: var(--text-muted);
+  color: var(--chat-meta);
   font-size: 0.9375rem;
   gap: 0.75rem;
 }
@@ -515,11 +1964,10 @@
    and the failure to load one. Neither takes room in the thread: a row in flow adds its height and one flex
    gap above the oldest bubble, which pushed the reader's content down by that much when the page was
    requested and back up when it landed. The loading pill's height is explicit, and its margins take it and
-   the gap back (the gap is the 0.75rem of .room-messages), as the scroll-to-bottom button does, so the
-   thread lays out the same with and without the row. The top margin lifts it into the 1.5rem of padding,
-   clear of the first bubble when the thread is at its top, whatever its height; the bottom margin is what is
-   left to add up to minus the gap. It never takes a pointer event from a bubble under it, and it must not
-   take the flex remainder either. */
+   the gap back, as the scroll-to-bottom button does, so the thread lays out the same with and without the
+   row. The top margin lifts it into the 1.5rem of padding, clear of the first bubble when the thread is at
+   its top, whatever its height; the bottom margin is what is left to add up to minus the gap. It never takes
+   a pointer event from a bubble under it, and it must not take the flex remainder either. */
 .chats-page .messages-loading-older {
   --older-row-height: 1.25rem;
   position: sticky;
@@ -537,13 +1985,13 @@
   max-width: 100%;
   height: var(--older-row-height);
   margin-top: -1.375rem;
-  margin-bottom: calc(0.625rem - var(--older-row-height));
+  margin-bottom: calc(1.375rem - 2px - var(--older-row-height));
   padding: 0 0.75rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--chat-divider);
   border-radius: 999px;
-  background: var(--bg-white);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
-  color: var(--text-muted);
+  background: var(--chat-bubble-in);
+  box-shadow: var(--chat-shadow-bubble);
+  color: var(--chat-meta);
   font-size: 0.75rem;
   line-height: 1.25;
   pointer-events: none;
@@ -607,12 +2055,9 @@
 
 /* In a thread of 17rem of content or less, two lines may not hold the whole sentence, and only the retry
    instruction is shown. The width queried is the content box of the thread: its client width, which leaves
-   out a scrollbar, less the 1.5rem of padding on each side. 17rem of it is a client width of 320px. The
-   longest sentence, the German one, needs 308px of client width for two lines in every engine. A 360px phone
-   has 326px, and shows the sentence with an overlay scrollbar; a classic scrollbar of 6px leaves it 320px,
-   and the instruction alone is shown. The instruction is two lines at most in the narrowest thread there is,
-   244px of client width beside the list at an 890px viewport (238px with a scrollbar of 6px). display: none
-   takes the hidden text out of the accessibility tree as well, so what is read is what is shown. */
+   out a scrollbar, less its inline padding. The longest sentence, the German one, needs 308px of client
+   width for two lines in every engine with 1.5rem of padding on each side. display: none takes the hidden
+   text out of the accessibility tree as well, so what is read is what is shown. */
 @container (max-width: 17rem) {
   .chats-page .messages-loading-older.failed > .older-failure-full {
     display: none;
@@ -650,16 +2095,55 @@
   align-items: center;
   justify-content: center;
   flex: 1;
-  color: var(--text-muted);
+  color: var(--chat-meta);
   font-size: 0.9375rem;
   gap: 0.75rem;
   text-align: center;
   padding: 2rem;
 }
 
+.chats-page .messages-empty span {
+  background: var(--chat-bubble-in);
+  padding-block: 0.5rem;
+  padding-inline: 0.875rem;
+  border-radius: 8px;
+  box-shadow: var(--chat-shadow-bubble);
+}
+
+/* Day separator pill */
+.chats-page .day-separator {
+  display: flex;
+  justify-content: center;
+  margin-block: 0.75rem 0.5rem;
+}
+
+.chats-page .day-separator span {
+  padding-block: 0.3rem;
+  padding-inline: 0.75rem;
+  background: var(--chat-bubble-in);
+  color: var(--chat-bubble-text);
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  box-shadow: var(--chat-shadow-bubble);
+}
+
+/* Bubbles */
 .chats-page .message-bubble-wrapper {
   display: flex;
   width: 100%;
+}
+
+.chats-page .message-bubble-wrapper.run-start {
+  margin-top: 0.5rem;
+}
+
+.chats-page .day-separator + .message-bubble-wrapper.run-start {
+  margin-top: 0;
+}
+
+.chats-page .message-bubble-wrapper.has-reactions {
+  margin-bottom: 0.875rem;
 }
 
 .chats-page .message-bubble-wrapper.incoming {
@@ -670,424 +2154,333 @@
   justify-content: flex-end;
 }
 
+.chats-page .message-bubble-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: min(65%, 640px);
+}
+
+.chats-page .message-bubble-wrapper.outgoing .message-bubble-container {
+  flex-direction: row-reverse;
+}
+
+.chats-page .message-bubble-wrapper.incoming .message-bubble-container {
+  flex-direction: row;
+}
+
 .chats-page .message-bubble {
+  position: relative;
+  min-width: 0;
   max-width: 100%;
-  padding: 0.625rem 0.875rem 0.375rem;
-  border-radius: 12px;
+  padding: 0.375rem 0.5rem 0.5rem;
+  border-radius: 8px;
   font-size: 0.9375rem;
   line-height: 1.4;
-  position: relative;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  color: var(--chat-bubble-text);
+  box-shadow: var(--chat-shadow-bubble);
 }
 
 .chats-page .message-bubble.incoming {
-  background: var(--bg-white);
-  color: var(--text-primary);
-  border-end-start-radius: 2px;
-  border: 1px solid var(--border);
+  background: var(--chat-bubble-in);
 }
 
 .chats-page .message-bubble.outgoing {
-  background: #d9fdd3; /* Soft WhatsApp Green */
-  color: #111b21;
-  border-end-end-radius: 2px;
+  background: var(--chat-bubble-out);
 }
 
-/* Dark theme outgoing chat bubble override */
-[data-theme='dark'] .chats-page .message-bubble.outgoing {
-  background: #005c4b; /* Dark WhatsApp Green */
-  color: #e9edef;
-}
-
-/* System-dark twin: the default 'system' theme removes data-theme entirely, so the explicit rule
-   above never matches on a dark OS. :not([data-theme='light']) keeps an explicit light choice in
-   control (same pattern as Webhooks.css). */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .chats-page .message-bubble.outgoing {
-    background: #005c4b;
-    color: #e9edef;
+/* Forced colours paint every bubble in the page colour and drop its shadow, which ran one message into the next on
+   the wallpaper: each bubble draws its edge instead. */
+@media (forced-colors: active) {
+  .chats-page .message-bubble {
+    border: 1px solid CanvasText;
   }
 }
 
-.chats-page .message-text {
-  word-break: break-word;
-  white-space: pre-wrap;
+/* The tail on the first bubble of a run, on the side the bubble comes from. */
+.chats-page .run-start .message-bubble.incoming {
+  border-start-start-radius: 0;
+}
+
+.chats-page .run-start .message-bubble.outgoing {
+  border-start-end-radius: 0;
+}
+
+.chats-page .run-start .message-bubble::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 8px;
+  height: 13px;
+}
+
+.chats-page .run-start .message-bubble.incoming::before {
+  inset-inline-start: -8px;
+  background: var(--chat-bubble-in);
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
+.chats-page .run-start .message-bubble.outgoing::before {
+  inset-inline-end: -8px;
+  background: var(--chat-bubble-out);
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+
+/* clip-path does not follow the writing direction, so a right-to-left layout mirrors both triangles. */
+[dir='rtl'] .chats-page .run-start .message-bubble.incoming::before {
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+
+[dir='rtl'] .chats-page .run-start .message-bubble.outgoing::before {
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
+.chats-page .message-bubble.media-type {
+  padding-block: 0.25rem 0.375rem;
+  padding-inline: 0.25rem;
+}
+
+.chats-page .message-bubble.media-type .message-content {
+  padding-inline: 0.3125rem;
+}
+
+/* Revoked / Deleted message type */
+.chats-page .message-bubble.revoked-type .message-text {
+  font-style: italic;
+  color: var(--chat-meta);
 }
 
 /* Group sender label: the poster's name atop an incoming group bubble (colour set inline per sender). */
 .chats-page .message-sender {
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   line-height: 1.2;
   margin-bottom: 0.15rem;
   word-break: break-word;
 }
 
-.chats-page .message-meta {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.25rem;
-  margin-top: 0.25rem;
+/* Inline text plus trailing time and ticks. The spacer reserves the meta's width at the end of the last
+   line, and the meta sits absolutely over it, so it tucks into that line when it fits and wraps below. */
+.chats-page .message-content {
+  position: relative;
+  word-break: break-word;
 }
 
+/* A message is written in its own direction, not the page's: under an inherited right to left an English
+   question in an Arabic page drew its question mark at the left ("?quote for the kitchen project"). On an inline
+   box plaintext isolates the text and reads its direction from the first strong letter, while the bubble keeps
+   aligning it by the page direction. */
+.chats-page .message-content > .message-text {
+  display: inline;
+  white-space: pre-wrap;
+  unicode-bidi: plaintext;
+}
+
+.chats-page .message-content > .message-poll-options {
+  display: block;
+  margin-block: 0.25rem;
+  padding-inline-start: 1.25rem;
+}
+
+/* A link in a quote takes the same tokens: the app's link green is 4.23:1 on a quote in a light outgoing bubble. */
+.chats-page .message-text a,
+.chats-page .quote-body a {
+  color: var(--chat-link);
+  text-decoration: underline;
+}
+
+/* The blue of an incoming link is 4.07:1 on the light green and 3.74:1 on the dark one. */
+.chats-page .message-bubble.outgoing .message-text a,
+.chats-page .message-bubble.outgoing .quote-body a {
+  color: var(--chat-link-out);
+}
+
+.chats-page .message-masked {
+  color: var(--chat-meta);
+}
+
+.chats-page .meta-spacer {
+  display: inline-block;
+  width: 3.25rem;
+  height: 1px;
+  vertical-align: baseline;
+}
+
+.chats-page .meta-spacer.with-status {
+  width: 4.5rem;
+}
+
+/* An edited label widens the room by its own text: a hidden copy sits in the spacer ahead of the fixed part. */
+.chats-page .meta-spacer:has(.meta-spacer-edited) {
+  width: auto;
+  overflow: hidden;
+  padding-inline-end: 3.25rem;
+}
+
+.chats-page .meta-spacer.with-status:has(.meta-spacer-edited) {
+  padding-inline-end: 4.5rem;
+}
+
+.chats-page .meta-spacer-edited {
+  visibility: hidden;
+  font-size: 0.6875rem;
+  padding-inline-end: 0.25rem;
+}
+
+.chats-page .message-meta {
+  position: absolute;
+  inset-inline-end: 0;
+  bottom: -0.3125rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1875rem;
+  white-space: nowrap;
+}
+
+.chats-page .message-edited,
 .chats-page .message-time {
   font-size: 0.6875rem;
-  color: var(--text-muted);
+  color: var(--chat-meta);
+}
+
+/* Every muted line inside an outgoing bubble: --chat-meta is 3.27:1 on the dark green, and 2.87:1 on a quote there. */
+.chats-page .message-bubble.outgoing .message-edited,
+.chats-page .message-bubble.outgoing .message-time,
+.chats-page .message-bubble.outgoing .message-quote-box,
+.chats-page .message-bubble.outgoing.revoked-type .message-text,
+.chats-page .message-bubble.outgoing .message-masked,
+.chats-page .message-bubble.outgoing .message-media-omitted {
+  color: var(--chat-meta-out);
 }
 
 /* A styled status bubble sets its own inline background + white text; let its timestamp inherit
    instead of staying the muted gray meant for the default bubble. */
+.chats-page .message-bubble[style] .message-edited,
 .chats-page .message-bubble[style] .message-time {
   color: inherit;
   opacity: 0.75;
 }
 
 .chats-page .message-status-icon {
-  font-size: 0.75rem;
+  display: inline-flex;
+  color: var(--chat-meta);
 }
 
 .chats-page .message-status-icon.read {
-  /* The WhatsApp blue is 2.13:1 on the outgoing bubble, and these checks are TEXT, not an icon.
-     Darkened to clear 4.5:1 there and on white; the status is also spelled out in aria-label/title,
-     since delivered and read otherwise differ only by this colour. */
-  color: #337592;
+  color: var(--chat-tick-read);
 }
 
-/* =============================================================================
-   INPUT BAR: Bottom Footer
-   ============================================================================= */
-.chats-page .room-input-footer {
-  background: var(--bg-white);
-  border-top: 1px solid var(--border);
-  padding: 1rem 1.5rem;
-  box-sizing: border-box;
-}
-
-.chats-page .input-form {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-}
-
-.chats-page .message-text-input {
-  flex: 1;
-  /* An input keeps its intrinsic width as its automatic minimum, which pinned the whole composer to
-     369px and pushed the send button outside the layout's clip. The floor replaces that with one small
-     enough to let the composer fit a narrow pane and large enough to keep a caret and a few characters
-     visible; without it the box shrinks to its own padding and shows nothing at all. */
-  min-width: 64px;
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  font-size: 0.9375rem;
-  background: var(--bg-light);
-  color: var(--text-primary);
-  outline: none;
-  transition: all 0.2s;
-  box-sizing: border-box;
-}
-
-.chats-page .message-text-input:focus {
-  border-color: var(--primary);
-  background: var(--bg-white);
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
-}
-
-.chats-page .btn-send-message {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  background: var(--primary);
-  border: none;
-  border-radius: 50%;
-  color: white;
-  cursor: pointer;
-  transition:
-    background 0.2s,
-    transform 0.1s;
-  flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(34, 197, 94, 0.3);
-}
-
-.chats-page .btn-send-message:hover:not(:disabled) {
-  background: var(--primary-hover);
-  transform: scale(1.05);
-}
-
-.chats-page .btn-send-message:disabled {
-  /* Keep the brand silhouette readable while clearly inactive — a bare gray-on-gray glyph
-     reads as "no button here" rather than "send, disabled". */
-  background: var(--primary);
-  color: #fff;
-  opacity: 0.55;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
-/* =============================================================================
-   GENERAL CHATS STYLES & ERROR STATES
-   ============================================================================= */
-.chats-page .chats-loading-container,
-.chats-page .chats-error-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-white);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 4rem 2rem;
-  margin-top: 1rem;
-  text-align: center;
-  color: var(--text-secondary);
-  box-shadow: var(--shadow-sm);
-  flex: 1;
-}
-
-.chats-page .chats-error-state h3 {
-  font-size: 1.25rem;
-  margin: 1rem 0 0.5rem;
-  color: var(--text-primary);
-}
-
-.chats-page .chats-error-state p {
-  font-size: 0.9375rem;
-  max-width: 450px;
-  margin: 0;
-  color: var(--text-muted);
-}
-
-.chats-page .text-warn {
-  color: var(--warning-text);
-}
-
-/* Real-time connection-lost banner */
-.chats-page .chats-reconnect-banner {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  margin-bottom: 0.75rem;
-  border-radius: 6px;
-  background: rgba(234, 88, 12, 0.1);
-  color: var(--warning-text);
-  font-size: 0.875rem;
-}
-
-.chats-page .chats-reconnect-banner button {
-  margin-inline-start: auto;
-}
-
-/* =============================================================================
-   ATTACHMENT PREVIEW & EMOJI PICKER
-   ============================================================================= */
-.chats-page .btn-input-accessory {
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 0.5rem;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
-  flex-shrink: 0;
-}
-
-.chats-page .btn-input-accessory:hover {
-  background: var(--bg-light);
-  color: var(--text-primary);
-}
-
-.chats-page .btn-input-accessory.active {
-  background: rgba(34, 197, 94, 0.1);
-  color: var(--primary-text);
-}
-
-.chats-page .attachment-preview-banner {
-  background: var(--bg-white);
-  border-top: 1px solid var(--border);
-  padding: 0.75rem 1.5rem;
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  box-sizing: border-box;
-}
-
-.chats-page .preview-thumbnail {
-  width: 48px;
-  height: 48px;
-  object-fit: cover;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-}
-
-.chats-page .preview-file-icon {
-  width: 48px;
-  height: 48px;
-  background: var(--bg-light);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.5rem;
-}
-
-.chats-page .preview-file-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.chats-page .preview-filename {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.chats-page .preview-filesize {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-
-.chats-page .btn-remove-attachment {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 0.375rem;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s;
-}
-
-.chats-page .btn-remove-attachment:hover {
-  background: rgba(239, 68, 68, 0.12);
+.chats-page .message-status-icon.failed {
   color: var(--error-text);
 }
 
-.chats-page .chats-emoji-picker {
-  background: var(--bg-white);
-  border-top: 1px solid var(--border);
-  padding: 0.75rem 1.5rem;
-  box-sizing: border-box;
-  max-height: 120px;
-  overflow-y: auto;
+/* Inline code inside a message body. */
+.chats-page .message-text code,
+.chats-page .quote-body code {
+  background: color-mix(in srgb, var(--chat-bubble-text) 8%, transparent);
+  padding-block: 0.1em;
+  padding-inline: 0.35em;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
 }
 
-.chats-page .emoji-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.chats-page .emoji-btn {
-  background: transparent;
-  border: none;
-  font-size: 1.25rem;
-  padding: 0.375rem;
+/* Code block. */
+.chats-page .message-text pre {
+  display: block;
+  background: color-mix(in srgb, var(--chat-bubble-text) 8%, transparent);
+  padding-block: 0.5em;
+  padding-inline: 0.75em;
   border-radius: 6px;
+  margin-block: 0.25em;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.chats-page .message-text pre code {
+  background: transparent;
+  padding: 0;
+}
+
+/* Quoted message inside a bubble */
+.chats-page .message-quote-box {
+  background: color-mix(in srgb, var(--chat-bubble-text) 6%, transparent);
+  border-inline-start: 4px solid var(--chat-quote-accent);
+  border-radius: 6px;
+  padding-block: 0.375rem;
+  padding-inline: 0.625rem;
+  margin-bottom: 0.375rem;
+  font-size: 0.8125rem;
+  color: var(--chat-meta);
   cursor: pointer;
-  transition: all 0.15s;
+}
+
+.chats-page .message-bubble.outgoing .message-quote-box {
+  border-inline-start-color: #008069;
+}
+
+.chats-page .quote-body {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  /* The cap is the smaller of 320px and the room in the quote box: under nowrap the shrink-to-fit width is the
+     whole text, so a bare 320px cap let a long quote paint past a narrow bubble. */
+  max-width: min(320px, 100%);
+  width: fit-content;
+}
+
+/* Inbound business prompt buttons (Baileys click-button) */
+.chats-page .message-prompt-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  width: 100%;
+}
+
+.chats-page .message-prompt-button {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 0.375rem;
+  width: 100%;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--chat-divider);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--chat-bubble-text) 4%, var(--chat-bubble-in));
+  color: var(--chat-pill-active-text);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    opacity 0.15s ease;
 }
 
-.chats-page .emoji-btn:hover {
-  background: var(--bg-light);
+.chats-page .message-prompt-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--chat-bubble-text) 8%, var(--chat-bubble-in));
+  border-color: var(--chat-accent);
 }
 
-.chats-page .message-bubble.media-type {
-  border-start-start-radius: 12px;
-  border-start-end-radius: 12px;
+.chats-page .message-prompt-button:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
-/* =============================================================================
-   RESPONSIVENESS
-   ============================================================================= */
-@media (max-width: 768px) {
-  .chats-page {
-    padding: 1rem;
-    height: calc(100dvh - 3.5rem);
-  }
-
-  .chats-page .chats-layout {
-    flex-direction: column;
-    height: calc(100vh - 7rem);
-  }
-
-  /* Single-pane on mobile: the list and the open conversation each take the full panel
-     instead of being squeezed into one short stacked column. */
-  .chats-page .chats-sidebar {
-    width: 100%;
-    height: 100%;
-    border-inline-end: none;
-  }
-
-  .chats-page .chats-room {
-    height: 100%;
-  }
-
-  /* Opening a chat replaces the list with the thread; the back button returns to the list. */
-  .chats-page .chats-layout.has-active-chat .chats-sidebar {
-    display: none;
-  }
-
-  .chats-page .chats-layout:not(.has-active-chat) .chats-room {
-    display: none;
-  }
-
-  .chats-page .room-back {
-    display: inline-flex;
-  }
-
-  .chats-page .room-header {
-    height: 60px;
-  }
+.chats-page .message-prompt-button.selected {
+  opacity: 1;
+  border-color: var(--chat-accent);
+  background: color-mix(in srgb, var(--chat-accent) 14%, var(--chat-bubble-in));
+  font-weight: 600;
 }
 
-/* Between the mobile breakpoint and 889px the two-pane layout leaves the room narrower than the
-   composer's 244px minimum, so the send button fell outside the panel's clip with no scrollbar to
-   recover it. In that band the panes swap one at a time instead, the way they already do on a phone.
-   Bounded on both sides on purpose: at 768px and below the mobile shell owns the layout, and from 890px
-   the room fits the composer again. The room is `viewport - 646`, so the bound is 646 + 244 - 1; it
-   moves if the composer's own minimum does. Keyed to the navigation as well as the viewport, because
-   that arithmetic only holds while the nav is expanded; collapsed it already fits and none of this
-   should apply. `.main-content.expanded` is Layout's class for the COLLAPSED nav. */
-@media (min-width: 769px) and (max-width: 889px) {
-  .main-content:not(.expanded) .chats-page .chats-layout {
-    flex-direction: column;
-  }
-
-  .main-content:not(.expanded) .chats-page .chats-sidebar {
-    width: 100%;
-    height: 100%;
-    border-inline-end: none;
-  }
-
-  .main-content:not(.expanded) .chats-page .chats-layout.has-active-chat .chats-sidebar {
-    display: none;
-  }
-
-  .main-content:not(.expanded) .chats-page .chats-layout:not(.has-active-chat) .chats-room {
-    display: none;
-  }
-
-  .main-content:not(.expanded) .chats-page .room-back {
-    display: inline-flex;
-  }
+.chats-page .message-prompt-button.answered:not(.selected) {
+  opacity: 0.4;
 }
 
 /* =============================================================================
@@ -1095,11 +2488,11 @@
    ============================================================================= */
 .chats-page .chat-image-media {
   max-width: 100%;
-  max-height: 250px;
-  border-radius: 8px;
+  max-height: 340px;
+  border-radius: 6px;
   display: block;
   margin-bottom: 0.5rem;
-  cursor: pointer;
+  cursor: zoom-in;
   object-fit: cover;
 }
 
@@ -1122,7 +2515,7 @@
   padding: 0;
   border: none;
   background: none;
-  color: var(--text-muted);
+  color: var(--chat-meta);
   font-style: italic;
   font-size: 0.9em;
   font-family: inherit;
@@ -1150,18 +2543,18 @@
 }
 
 /* The map preview keeps its own modest cap, but bounded by the bubble the way every other media type
-   here is. As a bare pixel width it stayed 220px wide in a narrower room and ran past the panel edge. */
+   here is. As a bare pixel width it stayed wide in a narrower room and ran past the panel edge. */
 .chats-page .chat-location-media {
-  max-width: min(220px, 100%);
-  border-radius: 8px;
+  max-width: min(260px, 100%);
+  border-radius: 6px;
   display: block;
   margin-bottom: 0.25rem;
 }
 
 .chats-page .chat-video-media {
   max-width: 100%;
-  max-height: 250px;
-  border-radius: 8px;
+  max-height: 340px;
+  border-radius: 6px;
   display: block;
   margin-bottom: 0.5rem;
 }
@@ -1173,74 +2566,41 @@
 }
 
 .chats-page .chat-document-media {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--bg-light);
-  border: 1px solid var(--border);
+  padding-block: 0.625rem;
+  padding-inline: 0.75rem;
+  margin-bottom: 0.5rem;
+  background: color-mix(in srgb, var(--chat-bubble-text) 6%, transparent);
   border-radius: 6px;
-  color: var(--text-primary);
+  color: var(--chat-bubble-text);
   text-decoration: none;
   font-size: 0.875rem;
   font-weight: 500;
-  margin-bottom: 0.5rem;
-  transition: all 0.2s;
   word-break: break-all;
 }
 
 .chats-page .chat-document-media:hover {
-  background: var(--border);
-}
-
-[data-theme='dark'] .chats-page .chat-document-media {
-  background: #202c33;
-  border-color: #2f3b43;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .chats-page .chat-document-media {
-    background: #202c33;
-    border-color: #2f3b43;
-  }
-}
-
-.chats-page .message-bubble.media-type {
-  padding: 0.5rem;
+  background: color-mix(in srgb, var(--chat-bubble-text) 10%, transparent);
 }
 
 /* =============================================================================
    HOVER MENU, REPLIES, REACTIONS, AND DELETIONS
    ============================================================================= */
-.chats-page .message-bubble-container {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  max-width: 70%;
-}
-
-.chats-page .message-bubble-wrapper.outgoing .message-bubble-container {
-  flex-direction: row-reverse;
-}
-
-.chats-page .message-bubble-wrapper.incoming .message-bubble-container {
-  flex-direction: row;
-}
-
-/* Hover Menu */
+/* Laid over the bubble's top corner, not beside it: in flow it would squeeze a full-width bubble on hover. */
 .chats-page .message-actions-menu {
   position: absolute;
-  top: 0.5rem;
-  inset-inline-end: 0.5rem;
+  top: 0.375rem;
+  inset-inline-end: 0.375rem;
   display: none;
   align-items: center;
-  gap: 0.25rem;
-  background: var(--bg-white);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-sm);
+  gap: 0.125rem;
+  background: var(--chat-panel);
+  box-shadow: var(--shadow-md);
   border-radius: 20px;
-  padding: 2px 6px;
+  padding-block: 2px;
+  padding-inline: 4px;
   z-index: 5;
 }
 
@@ -1249,29 +2609,37 @@
   display: flex;
 }
 
+/* A touch screen reveals the actions with a tap, as a mouse does with hover. iOS Safari gives :hover on a tap only to an
+   element it takes for clickable, and a message has no click handler of its own; a pointer cursor marks it as one,
+   with no other effect on a screen that has no pointer to show. */
+@media (hover: none) {
+  .chats-page .message-bubble-container {
+    cursor: pointer;
+  }
+}
+
 /* A bubble is a keyboard stop (ChatThread): the ring says which message the arrow keys act on. */
 .chats-page .message-bubble-container:focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
-  border-radius: 12px;
+  border-radius: 8px;
 }
 
 .chats-page .action-btn {
   background: transparent;
   border: none;
-  color: var(--text-muted);
+  color: var(--chat-icon);
   cursor: pointer;
-  padding: 4px;
+  padding: 5px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease;
 }
 
 .chats-page .action-btn:hover {
-  background: var(--bg-light);
-  color: var(--text-primary);
+  background: var(--chat-hover);
 }
 
 .chats-page .action-btn.delete-btn:hover {
@@ -1291,11 +2659,11 @@
   left: 50%;
   /* --popover-shift is set when it opens, by the amount it would run past the pane (ChatThread). */
   transform: translateX(calc(-50% + var(--popover-shift, 0px))) translateY(-6px);
-  background: var(--bg-white);
-  border: 1px solid var(--border);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  background: var(--chat-panel);
+  box-shadow: var(--shadow-lg);
   border-radius: 24px;
-  padding: 0.375rem 0.625rem;
+  padding-block: 0.375rem;
+  padding-inline: 0.625rem;
   gap: 0.375rem;
   z-index: 50;
   white-space: nowrap;
@@ -1326,6 +2694,7 @@
   bottom: 100%;
 }
 
+/* Hover bridge so the pointer can travel from the trigger into the popover. */
 .chats-page .reaction-quick-popover::after {
   content: '';
   position: absolute;
@@ -1357,12 +2726,13 @@
 /* Reactions Badge */
 .chats-page .message-reactions-badge {
   position: absolute;
-  bottom: -12px;
-  background: var(--bg-white);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-sm);
+  bottom: -16px;
+  background: var(--chat-panel);
+  border: 1px solid var(--chat-divider);
+  box-shadow: var(--chat-shadow-bubble);
   border-radius: 12px;
-  padding: 2px 6px;
+  padding-block: 1px;
+  padding-inline: 6px;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -1373,11 +2743,11 @@
 }
 
 .chats-page .message-bubble-wrapper.outgoing .message-reactions-badge {
-  inset-inline-end: 12px;
+  inset-inline-end: 10px;
 }
 
 .chats-page .message-bubble-wrapper.incoming .message-reactions-badge {
-  inset-inline-start: 12px;
+  inset-inline-start: 10px;
 }
 
 .chats-page .reaction-emoji-span {
@@ -1386,150 +2756,129 @@
 
 .chats-page .reactions-count-span {
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--chat-meta);
   margin-inline-start: 2px;
 }
 
-/* Quoted Box inside Bubble */
-.chats-page .message-quote-box {
-  background: rgba(0, 0, 0, 0.04);
-  border-inline-start: 4px solid var(--primary);
-  border-radius: 4px;
-  padding: 0.375rem 0.625rem;
-  margin-bottom: 0.5rem;
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.chats-page .message-bubble.outgoing .message-quote-box {
-  background: rgba(0, 0, 0, 0.05);
-  border-inline-start-color: #008069;
-}
-
-[data-theme='dark'] .chats-page .message-quote-box {
-  background: rgba(255, 255, 255, 0.08);
-}
-/* Outgoing-bubble quote boxes: the plain dark rule loses the specificity tie with the light
-   outgoing rule below, so both dark modes apply the same treatment explicitly. */
-[data-theme='dark'] .chats-page .message-bubble.outgoing .message-quote-box {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .chats-page .message-quote-box {
-    background: rgba(255, 255, 255, 0.08);
-  }
-}
-
-.chats-page .quote-body {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 250px;
-}
-
-/* Inbound business prompt buttons (Baileys click-button) */
-.chats-page .message-prompt-buttons {
+/* =============================================================================
+   COMPOSER: attachment, emoji and reply panels, and the input bar
+   ============================================================================= */
+.chats-page .composer-banner {
+  background: var(--chat-panel-header);
+  padding-block: 0.625rem;
+  padding-inline: 1rem;
   display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-  margin-top: 0.5rem;
-  width: 100%;
+  align-items: center;
+  gap: 0.875rem;
+  box-sizing: border-box;
+  border-top: 1px solid var(--chat-divider);
+  flex-shrink: 0;
 }
 
-.chats-page .message-prompt-button {
+.chats-page .preview-thumbnail,
+.chats-page .preview-file-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.chats-page .preview-thumbnail {
+  object-fit: cover;
+}
+
+.chats-page .preview-file-icon {
+  background: var(--chat-panel);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.375rem;
-  width: 100%;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-white);
-  color: var(--primary);
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    background 0.15s ease,
-    border-color 0.15s ease,
-    opacity 0.15s ease;
+  font-size: 1.5rem;
 }
 
-.chats-page .message-prompt-button:hover:not(:disabled) {
-  background: rgba(0, 0, 0, 0.04);
-  border-color: var(--primary);
-}
-
-.chats-page .message-prompt-button:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
-.chats-page .message-prompt-button.selected {
-  opacity: 1;
-  border-color: var(--primary);
-  background: rgba(0, 128, 105, 0.08);
-  font-weight: 600;
-}
-
-.chats-page .message-prompt-button.answered:not(.selected) {
-  opacity: 0.4;
-}
-
-[data-theme='dark'] .chats-page .message-prompt-button {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-[data-theme='dark'] .chats-page .message-prompt-button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-[data-theme='dark'] .chats-page .message-prompt-button.selected {
-  background: rgba(0, 168, 132, 0.18);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .chats-page .message-prompt-button {
-    background: rgba(255, 255, 255, 0.06);
-  }
-
-  :root:not([data-theme='light']) .chats-page .message-prompt-button:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.1);
-  }
-
-  :root:not([data-theme='light']) .chats-page .message-prompt-button.selected {
-    background: rgba(0, 168, 132, 0.18);
-  }
-}
-
-/* Replying Preview Banner above Input Footer */
-.chats-page .replying-preview-banner {
-  background: var(--bg-white);
-  border-top: 1px solid var(--border);
-  padding: 0.75rem 1.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  box-sizing: border-box;
-}
-
-.chats-page .replying-preview-content {
+.chats-page .preview-file-info {
   flex: 1;
-  border-inline-start: 4px solid var(--primary);
-  padding-inline-start: 0.75rem;
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
+.chats-page .preview-filename {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.chats-page .preview-filesize {
+  font-size: 0.75rem;
+  color: var(--chat-meta);
+}
+
+.chats-page .btn-banner-close {
+  background: transparent;
+  border: none;
+  color: var(--chat-icon);
+  cursor: pointer;
+  padding: 0.375rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.chats-page .btn-banner-close:hover {
+  background: color-mix(in srgb, var(--chat-icon) 14%, transparent);
+}
+
+.chats-page .chats-emoji-picker {
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.chats-page .emoji-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.chats-page .emoji-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.375rem;
+  padding: 0.375rem;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chats-page .emoji-btn:hover {
+  background: var(--chat-hover);
+}
+
+.chats-page .replying-preview-content {
+  flex: 1;
+  min-width: 0;
+  background: var(--chat-panel);
+  border-inline-start: 4px solid var(--chat-quote-accent);
+  border-radius: 6px;
+  padding-block: 0.375rem;
+  padding-inline: 0.75rem;
+  display: flex;
+  flex-direction: column;
+}
+
 .chats-page .replying-to-title {
   font-size: 0.8125rem;
   font-weight: 700;
-  color: var(--primary-text);
+  color: var(--chat-pill-active-text);
   /* Same treatment as `.replying-to-body` below. Without it a quoted name with no break opportunity
      keeps its box but paints straight through the close button and out of the panel. */
   white-space: nowrap;
@@ -1539,101 +2888,241 @@
 
 .chats-page .replying-to-body {
   font-size: 0.875rem;
-  color: var(--text-secondary);
+  color: var(--chat-meta);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
-.chats-page .btn-close-reply {
+.chats-page .room-input-footer {
+  background: var(--chat-panel-header);
+  padding-block: 0.625rem;
+  padding-inline: 1rem;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.chats-page .input-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.chats-page .btn-input-accessory {
   background: transparent;
   border: none;
-  color: var(--text-muted);
+  color: var(--chat-icon);
   cursor: pointer;
-  padding: 0.375rem;
+  width: 42px;
+  height: 42px;
+  padding: 0;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
+  flex-shrink: 0;
+  transition: background 0.15s;
 }
 
-.chats-page .btn-close-reply:hover {
-  background: var(--bg-light);
-  color: var(--text-primary);
+.chats-page .btn-input-accessory:hover:not(:disabled),
+.chats-page .btn-input-accessory.active {
+  background: color-mix(in srgb, var(--chat-icon) 14%, transparent);
 }
 
-/* Revoked / Deleted message type */
-.chats-page .message-bubble.revoked-type {
-  font-style: italic;
-  opacity: 0.6;
+.chats-page .btn-input-accessory.active {
+  color: var(--chat-accent-text);
 }
 
-[data-theme='dark'] .chats-page .message-actions-menu,
-[data-theme='dark'] .chats-page .reaction-quick-popover,
-[data-theme='dark'] .chats-page .message-reactions-badge {
-  background: #202c33;
-  border-color: #2f3b43;
+.chats-page .btn-input-accessory:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .chats-page .message-actions-menu,
-  :root:not([data-theme='light']) .chats-page .reaction-quick-popover,
-  :root:not([data-theme='light']) .chats-page .message-reactions-badge {
-    background: #202c33;
-    border-color: #2f3b43;
-  }
+.chats-page .btn-input-accessory.inside {
+  width: 36px;
+  height: 36px;
 }
 
-/* Inline code inside a message body. */
-.chats-page .message-text code,
-.chats-page .quote-body code {
-  background: var(--bg-light);
-  padding: 0.1em 0.35em;
-  border-radius: 4px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.9em;
+.chats-page .message-input-pill {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-block: 0;
+  padding-inline: 1rem 0.25rem;
+  height: 46px;
+  box-sizing: border-box;
+  background: var(--chat-panel);
+  border: 1px solid var(--chat-divider);
+  border-radius: 24px;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
-/* Code block. */
-.chats-page .message-text pre {
-  background: var(--bg-light);
-  padding: 0.5em 0.75em;
-  border-radius: 6px;
-  margin: 0.25em 0;
-  overflow-x: auto;
+.chats-page .message-input-pill:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 15%, transparent);
 }
 
-.chats-page .message-text pre code {
-  background: transparent;
+.chats-page .message-input-pill .message-text-input {
+  flex: 1;
+  /* An input keeps its intrinsic width as its automatic minimum, which pinned the whole composer wider than
+     a narrow pane and pushed the send button outside the layout's clip. The floor replaces that with one small
+     enough to let the composer fit and large enough to keep a caret and a few characters visible. */
+  min-width: 64px;
   padding: 0;
+  border: none;
+  background: none;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+  outline: none;
 }
 
-/* Clickable photo cue. */
-.chats-page .chat-image-media {
-  cursor: zoom-in;
+.chats-page .message-text-input::placeholder {
+  color: var(--chat-meta);
+}
+
+.chats-page .btn-send-message {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  background: var(--chat-accent);
+  border: none;
+  border-radius: 50%;
+  color: #0f172a;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background 0.15s,
+    transform 0.1s,
+    opacity 0.15s;
+}
+
+.chats-page .btn-send-message:hover:not(:disabled) {
+  background: var(--chat-accent-hover);
+}
+
+.chats-page .btn-send-message:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.chats-page .btn-send-message:disabled {
+  /* Keep the brand silhouette readable while clearly inactive — a bare gray-on-gray glyph
+     reads as "no button here" rather than "send, disabled". */
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* =============================================================================
-   CHANNELS: read-only post pane
+   CONTACT INFO PANEL
+   ============================================================================= */
+.chats-page .contact-info-panel {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--chat-panel);
+  border-inline-start: 1px solid var(--chat-divider);
+}
+
+.chats-page .contact-info-header {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-block: 0;
+  padding-inline: 0.75rem;
+  background: var(--chat-panel-header);
+  border-bottom: 1px solid var(--chat-divider);
+  font-weight: 500;
+  color: var(--text-primary);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.chats-page .contact-info-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-block: 1.75rem;
+  padding-inline: 1.5rem;
+  overflow-y: auto;
+  text-align: center;
+}
+
+.chats-page .contact-info-body h3 {
+  margin-block: 1rem 0.25rem;
+  font-size: 1.25rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.chats-page .contact-info-sub {
+  margin: 0;
+  color: var(--chat-meta);
+  font-size: 0.9375rem;
+}
+
+.chats-page .contact-info-list {
+  width: 100%;
+  margin-block: 1.5rem 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--chat-divider);
+  text-align: start;
+}
+
+.chats-page .contact-info-list dt {
+  font-size: 0.8125rem;
+  color: var(--chat-meta);
+  margin-top: 0.875rem;
+}
+
+.chats-page .contact-info-list dt:first-child {
+  margin-top: 0;
+}
+
+.chats-page .contact-info-list dd {
+  margin-block: 0.125rem 0;
+  margin-inline: 0;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.chats-page .contact-info-list dd.mono bdi {
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* =============================================================================
+   CHANNELS AND STATUS: read-only post panes
    ============================================================================= */
 .chats-page .channel-room {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   height: 100%;
 }
 
 .chats-page .chats-room-header {
-  height: 70px;
-  background: var(--bg-white);
-  border-bottom: 1px solid var(--border);
-  padding: 0 1.5rem;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  box-sizing: border-box;
-  color: var(--text-secondary);
+  color: var(--chat-icon);
 }
 
 /* The pane icon's only in-flow sibling here is the heading, which has never opted out of shrinking,
@@ -1650,9 +3139,9 @@
   text-transform: none;
   letter-spacing: normal;
   margin: 0;
-  /* Same treatment as the chat header's h3. `overflow: hidden` is the load-bearing declaration: it
-     both clips and zeroes this flex item's automatic minimum, so no min-width is needed here or on
-     an ancestor. Without it the other two are inert and a long title runs past the panel edge. */
+  /* `overflow: hidden` is the load-bearing declaration: it both clips and zeroes this flex item's automatic
+     minimum, so no min-width is needed here or on an ancestor. Without it the other two are inert and a long
+     title runs past the panel edge. */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1660,22 +3149,33 @@
 
 .chats-page .messages-list {
   flex: 1;
+  min-height: 0;
   padding: 1.5rem;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.5rem;
   align-items: flex-start;
+  background-color: var(--chat-wallpaper);
+  background-image: var(--chat-wallpaper-pattern);
+  background-size: 240px 240px;
 }
 
 .chats-page .messages-list .message-bubble {
   max-width: 480px;
 }
 
+/* A feed post's time sits under its text: there is no tick to tuck in beside it. */
+.chats-page .messages-list .message-time {
+  display: block;
+  margin-top: 0.25rem;
+  text-align: end;
+}
+
 .chats-page .channel-media {
   max-width: 100%;
   max-height: 320px;
-  border-radius: 8px;
+  border-radius: 6px;
   display: block;
   margin-bottom: 0.5rem;
   object-fit: cover;
@@ -1686,23 +3186,68 @@
 .chats-page .status-media-placeholder {
   display: block;
   font-size: 0.85rem;
-  color: var(--text-muted);
+  color: var(--chat-meta);
   margin-bottom: 0.5rem;
+}
+
+/* =============================================================================
+   GENERAL CHATS STYLES & ERROR STATES
+   ============================================================================= */
+.chats-page .chats-loading-container,
+.chats-page .chats-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-white);
+  padding-block: 4rem;
+  padding-inline: 2rem;
+  text-align: center;
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.chats-page .chats-error-state h3 {
+  font-size: 1.25rem;
+  margin-block: 1rem 0.5rem;
+  color: var(--text-primary);
+}
+
+.chats-page .chats-error-state p {
+  font-size: 0.9375rem;
+  max-width: 450px;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.chats-page .chats-error-state button {
+  margin-top: 1.5rem;
+}
+
+.chats-page .text-warn {
+  color: var(--warning-text);
+}
+
+/* Real-time connection-lost banner */
+.chats-page .chats-reconnect-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-block: 0.5rem;
+  padding-inline: 1rem;
+  background: rgba(234, 88, 12, 0.1);
+  color: var(--warning-text);
+  font-size: 0.875rem;
+  flex-shrink: 0;
+}
+
+.chats-page .chats-reconnect-banner button {
+  margin-inline-start: auto;
 }
 
 /* =============================================================================
    STATUS COMPOSE MODAL
    ============================================================================= */
-.chats-page .status-compose-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.375rem;
-  width: 100%;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8125rem;
-}
-
 .chats-page .status-compose-modal .compose-type-toggle {
   display: flex;
   border: 1px solid var(--border);
@@ -1713,7 +3258,8 @@
 
 .chats-page .status-compose-modal .compose-type-toggle button {
   flex: 1;
-  padding: 0.625rem 1rem;
+  padding-block: 0.625rem;
+  padding-inline: 1rem;
   font-size: 0.875rem;
   font-weight: 500;
   background: var(--bg-white);
@@ -1729,7 +3275,7 @@
 
 .chats-page .status-compose-modal .compose-type-toggle button.active {
   background: var(--primary);
-  color: white;
+  color: #0f172a;
 }
 
 .chats-page .status-compose-modal .compose-field {
@@ -1750,10 +3296,11 @@
 .chats-page .status-compose-modal input[type='url'],
 .chats-page .status-compose-modal select {
   width: 100%;
-  padding: 0.625rem 0.75rem;
+  padding-block: 0.625rem;
+  padding-inline: 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius, 8px);
-  background: var(--bg-light);
+  background-color: var(--bg-light);
   color: var(--text-primary);
   font-size: 0.875rem;
   outline: none;
@@ -1763,9 +3310,11 @@
 
 .chats-page .status-compose-modal textarea:focus,
 .chats-page .status-compose-modal input:focus,
+.chats-page .status-compose-modal input[type='text']:focus,
+.chats-page .status-compose-modal input[type='url']:focus,
 .chats-page .status-compose-modal select:focus {
-  border-color: var(--primary);
-  background: var(--bg-white);
+  border-color: var(--focus-ring);
+  background-color: var(--bg-white);
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
 }
 
@@ -1794,6 +3343,11 @@
   box-sizing: border-box;
 }
 
+/* The rule above repaints the border over `input:focus` at the same weight, so a focused color input needs its own. */
+.chats-page .status-compose-modal input[type='color']:focus {
+  border-color: var(--focus-ring);
+}
+
 .chats-page .status-compose-modal input[type='file'] {
   width: 100%;
   font-size: 0.8125rem;
@@ -1804,7 +3358,7 @@
   font-size: 0.75rem;
   color: var(--text-muted);
   text-align: center;
-  margin: 0.5rem 0;
+  margin-block: 0.5rem;
 }
 
 .chats-page .status-compose-modal .compose-recipients {
@@ -1820,7 +3374,8 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
   font-size: 0.875rem;
   color: var(--text-primary);
   cursor: pointer;
@@ -1850,4 +3405,98 @@
   font-size: 0.75rem;
   color: var(--text-muted);
   margin-top: 0.375rem;
+}
+
+/* =============================================================================
+   RESPONSIVENESS
+   ============================================================================= */
+
+/* Not enough room for three columns: the contact panel overlays the room instead. */
+@media (max-width: 1200px) {
+  .chats-page .chats-layout {
+    position: relative;
+  }
+
+  .chats-page .contact-info-panel {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    inset-inline-end: 0;
+    z-index: 20;
+    box-shadow: var(--shadow-lg);
+  }
+}
+
+/* The phone shell's 3.5rem bar is drawn under Layout's MOBILE_QUERY, (max-width: 767px), and so is taken off here: at
+   768px the page is single pane (below) but has no bar above it, and taking it off left an empty strip. */
+@media (max-width: 767px) {
+  .chats-page {
+    height: calc(100dvh - 3.5rem);
+  }
+}
+
+@media (max-width: 768px) {
+  /* Single-pane on mobile: the list and the open conversation each take the full panel
+     instead of being squeezed into one short stacked column. */
+  .chats-page .chats-sidebar {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    border-inline-end: none;
+  }
+
+  /* Opening a chat replaces the list with the thread; the back button returns to the list. */
+  .chats-page .chats-layout.has-active-chat .chats-sidebar {
+    display: none;
+  }
+
+  .chats-page .chats-layout:not(.has-active-chat) .chats-room {
+    display: none;
+  }
+
+  .chats-page .room-back {
+    display: inline-flex;
+  }
+
+  .chats-page .message-bubble-container {
+    max-width: 85%;
+  }
+
+  .chats-page .contact-info-panel {
+    width: 100%;
+  }
+}
+
+/* Between the mobile breakpoint and 889px the two-pane layout leaves the room narrower than the composer
+   once the list takes its 300px minimum beside the 260px navigation, so the send button fell outside the
+   panel's clip with no scrollbar to recover it. In that band the panes swap one at a time instead, the way
+   they already do on a phone. From 890px the room fits the composer again. There is no lower bound: at 768px
+   and below these rules repeat the single-pane ones above, and a window zoomed to a width between 768 and
+   769px, which neither a 768px maximum nor a 769px minimum matches, would get two panes too narrow for the
+   room. Keyed to the navigation as well as the viewport, because that arithmetic only holds while the nav is
+   expanded; collapsed it already fits and none of this should apply. `.main-content.expanded` is Layout's
+   class for the COLLAPSED nav. */
+@media (max-width: 889px) {
+  .main-content:not(.expanded) .chats-page .chats-sidebar {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    border-inline-end: none;
+  }
+
+  .main-content:not(.expanded) .chats-page .chats-layout.has-active-chat .chats-sidebar {
+    display: none;
+  }
+
+  .main-content:not(.expanded) .chats-page .chats-layout:not(.has-active-chat) .chats-room {
+    display: none;
+  }
+
+  .main-content:not(.expanded) .chats-page .room-back {
+    display: inline-flex;
+  }
+
+  .main-content:not(.expanded) .chats-page .contact-info-panel {
+    width: 100%;
+  }
 }

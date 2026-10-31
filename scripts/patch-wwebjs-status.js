@@ -31,6 +31,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const UTILS_PATH = path.join('src', 'util', 'Injected', 'Utils.js');
@@ -170,7 +171,7 @@ function applyStatusPatches(wwjsDir = DEFAULT_WWJS) {
   }
 
   if (applied.length) {
-    fs.writeFileSync(utilsFile, source);
+    writeFileAtomic(utilsFile, source);
   }
   return { applied, skipped };
 }

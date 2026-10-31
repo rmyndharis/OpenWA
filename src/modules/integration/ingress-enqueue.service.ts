@@ -139,6 +139,16 @@ export class IngressEnqueueService implements OnApplicationBootstrap {
   }
 
   /**
+   * Whether a delivery of this plugin must wait to be dispatched: it would run inline, because the queue is off,
+   * in a plugin the boot restore has not reached, which has no worker to run it in. With the queue on, the job
+   * is enqueued instead, and IngressProcessor holds it until the plugin is up.
+   */
+  defersInlineDispatch(pluginId: string): boolean {
+    const queued = this.config.get<boolean>('queue.enabled', false) && !!this.ingressQueue;
+    return !queued && this.loader.isRestorePending(pluginId);
+  }
+
+  /**
    * State of the job an earlier enqueue() of this delivery left in the queue, or undefined when the
    * queue is off, holds no such job, or cannot answer. add() resolves for a duplicate jobId whatever
    * state the existing job is in, so a caller replaying under the original jobId must look first: a

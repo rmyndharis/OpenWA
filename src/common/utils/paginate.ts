@@ -9,7 +9,12 @@ export interface ListOptions {
 
 /** Normalize a query/list window for both in-memory slicing and database skip/take. */
 export function resolveListWindow(limit?: number, offset?: number): { limit: number; offset: number } {
-  const normalizedOffset = typeof offset === 'number' && Number.isFinite(offset) ? Math.max(Math.trunc(offset), 0) : 0;
+  // Capped at the largest safe integer: a driver refuses an OFFSET of 2^63 or more, and any offset that
+  // large is past the last row anyway.
+  const normalizedOffset =
+    typeof offset === 'number' && Number.isFinite(offset)
+      ? Math.min(Math.max(Math.trunc(offset), 0), Number.MAX_SAFE_INTEGER)
+      : 0;
   const normalizedLimit =
     typeof limit === 'number' && Number.isFinite(limit)
       ? Math.min(Math.max(Math.trunc(limit), 1), DEFAULT_LIST_LIMIT)

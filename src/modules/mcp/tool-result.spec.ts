@@ -18,6 +18,25 @@ describe('smartToolResult', () => {
     expect(result.content).toEqual([{ type: 'text', text: 'null' }]);
   });
 
+  // The threshold is 4 KB of UTF-8, not 4096 UTF-16 code units: multi-byte text must not inline at triple size.
+  it.each(['x'.repeat(4096), '\u00e9'.repeat(2048), '\ud83d\ude00'.repeat(1024)])(
+    'inlines a payload of exactly 4096 UTF-8 bytes',
+    text => {
+      expect(smartToolResult(text).content).toEqual([{ type: 'text', text }]);
+    },
+  );
+
+  it.each(['x'.repeat(4097), '\u00e9'.repeat(2048) + 'x', '\u4e2d'.repeat(2000), '\ud83d\ude00'.repeat(1025)])(
+    'embeds a payload over 4096 UTF-8 bytes without changing its contents',
+    text => {
+      const { content } = smartToolResult(text);
+      expect(content).toHaveLength(2);
+      const resource = content[1];
+      if (resource.type !== 'resource' || !('blob' in resource.resource)) throw new Error('expected a blob resource');
+      expect(Buffer.from(resource.resource.blob, 'base64').toString('utf8')).toBe(text);
+    },
+  );
+
   it('offloads a payload over 4 KB to an embedded resource', () => {
     const big = { blob: 'x'.repeat(5000) };
     const result = smartToolResult(big);

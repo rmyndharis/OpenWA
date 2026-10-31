@@ -535,6 +535,8 @@
     font-weight: 600;
     display: block;
     color: var(--text-primary);
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   /* Key cell */

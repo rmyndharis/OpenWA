@@ -5,29 +5,8 @@ import { createLogger } from '../services/logger.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 import { redisConnectionOptions } from '../../config/redis-options';
 
-export interface SessionInfo {
-  id: string;
-  name: string;
-  status: string;
-  phone?: string;
-  pushName?: string;
-  connectedAt?: string;
-}
-
-export interface SessionStats {
-  active: number;
-  total: number;
-  byStatus: Record<string, number>;
-}
-
-// TTL constants in seconds
-const TTL = {
-  SESSION_STATUS: 300, // 5 min
-  SESSION_INFO: 600, // 10 min
-  SESSION_QR: 60, // 1 min
-  SESSIONS_LIST: 30, // 30 sec
-  SESSIONS_STATS: 15, // 15 sec
-};
+/** Max time to await a cache command or release a socket that stops responding. */
+const CACHE_COMMAND_TIMEOUT_MS = 2000;
 
 /** Max time to await a graceful `redis.quit()` on shutdown before force-disconnecting (see onModuleDestroy). */
 export const CACHE_QUIT_TIMEOUT_MS = 2000;
@@ -69,6 +48,10 @@ export class CacheService implements OnModuleDestroy {
       // Cache is best-effort: a command issued while disconnected fails fast (the caller falls back to
       // the source of truth) instead of being queued and stalling the request until reconnect.
       enableOfflineQueue: false,
+      commandTimeout: CACHE_COMMAND_TIMEOUT_MS,
+      // Release unanswered commands as well as their callers, then let the client reconnect.
+      socketTimeout: CACHE_COMMAND_TIMEOUT_MS,
+      autoResendUnfulfilledCommands: false,
       maxRetriesPerRequest: 3,
       // Reconnect forever with bounded backoff. Returning null (the previous behavior after 3 tries)
       // makes ioredis abandon reconnection permanently, which is exactly what left the cache dead
@@ -139,113 +122,5 @@ export class CacheService implements OnModuleDestroy {
     // once ioredis has reconnected.
     this.ensureClient();
     return this.ping();
-  }
-
-  // ========== Session Status ==========
-
-  async getSessionStatus(id: string): Promise<string | null> {
-    if (!(await this.isAvailable())) return null;
-    try {
-      return await this.redis!.get(`session:${id}:status`);
-    } catch (error) {
-      this.logger.warn(`Cache read failed (session:status): ${String(error)}`);
-      return null;
-    }
-  }
-
-  async setSessionStatus(id: string, status: string): Promise<void> {
-    if (!(await this.isAvailable())) return;
-    try {
-      await this.redis!.setex(`session:${id}:status`, TTL.SESSION_STATUS, status);
-    } catch (error) {
-      this.logger.warn(`Cache write failed (session:status): ${String(error)}`);
-    }
-  }
-
-  // ========== Session Info ==========
-
-  async getSessionInfo(id: string): Promise<SessionInfo | null> {
-    if (!(await this.isAvailable())) return null;
-    try {
-      const data = await this.redis!.get(`session:${id}:info`);
-      return data ? (JSON.parse(data) as SessionInfo) : null;
-    } catch (error) {
-      this.logger.warn(`Cache read failed (session:info): ${String(error)}`);
-      return null;
-    }
-  }
-
-  async setSessionInfo(id: string, info: SessionInfo): Promise<void> {
-    if (!(await this.isAvailable())) return;
-    try {
-      await this.redis!.setex(`session:${id}:info`, TTL.SESSION_INFO, JSON.stringify(info));
-    } catch (error) {
-      this.logger.warn(`Cache write failed (session:info): ${String(error)}`);
-    }
-  }
-
-  // ========== Session QR ==========
-
-  async getSessionQR(id: string): Promise<string | null> {
-    if (!(await this.isAvailable())) return null;
-    try {
-      return await this.redis!.get(`session:${id}:qr`);
-    } catch (error) {
-      this.logger.warn(`Cache read failed (session:qr): ${String(error)}`);
-      return null;
-    }
-  }
-
-  async setSessionQR(id: string, qr: string): Promise<void> {
-    if (!(await this.isAvailable())) return;
-    try {
-      await this.redis!.setex(`session:${id}:qr`, TTL.SESSION_QR, qr);
-    } catch (error) {
-      this.logger.warn(`Cache write failed (session:qr): ${String(error)}`);
-    }
-  }
-
-  // ========== Sessions List ==========
-
-  async getSessionsList(): Promise<string[] | null> {
-    if (!(await this.isAvailable())) return null;
-    try {
-      const data = await this.redis!.get('sessions:list');
-      return data ? (JSON.parse(data) as string[]) : null;
-    } catch (error) {
-      this.logger.warn(`Cache read failed (sessions:list): ${String(error)}`);
-      return null;
-    }
-  }
-
-  async setSessionsList(ids: string[]): Promise<void> {
-    if (!(await this.isAvailable())) return;
-    try {
-      await this.redis!.setex('sessions:list', TTL.SESSIONS_LIST, JSON.stringify(ids));
-    } catch (error) {
-      this.logger.warn(`Cache write failed (sessions:list): ${String(error)}`);
-    }
-  }
-
-  // ========== Sessions Stats ==========
-
-  async getSessionsStats(): Promise<SessionStats | null> {
-    if (!(await this.isAvailable())) return null;
-    try {
-      const data = await this.redis!.get('sessions:stats');
-      return data ? (JSON.parse(data) as SessionStats) : null;
-    } catch (error) {
-      this.logger.warn(`Cache read failed (sessions:stats): ${String(error)}`);
-      return null;
-    }
-  }
-
-  async setSessionsStats(stats: SessionStats): Promise<void> {
-    if (!(await this.isAvailable())) return;
-    try {
-      await this.redis!.setex('sessions:stats', TTL.SESSIONS_STATS, JSON.stringify(stats));
-    } catch (error) {
-      this.logger.warn(`Cache write failed (sessions:stats): ${String(error)}`);
-    }
   }
 }

@@ -1,4 +1,5 @@
-import { Module, INestApplication, Controller, Get } from '@nestjs/common';
+import { Module, INestApplication, Controller, Get, Post, Body, Param } from '@nestjs/common';
+import { DASHBOARD_STATIC_OPTIONS } from '../src/app.module';
 import { applyGlobalValidation } from '../src/config/app-validation';
 import { configureApp } from '../src/configure-app';
 import { NestFactory } from '@nestjs/core';
@@ -48,22 +49,27 @@ class PingController {
   ping() {
     return { ok: true };
   }
+
+  @Post('echo')
+  echo(@Body() body: unknown) {
+    return { body };
+  }
+
+  @Get('items/:id')
+  item(@Param('id') id: string) {
+    return { id };
+  }
 }
 
-const EXCLUDE = ['/api/{*splat}', '/socket.io/{*splat}'];
-// Mirrors app.module.ts: the module's own catch-all fallback is off, main.ts's document
-// handler owns SPA routes. Without this the module answers every unmatched GET with the
-// shell, which is the behaviour the missing-asset test below exists to prevent.
-const RENDER_DISABLED = '/__openwa_spa_fallback_owned_by_main_ts__';
-
+// The options app.module.ts passes to the module, so a change there is what these tests exercise.
 @Module({
-  imports: [ServeStaticModule.forRoot({ rootPath: plainDist, exclude: EXCLUDE, renderPath: RENDER_DISABLED })],
+  imports: [ServeStaticModule.forRoot({ rootPath: plainDist, ...DASHBOARD_STATIC_OPTIONS })],
   controllers: [PingController],
 })
 class PlainServeStaticModule {}
 
 @Module({
-  imports: [ServeStaticModule.forRoot({ rootPath: dottedDist, exclude: EXCLUDE, renderPath: RENDER_DISABLED })],
+  imports: [ServeStaticModule.forRoot({ rootPath: dottedDist, ...DASHBOARD_STATIC_OPTIONS })],
   controllers: [PingController],
 })
 class DottedServeStaticModule {}
@@ -79,19 +85,20 @@ describe('serve-static test fixtures', () => {
 
 /**
  * Regression lock for single-port dashboard serving (app.module.ts + main.ts). Bootstraps the SAME
- * serve-static config (rootPath + exclude) AND the same document handler against a throwaway build:
- * the SPA must be served at `/` with client-side fallback, while Nest keeps ownership of `/api` so
- * unknown API routes return JSON 404s (not the SPA index.html). Pins the Express 5 /
- * path-to-regexp v8 wildcard syntax (`/api/{*splat}`) - if a dep bump breaks it, /api/* would start
- * returning index.html and these tests fail.
+ * serve-static options AND the same document handler against a throwaway build: the SPA must be
+ * served at `/` with client-side fallback, while Nest keeps ownership of `/api` so unknown API routes
+ * return JSON 404s (not the SPA index.html) and a request the body parsers refuse keeps its own 413
+ * or 400 instead of the module's `404 Cannot POST`.
  */
 describe.each([
   ['a plain install path', PlainServeStaticModule, plainDist],
   ['an install path with a dot-segment', DottedServeStaticModule, dottedDist],
 ])('Dashboard serve-static (e2e) - %s', (_label, moduleClass, distDir) => {
   let app: INestApplication<App>;
+  const previousBodyLimit = process.env.BODY_SIZE_LIMIT;
 
   beforeAll(async () => {
+    process.env.BODY_SIZE_LIMIT = '1kb';
     // The REAL production stack, pointed at this fixture build. It used to be a copy of the
     // document handler kept in this file, minus the nonce injection, so a divergence between the
     // copy and the original passed.
@@ -102,6 +109,8 @@ describe.each([
   });
 
   afterAll(async () => {
+    if (previousBodyLimit === undefined) delete process.env.BODY_SIZE_LIMIT;
+    else process.env.BODY_SIZE_LIMIT = previousBodyLimit;
     await app?.close();
   });
 
@@ -182,5 +191,33 @@ describe.each([
     // A mistyped POST must fail loudly rather than receiving a 200 HTML shell.
     const res = await request(app.getHttpServer()).post('/sessions');
     expect(res.status).not.toBe(200);
+  });
+
+  describe('a request the body parsers refuse, under /api', () => {
+    // The serve-static error handler used to rewrite each of these into `404 Cannot POST /api/echo`.
+    // The oversized body stays under the in-flight budget the 1kb limit implies (4 KB), so the
+    // parser answers and not the budget.
+    const postJson = (body: string) => request(app.getHttpServer()).post('/api/echo').type('json').send(body);
+
+    it('answers 413 for a body over BODY_SIZE_LIMIT', async () => {
+      const res = await postJson(JSON.stringify({ text: 'x'.repeat(2048) }));
+      expect(res.status).toBe(413);
+    });
+
+    it('answers 400 for malformed JSON', async () => {
+      const res = await postJson('{"text":');
+      expect(res.status).toBe(400);
+    });
+
+    it('answers 400 for a body nested past the bound', async () => {
+      const res = await postJson(`${'['.repeat(150)}${']'.repeat(150)}`);
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ statusCode: 400, error: 'Bad Request' });
+    });
+
+    it('answers 400 for a path parameter that cannot be decoded', async () => {
+      const res = await request(app.getHttpServer()).get('/api/items/%FF');
+      expect(res.status).toBe(400);
+    });
   });
 });

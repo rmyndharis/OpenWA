@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { Fragment, useState, useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import {
@@ -14,11 +14,12 @@ import {
   Download,
   Upload,
 } from 'lucide-react';
-import { API_BASE_URL, type SavedConfig } from '../services/api';
+import { API_BASE_URL, infraApi, type SavedConfig, type SaveConfigPayload } from '../services/api';
 import { copyToClipboard } from '../utils/clipboard';
+import { CONTAINER_OF, namesBundledContainer, sameHost } from '../utils/bundledHost';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useInfraStatusQuery, useInfraConfigQuery, useEnginesQuery, useCurrentEngineQuery } from '../hooks/queries';
-import { useInfraConfigForm } from '../hooks/useInfraConfigForm';
+import { savedBuiltIn, useInfraConfigForm } from '../hooks/useInfraConfigForm';
 import { useConfigSave } from '../hooks/useConfigSave';
 import { useRestartFlow } from '../hooks/useRestartFlow';
 import { useDataBackup } from '../hooks/useDataBackup';
@@ -36,6 +37,43 @@ interface QueueStats {
   pending: number;
   completed: number;
   failed: number;
+}
+
+// The key that holds each managed profile's host.
+const HOST_KEY: Record<string, string> = { postgres: 'DATABASE_HOST', redis: 'REDIS_HOST', minio: 'S3_ENDPOINT' };
+
+// The settings a built-in save writes (or drops) for the bundled container while their fields are hidden; one the
+// environment pins still wins at boot, so its note moves under the Use Built-in toggle.
+const BUILT_IN_DETAIL_KEYS = {
+  postgres: [
+    'DATABASE_PORT',
+    'DATABASE_USERNAME',
+    'DATABASE_PASSWORD',
+    'DATABASE_NAME',
+    'DATABASE_POOL_SIZE',
+    'POSTGRES_SCHEMA',
+    'DATABASE_SSL',
+    'DATABASE_SSL_REJECT_UNAUTHORIZED',
+  ],
+  redis: ['REDIS_PORT', 'REDIS_PASSWORD'],
+  minio: ['S3_BUCKET', 'S3_REGION', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'],
+};
+
+/** The host the next boot dials for a profile, as GET /config reports it: the environment's, else the saved one. */
+const nextBootHost = (profile: string, config: SavedConfig): string =>
+  profile === 'postgres' ? config.database.host : profile === 'redis' ? config.redis.host : config.storage.s3Endpoint;
+
+/**
+ * The host a save wrote for a profile whose host the environment does not pin, taken from what it sent the way the
+ * section writers (src/modules/infra/config-sections.ts) write it, for when the config cannot be read back: the host
+ * sent, or '' where the save drops it. A built-in choice the new configuration uses is in the save's profiles, which
+ * the restart starts rather than stops, so the host sent beside it does not matter.
+ */
+function writtenHost(profile: string, sent: SaveConfigPayload): string | undefined {
+  if (profile === 'postgres') return sent.database?.type === 'sqlite' ? '' : sent.database?.host;
+  if (profile === 'minio') return sent.storage?.type === 'local' ? '' : sent.storage?.s3Endpoint;
+  // Consumer pins and the retained cache profile decide whether Redis is unused below.
+  return sent.redis?.host;
 }
 
 export function Infrastructure() {
@@ -64,33 +102,68 @@ export function Infrastructure() {
   // to open — the one-way edge between the save and restart hooks.
   const configSave = useConfigSave({
     buildPayload: configForm.buildSavePayload,
-    onSaved: profiles => {
-      // Flag a backend switch vs what's actually running so the restart modal can warn about the
-      // empty-database / orphaned-media data move before it happens. A switch is: changing type;
-      // flipping built-in↔external (different physical backend); OR retargeting an external Postgres
-      // to a different host/port/database (also a different, empty DB). Host/port/db aren't all in
-      // /status, so compare the edited form against the saved config as the page loaded it. A key with
-      // nothing saved reads '', and runs on the same fallback the form was seeded with.
+    onSaved: async (profiles, sent) => {
+      // Flag a backend switch so the restart modal can warn about the empty-database / orphaned-media data
+      // move before it happens. A switch is a next boot that connects somewhere else than the server does
+      // now: another type, host, port or database name, or another S3 endpoint or bucket. The next boot
+      // connects to a value the environment pins whatever the form says, and to the bundled container for
+      // a built-in choice; two spellings of that container are one host. Whether it runs right now is no part
+      // of it: a stopped one is started again on the same volume. /status reports the type, host, endpoint and
+      // bucket in use; the port and the database name are not on it, so those compare with the saved config as
+      // the page loaded it. A key with nothing saved reads '', and runs on the same fallback the form was seeded
+      // with. A new local path is no switch.
       const loaded = loadedConfig.current;
-      const dbExternalRetarget =
-        configForm.dbConfig.type === 'postgres' &&
-        !configForm.dbConfig.builtIn &&
+      const pinned = (key: string) => (infraStatus?.envPinned?.includes(key) ? loaded : undefined);
+      const db = configForm.dbConfig;
+      const dbType = pinned('DATABASE_TYPE')?.database.type ?? db.type;
+      const dbHost =
+        (pinned('DATABASE_HOST')?.database.host ?? (db.builtIn ? 'postgres' : db.host.trim())) || 'localhost';
+      // The database name the save writes: the form's for an external server; for a built-in one the name the server
+      // keeps, the saved config's where its host already reaches the bundled container, else the one the bundled
+      // container serves now (the page loaded it), else openwa.
+      const dbName = db.builtIn
+        ? (namesBundledContainer('postgres', savedConfig?.database.host) && savedConfig?.database.type === 'postgres'
+            ? savedConfig.database.database
+            : infraStatus?.database.type === 'postgres' && namesBundledContainer('postgres', infraStatus.database.host)
+              ? loaded?.database.database
+              : '') || 'openwa'
+        : db.database;
+      const dbRetarget =
         !!loaded &&
-        (configForm.dbConfig.host !== (loaded.database.host || infraStatus?.database.host || 'localhost') ||
-          configForm.dbConfig.port !== (loaded.database.port || '5432') ||
-          configForm.dbConfig.database !== (loaded.database.database || 'openwa'));
+        ((!db.builtIn && !pinned('DATABASE_PORT') && db.port !== (loaded.database.port || '5432')) ||
+          (!pinned('DATABASE_NAME') && dbName !== (loaded.database.database || 'openwa')));
       const dbSwitch =
         !!infraStatus &&
-        (configForm.dbConfig.type !== infraStatus.database.type ||
-          (configForm.dbConfig.type === 'postgres' && configForm.dbConfig.builtIn !== infraStatus.database.builtIn) ||
-          dbExternalRetarget);
-      // Scope: this warns on a backend-TYPE change (local↔s3) and a built-in↔external flip — the cases
-      // that point at a different store. It does NOT warn on same-backend repointing (e.g. a new S3
-      // bucket/endpoint or a new local path); region/endpoint aren't on /status to compare reliably.
+        (dbType !== infraStatus.database.type ||
+          (dbType === 'postgres' && (!sameHost('postgres', dbHost, infraStatus.database.host) || dbRetarget)));
+      const storage = configForm.storageConfig;
+      const storageType = pinned('STORAGE_TYPE')?.storage.type ?? storage.type;
+      // The storage section takes the bundled bucket for a flag sent as true only: beside a pinned endpoint an untouched
+      // toggle is left out of the save, and the stored bucket stays. It stays under the flag too when the saved config
+      // (the file this save replaced) already reaches the bundled MinIO, which then serves that bucket, and else the
+      // bucket the bundled MinIO serves now does.
+      const storageBuiltIn = sent.storage?.builtIn === true;
+      const keepsBucket = namesBundledContainer('minio', savedConfig?.storage.s3Endpoint);
+      const servesBucket =
+        infraStatus?.storage.type === 's3' && namesBundledContainer('minio', infraStatus.storage.endpoint);
+      const endpoint =
+        pinned('S3_ENDPOINT')?.storage.s3Endpoint ?? (storageBuiltIn ? 'http://minio:9000' : storage.s3Endpoint);
+      const bucket =
+        (pinned('S3_BUCKET')?.storage.s3Bucket ??
+          (storageBuiltIn
+            ? keepsBucket
+              ? savedConfig?.storage.s3Bucket
+              : servesBucket
+                ? infraStatus?.storage.bucket
+                : 'openwa'
+            : storage.s3Bucket)) ||
+        'openwa';
       const storageSwitch =
         !!infraStatus &&
-        (configForm.storageConfig.type !== infraStatus.storage.type ||
-          (configForm.storageConfig.type === 's3' && configForm.storageConfig.builtIn !== infraStatus.storage.builtIn));
+        (storageType !== infraStatus.storage.type ||
+          (storageType === 's3' &&
+            (!sameHost('minio', endpoint, infraStatus.storage.endpoint ?? '') ||
+              bucket !== (infraStatus.storage.bucket || 'openwa'))));
       // The built-in containers running now, so the restart stops each one the new config dropped. With no
       // status read there is nothing to go on, and nothing is stopped.
       const running = [
@@ -98,9 +171,54 @@ export function Infrastructure() {
         infraStatus?.redis.builtIn && 'redis',
         infraStatus?.storage.type === 's3' && infraStatus.storage.builtIn && 'minio',
       ].filter((p): p is string => typeof p === 'string');
-      restartFlow.open({ profiles, running, dbSwitch, storageSwitch });
-      // The form is seeded once, so the refetch keeps any edit in progress.
-      void queryClient.invalidateQueries({ queryKey: ['infra', 'config'] });
+      // A bundled container OpenWA created that no boot uses while the environment pins its host elsewhere: the
+      // restart stops it. The server starts nothing for that host whatever the save asked, so it is no start either.
+      const pinnedAway = (
+        [
+          ['postgres', infraStatus?.database.running, pinned('DATABASE_HOST')?.database.host],
+          ['redis', infraStatus?.redis.running, pinned('REDIS_HOST')?.redis.host],
+          ['minio', infraStatus?.storage.running, pinned('S3_ENDPOINT')?.storage.s3Endpoint],
+        ] as const
+      )
+        .filter(([profile, up, host]) => up && host !== undefined && !namesBundledContainer(profile, host))
+        .map(([profile]): string => profile);
+      // The server keeps a container only while the next boot both uses its datastore and dials its host: the host the
+      // environment pins, else the one in the file this save wrote. A pinned host is the one the page loaded; the saved
+      // one the page reads back, or takes from what the save sent when that read fails. It asks for (and names) the
+      // containers whose datastore is switched off, then those neither host reaches, and none whose host it cannot
+      // tell, so the dialog lists what the server stops. The form is seeded once, so the refetch keeps any edit in
+      // progress.
+      const saved = await queryClient
+        .fetchQuery({ queryKey: ['infra', 'config'], queryFn: infraApi.getConfig, staleTime: 0 })
+        .catch(() => undefined);
+      const redisEnabled = infraStatus?.envPinned?.includes('REDIS_ENABLED')
+        ? infraStatus.redis.enabled
+        : (saved?.redis.enabled ?? sent.redis?.enabled);
+      const queueEnabled = infraStatus?.envPinned?.includes('QUEUE_ENABLED')
+        ? infraStatus.queue.enabled
+        : (saved?.queue.enabled ?? sent.queue?.enabled);
+      const toStop = [...running, ...pinnedAway].filter(profile => {
+        // An inactive datastore never dials its pinned host. A retained Redis profile may still serve the cache.
+        const unused =
+          profile === 'postgres'
+            ? dbType !== 'postgres'
+            : profile === 'minio'
+              ? storageType !== 's3'
+              : sent.redis?.builtIn === true &&
+                redisEnabled === false &&
+                queueEnabled === false &&
+                !profiles.includes('redis');
+        if (unused) return true;
+        const config = pinned(HOST_KEY[profile]) ?? saved;
+        const host = config ? nextBootHost(profile, config) : writtenHost(profile, sent);
+        return host !== undefined && !namesBundledContainer(profile, host);
+      });
+      restartFlow.open({
+        profiles: profiles.filter(p => !pinnedAway.includes(p)),
+        running: toStop,
+        dbSwitch,
+        storageSwitch,
+      });
     },
   });
 
@@ -191,13 +309,28 @@ export function Infrastructure() {
   // as an environment pin even on a stock stack with no variable set anywhere (#1082).
   // Pin-only: PUPPETEER_ARGS cannot go through settingNote, because the running list is re-tokenized and
   // gains the pinned `--lang` flag, so it never string-compares equal to the saved value. The headless
-  // flag and the two paths do have a running and a saved value, but show only a reported pin as well.
-  const pinNote = (envKey: string) =>
+  // flag and the two paths do have a running and a saved value, but show only a reported pin as well, and so
+  // do the three datastore hosts, under the Use Built-in toggle a pinned host overrides, and every other setting a
+  // save writes, after the row that holds its field (a note inside a narrow port field would not fit), or under the
+  // Use Built-in toggle while it hides that field.
+  const pinNote = (envKey: string, note = 'infrastructure.envPinNote') =>
     infraStatus?.envPinned?.includes(envKey) ? (
       <p className="env-pin-note">
-        <AlertTriangle size={14} /> {t('infrastructure.envPinNote', { name: envKey })}
+        <AlertTriangle size={14} /> {t(note, { name: envKey })}
       </p>
     ) : null;
+  const builtInDetailNotes = (profile: keyof typeof BUILT_IN_DETAIL_KEYS) =>
+    BUILT_IN_DETAIL_KEYS[profile].map(key => <Fragment key={key}>{pinNote(key)}</Fragment>);
+  // A pinned *_BUILTIN flag decides only whether the boot starts the bundled container, at every boot while it is
+  // true; whether the service uses it follows its host. Beside a host pinned elsewhere the boot starts nothing.
+  const flagPinNote = (flagKey: string, profile: string) =>
+    pinNote(
+      flagKey,
+      infraStatus.envPinned?.includes(HOST_KEY[profile]) &&
+        !namesBundledContainer(profile, nextBootHost(profile, savedConfig))
+        ? 'infrastructure.envPinNote'
+        : 'infrastructure.envPinFlagNote',
+    );
   const settingNote = (envKey: string, running: unknown, saved: unknown) => {
     if (infraStatus?.envPinned?.includes(envKey)) return pinNote(envKey);
     // Hidden only while the save request is in flight (`configSave.saving`).
@@ -208,6 +341,19 @@ export function Infrastructure() {
       </p>
     ) : null;
   };
+
+  // A switch between a bundled container and an external service that was saved and not restarted for. The
+  // toggle shows what was saved, so the note names what runs. It needs the same service running and saved: a
+  // pending type change has its own note, and a flag says nothing about a service that is not running. A saved
+  // built-in choice switches nothing while the server already dials the bundled host: its container is only
+  // stopped, and the restart starts it again.
+  const builtInNote = (sameService: boolean, running: boolean, saved: boolean, dialsBundled: boolean) =>
+    sameService && !configSave.saving && running !== saved && !(saved && dialsBundled) ? (
+      <p className="env-pin-note">
+        <AlertTriangle size={14} />{' '}
+        {t(saved ? 'infrastructure.pendingBuiltInNote' : 'infrastructure.pendingExternalNote')}
+      </p>
+    ) : null;
 
   // Built-in services the restart failed to start or stop. Shown whether or not the server came back:
   // a service that failed to start is the likeliest reason it did not.
@@ -234,8 +380,8 @@ export function Infrastructure() {
               <Database size={20} />
               <h2>{t('infrastructure.database.title')}</h2>
             </div>
-            <span className={`status-indicator ${configForm.dbConfig.type === 'postgres' ? 'connected' : 'sqlite'}`}>
-              ● {configForm.dbConfig.type === 'postgres' ? 'PostgreSQL' : 'SQLite'}
+            <span className={`status-indicator ${infraStatus.database.type === 'postgres' ? 'connected' : 'sqlite'}`}>
+              ● {infraStatus.database.type === 'postgres' ? 'PostgreSQL' : 'SQLite'}
             </span>
           </div>
           {settingNote('DATABASE_TYPE', infraStatus.database.type, savedConfig?.database.type)}
@@ -283,6 +429,16 @@ export function Infrastructure() {
                 </label>
               </div>
 
+              {builtInNote(
+                infraStatus.database.type === 'postgres' && savedConfig.database.type === 'postgres',
+                infraStatus.database.builtIn,
+                savedBuiltIn(savedConfig.database, infraStatus.database.builtIn),
+                namesBundledContainer('postgres', infraStatus.database.host),
+              )}
+              {pinNote('DATABASE_HOST')}
+              {flagPinNote('POSTGRES_BUILTIN', 'postgres')}
+              {configForm.dbConfig.builtIn && builtInDetailNotes('postgres')}
+
               {!configForm.dbConfig.builtIn && (
                 <div className="config-form">
                   <div className="form-row">
@@ -305,6 +461,7 @@ export function Infrastructure() {
                       />
                     </div>
                   </div>
+                  {pinNote('DATABASE_PORT')}
                   <div className="form-row">
                     <div className="form-group">
                       <label htmlFor="infra-3">{t('common.username')}</label>
@@ -320,11 +477,14 @@ export function Infrastructure() {
                       <input
                         id="infra-4"
                         type="password"
+                        autoComplete="new-password"
                         value={configForm.dbConfig.password}
                         onChange={e => configForm.updateDbConfig('password', e.target.value)}
                       />
                     </div>
                   </div>
+                  {pinNote('DATABASE_USERNAME')}
+                  {pinNote('DATABASE_PASSWORD')}
                   <div className="form-row">
                     <div className="form-group">
                       <label htmlFor="infra-5">{t('infrastructure.database.dbName')}</label>
@@ -342,11 +502,21 @@ export function Infrastructure() {
                         type="number"
                         min="1"
                         max="50"
-                        value={configForm.dbConfig.poolSize}
-                        onChange={e => configForm.updateDbConfig('poolSize', parseInt(e.target.value))}
+                        value={Number.isNaN(configForm.dbConfig.poolSize) ? '' : configForm.dbConfig.poolSize}
+                        onChange={e => {
+                          // An emptied field stays NaN and is left out of the save; a typed size is kept
+                          // inside the range the field offers.
+                          const size = parseInt(e.target.value);
+                          configForm.updateDbConfig(
+                            'poolSize',
+                            Number.isNaN(size) ? size : Math.min(50, Math.max(1, size)),
+                          );
+                        }}
                       />
                     </div>
                   </div>
+                  {pinNote('DATABASE_NAME')}
+                  {pinNote('DATABASE_POOL_SIZE')}
                   <div className="form-row">
                     <div className="form-group">
                       <label htmlFor="infra-7">{t('infrastructure.database.schema')}</label>
@@ -360,6 +530,7 @@ export function Infrastructure() {
                       <small>{t('infrastructure.database.schemaDesc')}</small>
                     </div>
                   </div>
+                  {pinNote('POSTGRES_SCHEMA')}
                   <div className="toggle-row">
                     <div className="toggle-info">
                       <span id="toggle-db-ssl">{t('infrastructure.database.ssl')}</span>
@@ -375,6 +546,7 @@ export function Infrastructure() {
                       <span className="toggle-slider"></span>
                     </label>
                   </div>
+                  {pinNote('DATABASE_SSL')}
                   {configForm.dbConfig.sslEnabled && (
                     <div className="toggle-row">
                       <div className="toggle-info">
@@ -392,6 +564,7 @@ export function Infrastructure() {
                       </label>
                     </div>
                   )}
+                  {configForm.dbConfig.sslEnabled && pinNote('DATABASE_SSL_REJECT_UNAUTHORIZED')}
                 </div>
               )}
             </>
@@ -517,11 +690,11 @@ export function Infrastructure() {
             </div>
             <span
               className={`status-indicator ${
-                configForm.redisEnabled && configForm.redisConfig.connected ? 'connected' : 'disconnected'
+                infraStatus.redis.enabled && configForm.redisConfig.connected ? 'connected' : 'disconnected'
               }`}
             >
               ●{' '}
-              {configForm.redisEnabled
+              {infraStatus.redis.enabled
                 ? configForm.redisConfig.connected
                   ? t('infrastructure.statusLabels.connected')
                   : t('infrastructure.statusLabels.disconnected')
@@ -571,6 +744,18 @@ export function Infrastructure() {
                 </label>
               </div>
 
+              {builtInNote(
+                infraStatus.redis.enabled && savedConfig.redis.enabled,
+                infraStatus.redis.builtIn,
+                savedBuiltIn(savedConfig.redis, infraStatus.redis.builtIn),
+                namesBundledContainer('redis', infraStatus.redis.host),
+              )}
+              {pinNote('REDIS_HOST')}
+              {flagPinNote('REDIS_BUILTIN', 'redis')}
+              {pinNote('REDIS_TLS')}
+              {pinNote('REDIS_USERNAME')}
+              {configForm.redisConfig.builtIn && builtInDetailNotes('redis')}
+
               {!configForm.redisConfig.builtIn && (
                 <div className="config-form">
                   <div className="form-row">
@@ -597,12 +782,15 @@ export function Infrastructure() {
                       <input
                         id="infra-12"
                         type="password"
+                        autoComplete="new-password"
                         value={configForm.redisConfig.password}
                         onChange={e => configForm.updateRedisConfig('password', e.target.value)}
                         placeholder={t('infrastructure.redis.passwordOptional')}
                       />
                     </div>
                   </div>
+                  {pinNote('REDIS_PORT')}
+                  {pinNote('REDIS_PASSWORD')}
                 </div>
               )}
 
@@ -621,6 +809,7 @@ export function Infrastructure() {
                   <span className="toggle-slider"></span>
                 </label>
               </div>
+              {settingNote('QUEUE_ENABLED', infraStatus.queue.enabled, savedConfig.queue.enabled)}
 
               {configForm.queueEnabled && (
                 <div className="queue-stats">
@@ -688,15 +877,13 @@ export function Infrastructure() {
               <h2>{t('infrastructure.storage.title')}</h2>
             </div>
             {(() => {
-              // S3 selected but the backend isn't reachable → warn instead of a misleading green.
-              const s3Unreachable =
-                configForm.storageConfig.type === 's3' && infraStatus?.storage.s3Available === false;
-              const cls =
-                configForm.storageConfig.type !== 's3' ? 'sqlite' : s3Unreachable ? 'disconnected' : 'connected';
+              // S3 running but the backend isn't reachable → warn instead of a misleading green.
+              const s3Unreachable = infraStatus.storage.type === 's3' && infraStatus.storage.s3Available === false;
+              const cls = infraStatus.storage.type !== 's3' ? 'sqlite' : s3Unreachable ? 'disconnected' : 'connected';
               return (
                 <span className={`status-indicator ${cls}`}>
                   ●{' '}
-                  {configForm.storageConfig.type === 's3'
+                  {infraStatus.storage.type === 's3'
                     ? s3Unreachable
                       ? t('infrastructure.storage.s3Unreachable')
                       : 'S3'
@@ -764,6 +951,16 @@ export function Infrastructure() {
                   </label>
                 </div>
 
+                {builtInNote(
+                  infraStatus.storage.type === 's3' && savedConfig.storage.type === 's3',
+                  infraStatus.storage.builtIn,
+                  savedBuiltIn(savedConfig.storage, infraStatus.storage.builtIn),
+                  namesBundledContainer('minio', infraStatus.storage.endpoint),
+                )}
+                {pinNote('S3_ENDPOINT')}
+                {flagPinNote('MINIO_BUILTIN', 'minio')}
+                {configForm.storageConfig.builtIn && builtInDetailNotes('minio')}
+
                 {!configForm.storageConfig.builtIn && (
                   <>
                     <div className="form-row">
@@ -786,6 +983,8 @@ export function Infrastructure() {
                         />
                       </div>
                     </div>
+                    {pinNote('S3_BUCKET')}
+                    {pinNote('S3_REGION')}
                     <div className="form-row">
                       <div className="form-group">
                         <label htmlFor="infra-16">{t('infrastructure.storage.accessKey')}</label>
@@ -801,11 +1000,14 @@ export function Infrastructure() {
                         <input
                           id="infra-17"
                           type="password"
+                          autoComplete="new-password"
                           value={configForm.storageConfig.s3SecretKey}
                           onChange={e => configForm.updateStorageConfig('s3SecretKey', e.target.value)}
                         />
                       </div>
                     </div>
+                    {pinNote('S3_ACCESS_KEY_ID')}
+                    {pinNote('S3_SECRET_ACCESS_KEY')}
                     <div className="form-group">
                       <label htmlFor="infra-18">{t('infrastructure.storage.endpoint')}</label>
                       <input
@@ -847,6 +1049,21 @@ export function Infrastructure() {
               <p className="restart-idle-desc">
                 <Trans i18nKey="infrastructure.restart.idleDesc" components={{ code: <code />, br: <br /> }} />
               </p>
+              {/* Without `running` Docker did not answer the status, and the server stops nothing then. */}
+              {infraStatus.database.running !== undefined && restartFlow.profilesToRemove.length > 0 && (
+                <p className="restart-idle-desc">
+                  {t('infrastructure.restart.stopsContainers')}
+                  {/* One left-to-right chip per container, kept whole: a name is what the operator types into docker. */}
+                  {restartFlow.profilesToRemove.map(p => (
+                    <Fragment key={p}>
+                      {' '}
+                      <code dir="ltr" className="restart-stop-name">
+                        {CONTAINER_OF[p] ?? p}
+                      </code>
+                    </Fragment>
+                  ))}
+                </p>
+              )}
               {(restartFlow.dbSwitch || restartFlow.storageSwitch) && (
                 <div className="migration-warning">
                   <AlertTriangle size={18} />

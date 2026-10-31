@@ -1,6 +1,3 @@
-// archiver v8 is ESM-only (pulled in transitively via @Global StorageModule); stub for ts-jest CJS.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -104,6 +101,23 @@ describe('Global read and create routes reject session-scoped keys (e2e)', () =>
       .get(`/api/stats/sessions/${scopedSessionId}`)
       .set('X-API-Key', scopedAdminKey);
     expect(res.status).toBe(200);
+  });
+
+  it('counts only its own sessions for a scoped key on GET /api/sessions/stats/overview', async () => {
+    // The route names no :sessionId, so the guard cannot scope it: the key's allowlist handed to the
+    // service is the only thing keeping the gateway-wide totals from a scoped key. A session outside the
+    // allowlist makes the two answers differ; the control proves it is really counted.
+    const sessionRepo: Repository<Session> = app.get(getRepositoryToken(Session, 'data'));
+    await sessionRepo.save(sessionRepo.create({ name: `e2e-global-scope-stats-${Date.now()}` }));
+    const overview = (key: string) =>
+      request(app.getHttpServer())
+        .get('/api/sessions/stats/overview')
+        .set('X-API-Key', key)
+        .expect(200)
+        .then(res => res.body as { total: number; byStatus: Record<string, number> });
+
+    expect(await overview(scopedOperatorKey)).toMatchObject({ total: 1, byStatus: { created: 1 } });
+    expect((await overview(adminKey)).total).toBeGreaterThanOrEqual(2);
   });
 
   it('denies a session-scoped key per-session stats for a session outside its scope', async () => {

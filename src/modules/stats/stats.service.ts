@@ -45,8 +45,13 @@ export function maxCreatedAtSql(dbType: string): string {
  * SQL for a top chat's label. `chatName` holds the SENDER's push name, not the chat's: MAX over a group's
  * rows named the group after whichever member sorts last. Only a 1:1 chat's inbound rows carry the name
  * of the chat itself, so groups get null and the dashboard falls back to the chat id.
+ *
+ * The chat id is tested first on purpose: it is in the chatId indexes, so SQLite answers a group's row
+ * without seeking the table row that `direction` and `chatName` live in, which on a table of large rows
+ * is most of the cost (1.7 s down to 0.6 s over 59k messages, most of them in groups).
  */
-const CHAT_LABEL_SQL = `MAX(CASE WHEN m.direction = '${MessageDirection.INCOMING}' AND m.chatId NOT LIKE '%@g.us' THEN m.chatName END)`;
+const chatLabelSql = (alias: string): string =>
+  `MAX(CASE WHEN ${alias}.chatId NOT LIKE '%@g.us' AND ${alias}.direction = '${MessageDirection.INCOMING}' THEN ${alias}.chatName END)`;
 
 export interface OverviewStats {
   sessions: {
@@ -91,8 +96,8 @@ export class StatsService {
    * dashboard polling would otherwise re-run them on every request. TTL-only invalidation:
    * entries expire after stats.cacheTtlMs; there is no write-path hook. Session-scoped entries
    * are additionally re-validated on serve (getSessionStats), so a deleted session is not
-   * resurrected from the memo. Key cardinality is
-   * bounded (4 global shapes + one per session), so no size eviction is needed. Concurrent misses
+   * resurrected from the memo. Every finished computation also drops the entries that have expired, so
+   * the entries of deleted sessions nobody asks for again do not accumulate. Concurrent misses
    * on one key share a single computation (`inflight`), so an expired entry costs one scan, not one
    * per waiting request; a rejection is handed to every waiter and never stored.
    */
@@ -134,7 +139,9 @@ export class StatsService {
       value => {
         if (this.inflight.get(key) === flight) {
           this.inflight.delete(key);
-          this.memo.set(key, { expiresAt: Date.now() + ttl, value });
+          const now = Date.now();
+          for (const [memoKey, entry] of this.memo) if (entry.expiresAt <= now) this.memo.delete(memoKey);
+          this.memo.set(key, { expiresAt: now + ttl, value });
         }
         return value;
       },
@@ -265,19 +272,7 @@ export class StatsService {
       ...stats,
     }));
 
-    // Top chats
-    const topChats = await this.messageRepo
-      .createQueryBuilder('m')
-      .select('m.chatId', 'chatId')
-      .addSelect('COUNT(*)', 'messageCount')
-      .addSelect(CHAT_LABEL_SQL, 'chatName')
-      .where('m.createdAt >= :since', { since })
-      .groupBy('m.chatId')
-      // Order by the aggregate expression, not the "messageCount" alias: Postgres folds an unquoted
-      // ORDER BY messageCount to lowercase and 42703s against the quoted alias (SQLite tolerated it).
-      .orderBy('COUNT(*)', 'DESC')
-      .limit(10)
-      .getRawMany<{ chatId: string; messageCount: string; chatName: string | null }>();
+    const topChats = await this.getTopChats(since);
 
     return {
       timeSeries,
@@ -289,6 +284,46 @@ export class StatsService {
         messageCount: parseInt(c.messageCount),
       })),
     };
+  }
+
+  /** The ten chats with the most messages since `since`, each 1:1 chat with its name. */
+  private async getTopChats(
+    since: Date,
+  ): Promise<Array<{ chatId: string; messageCount: string; chatName: string | null }>> {
+    if (this.dataDbType === 'postgres') {
+      return (
+        this.messageRepo
+          .createQueryBuilder('m')
+          .select('m.chatId', 'chatId')
+          .addSelect('COUNT(*)', 'messageCount')
+          .addSelect(chatLabelSql('m'), 'chatName')
+          .where('m.createdAt >= :since', { since })
+          .groupBy('m.chatId')
+          // Order by the aggregate expression, not the "messageCount" alias: Postgres folds an unquoted
+          // ORDER BY messageCount to lowercase and 42703s against the quoted alias.
+          .orderBy('COUNT(*)', 'DESC')
+          .limit(10)
+          .getRawMany<{ chatId: string; messageCount: string; chatName: string | null }>()
+      );
+    }
+    // SQLite keeps no statistics, so for GROUP BY m.chatId it reads the whole table in chatId index order
+    // rather than the createdAt range, however narrow: 3.2 s over 59k messages for a window of 306, and
+    // better-sqlite3 runs it on the event loop, so every request waits. Materializing the window first
+    // makes the createdAt index drive the read (21 ms for the same window). The window is still built by
+    // the query builder, which formats the date parameter the way the column is stored; the TypeORM SQLite
+    // driver cannot emit the MATERIALIZED keyword itself.
+    const [window, params] = this.messageRepo
+      .createQueryBuilder('m')
+      .select('m.chatId', 'chatId')
+      .addSelect('m.chatName', 'chatName')
+      .addSelect('m.direction', 'direction')
+      .where('m.createdAt >= :since', { since })
+      .getQueryAndParameters();
+    return this.messageRepo.manager.query(
+      `WITH w AS MATERIALIZED (${window}) SELECT w.chatId AS "chatId", COUNT(*) AS "messageCount", ` +
+        `${chatLabelSql('w')} AS "chatName" FROM w GROUP BY w.chatId ORDER BY COUNT(*) DESC LIMIT 10`,
+      params,
+    );
   }
 
   async getSessionStats(sessionId: string): Promise<SessionStats> {
@@ -343,7 +378,7 @@ export class StatsService {
       .select('m.chatId', 'chatId')
       .addSelect('COUNT(*)', 'count')
       .addSelect(maxCreatedAtSql(this.dataDbType), 'lastActive')
-      .addSelect(CHAT_LABEL_SQL, 'chatName')
+      .addSelect(chatLabelSql('m'), 'chatName')
       .where('m.sessionId = :sessionId', { sessionId })
       .groupBy('m.chatId')
       .orderBy('count', 'DESC')

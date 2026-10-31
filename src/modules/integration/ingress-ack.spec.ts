@@ -25,6 +25,18 @@ describe('renderAck', () => {
     expect(renderAck({ body: '{rawBody}' }, { ...ctx, rawBody: '$&$`$1' }).body).toBe('$&$`$1');
   });
 
+  it('substitutes only the original template tokens and preserves inserted values literally', () => {
+    const literal = {
+      rawBody: '{timestamp}:{id}:$&:$1:{rawBody}',
+      timestamp: '{id}:$&:$1',
+      id: '{rawBody}:{timestamp}:$&:$1',
+    };
+    expect(renderAck({ body: '{rawBody}|{timestamp}|{id}|{rawBody}|{unknown}' }, literal).body).toBe(
+      '{timestamp}:{id}:$&:$1:{rawBody}|{id}:$&:$1|{rawBody}:{timestamp}:$&:$1|{timestamp}:{id}:$&:$1:{rawBody}|{unknown}',
+    );
+    expect(renderAck({ body: '{rawBody}{timestamp}{id}' }, { rawBody: '', timestamp: '', id: '' }).body).toBe('');
+  });
+
   it('omits body and headers when not declared', () => {
     expect(renderAck({ status: 204 }, ctx)).toEqual({ status: 204 });
   });

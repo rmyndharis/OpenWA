@@ -6,13 +6,13 @@ socket. Security matters here, and we appreciate responsible disclosure.
 
 ## Supported versions
 
-Security fixes land on the latest minor release (currently 0.25.x). Older minor
+Security fixes land on the latest minor release (currently 0.27.x). Older minor
 lines receive no backports — please upgrade older deployments.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.25.x  | :white_check_mark: |
-| < 0.25  | :x:                |
+| 0.27.x  | :white_check_mark: |
+| < 0.27  | :x:                |
 
 ## Reporting a vulnerability
 
@@ -90,7 +90,7 @@ The application container never mounts `/var/run/docker.sock`; it reaches the da
 only through the bundled `docker-proxy` sidecar (pinned `tecnativa/docker-socket-proxy`),
 which listens solely on an internal Compose network that no other container joins.
 The proxy enables only the endpoint families the built-in datastore orchestration
-needs (`CONTAINERS`, `IMAGES`, `VOLUMES`, `INFO`, `PING`) plus its single `POST`
+needs (`CONTAINERS`, `IMAGES`, `VOLUMES`, `PING`) plus its single `POST`
 method switch.
 
 This is **not** a fine-grained privilege boundary, and we deliberately do not claim

@@ -4,7 +4,7 @@ import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { inboundMediaConcurrency } from './inbound-media-cap';
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
-import type { Contact, EventResponseEvent } from '../interfaces/whatsapp-engine.interface';
+import type { Contact, EventResponseEvent, MessageReceiptEvent } from '../interfaces/whatsapp-engine.interface';
 
 /**
  * `downloadMediaMessage` is a jest mock, not a silent no-op: the real-download branch
@@ -120,6 +120,7 @@ function makeHost(overrides: Partial<BaileysEventsHost> = {}): BaileysEventsHost
     getOnMessageEdited: () => undefined,
     getOnMessageReaction: () => undefined,
     getOnMessageAck: () => undefined,
+    getOnMessageReceipt: () => undefined,
     getOnGroupEvent: () => undefined,
     getOnEventResponse: () => undefined,
     findContact: () => null,
@@ -590,14 +591,25 @@ describe('BaileysEvents store writes across an unlink', () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => (release = resolve));
     const putStoredMessage = jest.fn(() => Promise.resolve());
+    const recordKeyLidMappings = jest.fn();
     const events = new BaileysEvents(
-      makeHost({ loadLib: () => gate.then(() => libStub), putStoredMessage, getOnMessage: () => jest.fn() }),
+      makeHost({
+        loadLib: () => gate.then(() => libStub),
+        putStoredMessage,
+        recordKeyLidMappings,
+        getOnMessage: () => jest.fn(),
+      }),
     );
     events.handleMessagesUpsert({
       type: 'notify',
       messages: [
         {
-          key: { id: 'wamid.unlink', remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
+          key: {
+            id: 'wamid.unlink',
+            remoteJid: '123456789@lid',
+            remoteJidAlt: '15550001111@s.whatsapp.net',
+            fromMe: false,
+          },
           messageTimestamp: 1_700_000_000,
           message: { conversation: 'hi' },
         },
@@ -607,20 +619,22 @@ describe('BaileysEvents store writes across an unlink', () => {
       release();
       for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
     };
-    return { events, putStoredMessage, settle };
+    return { events, putStoredMessage, recordKeyLidMappings, settle };
   };
 
   it('stores a message whose processing finishes with the account still linked', async () => {
-    const { putStoredMessage, settle } = held();
+    const { putStoredMessage, recordKeyLidMappings, settle } = held();
     await settle();
     expect(putStoredMessage).toHaveBeenCalledTimes(1);
+    expect(recordKeyLidMappings).toHaveBeenCalledTimes(1);
   });
 
   it('does not store a message still being processed when the account was unlinked', async () => {
-    const { events, putStoredMessage, settle } = held();
+    const { events, putStoredMessage, recordKeyLidMappings, settle } = held();
     events.fenceStoredWrites();
     await settle();
     expect(putStoredMessage).not.toHaveBeenCalled();
+    expect(recordKeyLidMappings).not.toHaveBeenCalled();
   });
 });
 
@@ -633,6 +647,325 @@ describe('BaileysEvents record of messages deleted for everyone', () => {
     expect(events.wasDeletedForEveryone('M0')).toBe(false);
     expect(events.wasDeletedForEveryone('M1')).toBe(true);
     expect(events.wasDeletedForEveryone(`M${limit}`)).toBe(true);
+  });
+});
+
+describe('BaileysEvents.handleMessageReceiptUpdate', () => {
+  const group = '120363000000000001@g.us';
+  const member = '6281111111111@s.whatsapp.net';
+
+  function setup(overrides: Partial<BaileysEventsHost> = {}) {
+    const onMessageReceipt = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnMessageReceipt: () => onMessageReceipt, ...overrides }));
+    return { events, onMessageReceipt };
+  }
+
+  it('reports one event per recipient receipt of a message the account sent', () => {
+    const { events, onMessageReceipt } = setup();
+    events.handleMessageReceiptUpdate([
+      {
+        key: { id: 'OUT1', remoteJid: group, fromMe: true },
+        receipt: { userJid: member, receiptTimestamp: 1700000000 },
+      },
+      { key: { id: 'OUT1', remoteJid: group, fromMe: true }, receipt: { userJid: member, readTimestamp: 1700000060 } },
+    ]);
+    expect(onMessageReceipt.mock.calls).toEqual([
+      [{ messageId: 'OUT1', chatId: group, participant: member, status: 'delivered', timestamp: 1700000000 }],
+      [{ messageId: 'OUT1', chatId: group, participant: member, status: 'read', timestamp: 1700000060 }],
+    ]);
+  });
+
+  it('splits a buffered entry that carries several timestamps into one event per status', () => {
+    const { events, onMessageReceipt } = setup();
+    events.handleMessageReceiptUpdate([
+      {
+        key: { id: 'OUT1', remoteJid: group, fromMe: true },
+        receipt: { userJid: member, receiptTimestamp: 1, readTimestamp: 2, playedTimestamp: 3 },
+      },
+    ]);
+    const calls = onMessageReceipt.mock.calls as Array<[MessageReceiptEvent]>;
+    expect(calls.map(([e]) => [e.status, e.timestamp])).toEqual([
+      ['delivered', 1],
+      ['read', 2],
+      ['played', 3],
+    ]);
+  });
+
+  it("drops receipts from the account's own devices, in either dialect", () => {
+    const { events, onMessageReceipt } = setup({
+      getSocketOrNull: () =>
+        ({ user: { id: '6280000000000:3@s.whatsapp.net', lid: '99999@lid' } }) as unknown as WASocket,
+    });
+    events.handleMessageReceiptUpdate([
+      {
+        key: { id: 'OUT1', remoteJid: group, fromMe: true },
+        receipt: { userJid: '6280000000000@s.whatsapp.net', readTimestamp: 1 },
+      },
+      { key: { id: 'OUT1', remoteJid: group, fromMe: true }, receipt: { userJid: '99999@lid', readTimestamp: 1 } },
+    ]);
+    expect(onMessageReceipt).not.toHaveBeenCalled();
+  });
+
+  it('ignores receipts for messages the account did not send, and malformed entries', () => {
+    const { events, onMessageReceipt } = setup();
+    events.handleMessageReceiptUpdate([
+      { key: { id: 'IN1', remoteJid: group, fromMe: false }, receipt: { userJid: member, readTimestamp: 1 } },
+      { key: { remoteJid: group, fromMe: true }, receipt: { userJid: member, readTimestamp: 1 } },
+      { key: { id: 'OUT1', remoteJid: group, fromMe: true }, receipt: { readTimestamp: 1 } },
+      { key: { id: 'OUT1', remoteJid: group, fromMe: true }, receipt: { userJid: member } },
+    ]);
+    expect(onMessageReceipt).not.toHaveBeenCalled();
+  });
+
+  it('reports the receipts of a status post as well as a group message', () => {
+    const { events, onMessageReceipt } = setup();
+    events.handleMessageReceiptUpdate([
+      {
+        key: { id: 'ST1', remoteJid: 'status@broadcast', fromMe: true },
+        receipt: { userJid: member, readTimestamp: 5 },
+      },
+    ]);
+    expect(onMessageReceipt.mock.calls).toEqual([
+      [{ messageId: 'ST1', chatId: 'status@broadcast', participant: member, status: 'read', timestamp: 5 }],
+    ]);
+  });
+
+  // message.receipt is documented for group and status messages only, which is the split Baileys itself makes
+  // (1:1 receipts arrive as messages.update). A list the phone filled in reaches this handler through a
+  // message's own userReceipt, whatever the chat, so the handler holds the line.
+  it.each([
+    ['a 1:1 chat', '6282222222222@s.whatsapp.net'],
+    ['a 1:1 chat in the lid dialect', '55555@lid'],
+    ['a broadcast list', '1700000000@broadcast'],
+    ['a channel', '120363000000000002@newsletter'],
+    ['a jid in a domain no kind is known for', '120363000000000003@bot'],
+    ['another unrecognised domain', '12345@interop'],
+  ])('does not report a receipt for %s', (_kind, remoteJid) => {
+    const { events, onMessageReceipt } = setup();
+    events.handleMessageReceiptUpdate([
+      {
+        key: { id: 'OUT1', remoteJid, fromMe: true },
+        receipt: { userJid: member, receiptTimestamp: 1, readTimestamp: 2 },
+      },
+    ]);
+    expect(onMessageReceipt).not.toHaveBeenCalled();
+  });
+
+  it('neutralises the chat and participant ids', () => {
+    const { events, onMessageReceipt } = setup({ toNeutralJid: (jid: string) => `n:${jid}` });
+    events.handleMessageReceiptUpdate([
+      { key: { id: 'OUT1', remoteJid: group, fromMe: true }, receipt: { userJid: '55555@lid', readTimestamp: 1 } },
+    ]);
+    expect(onMessageReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: `n:${group}`, participant: 'n:55555@lid' }),
+    );
+  });
+});
+
+// Baileys' event buffer merges a receipt that lands while a message's own upsert is still buffered (about
+// 100 ms after the send, or inside an offline replay) into that upsert as `userReceipt`, and raises no
+// message-receipt.update for it.
+describe('BaileysEvents.handleMessagesUpsert receipts merged into the upsert', () => {
+  const group = '120363000000000001@g.us';
+  const member = '6281111111111@s.whatsapp.net';
+  const other = '6282222222222@s.whatsapp.net';
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+  const upsert = (userReceipt?: unknown[], fromMe = true): Parameters<BaileysEvents['handleMessagesUpsert']>[0] =>
+    ({
+      type: 'append',
+      messages: [
+        {
+          key: { id: 'OUT1', remoteJid: group, fromMe },
+          messageTimestamp: 1_700_000_000,
+          message: { conversation: 'hi' },
+          ...(userReceipt ? { userReceipt } : {}),
+        },
+      ],
+    }) as Parameters<BaileysEvents['handleMessagesUpsert']>[0];
+  const merged = [
+    { userJid: member, receiptTimestamp: 1_700_000_001 },
+    { userJid: other, receiptTimestamp: 1_700_000_002, readTimestamp: 1_700_000_005 },
+  ];
+  const reported = (onMessageReceipt: jest.Mock): unknown[] =>
+    (onMessageReceipt.mock.calls as Array<[MessageReceiptEvent]>).map(([e]) => [e.participant, e.status, e.timestamp]);
+
+  it('reports them for the echo of a message this session sent, which is still skipped', async () => {
+    const onMessageReceipt = jest.fn();
+    const onMessageCreate = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getOnMessageReceipt: () => onMessageReceipt,
+        getOnMessageCreate: () => onMessageCreate,
+        consumeOwnSend: id => id === 'OUT1',
+      }),
+    );
+
+    events.handleMessagesUpsert(upsert(merged));
+    await flush();
+
+    expect(reported(onMessageReceipt)).toEqual([
+      [member, 'delivered', 1_700_000_001],
+      [other, 'delivered', 1_700_000_002],
+      [other, 'read', 1_700_000_005],
+    ]);
+    expect(onMessageCreate).not.toHaveBeenCalled();
+  });
+
+  it('reports them for a message the phone sent while the gateway was down, which is still processed', async () => {
+    const onMessageReceipt = jest.fn();
+    const onMessageCreate = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({ getOnMessageReceipt: () => onMessageReceipt, getOnMessageCreate: () => onMessageCreate }),
+    );
+
+    events.handleMessagesUpsert(upsert(merged));
+    for (let i = 0; i < 5; i++) await flush();
+
+    expect(reported(onMessageReceipt)).toHaveLength(3);
+    expect(onMessageCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['carries none', upsert(undefined)],
+    ['carries an empty list', upsert([])],
+    ['is not one the account sent', upsert(merged, false)],
+  ])('reports nothing for a message that %s', async (_label, event) => {
+    const onMessageReceipt = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnMessageReceipt: () => onMessageReceipt }));
+
+    events.handleMessagesUpsert(event);
+    for (let i = 0; i < 5; i++) await flush();
+
+    expect(onMessageReceipt).not.toHaveBeenCalled();
+  });
+});
+
+// The same buffer merges a 1:1 delivery or read ack that lands within about 100 ms of a message's own upsert
+// into that upsert as `status`, and raises no messages.update for it, and so does a rejection by the server
+// (status ERROR). An echo carries PENDING and a message the phone typed carries SERVER_ACK before any ack.
+describe('BaileysEvents.handleMessagesUpsert acks merged into the upsert', () => {
+  const partner = '6281111111111@s.whatsapp.net';
+  const group = '120363000000000001@g.us';
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 8; i++) await flush();
+  };
+  const upsert = (
+    status: number | null | undefined,
+    over: { fromMe?: boolean; remoteJid?: string } = {},
+  ): Parameters<BaileysEvents['handleMessagesUpsert']>[0] => ({
+    type: 'append',
+    messages: [
+      {
+        key: { id: 'OUT1', remoteJid: over.remoteJid ?? partner, fromMe: over.fromMe ?? true },
+        messageTimestamp: 1_700_000_000,
+        message: { conversation: 'hi' },
+        ...(status === undefined ? {} : { status }),
+      },
+    ],
+  });
+
+  it.each([
+    [3, 'delivered'],
+    [4, 'read'],
+    [5, 'read'],
+    [0, 'failed'],
+  ])(
+    'reports status %i of the echo of a message this session sent as %s, and still skips the echo',
+    async (status, expected) => {
+      const onMessageAck = jest.fn();
+      const onMessageCreate = jest.fn();
+      const events = new BaileysEvents(
+        makeHost({
+          getOnMessageAck: () => onMessageAck,
+          getOnMessageCreate: () => onMessageCreate,
+          consumeOwnSend: id => id === 'OUT1',
+        }),
+      );
+
+      events.handleMessagesUpsert(upsert(status));
+      await settle();
+
+      expect(onMessageAck).toHaveBeenCalledTimes(1);
+      expect(onMessageAck).toHaveBeenCalledWith('OUT1', expected, partner);
+      expect(onMessageCreate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['PENDING, which every echo carries', upsert(1), true],
+    ['SERVER_ACK, which a message typed on the phone carries', upsert(2), false],
+    ['no status', upsert(undefined), true],
+    ['a null status', upsert(null), true],
+    ['a delivery status on a message the account did not send', upsert(3, { fromMe: false }), false],
+    ['a delivery status on a group message, which is reported as receipts', upsert(3, { remoteJid: group }), true],
+  ])('reports no ack for %s', async (_label, event, echo) => {
+    const onMessageAck = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnMessageAck: () => onMessageAck, consumeOwnSend: () => echo }));
+
+    events.handleMessagesUpsert(event);
+    await settle();
+
+    expect(onMessageAck).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a group', group],
+    ['a status post', 'status@broadcast'],
+  ])('reports a rejection by the server merged into the echo of a message sent to %s', async (_label, remoteJid) => {
+    const onMessageAck = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnMessageAck: () => onMessageAck, consumeOwnSend: () => true }));
+
+    events.handleMessagesUpsert(upsert(0, { remoteJid }));
+    await settle();
+
+    expect(onMessageAck).toHaveBeenCalledWith('OUT1', 'failed', remoteJid);
+  });
+
+  it('holds the ack of a message the phone sent while the gateway was down until that message was handed on', async () => {
+    const order: string[] = [];
+    let release!: () => void;
+    const held = new Promise<undefined>(resolve => (release = () => resolve(undefined)));
+    const events = new BaileysEvents(
+      makeHost({
+        // The repeat-delivery check is the first thing processing waits for.
+        getStoredMessage: () => held as unknown as ReturnType<BaileysEventsHost['getStoredMessage']>,
+        getOnMessageCreate: () => () => {
+          order.push('created');
+        },
+        getOnMessageAck: () => (id, status) => {
+          order.push(`ack ${id} ${status}`);
+        },
+      }),
+    );
+
+    events.handleMessagesUpsert(upsert(3));
+    await settle();
+    expect(order).toEqual([]);
+
+    release();
+    await settle();
+
+    expect(order).toEqual(['created', 'ack OUT1 delivered']);
+  });
+
+  it('still reports the ack of a replayed message that is processed no further', async () => {
+    const onMessageAck = jest.fn();
+    const onMessageCreate = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getStoredMessage: () =>
+          ({ key: { id: 'OUT1' } }) as unknown as ReturnType<BaileysEventsHost['getStoredMessage']>,
+        getOnMessageAck: () => onMessageAck,
+        getOnMessageCreate: () => onMessageCreate,
+      }),
+    );
+
+    events.handleMessagesUpsert(upsert(4));
+    await settle();
+
+    expect(onMessageCreate).not.toHaveBeenCalled();
+    expect(onMessageAck).toHaveBeenCalledWith('OUT1', 'read', partner);
   });
 });
 
@@ -1154,7 +1487,7 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     expect(onMessageEdited).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: 'ORIG1', body: 'new text', chatId: group, senderId: author }),
     );
-    expect(recordMessageEdit).toHaveBeenCalledWith(group, 'ORIG1', 'new text');
+    expect(recordMessageEdit).toHaveBeenCalledWith(group, 'ORIG1', 'new text', undefined, expect.any(Function));
     expect(onMessage).not.toHaveBeenCalled();
   });
 
@@ -1203,7 +1536,7 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     expect(onMessageEdited).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: 'ORIG1', body: 'new text', fromMe: true }),
     );
-    expect(recordMessageEdit).toHaveBeenCalledWith(group, 'ORIG1', 'new text');
+    expect(recordMessageEdit).toHaveBeenCalledWith(group, 'ORIG1', 'new text', undefined, expect.any(Function));
   });
 
   it('reads an edit of a message that is still being processed, with the secret that copy carries', async () => {
@@ -1222,10 +1555,13 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     await flush();
     events.handleMessagesUpsert({ type: 'notify', messages: [editEnvelope()] });
     await flush();
+    // The edit was read, but it is announced once the session holds the message it changes.
+    expect(onMessageEdited).not.toHaveBeenCalled();
 
-    expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
     release(null);
     await flush();
+
+    expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
   });
 
   it('reads the edit of an original that finishes while the edit is still reading the store', async () => {
@@ -1527,5 +1863,112 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     await flush();
 
     expect(onMessageReaction).not.toHaveBeenCalled();
+  });
+});
+
+// Where nothing is admitted before the emit (SQLite) a reaction of a message still being processed waits for its
+// emit; the wait ends at the latest after three media deadlines, and its timer is neither kept nor left running.
+describe('BaileysEvents changes waiting for the message they change', () => {
+  const chat = '6281111111111@s.whatsapp.net';
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+  const original: WAMessage = {
+    key: { id: 'M', remoteJid: chat, fromMe: false },
+    messageTimestamp: 1_700_000_000,
+    message: { conversation: 'hi' },
+  };
+  const reaction: WAMessage = {
+    key: { id: 'R', remoteJid: chat, fromMe: false },
+    messageTimestamp: 1_700_000_001,
+    message: { reactionMessage: { key: { id: 'M', remoteJid: chat, fromMe: false }, text: 'ok' } },
+  };
+  const saved = process.env.MEDIA_DOWNLOAD_TIMEOUT_MS;
+
+  beforeEach(() => {
+    process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '1000';
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    if (saved === undefined) delete process.env.MEDIA_DOWNLOAD_TIMEOUT_MS;
+    else process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = saved;
+  });
+
+  /** The original never finishes: its check for a repeat delivery is not answered. */
+  const withMessageStuck = () => {
+    let checked = false;
+    const onMessageReaction = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getStoredMessage: (id: string) => {
+          if (id !== 'M' || checked) return Promise.resolve(null);
+          checked = true;
+          return new Promise<WAMessage | null>(() => undefined);
+        },
+        getOnMessageReaction: () => onMessageReaction,
+      }),
+    );
+    events.handleMessagesUpsert({ type: 'notify', messages: [original] });
+    return { events, onMessageReaction };
+  };
+
+  it('lets a change go three media deadlines after it began to wait, and leaves no timer behind', async () => {
+    const { events, onMessageReaction } = withMessageStuck();
+    await flush();
+    events.handleMessagesUpsert({ type: 'notify', messages: [reaction] });
+    await flush();
+    expect(onMessageReaction).not.toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(1);
+
+    jest.advanceTimersByTime(2_999);
+    expect(onMessageReaction).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(1);
+
+    expect(onMessageReaction).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('does not keep the process alive while a change waits', async () => {
+    const waits: Array<{ unref: jest.SpyInstance }> = [];
+    const fake = global.setTimeout;
+    jest.spyOn(global, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+      const handle = fake(fn, ms) as unknown as { unref: () => unknown };
+      if (ms === 3_000) waits.push({ unref: jest.spyOn(handle, 'unref') });
+      return handle;
+    }) as never);
+    const { events } = withMessageStuck();
+    await flush();
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [reaction] });
+    await flush();
+
+    expect(waits).toHaveLength(1);
+    expect(waits[0].unref).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the timer once the message has been handed on', async () => {
+    let release!: (stored: WAMessage | null) => void;
+    let checked = false;
+    const onMessageReaction = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getStoredMessage: (id: string) => {
+          if (id !== 'M' || checked) return Promise.resolve(null);
+          checked = true;
+          return new Promise<WAMessage | null>(resolve => (release = resolve));
+        },
+        getOnMessageReaction: () => onMessageReaction,
+      }),
+    );
+    events.handleMessagesUpsert({ type: 'notify', messages: [original] });
+    await flush();
+    events.handleMessagesUpsert({ type: 'notify', messages: [reaction] });
+    await flush();
+    expect(jest.getTimerCount()).toBe(1);
+
+    release(null);
+    await flush();
+
+    expect(onMessageReaction).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
   });
 });

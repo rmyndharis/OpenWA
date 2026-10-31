@@ -11,7 +11,9 @@ import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { EngineNotSentError } from '../../common/errors/engine-not-sent.error';
+import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+import { toParticipantWid } from '../../engine/identity/wa-id';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 
@@ -39,11 +41,14 @@ export function isPacingLimitedError(error: unknown): boolean {
  * open the breaker on a perfectly healthy session and 429 every send for the cooldown. The rule is
  * therefore: a client-fault or engine-state HTTP status (4xx/501/503) does NOT count; a refusal
  * WhatsApp itself returned — EngineRefusedError (403) — and anything unclassified (a raw engine
- * error, a timeout, a 5xx) does.
+ * error, a timeout, a 5xx) does. A rate limit WhatsApp answered (EngineThrottledError, a 503 on the wire)
+ * counts as well: it is WhatsApp refusing this account's traffic, the signal the breaker exists to act on,
+ * even though the send provably went nowhere (see sentNothing). A whatsapp-web.js send whose recipient lookup did
+ * not answer (RecipientLookupUnansweredError) is a 500 that does not count: it says nothing about the account.
  */
 export function countsTowardSendBreaker(error: unknown): boolean {
-  if (error instanceof EngineRefusedError) return true;
-  if (error instanceof SsrfBlockedError) return false;
+  if (error instanceof EngineRefusedError || error instanceof EngineThrottledError) return true;
+  if (error instanceof SsrfBlockedError || error instanceof RecipientLookupUnansweredError) return false;
   if (error instanceof HttpException) {
     const status = error.getStatus();
     // 4xx = the caller's request was wrong; 501 = this engine cannot do it; 503 = the engine is not
@@ -106,14 +111,17 @@ interface BreakerState {
 interface Admission {
   /** Epoch ms its own term ends: a window from its admission, or from its settle. */
   until: number;
+  /** An untilSettled caller still has no engine outcome to count in the persisted day. */
+  unsettled: boolean;
   /** Epoch ms it stops being held, so only its row counts from then on; refreshed by heldAdmissions. */
   heldUntil: number;
-  sentToday: number;
+  /** Reset at UTC rollover, then filled from the first current-day count. */
+  sentToday: number | null;
   /**
    * Set for a cold send; the key is folded the way the cold count folds dialects. Cleared by heldAdmissions
    * once no cold admission's own term is running, so from then on only its row counts against the cold cap.
    */
-  cold: { key: string; coldToday: number } | null;
+  cold: { key: string; coldToday: number | null } | null;
 }
 
 /** The admissions a session holds, in the order they were admitted, for one UTC day. */
@@ -141,8 +149,8 @@ const UNSETTLED_ADMISSION_MAX_MS = 5 * 60_000;
 
 /**
  * Settles the admission assertSendAllowed held. Called with nothing, for a send that provably never went
- * out, it hands the admission back at once. Called with `true`, once the engine returned or failed with an
- * unknown outcome, it holds the admission for ADMISSION_WINDOW_MS from now, while the row or the own-send
+ * out, it hands the admission back at once. Called with `true`, once PENDING is written or the engine returned
+ * or failed with an unknown outcome, it holds the admission for ADMISSION_WINDOW_MS while the row or own-send
  * echo lands, or for as long as a send admitted after it is held, if that is longer.
  */
 export type SettleAdmission = (mayHaveSent?: boolean) => void;
@@ -242,6 +250,8 @@ export class SendPacingService {
    * after the engine call (a bulk item, a product send): the window starts when the caller settles it
    * with `true`, bounded by UNSETTLED_ADMISSION_MAX_MS if it never does. Without it the window starts
    * now, for a caller that writes its PENDING row before asking the engine.
+   * `whilePreparing` has no safety expiry: its caller must settle in a finally block once the
+   * PENDING write finishes or preparation fails, even when hooks take arbitrarily long.
    *
    * Returns the settle for the admission it held, or undefined when it held none. A caller whose send
    * fails before writing a row, and before WhatsApp may have taken it, calls it with nothing so that
@@ -250,7 +260,7 @@ export class SendPacingService {
   async assertSendAllowed(
     sessionId: string,
     chatId?: string,
-    opts: { hold?: boolean; untilSettled?: boolean } = {},
+    opts: { hold?: boolean; untilSettled?: boolean; whilePreparing?: boolean } = {},
   ): Promise<SettleAdmission | undefined> {
     const config = resolveSendPacingConfig(this.configService);
     if (!config.enabled) return;
@@ -268,9 +278,16 @@ export class SendPacingService {
     const sentToday = await this.messageRepository.count({
       where: { sessionId, direction: MessageDirection.OUTGOING, createdAt: MoreThanOrEqual(dayStart) },
     });
+    // A stale count must not reset the new day's held admissions.
+    if (startOfUtcDay(new Date()).getTime() !== dayStart.getTime()) {
+      return this.assertSendAllowed(sessionId, chatId, opts);
+    }
     // The overall cap is the cheaper check and bounds everything, so it settles before the cold probe.
     this.assertUnderDailyCap(sessionId, dayStart, ageDays, allowance, sentToday);
     const cold = await this.readColdReachouts(sessionId, chatId, dayStart, ageDays, config);
+    if (startOfUtcDay(new Date()).getTime() !== dayStart.getTime()) {
+      return this.assertSendAllowed(sessionId, chatId, opts);
+    }
 
     // Judged again, and admitted, with no await from here on: a concurrent request admitted while this
     // one was reading must count, and this one must count for the next.
@@ -283,9 +300,12 @@ export class SendPacingService {
       this.assertUnderColdCap(sessionId, dayStart, ageDays, cold);
     }
     if (opts.hold !== false) {
-      const until = Date.now() + (opts.untilSettled ? UNSETTLED_ADMISSION_MAX_MS : ADMISSION_WINDOW_MS);
+      const until = opts.whilePreparing
+        ? Infinity
+        : Date.now() + (opts.untilSettled ? UNSETTLED_ADMISSION_MAX_MS : ADMISSION_WINDOW_MS);
       const admission: Admission = {
         until,
+        unsettled: opts.untilSettled === true,
         heldUntil: until,
         sentToday,
         cold: cold ? { key, coldToday: cold.coldToday } : null,
@@ -293,7 +313,11 @@ export class SendPacingService {
       const hold = this.holds.get(sessionId);
       if (hold?.dayStartMs === dayStart.getTime()) hold.admissions.push(admission);
       else this.holds.set(sessionId, { dayStartMs: dayStart.getTime(), admissions: [admission] });
+      let settled = false;
       return (mayHaveSent = false) => {
+        if (settled) return;
+        settled = true;
+        admission.unsettled = false;
         if (mayHaveSent) {
           admission.until = Date.now() + ADMISSION_WINDOW_MS;
           return;
@@ -302,7 +326,10 @@ export class SendPacingService {
         admission.until = admission.heldUntil = 0;
         const admissions = this.holds.get(sessionId)?.admissions;
         const index = admissions?.indexOf(admission) ?? -1;
-        if (admissions && index !== -1) admissions.splice(index, 1);
+        if (admissions && index !== -1) {
+          admissions.splice(index, 1);
+          if (admissions.length === 0) this.holds.delete(sessionId);
+        }
       };
     }
   }
@@ -316,17 +343,27 @@ export class SendPacingService {
     for (let i = held.length - 1; i >= 0; i--) {
       const cold = held[i].cold;
       if (!cold) continue;
+      cold.coldToday ??= persisted;
       chats.add(cold.key);
       count = Math.max(count, cold.coldToday + chats.size);
     }
     return count;
   }
 
-  /** This session's held admissions today, oldest first; empty once none of them is held or the day rolled. */
+  /** This session's held admissions today, oldest first, including preparations carried across midnight. */
   private heldAdmissions(sessionId: string, dayStart: Date): Admission[] {
     const hold = this.holds.get(sessionId);
     if (!hold) return [];
     const now = Date.now();
+    if (hold.dayStartMs !== dayStart.getTime()) {
+      // Preparations and engine calls still running may write today; completed yesterday's sends do not.
+      hold.admissions = hold.admissions.filter(a => a.until === Infinity || (a.unsettled && a.until > now));
+      hold.dayStartMs = dayStart.getTime();
+      for (const admission of hold.admissions) {
+        admission.sentToday = null;
+        if (admission.cold) admission.cold.coldToday = null;
+      }
+    }
     // The cold terms lapse as a whole, once no cold admission's own term is running: a warm admission read no
     // cold count, so it cannot have missed a cold row, and letting it hold them would keep a cold send that
     // wrote no row counted for as long as warm sends keep arriving. Cleared rather than skipped, so a cold
@@ -376,7 +413,7 @@ export class SendPacingService {
     // The same id twice in one request is one contact, and must cost one. Each contact is probed
     // under both user-id dialects (see dialectVariants) — a contact known under the other spelling
     // is not a stranger.
-    const unique = [...new Set(contactIds)];
+    const unique = [...new Set(contactIds.map(toParticipantWid))];
     const variantsByContact = new Map(unique.map(id => [id, dialectVariants(id)]));
     const knownRows = await this.messageRepository
       .createQueryBuilder('m')
@@ -550,7 +587,10 @@ export class SendPacingService {
     persisted: number,
   ): void {
     const held = this.heldAdmissions(sessionId, dayStart);
-    const sentToday = held.reduce((max, a, i) => Math.max(max, a.sentToday + held.length - i), persisted);
+    const sentToday = held.reduce((max, a, i) => {
+      a.sentToday ??= persisted;
+      return Math.max(max, a.sentToday + held.length - i);
+    }, persisted);
     if (sentToday < allowance) return;
 
     const retryAfter =

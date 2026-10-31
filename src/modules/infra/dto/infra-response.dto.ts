@@ -24,11 +24,21 @@ export class InfraDatabaseStatusDto {
   @ApiProperty({
     description:
       "Whether OpenWA's own bundled container is actually running and backing this service, " +
-      'detected live from the labelled container rather than read from the saved intent. Falls back ' +
-      'to the saved flag when Docker is unavailable.',
+      'detected live from the labelled container rather than read from the saved intent. When Docker is ' +
+      "unavailable it falls back to the saved flag (the environment's first) beside a host that reaches the " +
+      'bundled container: neither a host name nor the flag alone proves it.',
     example: true,
   })
   builtIn!: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether a bundled PostgreSQL container OpenWA created is running, whether or not this service uses it, beside ' +
+      "this instance's built-in flag (the environment's first). False for one Docker Compose created, or with the " +
+      'flag not set; absent when Docker is unreachable, where nothing can be seen or stopped.',
+    example: false,
+  })
+  running?: boolean;
 }
 
 export class InfraRedisStatusDto {
@@ -46,6 +56,15 @@ export class InfraRedisStatusDto {
 
   @ApiProperty({ description: "Whether OpenWA's bundled Redis container is backing this.", example: true })
   builtIn!: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether a bundled Redis container OpenWA created is running, whether or not this service uses it, beside ' +
+      "this instance's built-in flag (the environment's first). False for one Docker Compose created, or with the " +
+      'flag not set; absent when Docker is unreachable, where nothing can be seen or stopped.',
+    example: false,
+  })
+  running?: boolean;
 }
 
 export class InfraQueueDepthDto {
@@ -82,8 +101,25 @@ export class InfraStorageStatusDto {
   @ApiPropertyOptional({ description: 'Bucket name. Present only for `s3`.', example: 'openwa-media' })
   bucket?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'S3 endpoint the app is configured to reach. Present only for `s3` with an endpoint set; absent for the ' +
+      'default AWS endpoint.',
+    example: 'http://minio:9000',
+  })
+  endpoint?: string;
+
   @ApiProperty({ description: "Whether OpenWA's bundled MinIO container is backing this.", example: false })
   builtIn!: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether a bundled MinIO container OpenWA created is running, whether or not this service uses it, beside ' +
+      "this instance's built-in flag (the environment's first). False for one Docker Compose created, or with the " +
+      'flag not set; absent when Docker is unreachable, where nothing can be seen or stopped.',
+    example: false,
+  })
+  running?: boolean;
 
   @ApiPropertyOptional({ description: 'Whether the S3 endpoint answered a probe. Present only for `s3`.' })
   s3Available?: boolean;
@@ -235,12 +271,22 @@ export class InfraUpdateCheckResponseDto {
 
 // ---------- GET /infra/config ----------
 
+const BUILT_IN_SET_DESCRIPTION =
+  'Whether the saved configuration states the built-in mode of this service. False when a host pinned by the ' +
+  'environment decides it (builtIn then reports the pin: true for the bundled host), when the saved file does not ' +
+  'select the service (the first boot writes every flag as false next to a service that is not in use), when the ' +
+  'file holds the bundled host with the flag not true (the next boot dials the container, builtIn is true), and ' +
+  'when nothing is saved. When false, read what runs from /infra/status.';
+
 export class InfraConfigDatabaseDto {
   @ApiProperty({ enum: ['sqlite', 'postgres'], example: 'postgres' })
   type!: string;
 
   @ApiProperty({ example: true })
   builtIn!: boolean;
+
+  @ApiProperty({ description: BUILT_IN_SET_DESCRIPTION, example: true })
+  builtInSet!: boolean;
 
   @ApiProperty({ example: 'openwa-postgres' })
   host!: string;
@@ -251,7 +297,7 @@ export class InfraConfigDatabaseDto {
   @ApiProperty({ example: 'openwa' })
   username!: string;
 
-  @ApiProperty({ description: 'Database name, or the SQLite file path.', example: 'openwa' })
+  @ApiProperty({ description: 'Database name under PostgreSQL; empty under SQLite.', example: 'openwa' })
   database!: string;
 
   @ApiProperty({ example: 'public' })
@@ -277,6 +323,9 @@ export class InfraConfigRedisDto {
   @ApiProperty({ example: true })
   builtIn!: boolean;
 
+  @ApiProperty({ description: BUILT_IN_SET_DESCRIPTION, example: true })
+  builtInSet!: boolean;
+
   @ApiProperty({ example: 'openwa-redis' })
   host!: string;
 
@@ -299,7 +348,10 @@ export class InfraConfigStorageDto {
   @ApiProperty({ example: false })
   builtIn!: boolean;
 
-  @ApiProperty({ example: './data/storage' })
+  @ApiProperty({ description: BUILT_IN_SET_DESCRIPTION, example: true })
+  builtInSet!: boolean;
+
+  @ApiProperty({ example: './data/media' })
   localPath!: string;
 
   @ApiProperty({ example: '' })

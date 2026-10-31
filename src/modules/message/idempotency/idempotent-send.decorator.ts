@@ -8,7 +8,12 @@ export const IDEMPOTENCY_KEY_HEADER_DESCRIPTION =
   'ASCII characters, unique per session. While the first request runs a retry gets 409 ' +
   '`IDEMPOTENCY_KEY_IN_PROGRESS`; after a failure that may have sent the message it gets 409 ' +
   '`IDEMPOTENCY_OUTCOME_UNKNOWN`. A 4xx or 501 refusal before the engine call frees the key. ' +
-  'Errors from an engine send keep it taken regardless of HTTP status, including 409.';
+  'Errors from an engine send keep it taken whatever their HTTP status, including 409, unless the engine ' +
+  'proves that nothing was sent: a transport failure or a not-ready 409 before the message was handed over ' +
+  '(the session not ready, WhatsApp Web reloading its page, or a Baileys connection replaced or stopped ' +
+  'meanwhile), a WhatsApp rate limit, media it could not fetch, or, on Baileys, a sticker or preview image ' +
+  'it could not read, a recipient WhatsApp reports as not registered, or a quoted or forwarded message it ' +
+  'does not hold or holds under another chat.';
 
 /**
  * Marks a send route as accepting the opt-in `Idempotency-Key` header: wires the interceptor and

@@ -1,4 +1,4 @@
-import { INestApplication, Type } from '@nestjs/common';
+import { BadRequestException, INestApplication, Type } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import helmet from 'helmet';
 import { Request, Response, NextFunction, json, urlencoded } from 'express';
@@ -18,6 +18,13 @@ import { ShutdownService } from './common/services/shutdown.service';
 import { injectDashboardCspNonce } from './config/dashboard-csp';
 import { resolveCorsPolicy, isUpgradeInsecureRequestsEnabled, resolveBodyLimit } from './config/bootstrap-security';
 import { resolveRequestTimeoutMs } from './config/http-timeouts';
+import { parseTrustedProxies } from './common/utils/ip';
+import {
+  BODY_NESTING_MESSAGE,
+  exceedsBodyNesting,
+  exceedsJsonNesting,
+  isUtf8Charset,
+} from './common/validation/body-nesting';
 
 /** Where the bundled dashboard documents come from, and whether to serve them at all. */
 export interface DashboardSource {
@@ -44,7 +51,7 @@ export interface AppliedBodyCaps {
 /**
  * Everything the production HTTP surface installs on the Express app: request context, the CSP
  * nonce, helmet, the SPA document handler, CORS, the encoded-NUL refusal, the in-flight body budget,
- * the body parsers and the trailing-slash DELETE refusal.
+ * the body parsers, the nesting-depth refusal and the trailing-slash DELETE refusal.
  *
  * It lives here rather than inside bootstrap() so the e2e lane can run the SAME stack. main.ts
  * boots on import, so a suite cannot import it; the whole stack was therefore executed by nothing,
@@ -259,10 +266,7 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
   const keyIndex = optional(ActiveKeyIndex);
   app.use(
     createInflightBodyBudget(inflightBudgetBytes, {
-      trustedProxies: (process.env.TRUSTED_PROXIES || '')
-        .split(',')
-        .map(p => p.trim())
-        .filter(Boolean),
+      trustedProxies: parseTrustedProxies(process.env.TRUSTED_PROXIES),
       classify: (req, clientIp) => keyIndex?.recognise(req.headers, clientIp),
       bodyLimitBytes: parseBodyLimitBytes(bodyLimit),
       requestTimeoutMs: resolveRequestTimeoutMs(process.env.REQUEST_TIMEOUT_MS),
@@ -277,12 +281,23 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
   // charged to the budget at its compressed size and bounded by nothing. Every other parser in the
   // process must carry the same flag for that argument to hold; the MCP route-level fallback
   // (src/modules/mcp/mcp.server.ts) does.
+  //
+  // The same callback reads the nesting depth off the raw UTF-8 bytes, before JSON.parse: the recursive
+  // readers of a parsed body (class-transformer in the validation pipe, the send idempotency fingerprint, the
+  // cluster proxy's JSON.stringify) overflow the stack a couple of thousand levels down and answered 500 with a
+  // stack trace in the log. A body is refused here for the price of one pass over its bytes, ahead of the
+  // parse, authentication, and every guard, interceptor and pipe. body-parser reports an error thrown from
+  // `verify` as 403 unless it carries a status; this one carries 400, and Nest answers it in the usual shape.
   app.use(
     json({
       limit: bodyLimit,
       inflate: false,
-      verify: (req: Request & { rawBody?: Buffer }, _res, buf) => {
+      verify: (req: Request & { rawBody?: Buffer; nestingScanned?: boolean }, _res, buf, encoding) => {
         req.rawBody = buf;
+        if (isUtf8Charset(encoding)) {
+          if (exceedsJsonNesting(buf)) throw new BadRequestException(BODY_NESTING_MESSAGE);
+          req.nestingScanned = true;
+        }
       },
     }),
   );
@@ -298,6 +313,15 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
       },
     }),
   );
+
+  // The raw scan above reads UTF-8 only. JSON in another UTF charset (UTF-16, even UTF-7) is decoded by the
+  // parser, so its depth is walked on the parsed body here, with the same bound and the same answer. A
+  // form-encoded body is walked too and costs nothing: the parser itself stops it at 32 levels and 1000 keys.
+  // Every route and /mcp share the one bound, ahead of the guards, interceptors and pipes.
+  app.use((req: Request & { nestingScanned?: boolean }, _res: Response, next: NextFunction) => {
+    if (req.nestingScanned || !exceedsBodyNesting(req.body)) return next();
+    next(new BadRequestException(BODY_NESTING_MESSAGE));
+  });
 
   // A DELETE path ending in '/' names no resource. Non-strict routing would still match it to the
   // route without the slash, so a client that normalises `<parent>/<child>/..` down to `<parent>/`

@@ -106,19 +106,22 @@ export class ApiKeyUsageTracker {
     }
   }
 
-  /** Persist every accumulated delta with an atomic increment; entries that fail stay pending. */
+  /**
+   * Persist every accumulated delta with an atomic increment; entries that fail go back to pending. The batch
+   * is taken out of the map before the first write: a use recorded while a write is awaited then starts a
+   * fresh count, instead of being deleted along with the one just written or written a second time.
+   */
   private async flushPending(): Promise<void> {
-    for (const [keyId, delta] of [...this.pending.entries()]) {
-      if (delta <= 0) {
-        this.pending.delete(keyId);
-        continue;
-      }
+    const batch = [...this.pending.entries()];
+    this.pending.clear();
+    for (const [keyId, delta] of batch) {
+      if (delta <= 0) continue;
       try {
         // Atomic UPDATE ... SET usageCount = usageCount + delta — no read-modify-write race with a
         // concurrent windowed save, unlike reloading the row and saving it back.
         await this.apiKeyRepository.increment({ id: keyId }, 'usageCount', delta);
-        this.pending.delete(keyId);
       } catch (error) {
+        this.pending.set(keyId, (this.pending.get(keyId) ?? 0) + delta);
         this.logger.warn('Usage-stat flush failed for a key; delta kept pending', {
           keyId,
           error: error instanceof Error ? error.message : String(error),

@@ -6,7 +6,10 @@ namespace OpenWA\Tests;
 
 use OpenWA\Exceptions\OpenWAApiException;
 use OpenWA\Exceptions\OpenWAAuthException;
+use OpenWA\Exceptions\OpenWAConflictException;
+use OpenWA\Exceptions\OpenWAForbiddenException;
 use OpenWA\Exceptions\OpenWANotFoundException;
+use OpenWA\Exceptions\OpenWANotImplementedException;
 use OpenWA\Exceptions\OpenWARateLimitException;
 use OpenWA\Exceptions\OpenWAServiceUnavailableException;
 use OpenWA\Exceptions\OpenWATimeoutException;
@@ -73,17 +76,51 @@ class ClientTest extends TestCase
 
     public function testANumberABooleanOrNullDefaultHeaderValueIsSentAsItsText(): void
     {
-        $backend = (new MockBackend())->on(200, []);
+        $mock = new \GuzzleHttp\Handler\MockHandler([new \GuzzleHttp\Psr7\Response(200)]);
+        $httpClient = new \GuzzleHttp\Client(['handler' => \GuzzleHttp\HandlerStack::create($mock)]);
         (new \OpenWA\Client([
             'baseUrl' => 'http://localhost:2785',
             'apiKey' => 'k',
-            'httpClient' => $backend->httpClient(),
-            'defaultHeaders' => ['X-Tenant-Id' => 42, 'X-Ratio' => 1.5, 'X-Debug' => true, 'X-Empty' => null],
+            'httpClient' => $httpClient,
+            'defaultHeaders' => [
+                'X-Tenant-Id' => 42,
+                'X-Ratio' => 1.5,
+                'X-Debug' => true,
+                'X-False' => false,
+                'X-Empty' => null,
+                'X-List' => ['first', 42, 1.5, true, false, null],
+            ],
         ]))->request('GET', '/api/anything');
-        $headers = $backend->lastCall()['headers'];
-        $this->assertSame('42', $headers['x-tenant-id'] ?? null);
-        $this->assertSame('1.5', $headers['x-ratio'] ?? null);
-        $this->assertSame('1', $headers['x-debug'] ?? null);
+        $request = $mock->getLastRequest();
+        $this->assertNotNull($request);
+        $this->assertSame(['42'], $request->getHeader('X-Tenant-Id'));
+        $this->assertSame(['1.5'], $request->getHeader('X-Ratio'));
+        $this->assertSame(['1'], $request->getHeader('X-Debug'));
+        $this->assertSame([''], $request->getHeader('X-False'));
+        $this->assertSame([''], $request->getHeader('X-Empty'));
+        $this->assertSame(['first', '42', '1.5', '1', '', ''], $request->getHeader('X-List'));
+    }
+
+    public function testAnEmptyHeaderListIsRefusedBeforeAnInjectedCredentialCanBeSent(): void
+    {
+        $mock = new \GuzzleHttp\Handler\MockHandler([new \GuzzleHttp\Psr7\Response(200)]);
+        $httpClient = new \GuzzleHttp\Client([
+            'handler' => \GuzzleHttp\HandlerStack::create($mock),
+            'headers' => ['X-Proxy-Credential' => 'private-default'],
+        ]);
+        try {
+            (new \OpenWA\Client([
+                'baseUrl' => 'http://localhost:2785',
+                'apiKey' => 'k',
+                'httpClient' => $httpClient,
+                'defaultHeaders' => ['X-Proxy-Credential' => []],
+            ]))->request('GET', '/api/anything');
+            $this->fail('Expected an exception for an empty header list');
+        } catch (\OpenWA\Exceptions\OpenWAException $e) {
+            $this->assertStringContainsString('X-Proxy-Credential', $e->getMessage());
+            $this->assertStringNotContainsString('private-default', $e->getMessage());
+        }
+        $this->assertNull($mock->getLastRequest());
     }
 
     public function testADefaultHeaderThatIsNeitherTextNorAListOfItIsRefusedByName(): void
@@ -264,6 +301,26 @@ class ClientTest extends TestCase
         $this->assertStringContainsString('a=1', $backend->lastCall()['query']);
     }
 
+    public function testRawRequestSendsTheMethodInCapitals(): void
+    {
+        // Guzzle 7 upper-cased the method itself; Guzzle 8 sends it as written, and the gateway refuses "get".
+        $backend = new MockBackend();
+        $client = $backend->makeClient();
+        foreach (['get' => 'GET', 'Post' => 'POST', 'delete' => 'DELETE'] as $written => $sent) {
+            $backend->on(200, []);
+            $client->request($written, '/api/anything');
+            $this->assertSame($sent, $backend->lastCall()['method']);
+        }
+
+        $backend->on(404, ['statusCode' => 404, 'message' => 'missing', 'error' => 'Not Found']);
+        try {
+            $client->request('get', '/api/missing');
+            $this->fail('Expected exception');
+        } catch (OpenWANotFoundException $e) {
+            $this->assertStringContainsString('GET /api/missing', $e->getMessage());
+        }
+    }
+
     public function testBaseUrlPathPrefixIsPreserved(): void
     {
         // A base URL with a path prefix (e.g. behind a reverse proxy at /v1) must
@@ -289,6 +346,45 @@ class ClientTest extends TestCase
         }
         $this->assertTrue($threw, 'an unfollowed 3xx must surface as an API error');
         $this->assertCount(1, $backend->calls()); // the redirect target was never requested
+    }
+
+    /** @dataProvider finalResponseStatuses */
+    public function testOnlyFinal2xxResponsesSucceed(int $status, bool $binary, bool $shouldError): void
+    {
+        $body = $status < 200 || $status === 204 ? '' : ($binary ? "\0PNG_fixture" : '{"ok":true}');
+        $backend = (new MockBackend())->onRaw($status, $body, [
+            'Content-Type' => $binary ? 'application/octet-stream' : 'application/json',
+        ]);
+        $client = $backend->makeClient();
+        $request = fn () => $binary ? $client->status->media('s', 'item') : $client->request('GET', '/api/anything');
+
+        if ($shouldError) {
+            try {
+                $request();
+                $this->fail('Expected an API exception for final HTTP ' . $status);
+            } catch (OpenWAApiException $error) {
+                $this->assertSame($status, $error->getStatus());
+            }
+        } elseif ($binary) {
+            $this->assertSame([
+                'data' => $status === 204 ? '' : "\0PNG_fixture",
+                'contentType' => $status === 204 ? null : 'application/octet-stream',
+            ], $request());
+        } else {
+            $this->assertSame($status === 204 ? null : ['ok' => true], $request());
+        }
+        $this->assertCount(1, $backend->calls());
+    }
+
+    public static function finalResponseStatuses(): array
+    {
+        $cases = [];
+        foreach (['JSON' => false, 'binary' => true] as $kind => $binary) {
+            foreach ([100 => true, 101 => true, 199 => true, 200 => false, 204 => false, 299 => false, 300 => true, 401 => true, 429 => true, 503 => true] as $status => $shouldError) {
+                $cases[$kind . ' ' . $status] = [$status, $binary, $shouldError];
+            }
+        }
+        return $cases;
     }
 
     public function test204DeleteSucceedsWithNoBody(): void
@@ -318,6 +414,36 @@ class ClientTest extends TestCase
         ]);
         $this->expectException(OpenWAAuthException::class);
         $backend->makeClient()->sessions->list();
+    }
+
+    /** @dataProvider statusClasses */
+    public function testEachStatusMapsToItsOwnExceptionClass(int $status, string $class): void
+    {
+        $backend = (new MockBackend())->on($status, ['statusCode' => $status, 'message' => 'x', 'error' => 'E']);
+        try {
+            $backend->makeClient()->sessions->list();
+            $this->fail('Expected exception');
+        } catch (OpenWAApiException $e) {
+            // The exact class, not instanceof: every one of them is also an OpenWAApiException.
+            $this->assertSame($class, $e::class);
+            $this->assertSame($status, $e->getStatus());
+        }
+    }
+
+    public static function statusClasses(): array
+    {
+        return [
+            '401' => [401, OpenWAAuthException::class],
+            '403' => [403, OpenWAForbiddenException::class],
+            '404' => [404, OpenWANotFoundException::class],
+            '409' => [409, OpenWAConflictException::class],
+            '429' => [429, OpenWARateLimitException::class],
+            '501' => [501, OpenWANotImplementedException::class],
+            '503' => [503, OpenWAServiceUnavailableException::class],
+            '400' => [400, OpenWAApiException::class],
+            '500' => [500, OpenWAApiException::class],
+            '502' => [502, OpenWAApiException::class],
+        ];
     }
 
     public function testExposesAllResources(): void
@@ -413,6 +539,42 @@ class ClientTest extends TestCase
         $this->assertSame([], (new OpenWARateLimitException('m', 429))->getHeaders());
     }
 
+    public function testAnOversizedRetryAfterBodyDoesNotWrapAround(): void
+    {
+        foreach ([9.3e18, 1.5e19, 1e20] as $seconds) {
+            $backend = (new MockBackend())->on(429, ['statusCode' => 429, 'message' => 'x', 'retryAfterSeconds' => $seconds]);
+            try {
+                $backend->makeClient()->sessions->list();
+                $this->fail('Expected exception');
+            } catch (OpenWARateLimitException $e) {
+                $this->assertSame(PHP_INT_MAX, $e->getRetryAfterSeconds(), "retryAfterSeconds {$seconds}");
+            }
+        }
+    }
+
+    public function testAnOversizedRetryAfterHeaderSaturatesInsteadOfReadingAsZero(): void
+    {
+        // A numeric string of 309 digits or more converts through INF, which casts to 0.
+        $cases = [
+            [str_repeat('9', 19), PHP_INT_MAX],
+            [str_repeat('9', 25), PHP_INT_MAX],
+            [str_repeat('9', 308), PHP_INT_MAX],
+            [str_repeat('9', 309), PHP_INT_MAX],
+            [str_repeat('9', 400), PHP_INT_MAX],
+            [str_repeat('0', 400) . '7', 7],
+            ['0', 0],
+        ];
+        foreach ($cases as [$header, $expected]) {
+            $backend = (new MockBackend())->on(503, ['statusCode' => 503, 'message' => 'x'], ['Retry-After' => $header]);
+            try {
+                $backend->makeClient()->sessions->list();
+                $this->fail('Expected exception');
+            } catch (OpenWAApiException $e) {
+                $this->assertSame($expected, $e->getRetryAfterSeconds(), 'Retry-After of ' . strlen($header) . ' characters');
+            }
+        }
+    }
+
     public function testRetryAfterParsesWithoutTheCtypeExtension(): void
     {
         // The SDK does not require ext-ctype, so a build without it must still
@@ -449,27 +611,362 @@ class ClientTest extends TestCase
         }
     }
 
-    public function testTimeoutWithErrno28MapsToTimeoutException(): void
+    public function testASuccessBodyThatIsNotJsonComesBackAsText(): void
     {
-        // Regression guard: cURL error 28 (CURLE_OPERATION_TIMEDOUT) must map to
-        // OpenWATimeoutException, regardless of the message wording. The message
-        // deliberately avoids 'timed out' so only the errno check can match it.
-        $timeoutRequest = new \GuzzleHttp\Exception\ConnectException(
-            'cURL error 28: Zeitlimit für Vorgang überschritten',
-            new \GuzzleHttp\Psr7\Request('GET', '/api/sessions'),
-            null,
-            ['errno' => 28],
-        );
-        $mock = new \GuzzleHttp\Handler\MockHandler([$timeoutRequest]);
+        $backend = new MockBackend();
+        $client = $backend->makeClient();
+        $backend->onRaw(200, 'plain text ok', ['Content-Type' => 'text/plain']);
+        $this->assertSame('plain text ok', $client->request('GET', '/api/anything'));
+
+        // The JSON literal null is JSON: it decodes to null, not to the text "null".
+        $backend->onRaw(200, 'null', ['Content-Type' => 'application/json']);
+        $this->assertNull($client->request('GET', '/api/anything'));
+    }
+
+    public function testATypedResourceRefusesASuccessBodyThatIsNotJson(): void
+    {
+        $backend = new MockBackend();
+        $client = $backend->makeClient();
+        // A baseUrl that points at a page server answers every route 200 with HTML.
+        $backend->onRaw(200, '<html>sign in</html>', ['Content-Type' => 'text/html']);
+        $backend->onRaw(200, '<html>sign in</html>', ['Content-Type' => 'text/html']);
+        $calls = [
+            fn () => $client->sessions->get('s'),
+            fn () => $client->auth(),
+        ];
+        foreach ($calls as $call) {
+            try {
+                $call();
+                $this->fail('Expected an OpenWAException for a body that is not JSON');
+            } catch (\OpenWA\Exceptions\OpenWAException $e) {
+                $this->assertStringContainsString('non-JSON response for', $e->getMessage());
+            }
+        }
+    }
+
+    public function testAnErrorBodyThatIsNotJsonIsKeptAsText(): void
+    {
+        $backend = new MockBackend();
+        $client = $backend->makeClient();
+        // A proxy in front of the gateway answers 502 with a page of its own.
+        $backend->onRaw(502, '<html>Bad Gateway</html>', ['Content-Type' => 'text/html']);
+        try {
+            $client->request('GET', '/api/anything');
+            $this->fail('Expected exception');
+        } catch (OpenWAApiException $e) {
+            $this->assertSame(502, $e->getStatus());
+            $this->assertSame('<html>Bad Gateway</html>', $e->getBody());
+            $this->assertStringContainsString('<html>Bad Gateway</html>', $e->getMessage());
+        }
+
+        // The JSON literal null is JSON here too: no body to keep, and the status text names the failure.
+        $backend->onRaw(500, 'null', ['Content-Type' => 'application/json']);
+        try {
+            $client->request('GET', '/api/anything');
+            $this->fail('Expected exception');
+        } catch (OpenWAApiException $e) {
+            $this->assertNull($e->getBody());
+            $this->assertStringContainsString('Internal Server Error', $e->getMessage());
+        }
+    }
+
+    /** @dataProvider transportTimeouts */
+    public function testTransportTimeoutMapsWithoutAnEnglishMessage(\Throwable $failure, bool $binary): void
+    {
+        $mock = new \GuzzleHttp\Handler\MockHandler([$failure]);
         $httpClient = new \GuzzleHttp\Client(['handler' => \GuzzleHttp\HandlerStack::create($mock)]);
         $client = new \OpenWA\Client([
             'baseUrl' => 'http://localhost:2785',
             'apiKey' => 'k',
+            'timeout' => 1.25,
             'httpClient' => $httpClient,
         ]);
 
-        $this->expectException(OpenWATimeoutException::class);
-        $client->sessions->list();
+        try {
+            $binary ? $client->status->media('s', 'status') : $client->sessions->list();
+            $this->fail('Expected a timeout exception');
+        } catch (OpenWATimeoutException $e) {
+            $this->assertSame(1.25, $e->getTimeout());
+        }
+    }
+
+    public static function transportTimeouts(): array
+    {
+        $request = new \GuzzleHttp\Psr7\Request('GET', '/api/sessions');
+        $message = 'cURL error 28: Zeitlimit für Vorgang überschritten';
+        if (method_exists(\GuzzleHttp\Exception\ConnectException::class, 'getHandlerContext')) {
+            $failures = ['curl errno 28' => new \GuzzleHttp\Exception\ConnectException($message, $request, null, ['errno' => 28])];
+        } else {
+            $failures = [
+                'connect timeout' => new \GuzzleHttp\Exception\ConnectTimeoutException($message, $request),
+                'network timeout' => new \GuzzleHttp\Exception\NetworkTimeoutException($message, $request),
+                'response timeout' => new \GuzzleHttp\Exception\ResponseTimeoutException($message, $request, new \GuzzleHttp\Psr7\Response(200)),
+            ];
+        }
+        $cases = [];
+        foreach ($failures as $name => $failure) {
+            $cases[$name . ' JSON'] = [$failure, false];
+            $cases[$name . ' binary'] = [$failure, true];
+        }
+        return $cases;
+    }
+
+    public function testTheTimeoutIsAlsoTheIdleReadTimeoutOnGuzzle8Only(): void
+    {
+        // Guzzle 8's stream handler (a host without ext-curl) also stops a connection that stays silent for
+        // 60 s unless read_timeout says otherwise, which would cut off a longer timeout, and 0 means no bound.
+        // Guzzle 7 reads the option differently (0 and fractions end reads at once), so it is left out there.
+        foreach ([100.0, 1.25, 0.0] as $timeout) {
+            $mock = new \GuzzleHttp\Handler\MockHandler([new \GuzzleHttp\Psr7\Response(200)]);
+            $client = new \OpenWA\Client([
+                'baseUrl' => 'http://localhost:2785',
+                'apiKey' => 'k',
+                'timeout' => $timeout,
+                'httpClient' => new \GuzzleHttp\Client(['handler' => \GuzzleHttp\HandlerStack::create($mock)]),
+            ]);
+            $client->request('GET', '/api/anything');
+            $options = $mock->getLastOptions();
+
+            $this->assertSame($timeout, $options['timeout']);
+            if (\GuzzleHttp\ClientInterface::MAJOR_VERSION >= 8) {
+                $this->assertSame($timeout, $options['read_timeout'] ?? null);
+            } else {
+                $this->assertArrayNotHasKey('read_timeout', $options);
+            }
+        }
+    }
+
+    /**
+     * Guzzle's stream handler (a host without ext-curl) reports a gateway that stays silent past the timeout
+     * as a ConnectException (before the headers, Guzzle 7) or a RequestException without a response (before
+     * the headers on Guzzle 8, in the middle of the body on Guzzle 7), with no errno and no timeout text.
+     *
+     * @dataProvider silentGatewayFailures
+     */
+    public function testAResponseLessFailureAfterTheWholeTimeoutMapsToTimeoutException(\Throwable $failure, bool $binary): void
+    {
+        $client = self::clientWhoseHandlerFails($failure, 0.05, 0.08);
+
+        try {
+            $binary ? $client->status->media('s', 'status') : $client->sessions->list();
+            $this->fail('Expected a timeout exception');
+        } catch (OpenWATimeoutException $e) {
+            $this->assertSame(0.05, $e->getTimeout());
+        }
+    }
+
+    /** @dataProvider silentGatewayFailures */
+    public function testTheSameFailureBeforeTheTimeoutIsNotATimeout(\Throwable $failure, bool $binary): void
+    {
+        $client = self::clientWhoseHandlerFails($failure, 30.0, 0.0);
+
+        try {
+            $binary ? $client->status->media('s', 'status') : $client->sessions->list();
+            $this->fail('Expected the transport exception');
+        } catch (\GuzzleHttp\Exception\TransferException $e) {
+            $this->assertSame($failure, $e);
+        }
+    }
+
+    public static function silentGatewayFailures(): array
+    {
+        $request = new \GuzzleHttp\Psr7\Request('GET', '/api/sessions');
+        $failures = [
+            'connect failure' => new \GuzzleHttp\Exception\ConnectException('Connection refused for URI http://localhost:2785/api/sessions', $request),
+            'request failure' => new \GuzzleHttp\Exception\RequestException('Unable to read from stream', $request),
+        ];
+        $cases = [];
+        foreach ($failures as $name => $failure) {
+            $cases[$name . ' JSON'] = [$failure, false];
+            $cases[$name . ' binary'] = [$failure, true];
+        }
+        return $cases;
+    }
+
+    public function testAFailureThatIsNotASilentGatewayStaysUnmappedEvenAfterTheTimeout(): void
+    {
+        $request = new \GuzzleHttp\Psr7\Request('GET', '/api/sessions');
+        $failures = [
+            // a response was received, so the gateway was not silent
+            'with a response' => new \GuzzleHttp\Exception\ServerException('Server error', $request, new \GuzzleHttp\Psr7\Response(502)),
+            // cURL reports its own errno, which decides the mapping (28 above, anything else here)
+            'cURL error' => new \GuzzleHttp\Exception\ConnectException('cURL error 6: Could not resolve host: gateway.invalid', $request),
+        ];
+        foreach ($failures as $name => $failure) {
+            try {
+                self::clientWhoseHandlerFails($failure, 0.05, 0.08)->sessions->list();
+                $this->fail("Expected the transport exception ({$name})");
+            } catch (\GuzzleHttp\Exception\TransferException $e) {
+                $this->assertSame($failure, $e, $name);
+            }
+        }
+    }
+
+    public function testNoTimeoutMeansNoFailureIsMappedToOne(): void
+    {
+        $failure = new \GuzzleHttp\Exception\ConnectException('Connection refused', new \GuzzleHttp\Psr7\Request('GET', '/api/sessions'));
+
+        try {
+            self::clientWhoseHandlerFails($failure, 0.0, 0.01)->sessions->list();
+            $this->fail('Expected the transport exception');
+        } catch (\GuzzleHttp\Exception\ConnectException $e) {
+            $this->assertSame($failure, $e);
+        }
+    }
+
+    /**
+     * The start is hrtime(true): an int on 64-bit PHP and a float on 32-bit PHP. The closure calls the check
+     * from this strict file, as the executor itself does.
+     */
+    public function testTheElapsedTimeCheckTakesAnIntOrAFloatStart(): void
+    {
+        $executor = new \OpenWA\Http\HttpExecutor('http://localhost:2785', 'k', 1.0);
+        $failure = new \GuzzleHttp\Exception\ConnectException('Connection refused', new \GuzzleHttp\Psr7\Request('GET', '/api/sessions'));
+        $failedAfterTimeout = \Closure::bind(
+            fn (int|float $startedNs): bool => $this->failedAfterTimeout($failure, $startedNs),
+            $executor,
+            \OpenWA\Http\HttpExecutor::class
+        );
+
+        $now = hrtime(true);
+        foreach (['int' => $now, 'float' => (float) $now] as $type => $started) {
+            $this->assertFalse($failedAfterTimeout($started), "{$type} start, no time elapsed");
+            $this->assertTrue($failedAfterTimeout($started - 2_000_000_000), "{$type} start, 2 s elapsed");
+        }
+    }
+
+    /** @dataProvider responseBodyKinds */
+    public function testAnInjectedStreamingClientClassifiesBodyTimeouts(string $kind): void
+    {
+        $this->withNativeResponse($kind, false, function (\OpenWA\Client $client) use ($kind): void {
+            if ($kind === 'error') {
+                try {
+                    $client->request('GET', '/api/anything');
+                    $this->fail('Expected the complete 503 response');
+                } catch (OpenWAServiceUnavailableException $error) {
+                    $this->assertSame(503, $error->getStatus());
+                    $this->assertSame('fixture failure', $error->getBody()['message']);
+                }
+            } elseif ($kind === 'binary') {
+                $this->assertSame(
+                    ['data' => "\0PNG_fixture", 'contentType' => 'application/octet-stream'],
+                    $client->status->media('s', 'item')
+                );
+            } else {
+                $this->assertSame(['ok' => true], $client->request('GET', '/api/anything'));
+            }
+        });
+
+        $this->withNativeResponse($kind, true, function (\OpenWA\Client $client) use ($kind): void {
+            try {
+                $kind === 'binary' ? $client->status->media('s', 'item') : $client->request('GET', '/api/anything');
+                $this->fail('Expected a body timeout, not partial response data');
+            } catch (OpenWATimeoutException $error) {
+                $this->assertSame(0.1, $error->getTimeout());
+            }
+        });
+    }
+
+    public static function responseBodyKinds(): array
+    {
+        return ['JSON' => ['json'], 'binary' => ['binary'], 'error' => ['error']];
+    }
+
+    private function withNativeResponse(string $kind, bool $stall, callable $check): void
+    {
+        $server = <<<'PHP'
+$socket = stream_socket_server('tcp://127.0.0.1:0', $errno, $error);
+if ($socket === false) { exit(2); }
+fwrite(STDOUT, stream_socket_get_name($socket, false) . "\n");
+fflush(STDOUT);
+$connection = stream_socket_accept($socket, 2.0);
+if ($connection === false) { fclose($socket); exit(3); }
+stream_set_timeout($connection, 1);
+$request = '';
+while (!str_contains($request, "\r\n\r\n") && strlen($request) < 16_384) {
+    $part = fread($connection, 1024);
+    if ($part === false || $part === '') { break; }
+    $request .= $part;
+}
+if (!str_contains($request, "\r\n\r\n")) { fclose($connection); fclose($socket); exit(4); }
+$body = match ($argv[1]) {
+    'binary' => "\0PNG_fixture",
+    'error' => '{"statusCode":503,"message":"fixture failure","error":"Service Unavailable"}',
+    default => '{"ok":true}',
+};
+$status = $argv[1] === 'error' ? '503 Service Unavailable' : '200 OK';
+$type = $argv[1] === 'binary' ? 'application/octet-stream' : 'application/json';
+@fwrite($connection, "HTTP/1.1 {$status}\r\nContent-Type: {$type}\r\nContent-Length: " . strlen($body) . "\r\nConnection: close\r\n\r\n");
+@fwrite($connection, substr($body, 0, 1));
+fflush($connection);
+if ($argv[2] === '1') { usleep(500_000); }
+@fwrite($connection, substr($body, 1));
+fclose($connection);
+fclose($socket);
+PHP;
+        $process = proc_open(
+            [PHP_BINARY, '-n', '-r', $server, $kind, $stall ? '1' : '0'],
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+            null,
+            ['TZ' => 'UTC']
+        );
+        $this->assertIsResource($process);
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+        try {
+            $address = '';
+            $deadline = hrtime(true) + 2_000_000_000;
+            while (!str_contains($address, "\n") && hrtime(true) < $deadline) {
+                $address .= (string) fread($pipes[1], 256);
+                $this->assertLessThan(512, strlen($address));
+                usleep(2_000);
+            }
+            $this->assertMatchesRegularExpression('/\A127\.0\.0\.1:[1-9][0-9]{0,4}\n\z/', $address);
+            $http = new \GuzzleHttp\Client([
+                'handler' => \GuzzleHttp\HandlerStack::create(new \GuzzleHttp\Handler\StreamHandler()),
+                'stream' => true,
+            ]);
+            $check(new \OpenWA\Client([
+                'baseUrl' => 'http://' . trim($address),
+                'apiKey' => 'fixture-key',
+                'timeout' => $stall ? 0.1 : 1.0,
+                'httpClient' => $http,
+            ]));
+        } finally {
+            $deadline = hrtime(true) + 1_000_000_000;
+            while (proc_get_status($process)['running'] && hrtime(true) < $deadline) {
+                usleep(5_000);
+            }
+            if (proc_get_status($process)['running']) {
+                proc_terminate($process);
+                usleep(30_000);
+                if (proc_get_status($process)['running']) {
+                    proc_terminate($process, 9);
+                }
+            }
+            $serverError = (string) stream_get_contents($pipes[2], 8192);
+            foreach ($pipes as $pipe) {
+                fclose($pipe);
+            }
+            proc_close($process);
+        }
+        $this->assertSame('', $serverError);
+    }
+
+    private static function clientWhoseHandlerFails(\Throwable $failure, float $timeout, float $afterSeconds): \OpenWA\Client
+    {
+        $handler = static function () use ($failure, $afterSeconds) {
+            usleep((int) ($afterSeconds * 1e6));
+            return \GuzzleHttp\Promise\Create::rejectionFor($failure);
+        };
+
+        return new \OpenWA\Client([
+            'baseUrl' => 'http://localhost:2785',
+            'apiKey' => 'k',
+            'timeout' => $timeout,
+            'httpClient' => new \GuzzleHttp\Client(['handler' => \GuzzleHttp\HandlerStack::create($handler)]),
+        ]);
     }
 
     public function testTimedOutMessageWithoutErrnoMapsToTimeoutException(): void
@@ -494,13 +991,10 @@ class ClientTest extends TestCase
 
     public function testConnectionRefusedDoesNotMapToTimeoutException(): void
     {
-        // Regression guard: a non-timeout ConnectException (errno 7) must NOT be
-        // misclassified as a timeout — it must propagate as ConnectException.
+        // A connection refusal must propagate unchanged instead of becoming a timeout.
         $refused = new \GuzzleHttp\Exception\ConnectException(
             'cURL error 7: connection refused',
             new \GuzzleHttp\Psr7\Request('GET', '/api/sessions'),
-            null,
-            ['errno' => 7],
         );
         $mock = new \GuzzleHttp\Handler\MockHandler([$refused]);
         $httpClient = new \GuzzleHttp\Client(['handler' => \GuzzleHttp\HandlerStack::create($mock)]);
@@ -510,7 +1004,11 @@ class ClientTest extends TestCase
             'httpClient' => $httpClient,
         ]);
 
-        $this->expectException(\GuzzleHttp\Exception\ConnectException::class);
-        $client->sessions->list();
+        try {
+            $client->sessions->list();
+            $this->fail('Expected a connection exception');
+        } catch (\GuzzleHttp\Exception\ConnectException $e) {
+            $this->assertSame($refused, $e);
+        }
     }
 }

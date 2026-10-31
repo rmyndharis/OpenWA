@@ -1,7 +1,3 @@
-// archiver v8 is ESM-only and is pulled in transitively via the @Global StorageModule when
-// AppModule boots; stub it so ts-jest (CommonJS) can load the module graph.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 // Set BEFORE AppModule is imported: InstanceThrottlerGuard reads these in onModuleInit (once, at
 // boot), not per request. The per-instance limit is left at its default and never binds here: it is
 // charged only after signature verification, and every request below names an unknown instance.

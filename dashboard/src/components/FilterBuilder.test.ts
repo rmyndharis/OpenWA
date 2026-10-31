@@ -100,3 +100,56 @@ test('removing a row does not hand its unsent chip text to the row below', () =>
   assert.deepEqual(latest, { conditions: [{ field: 'chatId', operator: 'is', value: ['2@c.us', '62813@c.us'] }] });
   assert.equal(container.querySelector('.chips-text'), left);
 });
+
+// A contact typed as a number is turned into its chat id from the digits; those may be native-script or full-width.
+for (const [script, zero] of [
+  ['Arabic-Indic', 0x0660],
+  ['full-width', 0xff10],
+] as const) {
+  test(`a contact typed in ${script} digits is added as an ASCII chat id`, () => {
+    const changes: (WebhookFilters | null)[] = [];
+    const { container } = rtl.render(
+      createElement(FilterBuilder, {
+        filters: { conditions: [{ field: 'sender', operator: 'is', value: [] }] },
+        onChange: next => changes.push(next),
+        chats: [],
+      }),
+    );
+    const input = container.querySelector<HTMLInputElement>('.chips-text');
+    assert.ok(input, 'expected the contact input');
+    const typed = [...'628123456789'].map(d => String.fromCharCode(zero + Number(d))).join('');
+    rtl.fireEvent.change(input, { target: { value: typed } });
+    rtl.fireEvent.keyDown(input, { key: 'Enter' });
+    assert.deepEqual(changes.at(-1)?.conditions?.[0].value, ['628123456789@c.us']);
+  });
+}
+
+// The Enter that commits an input method composition (isComposing, or keyCode 229) is the input method's: it adds no
+// chip from the text being composed and is not cancelled, so the input method still gets it.
+test('the Enter that commits an input method composition adds no contact', () => {
+  const changes: (WebhookFilters | null)[] = [];
+  const { container } = rtl.render(
+    createElement(FilterBuilder, {
+      filters: { conditions: [{ field: 'sender', operator: 'is', value: [] }] },
+      onChange: next => changes.push(next),
+      chats: [],
+    }),
+  );
+  const input = container.querySelector<HTMLInputElement>('.chips-text');
+  assert.ok(input, 'expected the contact input');
+
+  rtl.fireEvent.compositionStart(input);
+  rtl.fireEvent.change(input, { target: { value: '62812' } });
+  assert.equal(
+    rtl.fireEvent.keyDown(input, { key: 'Enter', isComposing: true }),
+    true,
+    'the composing Enter was cancelled',
+  );
+  assert.equal(rtl.fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 }), true, 'the composing Enter was cancelled');
+  rtl.fireEvent.compositionEnd(input);
+  assert.equal(changes.length, 0, 'a chip was added from the composing text');
+
+  rtl.fireEvent.change(input, { target: { value: '628123456789' } });
+  rtl.fireEvent.keyDown(input, { key: 'Enter' });
+  assert.deepEqual(changes.at(-1)?.conditions?.[0].value, ['628123456789@c.us']);
+});

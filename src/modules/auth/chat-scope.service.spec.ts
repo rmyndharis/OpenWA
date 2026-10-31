@@ -1,8 +1,9 @@
 import { ForbiddenException } from '@nestjs/common';
 import { ChatScopeService } from './chat-scope.service';
-import { FindOperator, Repository } from 'typeorm';
+import { DataSource, FindOperator, Repository } from 'typeorm';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { LidMapping } from '../../engine/identity/lid-mapping.entity';
+import { Session } from '../session/entities/session.entity';
 
 const PHONE = '919999999999';
 const LID = '555000111';
@@ -55,6 +56,22 @@ describe('ChatScopeService', () => {
     expect(await svc.allows({ allowedChats: [`${LID}@lid`] }, `${PHONE}@c.us`)).toBe(true);
   });
 
+  it('candidatesFor expands a phone and a lid through the directory, and always keeps the id as given', async () => {
+    const svc = new ChatScopeService(fakeStore());
+
+    const phone = await svc.candidatesFor(`${PHONE}@c.us`);
+    expect(phone).toEqual(expect.arrayContaining([`${PHONE}@c.us`, `${PHONE}@s.whatsapp.net`, `${LID}@lid`]));
+
+    const lid = await svc.candidatesFor(`${LID}@lid`);
+    expect(lid).toEqual(expect.arrayContaining([`${LID}@lid`, `${PHONE}@c.us`]));
+
+    // A spelling the expansion does not fold still names the rows stored under it.
+    for (const spelling of ['120363@G.US', '120363@g.us ', '999@LID', '999:7@lid']) {
+      expect(await svc.candidatesFor(spelling)).toContain(spelling);
+    }
+    expect(new Set(phone).size).toBe(phone.length);
+  });
+
   it('filters a list through the batched expansion, passing an unrestricted key through', async () => {
     const svc = new ChatScopeService(fakeStore());
     const rows = [{ id: '123@g.us' }, { id: `${LID}@lid` }, { id: '999@g.us' }];
@@ -72,8 +89,8 @@ describe('ChatScopeService', () => {
     expect(await svc.idsForFilter(undefined)).toBeUndefined();
   });
 
-  it('does not admit a phone whose lid another node has re-mapped', async () => {
-    const rows = [{ lid: LID, phone: PHONE as string | null }];
+  it('follows a lid another node has re-mapped, in the single check and the list filter alike', async () => {
+    const rows = [{ lid: LID, phone: PHONE as string | null, isReported: true }];
     const hit = (value: string | null, cond?: string | FindOperator<unknown>) =>
       cond === undefined || (cond instanceof FindOperator ? (cond.value as unknown[]).includes(value) : value === cond);
     const repo = {
@@ -89,14 +106,144 @@ describe('ChatScopeService', () => {
     await store.onModuleInit(); // the cache now indexes LID -> PHONE
     rows[0].phone = '918888888888'; // another node re-mapped the lid in the shared table
     const svc = new ChatScopeService(store);
-    expect(await svc.allows({ allowedChats: [`${LID}@lid`] }, `${PHONE}@c.us`)).toBe(false);
-    // Until this node learns the re-map, the disagreement fails closed for the new phone too.
-    expect(await svc.allows({ allowedChats: [`${LID}@lid`] }, '918888888888@c.us')).toBe(false);
+    // The table is the truth across nodes: the lid now answers the new phone only, on both paths.
+    const lidKey = { allowedChats: [`${LID}@lid`] };
+    expect(await svc.allows(lidKey, `${PHONE}@c.us`)).toBe(false);
+    expect(await svc.allows(lidKey, '918888888888@c.us')).toBe(true);
+    const lidScope = (await svc.scopeForFilter(lidKey))!;
+    expect([lidScope.allowed.has(`${PHONE}@c.us`), lidScope.allowed.has('918888888888@c.us')]).toEqual([false, true]);
+    for (const [phone, admitted] of [
+      [PHONE, false],
+      ['918888888888', true],
+    ] as const) {
+      const key = { allowedChats: [`${phone}@c.us`] };
+      expect(await svc.allows(key, `${LID}@lid`)).toBe(admitted);
+      expect((await svc.scopeForFilter(key))!.allowed.has(`${LID}@lid`)).toBe(admitted);
+    }
   });
 
   it('degrades to exact dialects when no lid directory is available', async () => {
     const svc = new ChatScopeService();
     expect(await svc.allows({ allowedChats: [`${PHONE}@c.us`] }, `${LID}@lid`)).toBe(false);
     expect(await svc.allows({ allowedChats: [`${PHONE}@c.us`] }, `${PHONE}@c.us`)).toBe(true);
+  });
+});
+
+describe('ChatScopeService over the shared lid table, with two sessions', () => {
+  const key = { allowedChats: [`${PHONE}@c.us`] };
+  const [s1, s2] = ['00000001-0000-4000-8000-000000000000', '00000002-0000-4000-8000-000000000000'];
+  let ds: DataSource;
+  let store: LidMappingStoreService;
+  let svc: ChatScopeService;
+  let warn: jest.SpyInstance;
+  const admitted = async (): Promise<[boolean, boolean]> => [
+    await svc.allows(key, `${LID}@lid`),
+    (await svc.scopeForFilter(key))!.allowed.has(`${LID}@lid`),
+  ];
+
+  beforeEach(async () => {
+    ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [LidMapping, Session],
+      synchronize: true,
+    }).initialize();
+    await ds.getRepository(Session).insert([s1, s2].map(id => ({ id, name: id, phone: `6290000000${id[7]}` })));
+    store = new LidMappingStoreService(ds.getRepository(LidMapping));
+    // A statement that fails is only logged, which would let a case pass on a write that never ran.
+    warn = jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn');
+    await store.onModuleInit();
+    svc = new ChatScopeService(store);
+    await store.remember(LID, PHONE, s1);
+  });
+
+  afterEach(async () => {
+    expect(warn).not.toHaveBeenCalled();
+    await ds.destroy();
+  });
+
+  it('still admits the lid of a phone after a session that cannot see the number answers no phone', async () => {
+    expect(await admitted()).toEqual([true, true]);
+
+    await store.remember(LID, null, s2);
+
+    expect(await admitted()).toEqual([true, true]);
+  });
+
+  it('still admits it after the session that stored the phone answers no phone, when another one reported it since', async () => {
+    await store.remember(LID, PHONE, s2);
+
+    await store.remember(LID, null, s1);
+
+    expect(await admitted()).toEqual([true, true]);
+  });
+
+  it('stops admitting it once the session that stored the phone answers no phone', async () => {
+    await store.remember(LID, null, s1);
+
+    expect(await admitted()).toEqual([false, false]);
+  });
+
+  it('still admits it after the latest session to report the phone is deleted, once an earlier one reports it again', async () => {
+    const s3 = '00000003-0000-4000-8000-000000000000';
+    await ds.getRepository(Session).insert({ id: s3, name: s3, phone: '629000000003' });
+    await store.remember(LID, PHONE, s2);
+    await ds.getRepository(Session).delete({ id: s2 });
+    await store.releaseSession(s2);
+
+    await store.remember(LID, PHONE, s1);
+    await store.remember(LID, null, s3);
+
+    expect(await admitted()).toEqual([true, true]);
+  });
+
+  it('admits it for the phone another node has since stored, on both paths', async () => {
+    const other = new LidMappingStoreService(ds.getRepository(LidMapping)); // a second node on the same table
+    await other.onModuleInit();
+    await other.remember(LID, '628222', s2);
+
+    expect(await admitted()).toEqual([false, false]);
+    const newKey = { allowedChats: ['628222@c.us'] };
+    expect([
+      await svc.allows(newKey, `${LID}@lid`),
+      (await svc.scopeForFilter(newKey))!.allowed.has(`${LID}@lid`),
+    ]).toEqual([true, true]);
+  });
+
+  it('admits it for neither phone while a phone write of this node has not reached the table', async () => {
+    const newKey = { allowedChats: ['628222@c.us'] };
+    const admittedNew = async () => [
+      await svc.allows(newKey, `${LID}@lid`),
+      (await svc.scopeForFilter(newKey))!.allowed.has(`${LID}@lid`),
+    ];
+    jest.spyOn(ds.getRepository(LidMapping), 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+    await store.remember(LID, '628222', s1);
+    warn.mockClear();
+
+    expect([await admitted(), await admittedNew()]).toEqual([
+      [false, false],
+      [false, false],
+    ]);
+    await store.remember(LID, '628222', s1); // the write lands
+    expect([await admitted(), await admittedNew()]).toEqual([
+      [false, false],
+      [true, true],
+    ]);
+  });
+
+  it('stops admitting it once the session that stored the phone logs out and another answers no phone', async () => {
+    await ds.getRepository(Session).update({ id: s1 }, { phone: null });
+
+    await store.remember(LID, null, s2);
+
+    expect(await admitted()).toEqual([false, false]);
+  });
+
+  it('stops admitting it once the session that stored the phone is deleted and another answers no phone', async () => {
+    await ds.getRepository(Session).delete({ id: s1 });
+
+    await store.remember(LID, null, s2);
+
+    expect(await admitted()).toEqual([false, false]);
   });
 });

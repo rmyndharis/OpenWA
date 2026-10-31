@@ -1,7 +1,3 @@
-// archiver v8 is ESM-only and is pulled in transitively via the @Global StorageModule when
-// AppModule boots; stub it so ts-jest (CommonJS) can load the module graph.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -14,7 +10,7 @@ import { renderHttpRequestMetrics, resetHttpRequestMetrics } from './../src/comm
 
 /**
  * Smoke e2e: the previous test asserted a non-existent Hello-World route and failed to
- * even compile (ESM archiver). This boots the real app (SQLite, no queue) and checks the
+ * even compile. This boots the real app (SQLite, no queue) and checks the
  * public health route, the auth boundary, and unknown-route handling.
  */
 describe('App smoke (e2e)', () => {
@@ -77,6 +73,23 @@ describe('App smoke (e2e)', () => {
 
   it('GET /api/sessions without an API key is rejected (401)', () => {
     return request(app.getHttpServer()).get('/api/sessions').expect(401);
+  });
+
+  // A driver refuses an OFFSET of 2^63 or more, so a window that far out answered 500 instead of an
+  // empty page. Through the real controllers, query parsing and services, on the database the app booted.
+  it('GET the session and message lists answer an empty page for an offset past the largest safe integer', async () => {
+    const { rawKey } = await app.get(AuthService).createApiKey({ name: 'e2e-offset', role: ApiKeyRole.VIEWER });
+    const offset = '99999999999999999999';
+
+    const sessions = await request(app.getHttpServer()).get(`/api/sessions?offset=${offset}`).set('X-API-Key', rawKey);
+    expect(sessions.status).toBe(200);
+    expect(sessions.body).toEqual([]);
+
+    const messages = await request(app.getHttpServer())
+      .get(`/api/sessions/0a941dac-a965-45e7-b318-74ae8be134f0/messages?offset=${offset}`)
+      .set('X-API-Key', rawKey);
+    expect(messages.status).toBe(200);
+    expect(messages.body).toMatchObject({ messages: [], total: 0 });
   });
 
   it('GET an unknown route returns 404', () => {

@@ -83,8 +83,12 @@ export function registerUncaughtExceptionMonitor(logger: FatalLogger): void {
  * One class is logged at WARN instead of ERROR: a Puppeteer rejection left behind when the page an
  * `evaluate` was waiting on goes away. whatsapp-web.js re-runs `inject()` from an async
  * `framenavigated` listener it never awaits, so a page navigation or an engine teardown turns that
- * still-pending evaluate into a rejection with no owner (#982). Either way the session recovers on its
- * own, and an ERROR with a raw Puppeteer stack reads like a crash.
+ * still-pending evaluate into a rejection with no owner (#982). Once a launch has finished, the
+ * whatsapp-web.js adapter catches those re-injects itself (it logs a failed one as `page_reinject_failed`,
+ * and one that dies under its own teardown not at all), so what still reaches this handler is the
+ * re-inject of a client whose launch a teardown cut short, and any other Puppeteer call a navigation or
+ * a teardown leaves without an owner. Either way the session recovers on its own, and an ERROR with a
+ * raw Puppeteer stack reads like a crash.
  *
  * Deliberately scoped so nothing actionable is muted: the ACTIONABLE variant of the same message — a
  * browser profile left stale by an upgrade that changed the Chromium binary (#663/#708) — is thrown

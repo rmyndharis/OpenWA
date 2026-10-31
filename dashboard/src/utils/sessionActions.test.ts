@@ -183,6 +183,15 @@ test('classifyUnlinkError: a JSON 502 WITHOUT the exact code stays generic', () 
   assert.equal(classifyUnlinkError(err), 'generic');
 });
 
+test('classifyUnlinkError: a 409 says there was nothing to unlink', () => {
+  const err = new Error('This session has no linked WhatsApp device, so there is nothing to unlink.') as Error & {
+    status?: number;
+    code?: string;
+  };
+  err.status = 409;
+  assert.equal(classifyUnlinkError(err), 'notLinked');
+});
+
 test('classifyUnlinkError: everything else is generic', () => {
   for (const status of [400, 401, 403, 404, 500, 503]) {
     const err = new Error('x') as Error & { status?: number; code?: string };

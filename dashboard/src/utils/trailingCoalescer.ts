@@ -5,12 +5,13 @@
 // event, and a per-event POST sprays the gateway into 429s. Keys are independent (each chat
 // gets its own quiet window). `flush()` fires every pending key immediately — used on
 // unmount/navigation so a queued mark-as-read isn't lost when the user leaves mid-window —
-// while `cancel()` drops pending calls without firing them.
+// while `cancel()` drops pending calls without firing them, and `drop(key)` drops one key's.
 
 export interface TrailingCoalescer<K> {
   call(key: K): void;
   flush(): void;
   cancel(): void;
+  drop(key: K): void;
 }
 
 export function createTrailingCoalescer<K>(send: (key: K) => void, delayMs: number): TrailingCoalescer<K> {
@@ -36,6 +37,10 @@ export function createTrailingCoalescer<K>(send: (key: K) => void, delayMs: numb
     cancel() {
       for (const timer of timers.values()) clearTimeout(timer);
       timers.clear();
+    },
+    drop(key: K) {
+      clearTimeout(timers.get(key));
+      timers.delete(key);
     },
   };
 }

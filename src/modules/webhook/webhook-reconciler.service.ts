@@ -147,6 +147,11 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
       // Live jobs may occupy a whole page. Advance past them without spending their replay budget.
       this.cursor = scannedThrough ?? rows.at(-1)?.id;
       stats.scanned = rows.length;
+      // Webhooks whose replay did not deliver in this pass. Direct mode replays one row at a time with
+      // the full retry schedule, so a receiver that never answers would cost that schedule per stranded
+      // row and hold every webhook behind it. The first failure has shown it is down: its further rows
+      // make one attempt each, and the next sweep is their retry.
+      const failedWebhooks = new Set<string>();
       for (const row of rows) {
         if (this.stop.signal.aborted) break;
         if (this.delivery.isLocallyPending(row.idempotencyKey)) {
@@ -205,11 +210,12 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
             row.event,
             row.idempotencyKey,
             row.payload,
-            { signal: this.stop.signal },
+            { signal: this.stop.signal, oneDirectAttempt: failedWebhooks.has(row.webhookId) },
           );
           if (outcome === 'failed' || outcome === 'unrecorded') {
             // Left 'pending' on purpose: the next sweep retries it until the budget is spent.
             this.logger.warn(`Replay of ${row.event} to webhook ${row.webhookId} did not deliver`);
+            failedWebhooks.add(row.webhookId);
             stats.failed++;
             continue;
           }

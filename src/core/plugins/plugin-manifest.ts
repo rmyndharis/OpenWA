@@ -93,6 +93,35 @@ export function validatePluginManifest(
   }
 }
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * Remove, in place and at any depth, a configSchema `properties` or `items` that is not a plain object and a
+ * `properties` entry that is not a field object. Every reader of the schema (secret masking and restore, the
+ * dashboard form) takes such an entry as a field and fails on a null one, which took down the plugin list for
+ * every plugin. The key is then read as an undescribed one, as seedConfigDefaults already does. Not a refusal:
+ * such a package loads today.
+ */
+export function dropMalformedConfigFields(schema: unknown): void {
+  if (!isPlainObject(schema)) return;
+  if ('properties' in schema) {
+    const properties = schema.properties;
+    if (!isPlainObject(properties)) {
+      delete schema.properties;
+    } else {
+      for (const [key, field] of Object.entries(properties)) {
+        if (isPlainObject(field)) dropMalformedConfigFields(field);
+        else delete properties[key];
+      }
+    }
+  }
+  if ('items' in schema) {
+    if (isPlainObject(schema.items)) dropMalformedConfigFields(schema.items);
+    else delete schema.items;
+  }
+}
+
 function assertStringArray(value: unknown, field: string): void {
   if (value !== undefined && value !== null && !(Array.isArray(value) && value.every(v => typeof v === 'string'))) {
     throw new Error(`manifest.json ${field} must be an array of strings`);

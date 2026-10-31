@@ -1,4 +1,4 @@
-import { randomBytes } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import { DataSource, Repository } from 'typeorm';
 import { Session } from '../session/entities/session.entity';
@@ -8,13 +8,13 @@ import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.enti
 import { WebhookOutboxEvent } from './entities/webhook-outbox-event.entity';
 import { WebhookOutboxService } from './webhook-outbox.service';
 import { WebhookRedriveService } from './webhook-redrive.service';
+import { WebhookService } from './webhook.service';
 import { recordWebhookDeliveryFailure } from './utils/record-delivery-failure';
 import { DeduplicateTerminalWebhookFailures1787200000000 } from '../../database/migrations/1787200000000-DeduplicateTerminalWebhookFailures';
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
 import type { StorageService } from '../../common/storage/storage.service';
 import { mergeSentMetadata, updateMessageMetadata } from '../message/message-metadata';
 
-jest.mock('archiver', () => ({ default: jest.fn() }));
 const describePostgres = process.env.DATABASE_TYPE === 'postgres' ? describe : describe.skip;
 
 describePostgres('webhook and media recovery on PostgreSQL', () => {
@@ -131,6 +131,64 @@ describePostgres('webhook and media recovery on PostgreSQL', () => {
     expect(await disabled.redrive({})).toMatchObject({ redriven: 0, remaining: 0 });
 
     expect(await service.redrive({ sessionId: 'outside' }, [sessionId])).toMatchObject({ redriven: 0 });
+  });
+
+  // The replay skips an opt-in event for a webhook that only subscribes to '*' without spending an
+  // attempt, so a row selected for one would sit at the head of every batch for good.
+  it('leaves an opt-in event out of the batch of a webhook that only subscribes to *', async () => {
+    await webhooks.update({ id: input.webhookId }, { events: ['*'] });
+    await failures.save({
+      ...input,
+      event: 'message.receipt',
+      idempotencyKey: 'receipt',
+      payload: {},
+      createdAt: new Date(Date.now() - 2000),
+    });
+    await failures.save({
+      ...input,
+      idempotencyKey: 'ordinary',
+      payload: { body: 'ok' },
+      createdAt: new Date(Date.now() - 1000),
+    });
+    const delivery = {
+      redeliver: jest.fn(async (_webhook: Webhook, _session: string, _event: string, key: string) => {
+        await failures.delete({ idempotencyKey: key });
+        return 'delivered';
+      }),
+    };
+    const service = new WebhookRedriveService(webhooks, failures, delivery as never, config);
+
+    expect(await service.redrive({ limit: 1 }, [sessionId])).toMatchObject({ delivered: 1, remaining: 0 });
+    expect(delivery.redeliver.mock.calls.map(call => call[3])).toEqual(['ordinary']);
+
+    await webhooks.update({ id: input.webhookId }, { events: ['message.receipt'] });
+    expect(await service.redrive({ limit: 1 }, [sessionId])).toMatchObject({ delivered: 1, remaining: 0 });
+    expect(delivery.redeliver.mock.calls.map(call => call[3])).toEqual(['ordinary', 'receipt']);
+  });
+
+  it('lists a row of a deleted webhook or another session as not replayable, a disabled one as replayable', async () => {
+    const listing = new WebhookService(webhooks, failures, {} as never, config, {} as never);
+    const save = () => webhooks.save({ sessionId, url: input.url, events: ['message.received'] });
+    const [disabled, deleted] = [await save(), await save()];
+    await webhooks.update({ id: disabled.id }, { active: false });
+    const add = (webhookId: string, idempotencyKey: string, rowSession = sessionId) =>
+      failures.save(
+        failures.create({ ...input, webhookId, idempotencyKey, sessionId: rowSession, payload: { id: 1 } }),
+      );
+    const rows = {
+      kept: await add(input.webhookId, 'kept'),
+      disabled: await add(disabled.id, 'disabled'),
+      deleted: await add(deleted.id, 'deleted'),
+      foreign: await add(input.webhookId, 'foreign', randomUUID()),
+    };
+    await webhooks.delete({ id: deleted.id });
+
+    const flags = new Map((await listing.listDeliveryFailures({}, null)).map(r => [r.id, r.replayable]));
+
+    expect(flags.get(rows.kept.id)).toBe(true);
+    expect(flags.get(rows.disabled.id)).toBe(true);
+    expect(flags.get(rows.deleted.id)).toBe(false);
+    expect(flags.get(rows.foreign.id)).toBe(false);
   });
 
   it('converges two connections on one terminal identity', async () => {

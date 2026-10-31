@@ -115,6 +115,21 @@ function partialTree(err) {
   return err;
 }
 
+/**
+ * True only when the tree provably carries nothing this patcher writes: no REQUIRED_SITES marker and no
+ * patch artifact. An applier that failed before its first write (a tree the user cannot write) leaves
+ * exactly that, while one that failed part-way leaves a marker or an artifact behind, or a file missing:
+ * `git apply` deletes the files it rewrites, where it can, before writing any of them back. Anything that
+ * cannot be read proves nothing, so it answers false.
+ */
+function treeUntouched(wwjsDir) {
+  try {
+    return !REQUIRED_SITES.some(([rel]) => siteLanded(wwjsDir, rel)) && findArtifacts(wwjsDir).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 function findArtifacts(root, dir = root) {
   const out = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -208,8 +223,9 @@ function applyWithGit(wwjsDir, patchFile) {
     // Degrade only when nothing can have been written: ENOENT means git never executed at all, and a
     // 128 whose message is one of git's pre-write refusals means it rejected the input before applying
     // anything. Any other failure — including a 128 raised midway through writing results — has to be
-    // treated as a partial tree. A rejected hunk is exit 1, which returned above.
-    throw gitApplyLeftTreeUntouched(e) ? err : partialTree(err);
+    // treated as a partial tree, unless the tree provably kept nothing of this run: a tree the user cannot
+    // write fails git at its first file, as it does `patch`. A rejected hunk is exit 1, which returned above.
+    throw gitApplyLeftTreeUntouched(e) || treeUntouched(wwjsDir) ? err : partialTree(err);
   }
 }
 
@@ -305,7 +321,10 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
         applyWithGit(wwjsDir, lfPatch);
       } else if (e.status !== 1) {
         const detail = e.stderr ? String(e.stderr).trim() : e.message;
-        throw partialTree(new Error(`\`patch\` failed (${e.code ?? `exit ${e.status}`}): ${detail}`));
+        const err = new Error(`\`patch\` failed (${e.code ?? `exit ${e.status}`}): ${detail}`);
+        // A refusal before the first write (a tree the user cannot write) leaves it pristine, which
+        // `--best-effort` may degrade on; only a tree that kept something of this run is partial.
+        throw treeUntouched(wwjsDir) ? err : partialTree(err);
       }
     }
   });

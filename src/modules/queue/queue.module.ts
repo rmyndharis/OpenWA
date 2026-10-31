@@ -7,7 +7,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { WebhookProcessor } from './processors/webhook.processor';
 import { IngressProcessor } from './processors/ingress.processor';
 import { QUEUE_NAMES } from './queue-names';
-import { queueConnectionOptions } from './redis-connection';
+import { queueRootOptions } from './redis-connection';
 import { ShutdownSafeQueue } from './shutdown-safe-queue';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookOutboxModule } from '../webhook/webhook-outbox.module';
@@ -16,9 +16,6 @@ import { IntegrationDeliveryFailure } from '../integration/entities/integration-
 import { IngressEvent } from '../integration/entities/ingress-event.entity';
 import { HooksModule } from '../../core/hooks/hooks.module';
 import { PluginsModule } from '../../core/plugins/plugins.module';
-
-// Re-export for backward compatibility
-export { QUEUE_NAMES } from './queue-names';
 
 /**
  * Bounded retention for finished webhook-queue jobs. Failed webhook jobs carry their full payload in
@@ -44,11 +41,12 @@ BullModule.queueClass = ShutdownSafeQueue;
     WebhookOutboxModule,
     // Required for WebhookProcessor/IngressProcessor to inject HookManager
     HooksModule,
-    // Required for IngressProcessor to inject PluginLoaderService (already @Global(), imported
-    // explicitly for clarity, matching HooksModule above).
+    // Required for IngressProcessor to inject PluginLoaderService (already @Global()). Imported ahead of
+    // BullModule so the loader's init hook, which marks the plugins being restored, runs before the
+    // workers start (see app.module.ts).
     PluginsModule,
     BullModule.forRootAsync({
-      useFactory: () => ({ connection: queueConnectionOptions() }),
+      useFactory: queueRootOptions,
     }),
     BullModule.registerQueue({
       name: QUEUE_NAMES.WEBHOOK,

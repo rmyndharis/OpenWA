@@ -15,9 +15,9 @@ export function smartToolResult(data: string | object | object[]): CallToolResul
   const text = typeof data === 'string' ? data : (JSON.stringify(data) ?? 'null');
   const mimeType = typeof data === 'string' ? 'text/plain' : 'application/json';
   const ext = typeof data === 'string' ? 'txt' : 'json';
-  if (text.length > 4096) {
+  const buffer = Buffer.from(text);
+  if (buffer.byteLength > 4096) {
     const uri = `mcp://toolResult/${randomUUID()}.${ext}`;
-    const buffer = Buffer.from(text);
     return {
       content: [
         { type: 'text', text: `Received resource ${uri} with ${buffer.byteLength} bytes` },

@@ -495,3 +495,12 @@ openwa_resolve() {
   done
   printf '%s' "$fallback"
 }
+
+# openwa_pg_schema_valid <name> - whether <name> is a POSTGRES_SCHEMA the app accepts (src/config/env.validation.ts):
+# a lower-case letter or underscore, then lower-case letters, digits or underscores, at most 63 characters, and no
+# pg_ prefix. pg_dump folds an unquoted name to lower case and reads ? and * as wildcards, so no other name may
+# reach it, and the scripts write the name into SQL.
+openwa_pg_schema_valid() {
+  local LC_ALL=C
+  [[ $1 =~ ^[a-z_][a-z0-9_]{0,62}$ ]] && [[ $1 != pg_* ]]
+}

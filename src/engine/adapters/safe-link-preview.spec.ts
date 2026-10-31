@@ -1,3 +1,4 @@
+import { Response } from 'undici';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { generateSafeLinkPreview } from './safe-link-preview';
@@ -150,6 +151,46 @@ describe('generateSafeLinkPreview', () => {
 
     it('returns nothing when a hop points at a blocked address', async () => {
       await expect(generateSafeLinkPreview(`${origin}/internal`)).resolves.toBeUndefined();
+    });
+  });
+
+  describe('the HTML byte prefix', () => {
+    const bytes = (...chunks: string[]) => chunks.map(chunk => Buffer.from(chunk));
+    it.each([
+      ['an oversized first chunk', bytes(' '.repeat(64) + '<title>Beyond</title>'), undefined],
+      ['an oversized final chunk', bytes(' '.repeat(48), ' '.repeat(16) + '<title>Beyond</title>'), undefined],
+      ['Open Graph beyond the cap', bytes(' '.repeat(64) + '<meta property="og:title" content="Beyond">'), undefined],
+      ['valid prefix metadata', bytes('<title>Within</title>' + ' '.repeat(44) + '<title>Beyond</title>'), 'Within'],
+      ['metadata ending at the cap', bytes(' '.repeat(44) + '<title>Exact</title>'), 'Exact'],
+      [
+        'a split multibyte character',
+        [
+          Buffer.concat([Buffer.from(' '.repeat(62)), Buffer.from([0xc3])]),
+          Buffer.concat([Buffer.from([0xa9]), Buffer.from('<title>Beyond</title>')]),
+        ],
+        undefined,
+      ],
+    ] as const)('reads only the allowed bytes for %s', async (_name, chunks, title) => {
+      let index = 0;
+      const cancel = jest.fn();
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (index < chunks.length) controller.enqueue(chunks[index++]);
+            else controller.close();
+          },
+          cancel,
+        },
+        { highWaterMark: 0 },
+      );
+      const response = new Response(body, { headers: { 'content-type': 'text/html' } });
+      jest.spyOn(ssrfGuard, 'withSafeFetch').mockImplementation((_url, _init, use) => Promise.resolve(use(response)));
+
+      const preview = await generateSafeLinkPreview('https://example.com', { maxBytes: 64 });
+
+      expect(preview?.title).toBe(title);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(index).toBe(chunks.length);
     });
   });
 

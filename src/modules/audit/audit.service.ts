@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThan, In } from 'typeorm';
+import { Repository, LessThan, In } from 'typeorm';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
 import { ApiKey } from '../auth/entities/api-key.entity';
 import { createLogger } from '../../common/services/logger.service';
@@ -40,8 +40,6 @@ export interface AuditQueryOptions {
   apiKeyId?: string;
   sessionId?: string;
   severity?: AuditSeverity;
-  startDate?: Date;
-  endDate?: Date;
   limit?: number;
   offset?: number;
 }
@@ -143,10 +141,6 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
     return this.log(action, context, AuditSeverity.WARN);
   }
 
-  async logError(action: AuditAction, context: AuditContext = {}): Promise<AuditLog | null> {
-    return this.log(action, context, AuditSeverity.ERROR);
-  }
-
   async findAll(
     options: AuditQueryOptions = {},
     allowedSessions?: string[] | null,
@@ -168,10 +162,6 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
     }
     if (options.severity) where.severity = options.severity;
 
-    if (options.startDate && options.endDate) {
-      where.createdAt = Between(options.startDate, options.endDate);
-    }
-
     // Clamp the page size so an arbitrarily large `limit` can't load the whole table into one response.
     const requested = options.limit && options.limit > 0 ? options.limit : 50;
     const take = Math.min(requested, MAX_AUDIT_PAGE_SIZE);
@@ -182,28 +172,13 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
       // them one fixed order, or separate LIMIT/OFFSET pages could repeat one row and skip another.
       order: { createdAt: 'DESC', id: 'DESC' },
       take,
-      // Clamp to a non-negative skip: a negative offset (e.g. from an unvalidated `?offset=-5`) would
-      // otherwise reach the query driver verbatim.
-      skip: options.offset && options.offset > 0 ? options.offset : 0,
+      // Bound the skip to [0, MAX_SAFE_INTEGER]: a negative offset (e.g. from an unvalidated `?offset=-5`)
+      // would otherwise reach the query driver verbatim, and the driver refuses an OFFSET of 2^63 or more
+      // as a 500, where any offset past the last row is just an empty page.
+      skip: options.offset && options.offset > 0 ? Math.min(options.offset, Number.MAX_SAFE_INTEGER) : 0,
     });
 
     return { data, total };
-  }
-
-  async getRecentByApiKey(apiKeyId: string, limit = 10): Promise<AuditLog[]> {
-    return this.auditRepository.find({
-      where: { apiKeyId },
-      order: { createdAt: 'DESC' },
-      take: limit,
-    });
-  }
-
-  async getRecentBySession(sessionId: string, limit = 10): Promise<AuditLog[]> {
-    return this.auditRepository.find({
-      where: { sessionId },
-      order: { createdAt: 'DESC' },
-      take: limit,
-    });
   }
 
   async cleanup(olderThanDays = 30): Promise<number> {

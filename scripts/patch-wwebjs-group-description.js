@@ -33,6 +33,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const GROUP_CHAT_PATH = path.join('src', 'structures', 'GroupChat.js');
@@ -97,7 +98,7 @@ function applyGroupDescriptionFix(wwjsDir = DEFAULT_WWJS) {
     );
   }
 
-  fs.writeFileSync(groupChatFile, source.replace(POSITIONAL_CALL, OPTIONS_CALL));
+  writeFileAtomic(groupChatFile, source.replace(POSITIONAL_CALL, OPTIONS_CALL));
   return { skipped: false, note: 'group description job called with an options object' };
 }
 

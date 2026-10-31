@@ -63,7 +63,13 @@ public final class Http {
             qs.add(encodeQuery(e.getKey()) + "=" + encodeQuery(value));
         }
         String q = qs.toString();
-        return q.isEmpty() ? url : url + (url.contains("?") ? "&" : "?") + q;
+        if (q.isEmpty()) {
+            return url;
+        }
+        int fragmentAt = url.indexOf('#');
+        String fragment = fragmentAt < 0 ? "" : url.substring(fragmentAt);
+        String target = fragmentAt < 0 ? url : url.substring(0, fragmentAt);
+        return target + (target.contains("?") ? "&" : "?") + q + fragment;
     }
 
     private static String encodeQuery(String s) {

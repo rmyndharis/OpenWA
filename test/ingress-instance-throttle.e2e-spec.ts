@@ -1,7 +1,3 @@
-// archiver v8 is ESM-only and is pulled in transitively via the @Global StorageModule when
-// AppModule boots; stub it so ts-jest (CommonJS) can load the module graph.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 // IngressService reads these per delivery; set them before AppModule is imported anyway, since the
 // ingress guard sizes its own tier from INGRESS_INSTANCE_TTL once at boot.
 process.env.INGRESS_INSTANCE_LIMIT = '3';

@@ -45,18 +45,24 @@ function instanceRow(instanceId: string, config: Record<string, unknown> | null,
   };
 }
 
-function job(instanceId: string): IngressJobData {
+/** A job as admission leaves it: the session is the one the instance was bound to. */
+function job(
+  instanceId: string,
+  sessionId: string | null = SHARED_SCOPE,
+  admission?: { verified: boolean },
+): IngressJobData {
   return {
     pluginId: PLUGIN_ID,
     instanceId,
     route: '/hook',
     deliveryId: 'delivery-' + instanceId,
-    payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+    sessionId: sessionId ?? undefined,
+    payload: { headers: {}, query: {}, body: '{}', rawBody: '{}', ...(admission ? { admission } : {}) },
   };
 }
 
-/** The one field of the worker payload these specs assert on. */
-type WebhookCall = { config?: Record<string, unknown> };
+/** The fields of the worker payload these specs assert on. */
+type WebhookCall = { config?: Record<string, unknown>; verified?: boolean; sessionId?: string };
 
 /** Builds a bridge whose dispatch path is real; only the worker host and the instance store are fakes. */
 function makeBridge(opts: {
@@ -255,9 +261,97 @@ describe('ingress dispatch resolves config per INSTANCE, not per session scope',
       manifestOverrides: { sessionScoped: false },
     });
 
-    await bridge.dispatchWebhookForInstance(job('acct-a'));
+    await bridge.dispatchWebhookForInstance(job('acct-a', null));
 
     expect(calls[0].config).toEqual({ apiToken: 'token-A' });
+  });
+});
+
+describe('ingress dispatch does not carry a base secret to another host', () => {
+  // An adapter that calls the host named in `baseUrl` with a stored token. A key that may create an
+  // instance on one session, or write that session's override, picks the host; the token is the
+  // operator's and belongs to the host it was saved for.
+  const adapter: Partial<PluginManifest> = {
+    net: { allowConfigHosts: ['baseUrl'] },
+    configSchema: {
+      type: 'object',
+      properties: { baseUrl: { type: 'string' }, apiToken: { type: 'string', secret: true } },
+    },
+  };
+  const baseConfig = { baseUrl: 'https://chat.example.com', apiToken: 'OPERATOR-TOKEN' };
+
+  it('withholds the operator token from an instance that names its own host', async () => {
+    const tenant = instanceRow('tenant', { baseUrl: 'https://attacker.example' }, 'S1');
+    const { bridge, calls } = makeBridge({ rows: [tenant], baseConfig, manifestOverrides: adapter });
+
+    await bridge.dispatchWebhookForInstance(job('tenant', 'S1'));
+
+    expect(calls[0].config).toEqual({ baseUrl: 'https://attacker.example' });
+  });
+
+  it('withholds it from an instance on a session whose override names another host', async () => {
+    const tenant = instanceRow('tenant', null, 'S1');
+    const { bridge, calls } = makeBridge({
+      rows: [tenant],
+      baseConfig,
+      sessionConfig: { S1: { baseUrl: 'https://attacker.example' } },
+      manifestOverrides: adapter,
+    });
+
+    await bridge.dispatchWebhookForInstance(job('tenant', 'S1'));
+
+    expect(calls[0].config).toEqual({ baseUrl: 'https://attacker.example' });
+  });
+
+  // The row's token was provisioned against the operator host. An override written for the same session by a
+  // key that cannot read it must not be able to move the host and take the row's token along.
+  it('withholds the token an instance holds itself when a session override moved the host', async () => {
+    const tenant = instanceRow('tenant', { apiToken: 'TENANT-TOKEN', inboxId: '9' }, 'S1');
+    const { bridge, calls } = makeBridge({
+      rows: [tenant],
+      baseConfig,
+      sessionConfig: { S1: { baseUrl: 'https://attacker.example' } },
+      manifestOverrides: adapter,
+    });
+
+    await bridge.dispatchWebhookForInstance(job('tenant', 'S1'));
+
+    expect(calls[0].config).toEqual({ baseUrl: 'https://attacker.example', inboxId: '9' });
+  });
+
+  it('keeps the token an instance holds itself when the override left the host alone', async () => {
+    const tenant = instanceRow('tenant', { apiToken: 'TENANT-TOKEN' }, 'S1');
+    const { bridge, calls } = makeBridge({
+      rows: [tenant],
+      baseConfig,
+      sessionConfig: { S1: { baseUrl: 'https://chat.example.com/' } },
+      manifestOverrides: adapter,
+    });
+
+    await bridge.dispatchWebhookForInstance(job('tenant', 'S1'));
+
+    expect(calls[0].config).toMatchObject({ apiToken: 'TENANT-TOKEN' });
+  });
+
+  it('keeps the token for an instance that names the operator host or none', async () => {
+    const same = instanceRow('same', { baseUrl: 'https://chat.example.com/other' }, 'S1');
+    const none = instanceRow('none', {}, 'S2');
+    const { bridge, calls } = makeBridge({ rows: [same, none], baseConfig, manifestOverrides: adapter });
+
+    await bridge.dispatchWebhookForInstance(job('same', 'S1'));
+    await bridge.dispatchWebhookForInstance(job('none', 'S2'));
+
+    expect(calls[0].config).toMatchObject({ apiToken: 'OPERATOR-TOKEN' });
+    expect(calls[1].config).toEqual(baseConfig);
+  });
+
+  it('hands an instance the token it brings for its own host', async () => {
+    const tenant = instanceRow('tenant', { baseUrl: 'https://other.example', apiToken: 'TENANT-TOKEN' }, 'S1');
+    const { bridge, calls } = makeBridge({ rows: [tenant], baseConfig, manifestOverrides: adapter });
+
+    await bridge.dispatchWebhookForInstance(job('tenant', 'S1'));
+
+    expect(calls[0].config).toEqual({ baseUrl: 'https://other.example', apiToken: 'TENANT-TOKEN' });
   });
 });
 
@@ -278,9 +372,93 @@ describe('ingress dispatch refuses an instance that is disabled or deleted', () 
     const wildcard = instanceRow('acct-b', { apiToken: 'token-B' }, null);
     const { bridge, calls } = makeBridge({ rows: [wildcard], baseConfig: { apiToken: 'token-B' } });
 
-    await expect(bridge.dispatchWebhookForInstance(job('acct-a'))).rejects.toThrow(
+    await expect(bridge.dispatchWebhookForInstance(job('acct-a', null))).rejects.toThrow(
       'instance acct-a of plugin chat-adapter is disabled or deleted',
     );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+const route = (scheme: 'none' | 'hmac-sha256') => ({
+  route: '/hook',
+  mode: 'async' as const,
+  verify: 'core' as const,
+  maxBodyBytes: 1024,
+  signature: scheme === 'none' ? { scheme: 'none' as const } : { scheme: 'hmac-sha256' as const, header: 'x-sig' },
+});
+
+describe('ingress dispatch keeps what was decided when the delivery was admitted', () => {
+  const row = () => instanceRow('acct-a', { apiToken: 'token-A' }, 'S1');
+
+  it('does not label an unauthenticated delivery verified after its route starts signing', async () => {
+    const { bridge, calls } = makeBridge({
+      rows: [row()],
+      manifestOverrides: { ingress: [route('hmac-sha256')] },
+    });
+
+    await bridge.dispatchWebhookForInstance(job('acct-a', 'S1', { verified: false }));
+
+    expect(calls[0].verified).toBe(false);
+  });
+
+  it('keeps an authenticated delivery verified after its route stops signing', async () => {
+    const { bridge, calls } = makeBridge({
+      rows: [row()],
+      manifestOverrides: { ingress: [route('none')] },
+    });
+
+    await bridge.dispatchWebhookForInstance(job('acct-a', 'S1', { verified: true }));
+
+    expect(calls[0].verified).toBe(true);
+  });
+
+  it('still never labels a delivery verified when its route is gone', async () => {
+    const { bridge, calls } = makeBridge({ rows: [row()] });
+
+    await bridge.dispatchWebhookForInstance(job('acct-a', 'S1', { verified: true }));
+
+    expect(calls[0].verified).toBe(false);
+  });
+
+  it.each([
+    ['signing', 'hmac-sha256', true],
+    ['unsigned', 'none', false],
+  ] as const)(
+    'reads the route for a delivery admitted before the verdict was recorded (%s)',
+    async (_l, scheme, want) => {
+      const { bridge, calls } = makeBridge({
+        rows: [row()],
+        manifestOverrides: { ingress: [route(scheme)] },
+      });
+
+      await bridge.dispatchWebhookForInstance(job('acct-a', 'S1'));
+
+      expect(calls[0].verified).toBe(want);
+    },
+  );
+
+  it('refuses a delivery admitted for a session the instance has since left', async () => {
+    const rebound = instanceRow('acct-a', { apiToken: 'token-A' }, 'S-new');
+    const { bridge, calls } = makeBridge({ rows: [rebound], sessionConfig: { 'S-new': { endpoint: 'https://new' } } });
+
+    await expect(bridge.dispatchWebhookForInstance(job('acct-a', 'S-old'))).rejects.toThrow(/rebound/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('treats null, undefined and * as the one all-sessions scope', async () => {
+    const wildcard = instanceRow('acct-a', { apiToken: 'token-A' }, '*');
+    const { bridge, calls } = makeBridge({ rows: [wildcard] });
+
+    await bridge.dispatchWebhookForInstance(job('acct-a', null));
+    await bridge.dispatchWebhookForInstance(job('acct-a', '*'));
+
+    expect(calls).toHaveLength(2);
+  });
+
+  it('refuses a delivery admitted for all sessions once the instance is bound to one', async () => {
+    const { bridge, calls } = makeBridge({ rows: [row()] });
+
+    await expect(bridge.dispatchWebhookForInstance(job('acct-a', null))).rejects.toThrow(/rebound/);
     expect(calls).toHaveLength(0);
   });
 });

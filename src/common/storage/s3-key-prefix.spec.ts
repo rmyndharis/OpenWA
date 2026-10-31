@@ -3,9 +3,6 @@ import * as os from 'os';
 import * as path from 'path';
 import { ConfigService } from '@nestjs/config';
 
-// archiver is ESM-only and never used here; stub it before StorageService is imported.
-jest.mock('archiver', () => ({ default: jest.fn() }));
-
 const mockSend = jest.fn();
 jest.mock('@aws-sdk/client-s3', () => ({
   S3Client: jest.fn().mockImplementation(() => ({ send: mockSend })),
@@ -83,7 +80,7 @@ describe('StorageService S3 key prefix', () => {
     } as unknown as ConfigService;
     svc = new StorageService(config);
     await new Promise(resolve => setImmediate(resolve));
-    expect(svc.isS3Available()).toBe(true);
+    expect((svc as unknown as { s3Available: boolean }).s3Available).toBe(true);
     return svc;
   }
 

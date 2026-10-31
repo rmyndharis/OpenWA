@@ -184,6 +184,19 @@ describe('SessionOwnershipService', () => {
       await settle();
       expect((await sessions.findOneByOrFail({ id: session.id })).nodeId).toBe('node-b');
     });
+
+    it('makes ownership visible before invoking a detached adoption handler', async () => {
+      const node = service('node-b');
+      const observed: boolean[] = [];
+      node.onAdoption(id => {
+        observed.push(node.owns(id));
+        return Promise.resolve();
+      });
+      const session = await seed(lapsedBy('node-a'));
+      expect(await node.claim(session.id)).toBe(true);
+      await settle();
+      expect(observed).toEqual([true]);
+    });
   });
 
   describe('releasing', () => {

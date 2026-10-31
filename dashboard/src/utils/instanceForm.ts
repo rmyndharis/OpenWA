@@ -1,3 +1,5 @@
+import { captionLength } from './bulkMedia.ts';
+
 export const INSTANCE_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
 export function isValidInstanceId(id: string): boolean {
@@ -6,9 +8,11 @@ export function isValidInstanceId(id: string): boolean {
 
 type ParseResult = { ok: true; value: Record<string, unknown> | undefined } | { ok: false };
 
-/** Blank → auto-generate (server-side). Otherwise must be a real secret (>= 16 chars), mirroring the server DTO. */
+/** Blank means auto-generate; otherwise use the server DTO character count and its 16 to 512 bounds. */
 export function isValidInstanceSecret(raw: string): boolean {
-  return raw.trim() === '' || raw.trim().length >= 16;
+  const secret = raw.trim();
+  const length = captionLength(secret);
+  return secret === '' || (length >= 16 && length <= 512);
 }
 
 /** Blank → no config (undefined). Otherwise must parse to a plain JSON object. */

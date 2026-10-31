@@ -184,6 +184,60 @@ describe('SessionLivenessWatchdog', () => {
   });
 
   describe('stale results', () => {
+    it.each([EngineStatus.ACTION_REQUIRED, EngineStatus.DISCONNECTED])(
+      'drops a pending READY result when status changes to %s',
+      async status => {
+        let settle: (alive: boolean) => void = () => undefined;
+        const probe = jest
+          .fn()
+          .mockResolvedValueOnce(false)
+          .mockImplementationOnce(
+            () =>
+              new Promise<boolean>(resolve => {
+                settle = resolve;
+              }),
+          );
+        const engine = engineOf(EngineStatus.READY, probe);
+        engines.set('s1', engine as unknown as IWhatsAppEngine);
+        watchdog.start(onDead);
+        await watchdog.probe('s1', engine as unknown as IWhatsAppEngine);
+        const pending = watchdog.probe('s1', engine as unknown as IWhatsAppEngine);
+        engine.getStatus.mockReturnValue(status);
+        settle(false);
+        await pending;
+
+        expect(onDead).not.toHaveBeenCalled();
+        expect(failuresOf(watchdog).has('s1')).toBe(false);
+        engine.getStatus.mockReturnValue(EngineStatus.READY);
+        probe.mockResolvedValue(false);
+        await watchdog.probe('s1', engine as unknown as IWhatsAppEngine);
+        expect(onDead).not.toHaveBeenCalled();
+        expect(failuresOf(watchdog).get('s1')).toBe(1);
+      },
+    );
+
+    it('drops a timed-out READY probe after operator action becomes necessary', async () => {
+      jest.useFakeTimers();
+      try {
+        const probe = jest
+          .fn()
+          .mockResolvedValueOnce(false)
+          .mockImplementationOnce(() => new Promise<boolean>(() => undefined));
+        const engine = engineOf(EngineStatus.READY, probe);
+        engines.set('s1', engine as unknown as IWhatsAppEngine);
+        watchdog.start(onDead);
+        await watchdog.probe('s1', engine as unknown as IWhatsAppEngine);
+        const pending = watchdog.probe('s1', engine as unknown as IWhatsAppEngine);
+        engine.getStatus.mockReturnValue(EngineStatus.ACTION_REQUIRED);
+        await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_PROBE_TIMEOUT_MS);
+        await pending;
+        expect(onDead).not.toHaveBeenCalled();
+        expect(failuresOf(watchdog).has('s1')).toBe(false);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('ignores a probe result for an engine superseded while it was in flight', async () => {
       const engine = engineOf(EngineStatus.READY, jest.fn().mockResolvedValue(false));
       engines.set('s1', engine as unknown as IWhatsAppEngine);

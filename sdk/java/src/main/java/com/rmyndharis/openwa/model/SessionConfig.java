@@ -5,7 +5,8 @@ package com.rmyndharis.openwa.model;
  *
  * <p>A null {@code maxReconnectAttempts} means unlimited — not unset.
  *
- * @param autoRejectCalls whether incoming calls are auto-rejected
+ * @param autoRejectCalls whether incoming calls are auto-rejected; Baileys only, whatsapp-web.js stores
+ *     the flag but cannot reject a call, so calls keep ringing there
  * @param maxReconnectAttempts cap on consecutive reconnect attempts; null means unlimited
  * @param reconnectBaseDelay base delay of the reconnect backoff, in milliseconds
  */

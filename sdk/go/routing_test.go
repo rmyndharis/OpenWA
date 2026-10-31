@@ -84,6 +84,7 @@ func TestRouting(t *testing.T) {
 		{"Groups.DemoteParticipants", func(c *Client) { c.Groups.DemoteParticipants(ctx, "s1", "g1", nil) }, "POST", "/api/sessions/s1/groups/g1/participants/demote"},
 		{"Groups.SetSubject", func(c *Client) { c.Groups.SetSubject(ctx, "s1", "g1", "x") }, "PUT", "/api/sessions/s1/groups/g1/subject"},
 		{"Groups.SetDescription", func(c *Client) { c.Groups.SetDescription(ctx, "s1", "g1", "x") }, "PUT", "/api/sessions/s1/groups/g1/description"},
+		{"Groups.SetMemberLabel", func(c *Client) { c.Groups.SetMemberLabel(ctx, "s1", "g1", "x") }, "PUT", "/api/sessions/s1/groups/g1/member-label"},
 		{"Groups.Leave", func(c *Client) { c.Groups.Leave(ctx, "s1", "g1") }, "POST", "/api/sessions/s1/groups/g1/leave"},
 		{"Groups.InviteCode", func(c *Client) { c.Groups.InviteCode(ctx, "s1", "g1") }, "GET", "/api/sessions/s1/groups/g1/invite-code"},
 		{"Groups.RevokeInviteCode", func(c *Client) { c.Groups.RevokeInviteCode(ctx, "s1", "g1") }, "POST", "/api/sessions/s1/groups/g1/invite-code/revoke"},

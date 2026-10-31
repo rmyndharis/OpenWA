@@ -1,3 +1,4 @@
+import { parseWaId } from '../identity/wa-id';
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { Chat, Contact as BaileysContact, WAMessage, WAMessageKey, WASocket } from '@whiskeysockets/baileys';
 import { EngineEventCallbacks, IncomingMessage, MessageType } from '../interfaces/whatsapp-engine.interface';
@@ -8,6 +9,7 @@ import {
   extractBaileysButtonReply,
   extractBaileysButtons,
   extractBaileysCommerce,
+  extractBaileysContext,
   extractBaileysPoll,
   isBaileysCatalogShare,
   keyParticipant,
@@ -26,11 +28,12 @@ export interface BaileysHistoryHost {
   getSocket(): WASocket;
   readonly logger: ReturnType<typeof createLogger>;
   toNeutralJid(jid: string): string;
+  findPersistedLidPhone?(jid: string): Promise<string | null>;
   normalizedSelfJid(): string;
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
   loadLib(): Promise<typeof BaileysLib>;
   /** Seed the chat's last-message preview + sort time from a history/live message. */
-  recordMessage(msg: WAMessage, type?: MessageType): void;
+  recordMessage(msg: WAMessage, type?: MessageType, order?: number): void;
   recordMessageEdit(chatId: string, messageId: string, text: string, type?: MessageType): void;
   applyHistoryRevoke(target: WAMessageKey, envelope: WAMessageKey): Promise<WAMessageKey | undefined>;
   upsertContacts(records: Partial<BaileysContact>[]): void;
@@ -45,6 +48,7 @@ export interface BaileysHistoryHost {
   extractEphemeralDuration(msg: WAMessage): number | undefined;
   /** The currently-registered onHistoryMessages callback, if any (assigned at initialize()). */
   getOnHistoryMessages(): EngineEventCallbacks['onHistoryMessages'];
+  getStoredWriteGeneration?(): number;
 }
 
 /**
@@ -105,7 +109,10 @@ export class BaileysHistory {
     if (!messages.length) {
       return;
     }
+    const generation = this.host.getStoredWriteGeneration?.();
+    const current = (): boolean => generation === this.host.getStoredWriteGeneration?.();
     const b = await this.host.loadLib();
+    if (!current()) return;
     const nameUpdates: { id: string; notify: string }[] = [];
     const mapped: IncomingMessage[] = [];
     const revokes: { message: WAMessage; target: WAMessageKey }[] = [];
@@ -135,6 +142,7 @@ export class BaileysHistory {
         original?.key ?? { ...target, remoteJid: target.remoteJid ?? message.key.remoteJid },
         message.key,
       );
+      if (!current()) return;
       if (!key?.remoteJid) continue;
       const cleared = this.revokedMessage(key, toUnixSeconds(original?.messageTimestamp ?? message.messageTimestamp));
       mapped.push(cleared);
@@ -144,15 +152,24 @@ export class BaileysHistory {
     }
     if (mapped.length) {
       const storedRevokes = await this.host.getOnHistoryMessages()?.(mapped);
+      if (!current()) return;
       const revoked = (storedRevokes ?? mapped).filter(m => m.type === 'revoked');
       const revokedKeys = new Set(revoked.map(m => JSON.stringify([m.id, m.chatId, m.fromMe])));
       for (const incoming of mapped) {
         if (incoming.type === 'revoked') continue;
         const original = targets.get(incoming.id)!;
         const deleted = revokedKeys.has(JSON.stringify([incoming.id, incoming.chatId, incoming.fromMe]));
-        this.host.recordMessage(original, deleted ? 'revoked' : incoming.type);
+        // History has no observed order: equal-time messages keep the first one met, and give way to a live one.
+        this.host.recordMessage(original, deleted ? 'revoked' : incoming.type, 0);
       }
-      for (const m of revoked) this.host.recordMessageEdit(m.chatId, m.id, '', 'revoked');
+      for (const m of revoked) {
+        this.host.recordMessageEdit(m.chatId, m.id, '', 'revoked');
+        if (parseWaId(m.chatId).kind === 'lid') {
+          const phone = await this.host.findPersistedLidPhone?.(m.chatId).catch(() => null);
+          if (!current()) return;
+          if (phone) this.host.recordMessageEdit(`${phone}@s.whatsapp.net`, m.id, '', 'revoked');
+        }
+      }
     }
   }
 
@@ -300,6 +317,7 @@ export class BaileysHistory {
       return null;
     }
     const body = extractBaileysBody(content);
+    const context = extractBaileysContext(content);
     const commerce = extractBaileysCommerce(content, contentType);
     const button = extractBaileysButtonReply(content, contentType);
     const buttons = extractBaileysButtons(content, contentType);
@@ -321,6 +339,8 @@ export class BaileysHistory {
         poll: extractBaileysPoll(content),
         button,
         buttons,
+        quotedMessage: context.quotedMessage,
+        mentionedJids: context.mentionedJids,
         isCatalogShare: isBaileysCatalogShare(content),
         // Populate the disappearing-messages timer using the same extraction the live path and the
         // session-store cache share (`msg.ephemeralDuration` primary, `contextInfo.expiration` fallback),

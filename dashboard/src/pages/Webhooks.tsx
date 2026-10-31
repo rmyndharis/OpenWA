@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Plus,
@@ -20,6 +20,7 @@ import { filterValueLabel } from '../utils/enumLabels';
 import { buildHeaderMap, generateSecret, secretError, type HeaderRow } from '../utils/webhookAuth';
 import { copyToClipboard } from '../utils/clipboard';
 import { filtersIncomplete } from '../utils/webhookFilters';
+import { isComposingKey } from '../utils/composition';
 import { useRole } from '../hooks/useRole';
 import { useToast } from '../hooks/useToast';
 import {
@@ -65,12 +66,39 @@ function conditionSummary(c: WebhookFilterCondition, t: TFn): string {
 // fixed-positioned from the badge's rect so the card's `overflow: hidden` doesn't clip it.
 function FilterBadge({ filters }: { filters: WebhookFilters }) {
   const { t } = useTranslation();
-  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
-  const openAt = (el: HTMLElement) => {
-    const r = el.getBoundingClientRect();
-    setCoords({ top: r.bottom + 6, left: r.left });
-  };
-  const close = () => setCoords(null);
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const openAt = (el: HTMLElement) => setAnchor(el.getBoundingClientRect());
+  const close = () => setAnchor(null);
+
+  // Below the badge at its left edge when that fits; otherwise above it, and pulled back from the screen edges.
+  useLayoutEffect(() => {
+    const popover = popoverRef.current;
+    if (!anchor || !popover) return;
+    const gap = 6;
+    const margin = 8;
+    // Measured with all the room the viewport allows, because the box shrinks to the space left of its edge.
+    popover.style.left = `${margin}px`;
+    const { offsetWidth: width, offsetHeight: height } = popover;
+    const fitsBelow = anchor.bottom + gap + height <= window.innerHeight - margin;
+    Object.assign(popover.style, {
+      top: `${fitsBelow ? anchor.bottom + gap : Math.max(margin, anchor.top - gap - height)}px`,
+      left: `${Math.min(Math.max(margin, anchor.left), window.innerWidth - width - margin)}px`,
+    });
+  }, [anchor]);
+
+  // Escape puts the popover away without moving the pointer or focus, whether hover or focus opened it.
+  const isOpen = anchor !== null;
+  useEffect(() => {
+    if (!isOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || isComposingKey(event) || event.defaultPrevented) return;
+      event.preventDefault();
+      setAnchor(null);
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [isOpen]);
 
   return (
     <span
@@ -83,8 +111,13 @@ function FilterBadge({ filters }: { filters: WebhookFilters }) {
     >
       <Filter size={12} />
       {t('webhooks.filters.badge', { count: filters.conditions.length })}
-      {coords && (
-        <div className="filter-popover" style={{ top: coords.top, left: coords.left }} role="tooltip">
+      {anchor && (
+        <div
+          className="filter-popover"
+          ref={popoverRef}
+          style={{ top: anchor.bottom + 6, left: anchor.left }}
+          role="tooltip"
+        >
           <div className="filter-popover-title">{t('webhooks.filters.title')}</div>
           {filters.conditions.map((condition, i) => (
             <div key={i} className="filter-popover-row">
@@ -198,7 +231,9 @@ export function Webhooks() {
   const { t } = useTranslation();
   useDocumentTitle(t('webhooks.title'));
   const { canWrite } = useRole();
-  const { data: webhooks = [], isLoading: loadingWebhooks, error: webhooksError } = useWebhooksQuery();
+  // GET /webhooks is OPERATOR-only and the gateway records every refusal as a failed authentication, so a key
+  // that cannot write is not sent it.
+  const { data: webhooks = [], isLoading: loadingWebhooks, error: webhooksError } = useWebhooksQuery(canWrite);
   const { data: sessions = [] } = useSessionsQuery();
   const loading = loadingWebhooks;
   const createMutation = useCreateWebhookMutation();
@@ -310,7 +345,11 @@ export function Webhooks() {
       if (result.success) {
         toast.success(t('webhooks.toasts.testOk', { status: result.statusCode }));
       } else {
-        toast.error(t('webhooks.toasts.testFailed', { message: result.error || `Status ${result.statusCode}` }));
+        toast.error(
+          t('webhooks.toasts.testFailed', {
+            message: result.error || t('webhooks.toasts.testStatus', { status: result.statusCode }),
+          }),
+        );
       }
     } catch (err) {
       toast.error(
@@ -468,6 +507,7 @@ export function Webhooks() {
                 <button
                   key={name}
                   type="button"
+                  aria-pressed={isSelected}
                   className={`event-tag ${isSelected ? 'selected' : ''}`}
                   onClick={() => toggleNewEvent(name)}
                 >
@@ -556,6 +596,7 @@ export function Webhooks() {
                 <button
                   key={name}
                   type="button"
+                  aria-pressed={isSelected}
                   className={`event-tag ${isSelected ? 'selected' : ''}`}
                   onClick={() => toggleEditEvent(name)}
                 >
@@ -690,12 +731,13 @@ export function Webhooks() {
 
       <div className="webhooks-content">
         <div className="webhooks-list-container">
-          {webhooksError && webhooks.length === 0 ? (
-            // A failed read is not an empty list: a viewer key always gets 403 here (the route is
-            // OPERATOR-only), and a gateway error would otherwise read as "no webhooks configured".
+          {(webhooksError || !canWrite) && webhooks.length === 0 ? (
+            // A failed read is not an empty list: a key below operator is refused here (the route is
+            // OPERATOR-only, so it is never sent), and a gateway error would otherwise read as "no webhooks
+            // configured". The 403 branch stays for a key whose role the page took for a writer's.
             <div className="empty-table-state" role="alert">
               <AlertCircle size={48} strokeWidth={1} />
-              {(webhooksError as { status?: number }).status === 403 ? (
+              {!canWrite || (webhooksError as { status?: number } | null)?.status === 403 ? (
                 <>
                   <h3>{t('webhooks.empty.forbiddenTitle')}</h3>
                   <p>{t('webhooks.empty.forbiddenDesc')}</p>
@@ -703,7 +745,7 @@ export function Webhooks() {
               ) : (
                 <>
                   <h3>{t('webhooks.empty.loadErrorTitle')}</h3>
-                  <p>{webhooksError.message}</p>
+                  <p>{webhooksError?.message}</p>
                 </>
               )}
             </div>

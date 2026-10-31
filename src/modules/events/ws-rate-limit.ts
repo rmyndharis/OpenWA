@@ -27,20 +27,14 @@
  * distinct-key (or spoofed-IP) flood cannot grow process memory without limit.
  */
 
+import { positiveIntOrDefault } from '../../common/utils/env-int';
+
 const DEFAULT_FRAME_PER_SECOND = 60;
 const DEFAULT_FRAME_BURST = 120;
 const DEFAULT_HANDSHAKE_MAX = 10;
 const DEFAULT_HANDSHAKE_WINDOW_MS = 60_000;
 const DEFAULT_MAX_SOCKETS_PER_KEY = 16;
 const DEFAULT_MAX_KEYS = 50_000;
-
-const parsePositiveInt = (raw: string | undefined, fallback: number): number => {
-  if (!raw || raw.trim() === '') return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return fallback;
-  const i = Math.floor(n);
-  return i >= 1 ? i : fallback;
-};
 
 export interface WsRateLimitConfig {
   framePerSecond: number;
@@ -57,11 +51,11 @@ export interface WsRateLimitConfig {
  */
 export function readWsRateLimitConfig(env: NodeJS.ProcessEnv = process.env): WsRateLimitConfig {
   return {
-    framePerSecond: parsePositiveInt(env['WS_RATE_LIMIT_FRAME_PER_SECOND'], DEFAULT_FRAME_PER_SECOND),
-    frameBurst: parsePositiveInt(env['WS_RATE_LIMIT_FRAME_BURST'], DEFAULT_FRAME_BURST),
-    handshakeMax: parsePositiveInt(env['WS_RATE_LIMIT_HANDSHAKE_MAX'], DEFAULT_HANDSHAKE_MAX),
-    handshakeWindowMs: parsePositiveInt(env['WS_RATE_LIMIT_HANDSHAKE_WINDOW_MS'], DEFAULT_HANDSHAKE_WINDOW_MS),
-    maxSocketsPerKey: parsePositiveInt(env['WS_MAX_SOCKETS_PER_KEY'], DEFAULT_MAX_SOCKETS_PER_KEY),
+    framePerSecond: positiveIntOrDefault(env['WS_RATE_LIMIT_FRAME_PER_SECOND'], DEFAULT_FRAME_PER_SECOND),
+    frameBurst: positiveIntOrDefault(env['WS_RATE_LIMIT_FRAME_BURST'], DEFAULT_FRAME_BURST),
+    handshakeMax: positiveIntOrDefault(env['WS_RATE_LIMIT_HANDSHAKE_MAX'], DEFAULT_HANDSHAKE_MAX),
+    handshakeWindowMs: positiveIntOrDefault(env['WS_RATE_LIMIT_HANDSHAKE_WINDOW_MS'], DEFAULT_HANDSHAKE_WINDOW_MS),
+    maxSocketsPerKey: positiveIntOrDefault(env['WS_MAX_SOCKETS_PER_KEY'], DEFAULT_MAX_SOCKETS_PER_KEY),
   };
 }
 
@@ -117,12 +111,12 @@ export class TokenBucketLimiter {
 }
 
 /**
- * Per-subject sliding-window counter (fixed `max` events per `windowMs`). Same shape as the
- * MCP KeyRateLimiter but returns a boolean instead of throwing an HttpException, since the
- * WS surface answers with an error frame, not an HTTP status.
+ * Per-subject sliding-window counter (fixed `max` events per `windowMs`). Returns a boolean rather
+ * than throwing, since the WS surface answers with an error frame, not an HTTP status; the MCP
+ * KeyRateLimiter wraps it for the HTTP side.
  */
 export class SlidingWindowLimiter {
-  private readonly hits = new Map<string, number[]>();
+  private readonly hits = new Map<string, { at: number; reservation?: object }[]>();
 
   constructor(
     private readonly max = DEFAULT_HANDSHAKE_MAX,
@@ -131,12 +125,15 @@ export class SlidingWindowLimiter {
     private readonly maxKeys = DEFAULT_MAX_KEYS,
   ) {}
 
-  /** Record one attempt for `subject`; returns false when it exceeds `max` inside the window. */
-  allow(subject: string): boolean {
+  /**
+   * Record one attempt for `subject`; returns false when it exceeds `max` inside the window. A caller that
+   * gives the attempt back after an await passes a `reservation` object to name it (see refund).
+   */
+  allow(subject: string, reservation?: object): boolean {
     const t = this.now();
-    const recent = (this.hits.get(subject) ?? []).filter(ts => t - ts < this.windowMs);
+    const recent = (this.hits.get(subject) ?? []).filter(hit => t - hit.at < this.windowMs);
     const allowed = recent.length < this.max;
-    if (allowed) recent.push(t);
+    if (allowed) recent.push({ at: t, reservation });
 
     this.hits.delete(subject);
     this.hits.set(subject, recent);
@@ -145,7 +142,9 @@ export class SlidingWindowLimiter {
   }
 
   /**
-   * Give back the most recent attempt recorded for `subject`.
+   * Give back the attempt recorded for `subject` under `reservation`, or the most recent one when none is given.
+   * A caller that awaits between allow and refund must pass its reservation: by then newer attempts, a failed
+   * handshake among them, are on the list, and the most recent one is not its own.
    *
    * The handshake window is consumed BEFORE authentication (that is the point — an unauthenticated
    * flood must not reach the DB key validation on every attempt), which also charges every
@@ -154,9 +153,14 @@ export class SlidingWindowLimiter {
    * Refunding a handshake that turned out to be authentic keeps the budget aimed at failures;
    * authenticated abuse is bounded separately by the per-key socket cap.
    */
-  refund(subject: string): void {
+  refund(subject: string, reservation?: object): void {
     const recent = this.hits.get(subject);
     if (!recent?.length) return;
-    recent.pop();
+    if (!reservation) {
+      recent.pop();
+      return;
+    }
+    const index = recent.findIndex(hit => hit.reservation === reservation);
+    if (index !== -1) recent.splice(index, 1);
   }
 }

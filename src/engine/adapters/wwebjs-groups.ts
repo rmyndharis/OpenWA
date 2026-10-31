@@ -12,15 +12,16 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { GroupChat, GroupMetadataRaw, SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 import { toParticipantWid } from '../identity/wa-id';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { toMessageMedia } from './wwebjs-messaging';
-import { type WwebjsEngineHost, withPage, reportPageDeath } from './wwebjs-host';
-import { isProtocolTimeout } from './wwebjs-lifecycle';
-import { listChats } from './wwebjs-chats';
+import { type WwebjsEngineHost, rethrowIfNavigation, withPage, reportPageDeath } from './wwebjs-host';
+import { isNavigationError, isProtocolTimeout } from './wwebjs-lifecycle';
+import { isPageInvariant, listChats, readChats } from './wwebjs-chats';
 
 /**
  * Extracts the JID of the parent community a group is linked to, if any.
@@ -136,7 +137,15 @@ export class WwebjsGroups {
   async getGroupInfo(groupId: string): Promise<GroupInfo | null> {
     this.host.ensureReady();
     try {
-      const chat = await this.client().getChatById(groupId);
+      // A group whose refresh fails one of WhatsApp Web's own invariants is read from the metadata the
+      // page already holds, as the group list reads it (readChatModels): as last loaded, not refreshed,
+      // and without a last message, which this read does not use. Any other rejection falls to the catch.
+      const chat = await this.client()
+        .getChatById(groupId)
+        .catch(async (error: unknown) => {
+          if (!isPageInvariant(error)) throw error;
+          return (await readChats(this.host, 'getGroupInfo', [groupId]))[0];
+        });
       if (!chat.isGroup) {
         return null;
       }
@@ -179,9 +188,15 @@ export class WwebjsGroups {
         linkedParentJID: extractLinkedParentJID(groupChat.groupMetadata),
       };
     } catch (error) {
+      // A session that went away during the read (the client is read again after the lookup) is not a
+      // missing group either: the retryable 409, not a 404.
+      if (error instanceof EngineNotReadyError) {
+        throw error;
+      }
       // A dead page and a genuinely-missing group both land in this catch; only the second may
       // become null (→ service 404). A transport death surfaced as "group not found" sends
       // operators debugging the wrong layer — report it and answer 503 instead.
+      rethrowIfNavigation(this.host, error);
       if (this.host.isPageTransportError(error)) {
         this.host.reportIfPageTransportError(error, 'getGroupInfo');
         throw new EngineTransportError(`Transport died while reading group ${groupId}`);
@@ -428,6 +443,7 @@ export class WwebjsGroups {
     } catch (error) {
       // A dead page and a refused invite both land here; only the second is a 404. Folding a
       // transport death into "no such invite" sends operators debugging the wrong layer.
+      rethrowIfNavigation(this.host, error);
       if (this.host.isPageTransportError(error)) {
         this.host.reportIfPageTransportError(error, 'getGroupJoinInfo');
         throw new EngineTransportError(`Transport died while previewing invite ${inviteCode}`);
@@ -484,6 +500,10 @@ export class WwebjsGroups {
       if (isProtocolTimeout(error)) {
         throw new EngineTransportError('WhatsApp Web did not answer the group invite acceptance in time');
       }
+      // A reload cut the call: the same unknown outcome, and not a refused invite either.
+      if (isNavigationError(error)) {
+        throw new EngineTransportError('WhatsApp Web reloaded its page during the group invite acceptance');
+      }
       this.host.logger.warn(`Failed to accept group invite: ${String(error)}`);
       groupId = undefined;
     }
@@ -497,7 +517,8 @@ export class WwebjsGroups {
   /**
    * Resolve a group chat or throw: the shared preamble of the group settings writes. The lookup is a
    * read that runs before any write, so a dead page answers 503 with the death signal even for the
-   * non-idempotent callers: nothing has been applied yet. `context` names the caller's operation.
+   * non-idempotent callers: nothing has been applied yet. A session that went away during the lookup
+   * answers the not-ready 409 for the same reason. `context` names the caller's operation.
    */
   private async requireGroupChat(groupId: string, context: string): Promise<GroupChat> {
     this.host.ensureReady();
@@ -507,6 +528,9 @@ export class WwebjsGroups {
     if (!chat?.isGroup) {
       throw new GroupNotFoundError(groupId);
     }
+    // The write goes out on the chat's own client right after this, which the host's getClient never
+    // sees, so a teardown that landed in the lookup must be caught here.
+    this.host.ensureReady();
     return chat as unknown as GroupChat;
   }
 
@@ -529,6 +553,8 @@ export class WwebjsGroups {
     const groupChat = await this.requireGroupChat(groupId, 'setGroupPicture');
     // Loaded outside the page guard: a media fetch failing with "connection closed" is not a dead page.
     const picture = await toMessageMedia(media, this.host.config.proxy?.url);
+    // The fetch can outlast the session, and the chat writes through the client that read it.
+    this.host.ensureReady();
     // GroupChat.setPicture, NOT Client.setProfilePicture — the latter targets the own account.
     const ok = await withPage(this.host, 'setGroupPicture', () => groupChat.setPicture(picture));
     if (!ok) {
@@ -576,6 +602,14 @@ export class WwebjsGroups {
   async setGroupEphemeral(_groupId: string, _durationSec: number): Promise<void> {
     this.host.ensureReady();
     throw new EngineNotSupportedError('setGroupEphemeral');
+  }
+
+  // whatsapp-web.js 1.34.7 has no member-label setter (no memberLabel or member tag symbol in index.d.ts
+  // or src/), so this is an honest 501 rather than a no-op.
+  // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars
+  async setGroupMemberLabel(_groupId: string, _label: string): Promise<void> {
+    this.host.ensureReady();
+    throw new EngineNotSupportedError('setGroupMemberLabel');
   }
 
   async getGroupMembershipRequests(groupId: string): Promise<GroupMembershipRequest[]> {

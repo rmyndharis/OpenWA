@@ -292,7 +292,7 @@ export class SomeService {
 
   async saveMedia(filePath: string, data: Buffer) {
     await this.storage.putFile(filePath, data); // path-safety guarded
-    await this.cache.setSessionStatus('id', 'READY'); // no-op if Redis disabled
+    const cacheUp = await this.cache.isAvailable(); // false when Redis is disabled or unreachable
   }
 }
 ```
@@ -917,6 +917,7 @@ export enum EngineStatus {
 export interface EngineEventCallbacks {
   onQRCode?: (qr: string) => void;
   onReady?: (phone: string, pushName: string) => void;
+  onPushNameChanged?: (pushName: string) => void; // the account's own name synced after onReady (Baileys)
   admitInbound?: (arrival: {
     id: string;
     chatId: string;
@@ -931,10 +932,12 @@ export interface EngineEventCallbacks {
   // that cannot wait, or is still waiting when the time runs out, is dropped.
   onMessageCreate?: (message: IncomingMessage, ticket?: InboundTicket) => void; // outgoing (incl. linked-phone sends)
   onMessageAck?: (messageId: string, status: DeliveryStatus, chatId?: string) => void;
+  onMessageReceipt?: (event: MessageReceiptEvent) => void; // per-recipient group/status receipts (Baileys only)
   onMessageRevoked?: (message: RevokedMessage, actor?: { fromMe: boolean }) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
   onEventResponse?: (event: EventResponseEvent) => void; // an RSVP to a WhatsApp event; Baileys only
+  onPollVote?: (event: PollVoteEvent) => void; // a voter's new selection on a poll; whatsapp-web.js only
   onGroupEvent?: (event: GroupEvent) => void; // kind selects group.join / group.leave / group.update / group.join_request
   onCall?: (event: IncomingCallEvent) => void; // incoming call ringing; Baileys can rejectCall() while it rings
   onHistoryMessages?: (messages: IncomingMessage[]) => void | Promise<IncomingMessage[] | void>; // bulk initial sync; persist, don't dispatch
@@ -1332,7 +1335,7 @@ On S3 every key sits under the `S3_KEY_PREFIX` root (default `media/`).
 **MinIO is not a separate type** — it is the `s3` backend. The S3 client is created from credentials
 alone, so plain AWS S3 works with no endpoint (the SDK derives one from the region); `S3_ENDPOINT` is
 for S3-compatible stores (MinIO, R2, …), and setting it is also what enables `forcePathStyle: true`.
-The public method set is `putFile` / `getFile` / `deleteFile` / `listFiles` / `iterateFiles` /
+The public method set is `putFile` / `getFile` / `deleteFile` / `iterateFiles` /
 `createExportStream` (export) / `importFromStream` (import), plus `getFileCount`,
 `getCurrentStorageType` and `refreshS3Availability` (re-probes the bucket; the infra status endpoint
 calls it to report S3 reachability).
@@ -1381,7 +1384,7 @@ export class StorageService {
   async getFile(filePath: string): Promise<Buffer> {
     /* mirrors putFile */
   }
-  async listFiles(): Promise<string[]> {
+  async *iterateFiles(prefix = ''): AsyncGenerator<string> {
     /* local recurse, or S3 ListObjectsV2 under <S3_KEY_PREFIX, default media/> */
   }
   // createExportStream(): tar.gz of all files; importFromStream(): extract with zip-bomb caps
@@ -1487,11 +1490,12 @@ Migrations that must run on both dialects with different SQL take the same check
 
 There is **no** cache-manager / `CacheModuleOptions` / `redisStore` setup and **no** in-memory cache.
 `CacheService` (`src/common/cache/cache.service.ts`) talks to **ioredis directly** and is gated by
-`REDIS_ENABLED` (falling back to the `cache.enabled` config flag). When caching is disabled — or Redis
-is unreachable — the service **fails open**: every read returns `null` and every write is a silent
-no-op, so the app keeps serving from its source of truth. In other words, "no cache configured" means
-**no cache** (recompute), not an in-process LRU. Cache is never the source of truth, and today no
-request path reads from it: its only consumer is the infra status probe (`isAvailable`).
+`REDIS_ENABLED` (falling back to the `cache.enabled` config flag). It stores no values: its only
+consumer is the infra status probe, which calls `isAvailable()` to learn whether Redis answers a ping
+right now. When caching is disabled, or Redis is unreachable, `isAvailable()` returns `false` instead
+of throwing, so the app keeps serving from its source of truth. In other words, "no cache configured"
+means **no cache** (recompute), not an in-process LRU. Cache is never the source of truth, and no
+request path reads from it today.
 
 ```typescript
 // src/common/cache/cache.service.ts
@@ -1511,25 +1515,6 @@ export class CacheService implements OnModuleDestroy {
     if (!this.enabled) return false; // disabled -> always "no cache"
     this.ensureClient(); // create on first use; ioredis handles (re)connecting
     return this.ping(); // reflects live state: false during an outage, true once back
-  }
-
-  // Fail-open reads/writes: unavailable Redis is a no-op, never an error to the caller.
-  async getSessionStatus(id: string): Promise<string | null> {
-    if (!(await this.isAvailable())) return null;
-    try {
-      return await this.redis!.get(`session:${id}:status`);
-    } catch {
-      return null;
-    }
-  }
-
-  async setSessionStatus(id: string, status: string): Promise<void> {
-    if (!(await this.isAvailable())) return; // no-op when disabled/unreachable
-    try {
-      await this.redis!.setex(`session:${id}:status`, /* TTL */ 300, status);
-    } catch {
-      /* logged + swallowed */
-    }
   }
 }
 ```

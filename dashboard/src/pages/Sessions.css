@@ -47,7 +47,7 @@
 }
 
 .sessions-page .search-input:focus-within {
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
@@ -71,7 +71,7 @@
 
 .sessions-page .sessions-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1.5rem;
   width: 100%;
 }
@@ -222,19 +222,19 @@
 
 @media (max-width: 1400px) {
   .sessions-page .sessions-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 1000px) {
   .sessions-page .sessions-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 600px) {
   .sessions-page .sessions-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .sessions-page {
@@ -387,7 +387,7 @@
 
 .sessions-page .modal-body input:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   background: var(--bg-white);
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
 }
@@ -642,7 +642,8 @@
   }
 }
 
-/* Status Pill for Card Headers */
+/* Status Pill for Card Headers. The detail modal's .status-badge takes the same tint for each status below,
+   except disconnected (its own grey above) and action_required (a lighter tint of its own). */
 .sessions-page .status-pill {
   display: inline-flex;
   padding: 0.25rem 0.75rem;
@@ -653,19 +654,23 @@
 }
 
 .sessions-page .status-pill.created,
-.sessions-page .status-pill.idle {
+.sessions-page .status-pill.idle,
+.sessions-page .status-badge.created {
   background: rgba(107, 114, 128, 0.1);
   color: var(--text-secondary);
 }
 
 .sessions-page .status-pill.initializing,
 .sessions-page .status-pill.connecting,
-.sessions-page .status-pill.authenticating {
+.sessions-page .status-pill.authenticating,
+.sessions-page .status-badge.initializing,
+.sessions-page .status-badge.authenticating {
   background: rgba(234, 179, 8, 0.1);
   color: var(--warning-text);
 }
 
-.sessions-page .status-pill.qr_ready {
+.sessions-page .status-pill.qr_ready,
+.sessions-page .status-badge.qr_ready {
   background: rgba(59, 130, 246, 0.1);
   color: var(--info);
 }
@@ -678,13 +683,23 @@
   color: var(--warning-text);
 }
 
-.sessions-page .status-pill.ready {
+/* The detail badge spells the status out beside its own label, so it takes the 10 percent tint of the other
+   badges: --warning-text is 5.02:1 on it, 4.57:1 on the pill's 22 percent. In the dialog it then differs from
+   the in-progress amber badges by hue only. */
+.sessions-page .status-badge.action_required {
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--warning-text);
+}
+
+.sessions-page .status-pill.ready,
+.sessions-page .status-badge.ready {
   background: rgba(34, 197, 94, 0.1);
   color: var(--success-text);
 }
 
 .sessions-page .status-pill.disconnected,
-.sessions-page .status-pill.failed {
+.sessions-page .status-pill.failed,
+.sessions-page .status-badge.failed {
   background: rgba(239, 68, 68, 0.1);
   color: var(--error-text);
 }
@@ -695,7 +710,7 @@
   font-size: 0.8125rem;
   font-weight: 600;
   background: var(--primary);
-  color: white;
+  color: #0f172a;
   border: none;
   border-radius: 6px;
   cursor: pointer;
@@ -881,7 +896,7 @@
 }
 
 .sessions-page .toggle-switch input:focus-visible + .toggle-slider {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -903,4 +918,9 @@
   color: var(--text-primary);
   font-size: 0.9375rem;
   box-sizing: border-box;
+}
+
+/* The rule above repaints the border over `.sessions-page .modal-body input:focus` at the same weight. */
+.sessions-page .proxy-form-section input[type='text']:focus {
+  border-color: var(--focus-ring);
 }

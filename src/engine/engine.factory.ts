@@ -167,6 +167,9 @@ export class EngineFactory implements OnModuleInit {
    * id-keyed directory already there), so purging only the id-keyed dirs would strand a complete
    * WhatsApp login on the volume and in every backup taken after the delete. It is removed only when
    * the base directory really holds an entry with that exact name; see readAuthDirEntries.
+   *
+   * The session's lid mappings are kept (the table is shared) but handed to no session, so a phone
+   * this session stored can still be cleared by the session that replaces it (see LidMappingStoreService).
    */
   async purgeSessionData(sessionId: string, legacyName?: string): Promise<void> {
     if (!isSafeSessionName(sessionId)) {
@@ -177,6 +180,7 @@ export class EngineFactory implements OnModuleInit {
       });
       return;
     }
+    await this.lidMappingStore.releaseSession(sessionId);
     const dirs: Array<{ engine: string; dir: string }> = [
       { engine: 'whatsapp-web.js', dir: this.wwjsAuthDir(sessionId) },
       { engine: 'baileys', dir: this.baileysAuthDir(sessionId) },
