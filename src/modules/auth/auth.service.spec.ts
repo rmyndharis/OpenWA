@@ -100,7 +100,7 @@ describe('bannerKeyLine (startup banner key masking)', () => {
     const line = bannerKeyLine(FULL, false);
     expect(line).not.toContain('0123456789abcdef'); // the secret tail must not appear
     expect(line.startsWith('owa_k1_0')).toBe(true); // a short fingerprint is fine
-    expect(line).toMatch(/data\/\.api-key/); // points the operator to the real source
+    expect(line).toMatch(/data[\\/]\.api-key/); // points the operator to the real source
     expect(line).not.toContain('dashboard'); // the dashboard only ever shows a key's prefix
   });
 
@@ -1206,7 +1206,82 @@ describe('AuthService', () => {
       await service.onModuleInit();
 
       expect(unlinkSpy).not.toHaveBeenCalled();
-      expect(bannerText()).toMatch(/\(full key in \S*data\/\.api-key\)/);
+      expect(bannerText()).toMatch(/\(full key in \S*data[\\/]\.api-key\)/);
+    });
+
+    it('seeds a default admin key and the written key successfully authenticates against the persisted hash', async () => {
+      const savedEnv = {
+        API_MASTER_KEY: process.env.API_MASTER_KEY,
+        ALLOW_DEV_API_KEY: process.env.ALLOW_DEV_API_KEY,
+        BOOTSTRAP_KEY_FILE: process.env.BOOTSTRAP_KEY_FILE,
+      };
+      delete process.env.API_MASTER_KEY;
+      delete process.env.ALLOW_DEV_API_KEY;
+      process.env.BOOTSTRAP_KEY_FILE = '/isolated/virtual/path/.api-key';
+
+      const chmodSpy = jest.spyOn(fs, 'chmodSync').mockImplementation(() => undefined);
+      let capturedWrittenKey = '';
+      const writeSpy = jest.spyOn(fs, 'writeFileSync').mockImplementation((_file, data) => {
+        if (typeof data === 'string') {
+          capturedWrittenKey = data;
+        } else if (Buffer.isBuffer(data)) {
+          capturedWrittenKey = data.toString('utf-8');
+        }
+        return undefined;
+      });
+
+      let persistedEntity: ApiKey | undefined;
+      (repository.count as jest.Mock).mockResolvedValue(0);
+      (repository.create as jest.Mock).mockImplementation((dto: Partial<ApiKey>) => {
+        return createMockApiKey({
+          name: dto.name,
+          keyHash: dto.keyHash,
+          keyPrefix: dto.keyPrefix,
+          role: dto.role,
+          isActive: true,
+        });
+      });
+      (repository.save as jest.Mock).mockImplementation((entity: ApiKey) => {
+        persistedEntity = entity;
+        return Promise.resolve(entity);
+      });
+
+      try {
+        await service.onModuleInit();
+
+        expect(keyIndex.refreshSoon).toHaveBeenCalled();
+        expect(writeSpy).toHaveBeenCalledWith(
+          '/isolated/virtual/path/.api-key',
+          expect.stringMatching(/^owa_k1_[a-f0-9]{64}$/),
+          expect.objectContaining({ mode: 0o600 }),
+        );
+        expect(capturedWrittenKey).toMatch(/^owa_k1_[a-f0-9]{64}$/);
+        expect(bannerText()).toContain('API Key (newly created)');
+
+        (repository.findOne as jest.Mock).mockImplementation((options?: { where?: { keyHash?: string } }) => {
+          if (persistedEntity && options?.where?.keyHash === persistedEntity.keyHash) {
+            return Promise.resolve(persistedEntity);
+          }
+          return Promise.resolve(null);
+        });
+
+        const validated = await service.validateApiKey(capturedWrittenKey);
+        expect(validated).toBeDefined();
+        expect(validated.role).toBe(ApiKeyRole.ADMIN);
+        expect(validated.name).toBe('Default Admin Key');
+
+        // Negative check: a mismatched hash fails validation with Invalid API key (401)
+        expect(persistedEntity).toBeDefined();
+        persistedEntity!.keyHash = 'tampered-or-wrong-hash';
+        await expect(service.validateApiKey(capturedWrittenKey)).rejects.toThrow('Invalid API key');
+      } finally {
+        for (const [key, val] of Object.entries(savedEnv)) {
+          if (val === undefined) delete process.env[key];
+          else process.env[key] = val;
+        }
+        chmodSpy.mockRestore();
+        writeSpy.mockRestore();
+      }
     });
   });
 

@@ -97,6 +97,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
 
       await this.seedApiKey(displayKey, 'Default Admin Key', ApiKeyRole.ADMIN);
       isNewKey = true;
+      this.keyIndex?.refreshSoon();
 
       // Save raw key to file for startup script to read (owner-only — it's the raw admin key).
       try {

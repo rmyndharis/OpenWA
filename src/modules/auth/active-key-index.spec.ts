@@ -86,6 +86,27 @@ describe('ActiveKeyIndex', () => {
     expect(index.recognise({ 'x-api-key': 'k1' }, '192.0.2.1')).toBe(sha('k1'));
   });
 
+  it('recovers and populates the index when an initial bootstrap read fails transiently', async () => {
+    let attempts = 0;
+    const { index } = indexOver(() => {
+      attempts++;
+      if (attempts === 1) return Promise.reject(new Error('transient bootstrap db connection error'));
+      return Promise.resolve([row('k-bootstrap')]);
+    });
+
+    // Initial bootstrap load fails transiently; index stays empty without throwing
+    await index.onApplicationBootstrap();
+    expect(index.recognise({ 'x-api-key': 'k-bootstrap' }, '192.0.2.1')).toBeUndefined();
+
+    // Extra refresh (e.g. from seedApiKey bootstrap resilience) attempts reload
+    index.refreshSoon();
+    await (index as unknown as { loading: Promise<void> }).loading;
+    index.onModuleDestroy();
+
+    // Now populated successfully
+    expect(index.recognise({ 'x-api-key': 'k-bootstrap' }, '192.0.2.1')).toBe(sha('k-bootstrap'));
+  });
+
   it('runs one more load when asked to refresh during a load, and none after destroy', async () => {
     let rows = [row('k1')];
     const { index, find } = indexOver(() => Promise.resolve(rows));
