@@ -1,4 +1,4 @@
-import { type Client } from 'whatsapp-web.js';
+import { type Chat, type Client } from 'whatsapp-web.js';
 import {
   Group,
   GroupInfo,
@@ -21,7 +21,7 @@ import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.
 import { toMessageMedia } from './wwebjs-messaging';
 import { type WwebjsEngineHost, rethrowIfNavigation, withPage, reportPageDeath } from './wwebjs-host';
 import { isNavigationError, isProtocolTimeout } from './wwebjs-lifecycle';
-import { listChats } from './wwebjs-chats';
+import { isPageSideRejection, listChats, readLoadedChats } from './wwebjs-chats';
 
 /**
  * Extracts the JID of the parent community a group is linked to, if any.
@@ -137,7 +137,19 @@ export class WwebjsGroups {
   async getGroupInfo(groupId: string): Promise<GroupInfo | null> {
     this.host.ensureReady();
     try {
-      const chat = await this.client().getChatById(groupId);
+      let chat: Chat;
+      try {
+        chat = await this.client().getChatById(groupId);
+      } catch (error) {
+        // getChatById refreshes a group's metadata from the server first, and WhatsApp Web can fail one
+        // of its own invariants while processing the reply (#1950). Read the group from the metadata the
+        // page already holds, as the group list does, rather than answer that it does not exist. A dead
+        // page, a timeout or a session that went away goes straight to the splits below.
+        if (!isPageSideRejection(this.host, error)) throw error;
+        const [local] = await readLoadedChats(this.host, 'getGroupInfo', [groupId]);
+        if (!local) throw error;
+        chat = local;
+      }
       if (!chat.isGroup) {
         return null;
       }

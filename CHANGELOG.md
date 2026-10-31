@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Read a whatsapp-web.js group from the metadata the page already holds when WhatsApp Web fails one of its own invariants while refreshing it, as the group list does, so `GET /api/sessions/{sessionId}/groups/{groupId}` and `/labels/{labelId}/chats` no longer answer `404` for that group or for every label it carries (#1950).
+
 ## [0.27.0] - 2026-10-31
 
 ### Added

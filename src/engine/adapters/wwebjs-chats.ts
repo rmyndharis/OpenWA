@@ -7,7 +7,7 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { chatKind, isChannelJid } from '../identity/wa-id';
 import { WwebjsMessaging } from './wwebjs-messaging';
 import { type WwebjsEngineHost, rethrowIfNavigation } from './wwebjs-host';
-import { isProtocolTimeout } from './wwebjs-lifecycle';
+import { isNavigationError, isProtocolTimeout } from './wwebjs-lifecycle';
 import { mapWwebjsMessageType } from './message-mapper';
 
 /**
@@ -22,8 +22,11 @@ import { mapWwebjsMessageType } from './message-mapper';
  * whose model fails one of WhatsApp Web's own invariants is served from the metadata the page already
  * holds (see the fallback below), so one group WhatsApp Web cannot refresh no longer fails the whole
  * list; any other rejection still rejects the whole read, as upstream does.
+ *
+ * Given `chatIds`, it reads only those chats the page has loaded, skipping any it does not hold, so a
+ * read that resolves one chat through `getChatById` can recover a group the same way the list does.
  */
-export async function readChatModels(): Promise<unknown[]> {
+export async function readChatModels(chatIds?: string[]): Promise<unknown[]> {
   type PageChat = {
     serialize: () => Record<string, unknown>;
     mute?: { expiration?: number };
@@ -32,7 +35,7 @@ export async function readChatModels(): Promise<unknown[]> {
   };
   const w = window as unknown as {
     require: (m: string) => {
-      Chat: { getModelsArray: () => PageChat[] };
+      Chat: { getModelsArray: () => PageChat[]; get: (id: string) => PageChat | undefined };
       toPn: (id: unknown) => unknown;
     };
     WWebJS: { getChatModel: (chat: unknown) => Promise<unknown> };
@@ -72,7 +75,10 @@ export async function readChatModels(): Promise<unknown[]> {
   // A copy: getModelsArray() is the collection's live array, which re-sorts on a new message and
   // grows on a new chat, so indexing it across the yields below would read one chat twice and skip
   // another. Upstream's single synchronous map never let it change underneath.
-  const chats = w.require('WAWebCollections').Chat.getModelsArray().slice();
+  const collection = w.require('WAWebCollections').Chat;
+  const chats = chatIds
+    ? chatIds.map(id => collection.get(id)).filter((chat): chat is PageChat => Boolean(chat))
+    : collection.getModelsArray().slice();
   const pending: Promise<unknown>[] = [];
   for (let i = 0; i < chats.length; i++) {
     const chat = chats[i];
@@ -139,6 +145,41 @@ export async function listChats(host: WwebjsEngineHost, context: string): Promis
     );
     throw error;
   }
+  return toChats(host, context, models);
+}
+
+/**
+ * The given chats through {@link readChatModels}, for a read that resolved them one by one through
+ * `getChatById` and got a rejection: a group whose refresh fails one of WhatsApp Web's own invariants
+ * comes back from its loaded metadata, as the list serves it. A chat the page does not hold is left out
+ * and any other rejection is rethrown, for the caller to handle as it handled the original.
+ */
+export async function readLoadedChats(host: WwebjsEngineHost, context: string, chatIds: string[]): Promise<Chat[]> {
+  const page = (
+    host.getClient() as unknown as {
+      pupPage: { evaluate: <T, A>(fn: (arg: A) => Promise<T>, arg: A) => Promise<T> };
+    }
+  ).pupPage;
+  return toChats(host, context, await page.evaluate(readChatModels, chatIds));
+}
+
+/**
+ * Whether a rejection is the page's own code failing, the only kind {@link readLoadedChats} can recover:
+ * not a dead page, a read that outran the protocol budget or a session that went away, which the caller
+ * answers as it always did.
+ */
+export function isPageSideRejection(host: WwebjsEngineHost, error: unknown): boolean {
+  return !(
+    error instanceof EngineNotReadyError ||
+    isNavigationError(error) ||
+    host.isPageTransportError(error) ||
+    isProtocolTimeout(error)
+  );
+}
+
+/** Rehydrate page models the way ChatFactory does, reporting any group served from local metadata. */
+function toChats(host: WwebjsEngineHost, context: string, models: unknown[]): Chat[] {
+  const client = host.getClient();
   const local = models.filter(
     data => typeof (data as { metadataRefreshError?: unknown }).metadataRefreshError === 'string',
   );

@@ -4,6 +4,7 @@ import { WwebjsLabels } from './wwebjs-labels';
 import { createLogger } from '../../common/services/logger.service';
 import { type WwebjsEngineHost } from './wwebjs-host';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
+import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
 
 /**
  * Three label reads had no error handling on the page call at all, so a dead page was both an opaque
@@ -117,5 +118,80 @@ describe('label operations distinguish a dead page from an ordinary failure', ()
     await expect(labels.addLabelToChat('628999@c.us', '7')).rejects.toBeInstanceOf(NotFoundException);
     await expect(labels.removeLabelFromChat('628999@c.us', '7')).rejects.toBeInstanceOf(NotFoundException);
     expect(client.addOrRemoveLabels).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * getChatsByLabelId resolves each chat through getChatById, so one group whose metadata refresh fails
+ * one of WhatsApp Web's own invariants (#1950) rejected the whole list, which answered as an unknown
+ * label. The fallback runs the real in-page reads against a stand-in page.
+ */
+describe('getChatsByLabel with a group whose metadata refresh fails', () => {
+  const g = globalThis as unknown as { window?: unknown };
+  const invariant = Object.assign(new Error('Minified invariant #76137; %s'), { name: 'Invariant Violation' });
+
+  afterEach(() => {
+    delete g.window;
+    jest.restoreAllMocks();
+  });
+
+  const pageChat = (id: string, title: string, group: boolean) => ({
+    id,
+    serialize: () => ({ id: { _serialized: id }, formattedTitle: title, unreadCount: 1, msgs: [] }),
+    mute: { expiration: 0 },
+    formattedTitle: title,
+    groupMetadata: group ? { serialize: () => ({ participants: [] }) } : undefined,
+  });
+
+  function makeLabels(labelItems: { parentType: string; parentId: string }[] | undefined) {
+    const chats: Record<string, ReturnType<typeof pageChat>> = {
+      '628111@c.us': pageChat('628111@c.us', 'Alice', false),
+      '120363@g.us': pageChat('120363@g.us', 'Coex group', true),
+    };
+    g.window = {
+      require: (m: string) =>
+        m === 'WAWebLidMigrationUtils'
+          ? { toPn: () => null }
+          : {
+              Chat: { get: (id: string) => chats[id] },
+              Label: {
+                get: () => labelItems && { labelItemCollection: { getModelsArray: () => labelItems } },
+              },
+            },
+      WWebJS: {
+        getChatModel: (chat: ReturnType<typeof pageChat>) =>
+          chat.groupMetadata ? Promise.reject(invariant) : Promise.resolve({ ...chat.serialize(), isGroup: false }),
+      },
+    };
+    const client = {
+      getChatsByLabelId: jest.fn().mockRejectedValue(new Error('Evaluation failed: Invariant Violation: #76137')),
+      pupPage: { evaluate: jest.fn((fn: (arg: unknown) => unknown, arg: unknown) => Promise.resolve(fn(arg))) },
+    };
+    const host = {
+      ensureReady: jest.fn(),
+      getClient: () => client as unknown as Client,
+      isPageTransportError: () => false,
+      reportIfPageTransportError: jest.fn(),
+      logger,
+    } as unknown as WwebjsEngineHost;
+    return new WwebjsLabels(host);
+  }
+
+  it('lists every chat on the label, the failing group from its loaded metadata', async () => {
+    jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const labels = makeLabels([
+      { parentType: 'Chat', parentId: '628111@c.us' },
+      { parentType: 'Message', parentId: 'msg-1' },
+      { parentType: 'Chat', parentId: '120363@g.us' },
+    ]);
+
+    await expect(labels.getChatsByLabel('7')).resolves.toEqual([
+      expect.objectContaining({ id: '628111@c.us', name: 'Alice', isGroup: false, unreadCount: 1 }),
+      expect.objectContaining({ id: '120363@g.us', name: 'Coex group', isGroup: true }),
+    ]);
+  });
+
+  it('still answers an unknown label as not found', async () => {
+    await expect(makeLabels(undefined).getChatsByLabel('7')).rejects.toBeInstanceOf(LabelNotFoundError);
   });
 });

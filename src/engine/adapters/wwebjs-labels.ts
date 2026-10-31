@@ -1,5 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
-import { type Client } from 'whatsapp-web.js';
+import { type Chat, type Client } from 'whatsapp-web.js';
 import { mapWwebjsMessageType } from './message-mapper';
 import { Label, ChatSummary } from '../interfaces/whatsapp-engine.interface';
 import { GroupChat, BusinessClient } from '../types/whatsapp-web-js.types';
@@ -9,6 +9,7 @@ import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { type WwebjsEngineHost, rethrowIfNavigation, withPage } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
+import { isPageSideRejection, readLoadedChats } from './wwebjs-chats';
 
 /**
  * Chat-label operations (WhatsApp Business only) extracted from WhatsAppWebJsAdapter. The adapter
@@ -55,7 +56,9 @@ export class WwebjsLabels {
     // the same answer getLabelById gives.
     let chats: Awaited<ReturnType<BusinessClient['getChatsByLabelId']>>;
     try {
-      chats = await (this.client() as unknown as BusinessClient).getChatsByLabelId(labelId);
+      chats = await (this.client() as unknown as BusinessClient)
+        .getChatsByLabelId(labelId)
+        .catch(error => this.readLoadedLabelChats(labelId, error));
     } catch (error) {
       // Same split the group read makes: a dead page is a 503, not "no such label".
       rethrowIfNavigation(this.host, error);
@@ -100,6 +103,38 @@ export class WwebjsLabels {
       });
     }
     return summaries;
+  }
+
+  /**
+   * The library resolves every chat behind the label through getChatById, so one group whose metadata
+   * refresh fails one of WhatsApp Web's own invariants (#1950) rejected the whole list, which read as an
+   * unknown label. Read the label's chats from what the page already holds instead, as the chat list
+   * does. A dead page, a timeout or a session that went away skips this, and any failure here lands in
+   * the caller's catch exactly as the original rejection would have.
+   */
+  private async readLoadedLabelChats(labelId: string, error: unknown): Promise<Chat[]> {
+    if (!isPageSideRejection(this.host, error)) throw error;
+    const page = (
+      this.client() as unknown as {
+        pupPage: { evaluate: <T, A>(fn: (arg: A) => T, arg: A) => Promise<T> };
+      }
+    ).pupPage;
+    // The same page read getChatsByLabelId starts with (Client.js), so an unknown label still throws.
+    const chatIds = await page.evaluate((id: string) => {
+      type LabelItem = { parentType: string; parentId: string };
+      const w = window as unknown as {
+        require: (m: string) => {
+          Label: { get: (id: string) => { labelItemCollection: { getModelsArray: () => LabelItem[] } } };
+        };
+      };
+      return w
+        .require('WAWebCollections')
+        .Label.get(id)
+        .labelItemCollection.getModelsArray()
+        .filter(item => item.parentType === 'Chat')
+        .map(item => item.parentId);
+    }, labelId);
+    return readLoadedChats(this.host, 'getChatsByLabel', chatIds);
   }
 
   async getLabelById(labelId: string): Promise<Label | null> {

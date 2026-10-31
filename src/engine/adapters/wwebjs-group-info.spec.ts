@@ -87,3 +87,96 @@ describe('WwebjsGroups.getGroupInfo', () => {
     expect(info).toMatchObject({ isAnnounce: false, isReadOnly: false });
   });
 });
+
+/**
+ * getChatById refreshes a group's metadata before it resolves, and WhatsApp Web can fail one of its own
+ * invariants on the reply (#1950), so the group read answered 404 for a group the list showed. The
+ * fallback runs the real in-page walk against a stand-in page.
+ */
+describe('WwebjsGroups.getGroupInfo for a group whose metadata refresh fails', () => {
+  const g = globalThis as unknown as { window?: unknown };
+  const invariant = Object.assign(new Error('Minified invariant #76137; %s'), { name: 'Invariant Violation' });
+
+  afterEach(() => {
+    delete g.window;
+    jest.restoreAllMocks();
+  });
+
+  const loadedGroup = {
+    serialize: () => ({ id: { _serialized: '120363@g.us' }, formattedTitle: 'Coex group', msgs: [] }),
+    mute: { expiration: 0 },
+    formattedTitle: 'Coex group',
+    groupMetadata: {
+      announce: true,
+      serialize: () => ({
+        announce: true,
+        creation: 1718900000,
+        owner: { _serialized: SELF },
+        participants: [participant(SELF, true), participant(OTHER, false)],
+      }),
+    },
+  };
+
+  function makeFailingGroups(pageChats: Record<string, unknown>, getChatModel: () => Promise<unknown>) {
+    g.window = {
+      require: (m: string) =>
+        m === 'WAWebLidMigrationUtils'
+          ? { toPn: () => null }
+          : { Chat: { get: (id: string) => pageChats[id], getModelsArray: () => Object.values(pageChats) } },
+      WWebJS: { getChatModel },
+    };
+    const evaluate = jest.fn((fn: (arg: unknown) => unknown, arg: unknown) => Promise.resolve(fn(arg)));
+    const client = {
+      info: { wid: { _serialized: SELF } },
+      getChatById: jest.fn().mockRejectedValue(new Error('Evaluation failed: Invariant Violation: #76137')),
+      pupPage: { evaluate },
+    };
+    const host = {
+      ensureReady: jest.fn(),
+      getClient: () => client as unknown as Client,
+      isPageTransportError: () => false,
+      reportIfPageTransportError: jest.fn(),
+      logger,
+    } as unknown as WwebjsEngineHost;
+    return { groups: new WwebjsGroups(host), evaluate };
+  }
+
+  it('reads the group from the metadata the page already holds', async () => {
+    const { groups, evaluate } = makeFailingGroups({ '120363@g.us': loadedGroup }, () => Promise.reject(invariant));
+    const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+    const info = await groups.getGroupInfo('120363@g.us');
+
+    expect(evaluate).toHaveBeenCalledWith(expect.any(Function), ['120363@g.us']);
+    expect(info).toMatchObject({
+      id: '120363@g.us',
+      name: 'Coex group',
+      owner: SELF,
+      createdAt: 1718900000,
+      participants: [
+        { id: SELF, isAdmin: true },
+        { id: OTHER, isAdmin: false },
+      ],
+      isAnnounce: true,
+      isReadOnly: false,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('1 group(s) from local metadata'),
+      expect.objectContaining({ context: 'getGroupInfo', groups: ['120363@g.us'] }),
+    );
+  });
+
+  it('still answers null for a group the page does not hold', async () => {
+    const { groups } = makeFailingGroups({}, () => Promise.reject(invariant));
+
+    await expect(groups.getGroupInfo('120363@g.us')).resolves.toBeNull();
+  });
+
+  it('still answers null when the page fails for a reason other than an invariant', async () => {
+    const { groups } = makeFailingGroups({ '120363@g.us': loadedGroup }, () =>
+      Promise.reject(new Error('Socket closed')),
+    );
+
+    await expect(groups.getGroupInfo('120363@g.us')).resolves.toBeNull();
+  });
+});
