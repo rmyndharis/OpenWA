@@ -74,3 +74,15 @@ test('refuses a tree that has no chats.js rather than skipping it', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'baileys-absent-'));
   assert.throws(() => applyAppStatePatch(dir), /not found/);
 });
+
+test('applies to a copy of the installed Baileys, or finds it applied there already', () => {
+  // The fixtures above are built from this patcher's own find strings, so they pass just the same once the
+  // library stops containing them. A copy of the installed file does not.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'baileys-appstate-installed-'));
+  const file = path.join('lib', 'Socket', 'chats.js');
+  fs.mkdirSync(path.join(dir, path.dirname(file)), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, '..', 'node_modules', '@whiskeysockets', 'baileys', file), path.join(dir, file));
+  applyAppStatePatch(dir);
+  assert.equal(isApplied(dir), true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
