@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Read a whatsapp-web.js group whose refresh fails one of WhatsApp Web's own invariants from the metadata the page already holds across group, chat, label and message routes (#1962).
 - Reload the active API key index after seeding the first admin key, so a failed first read no longer leaves body admission without it until the next refresh. Thanks @Purushotham-Prajapati-24.
+- Stop sending `message.edited` on the webhook and socket for an edit that reaches a message already deleted for everyone, which handed consumers new text for a message `message.revoked` had already withdrawn. Thanks @rupeshreddynagolu.
 - Clear or update both the `@lid` and `@s.whatsapp.net` Baileys chat previews when a history-sync revoke or a live edit or revoke arrives under the counterpart chat id.
 - Pin a Baileys send to the socket and ready state that started it across pre-send media, quote, preview and catalog work, and map a connection drop during `sendProduct`'s catalog lookup to `EngineNotReadyError`.
 - Ignore an old engine's disconnect report while `executeReconnect` is tearing that engine down, flush a deferred terminal-unlink read retry when a reconnect is cancelled or shut down, and register the `logout` credential-teardown fence before waiting on initial status.
