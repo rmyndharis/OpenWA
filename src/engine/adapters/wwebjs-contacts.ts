@@ -398,7 +398,7 @@ export class WwebjsContacts {
    */
   async getBlockedContacts(): Promise<string[]> {
     this.host.ensureReady();
-    const contacts = await withPage(this.host, 'getBlockedContacts', () => this.client().getBlockedContacts());
+    const contacts = await this.askPage('getBlockedContacts', () => this.client().getBlockedContacts());
     const ids = contacts.map(c => readWid(c.id as unknown as SerializedWid)).filter((id): id is string => Boolean(id));
     return [...new Set(ids)];
   }

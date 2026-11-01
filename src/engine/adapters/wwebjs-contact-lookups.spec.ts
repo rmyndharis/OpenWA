@@ -71,6 +71,12 @@ describe('WwebjsContacts lookups that outrun the protocol budget', () => {
     await expect(contacts.checkNumberExists('628123456789')).rejects.toBeInstanceOf(EngineTransportError);
   });
 
+  it('answers a timed-out blocklist read with the 503 its route documents', async () => {
+    const contacts = setup({ getBlockedContacts: jest.fn().mockRejectedValue(PROTOCOL_TIMEOUT) });
+
+    await expect(contacts.getBlockedContacts()).rejects.toBeInstanceOf(EngineTransportError);
+  });
+
   it('leaves an ordinary page failure as the failure it is', async () => {
     const refusal = new Error('Evaluation failed: lookup refused');
     const contacts = setup({
