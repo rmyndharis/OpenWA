@@ -559,7 +559,8 @@ app.use(helmet({
 > **Reality check:** persisted audit coverage currently includes API-key create/update/revoke/delete
 > (updates carry before/after authorization state), rejected authentication, session lifecycle
 > (including disconnects caused by WhatsApp unlinking the device, account restrictions and their
-> lifting, and refused rebinds), integration-instance creation, update, secret rotation, deletion,
+> lifting, and refused rebinds), a privacy id newly reported for a phone number the lid table already
+> maps to another (`phone_second_lid_reported`), integration-instance creation, update, secret rotation, deletion,
 > redrive, and scope-binding bridge failures, plugin install, update, uninstall, enable, disable, configuration and session
 > activation, webhook delivery-failure redrive batches, send-pacing refusals (sampled) and breaker trips, the
 > infra operations (config save, restart request, data export/import, storage export/import),
