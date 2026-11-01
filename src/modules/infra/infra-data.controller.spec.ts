@@ -2820,6 +2820,29 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     expect(await ds.getRepository(Session).count()).toBe(1);
   });
 
+  // Committed, such a row made every entity read of it throw: GET /sessions answered 500 for every session, and the
+  // webhook lookup of each event read the session's webhooks as none.
+  it.each([
+    ['a session config', 'Skipped session s1: config is not valid JSON'],
+    ['webhook headers', 'Skipped webhook wh1: headers is not valid JSON'],
+  ])('refuses an archive whose %s does not parse, replacing nothing', async (_case, warning) => {
+    await seedSession('s1');
+    await ds.getRepository(Webhook).save({ id: 'wh0', sessionId: 's1', url: 'https://example.com/kept' });
+    const dump = await build().exportData();
+    const [session] = dump.tables.sessions as unknown as Record<string, unknown>[];
+    const webhook = { id: 'wh1', sessionId: 's1', url: 'https://example.com/hook', events: ['message.received'] };
+    const tables = warning.includes('session')
+      ? { ...dump.tables, sessions: [{ ...session, config: '{"maxReconnectAttempts": 3' }] }
+      : { ...dump.tables, webhooks: [{ ...webhook, headers: '{"Authorization": "Bearer x"' }] };
+
+    const res = await build().importData({ tables: tables as never });
+
+    expect(res.imported).toBe(false);
+    expect(res.warnings).toEqual([warning]);
+    expect(await ds.getRepository(Session).find()).toHaveLength(1);
+    expect((await ds.getRepository(Webhook).find()).map(w => w.id)).toEqual(['wh0']);
+  });
+
   it('still reports the engines it already stopped when the import rolls back', async () => {
     // The pre-flight teardown runs BEFORE the transaction opens and cannot be rolled back with it.
     // An operator reading imported:false plus empty orphan arrays would conclude nothing happened,

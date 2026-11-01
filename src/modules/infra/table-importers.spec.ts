@@ -200,3 +200,32 @@ describe('table importers: NUL in free text', () => {
     expect(mapped('statusUpdates', { id: 'su1', contactJid: nul })[2]).toBe(nul);
   });
 });
+
+/**
+ * A restore writes JSON text as it finds it, and these columns are parsed on every entity read of their row, so text
+ * that does not parse made each read throw: GET /sessions answered 500 for every session, and one webhook's headers
+ * stopped every delivery of its session. Such a row is refused, naming the column. A decoded value, valid text, null
+ * or a missing column restores as before.
+ */
+describe('table importers: JSON text that does not parse', () => {
+  const skip = (key: string, row: Record<string, unknown>): string | null | undefined =>
+    TABLE_IMPORTERS.find(importer => importer.key === key)!.skip?.(row as never, [row] as never);
+
+  it.each([
+    ['sessions', 'config', { id: 's1', name: 'my-bot' }, 'Skipped session s1: config is not valid JSON'],
+    ['webhooks', 'headers', { id: 'wh-1', events: ['*'] }, 'Skipped webhook wh-1: headers is not valid JSON'],
+    ['messageBatches', 'messages', { id: 'b1' }, 'Skipped message batch b1: messages is not valid JSON'],
+    ['messageBatches', 'options', { id: 'b1' }, 'Skipped message batch b1: options is not valid JSON'],
+    ['messageBatches', 'progress', { id: 'b1' }, 'Skipped message batch b1: progress is not valid JSON'],
+    ['messageBatches', 'results', { id: 'b1' }, 'Skipped message batch b1: results is not valid JSON'],
+    ['pluginInstances', 'config', { id: 'pi1' }, 'Skipped plugin instance pi1: config is not valid JSON'],
+    ['conversationMappings', 'metadata', { id: 'cm1' }, 'Skipped conversation mapping cm1: metadata is not valid JSON'],
+  ])('refuses %s.%s text that does not parse, and nothing else', (key, column, row, warning) => {
+    for (const text of ['{', '', '{"maxReconnectAttempts": 3']) {
+      expect(skip(key, { ...row, [column]: text })).toBe(warning);
+    }
+    for (const value of ['{}', '[]', 'null', '{"maxReconnectAttempts":3}', { a: 1 }, null, undefined]) {
+      expect(skip(key, { ...row, [column]: value })).toBeNull();
+    }
+  });
+});
