@@ -6738,11 +6738,14 @@ Search messages across sessions (active search provider).
   receives `chatId` and `from` as the caller sent them, without the other stored forms the built-in
   provider matches.
 - `score` is optional and provider-specific (rank ordering is stable within a provider; cross-provider
-  scores are not comparable). The built-in provider on SQLite leaves it out for a key restricted to
-  selected sessions or chats, since it is computed over the whole index. With `match=contains` it is
-  the match quality on both dialects (3 per term found as a whole word, 2 at a word start, 1 inside a
-  word) and every key gets it, since it reads only its own message: its first 4,096 characters, so a
-  term found only past them adds nothing, and a hit with no term in them gets a snippet without `<mark>`.
+  scores are not comparable). Hits come back most relevant first, but the built-in `match=word` score
+  runs in opposite directions by database: on SQLite it is FTS5's bm25 rank, negative, lower meaning
+  more relevant; on PostgreSQL it is `ts_rank`, higher meaning more relevant. The built-in provider on
+  SQLite leaves it out for a key restricted to selected sessions or chats, since it is computed over
+  the whole index. With `match=contains` it is the match quality on both dialects (3 per term found as
+  a whole word, 2 at a word start, 1 inside a word) and every key gets it, since it reads only its own
+  message: its first 4,096 characters, so a term found only past them adds nothing, and a hit with no
+  term in them gets a snippet without `<mark>`.
 
 **Errors:** `400` empty/whitespace `q` or one holding a NUL character, a non-numeric `dateFrom`/`dateTo`/`limit`/`offset`, a `dateFrom`/`dateTo` beyond 9007199254740991 in either direction, an `offset` above `100000`, an unknown `match`, a
 `match=contains` query with no term of 3 or more characters (on PostgreSQL, 3 letters or digits in a row) or with more than 64 characters in its terms, or a malformed

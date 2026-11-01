@@ -236,7 +236,9 @@ GET /api/search?q=<term>&match=<word|contains>&sessionId=<id>&chatId=<id>&direct
   reads only its own message, so every key gets it.
 - **Response** is a `SearchResults` object: `{ hits: SearchHit[], total, tookMs, provider }`. Each hit
   carries `messageId`, `waMessageId`, `sessionId`, `chatId`, `body`, `snippet`, `timestamp`, `type`,
-  `direction`, `from`, and optional `score`. `total` is an exact count (bounded; computed lazily only
+  `direction`, `from`, and optional `score`: with `match=word` FTS5's bm25 rank on SQLite, where lower
+  is more relevant, and `ts_rank` on Postgres, where higher is; with `match=contains` higher on both.
+  Hits come back most relevant first either way. `total` is an exact count (bounded; computed lazily only
   when the page could be full). `tookMs` is the provider-side query time. `provider` names which
   backend answered (e.g. `builtin-fts`).
 - **Errors:** `400` empty/whitespace `q` or one holding a NUL character, a non-numeric numeric param,
