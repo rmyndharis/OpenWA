@@ -1116,7 +1116,13 @@ export class BaileysMessaging {
     expected?: WASocket,
   ): Promise<WAMessage | undefined> {
     const sock = this.sock(expected);
-    if (parseWaId(jid).kind === 'user') {
+    const recipient = parseWaId(jid);
+    // An id with a stray '@' or no user before it parses as unknown with no user part, which would skip the
+    // registered-recipient check below and hand the raw id to the socket.
+    if (recipient.kind === 'unknown' && !recipient.userPart && jid.includes('@')) {
+      throw markNothingSent(new BadRequestException(`Recipient ${jid} is not a valid WhatsApp id`));
+    }
+    if (recipient.kind === 'user') {
       let numberId: string | null;
       try {
         numberId = await this.getNumberId(jid);
