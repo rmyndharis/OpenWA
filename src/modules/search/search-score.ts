@@ -1,4 +1,4 @@
-import { foldForMatching } from './search-terms';
+import { containsRankedText, foldForMatching } from './search-terms';
 
 /**
  * Relevance of a match=contains candidate, computed in the application so both dialects rank alike
@@ -11,10 +11,10 @@ import { foldForMatching } from './search-terms';
  *  - 0 when the folded body does not contain it (a short term SQLite's ASCII-only LIKE matched).
  * The score is the sum over the terms, so a message matching more terms as words ranks higher. It
  * reads only the one body, never statistics of other messages, so it reveals nothing outside the
- * caller's scope.
+ * caller's scope, and only its first SEARCH_CONTAINS_RANKED_LENGTH characters.
  */
 export function containsScore(body: string, terms: string[]): number {
-  const folded = foldForMatching(body);
+  const folded = foldForMatching(containsRankedText(body));
   let score = 0;
   for (const term of terms.map(foldForMatching)) {
     let best = 0;

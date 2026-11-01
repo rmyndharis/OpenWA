@@ -1,5 +1,6 @@
 import { containsSnippet } from './search-snippet';
 import { containsTerms, foldSearchText } from './search-terms';
+import { SEARCH_CONTAINS_RANKED_LENGTH } from './search.constants';
 
 describe('foldSearchText', () => {
   it('drops accents and lowers case, as the contains indexes compare text', () => {
@@ -69,5 +70,21 @@ describe('containsSnippet', () => {
 
   it('returns an empty snippet for an empty body', () => {
     expect(containsSnippet('   ', ['invoice'], 24)).toBe('');
+  });
+
+  it('looks for matches in the first SEARCH_CONTAINS_RANKED_LENGTH characters of a long body only', () => {
+    const filler = 'filler '.repeat(Math.ceil(SEARCH_CONTAINS_RANKED_LENGTH / 7));
+    expect(containsSnippet(`${filler}invoice`, ['invoice'], 3)).toBe('filler filler filler…');
+  });
+
+  it('marks a long body as cut where it stops reading, never inside a surrogate pair', () => {
+    const word = 'x'.repeat(SEARCH_CONTAINS_RANKED_LENGTH - 1);
+    expect(containsSnippet(`${word}😀 tail`, ['xxx'], 24)).toBe(`<mark>${word}</mark>…`);
+  });
+
+  it('adds no cut mark for whitespace past the part it reads', () => {
+    expect(containsSnippet(`invoice${' '.repeat(SEARCH_CONTAINS_RANKED_LENGTH)}`, ['invoice'], 24)).toBe(
+      '<mark>invoice</mark>',
+    );
   });
 });

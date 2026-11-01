@@ -1,4 +1,5 @@
 import { containsScore } from './search-score';
+import { SEARCH_CONTAINS_RANKED_LENGTH } from './search.constants';
 
 describe('containsScore', () => {
   it('scores a whole word above a word start above a match inside a word', () => {
@@ -28,5 +29,11 @@ describe('containsScore', () => {
 
   it('scores 0 for a term the body does not contain', () => {
     expect(containsScore('Order shipped', ['invoice'])).toBe(0);
+  });
+
+  it('reads only the first SEARCH_CONTAINS_RANKED_LENGTH characters of a long body', () => {
+    const filler = 'x'.repeat(SEARCH_CONTAINS_RANKED_LENGTH);
+    expect(containsScore(`invoice ${filler}`, ['invoice'])).toBe(3);
+    expect(containsScore(`${filler} invoice`, ['invoice'])).toBe(0);
   });
 });
