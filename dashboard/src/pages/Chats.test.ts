@@ -1866,6 +1866,106 @@ test('a staged reply is dropped when another session is opened', async () => {
   }
 });
 
+/** Run `body` with every request URL recorded as sent, before the stub folds session 2's routes onto session 1's. */
+async function withSentUrls(body: (sent: string[]) => Promise<void>): Promise<void> {
+  const sent: string[] = [];
+  const stub = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    sent.push(String(input).replace(/^https?:\/\/[^/]+/, ''));
+    return stub(input, init);
+  }) as typeof fetch;
+  try {
+    await body(sent);
+  } finally {
+    globalThis.fetch = stub;
+  }
+}
+
+// A switch leaves the previous session's list on screen until the new one lands, and the chat open in it. Both
+// belong to the account left: the session switched to is asked nothing about them.
+for (const engine of ['baileys', 'whatsapp-web.js']) {
+  test(`a session switch on ${engine} asks the new session nothing about the chat open in the previous one`, async () => {
+    const { screen, fireEvent, within, waitFor } = rtl;
+    twoSessions = true;
+    window.sessionStorage.setItem('openwa_engine_type', engine);
+    // Session 2 does not list Alice.
+    chatsResponder = sessionId => Promise.resolve(jsonResponse(sessionId === SESSION.id ? [CHAT, CHAT_2] : [CHAT_2]));
+    try {
+      await withSentUrls(async sent => {
+        const { container } = renderChats();
+        await screen.findByText(SESSION.name);
+        fireEvent.click(await screen.findByText('Alice'));
+        await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+        sent.length = 0;
+
+        selectSession(container, SESSION_2.id);
+        await waitFor(() => assert.equal(screen.queryByText('Alice') === null, true, "session 2's list did not land"));
+        await flush();
+        const aliceThroughTwo = sent.filter(
+          url => url.includes(`/sessions/${SESSION_2.id}/`) && url.includes(encodeURIComponent(CHAT.id)),
+        );
+        assert.deepEqual(aliceThroughTwo, [], 'session 2 was asked about a chat only session 1 lists');
+      });
+    } finally {
+      twoSessions = false;
+      window.sessionStorage.setItem('openwa_engine_type', 'baileys');
+    }
+  });
+}
+
+test('a session switch asks the new session for the pictures of its own list, not of the one it replaces', async () => {
+  const { screen, waitFor } = rtl;
+  twoSessions = true;
+  chatsResponder = sessionId => Promise.resolve(jsonResponse(sessionId === SESSION.id ? [CHAT, CHAT_2] : [CHAT_2]));
+  try {
+    await withSentUrls(async sent => {
+      const { container } = renderChats();
+      await screen.findByText('Alice');
+      sent.length = 0;
+
+      selectSession(container, SESSION_2.id);
+      await waitFor(() => assert.equal(screen.queryByText('Alice') === null, true, "session 2's list did not land"));
+      await flush();
+      const asked = sent
+        .filter(url => url.startsWith(`/api/sessions/${SESSION_2.id}/contacts/profile-pictures`))
+        .map(url => new URL(url, 'http://localhost').searchParams.get('ids'));
+      assert.deepEqual(asked, [CHAT_2.id], "session 2 was not asked for exactly its own list's pictures");
+    });
+  } finally {
+    twoSessions = false;
+  }
+});
+
+test('a session switch with a channel open asks the new session nothing about that channel', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  twoSessions = true;
+  engineType = 'whatsapp-web.js';
+  window.sessionStorage.setItem('openwa_engine_type', engineType);
+  channels = [CHANNEL];
+  channelPosts = [{ id: 'post-1', body: 'news of the day', timestamp: 1_700_000_000, hasMedia: false }];
+  try {
+    await withSentUrls(async sent => {
+      const { container } = renderChats();
+      await screen.findByText(SESSION.name);
+      fireEvent.click(screen.getByRole('tab', { name: 'Channels' }));
+      fireEvent.click(await screen.findByText(CHANNEL.name));
+      await screen.findByText('news of the day');
+      sent.length = 0;
+
+      selectSession(container, SESSION_2.id);
+      await waitFor(() => assert.ok(container.querySelector('.chats-room-placeholder'), 'the channel stayed open'));
+      await flush();
+      const channelThroughTwo = sent.filter(url =>
+        url.startsWith(`/api/sessions/${SESSION_2.id}/channels/${encodeURIComponent(CHANNEL.id)}`),
+      );
+      assert.deepEqual(channelThroughTwo, [], "session 2 was asked for the posts of session 1's open channel");
+    });
+  } finally {
+    twoSessions = false;
+    window.sessionStorage.setItem('openwa_engine_type', 'baileys');
+  }
+});
+
 test("a send that resolves after a session switch does not promote the other session's chat", async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   twoSessions = true;
