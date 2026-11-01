@@ -3134,6 +3134,19 @@ describe('InfraConfigController.requestRestart when the built-in database does n
     expect(writes()).toEqual([]);
   });
 
+  it('says the saved configuration still selects it when putting it back fails', async () => {
+    const controller = build(failedStart);
+    const profiles = saveBuiltIn(controller);
+    (fs.writeFileSync as jest.Mock).mockImplementationOnce(() => {
+      throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    });
+
+    const refusal = await refusalOf(controller.requestRestart({ profiles }));
+
+    expect(refusal.message).toContain('still selects it');
+    expect(shutdown).not.toHaveBeenCalled();
+  });
+
   it('restarts when the built-in database started, whatever else failed', async () => {
     const controller = build({
       ...failedStart,
