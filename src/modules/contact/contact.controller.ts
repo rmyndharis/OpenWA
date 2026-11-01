@@ -195,7 +195,12 @@ export class ContactController {
     description: 'The number and its LID, or null',
     type: ContactLidResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Session is not started' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Session is not started, or `number` is an id of another kind (a privacy id, a group or a channel) rather ' +
+      'than a phone number',
+  })
   @ApiResponse({
     status: 503,
     description:

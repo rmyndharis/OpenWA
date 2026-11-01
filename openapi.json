@@ -9450,7 +9450,7 @@
             }
           },
           "400": {
-            "description": "Session is not started",
+            "description": "Session is not started, or `number` is an id of another kind (a privacy id, a group or a channel) rather than a phone number",
             "content": {
               "application/json": {
                 "schema": {

@@ -80,8 +80,21 @@ export class ContactService {
     }
   }
 
-  /** Unlike {@link resolveContactPhone}, a failed lookup is not swallowed: a null here would claim "no lid". */
+  /**
+   * Unlike {@link resolveContactPhone}, a failed lookup is not swallowed: a null here would claim "no lid".
+   *
+   * The input is a PHONE NUMBER, typed any way (`+62 812-7000-8896`) or as a phone id (`628…@c.us`). An id of another
+   * dialect only looks like one: the digits of a privacy id or a group id are no phone number, and the engines keep
+   * nothing but digits, so the lookup would spend a query on a stranger's number and answer null, or that stranger's
+   * LID. It is refused before an engine is asked.
+   */
   getContactLid(sessionId: string, number: string) {
+    if (number.includes('@') && parseWaId(number).kind !== 'user') {
+      throw new BadRequestException(
+        `${number} does not name a phone number; pass a phone number or a phone-based contact id such as 628123456789@c.us` +
+          (parseWaId(number).kind === 'lid' ? ', or resolve a privacy id with GET contacts/{contactId}/phone' : ''),
+      );
+    }
     return this.getEngine(sessionId).getContactLid(number);
   }
 

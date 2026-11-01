@@ -97,6 +97,12 @@ describe('Contact LID lookup gate (e2e)', () => {
     expect(res.body).toEqual({ number: '628123456789', lid: null });
   });
 
+  it('refuses a privacy id or a group id as the number (400) without asking the engine', async () => {
+    await lidGet(operatorKey, '234767895240796@lid').expect(400);
+    await lidGet(operatorKey, '120363021234567890@g.us').expect(400);
+    expect(engine.getContactLid).not.toHaveBeenCalled();
+  });
+
   it('passes an unanswered lookup through as 503, never as lid:null', async () => {
     engine.getContactLid.mockRejectedValue(new EngineTransportError('WhatsApp did not answer the LID lookup'));
 
