@@ -287,6 +287,23 @@ test('closing the dialog that shows a new key drops the secret, and Create opens
   assert.ok(screen.getByRole('button', { name: 'Create' }));
 });
 
+// The secret is shown only here. An Escape or a click beside the dialog closed it before it was copied, leaving an
+// active key nobody holds, so the dialog that shows it closes only on its Close button.
+test('a new key stays on screen through Escape and a click beside the dialog, until Close', async () => {
+  const { screen, fireEvent } = rtl;
+  const create = await openCreate();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'crm-bot' } });
+  fireEvent.click(create);
+  await screen.findByText('owa_k1_new');
+
+  fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(screen.queryByText('owa_k1_new') === null, false, 'Escape dismissed the one-time key');
+  fireEvent.mouseDown(document.querySelector('.modal-overlay') as HTMLElement);
+  assert.equal(screen.queryByText('owa_k1_new') === null, false, 'a click beside the dialog dismissed the key');
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  assert.equal(screen.queryByRole('dialog') === null, true, 'Close left the dialog open');
+});
+
 // The gateway counts an emoji, with or without its presentation selector, as one character.
 test('a name of two emoji keeps Create disabled', async () => {
   const { screen, fireEvent } = rtl;
