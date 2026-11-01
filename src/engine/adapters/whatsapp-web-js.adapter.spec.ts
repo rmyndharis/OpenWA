@@ -8860,7 +8860,14 @@ describe('probeOnboardingModal (in-page onboarding modal detection)', () => {
 
   const el = (
     textContent: string,
-    opts: { button?: boolean; roleButton?: boolean; hidden?: boolean; dialog?: boolean; ariaModal?: boolean } = {},
+    opts: {
+      button?: boolean;
+      roleButton?: boolean;
+      hidden?: boolean;
+      fixed?: boolean;
+      dialog?: boolean;
+      ariaModal?: boolean;
+    } = {},
   ): FakeEl => {
     const role = opts.roleButton ? 'button' : opts.dialog ? 'dialog' : null;
     return {
@@ -8868,7 +8875,8 @@ describe('probeOnboardingModal (in-page onboarding modal detection)', () => {
       role,
       textContent,
       parentElement: null,
-      offsetParent: opts.hidden ? null : {},
+      // Chromium answers a null offsetParent for a position: fixed element, which is still on screen.
+      offsetParent: opts.hidden || opts.fixed ? null : {},
       getBoundingClientRect: () => (opts.hidden ? { width: 0, height: 0 } : { width: 200, height: 40 }),
       getAttribute: (name: string) =>
         name === 'role' ? role : name === 'aria-modal' && opts.ariaModal ? 'true' : null,
@@ -8903,6 +8911,15 @@ describe('probeOnboardingModal (in-page onboarding modal detection)', () => {
 
   it('clicks Continue when it sits inside the onboarding modal', () => {
     const button = el('Continue', { button: true });
+    nest(el("What's new on WhatsApp Web"), button);
+    install([button]);
+
+    expect(probeOnboardingModal()).toEqual({ modalPresent: true, dismissed: true });
+    expect(button.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('clicks a Continue rendered with position: fixed', () => {
+    const button = el('Continue', { button: true, fixed: true });
     nest(el("What's new on WhatsApp Web"), button);
     install([button]);
 
@@ -9130,7 +9147,14 @@ describe('collectDialogDiagnostics (in-page dialog diagnostics)', () => {
 
   const el = (
     textContent: string,
-    opts: { tag?: string; role?: string; ariaModal?: boolean; ariaLabel?: string; hidden?: boolean } = {},
+    opts: {
+      tag?: string;
+      role?: string;
+      ariaModal?: boolean;
+      ariaLabel?: string;
+      hidden?: boolean;
+      fixed?: boolean;
+    } = {},
   ): FakeEl => {
     const ariaLabel = opts.ariaLabel ?? null;
     return {
@@ -9140,7 +9164,8 @@ describe('collectDialogDiagnostics (in-page dialog diagnostics)', () => {
       ariaLabel,
       textContent,
       parentElement: null,
-      offsetParent: opts.hidden ? null : {},
+      // Chromium answers a null offsetParent for a position: fixed element, which is still on screen.
+      offsetParent: opts.hidden || opts.fixed ? null : {},
       getBoundingClientRect: () => (opts.hidden ? { width: 0, height: 0 } : { width: 200, height: 40 }),
       getAttribute: (name: string) => (name === 'aria-label' ? ariaLabel : null),
     };
@@ -9200,6 +9225,18 @@ describe('collectDialogDiagnostics (in-page dialog diagnostics)', () => {
     install([el('Alice12:34What’s new?'), el('Continue', { tag: 'BUTTON' })]);
 
     expect(collectDialogDiagnostics()).toEqual([]);
+  });
+
+  // Modal layers are commonly rendered with position: fixed.
+  it('reports a dialog rendered with position: fixed', () => {
+    const heading = el('A fresh look for WhatsApp Web', { role: 'heading' });
+    const button = el('Get started', { tag: 'BUTTON' });
+    const dialog = nest(el('', { role: 'dialog', fixed: true }), heading, button);
+    install([dialog, heading, button]);
+
+    expect(collectDialogDiagnostics()).toEqual([
+      { heading: 'A fresh look for WhatsApp Web', buttons: ['Get started'] },
+    ]);
   });
 
   it('ignores a dialog that is not visible', () => {
