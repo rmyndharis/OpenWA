@@ -325,9 +325,12 @@ export class WwebjsLifecycle {
 
     try {
       // Build puppeteer args, including proxy if configured
-      const puppeteerArgs = this.host.config.puppeteer?.args
-        ? [...this.host.config.puppeteer.args]
-        : withPinnedBrowserLocale(DEFAULT_PUPPETEER_ARGS);
+      // Pinned on configured args too: a plugin config stored through the API replaces the whole puppeteer object
+      // (checked only to be an object), so the pin the env path applies never reaches it. A copy, never mutated.
+      const configuredArgs: unknown = this.host.config.puppeteer?.args;
+      const puppeteerArgs = withPinnedBrowserLocale(
+        Array.isArray(configuredArgs) ? (configuredArgs as string[]) : DEFAULT_PUPPETEER_ARGS,
+      );
 
       // Add proxy configuration if provided. A stored proxy that does not parse to a supported scheme
       // fails the session, as on Baileys (#859): launching without it would send the session's traffic

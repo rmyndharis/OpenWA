@@ -25,6 +25,7 @@ import {
   type WwebjsLifecycle,
 } from './wwebjs-lifecycle';
 import { READY_RECONCILE_TIMEOUT_MS, READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS } from './wwebjs-reconcile';
+import { DEFAULT_PUPPETEER_ARGS, PINNED_BROWSER_LOCALE } from '../../config/configuration';
 import { type WwebjsCalls } from './wwebjs-calls';
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
@@ -7259,6 +7260,39 @@ describe('WhatsAppWebJsAdapter orphaned Chromium sweep (pre-launch)', () => {
     // The cross-session leak that let a restart of sess-a SIGKILL sess-b's live browser: the sweep
     // substring-matches this marker against the full `ps` command line.
     expect(argsB).not.toContain('--openwa-session=sess-a');
+  });
+
+  describe('the browser locale', () => {
+    const argsWith = async (args: unknown): Promise<string[] | undefined> => {
+      const adapter = new WhatsAppWebJsAdapter({
+        sessionId: SESSION_ID,
+        sessionDataPath: './data/sessions',
+        puppeteer: { args: args as string[] },
+      });
+      await adapter.initialize({});
+      return (adapter as unknown as { client: { options: { puppeteer?: { args?: string[] } } } }).client.options
+        .puppeteer?.args;
+    };
+
+    it('is pinned on configured args as it is on the defaults', async () => {
+      const args = await argsWith(['--no-sandbox']);
+
+      expect(args).toEqual(expect.arrayContaining(['--no-sandbox', `--lang=${PINNED_BROWSER_LOCALE}`]));
+    });
+
+    it('keeps a locale the configured args already set', async () => {
+      const args = await argsWith(['--no-sandbox', '--lang=pt-BR']);
+
+      expect(args).toContain('--lang=pt-BR');
+      expect(args).not.toContain(`--lang=${PINNED_BROWSER_LOCALE}`);
+    });
+
+    it('falls back to the pinned defaults when the configured args are not a list', async () => {
+      const args = await argsWith('--no-sandbox');
+
+      expect(args).toEqual(expect.arrayContaining([...DEFAULT_PUPPETEER_ARGS, `--lang=${PINNED_BROWSER_LOCALE}`]));
+      expect(args).not.toContain('-');
+    });
   });
 
   it('SIGKILLs a Chromium process carrying this session marker and logs the sweep', async () => {
