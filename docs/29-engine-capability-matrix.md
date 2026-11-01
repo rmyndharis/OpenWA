@@ -950,8 +950,9 @@ adapter boundary — none silently stubs.
   whatsapp-web.js hands to the page like any other `image/*`. Sticker conversion is deliberately
   not wired to ffmpeg on the Baileys side: the binary ships only in the Docker image, so depending
   on it would make the same request succeed or fail depending on how the gateway was installed. A
-  Baileys voice note's waveform does read its audio through ffmpeg when the binary is there; without
-  it the note goes out with flat bars.
+  Baileys voice note's waveform and a Baileys video's inline preview do read their media through
+  ffmpeg when the binary is there; without it (or past the preview's 10 s deadline) the note goes
+  out with flat bars and the video without a preview.
 - **`deleteStatus` (baileys).** Baileys sends a status stanza, the revoke included, to exactly its
   `statusJidList`, so the revoke is addressed to the recipients the adapter remembered when it posted
   the status. It keeps them in memory for 24 hours, so a status this session did not post in the last

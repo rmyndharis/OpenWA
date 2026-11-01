@@ -2012,7 +2012,7 @@ Send an image (by URL or base64) with an optional caption.
 
 #### POST /api/sessions/:sessionId/messages/send-video
 
-Send a video (by URL or base64) with an optional caption. Uses the same `SendMediaMessageDto` (and the same validation rules and errors) as `send-image`.
+Send a video (by URL or base64) with an optional caption. Uses the same `SendMediaMessageDto` (and the same validation rules and errors) as `send-image`. On the Baileys engine the inline preview is a 32-pixel first frame made through ffmpeg (`FFMPEG_PATH`, also with media conversion disabled); without ffmpeg, or when the frame cannot be read within 10 seconds, the video goes out without a preview.
 
 **Auth:** API key (OPERATOR)
 
@@ -2447,7 +2447,7 @@ Both fields describe the edited message rather than the edit itself, on both eng
 { "messageId": "true_628123456789@c.us_3EB0ABCD", "timestamp": 1760000000 }
 ```
 
-**Errors:** `400` session not active / unknown body field · `401` missing/invalid API key · `403` key role below OPERATOR, or the engine refused the edit (both engines refuse a message the account did not send and one with no text or caption to edit, such as a location, sticker, poll, contact card or audio) · `404` message not found · `409` conflict or engine not ready (retryable) · `503` the whatsapp-web.js page died mid-request; repeating it is safe (retryable); on Baileys, also when the recipient lookup failed or timed out before the operation was sent (nothing reached WhatsApp, so a retry is safe), or when WhatsApp rate-limited the request (code 429: nothing was sent) or timed out a query it awaits (code 408: the outcome is not proven), or the connection closed before the message was written (nothing was sent)
+**Errors:** `400` session not active / unknown body field · `401` missing/invalid API key · `403` key role below OPERATOR, or the engine refused the edit (both engines refuse a message the account did not send and one with no text or caption to edit, such as a location, sticker, poll, contact card or audio; past these guards the Baileys engine has no acceptance signal and answers `200` even for an edit WhatsApp Web would refuse) · `404` message not found · `409` conflict or engine not ready (retryable) · `503` the whatsapp-web.js page died mid-request; repeating it is safe (retryable); on Baileys, also when the recipient lookup failed or timed out before the operation was sent (nothing reached WhatsApp, so a retry is safe), or when WhatsApp rate-limited the request (code 429: nothing was sent) or timed out a query it awaits (code 408: the outcome is not proven), or the connection closed before the message was written (nothing was sent)
 
 #### POST /api/sessions/:sessionId/messages/send-bulk
 
