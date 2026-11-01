@@ -13,6 +13,7 @@ import {
   GatewayTimeoutException,
   HttpException,
   HttpStatus,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -1973,6 +1974,37 @@ describe('SessionService', () => {
       expect(lifecycle.isEngineActive('sess-uuid-1')).toBe(false);
       expect(desired()).toBe('stopped');
       expect(ownership.release.mock.calls.length).toBeGreaterThan(releasesBefore);
+    });
+
+    // A claim that could not be written launched nothing, so the start answers the retryable 503 a delete
+    // answers for the same failure, not a 500.
+    it('start() answers 503 and launches nothing when its claim cannot be written', async () => {
+      const ownership = withOwnership();
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      ownership.claim.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+
+      await expect(service.start('sess-uuid-1', { explicit: true })).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
+
+      expect(mockEngine.initialize).not.toHaveBeenCalled();
+      expect(lifecycle.isEngineActive('sess-uuid-1')).toBe(false);
+    });
+
+    it('start() answers 503 when the re-claim of its one retry cannot be written', async () => {
+      const ownership = withOwnership();
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (engineFactory.create as jest.Mock).mockClear().mockReturnValue(mockEngine);
+      mockEngine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
+      ownership.claim
+        .mockResolvedValueOnce(true)
+        .mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+
+      await expect(service.start('sess-uuid-1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+      expect(mockEngine.initialize).toHaveBeenCalledTimes(1);
+      expect(lifecycle.isEngineActive('sess-uuid-1')).toBe(false);
     });
 
     // The same race with a force-kill: the start sent while the engine still ran launched a new one

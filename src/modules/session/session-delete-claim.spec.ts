@@ -3469,7 +3469,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
         });
       }
       if (sqlError) {
-        await expect(a.service.start(id, { explicit: true })).rejects.toThrow('fresh claim SQL unavailable');
+        await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(ServiceUnavailableException);
         expect(failFresh).toHaveBeenCalledTimes(1);
       } else {
         await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(ConflictException);
@@ -3613,7 +3613,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
             });
             return query;
           });
-          await expect(a.service.start(id, { explicit: true })).rejects.toThrow('missing row claim SQL unavailable');
+          await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(ServiceUnavailableException);
         } else {
           await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(NotFoundException);
         }
@@ -3652,7 +3652,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
             });
             return query;
           });
-          await expect(a.service.start(id, { explicit: true })).rejects.toThrow('suspended claim SQL unavailable');
+          await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(ServiceUnavailableException);
         } else {
           await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(ConflictException);
         }

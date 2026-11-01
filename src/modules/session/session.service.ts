@@ -930,12 +930,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     const stopRequestsBefore = this.stopRequestSeq;
     // Claimed before the engine is launched, never after: launching first and discovering the
     // session belongs elsewhere would already have opened a second connection to the account.
-    if (this.ownership && !(await this.ownership.claim(id))) {
-      // The claim is a conditional UPDATE, so an id that does not exist also matches zero rows —
-      // surface the route's documented 404 for that case instead of a misleading 409.
-      await this.findOne(id);
-      throw new ConflictException(`Session ${id} is running on another node`);
-    }
+    if (this.ownership) await this.claimForStart(id, this.ownership);
     let session: Session;
     try {
       session = await this.startWithTransientRetry(id, explicit, stopRequestsBefore);
@@ -954,6 +949,28 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // row keeps naming this node until the lease lapses and a peer adopts the stopped session.
     await this.releaseUnlessEngineActive(id, undefined, { correctStatus: true });
     return session;
+  }
+
+  /**
+   * Claim the session for this node's start. The claim is a conditional UPDATE, so an id that does not exist also
+   * matches zero rows: that answers the route's documented 404 instead of a misleading 409. A claim that could not be
+   * written launched nothing, so it answers the retryable 503 a delete gives for the same failure, not a 500.
+   */
+  private async claimForStart(id: string, ownership: SessionOwnershipService): Promise<void> {
+    let claimed: boolean;
+    try {
+      claimed = await ownership.claim(id);
+    } catch (error) {
+      this.logger.warn(`Could not claim session ${id} for the start; nothing was started`, {
+        sessionId: id,
+        action: 'session_start_claim_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new ServiceUnavailableException(`Session ${id} could not be claimed for the start; nothing was started`);
+    }
+    if (claimed) return;
+    await this.findOne(id);
+    throw new ConflictException(`Session ${id} is running on another node`);
   }
 
   /**
@@ -1000,10 +1017,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         this.refuseIfShuttingDown();
         // The lease may have lapsed while the first attempt ran; the retry must keep holding the
         // claim, never 409 on the session it already owns.
-        if (this.ownership && !(await this.ownership.claim(id))) {
-          await this.findOne(id);
-          throw new ConflictException(`Session ${id} is running on another node`);
-        }
+        if (this.ownership) await this.claimForStart(id, this.ownership);
         // Checked again: a stop that landed during the re-claim leaves the claim for claimAndStart's catch to release.
         if (this.stoppedSince(id, stopRequestsBefore)) {
           throw new SessionStoppedException(`Session ${id} was stopped`);

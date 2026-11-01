@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { DataSource, DataSourceOptions, Repository } from 'typeorm';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { SessionOwnershipService } from '../session/session-ownership.service';
@@ -209,7 +210,7 @@ describe('a start that fails before an engine exists on a session a vanished nod
     expect(await rowOf(id)).toEqual({ status: SessionStatus.READY, nodeId: 'node-b' });
 
     openClaim();
-    await expect(second).rejects.toThrow('database is locked');
+    await expect(second).rejects.toBeInstanceOf(ServiceUnavailableException);
 
     expect(await rowOf(id)).toEqual({ status: SessionStatus.DISCONNECTED, nodeId: null });
     const announced = b.events.emitSessionStatus.mock.calls.filter(
