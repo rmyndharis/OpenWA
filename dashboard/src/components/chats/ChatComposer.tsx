@@ -73,7 +73,9 @@ function ChatComposer({
   const { appendMessage, updateMessage } = useChatMessagesActions();
   const queryClient = useQueryClient();
 
-  const [sending, setSending] = useState<boolean>(false);
+  const [sendingByThread, setSendingByThread] = useState<Record<string, number>>({});
+  const activeThreadKey = selectedSessionId && activeChat?.id ? `${selectedSessionId}\0${activeChat.id}` : '';
+  const sending = Boolean(activeThreadKey && (sendingByThread[activeThreadKey] ?? 0) > 0);
   // "[Image]" for a non-text message; an unexpected type still reads as itself rather than a raw key.
   // An `unknown` one quotes as "[Message]" on purpose: here it is a message, not a type category
   // (the chart and the webhook filter name it through messageTypeLabelKey instead).
@@ -86,15 +88,17 @@ function ChatComposer({
   // removing the attachment) before `onload` fires must win over the late-arriving bytes —
   // otherwise the slower read overwrites the newer pick. Same pattern as composeImageReadSeq.
   const attachmentReadSeq = useRef(0);
+  const tempSeqRef = useRef(0);
 
   // Leaving this conversation — switching to another chat, or unmounting when the room closes —
   // invalidates an in-flight read, so its late `onload` drops the bytes instead of staging them
   // against whichever chat is open by then. The attachment state itself lives in the page.
   useEffect(() => {
+    setShowEmojiPicker(false);
     return () => {
       attachmentReadSeq.current += 1;
     };
-  }, [activeChat.id]);
+  }, [selectedSessionId, activeChat.id]);
 
   // Escape dismisses the emoji picker instead of closing the conversation behind it.
   //
@@ -223,9 +227,10 @@ function ChatComposer({
 
     // Text that cannot travel with an audio file stays in the input to be sent as its own message.
     if (!attachmentIsAudio) setMessageInput('');
-    setSending(true);
+    const threadKey = activeThreadKey;
+    setSendingByThread(prev => ({ ...prev, [threadKey]: (prev[threadKey] ?? 0) + 1 }));
 
-    const tempId = `temp_${Date.now()}`;
+    const tempId = `temp_${Date.now()}_${++tempSeqRef.current}`;
     // Mirrors the body the gateway stores: image and video keep only the caption, and a document its caption
     // or else its filename. Audio stores none; its filename stands in here because the thread hides a body
     // equal to it.
@@ -315,7 +320,13 @@ function ChatComposer({
       showErrorToast(t('chats.errors.send'), err instanceof Error ? err.message : undefined);
       updateMessage(selectedSessionId, activeChat.id, tempId, { status: 'failed' });
     } finally {
-      setSending(false);
+      setSendingByThread(prev => {
+        const nextCount = (prev[threadKey] ?? 0) - 1;
+        if (nextCount > 0) return { ...prev, [threadKey]: nextCount };
+        const next = { ...prev };
+        delete next[threadKey];
+        return next;
+      });
     }
   };
 
