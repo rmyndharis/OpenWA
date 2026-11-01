@@ -42,7 +42,10 @@ const PIPE_VALIDATOR_OPTS = { whitelist: true, forbidNonWhitelisted: true };
 /** The values each type is probed with, and why each must be refused. */
 const PROBES: Record<string, { values: unknown[]; reason: string }> = {
   Boolean: { values: ['yes'], reason: 'implicit conversion turns any non-empty string into true' },
-  Number: { values: [''], reason: 'Number("") is 0, so a blank field becomes a real zero' },
+  Number: {
+    values: ['', true],
+    reason: 'Number("") is 0 and Number(true) is 1, so blank and boolean inputs become real numbers',
+  },
   // Two string forms, because they differ: "true" passes a name rule that "[object Object]" fails, so one
   // probe alone would let such a field skip the decorator. An array is never converted, so it pins that it
   // stays refused. A number is not here: it is converted on purpose, and asserted separately below.
@@ -166,6 +169,23 @@ describe('DTO input-coercion drift gate', () => {
       expect(Array.isArray(read({ '628111@c.us': true }))).toBe(false);
       expect(read([])).toEqual([]);
       expect(Array.isArray(read([]))).toBe(true);
+    },
+  );
+
+  // A positive @Min (>= 1) rejects 0 even without @ToStrictNumber(), and @Min(>= 2) rejects 1 as well, so the
+  // validation verdict alone can pass while '' and true are still coerced to 0 and 1 before the validators run.
+  const numberTargets = targets.filter(t => t.type === 'Number');
+
+  it.each(numberTargets.map(t => [`${t.cls.name}.${t.prop}`, t] as const))(
+    '%s leaves blank and boolean inputs uncoerced, and still reads a numeric string as a number',
+    (_label, target) => {
+      const read = (value: unknown) =>
+        (plainToInstance(target.cls, { [target.prop]: value }, PIPE_TRANSFORM_OPTS) as Record<string, unknown>)[
+          target.prop
+        ];
+      expect(read('')).toBe('');
+      expect(read(true)).toBe(true);
+      expect(read('5')).toBe(5);
     },
   );
 });
