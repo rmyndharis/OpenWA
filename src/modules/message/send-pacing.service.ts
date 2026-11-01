@@ -44,11 +44,14 @@ export function isPacingLimitedError(error: unknown): boolean {
  * error, a timeout, a 5xx) does. A rate limit WhatsApp answered (EngineThrottledError, a 503 on the wire)
  * counts as well: it is WhatsApp refusing this account's traffic, the signal the breaker exists to act on,
  * even though the send provably went nowhere (see sentNothing). A whatsapp-web.js send whose recipient lookup did
- * not answer (RecipientLookupUnansweredError) is a 500 that does not count: it says nothing about the account.
+ * not answer (RecipientLookupUnansweredError) is a 500 that does not count: it says nothing about the account, and
+ * neither does any fault the engine marked as raised before anything was sent (markNothingSent), such as a host
+ * where sharp cannot load.
  */
 export function countsTowardSendBreaker(error: unknown): boolean {
   if (error instanceof EngineRefusedError || error instanceof EngineThrottledError) return true;
   if (error instanceof SsrfBlockedError || error instanceof RecipientLookupUnansweredError) return false;
+  if (provesNothingSent(error)) return false;
   if (error instanceof HttpException) {
     const status = error.getStatus();
     // 4xx = the caller's request was wrong; 501 = this engine cannot do it; 503 = the engine is not

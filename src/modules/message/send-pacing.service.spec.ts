@@ -630,6 +630,10 @@ describe('countsTowardSendBreaker', () => {
       'a send whose recipient lookup did not answer (500 RecipientLookupUnansweredError)',
       new RecipientLookupUnansweredError({ name: 'Error', message: 'No LID for user' }, new Error('No LID for user')),
     ],
+    [
+      'a server-side fault the engine marked as raised before anything was sent',
+      markNothingSent(new InternalServerErrorException('sharp could not load')),
+    ],
   ])('does not count %s', (_label, error) => {
     expect(countsTowardSendBreaker(error)).toBe(false);
   });
