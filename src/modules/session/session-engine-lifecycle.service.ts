@@ -213,13 +213,13 @@ const TERMINAL_UNLINK_REASONS = new Set(['LOGOUT', 'UNPAIRED', 'UNPAIRED_IDLE', 
  * empty phone at ready (client.info unreadable), and the account-binding guard in
  * SessionEngineEventWiring skips an empty incoming phone rather than rebind-rejecting it, so writing
  * it here would silently clear the stored number and drop the binding guard until the next non-empty
- * ready. In that case keep the existing binding and update only the liveness fields.
+ * ready. In that case keep the existing binding and its push name, which the same unreadable info
+ * reports empty, and update only the liveness fields.
  */
 export function readyRowUpdate(phone: string, pushName: string, at: Date) {
   return {
     status: SessionStatus.READY,
-    ...(phone ? { phone } : {}),
-    pushName,
+    ...(phone ? { phone, pushName } : {}),
     connectedAt: at,
     lastActiveAt: at,
   };
