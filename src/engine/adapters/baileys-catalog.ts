@@ -1,5 +1,6 @@
 import type { Product as BaileysProduct, WASocket } from '@whiskeysockets/baileys';
 import { Catalog, PaginatedProducts, Product, ProductQueryOptions } from '../interfaces/whatsapp-engine.interface';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { withQueryDeadline } from './baileys-query-deadline';
 import { mapServerRefusal, refusedStatusCode } from './baileys-groups';
@@ -68,8 +69,11 @@ export class BaileysCatalog {
   }
 
   /** Post-ensureReady socket handle. */
-  private sock(): WASocket {
-    return this.host.getSocket();
+  private sock(expected?: WASocket): WASocket {
+    this.host.ensureReady();
+    const socket = this.host.getSocket();
+    if (expected && socket !== expected) throw new EngineNotReadyError();
+    return socket;
   }
 
   /**
@@ -114,8 +118,8 @@ export class BaileysCatalog {
     };
   }
 
-  async getProduct(productId: string): Promise<Product | null> {
-    const found = (await this.fetchAllProducts()).find(p => p.id === productId);
+  async getProduct(productId: string, expected?: WASocket): Promise<Product | null> {
+    const found = (await this.fetchAllProducts(expected)).find(p => p.id === productId);
     return found ? mapProduct(found) : null;
   }
 
@@ -127,18 +131,19 @@ export class BaileysCatalog {
    * The budget is computed once and shared by every page: a per-query deadline would multiply by
    * the page count, making a ten-page walk slower than the 60s stall it replaces.
    */
-  private async fetchAllProducts(): Promise<BaileysProduct[]> {
-    this.host.ensureReady();
+  private async fetchAllProducts(expected?: WASocket): Promise<BaileysProduct[]> {
+    const sock = this.sock(expected);
     const jid = this.host.normalizedSelfJid();
     const deadline = Date.now() + this.budgetMs;
     const products: BaileysProduct[] = [];
     let cursor: string | undefined;
     do {
       const page = await this.bounded(
-        () => this.sock().getCatalog({ jid, limit: CATALOG_PAGE_SIZE, cursor }),
+        () => this.sock(sock).getCatalog({ jid, limit: CATALOG_PAGE_SIZE, cursor }),
         deadline,
         cursor === undefined ? { products: [], nextPageCursor: undefined } : undefined,
       );
+      this.sock(sock);
       products.push(...page.products);
       // A server echoing back the cursor it was handed would otherwise spin this loop until the
       // process runs out of heap — the accumulator grows on every pass.
