@@ -30,8 +30,7 @@
  *   9. `node scripts/patch-wwebjs-media-id.js --best-effort` when present, stripping the media
  *      model's private id from the outgoing message so media sends work again, gated the same way.
  *  10. `node scripts/patch-wwebjs-send-error.js --best-effort` when present, making a failed send
- *      report what the page threw instead of `t: t`, gated the same way. It runs after the other
- *      two Client.js patchers (steps 2 and 5), so theirs still meet the tree they were written for.
+ *      report what the page threw instead of `t: t`, gated the same way.
  *  11. `node scripts/patch-baileys-appstate.js --best-effort` when present, the app-state resync
  *      bound, gated the same way.
  *  12. `node scripts/patch-baileys-newsletter-create.js --best-effort` when present, the
