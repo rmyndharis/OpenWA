@@ -235,6 +235,8 @@ export interface WwebjsLifecycleHost {
 export class WwebjsLifecycle {
   /** Live whatsapp-web.js client, null once torn down. Aliased by the adapter's `client` accessor. */
   client: Client | null = null;
+  /** The client whose initialize() has not settled yet, kept past a teardown that nulled `client`: see forceDestroy. */
+  private launching: Client | null = null;
   /** Current engine status. Aliased by the adapter's `status` accessor. */
   status: EngineStatus = EngineStatus.DISCONNECTED;
   /** Last encoded QR, cleared on authentication. Aliased by the adapter's `qrCode` accessor. */
@@ -552,9 +554,11 @@ export class WwebjsLifecycle {
     // browser exists, so it cannot pull the files out from under a running Chromium.
     await removeStaleSingletonFiles(this.host.config.sessionId, this.host.config.sessionDataPath, this.host.logger);
     if (this.tearingDown) return;
+    this.launching = client;
     try {
       await client.initialize();
     } finally {
+      if (this.launching === client) this.launching = null;
       // A stop, delete or logout that landed mid-launch ran Client.destroy() before whatsapp-web.js
       // assigned pupBrowser, so it closed nothing. The handle exists now: close the browser here, or
       // it stays logged in with no owner until the process exits.
@@ -1202,17 +1206,22 @@ export class WwebjsLifecycle {
    */
   async forceDestroy(): Promise<void> {
     const client = this.beginClientTeardown();
-    if (!client) return;
+    // With the client already let go, a launch still in progress can own a browser: whatsapp-web.js assigns
+    // pupBrowser only after puppeteer.launch, so a stop that landed before that closed nothing, and a page that
+    // never loads (page.goto without a timeout) never reaches the finally in runInitAttempt that would close it.
+    const target = client ?? this.launching;
+    if (!target) return;
 
     try {
       // pupBrowser is the Puppeteer Browser; .process() is the Chromium ChildProcess (null if already gone).
       const proc = (
-        client as unknown as { pupBrowser?: { process?: () => { kill?: (sig: string) => void } | null } }
+        target as unknown as { pupBrowser?: { process?: () => { kill?: (sig: string) => void } | null } }
       ).pupBrowser?.process?.();
       proc?.kill?.('SIGKILL');
     } catch (err) {
       this.host.logger.warn('forceDestroy: failed to kill the browser process', { error: String(err) });
     }
+    if (!client) return;
 
     try {
       await client.destroy();
