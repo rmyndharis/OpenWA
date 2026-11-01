@@ -445,16 +445,18 @@ export class StorageService implements OnModuleDestroy {
 
   async getFileCount(): Promise<{ count: number; sizeBytes: number }> {
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
-      // ListObjectsV2 already returns each object's Size, so report the real total instead of a
-      // 100KB-per-file estimate — no extra API calls beyond the listing we'd do anyway.
-      const s3 = await this.getS3CountAndSize();
       // Union with the local fallback dir (media written locally while S3 was down is not in the
       // bucket listing): a local-only file counts with its real on-disk size; for a key present in
-      // both, the S3 copy is authoritative.
-      const s3Keys = new Set(s3.keys);
-      let { count, sizeBytes } = s3;
+      // both, the S3 copy is authoritative. As in iterateFiles, the local keys are the ones remembered,
+      // so the bucket's pages, which can list millions of keys, stream past without being kept.
+      const local = new Set<string>();
       for await (const file of this.iterateLocalFiles()) {
-        if (s3Keys.has(file) || !this.isExportableKey(file)) continue;
+        if (this.isExportableKey(file)) local.add(file);
+      }
+      // ListObjectsV2 already returns each object's Size, so report the real total instead of a
+      // 100KB-per-file estimate — no extra API calls beyond the listing we'd do anyway.
+      let { count, sizeBytes } = await this.getS3CountAndSize(local);
+      for (const file of local) {
         count += 1;
         try {
           // Same reason as the local branch below: the walk covers the whole store, so the stat must yield.
@@ -486,12 +488,10 @@ export class StorageService implements OnModuleDestroy {
     return { count: files.length, sizeBytes };
   }
 
-  private async getS3CountAndSize(): Promise<{ count: number; sizeBytes: number; keys: string[] }> {
+  /** Counts and sizes the bucket's exportable objects, dropping from `local` every key the bucket also holds. */
+  private async getS3CountAndSize(local: Set<string>): Promise<{ count: number; sizeBytes: number }> {
     let count = 0;
     let sizeBytes = 0;
-    // Keys (prefix-stripped) are kept so getFileCount can union the local fallback dir without a
-    // second listing.
-    const keys: string[] = [];
     let continuationToken: string | undefined;
 
     do {
@@ -509,13 +509,13 @@ export class StorageService implements OnModuleDestroy {
         if (key === null || !this.isExportableKey(key)) continue;
         count += 1;
         sizeBytes += obj.Size ?? 0;
-        keys.push(key);
+        local.delete(key);
       }
 
       continuationToken = response.NextContinuationToken;
     } while (continuationToken);
 
-    return { count, sizeBytes, keys };
+    return { count, sizeBytes };
   }
 
   // ============================================================================
