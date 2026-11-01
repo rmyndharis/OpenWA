@@ -526,7 +526,9 @@ export class MessageController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({
     status: 201,
-    description: 'Message forwarded',
+    description:
+      "Message forwarded. `messageId` is the forwarded copy's id, or an empty string when the engine could not " +
+      'read it back.',
     type: MessageResponseDto,
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
@@ -937,7 +939,9 @@ export class MessageController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({
     status: 200,
-    description: 'Message edited',
+    description:
+      'Message edited. Both fields describe the edited message, not the edit: `messageId` is its id and ' +
+      '`timestamp` the time it was originally sent.',
     type: MessageResponseDto,
   })
   @ApiResponse({
