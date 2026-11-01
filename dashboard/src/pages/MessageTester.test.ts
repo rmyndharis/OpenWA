@@ -1255,6 +1255,31 @@ for (const field of ['recipient', 'forward target'] as const) {
   });
 }
 
+// The recipient is only the default chat a forward is taken from. With From Chat ID filled it goes unused, yet Send
+// still required it and its lookup ran first, so a stale or mistyped number refused the forward as "not registered".
+test('a forward from a named chat neither needs nor looks up the personal recipient', async () => {
+  const { checked, writes } = stubPersonalSend();
+  const { container, client } = renderTesterForKey();
+  try {
+    await rtl.screen.findByRole('option', { name: /Main/ });
+    rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+    type(container, '#mt-17', '120363000000000000@g.us');
+    type(container, '#mt-9', '120363999999999999@g.us');
+    type(container, '#mt-10', 'original-message');
+    assert.equal(sendButton().disabled, false, 'Send waited for a recipient the forward does not use');
+    type(container, '#mt-13', '123');
+    rtl.fireEvent.click(sendButton());
+    await rtl.waitFor(() => assert.ok(writes.length + checked.length > 0));
+    assert.deepEqual(checked, [], 'the unused recipient was looked up');
+    assert.deepEqual(writes, [
+      { fromChatId: '120363000000000000@g.us', toChatId: '120363999999999999@g.us', messageId: 'original-message' },
+    ]);
+  } finally {
+    client.clear();
+    sessionStorage.removeItem('openwa_api_key');
+  }
+});
+
 test('an unchanged actor sends to canonical personal and forward destinations', async () => {
   const writes: { path: string; key: string | null; body: unknown }[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

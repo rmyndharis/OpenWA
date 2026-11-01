@@ -418,6 +418,9 @@ export function MessageTester() {
       (delayMs === undefined || (!Number.isNaN(delayMs) && delayMs >= 1000 && delayMs <= 60000));
   }
 
+  // A personal recipient is only the default chat a forward is taken from, so a forward from a named chat uses none.
+  const recipientUnused = messageType === 'forward' && recipientType !== 'group' && forwardFrom.trim().length > 0;
+
   // A new send replaces the batch on screen, so it waits for an in-flight cancel: the cancel's answer
   // would otherwise be merged into the newer batch and stop its progress polling.
   const isSendDisabled =
@@ -426,7 +429,9 @@ export function MessageTester() {
     batchCancelling ||
     !session ||
     !formValid ||
-    (messageType !== 'bulk' && (recipientType === 'group' ? selectedGroups.length === 0 : !namesRecipient(recipient)));
+    (messageType !== 'bulk' &&
+      !recipientUnused &&
+      (recipientType === 'group' ? selectedGroups.length === 0 : !namesRecipient(recipient)));
 
   // Says why Send is held when a field runs past its bound, counted the way `formValid` counts it.
   const tooLongHint = (value: string, max: number) => {
@@ -499,7 +504,7 @@ export function MessageTester() {
 
   const handleSend = async () => {
     const targetId = recipientType === 'group' ? (selectedGroups[0] ?? '') : recipient;
-    if (!session || (messageType !== 'bulk' && !targetId)) return;
+    if (!session || (messageType !== 'bulk' && !targetId && !recipientUnused)) return;
     const generation = ++sendGenerationRef.current;
     const sameKey = keepsSameKey();
     const isCurrent = () => !unmountedRef.current && generation === sendGenerationRef.current && sameKey();
@@ -525,7 +530,7 @@ export function MessageTester() {
       // as a number it loses its meaning, a lid's digits being no phone and a device suffix joining the phone's digits.
       if (messageType !== 'bulk' && recipientType !== 'group' && targetId.includes('@')) {
         chatId = targetId.trim();
-      } else if (messageType !== 'bulk' && recipientType !== 'group') {
+      } else if (messageType !== 'bulk' && recipientType !== 'group' && !recipientUnused) {
         const digits = phoneDigits(targetId);
         const resolved = digits === null ? null : await contactApi.checkNumber(session, digits);
         assertCurrent();
