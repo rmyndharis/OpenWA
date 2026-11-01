@@ -1315,11 +1315,19 @@ export class BaileysLifecycle {
       throw new EngineNotReadyError('Session is not waiting to be linked. Start it and wait for the QR stage.');
     }
     const sock = this.sock;
-    const code = await sock.requestPairingCode(phoneNumber);
-    // A stop, logout or new socket while WhatsApp answered leaves a code nothing can link any more.
-    if (this.sock !== sock || this.getStatus() !== EngineStatus.QR_READY) {
-      throw new EngineNotReadyError('Session stopped waiting to be linked while the pairing code was requested.');
+    const stopped = (): boolean => this.sock !== sock || this.getStatus() !== EngineStatus.QR_READY;
+    const notWaiting = (): EngineNotReadyError =>
+      new EngineNotReadyError('Session stopped waiting to be linked while the pairing code was requested.');
+    let code: string;
+    try {
+      code = await sock.requestPairingCode(phoneNumber);
+    } catch (error) {
+      // A stop that closes the socket under the request rejects it (Boom 428) instead of resolving it.
+      if (stopped()) throw notWaiting();
+      throw error;
     }
+    // A stop, logout or new socket while the code was being sent leaves a code nothing can link any more.
+    if (stopped()) throw notWaiting();
     this.armPairingWindow(sock);
     return code;
   }
