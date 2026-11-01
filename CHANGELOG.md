@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make a session delete wait for a logout that is still waiting on the session's initial status, instead of purging its data while the logout runs.
 - Reject chat and group ids with more than one `@` or an empty local part, in the API and in the API Keys form.
 - Pass the canonical `groupId` to the engine on the `/groups/{groupId}/picture` routes, which forwarded an upper-case, padded or device-suffixed id as sent.
-- Answer `404` to a malformed `channelId` on `POST /api/sessions/{sessionId}/channels/{channelId}/admins/demote` and `/owner/transfer`, which passed it to the engine.
+- Answer `404` to a malformed `channelId`, a bare `@newsletter` or an id with more than one `@`, on the channel delete, mute, unsubscribe, admin demote and owner transfer routes; demote and transfer passed any value to the engine, the others accepted such an id.
 - Answer `400` to a boolean `limit` in `POST /api/webhooks/delivery-failures/redrive` instead of redriving one delivery.
 - Retract the secrets of retired or rolled-back wildcard plugin instances from the plugin base config and `registry.json` when an infrastructure backup is imported, on the node that runs the import.
 - Keep a valid key's `GET /api/health` check from freeing the limiter slot of a newer failed attempt.
