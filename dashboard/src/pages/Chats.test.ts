@@ -866,6 +866,41 @@ test('a refused file send puts its caption back in the field', async () => {
   });
 });
 
+// The gateway refuses a text past 4096 characters and a caption past 1024, counting an astral character as one. The
+// composer holds such a send and says why, instead of leaving it to a refusal.
+test('the composer holds a message past the gateway limit and says why', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  const field = () => container.querySelector('.message-text-input') as HTMLInputElement;
+  const send = () => screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+  const hint = () => container.querySelector('.room-input-footer [role="status"]')?.textContent;
+
+  fireEvent.change(field(), { target: { value: 'a'.repeat(4097) } });
+  assert.equal(send().disabled, true, 'a text the gateway refuses can be sent');
+  assert.equal(hint(), 'Limited to 4096 characters (4097 now).');
+  fireEvent.submit(container.querySelector('.input-form') as HTMLFormElement);
+  await flush();
+  assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/messages/send-text`), 0, 'Enter sent it');
+
+  // 4096 emoji are 8192 UTF-16 units, and 4096 characters to the gateway.
+  fireEvent.change(field(), { target: { value: '😀'.repeat(4096) } });
+  assert.equal(send().disabled, false, 'a text the gateway takes is held');
+  assert.equal(hint(), '');
+
+  fireEvent.change(field(), { target: { value: 'c'.repeat(1025) } });
+  await stageAttachment(container, 'contract.pdf');
+  assert.equal(send().disabled, true, 'a caption the gateway refuses can be sent');
+  assert.equal(hint(), 'Limited to 1024 characters (1025 now).');
+
+  // Text next to audio is not sent with it, so it holds nothing back.
+  await stageAttachment(container, 'voice.ogg', 'audio/ogg');
+  assert.equal(send().disabled, false, 'text that does not travel with the audio held it');
+  assert.equal(hint(), '');
+});
+
 test('Escape dismisses the emoji picker instead of the conversation behind it', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   resetFetchCalls();
