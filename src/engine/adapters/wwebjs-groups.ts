@@ -21,7 +21,7 @@ import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.
 import { toMessageMedia } from './wwebjs-messaging';
 import { type WwebjsEngineHost, rethrowIfNavigation, withPage, reportPageDeath } from './wwebjs-host';
 import { isNavigationError, isProtocolTimeout } from './wwebjs-lifecycle';
-import { isPageInvariant, listChats, readChats } from './wwebjs-chats';
+import { listChats, recoverGroupChatById } from './wwebjs-chats';
 
 /**
  * Extracts the JID of the parent community a group is linked to, if any.
@@ -142,11 +142,8 @@ export class WwebjsGroups {
       // and without a last message, which this read does not use. Any other rejection falls to the catch.
       const chat = await this.client()
         .getChatById(groupId)
-        .catch(async (error: unknown) => {
-          if (!isPageInvariant(error)) throw error;
-          return (await readChats(this.host, 'getGroupInfo', [groupId]))[0];
-        });
-      if (!chat.isGroup) {
+        .catch(error => recoverGroupChatById(this.host, 'getGroupInfo', groupId, error));
+      if (!chat?.isGroup) {
         return null;
       }
       const groupChat = chat as unknown as GroupChat;
@@ -522,7 +519,14 @@ export class WwebjsGroups {
    */
   private async requireGroupChat(groupId: string, context: string): Promise<GroupChat> {
     this.host.ensureReady();
-    const chat = await withPage(this.host, context, () => this.client().getChatById(groupId));
+    const chat = await withPage(this.host, context, () =>
+      this.client()
+        .getChatById(groupId)
+        .catch(error => {
+          if (!recoverGroupChatById) throw error;
+          return recoverGroupChatById(this.host, context, groupId, error);
+        }),
+    );
     // getChatById RESOLVES undefined for an unknown id (wwebjs does not throw): unknown id and a
     // non-group id are the same client-facing outcome — there is no such group (404, not a 500).
     if (!chat?.isGroup) {

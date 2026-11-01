@@ -34,6 +34,7 @@ import { markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
 import { toCapturedPageError } from './wwebjs-lifecycle';
+import { recoverGroupChatById } from './wwebjs-chats';
 
 /**
  * Map a whatsapp-web.js MessageAck integer to the neutral DeliveryStatus.
@@ -799,7 +800,11 @@ export class WwebjsMessaging {
     ensureSendable(chatId, 'reply');
     try {
       // Find the message to quote
-      const chat = await this.readBeforeSend('replyToMessage', () => this.client().getChatById(chatId));
+      const chat = await this.readBeforeSend('replyToMessage', () =>
+        this.client()
+          .getChatById(chatId)
+          .catch(error => recoverGroupChatById(this.host, 'replyToMessage', chatId, error)),
+      );
       if (!chat) {
         throw new MessageNotFoundError(quotedMsgId, chatId);
       }
@@ -830,7 +835,11 @@ export class WwebjsMessaging {
   async forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult> {
     this.ensureReadyToSend();
     try {
-      const chat = await this.readBeforeSend('forwardMessage', () => this.client().getChatById(fromChatId));
+      const chat = await this.readBeforeSend('forwardMessage', () =>
+        this.client()
+          .getChatById(fromChatId)
+          .catch(error => recoverGroupChatById(this.host, 'forwardMessage', fromChatId, error)),
+      );
       if (!chat) {
         throw new MessageNotFoundError(messageId, fromChatId);
       }
@@ -920,7 +929,9 @@ export class WwebjsMessaging {
    * that many, which in a chat this account rarely writes to walks the whole history.
    */
   private async loadedOwnMessages(chatId: string): Promise<Message[]> {
-    const chat = await this.client().getChatById(chatId);
+    const chat = await this.client()
+      .getChatById(chatId)
+      .catch(error => recoverGroupChatById(this.host, 'forwardMessage', chatId, error));
     return (await chat?.fetchMessages({ fromMe: true })) ?? [];
   }
 
@@ -930,7 +941,9 @@ export class WwebjsMessaging {
       // NOTE: do NOT resolve chatId to @lid here — whatsapp-web.js reacts using the found message's own
       // id, not this chatId, so LID-resolving the lookup gives no send benefit and would miss a message
       // stored under the pre-migration @c.us chat (#583).
-      const chat = await this.client().getChatById(chatId);
+      const chat = await this.client()
+        .getChatById(chatId)
+        .catch(error => recoverGroupChatById(this.host, 'reactToMessage', chatId, error));
       // getChatById RESOLVES undefined for an unknown chat (wwebjs does not throw); guard it so the
       // caller gets the 404 editMessage returns rather than a TypeError surfacing as an opaque 500.
       if (!chat) {
@@ -952,7 +965,9 @@ export class WwebjsMessaging {
   async getMessageReactions(chatId: string, messageId: string): Promise<MessageReaction[]> {
     this.host.ensureReady();
     const reactions = await this.withPage('getMessageReactions', async () => {
-      const chat = await this.client().getChatById(chatId);
+      const chat = await this.client()
+        .getChatById(chatId)
+        .catch(error => recoverGroupChatById(this.host, 'getMessageReactions', chatId, error));
       if (!chat) {
         throw new MessageNotFoundError(messageId, chatId);
       }
@@ -995,7 +1010,9 @@ export class WwebjsMessaging {
     // OPEN and returns every loaded message. Substitute the default, as getChannelMessages does.
     const safeLimit = Number.isFinite(limit) && limit >= 1 ? Math.trunc(limit) : 50;
     const messages = await this.withPage('getChatHistory', async () => {
-      const chat = await this.client().getChatById(chatId);
+      const chat = await this.client()
+        .getChatById(chatId)
+        .catch(error => recoverGroupChatById(this.host, 'getChatHistory', chatId, error));
       // Unknown chat: getChatById resolves undefined rather than throwing. A chat this account cannot
       // see has no history to return, so yield an empty page instead of dereferencing undefined (a
       // TypeError that would surface as a 500).
@@ -1114,7 +1131,9 @@ export class WwebjsMessaging {
     // this chatId, so LID-resolving the lookup gives no benefit and would miss a message stored under
     // the pre-migration @c.us chat (#583).
     await this.withPage('deleteMessage', async () => {
-      const chat = await this.client().getChatById(chatId);
+      const chat = await this.client()
+        .getChatById(chatId)
+        .catch(error => recoverGroupChatById(this.host, 'deleteMessage', chatId, error));
       if (!chat) {
         throw new MessageNotFoundError(messageId, chatId);
       }
@@ -1132,13 +1151,13 @@ export class WwebjsMessaging {
   async editMessage(chatId: string, messageId: string, body: string, mentions?: string[]): Promise<MessageResult> {
     this.host.ensureReady();
     // Same lookup window as react/delete: fetchMessages sees only the 100 most recent messages.
-    // NOTE: do NOT resolve chatId to @lid here — edit operates on the found message's own key, not
+    // NOTE: do NOT resolve chatId to @lid here - edit operates on the found message's own key, not
     // this chatId, so LID-resolving the lookup would miss a message stored under the pre-migration
     // @c.us chat (#583).
     const edited = await this.withPage('editMessage', async () => {
-      const chat = await this.client().getChatById(chatId);
-      // getChatById RESOLVES undefined for an unknown chat (wwebjs does not throw) — that is the same
-      // client-facing outcome as a message outside the fetch window, not a TypeError (-> 500).
+      const chat = await this.client()
+        .getChatById(chatId)
+        .catch(error => recoverGroupChatById(this.host, 'editMessage', chatId, error));
       if (!chat) {
         throw new MessageNotFoundError(messageId, chatId);
       }
@@ -1175,7 +1194,9 @@ export class WwebjsMessaging {
    * a teardown that landed in the lookup would otherwise reach a closing page.
    */
   private async findInFetchWindow(chatId: string, messageId: string): Promise<Message> {
-    const chat = await this.client().getChatById(chatId);
+    const chat = await this.client()
+      .getChatById(chatId)
+      .catch(error => recoverGroupChatById(this.host, 'findInFetchWindow', chatId, error));
     // getChatById RESOLVES undefined for an unknown chat rather than throwing, which is the same
     // client-facing outcome as a message outside the window — a 404, not a TypeError-driven 500.
     if (!chat) throw new MessageNotFoundError(messageId, chatId);
