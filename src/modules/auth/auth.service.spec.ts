@@ -118,6 +118,14 @@ describe('bannerKeyLine (startup banner key masking)', () => {
   it('passes a placeholder through unchanged', () => {
     expect(bannerKeyLine('(check dashboard for keys)', false)).toBe('(check dashboard for keys)');
   });
+
+  // An API_MASTER_KEY is taken verbatim, so its first characters are part of the secret, not a fixed tag.
+  it('prints no part of an operator-chosen key on later boots', () => {
+    const master = 'Acme-Prod-Gateway-Master-2026-Q4!';
+    const line = bannerKeyLine(master, false);
+    expect(line).not.toContain(master.slice(0, 4));
+    expect(line).toMatch(/^\(full key in .*\.api-key\)$/);
+  });
 });
 
 describe('AuthService', () => {

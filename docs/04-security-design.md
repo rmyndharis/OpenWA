@@ -67,7 +67,9 @@ Storage: SHA-256 hash only (never store plain key); `keyPrefix` keeps the first 
 
 Every key minted through the API-keys endpoints uses that format. The bootstrap seed key is the only
 exception: an explicit `API_MASTER_KEY` is taken verbatim (surrounding whitespace is stripped), and `ALLOW_DEV_API_KEY=true` opts into the
-fixed `dev-admin-key`; with neither set, the seed key is generated in the format above.
+fixed `dev-admin-key`; with neither set, the seed key is generated in the format above. The `keyPrefix` of a key seeded from
+`API_MASTER_KEY` is its first 12 characters, which every ADMIN key can read in the key list, so replace it with a minted key
+(see the rotation note in §4.12) rather than keeping a chosen passphrase as the admin key.
 
 ### Permission Model
 
