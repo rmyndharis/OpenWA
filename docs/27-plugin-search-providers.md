@@ -15,9 +15,10 @@ A **search-provider plugin** owns a search backend. It does two things:
    `SearchResults` to the caller.
 
 The core never talks to the search backend directly — all vendor-specific logic (the query builder, the
-API client, the index schema) lives in the plugin. Swapping backends is a config change
-(`SEARCH_PROVIDER`), not a code change. See [26 - Global Search](./26-global-search.md) for the
-user-facing feature and the built-in DB-FTS default.
+API client, the index schema) lives in the plugin. Swapping backends means enabling another plugin, not
+a code change: under the default `SEARCH_PROVIDER=auto` an enabled plugin supersedes the built-in (see
+27.4), and `SEARCH_PROVIDER` accepts no plugin id. See [26 - Global Search](./26-global-search.md) for
+the user-facing feature and the built-in DB-FTS default.
 
 ## 27.2 The contract
 
