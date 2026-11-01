@@ -1424,9 +1424,12 @@ export class WwebjsLifecycle {
       } catch (error) {
         lastError = error;
         const reason = error instanceof Error ? error.message : String(error);
+        // A request that lands on the reloaded document before whatsapp-web.js has re-exposed window.AuthStore dies
+        // on the missing store, and one that lands before WhatsApp Web has booted on window.require.
         const transient =
           error instanceof PairingCodeAttemptTimeoutError ||
-          isExecutionContextDestroyedError(reason) ||
+          isNavigationShapedInitRejection(reason) ||
+          /reading 'PairingCodeLinkUtils'/.test(reason) ||
           isProtocolTimeout(error) ||
           /callfunctionon timed out/i.test(reason);
         if (!transient) {
