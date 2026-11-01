@@ -515,7 +515,11 @@ export function MessageTester() {
       // than hand-building an engine-specific JID here (#265) — also surfaces unregistered numbers.
       // Bulk carries its own recipient list, so the shared selector's target is not resolved there.
       let chatId = targetId;
-      if (messageType !== 'bulk' && recipientType !== 'group') {
+      // A chat id (anything with an @, such as a lid copied from Chats) goes out as it is, like a forward target: read
+      // as a number it loses its meaning, a lid's digits being no phone and a device suffix joining the phone's digits.
+      if (messageType !== 'bulk' && recipientType !== 'group' && targetId.includes('@')) {
+        chatId = targetId.trim();
+      } else if (messageType !== 'bulk' && recipientType !== 'group') {
         const digits = phoneDigits(targetId);
         const resolved = digits === null ? null : await contactApi.checkNumber(session, digits);
         assertCurrent();

@@ -1156,6 +1156,56 @@ for (const field of ['recipient', 'forward target'] as const) {
   });
 }
 
+// The number check and the send of one personal recipient, recorded, with every number answered as unregistered.
+function stubPersonalSend(): { checked: string[]; writes: unknown[] } {
+  const record = { checked: [] as string[], writes: [] as unknown[] };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith('/sessions')) return jsonResponse([{ id: 's1', name: 'Main', status: 'ready' }]);
+    if (path.includes('/contacts/check')) {
+      record.checked.push(path.split('/contacts/check')[1]);
+      return jsonResponse({ number: '0', exists: false });
+    }
+    if (path.includes('/messages/')) {
+      record.writes.push(JSON.parse(String(init?.body)));
+      return jsonResponse({ messageId: 'sent', timestamp: 1 });
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+  sessionStorage.setItem('openwa_api_key', 'original-key');
+  sessionStorage.setItem('openwa_user_role', 'operator');
+  return record;
+}
+
+function renderTesterForKey(): { container: HTMLElement; client: QueryClient } {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
+  const view = rtl.render(
+    createElement(QueryClientProvider, { client }, createElement(RoleProvider, null, createElement(MessageTester))),
+  );
+  return { container: view.container, client };
+}
+
+// Read as a phone number, a pasted chat id lost its meaning: a lid's digits were looked up as a number nobody has,
+// and a device suffix was glued onto the phone, making a different number that could belong to a stranger.
+for (const chatId of ['185290012345678@lid', '628123456789:5@s.whatsapp.net']) {
+  test(`a recipient written as a chat id (${chatId}) is sent to as it is, without a number lookup`, async () => {
+    const { checked, writes } = stubPersonalSend();
+    const { container, client } = renderTesterForKey();
+    try {
+      await rtl.screen.findByRole('option', { name: /Main/ });
+      type(container, '#mt-13', ` ${chatId} `);
+      type(container, '#mt-2', 'hello');
+      rtl.fireEvent.click(sendButton());
+      await rtl.waitFor(() => assert.ok(writes.length + checked.length > 0));
+      assert.deepEqual(checked, [], 'the chat id was looked up as a phone number');
+      assert.deepEqual(writes, [{ chatId, text: 'hello' }]);
+    } finally {
+      client.clear();
+      sessionStorage.removeItem('openwa_api_key');
+    }
+  });
+}
+
 test('an unchanged actor sends to canonical personal and forward destinations', async () => {
   const writes: { path: string; key: string | null; body: unknown }[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
