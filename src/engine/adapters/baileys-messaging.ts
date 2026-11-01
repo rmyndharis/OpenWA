@@ -930,6 +930,19 @@ export class BaileysMessaging {
         `the edit of message ${messageId} was rejected — only the account's own messages can be edited`,
       );
     }
+    // WhatsApp edits a text or the caption of a photo, video or document: the slots setBaileysText writes. The
+    // edit of anything else resolved all the same, and the stored body took the new text while recipients kept
+    // the original. whatsapp-web.js refuses it from the page.
+    const b = await this.host.loadLib();
+    const content = b.normalizeMessageContent(target.message ?? undefined);
+    if (
+      typeof content?.conversation !== 'string' &&
+      !(content?.extendedTextMessage ?? content?.imageMessage ?? content?.videoMessage ?? content?.documentMessage)
+    ) {
+      throw new EngineRefusedError(
+        `the edit of message ${messageId} was rejected: only a text or a caption can be edited`,
+      );
+    }
     // An edit keeps the original message id, so it is neither re-persisted nor echoed as a new send.
     // The destination is resolved like any other send: a lid-migrated contact rejects PN-addressed
     // sends with ack error 463 (see toDeliverableJid).
@@ -940,7 +953,6 @@ export class BaileysMessaging {
     // protocolMessage edit envelope, so an edit can re-tag participants. An edit REPLACES the
     // content, so omitting mentions drops whatever tags the original carried.
     const editContent = { text: body, ...this.withMentions(mentions), edit: target.key };
-    const b = await this.host.loadLib();
     await this.send(jid, this.previewSafe(editContent), this.previewSafeOptions(editContent), socket);
     // Update the preview and raw copy immediately, ahead of the buffered echo.
     this.host.recordMessageEdit(target.key.remoteJid ?? chatId, messageId, body);

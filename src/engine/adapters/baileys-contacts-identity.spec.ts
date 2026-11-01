@@ -286,6 +286,8 @@ describe.each(['stored', 'persisted', 'library', 'recipient'] as const)(
           return {
             key: { id: 'M1', remoteJid: '111@lid', fromMe: true },
             message: {
+              // A text as well as the buttons, so an edit has something it may change.
+              conversation: 'Choose',
               buttonsMessage: {
                 contentText: 'Choose',
                 buttons: [{ buttonId: 'yes', buttonText: { displayText: 'Yes' } }],

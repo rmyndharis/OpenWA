@@ -1018,12 +1018,13 @@ adapter boundary — none silently stubs.
   `setProfileStatus` is symmetric: neither engine surfaces a refusal for it.
 - **`editMessage` / `pinMessage` / `unpinMessage` refusals (baileys).** Both engines refuse what they
   can judge locally: the target must be addressable inside the given chat, and the Baileys adapter
-  additionally refuses an edit of a message the account did not send. Past those guards they diverge.
-  whatsapp-web.js reads a page-side verdict (`message.edit()` resolves `null`, `message.pin()`
-  resolves `false`) and raises a `403`; Baileys sends the edit or pin as an ordinary protocol message
-  and is never told the outcome. So a pin refused because the account is not a group admin, or an
-  edit refused because the target is not a text message, answers `403` on whatsapp-web.js and `200`
-  on Baileys.
+  additionally refuses an edit of a message the account did not send or of one with no text or caption
+  to edit (a location, sticker, poll, contact card or audio), the two edits whatsapp-web.js also
+  refuses. Past those guards they diverge. whatsapp-web.js reads a page-side verdict
+  (`message.edit()` resolves `null`, `message.pin()` resolves `false`) and raises a `403`; Baileys
+  sends the edit or pin as an ordinary protocol message and is never told the outcome. So a pin
+  refused because the account is not a group admin answers `403` on whatsapp-web.js and `200` on
+  Baileys.
 - **Inbound edits and reactions (baileys).** WhatsApp sends a contact's edit, and a reaction in some
   chats, encrypted under the secret of the message it changes, which the library does not decrypt. The
   adapter reads them with the stored copy of that message (the session's message store, bounded by

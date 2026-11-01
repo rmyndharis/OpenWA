@@ -5156,6 +5156,48 @@ describe('BaileysAdapter store-backed ops', () => {
     expect(fakeSock.sendMessage).not.toHaveBeenCalled();
   });
 
+  // WhatsApp edits a text or the caption of a photo, video or document, and whatsapp-web.js refuses the rest.
+  it.each([
+    ['location', { locationMessage: { degreesLatitude: 1, degreesLongitude: 2 } }],
+    ['sticker', { stickerMessage: { mimetype: 'image/webp' } }],
+    ['poll', { pollCreationMessage: { name: 'Lunch?', options: [{ optionName: 'Yes' }] } }],
+    ['contact card', { contactMessage: { displayName: 'Ann', vcard: 'BEGIN:VCARD' } }],
+    ['voice note', { audioMessage: { mimetype: 'audio/ogg; codecs=opus', ptt: true } }],
+  ])(
+    'editMessage refuses an own %s, which has no text to edit, with a 403 and sends nothing',
+    async (_kind, message) => {
+      fakeStore.getMessage.mockResolvedValue({ ...ownStored, message });
+      const adapter = await ready();
+      await expect(adapter.editMessage('628111@s.whatsapp.net', 'TARGET', 'x')).rejects.toBeInstanceOf(
+        EngineRefusedError,
+      );
+      expect(fakeSock.sendMessage).not.toHaveBeenCalled();
+      expect(fakeStore.update).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['a text with a link preview', { extendedTextMessage: { text: 'hi' } }],
+    ['a photo caption', { imageMessage: { caption: 'old' } }],
+    ['a video caption', { videoMessage: { caption: 'old' } }],
+    ['a document caption', { documentMessage: { caption: 'old', fileName: 'a.pdf' } }],
+    ['a text in a disappearing chat', { ephemeralMessage: { message: { conversation: 'hi' } } }],
+  ])('editMessage still edits %s', async (_kind, message) => {
+    jest
+      .requireMock<Record<string, jest.Mock>>('@whiskeysockets/baileys')
+      .normalizeMessageContent.mockImplementation((c: { ephemeralMessage?: { message: unknown } } | undefined) =>
+        c?.ephemeralMessage ? c.ephemeralMessage.message : c,
+      );
+    fakeStore.getMessage.mockResolvedValue({ ...ownStored, message });
+    fakeSock.sendMessage.mockResolvedValue(undefined);
+    const adapter = await ready();
+    await expect(adapter.editMessage('628111@s.whatsapp.net', 'TARGET', 'new')).resolves.toEqual({
+      id: 'TARGET',
+      timestamp: 1700000000,
+    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('editMessage throws MessageNotFoundError when the stored key belongs to another chat', async () => {
     fakeStore.getMessage.mockResolvedValue({
       ...ownStored,
