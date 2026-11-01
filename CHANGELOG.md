@@ -9,17 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Read a whatsapp-web.js group whose refresh fails one of WhatsApp Web's own invariants from the metadata the page already holds across group, chat, label and message routes (#1962).
+- Read a whatsapp-web.js group whose refresh fails one of WhatsApp Web's own invariants from the metadata the page already holds, so `GET /api/sessions/{sessionId}/groups/{groupId}` and `/labels/{labelId}/chats` no longer answer 404 for it, and the chat lookups behind its group setting, chat action, chat label and message routes use that metadata too (#1962).
 - Reload the active API key index after seeding the first admin key, so a failed first read no longer leaves body admission without it until the next refresh. Thanks @Purushotham-Prajapati-24.
 - Stop sending `message.edited` on the webhook and socket for an edit that reaches a message already deleted for everyone, which handed consumers new text for a message `message.revoked` had already withdrawn. Thanks @rupeshreddynagolu.
-- Clear or update both the `@lid` and `@s.whatsapp.net` Baileys chat previews when a history-sync revoke or a live edit or revoke arrives under the counterpart chat id.
-- Pin a Baileys send to the socket and ready state that started it across pre-send media, quote, preview and catalog work, and map a connection drop during `sendProduct`'s catalog lookup to `EngineNotReadyError`.
-- Ignore an old engine's disconnect report while `executeReconnect` is tearing that engine down, flush a deferred terminal-unlink read retry when a reconnect is cancelled or shut down, and register the `logout` credential-teardown fence before waiting on initial status.
-- Reject WhatsApp JIDs with more than one `@` or an empty local part, canonicalize `groupId` on group picture routes, and validate `channelId` on `demoteChannelAdmin` and `transferChannelOwnership`.
-- Retract retired or rolled-back wildcard instance secrets from the plugin base config and `registry.json` when an infrastructure backup is imported.
-- Refund the `/health` API key validation limiter slot by reservation token and skip `API_KEY_AUTH_FAILED` logging when the key store itself fails to read, and reject boolean `true` on numeric DTO fields with `@Min(1)`.
-- Stop throttled dashboard media retries after the API key changes or is cleared, keep the dashboard chat composer's in-flight state per conversation, and restore keyboard focus after an infrastructure export or import finishes.
-- Refuse `.` and `..` path segments on raw Python and PHP SDK `request` calls, preserve leading `//` paths on raw Python SDK `request` and `request_bytes` calls, and align `GroupInfo.owner`, `ChatHistoryMessage.mentionedIds`, `MessageContact.labels`, `BulkMessageItem.content` and `EngineHistoryMessage.media` across the SDK and dashboard contract types.
+- Keep the `@lid` and `@s.whatsapp.net` previews of one Baileys chat in step when a history-sync revoke, or a live edit or revoke, names the chat under the other id.
+- Keep a Baileys chat preview cleared when an edit reaches a message already deleted for everyone, so `GET /api/sessions/{sessionId}/chats` and the dashboard sidebar no longer show the deleted text.
+- Refuse a Baileys send or status post with `409`, rather than sending on a replacement socket, when its connection changes during the media fetch, quote or recipient lookup, preview upload or product lookup; a send cut off by reconnect backoff now answers `409`, where it answered `503`.
+- Answer `503` (not sent) instead of `500` for a Baileys product send whose catalog lookup is cut off by a closed connection, and hand back its pacing admission.
+- Stop an old engine's disconnect report, sent while a reconnect tears it down, from using up a second reconnect attempt.
+- Record and announce a WhatsApp unlink whose session row could not be read when the session is stopped, logged out or deleted, or the gateway shuts down, instead of dropping it.
+- Stop a disconnect read retry that is still re-reading from overwriting a session that has become READY and tearing down its recovered engine.
+- Make a session delete wait for a logout that is still waiting on the session's initial status, instead of purging its data while the logout runs.
+- Reject chat and group ids with more than one `@` or an empty local part, in the API and in the API Keys form.
+- Pass the canonical `groupId` to the engine on the `/groups/{groupId}/picture` routes, which forwarded an upper-case, padded or device-suffixed id as sent.
+- Answer `404` to a malformed `channelId` on `POST /api/sessions/{sessionId}/channels/{channelId}/admins/demote` and `/owner/transfer`, which passed it to the engine.
+- Answer `400` to a boolean `limit` in `POST /api/webhooks/delivery-failures/redrive` instead of redriving one delivery.
+- Retract the secrets of retired or rolled-back wildcard plugin instances from the plugin base config and `registry.json` when an infrastructure backup is imported, on the node that runs the import.
+- Keep a valid key's `GET /api/health` check from freeing the limiter slot of a newer failed attempt.
+- Log an unreadable API key store on `GET /api/health`, at most once a minute, instead of recording it as an `API_KEY_AUTH_FAILED` credential failure.
+- Stop throttled dashboard media downloads from retrying after the API key changes or is cleared.
+- Keep the dashboard chat composer's in-flight send state per conversation, so a slow send in one chat no longer disables Send in another.
+- Restore keyboard focus to the Export data, Import data or Download backup first control after a backup finishes, without scrolling the page.
+- Refuse `.` and `..` path segments, percent-encoded ones too, in raw Python and PHP SDK `request` paths, as the JavaScript, Go and Java SDKs do.
+- Keep the first segment of a raw Python SDK `request` path that starts with `//`, which httpx read as a host name and dropped.
+- Type `GroupInfo.owner` as a non-null JID in the JavaScript SDK, and `ChatHistoryMessage.mentionedIds` and `MessageContact.labels` as `list[str]` in the Python SDK.
 
 ## [0.27.0] - 2026-10-31
 
