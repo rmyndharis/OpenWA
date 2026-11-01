@@ -973,6 +973,16 @@ function isSimpleToken(token) {
   );
 }
 
+function resolveObjectSchema(node, schemas) {
+  if (!node || typeof node !== 'object') return null;
+  if (node.$ref) return schemas[node.$ref.split('/').pop()] ?? null;
+  if (Array.isArray(node.allOf) && node.allOf.length === 1 && node.allOf[0].$ref) {
+    return schemas[node.allOf[0].$ref.split('/').pop()] ?? null;
+  }
+  if (node.type === 'object' && node.properties) return node;
+  return null;
+}
+
 /**
  * Compares one hand type against one schema. Returns an array of human-readable diff lines —
  * empty when the pair conforms. Exported for the spec; the CLI loop below is a thin driver.
@@ -1002,6 +1012,26 @@ export function comparePair(
         `"${field}": hand ${handInfo.optional ? 'optional' : 'required'}, contract ${sField.optional ? 'optional' : 'required'}`,
       );
       continue;
+    }
+    const rawHand = handInfo.token.trim().replace(/;$/, '');
+    if (rawHand.startsWith('{') && rawHand.endsWith('}')) {
+      const subSchema = resolveObjectSchema(schema?.properties?.[field], schemas);
+      if (subSchema) {
+        const inlineMembers = parseMembers(rawHand.slice(1, -1).replace(/;\s*/g, ';\n'));
+        if (ctx) memberContext.set(inlineMembers, ctx);
+        for (const subDiff of comparePair(
+          `${handName}.${field}`,
+          inlineMembers,
+          `${schemaName}.${field}`,
+          subSchema,
+          schemas,
+          compareOptionality,
+          namesOnly,
+        )) {
+          diffs.push(`${field}.${subDiff}`);
+        }
+        continue;
+      }
     }
     if (isSimpleToken(sField.token)) {
       let hand = isSimpleToken(handInfo.token)

@@ -395,7 +395,6 @@ export interface EngineHistoryMessage {
     data?: string;
     omitted?: boolean;
     sizeBytes?: number;
-    archived?: boolean;
   };
   poll?: { name: string; options: string[]; allowMultipleAnswers: boolean };
   quotedMessage?: { id: string; body: string };
@@ -549,6 +548,7 @@ export interface BulkMessageItem {
     audio?: BulkMediaPayload;
     document?: BulkMediaPayload;
     caption?: string;
+    mentions?: string[];
   };
   variables?: Record<string, string>;
 }

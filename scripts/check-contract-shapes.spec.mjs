@@ -973,3 +973,48 @@ test('parsePythonTypes classifies bare list as unknown and types ChatHistoryMess
   );
   assert.deepEqual(diffs, ['"items": hand unknown, contract array<string>']);
 });
+
+test('comparePair recursively gates inline nested object fields on TypeScript interfaces', () => {
+  const openapi = JSON.parse(readFileSync(join(gateRoot, 'openapi.json'), 'utf8'));
+  const allSchemas = openapi.components.schemas;
+  const dashSrc = readFileSync(join(gateRoot, 'dashboard/src/services/api.ts'), 'utf8');
+  const dashTypes = parseHandTypes(dashSrc);
+  const bulkDiffs = comparePair(
+    'BulkMessageItem',
+    dashTypes.BulkMessageItem,
+    'BulkMessageItemDto',
+    allSchemas.BulkMessageItemDto,
+    allSchemas,
+  );
+  const historyDiffs = comparePair(
+    'EngineHistoryMessage',
+    dashTypes.EngineHistoryMessage,
+    'ChatHistoryMessageDto',
+    allSchemas.ChatHistoryMessageDto,
+    allSchemas,
+  );
+  assert.match(dashTypes.BulkMessageItem.content.token, /\bmentions\?:/);
+  assert.doesNotMatch(dashTypes.EngineHistoryMessage.media.token, /\barchived\?:/);
+  assert.deepEqual(bulkDiffs, []);
+  assert.deepEqual(historyDiffs, []);
+
+  const driftedInline = parseHandTypes('export interface Item {\n  nested: { extra?: boolean; id: string };\n}\n');
+  const inlineDiffs = comparePair(
+    'Item',
+    driftedInline.Item,
+    'ItemDto',
+    {
+      type: 'object',
+      required: ['nested'],
+      properties: {
+        nested: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string' } },
+        },
+      },
+    },
+    {},
+  );
+  assert.ok(inlineDiffs.some(d => d.includes('nested.hand has "extra"')));
+});
