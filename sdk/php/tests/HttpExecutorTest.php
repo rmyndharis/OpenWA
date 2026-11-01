@@ -27,6 +27,29 @@ class HttpExecutorTest extends TestCase
         $this->assertSame([], $backend->calls());
     }
 
+    public function testPathWithDotSegmentsIsRefusedBeforeSending(): void
+    {
+        $backend = (new MockBackend())->on(200, ['ok' => true]);
+        $client = $backend->makeClient();
+        foreach ([
+            '/api/sessions/s1/..',
+            '/api/sessions/.',
+            '/api/sessions/s1/../api-keys',
+            '/api/sessions/%2e%2e',
+            '/api/sessions/%2E',
+        ] as $path) {
+            try {
+                $client->request('GET', $path);
+                $this->fail("Expected InvalidArgumentException for {$path}");
+            } catch (\InvalidArgumentException $e) {
+                $this->assertStringContainsString('dot path segment', $e->getMessage());
+            }
+        }
+        $this->assertSame([], $backend->calls());
+        $client->request('GET', '/api/sessions/s1/labels/a.b?x=/..');
+        $this->assertCount(1, $backend->calls());
+    }
+
     /**
      * A client that is dumped while a call is debugged must not write its bearer-equivalent key out.
      */

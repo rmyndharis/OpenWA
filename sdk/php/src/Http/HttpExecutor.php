@@ -237,6 +237,13 @@ class HttpExecutor
         if (!str_starts_with($path, '/')) {
             throw new \InvalidArgumentException('OpenWA: path must begin with "/": ' . $path);
         }
+        $rawPath = explode('#', explode('?', $path, 2)[0], 2)[0];
+        foreach (explode('/', str_replace('\\', '/', $rawPath)) as $seg) {
+            $decoded = rawurldecode($seg);
+            if ($decoded === '.' || $decoded === '..') {
+                throw new \InvalidArgumentException('OpenWA: path must not contain a dot path segment: ' . $path);
+            }
+        }
         // Auth/JSON headers are applied per-request so they are correct whether
         // a default or injected client is used (and never leak Guzzle exceptions:
         // http_errors disabled so we translate status into typed SDK exceptions).
