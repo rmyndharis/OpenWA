@@ -10,7 +10,10 @@ import type { AnyToolDescriptor } from './tool-descriptor';
  * auth (role + allowedSessions + IP fail-closed) → chat gate (a chat-restricted key may run only a
  * tool that carries a `chatScope` mark) → validate input → NUL check → chat arguments and
  * `quotedMessageId` → handler.
- * Mirrors the REST guard-then-pipe order (auth before validation). The chat arguments are checked
+ * Mirrors the REST guard-then-pipe order (auth before validation) for a call that reaches it. Over MCP
+ * the SDK validates the same input schema before invoking this, so arguments the schema refuses come
+ * back as the SDK's -32602 tool error without reaching auth; every handler still runs only after the
+ * role, session and chat checks here. The chat arguments are checked
  * on the parsed values, so schema normalization cannot change the authorized target.
  * `clientIp` is undefined over MCP — a key with allowedIps therefore fails closed
  * inside validateApiKey (documented limitation).
