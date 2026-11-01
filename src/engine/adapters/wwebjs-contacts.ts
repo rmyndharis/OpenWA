@@ -311,6 +311,21 @@ export class WwebjsContacts {
     return pn ? pn.replace(/@c\.us$/i, '').replace(/\D/g, '') || null : null;
   }
 
+  /**
+   * The `<lid>@lid` WhatsApp Web holds for a phone number, or null when it holds none, which an unregistered
+   * number answers too. When the page does not know the LID it asks WhatsApp, so this can send a query.
+   */
+  async getContactLid(number: string): Promise<string | null> {
+    this.host.ensureReady();
+    const phone = userPart(number).replace(/\D/g, '');
+    if (!phone) return null;
+    const [result] = await withPage(this.host, 'getContactLid', () =>
+      this.client().getContactLidAndPhone([`${phone}@c.us`]),
+    );
+    const lid = result?.lid;
+    return typeof lid === 'string' && parseWaId(lid).kind === 'lid' ? `${userPart(lid)}@lid` : null;
+  }
+
   async upsertContact(contactId: string, firstName: string, lastName = ''): Promise<void> {
     this.host.ensureReady();
     // wwjs addresses the addressbook entry by PHONE NUMBER, not JID (Client.js:3266). lastName is

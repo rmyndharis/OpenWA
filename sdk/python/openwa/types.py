@@ -800,6 +800,12 @@ class ContactPhoneResponse(TypedDict):
     phone: str | None
 
 
+class ContactLidResponse(TypedDict):
+    number: str
+    # The <lid>@lid WhatsApp holds for the number, or None when it holds none (an unregistered number answers the same).
+    lid: str | None
+
+
 # ── Group ─────────────────────────────────────────────────────────
 
 

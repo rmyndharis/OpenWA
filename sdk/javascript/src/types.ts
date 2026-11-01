@@ -815,6 +815,16 @@ export interface ContactPhoneResponse {
   phone: string | null;
 }
 
+export interface ContactLidResponse {
+  /** The number exactly as supplied in the path. */
+  number: string;
+  /**
+   * The `<lid>@lid` WhatsApp holds for the number, or `null` when it holds none. An unregistered number answers
+   * `null` too; `contacts.check` tells the two apart.
+   */
+  lid: string | null;
+}
+
 // ── Group ─────────────────────────────────────────────────────────
 
 export interface GroupParticipant {

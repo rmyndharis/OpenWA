@@ -2768,6 +2768,31 @@ For inbound messages the gateway can attach this automatically instead: `RESOLVE
 
 **Errors:** `400` session is not started · `401` missing/invalid API key · `409` conflict or engine not ready (retryable)
 
+#### GET /api/sessions/:sessionId/contacts/:number/lid
+
+Look up the `@lid` WhatsApp holds for a phone number, without sending a message. The reverse of `GET /api/sessions/:sessionId/contacts/:contactId/phone`.
+
+**Auth:** API key (`OPERATOR`)
+
+**Path parameters**
+
+| Name      | Type   | Description                                                               |
+| --------- | ------ | ------------------------------------------------------------------------- |
+| sessionId | string | Session ID.                                                               |
+| number    | string | Phone number to look up, e.g. `628123456789` (digits, no `@c.us` suffix). |
+
+**Response** `200`
+
+```json
+{ "number": "628123456789", "lid": "12345678901234@lid" }
+```
+
+`lid` is the `<lid>@lid` WhatsApp holds for the number, or `null` when it holds none. An unregistered number answers `null` too, so call `GET /api/sessions/:sessionId/contacts/check/:number` to tell the two apart. Only the digits of `number` are used, so a `+`, spaces or an `@c.us` suffix are tolerated, and a path with no digits answers `null` without querying WhatsApp.
+
+The lookup is a read and the gateway stores nothing from it. Baileys asks WhatsApp with a server query. whatsapp-web.js reads the LID WhatsApp Web already holds and queries WhatsApp when it holds none. Either way a lookup can cost an outbound query, which is why the route needs an `OPERATOR` key and why bulk lookups put the linked account at risk. A key restricted to selected chats cannot call it.
+
+**Errors:** `400` session is not started · `401` missing/invalid API key · `403` key lacks OPERATOR role, is not scoped to this session, is restricted to selected chats, or its IP allow-list excludes the client · `409` conflict or engine not ready (retryable) · `503` WhatsApp did not answer the lookup (on Baileys the gateway bounds the query with its own clock, so an unanswered query is a `503`, never `lid: null`)
+
 #### PUT /api/sessions/:sessionId/contacts/:contactId
 
 Save a contact to the account's addressbook, or edit an existing entry. This is the WhatsApp

@@ -561,6 +561,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return this.contacts.resolveContactPhone(contactId);
   }
 
+  async getContactLid(number: string): Promise<string | null> {
+    return this.contacts.getContactLid(number);
+  }
+
   async getChats(): Promise<ChatSummary[]> {
     return this.contacts.getChats();
   }

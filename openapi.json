@@ -9414,6 +9414,98 @@
         ]
       }
     },
+    "/api/sessions/{sessionId}/contacts/{number}/lid": {
+      "get": {
+        "description": "Returns the `<lid>@lid` WhatsApp holds for a phone number, the reverse of `GET /contacts/{contactId}/phone`, without sending a message. A number WhatsApp holds no LID for answers `lid: null`, as does an unregistered one; use `check/{number}` to tell them apart. The gateway stores nothing from the lookup. Both engines may send a query to WhatsApp, so bulk lookups put the linked account at risk. Requires an OPERATOR key.",
+        "operationId": "ContactController_getContactLid",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "required": true,
+            "in": "path",
+            "description": "Phone number to look up (e.g., 628123456789)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The number and its LID, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactLidResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session is not started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The API key is missing, unknown, revoked, or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key's role, session or chat scope, or IP allow-list does not allow this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and for those few seconds the answer is a `409` naming the reload; retry shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "WhatsApp did not answer the lookup. Deliberately not reported as `lid: null`, which says WhatsApp holds no LID for the number. Retry once the session is ready again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Look up the LID of a phone number",
+        "tags": [
+          "contacts"
+        ]
+      }
+    },
     "/api/sessions/{sessionId}/contacts/{contactId}/profile-picture": {
       "get": {
         "operationId": "ContactController_getProfilePicture",
@@ -23660,6 +23752,26 @@
           "number",
           "exists",
           "whatsappId"
+        ]
+      },
+      "ContactLidResponseDto": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "string",
+            "description": "The number exactly as supplied in the path.",
+            "example": "628123456789"
+          },
+          "lid": {
+            "type": "string",
+            "nullable": true,
+            "description": "The `<lid>@lid` WhatsApp holds for the number, or null when it holds none. An unregistered number answers null too, so call `check/{number}` to tell the two apart.",
+            "example": "12345678901234@lid"
+          }
+        },
+        "required": [
+          "number",
+          "lid"
         ]
       },
       "ProfilePictureResponseDto": {

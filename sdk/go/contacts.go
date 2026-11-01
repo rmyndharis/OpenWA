@@ -75,6 +75,17 @@ func (s *ContactsService) Phone(ctx context.Context, sessionID, contactID string
 	return &out, nil
 }
 
+// Lid looks up the @lid WhatsApp holds for a phone number, without sending anything. Lid is nil when
+// WhatsApp holds none, which an unregistered number also answers. Requires an OPERATOR-level key.
+func (s *ContactsService) Lid(ctx context.Context, sessionID, number string) (*ContactLidResponse, error) {
+	var out ContactLidResponse
+	err := s.client.do(ctx, "GET", s.base(sessionID)+"/"+pathEscape(number)+"/lid", nil, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Upsert saves a contact to the addressbook, or edits an existing entry. Requires an OPERATOR-level
 // key.
 func (s *ContactsService) Upsert(ctx context.Context, sessionID, contactID string, body UpsertContactRequest) (*SuccessResult, error) {

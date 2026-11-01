@@ -587,6 +587,10 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
     return this.contacts.resolveContactPhone(contactId);
   }
 
+  getContactLid(number: string): Promise<string | null> {
+    return this.contacts.getContactLid(number);
+  }
+
   getGroups(): Promise<Group[]> {
     return this.groups.getGroups();
   }

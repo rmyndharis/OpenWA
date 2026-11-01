@@ -40,13 +40,14 @@ describe('group invite-code role coverage (the code is a capability, not read da
 });
 
 // A number-existence check is an outbound WhatsApp query about a third party, and bulk checks put the
-// linked account's standing at risk, so it sits at OPERATOR (the MCP ContactCheckNumber tool too).
+// linked account's standing at risk, so it sits at OPERATOR (the MCP ContactCheckNumber tool too), and so
+// does the LID lookup, which sends the same kind of query for a number.
 // The profile-picture and phone-resolution reads stay open to any key: the dashboard loads avatars
 // with a VIEWER key.
 describe('contact lookup role coverage', () => {
-  it('ContactController.checkNumber requires the OPERATOR role', () => {
+  it.each(['checkNumber', 'getContactLid'] as const)('ContactController.%s requires the OPERATOR role', method => {
     // eslint-disable-next-line @typescript-eslint/unbound-method -- reading route metadata, not invoking
-    expect(Reflect.getMetadata(REQUIRED_ROLE_KEY, ContactController.prototype.checkNumber)).toBe(ApiKeyRole.OPERATOR);
+    expect(Reflect.getMetadata(REQUIRED_ROLE_KEY, ContactController.prototype[method])).toBe(ApiKeyRole.OPERATOR);
   });
 
   it.each(['getProfilePictures', 'getProfilePicture', 'resolvePhone'] as const)(

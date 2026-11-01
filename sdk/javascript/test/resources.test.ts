@@ -201,6 +201,14 @@ describe('ContactsResource — exact paths', () => {
     await c.contacts.phone('s', 'x@lid');
   });
 
+  it('lid: GET /contacts/{number}/lid, and a null lid comes through', async () => {
+    const t = new MockTransport().on('GET', /\/lid$/, { body: { number: '628123', lid: null } });
+    const res = await client(t).contacts.lid('s', '628123');
+    expect(t.lastCall!.method).toBe('GET');
+    expect(t.lastCall!.url).toContain('/api/sessions/s/contacts/628123/lid');
+    expect(res.lid).toBeNull();
+  });
+
   it('block (POST) / unblock (DELETE)', async () => {
     const t = new MockTransport()
       .on('POST', /\/block$/, { body: { success: true } })

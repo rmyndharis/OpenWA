@@ -11,6 +11,7 @@ describe('ContactController', () => {
     getNumberId: jest.fn(),
     getProfilePicture: jest.fn(),
     resolveContactPhone: jest.fn(),
+    getContactLid: jest.fn(),
     upsertContact: jest.fn(),
     deleteContact: jest.fn(),
     blockContact: jest.fn(),
@@ -101,6 +102,23 @@ describe('ContactController', () => {
     });
   });
 
+  it('getContactLid wraps the number and its lid', async () => {
+    service.getContactLid.mockResolvedValue('234767895240796@lid');
+    await expect(controller.getContactLid('s1', '60123456789')).resolves.toEqual({
+      number: '60123456789',
+      lid: '234767895240796@lid',
+    });
+    expect(service.getContactLid).toHaveBeenCalledWith('s1', '60123456789');
+  });
+
+  it('getContactLid answers lid:null for a number WhatsApp holds no lid for', async () => {
+    service.getContactLid.mockResolvedValue(null);
+    await expect(controller.getContactLid('s1', '60123456789')).resolves.toEqual({
+      number: '60123456789',
+      lid: null,
+    });
+  });
+
   it('getBlockedContacts returns the service list as a bare array', async () => {
     service.getBlockedContacts.mockResolvedValue(['628111@c.us', '628222@c.us']);
     await expect(controller.getBlockedContacts('s1')).resolves.toEqual(['628111@c.us', '628222@c.us']);
@@ -136,7 +154,7 @@ describe('ContactController OpenAPI error responses', () => {
   );
 
   it('covers every route', () => {
-    expect(routes).toHaveLength(11);
+    expect(routes).toHaveLength(12);
   });
 
   it.each(routes)('%s declares 400', method => {
