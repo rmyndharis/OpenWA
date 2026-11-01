@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { ParticipantPresence, PresenceUpdateEvent } from '../../engine/interfaces/whatsapp-engine.interface';
 
-/** What `GET /presence/:chatId` serves: each participant's last reported state, with when the last report arrived. */
+/** What `GET /presence/:chatId` serves: the last report, with when it arrived. */
 export interface ChatPresence {
   chatId: string;
   participants: ParticipantPresence[];
@@ -61,14 +61,10 @@ export class PresenceStore {
     const chats = this.bySession.get(sessionId) ?? new Map<string, ChatPresence>();
     this.bySession.set(sessionId, chats);
 
-    // Kept per participant: Baileys reports each group member in a stanza of its own, so the latest event alone
-    // holds whoever spoke last, and one member's repeat would read as a change against another's report.
-    const participants = new Map((chats.get(event.chatId)?.participants ?? []).map(p => [p.id, p]));
-    const changed = event.participants.some(p => participants.get(p.id)?.state !== p.state);
-    for (const participant of event.participants) participants.set(participant.id, participant);
+    const previous = chats.get(event.chatId);
     const next: ChatPresence = {
       chatId: event.chatId,
-      participants: [...participants.values()],
+      participants: event.participants,
       ...(event.groupOnlineCount === undefined ? {} : { groupOnlineCount: event.groupOnlineCount }),
       observedAt: at,
     };
@@ -80,7 +76,7 @@ export class PresenceStore {
       if (oldest === undefined) break;
       chats.delete(oldest);
     }
-    return changed;
+    return !samePresence(previous?.participants, event.participants);
   }
 
   /** The last known presence for a chat, or null if none was ever reported. */
@@ -93,4 +89,14 @@ export class PresenceStore {
     this.bySession.delete(sessionId);
     this.ownIntent.delete(sessionId);
   }
+}
+
+/**
+ * Whether two participant lists say the same thing. Order is not significant — the engines build the
+ * list by iterating an object, so a reordering is not a presence change and must not read as one.
+ */
+function samePresence(before: ParticipantPresence[] | undefined, after: ParticipantPresence[]): boolean {
+  if (!before || before.length !== after.length) return false;
+  const previous = new Map(before.map(participant => [participant.id, participant.state]));
+  return after.every(participant => previous.get(participant.id) === participant.state);
 }

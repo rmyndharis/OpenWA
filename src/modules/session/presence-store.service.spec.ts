@@ -1,5 +1,5 @@
 import { PresenceStore } from './presence-store.service';
-import type { PresenceState, PresenceUpdateEvent } from '../../engine/interfaces/whatsapp-engine.interface';
+import type { PresenceUpdateEvent } from '../../engine/interfaces/whatsapp-engine.interface';
 
 const event = (over: Partial<PresenceUpdateEvent> = {}): PresenceUpdateEvent => ({
   chatId: 'c@c.us',
@@ -85,29 +85,6 @@ describe('PresenceStore', () => {
 
       expect(store.record('s1', event({ chatId: 'b@c.us' }))).toBe(true);
       expect(store.record('s2', event({ chatId: 'a@c.us' }))).toBe(true);
-    });
-  });
-
-  // Baileys sends one stanza per member, each reporting that member alone, so a group's members take turns.
-  describe('a group whose members report one at a time', () => {
-    const member = (id: string, state: PresenceState = 'composing'): PresenceUpdateEvent =>
-      event({ chatId: 'g@g.us', participants: [{ id, state }] });
-
-    it("reports only a member's own change, not the turn of another member", () => {
-      const changes = ['a@lid', 'b@lid', 'a@lid', 'b@lid', 'a@lid'].map(id => store.record('s1', member(id)));
-
-      expect(changes).toEqual([true, true, false, false, false]);
-    });
-
-    it('serves the last state of every member it heard from', () => {
-      store.record('s1', member('a@lid'));
-      store.record('s1', member('b@lid', 'paused'));
-      store.record('s1', member('a@lid', 'available'));
-
-      expect(store.get('s1', 'g@g.us')?.participants).toEqual([
-        { id: 'a@lid', state: 'available' },
-        { id: 'b@lid', state: 'paused' },
-      ]);
     });
   });
 
