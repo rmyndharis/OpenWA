@@ -8,9 +8,10 @@ import { BuiltInFtsProvider } from './builtin-fts.provider';
  * The state no other spec constructs: a database whose `messages` rows predate the FTS schema, with
  * the migration NOT applied.
  *
- * `builtin-fts.provider.spec.ts` and `search-dual-db.spec.ts` run `AddMessagesFts…up()` first, so the
- * index is always populated by the migration's own backfill, and `test/search.e2e-spec.ts` boots only
- * on an empty or already indexed database, so the provider's backfill branch never executes. That is
+ * The other search specs (`builtin-fts.provider.spec.ts` and `search-dual-db.spec.ts` among them) run
+ * `AddMessagesFts…up()` first, so the index is always populated by the migration's own backfill, and
+ * `test/search.e2e-spec.ts` boots only on an empty or already indexed database, so the provider's
+ * backfill branch never executes. That is
  * why this shipped and survived: the branch has no coverage, not weak coverage.
  *
  * `messages_fts` is an FTS5 **external-content** table, so `count(*)` on it scans `messages` and

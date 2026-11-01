@@ -1,6 +1,7 @@
 import { Controller, Get, INestApplication, Post } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
+import { Router } from 'express';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { applyGlobalValidation } from '../../config/app-validation';
@@ -43,6 +44,12 @@ describe('HTTP request metrics through the production stack (configureApp)', () 
     }).compile();
     app = mod.createNestApplication({ bodyParser: false, logger: false });
     configureApp(app);
+    // Bull Board is an Express app of its own below /api, and the labels of its routes are relative to the mount.
+    const board = Router();
+    board.get('/api/queues', (_req, res) => {
+      res.json([]);
+    });
+    app.use('/api/admin/queues', board);
     applyGlobalValidation(app);
     await app.listen(0, '127.0.0.1');
   });
@@ -76,6 +83,12 @@ describe('HTTP request metrics through the production stack (configureApp)', () 
 
     expect(counter('GET', '/api/ping', 200)).toBe(1);
     expect(total()).toBe(1);
+  });
+
+  it('leaves out the Bull Board mount, whose route labels read as routes the API does not have', async () => {
+    await request(app.getHttpServer()).get('/api/admin/queues/api/queues').expect(200);
+
+    expect(total()).toBe(0);
   });
 
   it('leaves out requests outside /api', async () => {

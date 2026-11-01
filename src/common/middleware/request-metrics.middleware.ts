@@ -5,6 +5,10 @@ import { recordHttpRequest } from '../metrics/request-metrics';
 // itself are not API traffic worth a RED series.
 const SKIPPED_PREFIXES = ['/api/health', '/api/metrics'];
 
+// Bull Board is an Express app of its own mounted below /api: the labels of its routes are relative to the mount
+// (`/api/queues`, read as a route the API does not have) and its UI polls every few seconds, so it is left out.
+const SKIPPED_MOUNTS = ['/api/admin/queues'];
+
 /**
  * Per-request ownership marker for the single RED observation, shared with
  * RequestMetricsInterceptor. configureApp mounts this boundary middleware on /api ahead of every
@@ -29,6 +33,8 @@ export function requestMetricsBoundaryMiddleware(req: Request, res: Response, ne
     const request = req as MetricsRequest;
     if (request[HTTP_REQUEST_METRICS_CLAIMED]) return;
     request[HTTP_REQUEST_METRICS_CLAIMED] = true;
+    const path = (req.originalUrl ?? '').split('?')[0];
+    if (SKIPPED_MOUNTS.some(mount => path === mount || path.startsWith(`${mount}/`))) return;
     // Guard rejections happen after Express matched the route, so req.route.path carries the
     // same bounded pattern label the interceptor uses. Unmatched paths (404s) collapse into
     // one constant label — no per-URL cardinality.

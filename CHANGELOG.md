@@ -86,8 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep a later webhook failure's event data on the delivery's earlier terminal failure row while payload retention is on, so the event can still be redriven.
 - Keep an S3 media download open for a slow client when the store took more than 3 seconds to send its headers; such downloads were cut after about 30 seconds instead of the 10 minutes a stalled reader is allowed.
 - Rank and highlight `match=contains` hits on the first 4,096 characters of each message, so a search over long received messages no longer blocks every session for seconds; a hit whose terms appear only past that point scores 0 and gets a snippet without `<mark>`.
-- Count API requests answered before routing (the shutdown `503`, the in-flight body budget's `503`/`413`/`415`, an encoded-NUL `400`, malformed or too deeply nested bodies) in `http_requests_total` and `http_request_duration_seconds` under the `(unmatched)` route; Bull Board requests under `/api/admin/queues` are counted too.
-- Log a Redis outage of the rate limiter once, and once more when Redis answers again, instead of three warnings for every request while it lasts.
+- Count API requests answered before routing (the shutdown `503`, the in-flight body budget's `503`/`413`/`415`, an encoded-NUL `400`, malformed or too deeply nested bodies) in `http_requests_total` and `http_request_duration_seconds` under the `(unmatched)` route, together with CORS preflights.
+- Log a failing Redis check of the rate limiter once per outage, and once more when Redis answers again, instead of three warnings for every request while it lasts.
 - Stop warning at every boot that `WEBHOOK_SHUTDOWN_DRAIN_MS` is shorter than `WEBHOOK_TIMEOUT` when both are at their defaults; a changed value that leaves them crossed still warns.
 - Return at most `limit` hits from a plugin search provider that answers with more.
 - Count the files of an S3 store for `GET /api/infra/storage/files/count` without holding every bucket key in memory.
