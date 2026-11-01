@@ -595,6 +595,18 @@ describe('PluginWorkerHost', () => {
       await expect(pending).resolves.toEqual({ healthy: false, message: 'missing credentials' });
     });
 
+    // Plugin code decides what its healthCheck returns, and a string or a missing field must not read as healthy.
+    it.each([['false'], [undefined], [1]])('resolves unhealthy for a healthy value of %p', async healthy => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.healthCheck(1000);
+      const sent = ch.last() as Extract<HostToWorkerMessage, { kind: 'health-check' }>;
+      ch.reply({ kind: 'health-result', id: sent.id, healthy: healthy as unknown as boolean });
+
+      await expect(pending).resolves.toEqual({ healthy: false, message: undefined });
+    });
+
     it('healthCheck resolves unhealthy on timeout so a wedged plugin never hangs the endpoint', async () => {
       jest.useFakeTimers();
       const ch = new FakeChannel();

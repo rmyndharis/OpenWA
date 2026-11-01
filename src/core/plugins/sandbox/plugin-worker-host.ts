@@ -541,7 +541,8 @@ export class PluginWorkerHost {
         this.healthPending.delete(message.id);
         clearTimeout(waiter.timer);
         waiter.resolve({
-          healthy: message.healthy,
+          // Plugin code returns what it likes; only a literal true reads as healthy.
+          healthy: message.healthy === true,
           message: message.message === undefined ? undefined : workerText(message.message),
         });
         break;
