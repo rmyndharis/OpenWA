@@ -123,9 +123,12 @@ const TERMINAL_BATCH_STATUSES: readonly BatchStatus[] = ['completed', 'cancelled
 
 // The digits of a typed number for the number check, or null past the longest phone number (E.164, 15 digits). A space
 // is number formatting, so two numbers pasted with one between them read as one run, which is no number to look up.
+// A leading 00 is the international exit code (no number starts with 0): dropped before measuring, as the Number
+// Checker drops it.
 const PHONE_DIGITS_MAX = 15;
 const phoneDigits = (text: string): string | null => {
-  const digits = normalizePhoneText(text).replace(/[^0-9]/g, '');
+  let digits = normalizePhoneText(text).replace(/[^0-9]/g, '');
+  if (digits.startsWith('00') && digits.length >= 12) digits = digits.slice(2);
   return digits.length > PHONE_DIGITS_MAX ? null : digits;
 };
 

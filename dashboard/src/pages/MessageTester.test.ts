@@ -1206,6 +1206,29 @@ for (const chatId of ['185290012345678@lid', '628123456789:5@s.whatsapp.net']) {
   });
 }
 
+// No phone number starts with 0, so `00` in front of one is the international exit code. Kept, it made a registered
+// number look unregistered, and a full-length number written with it read as more than one number.
+for (const [typed, number] of [
+  ['00 49 151 2345 6789', '4915123456789'],
+  ['00 123 456 789 012 345', '123456789012345'],
+] as const) {
+  test(`a recipient written as ${typed} is looked up without its 00 exit code`, async () => {
+    const { checked } = stubPersonalSend();
+    const { container, client } = renderTesterForKey();
+    try {
+      await rtl.screen.findByRole('option', { name: /Main/ });
+      type(container, '#mt-13', typed);
+      type(container, '#mt-2', 'hello');
+      rtl.fireEvent.click(sendButton());
+      await rtl.screen.findAllByText(/not registered|More than 15 digits/);
+      assert.deepEqual(checked, [`/${number}`]);
+    } finally {
+      client.clear();
+      sessionStorage.removeItem('openwa_api_key');
+    }
+  });
+}
+
 test('an unchanged actor sends to canonical personal and forward destinations', async () => {
   const writes: { path: string; key: string | null; body: unknown }[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

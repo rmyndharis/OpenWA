@@ -20,3 +20,11 @@ test('fifteen digits is still a recipient and sixteen is not', () => {
 test('a formatted single number is still one recipient', () => {
   assert.deepEqual(parseBulkRecipients('+62 812-3456-7890'), ['6281234567890@c.us']);
 });
+
+// No phone number starts with 0, so `00` in front of one is the international exit code, as the Number Checker reads it.
+test('a 00 exit code is not part of the recipient, and is not counted toward the fifteen digits', () => {
+  assert.deepEqual(parseBulkRecipients('0062812345678\n00 123 456 789 012 345'), [
+    '62812345678@c.us',
+    '123456789012345@c.us',
+  ]);
+});
