@@ -196,19 +196,23 @@ describe('WhatsAppWebJsAdapter group operations when groupMetadata.update hits i
     expect(evaluate).not.toHaveBeenCalled();
   });
 
-  it('marks pre-send reply failure as nothing-sent when the session stops during invariant recovery', async () => {
-    const evaluate = jest.fn();
-    const getChatById = jest.fn(() => {
+  it('marks pre-send reply failure as nothing-sent when the session stops while the recovery read runs', async () => {
+    const fetchMessagesSpy = jest.spyOn(Chat.prototype, 'fetchMessages').mockResolvedValue([]);
+    const evaluate = jest.fn((fn: unknown) => {
+      if (fn !== readChatModels) return Promise.resolve(undefined);
+      // The session stops after the recovery read began, and the read fails with it.
       (adapter as unknown as { status: EngineStatus }).status = EngineStatus.DISCONNECTED;
-      return Promise.reject(INVARIANT);
+      return Promise.reject(new Error('Session closed during the read'));
     });
+    const getChatById = jest.fn().mockRejectedValue(INVARIANT);
     const adapter = readyAdapter({ getChatById, pupPage: { evaluate } });
 
     const error = await adapter.replyToMessage(GROUP, 'M1', 'ack').catch((e: unknown) => e);
 
+    expect(evaluate).toHaveBeenCalledTimes(1);
     expect(error).toBeInstanceOf(EngineNotReadyError);
     expect(provesNothingSent(error)).toBe(true);
-    expect(evaluate).not.toHaveBeenCalled();
+    expect(fetchMessagesSpy).not.toHaveBeenCalled();
   });
 
   it('does not log a TypeError warning in getGroupInfo when getChatById resolves undefined for a missing group', async () => {

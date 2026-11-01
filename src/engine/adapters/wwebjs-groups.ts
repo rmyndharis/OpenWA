@@ -522,10 +522,7 @@ export class WwebjsGroups {
     const chat = await withPage(this.host, context, () =>
       this.client()
         .getChatById(groupId)
-        .catch(error => {
-          if (!recoverGroupChatById) throw error;
-          return recoverGroupChatById(this.host, context, groupId, error);
-        }),
+        .catch(error => recoverGroupChatById(this.host, context, groupId, error)),
     );
     // getChatById RESOLVES undefined for an unknown id (wwebjs does not throw): unknown id and a
     // non-group id are the same client-facing outcome — there is no such group (404, not a 500).

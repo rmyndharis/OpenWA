@@ -169,9 +169,10 @@ export async function readChats(host: WwebjsEngineHost, context: string, chatIds
 }
 
 /**
- * Fall back to {@link readChats} (loaded metadata, no server refresh) when `client.getChatById(chatId)`
- * fails one of WhatsApp Web's own invariants during a group metadata refresh. Any other rejection is
- * rethrown for the caller's transport/timeout/domain handler.
+ * Re-read the chat through {@link readChats} when `client.getChatById(chatId)` fails one of WhatsApp Web's
+ * own invariants during a group metadata refresh. That read tries the refresh once more and serves the
+ * metadata already loaded only if it fails an invariant again. Any other rejection is rethrown for the
+ * caller's transport/timeout/domain handler.
  */
 export async function recoverGroupChatById(
   host: WwebjsEngineHost,
