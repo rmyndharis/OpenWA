@@ -131,8 +131,9 @@ export class BaileysChannels {
 
   /**
    * Deliberately NOT bounded, unlike every other call here: creating a channel is non-idempotent,
-   * and 503 is a backpressure status the Go SDK retries three times for POST (sdk/go/retry.go).
-   * A deadline abandons without cancelling, so a slow-but-succeeding create could leave duplicates.
+   * and 503 is a status a client that retries a POST replays (the Go SDK does with an Idempotency-Key or a
+   * Retry-After, sdk/go/retry.go). A deadline abandons without cancelling, so a slow-but-succeeding create could
+   * leave duplicates.
    * An unanswered query therefore still surfaces opaquely rather than as something retryable, and so
    * does WA code 408: a server timeout does not say whether the channel was created.
    */

@@ -116,8 +116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refuse a dashboard sign-in on a `200` answer that does not say the key is valid, such as a misrouted proxy page.
 - Refresh the dashboard overview's sessions and session statistics every 30 seconds while it stays open and they can be read.
 - Keep keyboard focus out of the page behind the dashboard's open phone drawer, and return it to the language button when the language menu closes from inside it.
-- Go SDK: retry a POST answered `503` under `WithRetry` only when it carries an `Idempotency-Key` or the `503` carries `Retry-After`, since a Baileys send or status post that WhatsApp timed out may already have been delivered.
-- Java SDK: refuse a `SendLocationRequest` built without a latitude or longitude, which sent a pin at 0,0.
+- Go SDK: retry a POST answered `503` under `WithRetry` only when it carries an `Idempotency-Key` or the `503` carries `Retry-After`, since a Baileys send or status post that WhatsApp timed out may already have been delivered; an unkeyed POST now gets its first `503` back.
+- Java SDK: refuse a `SendLocationRequest` built without a latitude or longitude, which sent a pin at 0,0; `build()` now throws.
 - Java and Go SDKs: stop sending `sessionId` on the cross-session webhook list, which ignores it.
 - PHP SDK: send the `groups->create` participant list and the `sendBulk` messages list as JSON arrays when their keys have gaps, which the gateway refused with `400`.
 - JavaScript SDK: encode the route segment of `OpenWAClient.sendMedia`, and reject an id holding a lone surrogate instead of throwing synchronously.
