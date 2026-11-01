@@ -615,6 +615,18 @@ function withBrandNewPayload(contract) {
   return contract;
 }
 
+/** The gate source with BrandNew mapped for the dashboard, and the dashboard floor raised to match. */
+function mapBrandNewForDashboard(source) {
+  const mapped = editSource(
+    source,
+    "  'dashboard/src/services/api.ts': {\n    AccountRestriction: 'AccountRestrictionDto',",
+    "  'dashboard/src/services/api.ts': {\n    BrandNew: 'BrandNewDto',\n    AccountRestriction: 'AccountRestrictionDto',",
+  );
+  const floor = /^ {2}'dashboard\/src\/services\/api\.ts': (\d+),$/m.exec(mapped);
+  assert.ok(floor, 'the dashboard floor in MINIMUM_MAPPED has moved: move this anchor');
+  return mapped.replace(floor[0], `  'dashboard/src/services/api.ts': ${Number(floor[1]) + 1},`);
+}
+
 test('the gate exits 0 on the repository and finds every exposed schema covered', () => {
   // Also pins the harness below: a copy that cannot run would fail the other cases for the wrong reason.
   // A pair whose target is a list (a body type that is also its response) has to reach the comparison and
@@ -639,12 +651,7 @@ test('a schema that only the dashboard compares, or only an excluded pair holds,
   const dashboardOnly = runGateOnCopy({
     contract: withBrandNewPayload,
     dashboardTypes: api => `${api}\nexport interface BrandNew {\n  id: string;\n}\n`,
-    script: source =>
-      editSource(
-        source,
-        "  'dashboard/src/services/api.ts': {\n    AccountRestriction: 'AccountRestrictionDto',",
-        "  'dashboard/src/services/api.ts': {\n    BrandNew: 'BrandNewDto',\n    AccountRestriction: 'AccountRestrictionDto',",
-      ),
+    script: mapBrandNewForDashboard,
   });
   assert.match(dashboardOnly.output, /dashboard\/src\/services\/api\.ts: \d+ pairs compared, all conform/);
   assert.equal(dashboardOnly.status, 1, dashboardOnly.output);
@@ -733,6 +740,35 @@ test('an excluded pair with a looser field type is still compared by field name'
   }
 });
 
+test('the gate refuses a mapping whose size differs from its floor', () => {
+  // The floor is what makes a rewrite that drops pairs fail. Left one below its mapping, it let one Java pair go
+  // with nothing failing: AccountRestriction stays compared by the other clients, so coverage stays green too.
+  const dropped = runGateOnCopy({
+    script: source =>
+      editSource(
+        source,
+        "const JAVA_MAPPING = {\n  AccountRestriction: 'AccountRestrictionDto',\n",
+        'const JAVA_MAPPING = {\n',
+      ),
+  });
+  assert.equal(dropped.status, 1, dropped.output);
+  assert.match(dropped.output, /only \d+ mapped pairs for sdk\/java \(model\/\*\.java\) \(floor \d+\)/);
+
+  // A floor left below a grown mapping is the same hole, opened by a pair added without raising it.
+  const stale = runGateOnCopy({
+    script: source => {
+      const floor = /^ {2}'sdk\/java': (\d+),$/m.exec(source);
+      assert.ok(floor, 'the Java floor in MINIMUM_MAPPED has moved: move this anchor');
+      return source.replace(floor[0], `  'sdk/java': ${Number(floor[1]) - 1},`);
+    },
+  });
+  assert.equal(stale.status, 1, stale.output);
+  assert.match(
+    stale.output,
+    /\d+ mapped pairs for sdk\/java \(model\/\*\.java\), above its floor of \d+: raise the floor/,
+  );
+});
+
 test('the gate refuses a NAMES_ONLY entry whose pair is not excluded', () => {
   // An entry left behind after a pair is retyped and un-excluded would keep the weaker name-only comparison.
   const run = runGateOnCopy({
@@ -754,12 +790,7 @@ test('the gate and its CLI cases give the same verdicts on a CRLF checkout', () 
     lineEnding: '\r\n',
     contract: withBrandNewPayload,
     dashboardTypes: api => `${api}\nexport interface BrandNew {\n  id: string;\n}\n`,
-    script: source =>
-      editSource(
-        source,
-        "  'dashboard/src/services/api.ts': {\n    AccountRestriction: 'AccountRestrictionDto',",
-        "  'dashboard/src/services/api.ts': {\n    BrandNew: 'BrandNewDto',\n    AccountRestriction: 'AccountRestrictionDto',",
-      ),
+    script: mapBrandNewForDashboard,
   });
   assert.equal(dashboardOnly.status, 1, dashboardOnly.output);
   assert.match(dashboardOnly.output, /BrandNewDto is sent or returned by the SDKs but no client compares it/);

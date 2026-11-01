@@ -224,14 +224,15 @@ const MAPPINGS = {
  * Floor on the mapping SIZE per client. The per-file compared-pairs guard above cannot see a
  * rewrite that silently DROPS entries (protection shrinks while everything stays green: a rewrite
  * once lost four conforming pairs and the run still passed). Raising these floors as pairs are
- * added makes the shrink loud.
+ * added makes the shrink loud. Each must EQUAL its mapping's size, and the run fails when it does
+ * not: a floor left below its mapping let that many pairs be dropped with nothing failing.
  */
 const MINIMUM_MAPPED = {
   'sdk/javascript/src/types.ts': 121,
   'dashboard/src/services/api.ts': 22,
   'sdk/python/openwa/types.py': 132,
   'sdk/go': 132,
-  'sdk/java': 136,
+  'sdk/java': 137,
 };
 
 /** Known drift, deliberately not gated yet — each line is a to-adjudicate follow-up. */
@@ -1675,6 +1676,12 @@ if (isDirectRun) {
     if (Object.keys(client.mapping).length < client.floor) {
       fileResults.push(
         `  only ${Object.keys(client.mapping).length} mapped pairs for ${client.label} (floor ${client.floor}) — entries were dropped`,
+      );
+      failures++;
+    } else if (Object.keys(client.mapping).length > client.floor) {
+      const mapped = Object.keys(client.mapping).length;
+      fileResults.push(
+        `  ${mapped} mapped pairs for ${client.label}, above its floor of ${client.floor}: raise the floor`,
       );
       failures++;
     }
