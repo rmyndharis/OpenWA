@@ -389,6 +389,27 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
       });
     });
 
+    it('falls back to `git apply` when `patch` refuses its options without touching the tree', () => {
+      // BusyBox's patch applet takes none of `-d`, `-F0` or `--ignore-whitespace`: it prints its usage and
+      // exits 1, the status a rejected hunk gives, but leaves no .rej and changes nothing.
+      const dir = copyWwjs();
+      const bin = gitOnlyPath();
+      fs.writeFileSync(path.join(bin, 'patch'), '#!/bin/sh\necho "BusyBox v1.36.1 multi-call binary." >&2\nexit 1\n', {
+        mode: 0o755,
+      });
+
+      const res = spawnSync(process.execPath, [SCRIPT, '--best-effort', dir], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: bin },
+      });
+
+      expect(res.status).toBe(0);
+      expect(applyBackport(dir)).toEqual({
+        skipped: true,
+        reason: 'installed whatsapp-web.js already normalizes message ids',
+      });
+    });
+
     it('degrades when neither `patch` nor git is installed, leaving the tree pristine', () => {
       const dir = copyWwjs();
       // With no applier at all (a stripped container, a Baileys-only setup), nothing was written and a

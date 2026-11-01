@@ -348,6 +348,10 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
       // the assertions below misreport it as version skew.
       if (e.code === 'ENOENT') {
         applyWithGit(wwjsDir, lfPatch);
+      } else if (e.status === 1 && treeUntouched(wwjsDir)) {
+        // A rejected hunk always leaves its .rej, so an exit 1 that changed nothing is a `patch` that could not
+        // run as asked (BusyBox's applet refuses these options with exit 1): apply with git, as when it is absent.
+        applyWithGit(wwjsDir, lfPatch);
       } else if (e.status !== 1) {
         const detail = e.stderr ? String(e.stderr).trim() : e.message;
         const err = new Error(`\`patch\` failed (${e.code ?? `exit ${e.status}`}): ${detail}`);
