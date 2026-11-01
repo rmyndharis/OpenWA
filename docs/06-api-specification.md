@@ -3973,17 +3973,14 @@ List all channels/newsletters the session is subscribed to.
   {
     "id": "120363000000000000@newsletter",
     "name": "OpenWA Updates",
-    "description": "Release notes and tips",
-    "inviteCode": "ABC123xyz",
-    "subscriberCount": 1042,
-    "verified": true
+    "description": "Release notes and tips"
   }
 ]
 ```
 
 Bare array, no envelope. Only the whatsapp-web.js engine serves this route, and its channel mapping
-fills neither `picture` nor `createdAt`, so neither field appears here even though the channel schema
-declares them.
+fills only `id`, `name` and `description`: `inviteCode`, `subscriberCount`, `verified`, `picture` and
+`createdAt` never appear here even though the channel schema declares them.
 
 **Errors:** `400` `Session is not started` · `401` missing/invalid API key · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine
 
@@ -4014,10 +4011,11 @@ Get a single channel/newsletter by its id.
 }
 ```
 
-> **`createdAt` is Baileys-only, and the lookup reaches further there.** The whatsapp-web.js engine
-> exposes no per-id channel lookup, so the adapter scans the subscribed-channel list: a channel the
-> account does not follow answers `404` even though it exists, and `createdAt` is always absent from
-> the payload. The Baileys engine resolves any channel by id and fills `createdAt`. Neither engine
+> **`inviteCode`, `subscriberCount`, `verified` and `createdAt` are Baileys-only, and the lookup reaches
+> further there.** The whatsapp-web.js engine exposes no per-id channel lookup, so the adapter scans the
+> subscribed-channel list: a channel the account does not follow answers `404` even though it exists, and
+> the payload carries only `id`, `name` and `description`. The Baileys engine resolves any channel by id
+> and fills the other four. Neither engine
 > fills `picture`: WhatsApp reports the channel picture as a media path, not a URL.
 
 **Errors:** `400` `Session is not started` · `401` missing/invalid API key · `404` `Channel <channelId> not found` (engine returned null; on whatsapp-web.js this includes a channel the account does not follow) · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause

@@ -1040,7 +1040,9 @@ adapter boundary — none silently stubs.
   (`newsletterMetadata('jid', …)`), including one the account does not follow. whatsapp-web.js 1.34.x
   exposes no per-id lookup, so the adapter scans the subscribed-channel list and returns `null` (a
   `404`) for every channel the account is not subscribed to. The `Channel` payload differs too:
-  Baileys reads `createdAt` off the newsletter metadata and whatsapp-web.js never fills it. Neither
+  Baileys fills `inviteCode`, `subscriberCount`, `verified` and `createdAt` from the newsletter metadata, while
+  whatsapp-web.js fills none of them (its `Channel` keeps that data only inside `channelMetadata`, which the adapter
+  does not read), so a channel there carries `id`, `name` and `description`. Neither
   engine fills `picture`: WhatsApp reports the channel picture as a media path, not a URL.
 - **`starMessage` (baileys).** Needs the stored key's `fromMe` — the same id means different
   messages depending on direction.

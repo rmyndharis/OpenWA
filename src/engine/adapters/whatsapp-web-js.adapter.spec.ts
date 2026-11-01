@@ -1333,13 +1333,19 @@ describe('WhatsAppWebJsAdapter channels (#625 — wwebjs Client has no getChanne
   });
 
   it('getChannelById resolves from the subscribed-channel list (no getChannelById call)', async () => {
-    const getChannels = jest
-      .fn()
-      .mockResolvedValue([
-        { id: { _serialized: CHANNEL }, name: 'News', description: 'desc', subscriberCount: 5, verified: true },
-      ]);
+    // The shape Client.getChannels() returns: Channel._patch copies these fields and keeps the newsletter metadata
+    // only under channelMetadata, which the mapping does not read, so no invite code, count or badge is filled.
+    const getChannels = jest.fn().mockResolvedValue([
+      {
+        id: { _serialized: CHANNEL },
+        name: 'News',
+        description: 'desc',
+        isChannel: true,
+        channelMetadata: { description: 'desc', createdAtTs: 1717200000 },
+      },
+    ]);
     const ch = await readyAdapter({ getChannels }).getChannelById(CHANNEL);
-    expect(ch).toMatchObject({ id: CHANNEL, name: 'News', description: 'desc', subscriberCount: 5, verified: true });
+    expect(ch).toEqual({ id: CHANNEL, name: 'News', description: 'desc' });
   });
 
   it('getChannelById returns null for a channel not in the subscribed list (service maps null → 404)', async () => {
