@@ -54,6 +54,12 @@ describe('getGroupInfo', () => {
     await expect(groups({ groupMetadata }, 500).getGroupInfo('123@g.us')).resolves.toBeNull();
   });
 
+  // The window ends at 4xx: a WhatsApp server error is not a missing group.
+  it.each([500, 503])('does not read a WA %s answer as not-found', async code => {
+    const groupMetadata = jest.fn().mockRejectedValue(new Boom('server error', { data: code }));
+    await expect(groups({ groupMetadata }, 500).getGroupInfo('123@g.us')).rejects.toBeDefined();
+  });
+
   it('still returns the group when WhatsApp answers inside the budget', async () => {
     const groupMetadata = jest.fn().mockResolvedValue(META);
     await expect(groups({ groupMetadata }, 500).getGroupInfo('123@g.us')).resolves.toMatchObject({

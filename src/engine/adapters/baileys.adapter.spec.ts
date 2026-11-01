@@ -5725,7 +5725,7 @@ describe('BaileysAdapter group management', () => {
     expect(info).toMatchObject({ isAnnounce: true, isReadOnly: false });
   });
 
-  it('getGroupInfo maps groupMetadata, and returns null only for a server refusal (401/403/404)', async () => {
+  it('getGroupInfo maps groupMetadata, and returns null only for a server refusal (a 4xx answer)', async () => {
     fakeSock.groupMetadata.mockResolvedValueOnce(META);
     const adapter = await ready();
     expect((await adapter.getGroupInfo('123-456@g.us'))?.id).toBe('123-456@g.us');
