@@ -41,11 +41,18 @@ const BLOCKING = new Set(['high', 'critical']);
  * npm returns `{ error: { summary } }` (no `vulnerabilities`, no `metadata`) when the audit endpoint
  * is unreachable or, as npm retires the legacy audit endpoint, returns an error. That is NOT a clean
  * tree: reading it as one would find zero advisories and flag every allowlist entry as stale. A
- * genuinely clean report carries no `error` key (it has `vulnerabilities: {}` and `metadata`), so
- * keying on `error` leaves a normal clean run clean. Anything unparseable is wrapped as an error too.
+ * genuinely clean report carries no `error` key and has `vulnerabilities: {}` and `metadata`, which
+ * npm 7 and later write into every result. A payload missing either is not one this gate can read
+ * (npm 6's `advisories` map, or a changed format, would list a HIGH where it never looks), so it is
+ * unavailable too. Anything unparseable is wrapped as an error.
  */
 export function auditUnavailable(report) {
-  return report == null || typeof report !== 'object' || 'error' in report;
+  return (
+    report == null ||
+    typeof report !== 'object' ||
+    'error' in report ||
+    !('vulnerabilities' in report && 'metadata' in report)
+  );
 }
 
 /**
