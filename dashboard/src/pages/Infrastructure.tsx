@@ -117,7 +117,8 @@ export function Infrastructure() {
           : target === 'restart-export'
             ? restartBackupButtonRef.current
             : null;
-    el?.focus();
+    // The page may have been scrolled elsewhere while the backup ran; restoring focus must not pull it back.
+    el?.focus({ preventScroll: true });
   }, [dataBackup.migrating]);
 
   // Reads dbConfig/storageConfig (from configForm) plus infraStatus/savedConfig to decide whether the

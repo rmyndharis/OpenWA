@@ -231,6 +231,37 @@ test('keyboard focus stays on Export data after a backup is exported', async () 
   );
 });
 
+test('restoring focus after a backup export does not scroll the page back to the button', async () => {
+  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  HTMLAnchorElement.prototype.click = () => {};
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  rtl.render(
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(RoleProvider, null, createElement(ToastProvider, null, createElement(Infrastructure))),
+    ),
+  );
+  const exportBtn = (await rtl.screen.findByRole('button', { name: 'Export data' })) as HTMLButtonElement;
+  exportBtn.focus();
+  const focusOriginal = HTMLElement.prototype.focus;
+  const focusOptions: Array<FocusOptions | undefined> = [];
+  HTMLElement.prototype.focus = function (this: HTMLElement, options?: FocusOptions) {
+    focusOptions.push(options);
+    focusOriginal.call(this, options);
+  };
+  try {
+    rtl.fireEvent.click(exportBtn);
+    await rtl.waitFor(() => assert.equal(exportBtn.disabled, true));
+    await rtl.waitFor(() => assert.equal(exportBtn.disabled, false));
+    await rtl.waitFor(() => assert.equal(document.activeElement?.textContent?.trim(), 'Export data'));
+  } finally {
+    HTMLElement.prototype.focus = focusOriginal;
+  }
+  // React's own commit-time focus restore comes first, with no options; the page's effect runs after the commit.
+  assert.deepEqual(focusOptions.at(-1), { preventScroll: true });
+});
+
 test('keyboard focus stays on Download backup first in the restart modal after a backup is exported', async () => {
   window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
   HTMLAnchorElement.prototype.click = () => {};
