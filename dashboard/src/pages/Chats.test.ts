@@ -3140,6 +3140,63 @@ test('a channel post or status caption carrying mention delimiters renders them 
   assert.ok(!caption.querySelector('bdi'), 'the status caption rendered a mention');
 });
 
+// The viewer opens at the newest status and follows a new one. Anything else that draws the page again, a message for
+// another chat or a search that keeps the contact, leaves a reader who scrolled up to the older ones where they are.
+test('the status viewer moves to the newest only when the statuses it shows change', async () => {
+  const { screen, fireEvent } = rtl;
+  const contact = { id: '15550009999@c.us', name: 'Dora' };
+  const status = (n: number): StatusUpdate => ({
+    id: `status-${n}`,
+    contact,
+    type: 'text',
+    caption: `status number ${n}`,
+    timestamp: new Date(1_700_000_000_000 + n * 60_000).toISOString(),
+    expiresAt: new Date(1_800_000_000_000).toISOString(),
+  });
+  // Newest first, as the store answers.
+  statuses = [3, 2, 1].map(status);
+  const { container } = renderChats();
+  await screen.findByText(SESSION.name);
+  fireEvent.click(screen.getByRole('tab', { name: 'Status' }));
+  fireEvent.click(await screen.findByText('Dora'));
+  await screen.findByText('status number 1');
+  const feed = container.querySelector('.channel-room .messages-list') as HTMLElement;
+  // The reader has scrolled up to the oldest.
+  let top = 0;
+  const moves: number[] = [];
+  Object.defineProperty(feed, 'scrollHeight', { configurable: true, get: () => 3000 });
+  Object.defineProperty(feed, 'scrollTop', {
+    configurable: true,
+    get: () => top,
+    set: (value: number) => {
+      moves.push(value);
+      top = value;
+    },
+  });
+
+  receiveEvent('message.received', {
+    id: 'wamid.elsewhere.1',
+    chatId: CHAT.id,
+    from: CHAT.id,
+    to: 'me',
+    body: 'a message for another chat',
+    type: 'text',
+    fromMe: false,
+    timestamp: 1_700_000_900,
+  });
+  await flush();
+  await flush();
+  fireEvent.change(screen.getByPlaceholderText('Search chats...'), { target: { value: 'Dor' } });
+  await flush();
+  assert.deepEqual(moves, [], 'the viewer moved a reader who had scrolled up');
+
+  statuses = [4, 3, 2, 1].map(status);
+  receiveEvent('status.received', { id: 'status-4' });
+  await screen.findByText('status number 4');
+  await flush();
+  assert.deepEqual(moves, [3000], 'a new status did not move the viewer to it');
+});
+
 /**
  * Two omitted bubbles can be downloading at once, and nothing stops a viewer clicking one, then the
  * next. Each must own its own lifecycle: with a single shared slot the second click overwrote the

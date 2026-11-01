@@ -1905,14 +1905,16 @@ export function Chats() {
     ? (activeStatusGroup.contact.name ?? activeStatusGroup.contact.pushName ?? activeStatusGroup.contact.id)
     : '';
 
-  // Same open-at-newest behavior for the status viewer pane, keyed off the active contact and its
-  // item list. Declared after activeStatusGroup: the viewer follows refetches because the deps are
-  // the derived group's items, not a click-time snapshot.
+  // Same open-at-newest behavior for the status viewer pane, keyed off the active contact and the
+  // ids of its items. Declared after activeStatusGroup: the viewer follows refetches because the deps
+  // are the derived group's, not a click-time snapshot. The ids, not the item list, which is grouped
+  // anew on every render of the page and moved a reader who had scrolled up on any live message.
   const statusFeedRef = useRef<HTMLDivElement | null>(null);
+  const activeStatusItemIds = activeStatusGroup?.items.map(item => item.id).join(',');
   useEffect(() => {
     const el = statusFeedRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [activeStatusGroup?.contact.id, activeStatusGroup?.items]);
+  }, [activeStatusGroup?.contact.id, activeStatusItemIds]);
 
   // Escape closes the open view and returns to the list. Anything that owns the key already keeps
   // it: a modal (Modal renders role="dialog" only while open) and the language menu (role="menu")
