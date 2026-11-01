@@ -2234,6 +2234,20 @@ describe('BaileysAdapter messaging', () => {
     await expect(adapter.checkNumberExists('628111')).rejects.toBeInstanceOf(EngineTransportError);
   });
 
+  // A server error node and a connection that closes mid-query reject onWhatsApp with a raw Boom. Both are a
+  // failure to ask, so the route answers its documented 503, never a 500 and never a verdict on the number.
+  it('getNumberId reports a rate-limited lookup as throttled and any other rejection as a transport failure', async () => {
+    const adapter = await readyAdapter();
+    fakeSock.onWhatsApp.mockRejectedValue(Object.assign(new Error('rate-overlimit'), { data: 429 }));
+    await expect(adapter.getNumberId('628111')).rejects.toBeInstanceOf(EngineThrottledError);
+
+    fakeSock.onWhatsApp.mockRejectedValue(
+      Object.assign(new Error('Connection Closed'), { output: { statusCode: 428 } }),
+    );
+    await expect(adapter.getNumberId('628111')).rejects.toBeInstanceOf(EngineTransportError);
+    await expect(adapter.checkNumberExists('628111')).rejects.toBeInstanceOf(EngineTransportError);
+  });
+
   // An empty array is a real answer: Baileys returns [] when there is nothing to query.
   it('getNumberId still returns null for an empty result, which is an answer and not a failure', async () => {
     fakeSock.onWhatsApp.mockResolvedValue([]);

@@ -117,6 +117,22 @@ export class WwebjsContacts {
   }
 
   /**
+   * {@link withPage} for a lookup about someone else. A command that outran Puppeteer's protocol budget got no
+   * answer either way, and is no page death, so it is a 503 like the other contact reads give, not the raw
+   * timeout as a 500.
+   */
+  private async askPage<T>(context: string, op: () => Promise<T>): Promise<T> {
+    try {
+      return await withPage(this.host, context, op);
+    } catch (error) {
+      if (isProtocolTimeout(error)) {
+        throw new EngineTransportError(`WhatsApp Web did not answer the ${context} lookup in time`);
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Map a raw whatsapp-web.js contact to the library-agnostic {@link Contact}. The id is read
    * through {@link readWid} so both the `_serialized` and post-rename `$1` shapes resolve; a
    * contact with no readable id returns null so callers can skip it instead of dereferencing
@@ -264,7 +280,7 @@ export class WwebjsContacts {
    */
   async lookupNumberId(number: string): Promise<string | null> {
     this.host.ensureReady();
-    const numberId = await withPage(this.host, 'getNumberId', () => this.client().getNumberId(number));
+    const numberId = await this.askPage('getNumberId', () => this.client().getNumberId(number));
     // Read both property names: a WA Web build that renamed `_serialized` would otherwise make
     // every number look unregistered — and checkNumberExists below reports exactly that.
     return readWid(numberId) ?? null;
@@ -326,9 +342,7 @@ export class WwebjsContacts {
     this.host.ensureReady();
     const phone = userPart(number).replace(/\D/g, '');
     if (!phone) return null;
-    const [result] = await withPage(this.host, 'getContactLid', () =>
-      this.client().getContactLidAndPhone([`${phone}@c.us`]),
-    );
+    const [result] = await this.askPage('getContactLid', () => this.client().getContactLidAndPhone([`${phone}@c.us`]));
     const lid = result?.lid;
     return typeof lid === 'string' && parseWaId(lid).kind === 'lid' ? `${userPart(lid)}@lid` : null;
   }

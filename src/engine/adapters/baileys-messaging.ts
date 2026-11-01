@@ -44,7 +44,7 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { EngineNotSentError, markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { parseWaId, userPart } from '../identity/wa-id';
-import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, withQueryDeadline } from './baileys-query-deadline';
+import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, guardLookup, withQueryDeadline } from './baileys-query-deadline';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { describeAudio } from './baileys-audio-probe';
 
@@ -516,10 +516,13 @@ export class BaileysMessaging {
 
   async getNumberId(number: string): Promise<string | null> {
     this.host.ensureReady();
-    const results = await withQueryDeadline(
-      this.sock().onWhatsApp(number),
-      this.queryBudgetMs,
-      'WhatsApp did not answer the number-check query in time',
+    const results = await guardLookup(
+      withQueryDeadline(
+        this.sock().onWhatsApp(number),
+        this.queryBudgetMs,
+        'WhatsApp did not answer the number-check query in time',
+      ),
+      'The number check',
     );
     // onWhatsApp has no else branch after `if (results)`, so it resolves undefined when the usync
     // query goes unanswered — and Baileys' query() swallows its own timeout rather than throwing.

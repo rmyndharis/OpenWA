@@ -2,8 +2,13 @@ import type { Client } from 'whatsapp-web.js';
 import { WwebjsContacts } from './wwebjs-contacts';
 import { createLogger } from '../../common/services/logger.service';
 import { type WwebjsEngineHost } from './wwebjs-host';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 
 const logger = createLogger('wwebjs-contact-lookups.spec');
+const PROTOCOL_TIMEOUT = new Error(
+  "Runtime.callFunctionOn timed out. Increase the 'protocolTimeout' setting in launch/connect calls for a higher timeout if needed.",
+);
+
 function setup(client: Record<string, jest.Mock>) {
   const host = {
     ensureReady: jest.fn(),
@@ -49,5 +54,31 @@ describe('WwebjsContacts.resolveContactPhone', () => {
     const getContactLidAndPhone = jest.fn().mockResolvedValue([{ lid: '159442138038327@lid' }]);
 
     await expect(setup({ getContactLidAndPhone }).resolveContactPhone('159442138038327@lid')).resolves.toBeNull();
+  });
+});
+
+describe('WwebjsContacts lookups that outrun the protocol budget', () => {
+  it('answers a timed-out LID lookup with the 503 the route documents, not the raw timeout', async () => {
+    const contacts = setup({ getContactLidAndPhone: jest.fn().mockRejectedValue(PROTOCOL_TIMEOUT) });
+
+    await expect(contacts.getContactLid('628123456789')).rejects.toBeInstanceOf(EngineTransportError);
+  });
+
+  it('answers a timed-out number check with a 503 on both entry points', async () => {
+    const contacts = setup({ getNumberId: jest.fn().mockRejectedValue(PROTOCOL_TIMEOUT) });
+
+    await expect(contacts.getNumberId('628123456789')).rejects.toBeInstanceOf(EngineTransportError);
+    await expect(contacts.checkNumberExists('628123456789')).rejects.toBeInstanceOf(EngineTransportError);
+  });
+
+  it('leaves an ordinary page failure as the failure it is', async () => {
+    const refusal = new Error('Evaluation failed: lookup refused');
+    const contacts = setup({
+      getContactLidAndPhone: jest.fn().mockRejectedValue(refusal),
+      getNumberId: jest.fn().mockRejectedValue(refusal),
+    });
+
+    await expect(contacts.getContactLid('628123456789')).rejects.toBe(refusal);
+    await expect(contacts.getNumberId('628123456789')).rejects.toBe(refusal);
   });
 });

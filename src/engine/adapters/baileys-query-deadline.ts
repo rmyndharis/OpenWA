@@ -1,3 +1,5 @@
+import { HttpException } from '@nestjs/common';
+import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 
 /**
@@ -40,6 +42,29 @@ export async function withQueryDeadline<T>(work: Promise<T>, timeoutMs: number, 
     // clearTimeout tolerates undefined, so no guard — a guard here would be a branch no test can
     // reach, since the race always assigns the timer before it can settle.
     clearTimeout(timer);
+  }
+}
+
+/**
+ * Run a lookup that asks WhatsApp about someone and keep every failure to ASK a 503.
+ *
+ * `onWhatsApp` and `executeUSyncQuery` reject with a raw Boom when WhatsApp answers the query with an error
+ * node (`data` is the WA code, see assertNodeErrorFree) and when the connection closes mid-query. Neither is a
+ * verdict about the number, and left alone both reach Nest as a 500 where the lookup routes promise a retryable
+ * 503. A 429 keeps its own class so a paced caller can tell a throttled request from a dead link. Wrap only the
+ * awaited network call: a bug in building the query should still surface as the bug it is. An HttpException
+ * (the deadline above, a not-ready engine) is already classified and passes through.
+ */
+export async function guardLookup<T>(work: Promise<T>, operation: string): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    if (error instanceof HttpException) throw error;
+    const code = (error as { data?: unknown } | null | undefined)?.data;
+    if (code === 429) throw new EngineThrottledError(`${operation} was rate-limited by WhatsApp (code 429)`);
+    throw new EngineTransportError(
+      `${operation} could not be answered by WhatsApp${typeof code === 'number' ? ` (code ${code})` : ''}`,
+    );
   }
 }
 
