@@ -63,6 +63,8 @@ export interface ReconnectState extends ReconnectAttemptState {
    * terminal unlink reported while the timer is armed clears its phone, the binding the next engine checks.
    */
   session?: Session;
+  /** True while executeReconnect tears down the old engine and awaits any pending credential teardown. */
+  teardownInFlight?: boolean;
   /** True while executeReconnect awaits its re-init: an engine failure reported then is parked, not applied. */
   initInFlight?: boolean;
   /** The failure parked during that window, applied or dropped by executeReconnect once init settles. */
@@ -1252,7 +1254,7 @@ export class SessionEngineLifecycle {
     // A reconnect already armed keeps its own snapshot (scheduleReconnect leaves it alone), so the clear
     // reaches that one too. Only the phone: the rest is what the report that armed it read.
     const armed = this.reconnectStates.get(id);
-    if (armed?.timer && armed.session) armed.session = { ...armed.session, phone: null };
+    if ((armed?.timer || armed?.teardownInFlight) && armed.session) armed.session = { ...armed.session, phone: null };
     return true;
   }
 
@@ -1311,11 +1313,15 @@ export class SessionEngineLifecycle {
 
     const state = this.reconnectStates.get(id);
     if (!state) return;
-    // A reconnect is already armed for this episode. Another disconnect report (the liveness watchdog
-    // re-probes a wedged engine that still says READY) must neither consume an attempt nor push the
-    // pending one back: re-arming each time kept a long base delay from ever firing. Also keeps two
+    // A reconnect is already armed or tearing down the old engine for this episode. Another disconnect
+    // report (the liveness watchdog re-probes a wedged engine that still says READY, or the old engine
+    // emits its close event while executeReconnect destroys it) must neither consume an attempt nor push
+    // the pending one back: re-arming each time kept a long base delay from ever firing. Also keeps two
     // back-to-back disconnects from stacking two timers and double-initializing the engine.
-    if (state.timer) return;
+    if (state.timer || state.teardownInFlight) {
+      if (state.session && session.phone === null) state.session = { ...state.session, phone: null };
+      return;
+    }
 
     // Consume the last READY once. A READY that held for the stability window ended the episode, so
     // this drop starts a fresh streak; a shorter one is the same flap and keeps the streak growing.
@@ -1480,33 +1486,42 @@ export class SessionEngineLifecycle {
     let mine: IWhatsAppEngine | undefined;
     const attempt = (state.started = (state.started ?? 0) + 1);
     try {
-      // Clean up old engine. Time-bound the teardown: a wedged Chromium (the common reconnect
-      // trigger) makes destroy() hang, and a raw await here would stall the reconnect forever —
-      // the session would never re-init nor reach FAILED. teardownEngineSafely always resolves
-      // (after 10s on a hang), so reconnection proceeds either way.
-      const oldEngine = this.engines.get(id);
-      if (oldEngine) {
-        // A timed-out destroy() leaves the wedged Chromium process alive (the raced promise never
-        // kills it; see start()'s catch), and this path relaunches on the SAME profile dir in the
-        // same tick. destroyWithEscalation escalates to a SIGKILL so the replacement browser can't
-        // collide with the orphan (#1081); each step is bounded, so it can't wedge a second time.
-        await this.fences.destroyWithEscalation(id, oldEngine);
-        this.engines.deleteIfLive(id, oldEngine);
-        // A failed read of the old engine's report during that teardown armed a retry for it. The attempt that
-        // links the next engine ends it: a start since then owns a state of its own, and a later attempt
-        // sharing this one ends it itself.
-        if (this.reconnectStates.get(id) === state && state.started === attempt && this.endReadRetryOfGoneEngine(id)) {
-          session = { ...session, phone: null };
+      state.teardownInFlight = true;
+      try {
+        // Clean up old engine. Time-bound the teardown: a wedged Chromium (the common reconnect
+        // trigger) makes destroy() hang, and a raw await here would stall the reconnect forever —
+        // the session would never re-init nor reach FAILED. teardownEngineSafely always resolves
+        // (after 10s on a hang), so reconnection proceeds either way.
+        const oldEngine = this.engines.get(id);
+        if (oldEngine) {
+          // A timed-out destroy() leaves the wedged Chromium process alive (the raced promise never
+          // kills it; see start()'s catch), and this path relaunches on the SAME profile dir in the
+          // same tick. destroyWithEscalation escalates to a SIGKILL so the replacement browser can't
+          // collide with the orphan (#1081); each step is bounded, so it can't wedge a second time.
+          await this.fences.destroyWithEscalation(id, oldEngine);
+          this.engines.deleteIfLive(id, oldEngine);
+          // A failed read of the old engine's report during that teardown armed a retry for it. The attempt that
+          // links the next engine ends it: a start since then owns a state of its own, and a later attempt
+          // sharing this one ends it itself.
+          if (
+            this.reconnectStates.get(id) === state &&
+            state.started === attempt &&
+            this.endReadRetryOfGoneEngine(id)
+          ) {
+            session = { ...session, phone: null };
+          }
         }
-      }
 
-      // Credential-teardown fence — BEFORE engineFactory.create (inside initializeEngine). A logout
-      // teardown that lost its deadline race is still running and ends in an fs.rm of this session's
-      // on-disk profile — the same path initializeEngine is about to populate. Keyed by session NAME
-      // (see awaitPendingTeardown) and FAIL CLOSED: a timeout becomes a failed reconnect attempt that is
-      // rescheduled WITHOUT touching the auth dir (the catch below schedules the next attempt; no
-      // engine was created, so there is nothing to evict and no dir to purge).
-      await this.awaitPendingTeardown(session.name);
+        // Credential-teardown fence — BEFORE engineFactory.create (inside initializeEngine). A logout
+        // teardown that lost its deadline race is still running and ends in an fs.rm of this session's
+        // on-disk profile — the same path initializeEngine is about to populate. Keyed by session NAME
+        // (see awaitPendingTeardown) and FAIL CLOSED: a timeout becomes a failed reconnect attempt that is
+        // rescheduled WITHOUT touching the auth dir (the catch below schedules the next attempt; no
+        // engine was created, so there is nothing to evict and no dir to purge).
+        await this.awaitPendingTeardown(session.name);
+      } finally {
+        if (state.started === attempt) state.teardownInFlight = false;
+      }
 
       // A stop, force-kill, logout, delete or shutdown during the awaits above dropped or replaced this
       // state, and a start after it may already run its own engine: registering one now would overwrite
