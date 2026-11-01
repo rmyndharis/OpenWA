@@ -93,8 +93,10 @@ text (escape-then-highlight), never as HTML. Do not inject HTML.
 ## 27.3 Indexing via the `message:persisted` hook
 
 The core fires `message:persisted` for every live message (outbound on send, inbound on receive, and again
-when a stored message is edited or revoked) — never for history backfill. Register a handler to keep your index in
-sync:
+when a stored message is edited or revoked) — never for history backfill, with one exception. A message that
+a history sync reports deleted is handed over as its cleared row (`type: 'revoked'`, empty `body`), so an index drops
+the content; that row can be one your index never received, and a later sync that carries the message again hands it
+over again. Register a handler to keep your index in sync:
 
 ```ts
 ctx.registerHook('message:persisted', async hookCtx => {
