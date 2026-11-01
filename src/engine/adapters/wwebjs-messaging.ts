@@ -30,10 +30,10 @@ import { buildVCard } from './vcard';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
-import { markNothingSent } from '../../common/errors/engine-not-sent.error';
+import { EngineNotSentError, markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
-import { PAGE_RELOADING_MESSAGE, isNavigationError, toCapturedPageError } from './wwebjs-lifecycle';
+import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
 
 /**
@@ -355,7 +355,9 @@ function ensureSendable(chatId: string, shape: 'reply' | 'location' | 'contact c
   const channel = /@\w*newsletter\b/.test(chatId);
   if (/@\w*broadcast\b/.test(chatId) || (channel && shape !== 'poll' && shape !== 'sticker')) {
     const to = channel ? 'a channel' : 'a status or broadcast list';
-    throw new NotImplementedException(`whatsapp-web.js cannot send a ${shape} to ${to}; nothing was sent.`);
+    throw markNothingSent(
+      new NotImplementedException(`whatsapp-web.js cannot send a ${shape} to ${to}; nothing was sent.`),
+    );
   }
 }
 
@@ -404,6 +406,8 @@ export class WwebjsMessaging {
       this.ensureReadyToSend();
       // A reload that cut the read short is the retryable 409 every other call gets for it, and nothing was sent.
       if (isNavigationError(error)) throw markNothingSent(new EngineNotReadyError(PAGE_RELOADING_MESSAGE));
+      if (isProtocolTimeout(error))
+        throw new EngineNotSentError(`WhatsApp Web did not answer the ${context} read in time`);
       throw error;
     }
   }
@@ -554,9 +558,10 @@ export class WwebjsMessaging {
       // No-op for ordinary send errors; the retry/throw behavior below is unchanged.
       this.host.reportIfPageTransportError(err, 'sendMessage');
       // Before the LID branch: an unresolvable quote is neither stale-id nor transport, and
-      // re-resolving the recipient would not make the quoted message appear.
+      // re-resolving the recipient would not make the quoted message appear. The page refuses it before
+      // it builds the message, and this is the first attempt, so nothing was sent.
       if (quotedMessageId && isQuoteUnresolvedError(err)) {
-        throw new MessageNotFoundError(quotedMessageId);
+        throw markNothingSent(new MessageNotFoundError(quotedMessageId));
       }
       if (!chatId.endsWith('@c.us') || !isNoLidForUserError(err)) {
         throw toCapturedPageError(err);
@@ -621,7 +626,7 @@ export class WwebjsMessaging {
     // description or a thumbnail. Silently dropping the caller's preview would send a message that
     // looks nothing like what they asked for, so it refuses instead.
     if (options?.customPreview) {
-      throw new EngineNotSupportedError('sendTextMessage(customPreview)');
+      throw markNothingSent(new EngineNotSupportedError('sendTextMessage(customPreview)'));
     }
     const sendOptions: {
       mentions?: string[];
@@ -808,13 +813,13 @@ export class WwebjsMessaging {
           .catch(error => recoverGroupChatById(this.host, 'replyToMessage', chatId, error)),
       );
       if (!chat) {
-        throw new MessageNotFoundError(quotedMsgId, chatId);
+        throw markNothingSent(new MessageNotFoundError(quotedMsgId, chatId));
       }
       const messages = await this.readBeforeSend('replyToMessage', () => chat.fetchMessages({ limit: 100 }));
       const quotedMsg = messages.find(m => m.id._serialized === quotedMsgId);
 
       if (!quotedMsg) {
-        throw new MessageNotFoundError(quotedMsgId);
+        throw markNothingSent(new MessageNotFoundError(quotedMsgId));
       }
 
       // Reply's send leg hits the same `No LID for user` path as a normal send for a migrated contact,
@@ -843,13 +848,13 @@ export class WwebjsMessaging {
           .catch(error => recoverGroupChatById(this.host, 'forwardMessage', fromChatId, error)),
       );
       if (!chat) {
-        throw new MessageNotFoundError(messageId, fromChatId);
+        throw markNothingSent(new MessageNotFoundError(messageId, fromChatId));
       }
       const messages = await this.readBeforeSend('forwardMessage', () => chat.fetchMessages({ limit: 100 }));
       const msgToForward = messages.find(m => m.id._serialized === messageId);
 
       if (!msgToForward) {
-        throw new MessageNotFoundError(messageId);
+        throw markNothingSent(new MessageNotFoundError(messageId));
       }
 
       // The forward's send leg fails with `No LID for user` for a LID-migrated destination, so resolve
