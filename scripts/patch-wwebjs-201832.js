@@ -236,9 +236,25 @@ function applyWithGit(wwjsDir, patchFile) {
  * files in the patch's order, so one cut short leaves every missing site after every landed one, and a reinstall
  * cures it. A missing site before a landed one, or no site of ours at all, is a release (or an edit) that changed
  * the ids its own way: a reinstall brings it straight back, so the message must not send the operator there.
+ * A patch artifact left in the tree says a run of this patcher failed here (a drifted release applies the hunks it
+ * can and rejects the rest), which is the case a reinstall does help with, to see why. Without the patch file there
+ * is no order to compare, so the plain half-patched text stands.
  */
-function standDownRefusal(patchFile, missing) {
-  const order = [...fs.readFileSync(patchFile, 'utf8').matchAll(/^diff --git a\/(\S+) /gm)].map(m => m[1]);
+function standDownRefusal(patchFile, missing, artifacts = []) {
+  const reinstall = 'Reinstall the dependency (`rm -rf node_modules/whatsapp-web.js && npm ci`) and re-run.';
+  if (artifacts.length) {
+    return (
+      `whatsapp-web.js is PARTIALLY patched: ${missing.join(', ')} did not land, and a run of this patcher that ` +
+      `failed here left ${artifacts.join(', ')}. ${reinstall} A run on the clean tree reports why it failed; if that ` +
+      'is version skew, re-base scripts/wwebjs-201832.patch on the installed release.'
+    );
+  }
+  let order;
+  try {
+    order = [...fs.readFileSync(patchFile, 'utf8').matchAll(/^diff --git a\/(\S+) /gm)].map(m => m[1]);
+  } catch {
+    return `whatsapp-web.js is PARTIALLY patched: ${missing.join(', ')} did not land. ${reinstall}`;
+  }
   const landed = REQUIRED_SITES.map(([rel]) => rel).filter(rel => !missing.includes(rel));
   const lastLanded = Math.max(-1, ...landed.map(rel => order.indexOf(rel)));
   const advice =
@@ -300,7 +316,7 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
       // `partialTree`, so `--best-effort` cannot warn past this. The tree this detects is precisely the
       // one that flag must never wave through: half-patched, self-disable reading it as healthy, and
       // unrepairable by any later run.
-      throw partialTree(new Error(standDownRefusal(patchFile, missing)));
+      throw partialTree(new Error(standDownRefusal(patchFile, missing, findArtifacts(wwjsDir))));
     }
     return { skipped: true, reason: 'installed whatsapp-web.js already normalizes message ids' };
   }

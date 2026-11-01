@@ -215,6 +215,48 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     throw new Error('applyBackport did not refuse the tree');
   }
 
+  // A failed run of this patcher on a drifted release patches the hunks it can and leaves a .rej for the rest: every
+  // later run reads Message.js as normalizing with a site missing before one that landed, but a reinstall is the way
+  // to see the real error, not a sign that the release fixed the ids itself.
+  it('says a leftover patch artifact comes from a failed run of this patcher, not from a release fix', () => {
+    const dir = copyWwjs();
+    applyBackport(dir);
+    const groupChat = path.join(dir, 'src', 'structures', 'GroupChat.js');
+    fs.writeFileSync(
+      groupChat,
+      fs.readFileSync(groupChat, 'utf8').replace('pWid._serialized || pWid.$1', 'pWid._serialized ?? pWid.$1'),
+    );
+    fs.writeFileSync(`${groupChat}.rej`, '*** rejected hunk ***');
+
+    const message = refusal(dir);
+    expect(message).toMatch(/failed here left[\s\S]*GroupChat\.js\.rej[\s\S]*Reinstall the dependency/);
+    expect(message).not.toMatch(/retire this backport/);
+  });
+
+  it('keeps the refusal of a half-patched tree a partial tree when the patch file cannot be read', () => {
+    const dir = copyWwjs();
+    const messageJs = path.join(dir, 'src', 'structures', 'Message.js');
+    const utilsJs = path.join(dir, 'src', 'util', 'Injected', 'Utils.js');
+    const pristine = [messageJs, utilsJs].map(file => fs.readFileSync(file, 'utf8'));
+    applyBackport(dir);
+    fs.writeFileSync(messageJs, pristine[0]);
+    fs.writeFileSync(utilsJs, pristine[1]);
+    fs.writeFileSync(
+      messageJs,
+      fs.readFileSync(messageJs, 'utf8').replace('this.id = data.id', 'this.id = Base._normalizeId(data.id)'),
+    );
+
+    let thrown: unknown;
+    try {
+      applyBackport(dir, path.join(dir, 'missing.patch'));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as Error).message).toMatch(/PARTIALLY patched/);
+    expect((thrown as { leftPartialTree?: boolean }).leftPartialTree).toBe(true);
+  });
+
   // A run writes the files in the patch's order, so one cut short leaves the missing sites at the END of that
   // order. A gap before a site that landed, or no site of ours at all, comes from a release (or an edit) that
   // changed the ids its own way, which a reinstall brings straight back.
