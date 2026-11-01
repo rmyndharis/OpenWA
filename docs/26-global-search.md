@@ -105,7 +105,10 @@ time blocks the event loop every session shares) and 1.6 s on Postgres. So `cont
    every term, newest first. Both dialects answer that order from an index and stop once they hold
    1,000 matches. SQLite reads its trigram index in insertion order; Postgres walks the existing
    `IDX_messages_createdAt` b-tree backward for a common term, or reads the few matches of a rare one
-   from the GIN index. The window bounds the matches, not the messages read to find them: a message
+   from the GIN index. That early stop needs PostgreSQL 13 or newer, whose incremental sort breaks
+   `createdAt` ties by `id` during the walk: PostgreSQL 12 reads and sorts every match, so there a
+   common term costs in proportion to the messages holding it (about 40 ms for 80,000 matches).
+   The window bounds the matches, not the messages read to find them: a message
    the index yields that another term then rules out (a short term, or one `pg_trgm` cannot look up)
    costs a check and counts for nothing. So a query whose looked-up term is in most messages while a
    narrowing term is in none reads every message holding the looked-up term, on Postgres each
