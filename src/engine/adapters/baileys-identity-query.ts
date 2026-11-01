@@ -1,7 +1,7 @@
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { USyncQueryResult, WASocket } from '@whiskeysockets/baileys';
 import { parseWaId, userPart } from '../identity/wa-id';
-import { withQueryDeadline } from './baileys-query-deadline';
+import { guardLookup, withQueryDeadline } from './baileys-query-deadline';
 
 /** The server query that asks which LID WhatsApp holds for a phone. */
 export function phoneLidQuery(library: typeof BaileysLib, phone: string) {
@@ -21,7 +21,10 @@ export function lidOfPhone(result: USyncQueryResult | undefined, phone: string):
   return typeof lid === 'string' && parseWaId(lid).kind === 'lid' ? `${userPart(lid)}@lid` : null;
 }
 
-/** Confirm a phone/LID pair with the public server query, without reading Baileys' signal cache. */
+/**
+ * Confirm a phone/LID pair with the public server query, without reading Baileys' signal cache. A query
+ * WhatsApp refuses or a connection that closes under it rejects as a 503 (see guardLookup), not a raw 500.
+ */
 export async function queryLidPhone(
   socket: WASocket,
   library: typeof BaileysLib,
@@ -29,10 +32,13 @@ export async function queryLidPhone(
   lid: string,
   budgetMs: number,
 ): Promise<boolean> {
-  const result = await withQueryDeadline(
-    socket.executeUSyncQuery(phoneLidQuery(library, phone)),
-    budgetMs,
-    'WhatsApp did not answer the LID identity query in time',
+  const result = await guardLookup(
+    withQueryDeadline(
+      socket.executeUSyncQuery(phoneLidQuery(library, phone)),
+      budgetMs,
+      'WhatsApp did not answer the LID identity query in time',
+    ),
+    'The LID identity query',
   );
   return lidOfPhone(result, phone) === `${lid}@lid`;
 }

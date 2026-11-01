@@ -1270,7 +1270,18 @@ export class BaileysMessaging {
       if (typeof socket.executeUSyncQuery === 'function') {
         const library = await this.host.loadLib();
         this.sock(socket);
-        const confirmed = await queryLidPhone(socket, library, phone, lid, this.queryBudgetMs);
+        let confirmed: boolean;
+        try {
+          confirmed = await queryLidPhone(socket, library, phone, lid, this.queryBudgetMs);
+        } catch (error) {
+          this.sock(socket);
+          // A read before any write, so no message went out whatever stopped it. A rate limit keeps its own
+          // class, which already says so.
+          if (error instanceof EngineTransportError && !(error instanceof EngineThrottledError)) {
+            throw new EngineNotSentError(error.message);
+          }
+          throw markNothingSent(error);
+        }
         this.sock(socket);
         if (confirmed) {
           this.host.recordLidMapping(`${lid}@lid`, `${phone}@s.whatsapp.net`);
