@@ -175,14 +175,25 @@ podDisruptionBudget:
 
 # Requires METRICS_TOKEN set on the app (via secretEnv); without it /api/metrics
 # returns 404. A production boot refuses the placeholder from .env.example and
-# other known weak values, so use a long random token.
+# other known weak values, so use a long random token. The Secret the pod loads its
+# environment from holds it under the key METRICS_TOKEN: the chart's own Secret
+# (named <release>-openwa, or the release name when that contains "openwa") or
+# existingSecret. For a release named openwa, scrape with:
+#
+#   serviceMonitor:
+#     enabled: true
+#     bearerTokenSecret:
+#       name: openwa
+#       key: METRICS_TOKEN
+#
 serviceMonitor:
   enabled: false
   interval: 30s
   # Extra labels for the ServiceMonitor — most Prometheus Operators select
   # ServiceMonitors by a release label (e.g. release: kube-prometheus-stack).
   additionalLabels: {}
-  # Secret holding the METRICS_TOKEN value for bearer auth.
+  # Secret and key holding the METRICS_TOKEN value for bearer auth. The default key
+  # `token` fits a Secret of your own; the chart's Secret holds it as METRICS_TOKEN.
   bearerTokenSecret:
     name: ""
     key: token
