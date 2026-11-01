@@ -302,6 +302,32 @@ test('a successful create clears the form for the next template', async () => {
   assert.deepEqual(created, [{ path: '/api/sessions/sess-1/templates', name: 'invoice-reminder' }]);
 });
 
+// A production gateway answers a value past a DTO limit with a bare "Bad Request" that names no field, so each limit
+// is checked here: the name in code points (the "x" of the run below is one), the rest as the gateway counts them.
+for (const [field, max] of [
+  ['Name', 100],
+  ['Header', 1024],
+  ['Body', 4096],
+  ['Footer', 1024],
+] as const) {
+  test(`a ${field.toLowerCase()} past ${max} characters holds Create and says so`, async () => {
+    const { screen, fireEvent } = rtl;
+    window.sessionStorage.setItem('openwa_user_role', 'operator');
+    renderTemplates();
+
+    await screen.findByText('No templates saved');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'invoice-reminder' } });
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Hi {{name}}' } });
+    const create = screen.getByRole<HTMLButtonElement>('button', { name: 'Create Template' });
+    const input = screen.getByLabelText(field);
+    fireEvent.change(input, { target: { value: '\u{1F600}'.repeat(max) } });
+    assert.equal(create.disabled, false, `${max} characters were refused`);
+    fireEvent.change(input, { target: { value: '\u{1F600}'.repeat(max + 1) } });
+    assert.equal(create.disabled, true, 'Create was offered past the limit');
+    screen.getByText(`Limited to ${max} characters (${max + 1} now).`);
+  });
+}
+
 // The session select stays usable while a save is in flight. A create that resolves after the operator
 // switched session and started another draft must still land on the first session, and must not clear
 // the draft now on screen.
