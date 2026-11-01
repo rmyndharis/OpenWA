@@ -222,6 +222,8 @@ export class SendBulkMessageDto {
   @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(BULK_MESSAGES_MAX)
+  // @ValidateNested accepts an entry that is itself an array, and its inner items escape both the cap and the checks.
+  @IsObject({ each: true })
   @ValidateNested({ each: true })
   @Type(() => BulkMessageItemDto)
   messages!: BulkMessageItemDto[];
