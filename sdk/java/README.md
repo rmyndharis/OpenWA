@@ -70,6 +70,12 @@ OpenWAClient client = new OpenWAClient(ClientConfig.builder()
     .build());
 ```
 
+An `OpenWAClient` keeps no per-call state, so one instance can serve every thread
+when its transport can (the default one can): build one per base URL and API key
+and reuse it. Each client starts its own `HttpClient`, with a selector thread and
+a connection pool, so a client per request costs a thread and loses connection
+reuse.
+
 ## Resources
 
 The client exposes the same fluent resource surface as the JavaScript, Python,
