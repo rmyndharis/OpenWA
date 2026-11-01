@@ -40,6 +40,8 @@ interface ChatComposerProps {
   onSent: (sessionId: string, chatId: string, snippet: string, sentAt: number) => void;
   /** A send was confirmed: the placeholder `tempId` is now the thread row keyed `key` (its waMessageId ?? id). */
   onSendConfirmed?: (tempId: string, key: string) => void;
+  /** A send was refused: `text` is what it took from the field of the thread (`sessionId`, `chatId`) it was typed in. */
+  onSendFailed?: (sessionId: string, chatId: string, text: string) => void;
   messageInput: string;
   setMessageInput: Dispatch<SetStateAction<string>>;
   attachment: StagedAttachment | null;
@@ -60,6 +62,7 @@ function ChatComposer({
   onMessageAppended,
   onSent,
   onSendConfirmed,
+  onSendFailed,
   messageInput,
   setMessageInput,
   attachment,
@@ -322,6 +325,8 @@ function ChatComposer({
     } catch (err) {
       showErrorToast(t('chats.errors.send'), err instanceof Error ? err.message : undefined);
       updateMessage(selectedSessionId, activeChat.id, tempId, { status: 'failed' });
+      // The field was emptied as Send was pressed (text next to audio was left in it).
+      if (textToSend && !attachmentIsAudio) onSendFailed?.(selectedSessionId, activeChat.id, messageInput);
     } finally {
       setSendingByThread(prev => {
         const nextCount = (prev[threadKey] ?? 0) - 1;

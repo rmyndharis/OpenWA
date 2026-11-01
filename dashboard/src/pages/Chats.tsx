@@ -396,6 +396,13 @@ export function Chats() {
     setMessageInput(draftsRef.current.get(key) ?? '');
     draftsRef.current.delete(key);
   }, [selectedSessionId, openChatId, messageInput]);
+  // A refused send gives back the text it took from the field, as the draft of its thread, unless something was typed
+  // there since: its failed bubble lasts only until the thread is read again, and then the text was nowhere.
+  const restoreRefusedDraft = useCallback((sessionId: string, chatId: string, text: string) => {
+    const key = readKey(sessionId, chatId);
+    if (draftKeyRef.current === key) setMessageInput(current => (current === '' ? text : current));
+    else if (!draftsRef.current.get(key)) draftsRef.current.set(key, text);
+  }, []);
 
   // Per-chat scroll-position memory + auto-scroll heuristic.
   // Pass `messages.length > 0` as the loaded signal: it stays stable once the
@@ -2227,6 +2234,7 @@ export function Chats() {
                   onMessageAppended={onMessageAppended}
                   onSent={promoteSentChat}
                   onSendConfirmed={(tempId, key) => setLightbox(v => (v?.key === tempId ? { ...v, key } : v))}
+                  onSendFailed={restoreRefusedDraft}
                   messageInput={messageInput}
                   setMessageInput={setMessageInput}
                   attachment={attachment}

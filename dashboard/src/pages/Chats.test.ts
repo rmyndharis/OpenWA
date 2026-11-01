@@ -761,6 +761,111 @@ test('a typed draft stays with its session: the same chat on another account ope
   }
 });
 
+/** Run `body` with every send to `route` refused as a gateway whose engine reconnects refuses it, once `gate()` opens. */
+async function withSendsRefused(
+  route: string,
+  body: () => Promise<void>,
+  gate: () => Promise<void> = () => Promise.resolve(),
+): Promise<void> {
+  const stub = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    if (!String(input).endsWith(`/messages/${route}`)) return stub(input, init);
+    return gate().then(() => jsonResponse({ statusCode: 409, message: 'Engine not ready', error: 'Conflict' }, 409));
+  }) as typeof fetch;
+  try {
+    await body();
+  } finally {
+    globalThis.fetch = stub;
+  }
+}
+
+// The field is emptied as Send is pressed, and the bubble of a refused send lasts only until the thread is read again (a
+// session switch and back, a reconnect), so the text the gateway refused goes back where it was typed.
+test('a refused send puts its text back in the field, where it stays across a session switch and back', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  twoSessions = true;
+  try {
+    await withSendsRefused('send-text', async () => {
+      const { container } = renderChats();
+      const composer = () => screen.getByPlaceholderText('Type a message...') as HTMLInputElement;
+      const thread = () => container.querySelector('.room-messages') as HTMLElement;
+      await screen.findByText(SESSION.name);
+      fireEvent.click(await screen.findByText('Alice'));
+      await within(thread()).findByText('hello from alice');
+      fireEvent.change(composer(), { target: { value: 'a reply worth keeping' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await waitFor(() => assert.ok(thread().querySelector('.message-status-icon.failed'), 'the send was not refused'));
+      assert.equal(composer().value, 'a reply worth keeping');
+
+      selectSession(container, SESSION_2.id);
+      await waitFor(() => assert.equal(selectedSessionId(container), SESSION_2.id));
+      selectSession(container, SESSION.id);
+      await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+      fireEvent.click(await within(container.querySelector('.chats-sidebar') as HTMLElement).findByText('Alice'));
+      await within(thread()).findByText('hello from alice');
+      assert.equal(composer().value, 'a reply worth keeping');
+    });
+  } finally {
+    twoSessions = false;
+  }
+});
+
+// The text goes back to the chat it was typed in, and never over what was typed since: carried into the chat open by
+// then, the next Enter would send it to the wrong recipient.
+test('a refused send gives its text back to its own chat only, and not over text typed since', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  // Each send waits for its own answer.
+  let answer = () => {};
+  const gate = () =>
+    new Promise<void>(resolve => {
+      answer = resolve;
+    });
+  await withSendsRefused(
+    'send-text',
+    async () => {
+      const { container } = renderChats();
+      const composer = () => screen.getByPlaceholderText('Type a message...') as HTMLInputElement;
+      const failed = () => container.querySelectorAll('.room-messages .message-status-icon.failed').length;
+      const open = async (name: string) => {
+        fireEvent.click(within(container.querySelector('.chats-sidebar') as HTMLElement).getByText(name));
+        await within(container.querySelector('.room-header') as HTMLElement).findByText(name);
+      };
+      await screen.findByText('Alice');
+      await open('Alice');
+      fireEvent.change(composer(), { target: { value: 'for alice only' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await open('Carol');
+      answer();
+      await screen.findByText('Failed to send message');
+      assert.equal(composer().value, '', "the refused text went into Carol's field");
+      await open('Alice');
+      assert.equal(composer().value, 'for alice only');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      fireEvent.change(composer(), { target: { value: 'typed while it was out' } });
+      answer();
+      await waitFor(() => assert.equal(failed(), 2, 'the second send was not refused'));
+      assert.equal(composer().value, 'typed while it was out');
+    },
+    gate,
+  );
+});
+
+test('a refused file send puts its caption back in the field', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  await withSendsRefused('send-document', async () => {
+    const { container } = renderChats();
+    fireEvent.click(await screen.findByText('Alice'));
+    const thread = container.querySelector('.room-messages') as HTMLElement;
+    await within(thread).findByText('hello from alice');
+    await stageAttachment(container, 'contract.pdf');
+    fireEvent.change(screen.getByPlaceholderText('Add a caption...'), { target: { value: 'the signed copy' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => assert.ok(thread.querySelector('.message-status-icon.failed'), 'the send was not refused'));
+    assert.equal((screen.getByPlaceholderText('Type a message...') as HTMLInputElement).value, 'the signed copy');
+  });
+});
+
 test('Escape dismisses the emoji picker instead of the conversation behind it', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   resetFetchCalls();
