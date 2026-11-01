@@ -125,7 +125,7 @@ export function useInfraConfigForm(
   });
 
   const [redisEnabled, setRedisEnabledState] = useState(false);
-  const [queueEnabled, setQueueEnabled] = useState(false);
+  const [queueEnabled, setQueueEnabledState] = useState(false);
 
   // Whether the editable form has been seeded from the server once. After that, a background refetch
   // (react-query refetchOnWindowFocus) must NOT re-seed the editable fields or it would wipe the
@@ -144,6 +144,7 @@ export function useInfraConfigForm(
   const redisTouched = useRef(false);
   const storageTouched = useRef(false);
   const redisEnabledTouched = useRef(false);
+  const queueEnabledTouched = useRef(false);
   // Whether the operator has used each Use Built-in toggle here; beside a pinned host an unused one is left out.
   const dbBuiltInTouched = useRef(false);
   const redisBuiltInTouched = useRef(false);
@@ -188,7 +189,7 @@ export function useInfraConfigForm(
       builtIn: savedBuiltIn(redis, infraStatus.redis.builtIn),
     }));
     setRedisEnabledState(redis.enabled);
-    setQueueEnabled(queue.enabled);
+    setQueueEnabledState(queue.enabled);
     setStorageConfig(prev => ({
       ...prev,
       type: storage.type,
@@ -247,6 +248,10 @@ export function useInfraConfigForm(
     redisEnabledTouched.current = true;
     setRedisEnabledState(enabled);
     if (!enabled) setQueueEnabled(false);
+  };
+  const setQueueEnabled = (enabled: boolean) => {
+    queueEnabledTouched.current = true;
+    setQueueEnabledState(enabled);
   };
 
   const setRedisConnected = (connected: boolean) => setRedisConfig(prev => ({ ...prev, connected }));
@@ -307,7 +312,9 @@ export function useInfraConfigForm(
       port: redisConfig.port,
       password: redisConfig.builtIn ? '' : redisConfig.password,
     },
-    queue: { enabled: queueEnabled },
+    // QUEUE_ENABLED decides whether Redis is used, like REDIS_ENABLED, and the gateway's Redis section reads it to keep or
+    // drop a stored bundled Redis: a pinned value written back replaced the stored one in that reasoning.
+    queue: { enabled: pinnedSeed('QUEUE_ENABLED', queueEnabledTouched) ? undefined : queueEnabled },
     storage: {
       ...storageConfig,
       type: pinnedSeed('STORAGE_TYPE', storageTouched) ? undefined : storageConfig.type,
