@@ -472,9 +472,10 @@ export function Sessions() {
       // A session that came back already linked has nothing to scan. Decided from the re-read rather
       // than left to handleShowQR's own guard, which reads the sessions state this render still
       // holds: that state predates both the start response and the re-read, so it would let the
-      // modal open over a connected session and then poll for a QR that can never arrive.
+      // modal open over a connected session and then poll for a QR that can never arrive. A stopped session keeps
+      // its link, and a start answers before the engine connects, so `initializing` with a phone is linked too.
       if (row?.status === 'ready') return;
-      if (!row || isSessionStarted(row)) handleShowQR(id);
+      if (!row || (isSessionStarted(row) && awaitsPairing(row))) handleShowQR(id);
     } catch (err) {
       console.error('Failed to start:', err);
       // A credential teardown for this name is still settling — the backend fails closed with 409 +
@@ -494,7 +495,7 @@ export function Sessions() {
       const fresh = await fetchSessions();
       const current = fresh.find(s => s.id === id);
       if (current && isSessionStarted(current)) {
-        if (current.status !== 'ready') handleShowQR(id);
+        if (awaitsPairing(current)) handleShowQR(id);
         return;
       }
       // The answer to this request, not the row's lastError: that is shown on the card, and it can be the

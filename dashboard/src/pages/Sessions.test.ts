@@ -1172,6 +1172,40 @@ test('a start whose re-read shows the session ready opens no QR modal', async ()
   }
 });
 
+// A stop keeps the account linked (only a logout unlinks it), and a start answers before the engine has connected,
+// so the re-read shows `initializing` with the phone still set. There is nothing to scan, and a QR modal over that
+// session offers a phone re-link for an account that is linked.
+for (const failed of [false, true]) {
+  test(`a start of a stopped session that is still linked opens no QR modal${failed ? ', even when it times out' : ''}`, async () => {
+    const { screen, fireEvent, within, waitFor, act } = rtl;
+    resetFetchCalls();
+    const comingUp: Partial<Session> = { status: 'initializing', engineLoaded: true };
+    if (failed) startFailure = { status: 504, message: 'Gateway Timeout', leaves: comingUp };
+    else startResult = { answer: comingUp };
+    SESSIONS.push({
+      ...SESSION_QR,
+      id: 'sess-linked-stopped-1',
+      name: 'linked-stopped',
+      status: 'disconnected',
+      engineLoaded: false,
+      phone: '15550001111',
+    });
+    try {
+      renderSessions();
+      const card = (await screen.findByText('linked-stopped')).closest('.session-card') as HTMLElement;
+      const reads = () => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
+      const before = reads();
+      fireEvent.click(within(card).getByRole('button', { name: 'Start' }));
+      // The start's own re-read is what the modal is decided on; let that decision run before looking.
+      await waitFor(() => assert.ok(reads() > before));
+      await act(() => new Promise(resolve => setTimeout(resolve, 50)));
+      assert.ok(!screen.queryByRole('dialog'), 'a QR modal opened for a session that is still linked');
+    } finally {
+      SESSIONS.pop();
+    }
+  });
+}
+
 // A start can answer 200 with an engine that is gone by the time the list is read back: a stop that landed
 // while it ran retires it, and an engine can fail right after answering. The re-read decides, not the
 // answer, since a QR modal over that session could only spin.
