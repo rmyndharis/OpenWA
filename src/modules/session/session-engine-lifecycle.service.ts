@@ -839,7 +839,9 @@ export class SessionEngineLifecycle {
         // Force-kill whatever got launched so a retry doesn't collide with an orphaned browser.
         // teardownEngineSafely is itself time-bound, so this can't wedge a second time.
         await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
-        if (isCurrentTimeout()) {
+        // A reconnect's own attempt leaves the row INITIALIZING, as a relaunch that rejects does: its catch arms
+        // the next attempt, and the reason stored above is the lastError the backoff shows.
+        if (isCurrentTimeout() && reconnectAttempt === undefined) {
           // Only on a row that is still this node's or has no owner, as retireLaunchedEngine writes: once the
           // lease was lost during this init, the row belongs to the peer that adopted it and runs its engine.
           const nodeId = this.ownership?.nodeId;
