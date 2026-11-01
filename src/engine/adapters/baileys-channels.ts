@@ -2,7 +2,7 @@ import type { NewsletterMetadata, WASocket } from '@whiskeysockets/baileys';
 import { Channel } from '../interfaces/whatsapp-engine.interface';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
-import { mapServerRefusal } from './baileys-groups';
+import { closedAsTransport, mapServerRefusal } from './baileys-groups';
 import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
 
 /**
@@ -76,10 +76,15 @@ export class BaileysChannels {
   /**
    * Bound a channel call. executeWMexQuery throws Boom(..., { statusCode: 400, data: result }) when
    * nothing came back, and with result undefined Boom normalises data to null — so the refusal
-   * classifier cannot place it and the raw Boom escapes as a bare 500.
+   * classifier cannot place it and the raw Boom escapes as a bare 500. A connection that closes under
+   * the call answers 503, as the deadline does.
    */
   private bounded<T>(work: Promise<T>, operation: string): Promise<T> {
-    return withQueryDeadline(work, this.queryBudgetMs, `WhatsApp did not answer ${operation} in time`);
+    return withQueryDeadline(work, this.queryBudgetMs, `WhatsApp did not answer ${operation} in time`).catch(
+      (error: unknown) => {
+        throw closedAsTransport(error);
+      },
+    );
   }
 
   /** Post-ensureReady socket handle. */

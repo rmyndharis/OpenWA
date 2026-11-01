@@ -70,6 +70,19 @@ export function refusedStatusCode(error: unknown): number | undefined {
 }
 
 /**
+ * A failure of a call the connection closed under, as the transport failure it is (503: the call may or may not
+ * have been applied); anything else as it came. A query still waiting rejects with the WebSocket's close code, a
+ * bare number, and a write on a socket that is no longer open throws Baileys' `Boom('Connection Closed', 428)`,
+ * which carries no data. A WhatsApp answer carries its code or its GraphQL error node as `data`.
+ * Not for a create, which a retry could repeat.
+ */
+export function closedAsTransport(error: unknown): unknown {
+  const boom = error as { isBoom?: unknown; data?: unknown; output?: { statusCode?: unknown } } | null;
+  const closed = typeof error === 'number' || (boom?.isBoom === true && boom.output?.statusCode === 428 && !boom.data);
+  return closed ? new EngineTransportError('The WhatsApp connection closed before the request was answered') : error;
+}
+
+/**
  * Run a socket write and map a SERVER refusal (a 4xx-class WA code: admin rights missing, not
  * permitted, not acceptable) to EngineRefusedError — HTTP 403, the same status the whatsapp-web.js
  * adapter gives these causes — instead of letting the raw Boom escape as a 500. Transport/local
@@ -181,6 +194,8 @@ export class BaileysGroups {
   private async groupWrite<T>(groupId: string, operation: string, op: () => Promise<T>): Promise<T> {
     try {
       return await mapServerRefusal(operation, op, refusedStatusCode, () => new GroupNotFoundError(groupId));
+    } catch (error) {
+      throw closedAsTransport(error);
     } finally {
       // A group write may change who is in the group and how it sends, confirmed or not, so the next send
       // to it reads the group again instead of reusing the participant list cached before.
@@ -212,7 +227,7 @@ export class BaileysGroups {
       if (code === 408 || code === 429) {
         throw new EngineTransportError(`WhatsApp rate-limited or timed out the group list query (code ${code})`);
       }
-      throw err;
+      throw closedAsTransport(err);
     }
     const self = this.host.normalizedSelfJid();
     return Object.values(all).map(metadata => mapBaileysGroup(metadata, self, jid => this.host.toNeutralJid(jid)));
@@ -246,7 +261,7 @@ export class BaileysGroups {
         });
         return null; // not a group / not visible to this account
       }
-      throw err;
+      throw closedAsTransport(err);
     }
   }
 
@@ -426,7 +441,7 @@ export class BaileysGroups {
       if (code !== undefined && code >= 400 && code < 500) {
         throw new GroupNotFoundError(inviteCode);
       }
-      throw error;
+      throw closedAsTransport(error);
     }
     if (!meta?.id) {
       throw new GroupNotFoundError(inviteCode);
@@ -464,7 +479,7 @@ export class BaileysGroups {
     } catch (error) {
       const code = refusedStatusCode(error);
       if (code === undefined || code < 400 || code >= 500) {
-        throw error;
+        throw closedAsTransport(error);
       }
       if (code === 408 || code === 429) {
         throw new EngineTransportError(`WhatsApp rate-limited or timed out the group join (code ${code})`);
@@ -543,7 +558,7 @@ export class BaileysGroups {
           );
         if (lookupCode === 404) throw new GroupNotFoundError(groupId);
       }
-      throw err;
+      throw closedAsTransport(err);
     }
   }
 

@@ -3,7 +3,7 @@ import { Catalog, PaginatedProducts, Product, ProductQueryOptions } from '../int
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { withQueryDeadline } from './baileys-query-deadline';
-import { mapServerRefusal, refusedStatusCode } from './baileys-groups';
+import { closedAsTransport, mapServerRefusal, refusedStatusCode } from './baileys-groups';
 import { type createLogger } from '../../common/services/logger.service';
 
 /**
@@ -51,7 +51,7 @@ export class BaileysCatalog {
         mapServerRefusal('Reading the catalog', () =>
           work().catch((error: unknown) => {
             if (empty !== undefined && refusedStatusCode(error) === 404) return empty;
-            throw error;
+            throw closedAsTransport(error);
           }),
         ),
         deadline - Date.now(),

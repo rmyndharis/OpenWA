@@ -153,9 +153,9 @@ describe('BaileysCatalog server refusals', () => {
     await expect(catalog.getProducts()).rejects.toBeInstanceOf(EngineRefusedError);
   });
 
-  it('leaves a dropped connection unmapped', async () => {
+  it('answers a dropped connection with a retryable 503, not a refusal', async () => {
     const closed = new Boom('Connection Closed', { statusCode: 428 });
     const { catalog } = build({ getCatalog: jest.fn().mockRejectedValue(closed) }, 500);
-    await expect(catalog.getProducts()).rejects.toBe(closed);
+    await expect(catalog.getProducts()).rejects.toBeInstanceOf(EngineTransportError);
   });
 });
