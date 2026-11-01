@@ -730,6 +730,8 @@ export class BaileysSessionStore {
     }
     for (const key of targets) {
       const existing = this.lastMessages.get(key);
+      // A delete is final: an edit that reaches the preview afterwards must not bring the deleted text back.
+      if (existing?.type === 'revoked' && type !== 'revoked') continue;
       if (existing?.key.id === messageId && (!accept || accept(existing.key)))
         this.lastMessages.set(key, { ...existing, text, type: type ?? existing.type });
     }
