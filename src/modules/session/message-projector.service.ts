@@ -1562,7 +1562,9 @@ export class MessageProjector {
       announce();
       if (!messageStatus) return;
       const target = messageStatus;
-      // A row the verdict did not see is only advanced by the retry, which judges it again once it is written.
+      // A row the verdict did not see is advanced by the retry, which judges it again once it is written, and for a
+      // message still in flight by its insert, with the status parked above: that one had only the check against the
+      // in-flight entry, which resolves no lid.
       const judged = async (): Promise<number> =>
         (await this.receiptVerdict(id, messageId, receiptChat)) === 'stored'
           ? this.advanceAck(id, messageId, target)
