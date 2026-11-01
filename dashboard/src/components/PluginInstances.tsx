@@ -125,10 +125,13 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
     }
   };
 
+  // A created or regenerated secret is shown once, from its request's answer, by this component. Its dialog stays until
+  // that answer is in: on top of the plugin dialog it keeps an Escape or a click from closing that dialog, and this
+  // component with it, while the request runs (a regenerate has already retired the old secret by then).
+  const confirmPending = deleteM.isPending || regenM.isPending;
   const runConfirm = async () => {
-    if (!confirm) return;
+    if (!confirm || confirmPending) return;
     const { type, inst } = confirm;
-    setConfirm(null);
     try {
       if (type === 'delete') {
         await deleteM.mutateAsync(inst.instanceId);
@@ -141,6 +144,8 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
       }
     } catch (err) {
       toast.error(t('plugins.instances.toasts.actionFailed'), (err as Error).message);
+    } finally {
+      setConfirm(null);
     }
   };
 
@@ -220,12 +225,13 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
       {showForm && (
         <Modal
           open
-          onClose={() => setShowForm(false)}
+          onClose={createM.isPending ? () => {} : () => setShowForm(false)}
+          hideCloseButton={createM.isPending}
           title={t('plugins.instances.create')}
           closeLabel={t('common.close')}
           footer={
             <>
-              <button className="btn-secondary" onClick={() => setShowForm(false)}>
+              <button className="btn-secondary" onClick={() => setShowForm(false)} disabled={createM.isPending}>
                 {t('common.cancel')}
               </button>
               <button
@@ -392,20 +398,26 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
       {confirm && (
         <Modal
           open
-          onClose={() => setConfirm(null)}
+          onClose={confirmPending ? () => {} : () => setConfirm(null)}
+          hideCloseButton={confirmPending}
           title={t(`plugins.instances.${confirm.type}.title`)}
           className="confirm-modal"
           closeLabel={t('common.close')}
           footer={
             <>
-              <button className="btn-secondary" onClick={() => setConfirm(null)}>
+              <button className="btn-secondary" onClick={() => setConfirm(null)} disabled={confirmPending}>
                 {t('common.cancel')}
               </button>
               <button
                 className={confirm.type === 'delete' ? 'btn-danger' : 'btn-primary'}
                 onClick={() => void runConfirm()}
+                disabled={confirmPending}
               >
-                {t(`plugins.instances.${confirm.type}.action`)}
+                {confirmPending ? (
+                  <Loader2 className="animate-spin" size={16} />
+                ) : (
+                  t(`plugins.instances.${confirm.type}.action`)
+                )}
               </button>
             </>
           }
