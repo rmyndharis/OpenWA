@@ -757,13 +757,15 @@ export function Webhooks() {
           {(webhooksError || !canWrite) && webhooks.length === 0 ? (
             // A failed read is not an empty list: a key below operator is refused here (the route is
             // OPERATOR-only, so it is never sent), and a gateway error would otherwise read as "no webhooks
-            // configured". The 403 branch stays for a key whose role the page took for a writer's.
+            // configured". The 403 branch stays for a key whose role the page took for a writer's. For such a key the
+            // role copy may be wrong (a key restricted to selected chats is refused every webhook route), so it gets
+            // the gateway's own reason.
             <div className="empty-table-state" role="alert">
               <AlertCircle size={48} strokeWidth={1} />
               {!canWrite || (webhooksError as { status?: number } | null)?.status === 403 ? (
                 <>
                   <h3>{t('webhooks.empty.forbiddenTitle')}</h3>
-                  <p>{t('webhooks.empty.forbiddenDesc')}</p>
+                  <p>{canWrite ? webhooksError?.message : t('webhooks.empty.forbiddenDesc')}</p>
                 </>
               ) : (
                 <>

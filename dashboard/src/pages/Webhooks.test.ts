@@ -10,6 +10,8 @@ import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 let webhooksStatus = 200;
+// What a 403 on the list says: by default the role refusal.
+let forbiddenMessage = 'Insufficient permissions. Required: operator';
 let webhookReads = 0;
 let webhookList: unknown[] = [];
 let sessionList: unknown[] = [];
@@ -61,7 +63,7 @@ function installFetchStub(): void {
     if (path === '/api/webhooks') {
       webhookReads++;
       if (webhooksStatus === 403) {
-        return Promise.resolve(jsonResponse({ message: 'Insufficient permissions. Required: operator' }, 403));
+        return Promise.resolve(jsonResponse({ message: forbiddenMessage }, 403));
       }
       if (webhooksStatus !== 200) return Promise.resolve(jsonResponse({ message: 'database offline' }, 500));
       return Promise.resolve(jsonResponse(webhookList));
@@ -124,6 +126,21 @@ test('a 403 on the webhook list shows a permission state, not an empty list', as
   renderWebhooks();
   await rtl.screen.findByText('No access to webhooks');
   assert.ok(!rtl.screen.queryByText('No webhooks configured'), 'a refused read claimed there are no webhooks');
+});
+
+// The page knows the key's role allows webhooks, so a refusal it did not predict has another cause, such as a key
+// restricted to selected chats, which no webhook route admits. Role copy sent that operator looking for a role.
+test('a 403 for a key whose role allows webhooks gives the gateway reason, not role copy', async () => {
+  webhooksStatus = 403;
+  forbiddenMessage = 'API key is restricted to selected chats';
+  try {
+    renderWebhooks();
+    await rtl.screen.findByText('No access to webhooks');
+    rtl.screen.getByText('API key is restricted to selected chats');
+    assert.equal(rtl.screen.queryByText('Webhooks require an API key with the operator or admin role.') === null, true);
+  } finally {
+    forbiddenMessage = 'Insufficient permissions. Required: operator';
+  }
 });
 
 test('a viewer key is shown the permission state without a list request the gateway would refuse', async () => {

@@ -54,7 +54,9 @@ export function NumberChecker() {
   const batchProgress = run.progress;
   const batchStop = run.stopped;
 
-  const { data: sessions = [], isLoading: loadingSessions } = useSessionsQuery();
+  const { data: sessions = [], isLoading: loadingSessions, error: sessionsError } = useSessionsQuery();
+  // A read that never produced a list is not "no session connected"; a failed refetch keeps the cached one.
+  const sessionsFailed = !!sessionsError && sessions.length === 0;
   const readySessions = useMemo(() => sessions.filter(s => s.status === 'ready'), [sessions]);
 
   const [selectedSession, setSelectedSession] = useState<string>('');
@@ -310,8 +312,17 @@ export function NumberChecker() {
         }
       />
 
+      {sessionsFailed && (
+        <div className="error-banner" role="alert">
+          <AlertCircle size={20} />
+          <span className="error-banner-text">
+            {t('dashboard.loadError')}: {sessionsError.message}
+          </span>
+        </div>
+      )}
+
       {/* Session Alert if none ready */}
-      {!loadingSessions && readySessions.length === 0 && (
+      {!loadingSessions && !sessionsFailed && readySessions.length === 0 && (
         <div className="nc-alert warning">
           <div className="nc-alert-icon">
             <AlertCircle size={22} />
