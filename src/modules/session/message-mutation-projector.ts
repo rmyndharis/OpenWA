@@ -169,9 +169,11 @@ export class MessageMutationProjector {
         await this.markMessageEdited(id, message.messageId);
         await this.onTextChanged(id, message.messageId);
       } else {
-        // Nor announced onto one: consumers were already told the message is gone, and the payload carries the new
-        // text. Asked only when the write changed nothing, so an ordinary edit costs no extra read. A revoke runs on
-        // this same per-message chain, so none can land between the write and this read.
+        // Nor announced onto one: the payload carries the new text of a message that was deleted, for everyone or,
+        // through the REST delete, for this account only (which announced nothing). Asked only when the write changed
+        // nothing, so an ordinary edit costs no extra read. A revoke that lands between the write and this read (a
+        // history tombstone or a row stored deleted is written off this chain) makes it read revoked, which is right:
+        // the message is deleted by then.
         revoked =
           (await this.messageRepository.findOne({
             where: { sessionId: id, waMessageId: message.messageId, type: 'revoked' },
