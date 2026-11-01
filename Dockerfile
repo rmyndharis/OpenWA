@@ -141,12 +141,14 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 # Postgres the compose file does not control, where 17 is the current default. Pinning to 16 would
 # have left every such deployment unable to back up. Verified against live 16 and 17 servers.
 #
-# The signing key is committed rather than fetched at build time. Fetched, it was the one build input
-# nothing pinned: `signed-by` attests only that the .debs match whatever that request returned, so a
-# compromised host, or a build behind a TLS-intercepting proxy whose root is in the trust store,
-# would swap the trust anchor with nothing to notice. Committed, it is reviewed once and diffable
-# forever, and it removes one of the two network calls the release build makes uncached
-# (release.yml's `no-cache-filters: production` rebuilds this stage every tag, on both platforms).
+# The signing key is committed rather than fetched at build time. Fetched, nothing pinned it:
+# `signed-by` attests only that the .debs match whatever that request returned, so a compromised
+# host, or a build behind a TLS-intercepting proxy whose root is in the trust store, would swap the
+# trust anchor with nothing to notice. Committed, it is reviewed once and diffable forever. It is not
+# the only such input: this stage re-fetches on every release build (release.yml's
+# `no-cache-filters: production` rebuilds it every tag, on both platforms), and npm and its Undici
+# below are pinned by version over TLS only, as is the amd64 Chrome for Testing archive, which has no
+# checksum.
 # Verify with `gpg --show-keys --with-fingerprint scripts/pgdg-ACCC4CF8.asc`:
 #   B97B0AFC AA1A47F0 44F244A0 7FCC7D46 ACCC4CF8, uid "PostgreSQL Debian Repository".
 #
