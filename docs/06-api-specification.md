@@ -2724,7 +2724,7 @@ Batch-resolve profile picture URLs for many contacts in one request (a chat side
 
 | Name | Type   | Required | Description                                                                                                                                                        |
 | ---- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| ids  | string | Yes      | Comma-separated contact ids. Blank entries are dropped; only the **first 50** ids are looked up, the rest are ignored (they simply do not appear in the response). |
+| ids  | string | No       | Comma-separated contact ids. Blank entries are dropped; only the **first 50** ids are looked up, the rest are ignored (they simply do not appear in the response). |
 
 **Response** `200`
 
