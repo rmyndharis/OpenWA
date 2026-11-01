@@ -303,15 +303,19 @@ export function Chats() {
   // itself — state, contacts query, submit — is components/chats/StatusComposeModal.
   const [composeOpen, setComposeOpen] = useState<boolean>(false);
 
-  // The session the open chat, channel or status belongs to. A switch closes them while rendering, as menuOpenedFor is
-  // cleared: closed by the session effect below, they were drawn once more with the new session, and the hooks keyed
-  // by session asked it about the one left (the chat's thread, history, picture and phone, the channel's posts).
+  // The session the open chat, channel or status, the status form and the group dialog belong to. A switch closes them
+  // while rendering, as menuOpenedFor is cleared: closed by the session effect below, they were drawn once more with
+  // the new session, and the hooks keyed by session asked it about the one left (the chat's thread, history, picture
+  // and phone, the channel's posts, the group's info). The status form posts through the session selected, so kept
+  // open it sent what was written, and addressed, for one account through another.
   const [openViewsSession, setOpenViewsSession] = useState<string>(selectedSessionId);
   if (openViewsSession !== selectedSessionId) {
     setOpenViewsSession(selectedSessionId);
     setActiveChat(null);
     setActiveChannel(null);
     setActiveStatusContactId(null);
+    setComposeOpen(false);
+    setGroupDialogChat(null);
   }
 
   const {
@@ -668,10 +672,8 @@ export function Chats() {
     setPreviewUrl(null);
     setReplyingTo(null);
     lastRoomIdRef.current = null;
-    // The new-chat panel lists the address book of the session being left, and an open group dialog
-    // edits a group through it.
+    // The new-chat panel lists the address book of the session being left.
     setShowNewChat(false);
-    setGroupDialogChat(null);
     setConfirmAction(null);
     setMuteDialogChat(null);
     setContactDialogChat(null);

@@ -597,6 +597,52 @@ test('status compose modal posts a text status with the baileys recipient allow-
   });
 });
 
+// The form was filled for the account its session is, its recipients picked from that account's contacts: when the
+// session is deleted elsewhere and the next ready one is opened, Post would send the status through that one.
+test('a status being composed closes when its session gives way to another, reading nothing through it', async () => {
+  const { screen, fireEvent, within, waitFor, act } = rtl;
+  twoSessions = true;
+  let mainDeleted = false;
+  const sent: string[] = [];
+  const stub = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input).replace(/^https?:\/\/[^/]+/, '');
+    sent.push(url);
+    if ((init?.method ?? 'GET') === 'GET' && url === '/api/sessions' && mainDeleted) {
+      return Promise.resolve(jsonResponse([SESSION_2]));
+    }
+    return stub(input, init);
+  }) as typeof fetch;
+  try {
+    const { container } = renderChats();
+    await screen.findByText(SESSION.name);
+    fireEvent.click(screen.getByRole('tab', { name: 'Status' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Post a status' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByPlaceholderText('Text'), { target: { value: STATUS_TEXT } });
+    await within(dialog).findByText('Bob');
+    fireEvent.click(within(dialog).getByRole('checkbox'));
+    sent.length = 0;
+
+    // Deleted from another tab: showing the page again reads the list, which opens the next ready session.
+    mainDeleted = true;
+    await act(async () => {
+      document.dispatchEvent(new window.Event('visibilitychange'));
+    });
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION_2.id));
+    await flush();
+    assert.equal(screen.queryByRole('dialog') === null, true, 'the status form stayed open for the next session');
+    assert.deepEqual(
+      sent.filter(url => url.startsWith(`/api/sessions/${SESSION_2.id}/contacts?`)),
+      [],
+      "the next session's address book was read for the form",
+    );
+  } finally {
+    globalThis.fetch = stub;
+    twoSessions = false;
+  }
+});
+
 test('Refresh on a feed that never connected refetches the open thread once the socket is back', async () => {
   const { screen, fireEvent, within, waitFor, act } = rtl;
   resetFetchCalls();
