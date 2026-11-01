@@ -35,6 +35,7 @@ import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.
 import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
 import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
+import { readHeldPhone } from './wwebjs-contacts';
 
 /**
  * Map a whatsapp-web.js MessageAck integer to the neutral DeliveryStatus.
@@ -493,16 +494,36 @@ export class WwebjsMessaging {
    * `@c.us` and `@lid` rows on a pure whatsapp-web.js deployment (#583 R3). Fire-and-forget: resolution (and
    * the send) must never block/fail on the write. A write the store reports failed (it resolves false, or
    * rejects) is marked for the next send, unless a newer resolution has replaced this one meanwhile.
+   *
+   * The phone recorded is the one WhatsApp Web holds for the lid: it can differ from the digits typed (the extra
+   * mobile digit of Brazilian, Mexican and Argentine numbers), and every reader of the table takes the write as
+   * authoritative. The typed digits stand in when the page holds none.
    */
   private reportLid(chatId: string, wid: string): void {
     const failed = (): void => {
       if (this.resolvedSendIds.get(chatId) === wid) this.unreportedLids.add(chatId);
     };
-    void this.host.config.lidMappingStore
-      ?.remember(userPart(wid), userPart(chatId), this.host.config.sessionId)
-      ?.then(stored => {
+    const store = this.host.config.lidMappingStore;
+    if (!store) return;
+    void this.heldPhone(wid)
+      .then(held => store.remember(userPart(wid), held ?? userPart(chatId), this.host.config.sessionId))
+      .then(stored => {
         if (stored === false) failed();
       }, failed);
+  }
+
+  /** The phone WhatsApp Web holds for a lid, read locally, or null when it holds none or cannot be read. */
+  private async heldPhone(lid: string): Promise<string | null> {
+    try {
+      const page = (
+        this.client() as unknown as { pupPage?: { evaluate: <T>(fn: (id: string) => T, id: string) => Promise<T> } }
+      ).pupPage;
+      const phone = await page?.evaluate(readHeldPhone, lid);
+      return phone && parseWaId(phone).kind === 'user' ? userPart(phone) : null;
+    } catch {
+      // Best effort: an unreadable page leaves the typed digits, as before.
+      return null;
+    }
   }
 
   /**

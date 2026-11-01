@@ -104,6 +104,19 @@ export function readCurrentLid(phoneId: string): string | null {
 }
 
 /**
+ * Read IN-PAGE the phone id WhatsApp Web holds for a lid, or null when it holds none. Local only, like
+ * {@link readCurrentLid}: it sends nothing to WhatsApp. Self-contained, since Puppeteer ships it to the page as source.
+ */
+export function readHeldPhone(lidId: string): string | null {
+  type Wid = { _serialized?: string; $1?: string };
+  const w = window as unknown as {
+    require: (m: string) => { createWid: (id: string) => Wid; getPhoneNumber: (wid: Wid) => Wid | null | undefined };
+  };
+  const phone = w.require('WAWebApiContact').getPhoneNumber(w.require('WAWebWidFactory').createWid(lidId));
+  return phone?._serialized || phone?.$1 || null;
+}
+
+/**
  * Contact operations extracted from WhatsAppWebJsAdapter. The adapter keeps the public methods as
  * thin forwarders and injects the shared host surface (./wwebjs-host) via closures, so the delegate
  * never touches lifecycle state directly.
