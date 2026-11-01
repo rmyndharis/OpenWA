@@ -234,8 +234,8 @@ const MINIMUM_MAPPED = {
   'sdk/javascript/src/types.ts': 121,
   'dashboard/src/services/api.ts': 22,
   'sdk/python/openwa/types.py': 132,
-  'sdk/go': 132,
-  'sdk/java': 137,
+  'sdk/go': 133,
+  'sdk/java': 138,
 };
 
 /** Known drift, deliberately not gated yet — each line is a to-adjudicate follow-up. */
@@ -577,6 +577,7 @@ const GO_MAPPING = {
   ContactRecord: 'ContactDto',
   ConvertMediaInput: 'ConvertMediaDto',
   ConvertedMedia: 'ConvertedMediaResponseDto',
+  CustomLinkPreview: 'CustomLinkPreviewDto',
   GroupPictureResponse: 'GroupPictureResponseDto',
   GroupSettings: ['GroupSettingsResponseDto', 'GroupSettingsDto'],
   HealthResponse: 'HealthCheckResponseDto',
@@ -718,6 +719,7 @@ const JAVA_MAPPING = {
   ContactRecord: 'ContactDto',
   ConvertMediaRequest: 'ConvertMediaDto',
   ConvertedMedia: 'ConvertedMediaResponseDto',
+  CustomLinkPreview: 'CustomLinkPreviewDto',
   GroupPictureResponse: 'GroupPictureResponseDto',
   GroupSettings: ['GroupSettingsResponseDto', 'GroupSettingsDto'],
   HealthResponse: 'HealthCheckResponseDto',
