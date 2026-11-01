@@ -62,8 +62,9 @@ export const SEARCH_CONTAINS_TERMS_MAX_LENGTH = 64;
 export const SEARCH_CONTAINS_WINDOW = 1000;
 
 /**
- * How much of each candidate's body a match=contains search ranks and highlights, in UTF-16 units: the
- * longest text the API sends (MESSAGE_TEXT_MAX_LENGTH). A received message is stored whole and can be far
+ * How much of each candidate's body a match=contains search ranks and highlights, in UTF-16 units: the number
+ * MESSAGE_TEXT_MAX_LENGTH caps a sent text at, though that cap counts an emoji as one character where this cut
+ * counts two, so an emoji-heavy API text can run past it. A received message is stored whole and can be far
  * longer: over a window of 64 KB messages, folding and scanning whole bodies blocked the event loop for about
  * 2.8 s per search, reading this much of each about 240 ms. A message whose terms appear only past this
  * point still matches: it scores 0 and its snippet starts at the beginning, without `<mark>`.

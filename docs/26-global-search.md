@@ -117,9 +117,9 @@ time blocks the event loop every session shares) and 1.6 s on Postgres. So `cont
    at the start of a word and **1** inside a word (compared without case or accents), the hit's `score`
    is the sum over the terms, and ties go to the newest message, then to `messageId`. The same code
    ranks both dialects, so the same candidates come back in the same order. It reads the first **4,096
-   characters** of each body, the longest text the API sends: a received message can be far longer, and
-   one whose terms appear only past that point still matches, but scores 0 and gets a snippet from its
-   start without `<mark>`.
+   characters** of each body, counted in UTF-16 units (an emoji counts two), the number the API caps a
+   sent text at: a received message can be far longer, and one whose terms appear only past that point
+   still matches, but scores 0 and gets a snippet from its start without `<mark>`.
 
 Both phases together take about 2 ms on SQLite and 10 to 20 ms on Postgres at that size. Long bodies cost more, up to that cut: 1,000 candidates of 64 KB, each matching at every character, took about 240 ms on SQLite for a page of 100. The trade-off is that relevance orders the window, not the whole history: `total` is at most
 1,000 in this mode, and pages past it are empty. Reach older matches by narrowing the query (more
