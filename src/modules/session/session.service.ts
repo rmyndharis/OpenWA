@@ -1505,10 +1505,21 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    */
   async getPresence(id: string, chatId: string): Promise<ChatPresence | null> {
     await this.findOne(id);
+    // A report is stored under the neutral id WhatsApp sent it from, which on Baileys is the contact's lid once
+    // the subscribe went to it, so the read covers every form of the chat (the GET messages filter's rules).
+    const candidates = await resolveJidCandidates(chatId, {
+      resolveLid: lid => this.lidMappingStore.findPhoneForLid(lid),
+      lidsForPhone: phone => this.lidMappingStore.findLidsForPhone(phone),
+    });
     // Presence belongs to a connection: with no engine registered (stopped, logged out, killed or
     // failed) whatever was last reported is no longer current.
     if (!this.engines.has(id)) return null;
-    return this.presence.get(id, chatId);
+    let latest: ChatPresence | null = null;
+    for (const candidate of candidates) {
+      const reported = this.presence.get(id, candidate);
+      if (reported && (!latest || reported.observedAt > latest.observedAt)) latest = reported;
+    }
+    return latest;
   }
 
   async sendSeen(id: string, chatId: string, messageIds?: string[]): Promise<boolean> {

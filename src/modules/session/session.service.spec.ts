@@ -5952,6 +5952,66 @@ describe('SessionService', () => {
       });
     });
 
+    // Baileys subscribes a phone through the contact's lid once it knows one, and WhatsApp then reports
+    // presence from that lid, so the report is stored under the lid and not under the id subscribed.
+    describe('a read in another form of the reported chat', () => {
+      const PHONE = '628111222333';
+      const LID = '123456789012345';
+      const report = (chatId: string) => ({ chatId, participants: [{ id: chatId, state: 'composing' as const }] });
+
+      beforeEach(() => {
+        (lidMappingStore.findLidsForPhone as jest.Mock).mockImplementation((phone: string) =>
+          Promise.resolve(phone === PHONE ? [LID] : []),
+        );
+        (lidMappingStore.findPhoneForLid as jest.Mock).mockImplementation((lid: string) =>
+          Promise.resolve(lid.startsWith(LID) ? PHONE : null),
+        );
+      });
+
+      it('serves a report stored under the lid paired with the phone it is read by', async () => {
+        const callbacks = await startAndCapture();
+        callbacks.onPresenceUpdate?.(report(`${LID}@lid`));
+
+        await expect(service.getPresence('sess-uuid-1', `${PHONE}@c.us`)).resolves.toMatchObject(report(`${LID}@lid`));
+      });
+
+      it('serves a report stored under the phone to a read by its lid', async () => {
+        const callbacks = await startAndCapture();
+        callbacks.onPresenceUpdate?.(report(`${PHONE}@c.us`));
+
+        await expect(service.getPresence('sess-uuid-1', `${LID}@lid`)).resolves.toMatchObject(report(`${PHONE}@c.us`));
+      });
+
+      // The subscribe route accepts every spelling of an id, while reports are stored under the neutral one.
+      it.each([`${PHONE}@s.whatsapp.net`, `${PHONE}:12@c.us`, `${PHONE}@C.US`])(
+        'serves a read spelled %s',
+        async id => {
+          const callbacks = await startAndCapture();
+          callbacks.onPresenceUpdate?.(report(`${PHONE}@c.us`));
+
+          await expect(service.getPresence('sess-uuid-1', id)).resolves.toMatchObject(report(`${PHONE}@c.us`));
+        },
+      );
+
+      it('serves the newest report when the phone and its lid both have one', async () => {
+        const callbacks = await startAndCapture();
+        callbacks.onPresenceUpdate?.(report(`${PHONE}@c.us`));
+        await new Promise(resolve => setTimeout(resolve, 5));
+        callbacks.onPresenceUpdate?.(report(`${LID}@lid`));
+
+        await expect(service.getPresence('sess-uuid-1', `${PHONE}@c.us`)).resolves.toMatchObject({
+          chatId: `${LID}@lid`,
+        });
+      });
+
+      it('serves nothing for a lid that is not paired with the phone read', async () => {
+        const callbacks = await startAndCapture();
+        callbacks.onPresenceUpdate?.(report('999999999999999@lid'));
+
+        await expect(service.getPresence('sess-uuid-1', `${PHONE}@c.us`)).resolves.toBeNull();
+      });
+    });
+
     // Subscribed but quiet is a normal state, not a missing resource.
     it('reports null for a chat nothing was reported for', async () => {
       await startAndCapture();
