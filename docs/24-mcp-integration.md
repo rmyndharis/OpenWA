@@ -281,7 +281,7 @@ defineTool({
   description: 'Get one session by its UUID, including connection status.',
   tier: 'read',
   sessionScoped: true,
-  inputSchema: z.object({ sessionId: z.string().min(1).describe('Session UUID') }),
+  inputSchema: z.object({ sessionId: z.guid().describe('Session UUID') }),
   handler: input =>
     session.findOne(input.sessionId).then(s => SessionResponseDto.fromEntity(s, session.engineLoaded(s))),
 }),
