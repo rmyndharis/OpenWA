@@ -758,7 +758,8 @@ export class BaileysMessaging {
     return this.sendContent(
       chatId,
       {
-        contacts: { displayName: contact.name, contacts: [{ vcard: buildVCard(contact) }] },
+        // A single card is built from the entry alone, so the entry carries the name the bubble shows.
+        contacts: { displayName: contact.name, contacts: [{ displayName: contact.name, vcard: buildVCard(contact) }] },
       },
       await this.quoteOption(contact.quotedMessageId, socket),
       socket,

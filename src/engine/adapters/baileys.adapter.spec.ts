@@ -1898,9 +1898,11 @@ describe('BaileysAdapter location + contact + poll sends', () => {
     await adapter.sendContactMessage('628111@s.whatsapp.net', { name: 'John Doe', number: '+1 234-567' });
     const [, call] = fakeSock.sendMessage.mock.calls[0] as [
       string,
-      { contacts: { displayName: string; contacts: { vcard: string }[] } },
+      { contacts: { displayName: string; contacts: { displayName?: string; vcard: string }[] } },
     ];
     expect(call.contacts.displayName).toBe('John Doe');
+    // Baileys builds a single card from the entry alone (Utils/messages.js), dropping the outer name.
+    expect(call.contacts.contacts[0].displayName).toBe('John Doe');
     const vcard = call.contacts.contacts[0].vcard;
     expect(vcard).toContain('FN:John Doe');
     expect(vcard).toContain('waid=1234567:+1 234-567');
