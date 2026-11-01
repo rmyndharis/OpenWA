@@ -1242,7 +1242,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       lastError: unsent?.lastError
         ? `Webhook replay budget exhausted; last error: ${unsent.lastError}`
         : 'Webhook replay budget exhausted',
-      ...(this.keepsFailurePayload() ? { payload: row.payload } : {}),
+      ...(this.keepsFailurePayload()
+        ? { payload: row.payload, payloadRetentionHours: this.payloadRetentionHours() }
+        : {}),
     });
     if (recorded === true) incrementWebhookDeliveryFailures();
     return recorded !== null;
@@ -1253,7 +1255,11 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * built from, so an operator can redrive it. Off (0) by default, which stores nothing new.
    */
   private keepsFailurePayload(): boolean {
-    return this.configService.get<number>('webhook.failurePayloadRetentionHours', 0) > 0;
+    return this.payloadRetentionHours() > 0;
+  }
+
+  private payloadRetentionHours(): number {
+    return this.configService.get<number>('webhook.failurePayloadRetentionHours', 0);
   }
 
   /** What the direct path needs from the dispatch context: the slot, the replay copy, the attempt cap. */
@@ -1371,7 +1377,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           deliveryId: payload.deliveryId,
           attempts: attempt,
           error,
-          ...(options.replayData ? { payload: options.replayData } : {}),
+          ...(options.replayData
+            ? { payload: options.replayData, payloadRetentionHours: this.payloadRetentionHours() }
+            : {}),
         });
         if (recorded !== false) incrementWebhookDeliveryFailures();
         if (recorded === null) throw new UnrecordedWebhookFailure(redactSsrfError(error));

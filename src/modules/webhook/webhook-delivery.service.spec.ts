@@ -2454,6 +2454,24 @@ describe('WebhookDeliveryService', () => {
         expect.objectContaining({ attempts: 1, payload: { from: 'x@c.us', body: 'hi' } }),
       ]);
     });
+
+    // A terminal row recorded while retention was off holds no event data; the outbox copy goes after this record.
+    it('hands the event data to a terminal row of the same delivery recorded without it', async () => {
+      (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T) => {
+        if (key === 'webhook.failurePayloadRetentionHours') return 24;
+        if (key === 'webhook.retryDelay') return 100;
+        return def;
+      });
+      insertedFailures.push({ webhookId: 'wh-uuid-1', idempotencyKey: 'k', attempts: 3 });
+      mockFetch.mockRejectedValue(new Error('receiver down'));
+
+      await service.redeliver(createMockWebhook({ retryCount: 1 }), 'sess-1', 'message.received', 'k', { body: 'hi' });
+
+      expect(failureRepository.update).toHaveBeenCalledWith(
+        expect.objectContaining({ webhookId: 'wh-uuid-1', idempotencyKey: 'k' }),
+        { payload: { body: 'hi' } },
+      );
+    });
   });
 
   describe('dispatch slot isolation (direct mode)', () => {
