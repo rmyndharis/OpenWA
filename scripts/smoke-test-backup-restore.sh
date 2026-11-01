@@ -3164,9 +3164,12 @@ aw_restore() {
 AW_NEEDS='psql 13.22, 14.19, 15.14, 16.10, 17.6 or newer (no 12)'
 for AW_OLD in 12.22 13.21 14.18 15.13 16.9 17.5 9.6.24 'unknown build'; do
   aw_restore "$AW/restricted.tar.gz" "$AW/bin:$PATH" AW_PSQL="$AW_OLD"
+  # The runbook's load into the built-in container never runs this psql, so the refusal names the restore that
+  # gets past it there: one run in the image, whose own psql reads the dump.
   if [ "$rc" -eq 0 ] || [ -e "$AW/dst/data" ] ||
     ! grep -qF "which this psql cannot read: psql (PostgreSQL) $AW_OLD" <<<"$OUT_AW" ||
-    ! grep -qF "the load needs $AW_NEEDS; nothing has been restored yet" <<<"$OUT_AW"; then
+    ! grep -qF "the load needs $AW_NEEDS; nothing has been restored yet" <<<"$OUT_AW" ||
+    ! grep -qF "run this restore in the image instead, whose psql reads the dump" <<<"$OUT_AW"; then
     fail "(aw) psql $AW_OLD did not stop the restore before anything was written (rc $rc): $OUT_AW"
   fi
 done

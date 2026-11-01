@@ -375,7 +375,9 @@ fi
 # meta-command no older psql knows, and no 12: such a psql stops there with "invalid command \restrict" and loads
 # nothing. The printed load runs the psql on PATH, so one that cannot read this dump stops the restore before
 # anything is written. Only the psql on PATH is checked, read without the load's arguments (Debian's
-# pg_wrapper may pick another client by them); with none, the printed text names the versions.
+# pg_wrapper may pick another client by them); with none, the printed text names the versions. The runbook's
+# load into the built-in openwa-postgres container runs that container's psql, not this one, so the refusal
+# also names the way that load needs: this restore run in the image, whose psql reads the dump.
 psql_reads_restrict() {
   local re='\) ([0-9]+)\.?([0-9]*)'
   [[ $1 =~ $re ]] || return 1
@@ -398,6 +400,9 @@ if [ -f "$STAGE/database.sql" ] && grep -q '^\\restrict ' "$STAGE/database.sql";
       log "ERROR: the archive's PostgreSQL dump opens with \\restrict, which this psql cannot read: $PSQL_VERSION"
       log "       the load needs $PSQL_RESTRICT; nothing has been restored yet. Install a newer"
       log "       PostgreSQL client or put one first on PATH (the image ships 17), then re-run"
+      log "       The runbook's load into the built-in openwa-postgres container runs that container's psql,"
+      log "       not this one: for it, run this restore in the image instead, whose psql reads the dump, as"
+      log "       docs/11-operational-runbooks.md (Restore from Backup) shows for the openwa-data volume"
       exit 1
     fi
   fi
