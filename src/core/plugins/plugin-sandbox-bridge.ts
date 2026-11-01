@@ -646,9 +646,13 @@ export class PluginSandboxBridge {
   // a manifest without 'search:provide' is denied there — the wire declaration is untrusted input, and
   // this bridge bypasses the capability router that gates the ctx.* capabilities.
   private buildSearchProviderRegistrar(pluginId: string, plugin: PluginInstance): () => void {
+    // One declaration per worker. Plugin code can post the message itself, and every repeat would take the active
+    // provider back in auto mode, or log the denial again.
+    let declared = false;
     return (): void => {
       const liveHost = this.sandboxHosts.get(pluginId);
-      if (!liveHost) return;
+      if (!liveHost || declared) return;
+      declared = true;
       registerPluginSearchProvider({
         pluginId,
         label: `${plugin.manifest.name} (plugin)`,
