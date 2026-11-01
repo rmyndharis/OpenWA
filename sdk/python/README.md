@@ -123,8 +123,9 @@ except OpenWANotFoundError as e:
   a redirect target). Path segments are percent-encoded; a base-URL path prefix (e.g. behind a
   reverse proxy) is preserved.
 - Escape hatch for endpoints the SDK does not wrap:
-  `client.request(method, path, query=…, body=…, idempotency_key=…)`. A path with a `.` or `..` segment, or one that does not
-  begin with `/`, raises `ValueError` before anything is sent.
+  `client.request(method, path, query=…, body=…, idempotency_key=…)`. A path with a `.` or `..` segment (also after an
+  encoded slash, as in `..%2F`), or one that does not begin with `/`, raises `ValueError` before anything is sent. An id
+  with a `.` or `..` part between slashes, such as `../x`, is refused the same way.
 
 ## Receiving webhooks
 

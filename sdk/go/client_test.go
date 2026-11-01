@@ -189,6 +189,45 @@ func TestEmptyAndDotSegmentsRefused(t *testing.T) {
 	}
 }
 
+// An id is sent as one percent-encoded segment, so "../x" goes out as "..%2Fx". A reverse proxy that
+// decodes %2F before it resolves dot segments (nginx with a URI on proxy_pass) reads that as "../x" and
+// sends the call, API key included, to another route, so a dot part inside a segment is refused too.
+func TestDotPartInsideASegmentRefused(t *testing.T) {
+	var sent []string
+	rt := RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		sent = append(sent, req.URL.EscapedPath())
+		return &http.Response{StatusCode: 204, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}, Request: req}, nil
+	})
+	c := newTestClient(t, rt)
+	ctx := context.Background()
+
+	for name, err := range map[string]error{
+		`Templates.Delete "../../../sessions/V"`: c.Templates.Delete(ctx, "S", "../../../sessions/V"),
+		`Webhooks.Delete "a/./b"`:                c.Webhooks.Delete(ctx, "s1", "a/./b"),
+		`Webhooks.Delete "..\x"`:                 c.Webhooks.Delete(ctx, "s1", `..\x`),
+		`Do ..%2F`:                               c.Do(ctx, "DELETE", "/api/sessions/s1/contacts/..%2Fwebhooks%2Fw1", nil, nil, nil),
+		`Do %2e%2E%2f`:                           c.Do(ctx, "DELETE", "/api/sessions/s1/contacts/%2e%2E%2fx", nil, nil, nil),
+	} {
+		if err == nil || !strings.Contains(err.Error(), "dot path segment") {
+			t.Errorf("%s: err = %v, want a dot path segment error", name, err)
+		}
+	}
+	if len(sent) != 0 {
+		t.Fatalf("sent %v, want nothing", sent)
+	}
+
+	// A slash inside an id with no dot part, as a caller-chosen batch or label id may hold, still goes out.
+	for _, id := range []string{"a/b", "v1.0/x", "a/"} {
+		if err := c.Webhooks.Delete(ctx, "s1", id); err != nil {
+			t.Errorf("Webhooks.Delete %q: %v", id, err)
+		}
+	}
+	want := []string{"/api/sessions/s1/webhooks/a%2Fb", "/api/sessions/s1/webhooks/v1.0%2Fx", "/api/sessions/s1/webhooks/a%2F"}
+	if strings.Join(sent, " ") != strings.Join(want, " ") {
+		t.Fatalf("sent %v, want %v", sent, want)
+	}
+}
+
 func TestListSessionsQueryName(t *testing.T) {
 	rt := &recordTransport{status: 200, body: `[]`}
 	c := newTestClient(t, rt)

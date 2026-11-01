@@ -126,6 +126,28 @@ class TestClientCore:
         client.webhooks.delete("s1", "628123@c.us")
         assert backend.last_call.url == "http://localhost:2785/api/sessions/s1/webhooks/628123@c.us"
 
+    def test_a_dot_part_inside_an_id_is_refused_before_sending(self) -> None:
+        # Sent as one encoded segment ("..%2Fx"), such an id reaches another route behind a proxy that
+        # decodes %2F before it resolves dot segments (nginx with a URI on proxy_pass).
+        backend = MockBackend()
+        client = make_client(backend)
+        with pytest.raises(ValueError, match="dot path segment"):
+            client.templates.delete("S", "../../../sessions/V")
+        with pytest.raises(ValueError, match="dot path segment"):
+            client.webhooks.delete("s1", "a/./b")
+        with pytest.raises(ValueError, match="dot path segment"):
+            client.request("DELETE", "/api/sessions/s1/contacts/..%2Fwebhooks%2Fw1")
+        assert backend.calls == []
+
+        # A slash inside an id with no dot part, as a caller-chosen batch or label id may hold, still goes out.
+        backend.on("DELETE", "/webhooks/", status=204)
+        client.webhooks.delete("s1", "a/b")
+        client.webhooks.delete("s1", "v1.0/x")
+        assert [c.url for c in backend.calls] == [
+            "http://localhost:2785/api/sessions/s1/webhooks/a%2Fb",
+            "http://localhost:2785/api/sessions/s1/webhooks/v1.0%2Fx",
+        ]
+
     def test_raw_request_escape_hatch(self):
         backend = MockBackend().on("GET", "/api/anything", body={"ok": True})
         result = make_client(backend).request("GET", "/api/anything", query={"a": 1})

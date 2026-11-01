@@ -260,8 +260,11 @@ a key you have already handled is the same event arriving again.
   (e.g. behind a proxy at `/v1`) is preserved.
 - **Empty and dot ids are refused.** An empty, `.` or `..` id returns an error
   and nothing is sent, so a proxy that resolves dot segments cannot turn the
-  call into one on the parent resource. `Client.Do` refuses a `.` or `..`
-  segment the same way but sends an empty one (a trailing slash) as written.
+  call into one on the parent resource. So does an id with a `.` or `..` part
+  between slashes, such as `../x`: sent as `..%2Fx`, it would reach another
+  route behind a proxy that decodes `%2F` before it resolves dot segments.
+  `Client.Do` refuses a `.` or `..` segment the same way (also after an
+  encoded slash) but sends an empty one (a trailing slash) as written.
 
 ## Development
 

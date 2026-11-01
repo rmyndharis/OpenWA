@@ -48,6 +48,25 @@ class ClientTest {
     }
 
     @Test
+    void dotPartInsideAnIdIsRefusedBeforeSending() {
+        // Sent as one encoded segment ("..%2Fx"), such an id reaches another route behind a proxy that decodes
+        // %2F before it resolves dot segments (nginx with a URI on proxy_pass).
+        assertThrows(IllegalArgumentException.class, () -> client.templates.delete("S", "../../../sessions/V"));
+        assertThrows(IllegalArgumentException.class, () -> client.webhooks.delete("s1", "a/./b"));
+        assertThrows(IllegalArgumentException.class,
+            () -> client.requestVoid(HttpMethod.DELETE, "/api/sessions/s1/contacts/..%2Fwebhooks%2Fw1", null, null));
+        assertNull(tx.lastRequest());
+
+        // A slash inside an id with no dot part, as a caller-chosen batch or label id may hold, still goes out.
+        tx.respond(204, "");
+        client.webhooks.delete("s1", "a/b");
+        assertEquals("http://h:2785/api/sessions/s1/webhooks/a%2Fb", tx.lastRequest().url());
+        tx.respond(204, "");
+        client.webhooks.delete("s1", "v1.0/x");
+        assertEquals("http://h:2785/api/sessions/s1/webhooks/v1.0%2Fx", tx.lastRequest().url());
+    }
+
+    @Test
     void pathWithoutLeadingSlashIsRefusedBeforeSending() {
         // Appended to the base URL, such a path could move the request and its API key to another host.
         assertThrows(IllegalArgumentException.class,

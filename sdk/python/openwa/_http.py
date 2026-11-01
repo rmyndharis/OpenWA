@@ -46,8 +46,10 @@ def build_url(base_url: str, path: str, query: Mapping[str, Any] | None = None) 
     if not path.startswith("/"):
         raise ValueError(f"OpenWA: path must begin with '/': {path!r}")
     raw_path = path.split("?", 1)[0].split("#", 1)[0]
-    for seg in raw_path.replace("\\", "/").split("/"):
-        if unquote(seg) in (".", ".."):
+    # Decoded before it is split: a proxy that decodes %2F before it resolves dot segments reads an id
+    # sent as "..%2Fx" as "../x" and sends the call to another route.
+    for seg in unquote(raw_path).replace("\\", "/").split("/"):
+        if seg in (".", ".."):
             raise ValueError(f"OpenWA: path must not contain a dot path segment: {path!r}")
     url = f"{base_url.rstrip('/')}{path}"
     if not query:

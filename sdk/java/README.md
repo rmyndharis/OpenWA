@@ -186,8 +186,11 @@ a key you have already handled is the same event arriving again.
   a proxy at `/v1`) is preserved.
 - **Empty and dot ids are refused.** An empty, `.` or `..` id throws
   `IllegalArgumentException` and nothing is sent, so a proxy that resolves dot
-  segments cannot turn the call into one on the parent resource. The raw
-  `request*` methods refuse a `.` or `..` segment the same way, and a path
+  segments cannot turn the call into one on the parent resource. So does an id
+  with a `.` or `..` part between slashes, such as `../x`: sent as `..%2Fx`, it
+  would reach another route behind a proxy that decodes `%2F` before it resolves
+  dot segments. The raw `request*` methods refuse a `.` or `..` segment the same
+  way (also after an encoded slash), and a path
   that does not begin with `/`, but send an empty one (a trailing slash) as
   written.
 

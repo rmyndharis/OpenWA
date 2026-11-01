@@ -132,6 +132,26 @@ describe('OpenWAClient', () => {
     expect(t.calls).toHaveLength(2);
   });
 
+  it('refuses a dot part inside an id, which a proxy decoding %2F would resolve', async () => {
+    // Sent as one encoded segment ("..%2Fx"), such an id reaches another route behind a proxy that decodes
+    // %2F before it resolves dot segments (nginx with a URI on proxy_pass).
+    const t = new MockTransport().passthrough({ status: 204 });
+    const c = client(t);
+    await expect(c.templates.delete('S', '../../../sessions/V')).rejects.toThrow(TypeError);
+    await expect(c.webhooks.delete('s1', 'a/./b')).rejects.toThrow(TypeError);
+    const raw = { method: 'DELETE' as const, path: '/api/sessions/s1/contacts/..%2Fwebhooks%2Fw1' };
+    await expect(c.request(raw)).rejects.toThrow(TypeError);
+    expect(t.calls).toHaveLength(0);
+
+    // A slash inside an id with no dot part, as a caller-chosen batch or label id may hold, still goes out.
+    await c.webhooks.delete('s1', 'a/b');
+    await c.webhooks.delete('s1', 'v1.0/x');
+    expect(t.calls.map(call => call.url)).toEqual([
+      'http://localhost:2785/api/sessions/s1/webhooks/a%2Fb',
+      'http://localhost:2785/api/sessions/s1/webhooks/v1.0%2Fx',
+    ]);
+  });
+
   it('refuses an id encodeURIComponent cannot encode as a rejection, not a synchronous throw', async () => {
     const t = new MockTransport().passthrough({ status: 200, body: {} });
     const c = client(t);

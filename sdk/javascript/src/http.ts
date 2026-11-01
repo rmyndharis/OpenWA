@@ -189,7 +189,9 @@ async function send<T>(
   const rawPath = tail.split(/[?#]/, 1)[0];
   let pathOnly = rawPath.replace(/[\t\n\r]/g, '');
   if (rawPath.length === tail.length) pathOnly = pathOnly.replace(/[\x00-\x20]+$/, '');
-  for (const segment of pathOnly.split(/[/\\]/).slice(1)) {
+  // %2F and %5C split too: a proxy that decodes them before it resolves dot segments reads an id sent as
+  // `..%2Fx` as `../x` and sends the call to another route.
+  for (const segment of pathOnly.split(/[/\\]|%2f|%5c/i).slice(1)) {
     const dots = segment.replace(/%2e/gi, '.');
     if (dots === '.' || dots === '..') {
       throw new TypeError(`OpenWA: dot path segment in ${JSON.stringify(options.path)}`);
