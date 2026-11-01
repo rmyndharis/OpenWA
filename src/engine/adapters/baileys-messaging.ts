@@ -131,13 +131,16 @@ function isWebpBuffer(data: Buffer): boolean {
  * Load the deferred `sharp` binary, mapping a LOAD failure to a 500 rather than the decode path's 400.
  * A native-binary load failure (older CPU, stripped/musl image, missing prebuilt) is a host capability
  * gap: a valid PNG would hit it too, so reporting it as a 400 tells the caller their image is malformed.
+ * Every caller loads it before anything is written, so the 500 carries markNothingSent.
  */
 export async function loadSharp() {
   try {
     return (await import('sharp')).default;
   } catch (error) {
-    throw new InternalServerErrorException(
-      `Sticker conversion is unavailable: sharp could not load (${error instanceof Error ? error.message : String(error)}).`,
+    throw markNothingSent(
+      new InternalServerErrorException(
+        `Sticker conversion is unavailable: sharp could not load (${error instanceof Error ? error.message : String(error)}).`,
+      ),
     );
   }
 }
