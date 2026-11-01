@@ -102,8 +102,8 @@ function installFetchStub(): void {
     if (listFailure && !url.includes('limit=200')) {
       return Promise.resolve(new Response(JSON.stringify({ message: 'Bad Gateway' }), { status: listFailure }));
     }
-    // The gateway holds no error rows, so the server-side severity filter matches nothing.
-    if (new URL(url, 'http://localhost').searchParams.get('severity') === 'error') {
+    // No row of this fixture is a warning, so the server-side severity filter for it matches nothing.
+    if (new URL(url, 'http://localhost').searchParams.get('severity') === 'warn') {
       return Promise.resolve(jsonResponse({ data: [], total: 0 }));
     }
     const reply = jsonResponse({ data: LOGS, total: listTotal ?? LOGS.length });
@@ -349,9 +349,20 @@ test('a severity filter that matches nothing says no logs exist, not that this p
   renderLogs();
   await screen.findByText('infra.restart');
   fireEvent.click(screen.getByRole('button', { name: 'Severity, All Severities' }));
-  fireEvent.click(screen.getByRole('option', { name: 'Error' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Warning' }));
   await screen.findByText('No logs match these filters. Adjust the severity filter to widen the search.');
   assert.ok(screen.getByRole('heading', { name: 'No logs found' }));
+});
+
+// The gateway writes audit rows as info or warn only, failures included, so an Error filter could only ever show an
+// empty table, and an admin looking for failures would read it as nothing having failed.
+test('the severity filter offers only the severities the gateway writes', async () => {
+  const { screen, fireEvent } = rtl;
+  renderLogs();
+  await screen.findByText('infra.restart');
+  fireEvent.click(screen.getByRole('button', { name: 'Severity, All Severities' }));
+  const offered = screen.getAllByRole('option').map(option => option.textContent);
+  assert.deepEqual(offered, ['All Severities', 'Info', 'Warning']);
 });
 
 test('the severity badge shows the translated severity', async () => {

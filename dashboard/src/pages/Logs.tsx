@@ -166,11 +166,12 @@ export function Logs() {
               setSeverityFilter(value);
               setPage(1);
             }}
+            // No Error option: the gateway writes audit rows as info or warn only, failures included, so it would
+            // only ever show an empty table. A stored error row still renders its badge.
             options={[
               { value: 'all', label: t('logs.severity.all') },
               { value: 'info', label: t('logs.severity.info') },
               { value: 'warn', label: t('logs.severity.warn') },
-              { value: 'error', label: t('logs.severity.error') },
             ]}
             ariaLabel={t('logs.columns.severity')}
           />
