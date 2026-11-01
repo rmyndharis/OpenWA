@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsInt, IsNotEmpty, IsString, Matches, Max, Min, ValidateIf, MaxLength } from 'class-validator';
 import { CHAT_ID_MAX_LENGTH } from '../../message/dto/send-message.dto';
-import { ToStrictString } from '../../../common/utils/strict-boolean';
+import { ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 
 /**
  * The largest integer a JSON number carries exactly, and the bound on `muteUntil`. Both engines take every
@@ -45,6 +45,8 @@ export class MuteChatDto {
   })
   // `null` is a real instruction (unmute), so it skips the numeric checks rather than failing them.
   // A missing field is NOT null, so it still falls through to @IsInt and is rejected with a 400.
+  // The union type gets no implicit conversion, so a form-encoded value would otherwise always fail @IsInt.
+  @ToStrictNumber()
   @ValidateIf((o: MuteChatDto) => o.muteUntil !== null)
   @IsInt()
   @Min(1)

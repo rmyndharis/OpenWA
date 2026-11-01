@@ -25,6 +25,8 @@ describe('MuteChatDto muteUntil validation', () => {
     ['the smallest positive integer', 1],
     ['an epoch-millisecond expiry', 1_800_000_000_000],
     ['null, which unmutes', null],
+    // A form-encoded body carries every value as a string.
+    ['the expiry as a form-encoded body sends it', '1800000000000'],
   ])('accepts %s', async (_label, muteUntil) => {
     expect(await failing({ muteUntil })).toEqual([]);
   });
@@ -33,7 +35,9 @@ describe('MuteChatDto muteUntil validation', () => {
     ['zero', 0],
     ['a negative number', -1],
     ['a fraction', 1.5],
-    ['a numeric string', '1'],
+    ['zero as a string', '0'],
+    ['a fraction as a string', '1.5'],
+    ['a word', 'tomorrow'],
     ['an empty string', ''],
     ['a boolean', true],
   ])('rejects %s', async (_label, muteUntil) => {
