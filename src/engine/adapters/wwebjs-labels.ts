@@ -10,7 +10,19 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { type WwebjsEngineHost, rethrowIfNavigation, withPage } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
-import { isPageInvariant, readChats } from './wwebjs-chats';
+import { isPageInvariant, readChats, recoverGroupChatById } from './wwebjs-chats';
+
+/** The labels on a chat, read IN-PAGE as window.WWebJS.getChatLabels reads them without refreshing group metadata. */
+export async function readLocalChatLabels(chatId: string): Promise<Label[] | null> {
+  const w = window as unknown as {
+    WWebJS: {
+      getChat: (id: string, options: { getAsModel: boolean }) => Promise<{ labels?: string[] } | null>;
+      getLabel: (id: string) => Label;
+    };
+  };
+  const chat = await w.WWebJS.getChat(chatId, { getAsModel: false });
+  return chat ? (chat.labels || []).map(id => w.WWebJS.getLabel(id)) : null;
+}
 
 /** The ids of the chats carrying a label, read IN-PAGE exactly as Client.getChatsByLabelId reads them. */
 export function readLabelChatIds(labelId: string): string[] {
@@ -167,8 +179,20 @@ export class WwebjsLabels {
   /** The chat's labels, or null when the page cannot resolve the chat (getChatById resolves undefined). */
   private async readChatLabels(chatId: string): Promise<Label[] | null> {
     const labels = await withPage(this.host, 'getChatLabels', async () => {
-      const chat = await this.client().getChatById(chatId);
-      return chat ? ((await (chat as unknown as GroupChat).getLabels()) ?? []) : null;
+      const chat = await this.client()
+        .getChatById(chatId)
+        .catch(error => recoverGroupChatById(this.host, 'getChatLabels', chatId, error));
+      if (!chat) return null;
+      return (chat as unknown as GroupChat)
+        .getLabels()
+        .then(res => res ?? [])
+        .catch(async (error: unknown) => {
+          if (!isPageInvariant(error)) throw error;
+          const page = (
+            this.client() as unknown as { pupPage: { evaluate: <T>(fn: (id: string) => T, id: string) => Promise<T> } }
+          ).pupPage;
+          return page.evaluate(readLocalChatLabels, chatId);
+        });
     });
     if (!labels) {
       return null;

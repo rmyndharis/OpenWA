@@ -244,6 +244,20 @@ export interface InfraExportDataResult {
   omittedInlineMedia: { messages: number; messageBatches: number };
 }
 
+function parsePluginInstanceConfig(raw: unknown): Record<string, unknown> | null {
+  if (typeof raw === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+}
+
 const EMPTY_ARCHIVE_WARNING = 'Backup contained no rows to restore; refused to replace existing data. Check the file.';
 
 /** Result of POST /infra/import-data; InfraImportDataResponseDto is the published contract. */
@@ -858,12 +872,20 @@ export class InfraDataService {
         // transaction, and a missing table is tolerated by clearTable below.
         const previousPluginBindings = (await queryRunner.hasTable('plugin_instances'))
           ? (
-              (await queryRunner.query('SELECT "pluginId", "sessionScope", enabled FROM plugin_instances')) as Array<{
+              (await queryRunner.query(
+                'SELECT "pluginId", "instanceId", "sessionScope", enabled, config FROM plugin_instances',
+              )) as Array<{
                 pluginId: string;
+                instanceId?: string;
                 sessionScope: string | null;
                 enabled: boolean | number;
+                config?: unknown;
               }>
-            ).map(row => ({ ...row, enabled: Number(row.enabled) === 1 }))
+            ).map(row => ({
+              ...row,
+              enabled: Number(row.enabled) === 1,
+              config: parsePluginInstanceConfig(row.config),
+            }))
           : [];
         // Integration Fabric + both DLQs: none carry an FK constraint to sessions (sessionId is provenance),
         // so clearing them here before the sessions DELETE keeps the replace-semantics complete.
@@ -1107,7 +1129,8 @@ export class InfraDataService {
             notices.push(
               `Plugin instance bindings could not be re-applied after the restore ` +
                 `(${error instanceof Error ? error.message : String(error)}): check each plugin's active sessions ` +
-                `and per-session config (GET /api/plugins/:id, PUT /api/plugins/:id/sessions) against its restored instances.`,
+                `and per-session config (GET /api/plugins/:id, PUT /api/plugins/:id/sessions) against its restored instances, ` +
+                `and its base config for a secret a dropped session-wide instance left behind (PUT /api/plugins/:id/config).`,
             );
           }
         }

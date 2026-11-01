@@ -88,7 +88,7 @@ test('live messages move the cursor without ending the paging', () => {
 });
 
 test('a failed send does not shift the cursor past a real row', () => {
-  // ChatComposer's tempId is `temp_${Date.now()}`; a failed one stays in page.db with
+  // ChatComposer's tempId is `temp_${Date.now()}_${n}`; a failed one stays in page.db with
   // status: 'failed' forever (nothing removes it). Counting it as a fetched row offsets every
   // later page by one and permanently strands whichever real row that offset skips.
   const pages = [page([...rows(PAGE_SIZE, 'db-'), msg('temp_1700000000000', { status: 'failed' })], PAGE_SIZE)];

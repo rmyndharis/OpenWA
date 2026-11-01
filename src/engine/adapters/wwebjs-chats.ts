@@ -169,6 +169,23 @@ export async function readChats(host: WwebjsEngineHost, context: string, chatIds
 }
 
 /**
+ * Re-read the chat through {@link readChats} when `client.getChatById(chatId)` fails one of WhatsApp Web's
+ * own invariants during a group metadata refresh. That read tries the refresh once more and serves the
+ * metadata already loaded only if it fails an invariant again. Any other rejection is rethrown for the
+ * caller's transport/timeout/domain handler.
+ */
+export async function recoverGroupChatById(
+  host: WwebjsEngineHost,
+  context: string,
+  chatId: string,
+  error: unknown,
+): Promise<Chat | undefined> {
+  if (!isPageInvariant(error)) throw error;
+  host.ensureReady();
+  return (await readChats(host, context, [chatId]))[0];
+}
+
+/**
  * The whole chat list through {@link readChats}. Shared by the chat and group lists. A dead page
  * answers 503 with the death signal, a read that outran the protocol budget answers 503 without one,
  * and anything else is rethrown.
@@ -257,10 +274,12 @@ export class WwebjsChats {
   async sendSeen(chatId: string): Promise<boolean> {
     this.host.ensureReady();
     try {
-      const chat = await this.client().getChatById(chatId);
+      const chat = await this.client()
+        .getChatById(chatId)
+        .catch(error => recoverGroupChatById(this.host, 'sendSeen', chatId, error));
       // The chat acts through its own client, which getClient's readiness check never sees again.
       this.host.ensureReady();
-      return await chat.sendSeen();
+      return await chat!.sendSeen();
     } catch (error) {
       // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
       rethrowTransportFailure(this.host, error, 'sendSeen', 'marking a chat as read');
@@ -275,9 +294,11 @@ export class WwebjsChats {
       // An unknown chat needs no special case: getChatById resolves undefined for one, and the
       // resulting TypeError lands in the catch below as the same `false` the injected helper
       // returns for a chat it cannot find. Same shape as sendSeen/archiveChat above.
-      const chat = await this.client().getChatById(chatId);
+      const chat = await this.client()
+        .getChatById(chatId)
+        .catch(error => recoverGroupChatById(this.host, 'clearChatMessages', chatId, error));
       this.host.ensureReady();
-      return await chat.clearMessages();
+      return await chat!.clearMessages();
     } catch (error) {
       // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
       rethrowTransportFailure(this.host, error, 'clearChatMessages', 'clearing a chat');
@@ -329,7 +350,9 @@ export class WwebjsChats {
   private async requireResolvableChat(chatId: string): Promise<void> {
     let chat: unknown;
     try {
-      chat = await this.client().getChatById(chatId);
+      chat = await this.client()
+        .getChatById(chatId)
+        .catch(error => recoverGroupChatById(this.host, 'requireResolvableChat', chatId, error));
     } catch (error) {
       // A dead page resolves NOTHING, so swallowing every rejection here reported it as "no such
       // chat" and named the caller's chatId as the problem. The other chat operations split that case
@@ -402,10 +425,12 @@ export class WwebjsChats {
       return false;
     }
     try {
-      const chat = await this.client().getChatById(chatId);
+      const chat = await this.client()
+        .getChatById(chatId)
+        .catch(error => recoverGroupChatById(this.host, 'markUnread', chatId, error));
       this.host.ensureReady();
       // Chat.markUnread() resolves void, so synthesize the boolean from a clean call.
-      await chat.markUnread();
+      await chat!.markUnread();
       return true;
     } catch (error) {
       // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
@@ -423,9 +448,11 @@ export class WwebjsChats {
       return false;
     }
     try {
-      const chat = await this.client().getChatById(chatId);
+      const chat = await this.client()
+        .getChatById(chatId)
+        .catch(error => recoverGroupChatById(this.host, 'deleteChat', chatId, error));
       this.host.ensureReady();
-      return await chat.delete();
+      return await chat!.delete();
     } catch (error) {
       // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
       rethrowTransportFailure(this.host, error, 'deleteChat', 'deleting a chat');
@@ -456,13 +483,15 @@ export class WwebjsChats {
     }
     try {
       const to = await this.messaging.resolveSendId(chatId);
-      const chat = await this.client().getChatById(to);
+      const chat = await this.client()
+        .getChatById(to)
+        .catch(error => recoverGroupChatById(this.host, 'sendChatState', to, error));
       if (state === 'typing') {
-        await chat.sendStateTyping();
+        await chat!.sendStateTyping();
       } else if (state === 'recording') {
-        await chat.sendStateRecording();
+        await chat!.sendStateRecording();
       } else {
-        await chat.clearState();
+        await chat!.clearState();
       }
     } catch (error) {
       // Presence is best-effort and already swallowed here — it never breaks the surrounding send —

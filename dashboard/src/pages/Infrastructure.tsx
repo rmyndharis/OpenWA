@@ -96,6 +96,30 @@ export function Infrastructure() {
   }, [savedConfig]);
   const restartFlow = useRestartFlow();
   const dataBackup = useDataBackup();
+  const exportButtonRef = useRef<HTMLButtonElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const restartBackupButtonRef = useRef<HTMLButtonElement | null>(null);
+  const backupFocusRef = useRef<'export' | 'import' | 'restart-export' | null>(null);
+  const wasMigratingRef = useRef(false);
+
+  useEffect(() => {
+    const wasMigrating = wasMigratingRef.current;
+    wasMigratingRef.current = dataBackup.migrating;
+    if (!wasMigrating || dataBackup.migrating) return;
+    const target = backupFocusRef.current;
+    backupFocusRef.current = null;
+    if (document.activeElement !== null && document.activeElement !== document.body) return;
+    const el =
+      target === 'export'
+        ? exportButtonRef.current
+        : target === 'import'
+          ? importInputRef.current
+          : target === 'restart-export'
+            ? restartBackupButtonRef.current
+            : null;
+    // The page may have been scrolled elsewhere while the backup ran; restoring focus must not pull it back.
+    el?.focus({ preventScroll: true });
+  }, [dataBackup.migrating]);
 
   // Reads dbConfig/storageConfig (from configForm) plus infraStatus/savedConfig to decide whether the
   // just-saved config crosses to a different backend, then hands the restart flow everything it needs
@@ -244,7 +268,15 @@ export function Infrastructure() {
         <small>{t('infrastructure.migration.backupHint')}</small>
       </div>
       <div className="data-migration-actions">
-        <button className="btn-secondary btn-sm" onClick={dataBackup.exportBackup} disabled={dataBackup.migrating}>
+        <button
+          ref={exportButtonRef}
+          className="btn-secondary btn-sm"
+          onClick={() => {
+            backupFocusRef.current = 'export';
+            void dataBackup.exportBackup();
+          }}
+          disabled={dataBackup.migrating}
+        >
           {dataBackup.migrating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
           {t('infrastructure.migration.export')}
         </button>
@@ -252,13 +284,17 @@ export function Infrastructure() {
           <Upload size={14} />
           {t('infrastructure.migration.import')}
           <input
+            ref={importInputRef}
             type="file"
             accept="application/json,.json"
             className="hidden-file-input"
             disabled={dataBackup.migrating}
             onChange={e => {
               const file = e.target.files?.[0];
-              if (file) void dataBackup.importBackup(file);
+              if (file) {
+                backupFocusRef.current = 'import';
+                void dataBackup.importBackup(file);
+              }
               e.target.value = '';
             }}
           />
@@ -1073,8 +1109,12 @@ export function Infrastructure() {
                     {restartFlow.storageSwitch && <p>{t('infrastructure.migration.storageWarning')}</p>}
                     {restartFlow.dbSwitch && (
                       <button
+                        ref={restartBackupButtonRef}
                         className="btn-secondary btn-sm"
-                        onClick={dataBackup.exportBackup}
+                        onClick={() => {
+                          backupFocusRef.current = 'restart-export';
+                          void dataBackup.exportBackup();
+                        }}
                         disabled={dataBackup.migrating}
                       >
                         {dataBackup.migrating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}

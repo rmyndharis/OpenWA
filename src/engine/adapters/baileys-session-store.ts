@@ -720,8 +720,24 @@ export class BaileysSessionStore {
     accept?: (key: WAMessageKey) => boolean,
   ): void {
     if (!messageId) return;
-    for (const key of new Set([chatId, this.toEngineJid(chatId)])) {
+    const targets = new Set([chatId, this.toEngineJid(chatId)]);
+    if (accept && parseWaId(chatId).kind === 'user') {
+      // Only a preview whose own message sits in a lid chat: `accept` judges the chat of exactly those, and a
+      // received broadcast-list message previews under its sender's lid with the list as its remoteJid.
+      for (const [key, existing] of this.lastMessages.entries()) {
+        if (
+          existing.key.id === messageId &&
+          parseWaId(key).kind === 'lid' &&
+          parseWaId(existing.key.remoteJid ?? '').kind === 'lid'
+        ) {
+          targets.add(key);
+        }
+      }
+    }
+    for (const key of targets) {
       const existing = this.lastMessages.get(key);
+      // A delete is final: an edit that reaches the preview afterwards must not bring the deleted text back.
+      if (existing?.type === 'revoked' && type !== 'revoked') continue;
       if (existing?.key.id === messageId && (!accept || accept(existing.key)))
         this.lastMessages.set(key, { ...existing, text, type: type ?? existing.type });
     }

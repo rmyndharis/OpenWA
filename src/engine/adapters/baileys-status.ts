@@ -38,8 +38,14 @@ export class BaileysStatus {
   constructor(private readonly host: BaileysStatusHost) {}
 
   /** Post-ensureReady socket handle. */
-  private sock(): WASocket {
-    return this.host.getSocket();
+  private sock(expected?: WASocket): WASocket {
+    this.host.ensureReady();
+    const socket = this.host.getSocket();
+    const current = this.host.getSocketOrNull?.() ?? socket;
+    if (expected && (current !== expected || socket !== expected) && socket.sendMessage !== expected.sendMessage) {
+      throw new EngineNotReadyError();
+    }
+    return socket;
   }
 
   /**
@@ -50,8 +56,9 @@ export class BaileysStatus {
   private async sendStatus(
     content: AnyMessageContent,
     options: Parameters<WASocket['sendMessage']>[2],
+    expected?: WASocket,
   ): Promise<WAMessage | undefined> {
-    const sock = this.sock();
+    const sock = this.sock(expected);
     const deadline = this.host.sessionProxyUrl() ? { mediaUploadTimeoutMs: BAILEYS_QUERY_BUDGET_MS } : {};
     try {
       return await sock.sendMessage('status@broadcast', content, { ...options, ...deadline });
@@ -84,7 +91,7 @@ export class BaileysStatus {
     media: MediaInput,
     options: StatusPostOptions,
   ): Promise<StatusResult> {
-    this.host.ensureReady();
+    const socket = this.sock();
     // The kind's default labels a URL whose host serves a generic type, rather than octet-stream.
     const fallbackType = kind === 'image' ? 'image/jpeg' : kind === 'video' ? 'video/mp4' : 'audio/ogg; codecs=opus';
     const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl(), fallbackType);
@@ -98,7 +105,7 @@ export class BaileysStatus {
         : kind === 'video'
           ? { video: data, caption: options.caption, mimetype }
           : { audio: data, mimetype, ptt: true, ...(await describeAudio(data, true)) };
-    return this.postStatus(content, options);
+    return this.postStatus(content, options, socket);
   }
 
   /**
@@ -140,7 +147,11 @@ export class BaileysStatus {
    * The outbound status echo is NOT persisted: status isn't a chat message (its id is recorded below
    * so handleMessagesUpsert skips the `type:'append'` echo as ours).
    */
-  private async postStatus(content: AnyMessageContent, options: StatusPostOptions): Promise<StatusResult> {
+  private async postStatus(
+    content: AnyMessageContent,
+    options: StatusPostOptions,
+    expected?: WASocket,
+  ): Promise<StatusResult> {
     this.host.ensureReady();
     // Baileys posts to exactly the statusJidList allow-list, so unlike whatsapp-web.js (which
     // broadcasts) an absent/empty recipients list would publish to nobody — reject it as a client
@@ -149,11 +160,15 @@ export class BaileysStatus {
       throw new BadRequestException('recipients is required to post a status on the Baileys engine');
     }
     const statusJidList = options.recipients.map(r => this.host.toEngineJid(r));
-    const sent = await this.sendStatus(content, {
-      statusJidList,
-      backgroundColor: options.backgroundColor,
-      font: options.font,
-    });
+    const sent = await this.sendStatus(
+      content,
+      {
+        statusJidList,
+        backgroundColor: options.backgroundColor,
+        font: options.font,
+      },
+      expected,
+    );
     this.host.rememberOwnSend(sent?.key?.id);
     const now = Date.now();
     for (const [id, audience] of this.audiences) {

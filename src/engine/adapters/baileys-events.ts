@@ -373,7 +373,7 @@ export class BaileysEvents {
    */
   private readonly editedWhileInFlight = new Map<
     string,
-    { envelope: WAMessageKey; body: string; afterOtherText: boolean }
+    { envelope: WAMessageKey; body: string; afterOtherText: boolean; resolve?: (jid: string) => string | null }
   >();
 
   /**
@@ -466,7 +466,7 @@ export class BaileysEvents {
    */
   pendingEditOf(messageId: string, target: WAMessageKey): string | undefined {
     const edit = this.inboundInFlight.has(messageId) ? this.editedWhileInFlight.get(messageId) : undefined;
-    return edit && this.mayChange(target, edit.envelope, false) ? edit.body : undefined;
+    return edit && this.mayChange(target, edit.envelope, false, edit.resolve) ? edit.body : undefined;
   }
 
   /** Record an accepted delete for everyone of this message (see deletedForEveryone). */
@@ -709,14 +709,54 @@ export class BaileysEvents {
     body: string,
     type: MessageType | undefined,
     generation: number,
-    accept: (key: WAMessageKey) => boolean,
+    envelope: WAMessageKey,
+    isDelete: boolean,
+    resolveStored: (jid: string) => string | null,
+    storedChatId?: string,
   ): Promise<void> {
     if (generation !== this.storeGeneration) return;
-    this.host.recordMessageEdit(chatId, messageId, body, type, accept);
+    const pendingLids = new Set<string>();
+    const acceptFor = (
+      targetChatId: string,
+      resolve: (jid: string) => string | null,
+    ): ((key: WAMessageKey) => boolean) => {
+      const baseAccept = this.previewAuthor(envelope, isDelete, resolve);
+      const targetNeutral = this.host.toNeutralJid(targetChatId);
+      const targetKind = parseWaId(targetChatId).kind;
+      return key => {
+        if (targetKind === 'user' && key.remoteJid && parseWaId(key.remoteJid).kind === 'lid') {
+          const phone = resolve(key.remoteJid);
+          if (!phone) {
+            pendingLids.add(key.remoteJid);
+            return false;
+          }
+          if (`${phone}@c.us` !== targetNeutral) return false;
+        }
+        return baseAccept(key);
+      };
+    };
+    this.host.recordMessageEdit(chatId, messageId, body, type, acceptFor(chatId, resolveStored));
+    if (storedChatId && storedChatId !== chatId) {
+      this.host.recordMessageEdit(storedChatId, messageId, body, type, acceptFor(storedChatId, resolveStored));
+    }
     if (parseWaId(chatId).kind === 'lid') {
       const phone = await this.host.findPersistedLidPhone?.(chatId).catch(() => null);
       if (generation !== this.storeGeneration) return;
-      if (phone) this.host.recordMessageEdit(`${phone}@s.whatsapp.net`, messageId, body, type, accept);
+      if (phone) {
+        const phoneChatId = `${phone}@s.whatsapp.net`;
+        this.host.recordMessageEdit(phoneChatId, messageId, body, type, acceptFor(phoneChatId, resolveStored));
+      }
+    } else if (pendingLids.size > 0) {
+      const targetPhone = userPart(this.host.toNeutralJid(chatId));
+      for (const lidChatId of pendingLids) {
+        const phone = await this.host.findPersistedLidPhone?.(lidChatId).catch(() => null);
+        if (generation !== this.storeGeneration) return;
+        if (phone && phone === targetPhone) {
+          const resolveWithLid = (jid: string): string | null =>
+            userPart(jid) === userPart(lidChatId) ? phone : resolveStored(jid);
+          this.host.recordMessageEdit(lidChatId, messageId, body, type, acceptFor(lidChatId, resolveWithLid));
+        }
+      }
     }
   }
 
@@ -865,7 +905,7 @@ export class BaileysEvents {
       // leaves it, and a delete wins over an edit.
       const deleted = storedId !== null && this.deletedForEveryone.has(storedId);
       const edit = storedId !== null && !deleted ? this.editedWhileInFlight.get(storedId) : undefined;
-      const editedBody = edit && this.mayChange(msg.key, edit.envelope, false) ? edit.body : undefined;
+      const editedBody = edit && this.mayChange(msg.key, edit.envelope, false, edit.resolve) ? edit.body : undefined;
       let toStore = deleted ? { ...msg, message: null } : msg;
       if (editedBody !== undefined) {
         // A copy, so the edit reaches neither Baileys' object nor anyone else holding it.
@@ -1050,18 +1090,27 @@ export class BaileysEvents {
         }
         // The stored copy keeps its key, so a late re-delivery is still recognised and a delete
         // for me can still address it, but loses its content, so nothing can quote or resend it.
-        const resolveStored = await this.reportedPhones(
-          (await this.readTarget(revoked.id, 'reading a delete target'))?.key,
-          msg.key,
-        );
+        const storedKey = (await this.readTarget(revoked.id, 'reading a delete target'))?.key ?? target?.key;
+        const resolveStored = await this.reportedPhones(storedKey, target?.key, msg.key);
         if (opts.generation !== this.storeGeneration) return;
+        const currentTarget = this.inboundInFlight.get(revoked.id) ?? target;
+        if (currentTarget && this.mayChange(currentTarget.key, msg.key, true, resolveStored)) {
+          this.markDeletedForEveryone(revoked.id);
+        }
+        const storedChatJid =
+          storedKey?.remoteJid && this.mayChange(storedKey, msg.key, true, resolveStored)
+            ? baileysChatJid(storedKey.remoteJid, storedKey.participant, storedKey.fromMe === true)
+            : undefined;
         await this.recordPreviewChange(
           chatJid,
           revoked.id,
           '',
           'revoked',
           opts.generation,
-          this.previewAuthor(msg.key, true, resolveStored),
+          msg.key,
+          true,
+          resolveStored,
+          storedChatJid,
         );
         if (opts.generation !== this.storeGeneration) return;
         this.changeStoredMessage(pm.key?.id, stored =>
@@ -1115,29 +1164,46 @@ export class BaileysEvents {
           editedContentType === 'documentWithCaptionMessage' ||
           editedContentType === 'stickerMessage';
         const edited: EditedMessage = buildEditedMessage(base, hasMedia);
-        const target = this.inboundInFlight.get(edited.messageId);
-        if (target && this.mayChange(target.key, msg.key, false)) {
+        const recordInFlightEdit = (resolve?: (jid: string) => string | null): void => {
           const earlier = this.editedWhileInFlight.get(edited.messageId);
           const afterOtherText = !!earlier && (earlier.afterOtherText || earlier.body !== edited.body);
           this.editedWhileInFlight.delete(edited.messageId); // re-inserted as the newest
-          this.editedWhileInFlight.set(edited.messageId, { envelope: msg.key, body: edited.body, afterOtherText });
+          this.editedWhileInFlight.set(edited.messageId, {
+            envelope: msg.key,
+            body: edited.body,
+            afterOtherText,
+            resolve,
+          });
           if (this.editedWhileInFlight.size > BaileysEvents.DELETED_FOR_EVERYONE_LIMIT) {
             const [oldest] = this.editedWhileInFlight.keys();
             this.editedWhileInFlight.delete(oldest);
           }
+        };
+        const target = this.inboundInFlight.get(edited.messageId);
+        if (target && this.mayChange(target.key, msg.key, false)) {
+          recordInFlightEdit();
         }
-        const resolveStored = await this.reportedPhones(
-          (await this.readTarget(edited.messageId, 'reading an edit target'))?.key,
-          msg.key,
-        );
+        const storedKey = (await this.readTarget(edited.messageId, 'reading an edit target'))?.key ?? target?.key;
+        const resolveStored = await this.reportedPhones(storedKey, target?.key, msg.key);
         if (opts.generation !== this.storeGeneration) return;
+        const currentTarget = this.inboundInFlight.get(edited.messageId) ?? target;
+        if (currentTarget && this.mayChange(currentTarget.key, msg.key, false, resolveStored)) {
+          recordInFlightEdit(resolveStored);
+        }
+        const storedChatJid =
+          storedKey?.remoteJid && this.mayChange(storedKey, msg.key, false, resolveStored)
+            ? baileysChatJid(storedKey.remoteJid, storedKey.participant, storedKey.fromMe === true)
+            : undefined;
         await this.recordPreviewChange(
           chatJid,
           edited.messageId,
           edited.body,
           undefined,
           opts.generation,
-          this.previewAuthor(msg.key, false, resolveStored),
+          msg.key,
+          false,
+          resolveStored,
+          storedChatJid,
         );
         if (opts.generation !== this.storeGeneration) return;
         this.changeStoredMessage(edited.messageId, stored => {

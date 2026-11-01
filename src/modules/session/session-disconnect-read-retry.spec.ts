@@ -587,15 +587,15 @@ describe('a disconnect whose session read fails while a running reconnect tears 
     });
   });
 
-  it('lets the attempt that links the next engine record the unlink when two attempts share the teardown', async () => {
+  it('records the unlink once when an earlier drop read answered during the same teardown', async () => {
     const f = fixture();
     const teardown = await tearDownSlowly(f);
-    // A drop whose read answers while the old engine is still the live one arms a second attempt, which fires
-    // and waits on the same teardown.
+    // A drop whose read answers while the old engine is being torn down does not arm a second attempt.
     f.callbacksOf(0).onDisconnected?.('NAVIGATION');
     await f.settled();
+    expect(f.reconnectState()?.timer).toBeNull();
     await jest.advanceTimersByTimeAsync(3_000);
-    await until(() => f.engines[0].destroy.mock.calls.length > 1, 'the second attempt to tear the engine down');
+    expect(f.engines[0].destroy).toHaveBeenCalledTimes(1);
     await dropWithFailedRead(f, 0, 'LOGOUT');
     await finishTeardown(f, teardown);
 
@@ -622,8 +622,8 @@ describe('a disconnect whose session read fails while a running reconnect tears 
   });
 });
 
-// The same teardown, with the old engine's own report reading the row at once. The reconnect timer is spent while its
-// attempt runs, so the report arms another attempt beside it; the running one still brings up the next engine.
+// The same teardown, with the old engine's own report reading the row at once. While executeReconnect is tearing
+// the old engine down, the report updates the cleared phone binding without arming a second attempt.
 describe('a disconnect whose session read answers while a running reconnect tears its engine down', () => {
   afterEach(() => jest.useRealTimers());
 
@@ -637,7 +637,6 @@ describe('a disconnect whose session read answers while a running reconnect tear
       expect(f.unlinkAudits()).toHaveLength(1);
       expect(f.stored.phone).toBeNull();
 
-      // The teardown ends before the other attempt's timer fires.
       await finishTeardown(f, teardown);
       await linkOther(f);
       expect({ status: f.stored.status, phone: f.stored.phone, refusedUnder: refusedUnder(f) }).toEqual({
@@ -649,13 +648,14 @@ describe('a disconnect whose session read answers while a running reconnect tear
     },
   );
 
-  it('links whichever number scans the QR when the other attempt fires during the teardown', async () => {
+  it('does not arm a second attempt during a slow teardown and still links whichever number scans the QR', async () => {
     const f = fixture();
     const teardown = await tearDownSlowly(f);
     f.callbacksOf(0).onDisconnected?.('LOGOUT');
     await f.settled();
+    expect(f.reconnectState()?.timer).toBeNull();
     await jest.advanceTimersByTimeAsync(5_000);
-    await until(() => f.engines[0].destroy.mock.calls.length > 1, 'the other attempt to tear the engine down');
+    expect(f.engines[0].destroy).toHaveBeenCalledTimes(1);
     await finishTeardown(f, teardown);
     await linkOther(f);
     expect(f.stored.status).toBe(SessionStatus.READY);

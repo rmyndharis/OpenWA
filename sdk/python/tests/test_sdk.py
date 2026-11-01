@@ -263,6 +263,49 @@ class TestClientCore:
         make_client(backend).request("GET", "/api/sessions?limit=5", query={"name": "x"})
         assert backend.last_call.url == "http://localhost:2785/api/sessions?limit=5&name=x"
 
+    def test_raw_request_refuses_dot_path_segments_before_sending(self) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(str(request.url))
+            return httpx.Response(200, json={"ok": True})
+
+        client = OpenWAClient(
+            base_url="http://localhost:2785",
+            api_key="owa_test_key",
+            transport=httpx.MockTransport(handler),
+        )
+        for bad_path in (
+            "/api/sessions/s1/..",
+            "/api/sessions/.",
+            "/api/sessions/s1/../api-keys",
+            "/api/sessions/%2e%2e",
+            "/api/sessions/%2E",
+        ):
+            with pytest.raises(ValueError, match="dot path segment"):
+                client.request("GET", bad_path)
+            with pytest.raises(ValueError, match="dot path segment"):
+                build_url("http://localhost:2785", bad_path)
+
+        assert calls == []
+        client.request("GET", "/api/sessions/s1/labels/a.b?x=/..")
+        assert calls == ["http://localhost:2785/api/sessions/s1/labels/a.b?x=/.."]
+
+    def test_raw_request_with_leading_double_slash_does_not_strip_first_segment_as_host(self) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(str(request.url))
+            return httpx.Response(200, json={"ok": True})
+
+        client = OpenWAClient(
+            base_url="http://localhost:2785",
+            api_key="owa_test_key",
+            transport=httpx.MockTransport(handler),
+        )
+        client.request("GET", "//api/sessions", query={"limit": 5})
+        assert calls == ["http://localhost:2785//api/sessions?limit=5"]
+
     def test_204_is_none(self):
         # `delete` is declared `-> None`, so asserting on its result is a type error and proves
         # nothing the signature does not already guarantee. What is worth asserting is that a 204

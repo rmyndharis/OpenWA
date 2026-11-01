@@ -42,6 +42,25 @@ function installFetchStub(): void {
     if (method === 'GET' && path === '/api/infra/engines/current') {
       return Promise.resolve(jsonResponse({ engineType: 'baileys' }));
     }
+    if (method === 'PUT' && path === '/api/infra/config') {
+      return Promise.resolve(
+        jsonResponse({ message: 'Configuration saved', saved: true, envPath: '.env.generated', profiles: [] }),
+      );
+    }
+    if (method === 'GET' && path === '/api/infra/export-data') {
+      return new Promise(resolve =>
+        setImmediate(() =>
+          resolve(
+            jsonResponse({ exportedAt: '2026-10-09T10:00:00.000Z', dataDbType: 'sqlite', tables: {}, counts: {} }),
+          ),
+        ),
+      );
+    }
+    if (method === 'POST' && path === '/api/infra/import-data') {
+      return new Promise(resolve =>
+        setImmediate(() => resolve(jsonResponse({ imported: true, counts: {}, warnings: [] }, 201))),
+      );
+    }
     return Promise.resolve(jsonResponse({ message: `unstubbed ${method} ${path}` }, 404));
   }) as typeof fetch;
 }
@@ -51,10 +70,33 @@ let Infrastructure: (typeof import('./Infrastructure.tsx'))['Infrastructure'];
 let RoleProvider: (typeof import('../components/RoleProvider.tsx'))['RoleProvider'];
 let ToastProvider: (typeof import('../components/Toast.tsx'))['ToastProvider'];
 let queryClient: QueryClient | undefined;
+let confirmOriginal: typeof window.confirm;
+let anchorClickOriginal: typeof HTMLAnchorElement.prototype.click;
 
 before(async () => {
   const { installJsdomGlobals } = await import('../test-helpers/jsdom.ts');
   await installJsdomGlobals();
+  // HTML focus fixup rule: disabling the focused control drops focus to the document body (jsdom does not
+  // run focus fixup when disabled is set, and its blur() is a no-op once the attribute is already present).
+  const setAttr = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function (name: string, value: string) {
+    if (name.toLowerCase() === 'disabled' && document.activeElement === this) (this as HTMLElement).blur();
+    setAttr.call(this, name, value);
+  };
+  for (const Ctor of [HTMLInputElement, HTMLButtonElement]) {
+    const desc = Object.getOwnPropertyDescriptor(Ctor.prototype, 'disabled')!;
+    Object.defineProperty(Ctor.prototype, 'disabled', {
+      ...desc,
+      set(this: HTMLElement, value: boolean) {
+        if (value && document.activeElement === this) this.blur();
+        desc.set!.call(this, value);
+      },
+    });
+  }
+  confirmOriginal = window.confirm;
+  anchorClickOriginal = HTMLAnchorElement.prototype.click;
+  URL.createObjectURL = () => 'blob:backup';
+  URL.revokeObjectURL = () => {};
   installFetchStub();
   const { i18nReady } = await import('../i18n/index.ts');
   await i18nReady;
@@ -69,6 +111,9 @@ afterEach(async () => {
   rtl.cleanup();
   queryClient?.clear();
   queryClient = undefined;
+  window.confirm = confirmOriginal;
+  HTMLAnchorElement.prototype.click = anchorClickOriginal;
+  window.sessionStorage.removeItem('openwa_api_key');
 });
 
 // Every top-level rule of the page's stylesheet that sets display: none.
@@ -111,4 +156,160 @@ test('the backup file chooser of Import data can be opened from the keyboard', a
   // Named by the button's text, so a screen reader says what Space or Enter opens.
   chooser.focus();
   assert.equal(focusedLabel(), 'Import data');
+});
+
+test('keyboard focus stays on Import data after a backup file is imported', async () => {
+  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  window.confirm = () => true;
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  rtl.render(
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(RoleProvider, null, createElement(ToastProvider, null, createElement(Infrastructure))),
+    ),
+  );
+  await rtl.screen.findByText('Import data');
+  const chooser = rtl.screen.getByLabelText('Import data') as HTMLInputElement;
+  chooser.focus();
+  assert.equal(focusedLabel(), 'Import data');
+
+  const file = new File([JSON.stringify({ tables: { sessions: [{ id: 's1' }] } })], 'backup.json', {
+    type: 'application/json',
+  });
+  rtl.fireEvent.change(chooser, { target: { files: [file] } });
+  await rtl.waitFor(() => assert.equal(chooser.disabled, true));
+  await rtl.waitFor(() => assert.equal(chooser.disabled, false));
+  assert.equal(focusedLabel(), 'Import data');
+});
+
+test('keyboard focus returns to Import data when the import confirmation is declined', async () => {
+  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  window.confirm = () => false;
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  rtl.render(
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(RoleProvider, null, createElement(ToastProvider, null, createElement(Infrastructure))),
+    ),
+  );
+  await rtl.screen.findByText('Import data');
+  const chooser = rtl.screen.getByLabelText('Import data') as HTMLInputElement;
+  chooser.focus();
+  assert.equal(focusedLabel(), 'Import data');
+
+  const file = new File([JSON.stringify({ tables: { sessions: [{ id: 's1' }] } })], 'backup.json', {
+    type: 'application/json',
+  });
+  rtl.fireEvent.change(chooser, { target: { files: [file] } });
+  await rtl.waitFor(() => assert.equal(chooser.disabled, false));
+  assert.equal(focusedLabel(), 'Import data');
+});
+
+test('keyboard focus stays on Export data after a backup is exported', async () => {
+  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  HTMLAnchorElement.prototype.click = () => {};
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  rtl.render(
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(RoleProvider, null, createElement(ToastProvider, null, createElement(Infrastructure))),
+    ),
+  );
+  const exportBtn = (await rtl.screen.findByRole('button', { name: 'Export data' })) as HTMLButtonElement;
+  exportBtn.focus();
+  assert.equal(document.activeElement?.textContent?.trim(), 'Export data');
+
+  rtl.fireEvent.click(exportBtn);
+  await rtl.waitFor(() => assert.equal(exportBtn.disabled, true));
+  await rtl.waitFor(() => assert.equal(exportBtn.disabled, false));
+  assert.equal(
+    document.activeElement === document.body ? 'body' : document.activeElement?.textContent?.trim(),
+    'Export data',
+  );
+});
+
+test('restoring focus after a backup export does not scroll the page back to the button', async () => {
+  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  HTMLAnchorElement.prototype.click = () => {};
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  rtl.render(
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(RoleProvider, null, createElement(ToastProvider, null, createElement(Infrastructure))),
+    ),
+  );
+  const exportBtn = (await rtl.screen.findByRole('button', { name: 'Export data' })) as HTMLButtonElement;
+  exportBtn.focus();
+  const focusOriginal = HTMLElement.prototype.focus;
+  const focusOptions: Array<FocusOptions | undefined> = [];
+  HTMLElement.prototype.focus = function (this: HTMLElement, options?: FocusOptions) {
+    focusOptions.push(options);
+    focusOriginal.call(this, options);
+  };
+  try {
+    rtl.fireEvent.click(exportBtn);
+    await rtl.waitFor(() => assert.equal(exportBtn.disabled, true));
+    await rtl.waitFor(() => assert.equal(exportBtn.disabled, false));
+    await rtl.waitFor(() => assert.equal(document.activeElement?.textContent?.trim(), 'Export data'));
+  } finally {
+    HTMLElement.prototype.focus = focusOriginal;
+  }
+  // React's own commit-time focus restore comes first, with no options; the page's effect runs after the commit.
+  assert.deepEqual(focusOptions.at(-1), { preventScroll: true });
+});
+
+test('keyboard focus stays on Download backup first in the restart modal after a backup is exported', async () => {
+  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  HTMLAnchorElement.prototype.click = () => {};
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  const { container } = rtl.render(
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(RoleProvider, null, createElement(ToastProvider, null, createElement(Infrastructure))),
+    ),
+  );
+  await rtl.screen.findByRole('button', { name: 'Export data' });
+  const pgRadio = container.querySelectorAll('input[name="dbType"]')[1] as HTMLInputElement;
+  rtl.fireEvent.click(pgRadio);
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const restartBackupBtn = (await rtl.screen.findByRole('button', {
+    name: 'Download backup first',
+  })) as HTMLButtonElement;
+  restartBackupBtn.focus();
+  assert.equal(document.activeElement?.textContent?.trim(), 'Download backup first');
+
+  rtl.fireEvent.click(restartBackupBtn);
+  await rtl.waitFor(() => assert.equal(restartBackupBtn.disabled, true));
+  await rtl.waitFor(() => assert.equal(restartBackupBtn.disabled, false));
+  assert.equal(
+    document.activeElement === document.body ? 'body' : document.activeElement?.textContent?.trim(),
+    'Download backup first',
+  );
+});
+
+test('moving keyboard focus to another control while a backup export runs does not steal focus back', async () => {
+  window.sessionStorage.setItem('openwa_api_key', 'test-admin-key');
+  HTMLAnchorElement.prototype.click = () => {};
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  rtl.render(
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(RoleProvider, null, createElement(ToastProvider, null, createElement(Infrastructure))),
+    ),
+  );
+  const exportBtn = (await rtl.screen.findByRole('button', { name: 'Export data' })) as HTMLButtonElement;
+  const saveBtn = rtl.screen.getByRole('button', { name: 'Save Configuration' }) as HTMLButtonElement;
+  exportBtn.focus();
+  rtl.fireEvent.click(exportBtn);
+  await rtl.waitFor(() => assert.equal(exportBtn.disabled, true));
+  saveBtn.focus();
+  await rtl.waitFor(() => assert.equal(exportBtn.disabled, false));
+  assert.equal(document.activeElement?.textContent?.trim(), 'Save Configuration');
 });

@@ -230,7 +230,7 @@ export class GroupService {
   /** Read the group's picture URL, or null when it has none. Groups reuse the profile-picture read. */
   getGroupPicture(sessionId: string, groupId: string): Promise<string | null> {
     this.assertGroupId(groupId);
-    return this.getEngine(sessionId).getProfilePicture(groupId);
+    return this.getEngine(sessionId).getProfilePicture(toNeutralJid(groupId));
   }
 
   setGroupPicture(sessionId: string, groupId: string, dto: SetGroupPictureDto): Promise<void> {
@@ -241,12 +241,12 @@ export class GroupService {
       requireMimetypeForBase64: true,
       checkUrl: true,
     });
-    return this.getEngine(sessionId).setGroupPicture(groupId, media);
+    return this.getEngine(sessionId).setGroupPicture(toNeutralJid(groupId), media);
   }
 
   deleteGroupPicture(sessionId: string, groupId: string): Promise<void> {
     this.assertGroupId(groupId);
-    return this.getEngine(sessionId).deleteGroupPicture(groupId);
+    return this.getEngine(sessionId).deleteGroupPicture(toNeutralJid(groupId));
   }
 
   /** Read the group's announce/locked/ephemeral/member-add settings; 404s (via getGroupInfo) when unknown. */

@@ -149,7 +149,8 @@ $delivery = json_decode($raw, true);
   a redirect target). Path segments are percent-encoded; a base-URL path prefix (e.g. behind a
   reverse proxy) is preserved.
 - Escape hatch for endpoints the SDK does not wrap:
-  `$client->request($method, $path, $query, $body)`.
+  `$client->request($method, $path, $query, $body)`. A path with a `.` or `..` segment, or one that does not
+  begin with `/`, throws `InvalidArgumentException` before anything is sent.
 
 ## Releasing
 

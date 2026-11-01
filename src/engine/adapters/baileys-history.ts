@@ -29,12 +29,19 @@ export interface BaileysHistoryHost {
   readonly logger: ReturnType<typeof createLogger>;
   toNeutralJid(jid: string): string;
   findPersistedLidPhone?(jid: string): Promise<string | null>;
+  chatTwins?(jid: string): string[];
   normalizedSelfJid(): string;
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
   loadLib(): Promise<typeof BaileysLib>;
   /** Seed the chat's last-message preview + sort time from a history/live message. */
   recordMessage(msg: WAMessage, type?: MessageType, order?: number): void;
-  recordMessageEdit(chatId: string, messageId: string, text: string, type?: MessageType): void;
+  recordMessageEdit(
+    chatId: string,
+    messageId: string,
+    text: string,
+    type?: MessageType,
+    accept?: (key: WAMessageKey) => boolean,
+  ): void;
   applyHistoryRevoke(target: WAMessageKey, envelope: WAMessageKey): Promise<WAMessageKey | undefined>;
   upsertContacts(records: Partial<BaileysContact>[]): void;
   upsertChats(records: Partial<Chat>[]): void;
@@ -83,7 +90,19 @@ export function toUnixSeconds(ts: number | string | { toNumber(): number } | nul
 }
 
 export class BaileysHistory {
+  private static readonly TRACKED_LID_MESSAGES_LIMIT = 2_000;
+  private readonly lidByMessageId = new Map<string, { chatId: string; fromMe: boolean }>();
+
   constructor(private readonly host: BaileysHistoryHost) {}
+
+  private rememberLidMessage(id: string, chatId: string, fromMe: boolean): void {
+    this.lidByMessageId.delete(id);
+    this.lidByMessageId.set(id, { chatId, fromMe });
+    if (this.lidByMessageId.size > BaileysHistory.TRACKED_LID_MESSAGES_LIMIT) {
+      const [oldest] = this.lidByMessageId.keys();
+      if (oldest !== undefined) this.lidByMessageId.delete(oldest);
+    }
+  }
 
   /**
    * Whether the address-book snapshot has been pulled for this engine instance.
@@ -136,6 +155,7 @@ export class BaileysHistory {
       }
     }
     // Targets can precede or follow their revokes, including across separate history chunks.
+    const crossFormRevokes: { confirmedKey: string; extra: IncomingMessage }[] = [];
     for (const { message, target } of revokes) {
       const original = targets.get(target.id!);
       const key = await this.host.applyHistoryRevoke(
@@ -144,8 +164,15 @@ export class BaileysHistory {
       );
       if (!current()) return;
       if (!key?.remoteJid) continue;
-      const cleared = this.revokedMessage(key, toUnixSeconds(original?.messageTimestamp ?? message.messageTimestamp));
+      const timestamp = toUnixSeconds(original?.messageTimestamp ?? message.messageTimestamp);
+      const cleared = this.revokedMessage(key, timestamp);
       mapped.push(cleared);
+      const confirmedKey = JSON.stringify([cleared.id, cleared.chatId, cleared.fromMe]);
+      for (const remoteJid of [key.remoteJid, message.key.remoteJid]) {
+        if (!remoteJid) continue;
+        const extra = this.revokedMessage({ ...key, remoteJid }, timestamp);
+        if (extra.chatId !== cleared.chatId) crossFormRevokes.push({ confirmedKey, extra });
+      }
     }
     if (nameUpdates.length) {
       this.host.upsertContacts(nameUpdates);
@@ -153,21 +180,58 @@ export class BaileysHistory {
     if (mapped.length) {
       const storedRevokes = await this.host.getOnHistoryMessages()?.(mapped);
       if (!current()) return;
-      const revoked = (storedRevokes ?? mapped).filter(m => m.type === 'revoked');
-      const revokedKeys = new Set(revoked.map(m => JSON.stringify([m.id, m.chatId, m.fromMe])));
+      const baseRevoked = (storedRevokes ?? mapped).filter(m => m.type === 'revoked');
+      const confirmedKeys = new Set(baseRevoked.map(m => JSON.stringify([m.id, m.chatId, m.fromMe])));
+      const revoked: IncomingMessage[] = [];
+      const revokedKeys = new Set<string>();
+      for (const m of [
+        ...baseRevoked,
+        ...crossFormRevokes.filter(r => confirmedKeys.has(r.confirmedKey)).map(r => r.extra),
+      ]) {
+        const revokeKey = JSON.stringify([m.id, m.chatId, m.fromMe]);
+        if (revokedKeys.has(revokeKey)) continue;
+        revokedKeys.add(revokeKey);
+        revoked.push(m);
+      }
       for (const incoming of mapped) {
         if (incoming.type === 'revoked') continue;
         const original = targets.get(incoming.id)!;
         const deleted = revokedKeys.has(JSON.stringify([incoming.id, incoming.chatId, incoming.fromMe]));
+        if (parseWaId(incoming.chatId).kind === 'lid') {
+          this.rememberLidMessage(incoming.id, incoming.chatId, incoming.fromMe);
+        }
         // History has no observed order: equal-time messages keep the first one met, and give way to a live one.
         this.host.recordMessage(original, deleted ? 'revoked' : incoming.type, 0);
       }
       for (const m of revoked) {
-        this.host.recordMessageEdit(m.chatId, m.id, '', 'revoked');
-        if (parseWaId(m.chatId).kind === 'lid') {
+        const kind = parseWaId(m.chatId).kind;
+        if (kind === 'lid') {
+          this.host.recordMessageEdit(m.chatId, m.id, '', 'revoked');
           const phone = await this.host.findPersistedLidPhone?.(m.chatId).catch(() => null);
           if (!current()) return;
           if (phone) this.host.recordMessageEdit(`${phone}@s.whatsapp.net`, m.id, '', 'revoked');
+        } else if (kind === 'user') {
+          const tracked = this.lidByMessageId.get(m.id);
+          const candidateLids = new Set([
+            ...(tracked && tracked.fromMe === m.fromMe ? [tracked.chatId] : []),
+            ...(this.host.chatTwins?.(m.chatId) ?? []).filter(jid => parseWaId(jid).kind === 'lid'),
+          ]);
+          this.host.recordMessageEdit(m.chatId, m.id, '', 'revoked', key => {
+            if (key.remoteJid && parseWaId(key.remoteJid).kind === 'lid') {
+              if ((key.fromMe === true) === m.fromMe) candidateLids.add(key.remoteJid);
+              return false;
+            }
+            return true;
+          });
+          for (const lidChatId of candidateLids) {
+            const phone = await this.host.findPersistedLidPhone?.(lidChatId).catch(() => null);
+            if (!current()) return;
+            if (phone && `${phone}@c.us` === this.host.toNeutralJid(m.chatId)) {
+              this.host.recordMessageEdit(lidChatId, m.id, '', 'revoked', key => (key.fromMe === true) === m.fromMe);
+            }
+          }
+        } else {
+          this.host.recordMessageEdit(m.chatId, m.id, '', 'revoked');
         }
       }
     }

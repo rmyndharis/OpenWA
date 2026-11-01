@@ -479,6 +479,7 @@ export class RedriveWebhookDeliveriesDto {
     minimum: 1,
     maximum: 500,
   })
+  @ToStrictNumber()
   @IsOptional()
   @IsInt()
   @Min(1)

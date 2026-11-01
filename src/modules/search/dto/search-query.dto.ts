@@ -124,6 +124,7 @@ export class SearchQueryDto {
 
   @ApiPropertyOptional({ description: 'Max hits to return', type: 'integer', minimum: 1 })
   @IsOptional()
+  @ToStrictNumber()
   @Type(() => Number)
   @IsInt()
   @Min(1)

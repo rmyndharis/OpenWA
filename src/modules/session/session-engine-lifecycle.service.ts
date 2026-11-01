@@ -63,6 +63,8 @@ export interface ReconnectState extends ReconnectAttemptState {
    * terminal unlink reported while the timer is armed clears its phone, the binding the next engine checks.
    */
   session?: Session;
+  /** True while executeReconnect tears down the old engine and awaits any pending credential teardown. */
+  teardownInFlight?: boolean;
   /** True while executeReconnect awaits its re-init: an engine failure reported then is parked, not applied. */
   initInFlight?: boolean;
   /** The failure parked during that window, applied or dropped by executeReconnect once init settles. */
@@ -87,7 +89,7 @@ export interface ReconnectState extends ReconnectAttemptState {
    * disconnect with: the report's own, or a terminal unlink reported while it waited. Ended by a read
    * that answers and by READY.
    */
-  readRetry?: { timer: NodeJS.Timeout; attempts: number; reason: string };
+  readRetry?: { timer: NodeJS.Timeout; attempts: number; reason: string; ended?: boolean };
 }
 
 // Reconnect-backoff bounds. An OPERATOR-supplied session.config feeds this math, so the values
@@ -515,6 +517,9 @@ export class SessionEngineLifecycle {
   /** Delegate: SessionEngineControls.shutdown. */
   shutdown(): Promise<void> {
     this.closed = true;
+    for (const id of [...this.reconnectStates.keys()]) {
+      this.cancelReconnect(id);
+    }
     return this.controls.shutdown();
   }
 
@@ -981,6 +986,7 @@ export class SessionEngineLifecycle {
       if (this.readyStretchHeld(reconnectState)) reconnectState.attempts = 0;
       reconnectState.readyAt = Date.now();
       reconnectState.readyEndedAt = undefined;
+      if (reconnectState.readRetry) reconnectState.readRetry.ended = true;
       reconnectState.readRetry = undefined;
       if (reconnectState.timer) {
         clearTimeout(reconnectState.timer);
@@ -1118,10 +1124,15 @@ export class SessionEngineLifecycle {
    * belongs to a different engine, nor schedule a reconnect whose timer would later destroy the
    * replacement engine.
    */
-  async handleEngineDisconnected(id: string, engine: IWhatsAppEngine, reason: string): Promise<void> {
+  async handleEngineDisconnected(
+    id: string,
+    engine: IWhatsAppEngine,
+    reason: string,
+    retry?: { reason: string; ended?: boolean },
+  ): Promise<void> {
     // Entry fence: the caller already checked liveness, but the gap between that check and this
     // call site is enough for a stop()/reconnect to swap the engine. Re-verify before doing work.
-    if (!this.isLiveEngine(id, engine)) return;
+    if (!this.isLiveEngine(id, engine) || retry?.ended) return;
 
     let session: Session | null;
     try {
@@ -1133,7 +1144,7 @@ export class SessionEngineLifecycle {
       });
       // Nothing else revisits this disconnect: the engine reports DISCONNECTED itself, so the liveness
       // watchdog skips it, and it stays registered with its lease renewed. Read again shortly.
-      this.retryDisconnectAfterFailedRead(id, engine, reason);
+      if (!retry?.ended) this.retryDisconnectAfterFailedRead(id, engine, retry?.reason ?? reason, retry);
       return;
     }
     // A session deleted just before this ran has nothing left to reconnect; skip it.
@@ -1141,14 +1152,18 @@ export class SessionEngineLifecycle {
 
     // Post-await fence: the findOne yield above is the window in which a stop()/reconnect can
     // replace the engine for this id. Only a STILL-live owner may publish disconnect side effects
-    // or change the persisted status — otherwise a stale disconnect would (e.g.) clobber a
+    // or change the persisted status - otherwise a stale disconnect would (e.g.) clobber a
     // replacement engine that is already READY.
-    if (!this.isLiveEngine(id, engine)) return;
+    if (!this.isLiveEngine(id, engine) || retry?.ended) return;
+
+    if (retry && TERMINAL_UNLINK_REASONS.has(retry.reason) && !TERMINAL_UNLINK_REASONS.has(reason)) {
+      reason = retry.reason;
+    }
 
     // This read answered, so a retry an earlier failed read armed ends here: left pending, it would hold
     // the reconnect slot and publish this same disconnect a second time when it fired. An unlink it was
     // to re-run with is this disconnect's reason now; a retry already re-reading handles its own.
-    const pending = this.endReadRetry(id);
+    const pending = this.endReadRetry(id, retry, reason);
     if (pending && TERMINAL_UNLINK_REASONS.has(pending) && !TERMINAL_UNLINK_REASONS.has(reason)) reason = pending;
 
     this.logger.warn(`Session disconnected: ${reason}`, {
@@ -1198,7 +1213,12 @@ export class SessionEngineLifecycle {
    * so a row that never reads does not log an error every few seconds for the life of the process.
    * A report whose read fails while the episode's timer is armed is left to that timer, except an unlink.
    */
-  private retryDisconnectAfterFailedRead(id: string, engine: IWhatsAppEngine, reason: string): void {
+  private retryDisconnectAfterFailedRead(
+    id: string,
+    engine: IWhatsAppEngine,
+    reason: string,
+    callerRetry?: { reason: string; ended?: boolean },
+  ): void {
     const state = this.reconnectStates.get(id);
     if (!state || this.closed || this.shutdownService?.isShuttingDown()) return;
     // The read failed across an await, so a reconnect may have replaced this engine meanwhile. A retry armed
@@ -1209,16 +1229,24 @@ export class SessionEngineLifecycle {
       // unlink's reason once the row reads; an armed reconnect needs no row for it, so it is reported now.
       if (!TERMINAL_UNLINK_REASONS.has(reason)) return;
       if (state.readRetry?.timer === state.timer) state.readRetry.reason = reason;
-      else this.reportUnlinkWithoutRow(id, reason);
+      else {
+        if (state.readRetry) state.readRetry.ended = true;
+        state.readRetry = undefined;
+        this.reportUnlinkWithoutRow(id, reason);
+      }
+      return;
+    }
+    if (state.readRetry && state.readRetry !== callerRetry) {
+      if (TERMINAL_UNLINK_REASONS.has(reason)) state.readRetry.reason = reason;
       return;
     }
     const attempts = (state.readRetry?.attempts ?? 0) + 1;
     const delay = Math.min(state.baseDelay * 2 ** (attempts - 1), RECONNECT_BASE_DELAY_MAX_MS);
     const timer = setTimeout(() => {
       state.timer = null;
-      void this.handleEngineDisconnected(id, engine, retry.reason);
+      void this.handleEngineDisconnected(id, engine, retry.reason, retry);
     }, delay);
-    const retry = { timer, attempts, reason };
+    const retry: NonNullable<ReconnectState['readRetry']> = { timer, attempts, reason };
     state.timer = timer;
     state.readRetry = retry;
   }
@@ -1252,7 +1280,7 @@ export class SessionEngineLifecycle {
     // A reconnect already armed keeps its own snapshot (scheduleReconnect leaves it alone), so the clear
     // reaches that one too. Only the phone: the rest is what the report that armed it read.
     const armed = this.reconnectStates.get(id);
-    if (armed?.timer && armed.session) armed.session = { ...armed.session, phone: null };
+    if ((armed?.timer || armed?.teardownInFlight) && armed.session) armed.session = { ...armed.session, phone: null };
     return true;
   }
 
@@ -1277,12 +1305,22 @@ export class SessionEngineLifecycle {
    * Ends the read retry: its timer, when it is still the one armed, and the count its backoff keeps. Returns
    * the reason of a retry still armed, which never re-runs now; one that fired is re-reading on its own.
    */
-  private endReadRetry(id: string): string | undefined {
+  private endReadRetry(id: string, callerRetry?: { ended?: boolean }, callerReason?: string): string | undefined {
     const state = this.reconnectStates.get(id);
     const retry = state?.readRetry;
     if (!state || !retry) return undefined;
+    if (state.timer !== retry.timer) {
+      if (
+        callerRetry === retry ||
+        !TERMINAL_UNLINK_REASONS.has(retry.reason) ||
+        (callerReason !== undefined && TERMINAL_UNLINK_REASONS.has(callerReason))
+      ) {
+        if (callerRetry !== retry) retry.ended = true;
+        state.readRetry = undefined;
+      }
+      return undefined;
+    }
     state.readRetry = undefined;
-    if (state.timer !== retry.timer) return undefined;
     clearTimeout(retry.timer);
     state.timer = null;
     return retry.reason;
@@ -1294,8 +1332,10 @@ export class SessionEngineLifecycle {
    * caller's next engine links whichever number scans its QR. Returns whether the phone was cleared.
    */
   private endReadRetryOfGoneEngine(id: string): boolean {
-    const reason = this.reconnectStates.get(id)?.readRetry?.reason;
-    this.endReadRetry(id);
+    const retry = this.reconnectStates.get(id)?.readRetry;
+    if (retry) retry.ended = true;
+    const reason = retry?.reason;
+    this.endReadRetry(id, retry);
     return reason !== undefined && TERMINAL_UNLINK_REASONS.has(reason) && this.reportUnlinkWithoutRow(id, reason);
   }
 
@@ -1311,11 +1351,15 @@ export class SessionEngineLifecycle {
 
     const state = this.reconnectStates.get(id);
     if (!state) return;
-    // A reconnect is already armed for this episode. Another disconnect report (the liveness watchdog
-    // re-probes a wedged engine that still says READY) must neither consume an attempt nor push the
-    // pending one back: re-arming each time kept a long base delay from ever firing. Also keeps two
+    // A reconnect is already armed or tearing down the old engine for this episode. Another disconnect
+    // report (the liveness watchdog re-probes a wedged engine that still says READY, or the old engine
+    // emits its close event while executeReconnect destroys it) must neither consume an attempt nor push
+    // the pending one back: re-arming each time kept a long base delay from ever firing. Also keeps two
     // back-to-back disconnects from stacking two timers and double-initializing the engine.
-    if (state.timer) return;
+    if (state.timer || state.teardownInFlight) {
+      if (state.session && session.phone === null) state.session = { ...state.session, phone: null };
+      return;
+    }
 
     // Consume the last READY once. A READY that held for the stability window ended the episode, so
     // this drop starts a fresh streak; a shorter one is the same flap and keeps the streak growing.
@@ -1480,33 +1524,42 @@ export class SessionEngineLifecycle {
     let mine: IWhatsAppEngine | undefined;
     const attempt = (state.started = (state.started ?? 0) + 1);
     try {
-      // Clean up old engine. Time-bound the teardown: a wedged Chromium (the common reconnect
-      // trigger) makes destroy() hang, and a raw await here would stall the reconnect forever —
-      // the session would never re-init nor reach FAILED. teardownEngineSafely always resolves
-      // (after 10s on a hang), so reconnection proceeds either way.
-      const oldEngine = this.engines.get(id);
-      if (oldEngine) {
-        // A timed-out destroy() leaves the wedged Chromium process alive (the raced promise never
-        // kills it; see start()'s catch), and this path relaunches on the SAME profile dir in the
-        // same tick. destroyWithEscalation escalates to a SIGKILL so the replacement browser can't
-        // collide with the orphan (#1081); each step is bounded, so it can't wedge a second time.
-        await this.fences.destroyWithEscalation(id, oldEngine);
-        this.engines.deleteIfLive(id, oldEngine);
-        // A failed read of the old engine's report during that teardown armed a retry for it. The attempt that
-        // links the next engine ends it: a start since then owns a state of its own, and a later attempt
-        // sharing this one ends it itself.
-        if (this.reconnectStates.get(id) === state && state.started === attempt && this.endReadRetryOfGoneEngine(id)) {
-          session = { ...session, phone: null };
+      state.teardownInFlight = true;
+      try {
+        // Clean up old engine. Time-bound the teardown: a wedged Chromium (the common reconnect
+        // trigger) makes destroy() hang, and a raw await here would stall the reconnect forever —
+        // the session would never re-init nor reach FAILED. teardownEngineSafely always resolves
+        // (after 10s on a hang), so reconnection proceeds either way.
+        const oldEngine = this.engines.get(id);
+        if (oldEngine) {
+          // A timed-out destroy() leaves the wedged Chromium process alive (the raced promise never
+          // kills it; see start()'s catch), and this path relaunches on the SAME profile dir in the
+          // same tick. destroyWithEscalation escalates to a SIGKILL so the replacement browser can't
+          // collide with the orphan (#1081); each step is bounded, so it can't wedge a second time.
+          await this.fences.destroyWithEscalation(id, oldEngine);
+          this.engines.deleteIfLive(id, oldEngine);
+          // A failed read of the old engine's report during that teardown armed a retry for it. The attempt that
+          // links the next engine ends it: a start since then owns a state of its own, and a later attempt
+          // sharing this one ends it itself.
+          if (
+            this.reconnectStates.get(id) === state &&
+            state.started === attempt &&
+            this.endReadRetryOfGoneEngine(id)
+          ) {
+            session = { ...session, phone: null };
+          }
         }
-      }
 
-      // Credential-teardown fence — BEFORE engineFactory.create (inside initializeEngine). A logout
-      // teardown that lost its deadline race is still running and ends in an fs.rm of this session's
-      // on-disk profile — the same path initializeEngine is about to populate. Keyed by session NAME
-      // (see awaitPendingTeardown) and FAIL CLOSED: a timeout becomes a failed reconnect attempt that is
-      // rescheduled WITHOUT touching the auth dir (the catch below schedules the next attempt; no
-      // engine was created, so there is nothing to evict and no dir to purge).
-      await this.awaitPendingTeardown(session.name);
+        // Credential-teardown fence — BEFORE engineFactory.create (inside initializeEngine). A logout
+        // teardown that lost its deadline race is still running and ends in an fs.rm of this session's
+        // on-disk profile — the same path initializeEngine is about to populate. Keyed by session NAME
+        // (see awaitPendingTeardown) and FAIL CLOSED: a timeout becomes a failed reconnect attempt that is
+        // rescheduled WITHOUT touching the auth dir (the catch below schedules the next attempt; no
+        // engine was created, so there is nothing to evict and no dir to purge).
+        await this.awaitPendingTeardown(session.name);
+      } finally {
+        if (state.started === attempt) state.teardownInFlight = false;
+      }
 
       // A stop, force-kill, logout, delete or shutdown during the awaits above dropped or replaced this
       // state, and a start after it may already run its own engine: registering one now would overwrite
@@ -1633,6 +1686,7 @@ export class SessionEngineLifecycle {
   }
 
   private cancelReconnect(id: string): void {
+    this.endReadRetryOfGoneEngine(id);
     const state = this.reconnectStates.get(id);
     if (state?.timer) {
       clearTimeout(state.timer);

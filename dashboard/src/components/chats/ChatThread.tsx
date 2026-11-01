@@ -281,7 +281,10 @@ function ChatThread({
       try {
         // A 429 and the 503 of a full S3 download pool are refusals to try again, as the archived previews do.
         const blob = await retryThrottled(
-          () => sessionApi.getMessageMediaBlob(sessionId, activeChat.id, messageId),
+          () => {
+            if (!sameKey()) throw new DOMException('Aborted', 'AbortError');
+            return sessionApi.getMessageMediaBlob(sessionId, activeChat.id, messageId);
+          },
           1000,
           [429, 503],
         );
@@ -299,6 +302,7 @@ function ChatThread({
           return next;
         });
       } catch {
+        if (!sameKey()) return;
         // 404 covers every "there are no bytes" case the route documents (URL-based send, media
         // download disabled, over the inbound cap). Say so on the bubble rather than failing mutely.
         setMediaFetch(prev => ({ ...prev, [messageId]: 'failed' }));
