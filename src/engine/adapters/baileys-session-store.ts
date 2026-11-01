@@ -709,7 +709,8 @@ export class BaileysSessionStore {
   /**
    * Refresh the chat preview when (and only when) the edited message is still the latest message in
    * that chat. Editing an older message must not replace the preview or reorder the conversation. The
-   * preview may sit on any twin of the chat, the one the listing reads included, so each is checked.
+   * preview is checked under `chatId` and its engine form and, when `accept` is given for a phone chat,
+   * under any lid chat whose preview is this message; a caller that knows other twins passes each one.
    * `accept`, when given, judges the key the preview holds: a change it refuses leaves the preview alone.
    */
   recordMessageEdit(

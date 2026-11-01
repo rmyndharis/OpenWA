@@ -410,9 +410,9 @@ export class BaileysLifecycle {
     // An internal reconnect (transient drop) overwrites this.sock WITHOUT going through
     // disconnect/logout/destroy, so the previous socket's WebSocket and the 18 ev listeners we
     // register below would leak on every reconnect. Tear the prior socket down first. Detach OUR
-    // connection.update listener BEFORE end(): Baileys' own end() synchronously emits a synthetic
-    // connection.update {connection:'close'}, which — if still wired — would re-enter
-    // handleConnectionUpdate and schedule a spurious second reconnect.
+    // connection.update listener BEFORE end(): Baileys' own end() emits a synthetic
+    // connection.update {connection:'close'} once the WebSocket has closed, which — if still wired —
+    // would re-enter handleConnectionUpdate and schedule a spurious second reconnect.
     const previous = this.sock;
     if (previous) {
       try {
@@ -1093,7 +1093,8 @@ export class BaileysLifecycle {
         BAILEYS_LOGOUT_ACK_TIMEOUT_MS,
       );
       if (!response) {
-        // query() resolved without a result — WhatsApp did not acknowledge the unlink request.
+        // No answer node: WhatsApp did not acknowledge the unlink request. With the deadline passed to
+        // query(), a timeout rejects instead and reaches the catch below; this guards any other empty answer.
         throw new Error('WhatsApp did not acknowledge the unlink request');
       }
 
