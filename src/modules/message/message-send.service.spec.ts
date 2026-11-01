@@ -790,6 +790,22 @@ describe('MessageSendService', () => {
       expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
     });
 
+    it('answers a 400 for a template whose header, body and footer all render empty', async () => {
+      (templateService.resolve as jest.Mock).mockResolvedValue(
+        mockTemplate({ header: '{{a}}', body: '{{b}}', footer: '{{c}}' }),
+      );
+
+      await expect(
+        service.sendTemplate('sess-1', {
+          chatId: 'test@c.us',
+          templateId: 'tpl-1',
+          vars: { a: '', b: '', c: '' },
+        }),
+      ).rejects.toThrow(new BadRequestException('Rendered template is empty'));
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+
     it('still renders a number sent for a variable', async () => {
       (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'Order {{orderId}}' }));
 

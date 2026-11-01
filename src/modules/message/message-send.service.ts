@@ -313,7 +313,7 @@ export class MessageSendService {
     const maxChars =
       this.configService?.get<number>('template.renderMaxChars', DEFAULT_TEMPLATE_RENDER_MAX_CHARS) ??
       DEFAULT_TEMPLATE_RENDER_MAX_CHARS;
-    let text: string;
+    let rendered: string[];
     try {
       const length =
         parts.reduce((sum, part) => sum + renderedLength(part, vars), 0) +
@@ -323,13 +323,15 @@ export class MessageSendService {
           `Rendered template is ${length} characters, over the ${maxChars}-character limit`,
         );
       }
-      text = parts.map(part => renderTemplate(part, vars)).join(separator);
+      rendered = parts.map(part => renderTemplate(part, vars));
     } catch (error) {
       if (error instanceof TemplateRenderError) throw new BadRequestException(error.message);
       throw error;
     }
-    // send-text refuses an empty text before anything is stored or sent; a render that leaves none is the same.
-    if (!text) throw new BadRequestException('Rendered template is empty');
+    // send-text refuses an empty text before anything is stored or sent; a render that leaves none is the same. Each
+    // part is tested, not the joined text: the separator between empty parts would make it non-empty.
+    if (rendered.every(part => !part)) throw new BadRequestException('Rendered template is empty');
+    const text = rendered.join(separator);
 
     return this.sendText(sessionId, {
       chatId: dto.chatId,
