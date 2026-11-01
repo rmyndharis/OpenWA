@@ -40,6 +40,11 @@ console.log(result.messageId);
 
 CommonJS consumers use `require('@rmyndharis/openwa')` identically.
 
+For an endpoint the SDK does not wrap, call `client.request({ method, path, query, body })`, which
+takes an `Idempotency-Key` as its second argument, or `client.requestBytes(...)` for a binary body. A
+path that does not begin with `/`, or has a `.` or `..` segment, rejects with a `TypeError` before
+anything is sent.
+
 ## Messaging
 
 > Voice notes: pass `ptt: true` to `sendAudio` to send a real WhatsApp voice note (PTT). Supply `audio/ogg; codecs=opus` audio for reliable playback; the server defaults the mimetype to that when `ptt` is set without one.

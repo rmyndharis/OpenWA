@@ -132,6 +132,24 @@ describe('OpenWAClient', () => {
     expect(t.calls).toHaveLength(2);
   });
 
+  it('refuses an id encodeURIComponent cannot encode as a rejection, not a synchronous throw', async () => {
+    const t = new MockTransport().passthrough({ status: 200, body: {} });
+    const c = client(t);
+    let pending: Promise<unknown> | undefined;
+    // A lone surrogate, as left by cutting a string inside an emoji.
+    expect(() => {
+      pending = c.contacts.get('s1', '\uD800');
+    }).not.toThrow();
+    await expect(pending).rejects.toThrow(TypeError);
+    expect(t.calls).toHaveLength(0);
+  });
+
+  it('encodes the sendMedia route segment, so it cannot add a query or fragment', async () => {
+    const t = new MockTransport().passthrough({ status: 201, body: { messageId: 'm', timestamp: 1 } });
+    await client(t).sendMedia('s1', 'send-image?x=1#f', { chatId: 'a@c.us', url: 'https://x.test/i.png' });
+    expect(t.lastCall!.url).toBe('http://localhost:2785/api/sessions/s1/messages/send-image%3Fx%3D1%23f');
+  });
+
   it('refuses a raw path that does not begin with a slash, so the request never leaves the base host', async () => {
     const t = new MockTransport().passthrough({ status: 200, body: [] });
     const c = client(t);

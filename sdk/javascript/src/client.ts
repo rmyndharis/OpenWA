@@ -159,7 +159,7 @@ export class OpenWAClient {
   sendMedia(sessionId: string, segment: string, body: SendMediaRequest, idempotencyKey?: string): Promise<MessageResponse> {
     return this.request<MessageResponse>({
       method: 'POST',
-      path: `/api/sessions/${encodeSegment(sessionId)}/messages/${segment}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/${encodeSegment(segment)}`,
       body,
     }, idempotencyKey);
   }
