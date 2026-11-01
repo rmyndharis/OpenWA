@@ -75,6 +75,8 @@ describeWithRedis('RedisThrottlerStorage against a real Redis', () => {
 
   it('blocks past the limit until the window expires, without extending it', async () => {
     for (let i = 0; i < LIMIT; i++) await storage.increment('busy', TTL_MS, LIMIT, 60_000, throttler);
+    // Back to back, the blocked hit would read a full window whether or not a hit re-arms it.
+    await new Promise(resolve => setTimeout(resolve, 1100));
 
     const record = await storage.increment('busy', TTL_MS, LIMIT, 60_000, throttler);
     const pttl = await redis.pttl(keyOf('busy'));
@@ -82,8 +84,9 @@ describeWithRedis('RedisThrottlerStorage against a real Redis', () => {
     expect(record.totalHits).toBe(LIMIT + 1);
     expect(record.isBlocked).toBe(true);
     expect(record.timeToBlockExpire).toBeGreaterThanOrEqual(Math.ceil(pttl / 1000));
-    expect(record.timeToBlockExpire).toBeLessThanOrEqual(TTL_MS / 1000);
+    expect(record.timeToBlockExpire).toBeLessThanOrEqual((TTL_MS - 1000) / 1000);
     expect(pttl).toBeGreaterThan(0);
+    expect(pttl).toBeLessThanOrEqual(TTL_MS - 1000);
   });
 });
 
