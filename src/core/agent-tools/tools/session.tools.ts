@@ -11,9 +11,7 @@ import { chatIdSchema, chatJidSchema } from '../chat-id-schema';
 import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
 import { paginate } from '../../../common/utils/paginate';
 
-// The same check as ParseUUIDPipe on the REST twins: each tool reads the session row by this id first, and a
-// non-UUID would fail on PostgreSQL's uuid column as an internal error rather than a 400.
-const sessionId = z.guid().describe('Session UUID (the session id, not the name)');
+const sessionId = z.string().min(1).describe('Session UUID (the session id, not the name)');
 
 export function sessionTools(session: SessionService): AnyToolDescriptor[] {
   return [

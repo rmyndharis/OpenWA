@@ -23,14 +23,11 @@ async function run(tool: AnyToolDescriptor, input: unknown): Promise<unknown> {
   return invokeTool(tool, input, 'key', makeAuth() as unknown as AuthService);
 }
 
-// The tools take only a session UUID, as their REST routes do.
-const S1 = '11111111-1111-4111-8111-111111111111';
-
 describe('sessionTools', () => {
   // engineLoaded, not isActive: a session a live peer node runs has no engine in this process, and
   // an MCP call is never forwarded to the owner, so isActive would report it as stopped.
   it('SessionFindAll scopes by the key allowedSessions and maps entities to DTOs', async () => {
-    const row = { id: S1, name: 'main', status: 'ready' };
+    const row = { id: 's1', name: 'main', status: 'ready' };
     const findAll = jest.fn().mockResolvedValue([row]);
     const isActive = jest.fn().mockReturnValue(false);
     const engineLoaded = jest.fn().mockReturnValue(true);
@@ -40,16 +37,16 @@ describe('sessionTools', () => {
     )) as Array<{ id: string; engineLoaded: boolean }>;
     expect(findAll).toHaveBeenCalledWith(null, { limit: 5, offset: undefined });
     expect(engineLoaded).toHaveBeenCalledWith(row);
-    expect(out).toEqual([expect.objectContaining({ id: S1, engineLoaded: true })]);
+    expect(out).toEqual([expect.objectContaining({ id: 's1', engineLoaded: true })]);
   });
 
   it('SessionFindAll forwards the name filter together with a scoped key allowlist', async () => {
     const findAll = jest.fn().mockResolvedValue([]);
-    const auth = { ...makeAuth(), validateApiKey: jest.fn().mockResolvedValue({ id: 'k1', allowedSessions: [S1] }) };
+    const auth = { ...makeAuth(), validateApiKey: jest.fn().mockResolvedValue({ id: 'k1', allowedSessions: ['s1'] }) };
     const tool = makeTools({ findAll, isActive: jest.fn() } as unknown as SessionService).get('SessionFindAll')!;
 
     await expect(invokeTool(tool, { name: 'other-bot' }, 'key', auth as unknown as AuthService)).resolves.toEqual([]);
-    expect(findAll).toHaveBeenCalledWith([S1], { limit: undefined, offset: undefined, name: 'other-bot' });
+    expect(findAll).toHaveBeenCalledWith(['s1'], { limit: undefined, offset: undefined, name: 'other-bot' });
   });
 
   it('SessionFindAll rejects an empty name before reaching the service', async () => {
@@ -61,28 +58,28 @@ describe('sessionTools', () => {
   });
 
   it('SessionFindOne delegates to findOne and maps to the response DTO', async () => {
-    const row = { id: S1, name: 'main', status: 'ready' };
+    const row = { id: 's1', name: 'main', status: 'ready' };
     const findOne = jest.fn().mockResolvedValue(row);
     const isActive = jest.fn().mockReturnValue(false);
     const engineLoaded = jest.fn().mockReturnValue(true);
     const out = (await run(
       makeTools({ findOne, isActive, engineLoaded } as unknown as SessionService).get('SessionFindOne')!,
-      { sessionId: S1 },
+      { sessionId: 's1' },
     )) as { id: string; engineLoaded: boolean };
-    expect(findOne).toHaveBeenCalledWith(S1);
+    expect(findOne).toHaveBeenCalledWith('s1');
     expect(engineLoaded).toHaveBeenCalledWith(row);
-    expect(out.id).toBe(S1);
+    expect(out.id).toBe('s1');
     expect(out.engineLoaded).toBe(true);
   });
 
   it('SessionGetChats delegates to getChats with paging', async () => {
     const getChats = jest.fn().mockResolvedValue([{ id: 'c1' }]);
     const out = await run(makeTools({ getChats } as unknown as SessionService).get('SessionGetChats')!, {
-      sessionId: S1,
+      sessionId: 's1',
       limit: 20,
       offset: 10,
     });
-    expect(getChats).toHaveBeenCalledWith(S1, { limit: 20, offset: 10 });
+    expect(getChats).toHaveBeenCalledWith('s1', { limit: 20, offset: 10 });
     expect(out).toEqual([{ id: 'c1' }]);
   });
 
@@ -98,40 +95,40 @@ describe('sessionTools', () => {
     const subscribeToPresence = jest.fn().mockResolvedValue(undefined);
     const out = await run(
       makeTools({ subscribeToPresence } as unknown as SessionService).get('SessionSubscribePresence')!,
-      { sessionId: S1, chatId: '628111@c.us' },
+      { sessionId: 's1', chatId: '628111@c.us' },
     );
-    expect(subscribeToPresence).toHaveBeenCalledWith(S1, '628111@c.us');
+    expect(subscribeToPresence).toHaveBeenCalledWith('s1', '628111@c.us');
     expect(out).toEqual({ success: true });
   });
 
   it('SessionGetPresence delegates to getPresence and passes the result through', async () => {
     const getPresence = jest.fn().mockResolvedValue({ presence: 'online' });
     const out = await run(makeTools({ getPresence } as unknown as SessionService).get('SessionGetPresence')!, {
-      sessionId: S1,
+      sessionId: 's1',
       chatId: '628111@c.us',
     });
-    expect(getPresence).toHaveBeenCalledWith(S1, '628111@c.us');
+    expect(getPresence).toHaveBeenCalledWith('s1', '628111@c.us');
     expect(out).toEqual({ presence: 'online' });
   });
 
   it('SessionMarkChatRead maps the sendSeen result to a success field', async () => {
     const sendSeen = jest.fn().mockResolvedValue(true);
     const out = await run(makeTools({ sendSeen } as unknown as SessionService).get('SessionMarkChatRead')!, {
-      sessionId: S1,
+      sessionId: 's1',
       chatId: '628111@c.us',
     });
-    expect(sendSeen).toHaveBeenCalledWith(S1, '628111@c.us', undefined);
+    expect(sendSeen).toHaveBeenCalledWith('s1', '628111@c.us', undefined);
     expect(out).toEqual({ success: true });
   });
 
   it('SessionMarkChatRead forwards the message ids it was given', async () => {
     const sendSeen = jest.fn().mockResolvedValue(true);
     await run(makeTools({ sendSeen } as unknown as SessionService).get('SessionMarkChatRead')!, {
-      sessionId: S1,
+      sessionId: 's1',
       chatId: '628111@c.us',
       messageIds: ['M1', 'M2'],
     });
-    expect(sendSeen).toHaveBeenCalledWith(S1, '628111@c.us', ['M1', 'M2']);
+    expect(sendSeen).toHaveBeenCalledWith('s1', '628111@c.us', ['M1', 'M2']);
   });
 
   // The REST body rejects a whitespace-only id, and this path never sees that DTO: invokeTool parses
@@ -142,7 +139,7 @@ describe('sessionTools', () => {
     const sendSeen = jest.fn().mockResolvedValue(true);
     const tool = makeTools({ sendSeen } as unknown as SessionService).get('SessionMarkChatRead')!;
 
-    const failure = await run(tool, { sessionId: S1, chatId: '628111@c.us', messageIds: ['  '] }).catch(
+    const failure = await run(tool, { sessionId: 's1', chatId: '628111@c.us', messageIds: ['  '] }).catch(
       (e: unknown) => e,
     );
     expect(failure).toBeInstanceOf(BadRequestException);
@@ -151,41 +148,28 @@ describe('sessionTools', () => {
 
     // Control: a well-formed id still reaches the service, so the refusal above is this rule and not
     // a schema that turns everything away.
-    await run(tool, { sessionId: S1, chatId: '628111@c.us', messageIds: ['3EB0C767D26B8A3F1A2B'] });
-    expect(sendSeen).toHaveBeenCalledWith(S1, '628111@c.us', ['3EB0C767D26B8A3F1A2B']);
+    await run(tool, { sessionId: 's1', chatId: '628111@c.us', messageIds: ['3EB0C767D26B8A3F1A2B'] });
+    expect(sendSeen).toHaveBeenCalledWith('s1', '628111@c.us', ['3EB0C767D26B8A3F1A2B']);
   });
 
   it('SessionMarkChatUnread maps the markUnread result to a success field', async () => {
     const markUnread = jest.fn().mockResolvedValue(true);
     const out = await run(makeTools({ markUnread } as unknown as SessionService).get('SessionMarkChatUnread')!, {
-      sessionId: S1,
+      sessionId: 's1',
       chatId: '628111@c.us',
     });
-    expect(markUnread).toHaveBeenCalledWith(S1, '628111@c.us');
+    expect(markUnread).toHaveBeenCalledWith('s1', '628111@c.us');
     expect(out).toEqual({ success: true });
   });
 
   it('SessionSendChatState delegates to sendChatState and reports success', async () => {
     const sendChatState = jest.fn().mockResolvedValue(undefined);
     const out = await run(makeTools({ sendChatState } as unknown as SessionService).get('SessionSendChatState')!, {
-      sessionId: S1,
+      sessionId: 's1',
       chatId: '628111@c.us',
       state: 'typing',
     });
-    expect(sendChatState).toHaveBeenCalledWith(S1, '628111@c.us', 'typing');
+    expect(sendChatState).toHaveBeenCalledWith('s1', '628111@c.us', 'typing');
     expect(out).toEqual({ success: true });
-  });
-
-  // Each REST twin parses the id with ParseUUIDPipe. Every one of these tools reads the session row first, and on
-  // PostgreSQL a non-UUID reached the uuid column and failed there as an internal error.
-  it.each(
-    sessionTools({} as SessionService)
-      .filter(t => t.sessionScoped)
-      .map(t => [t.name, t] as const),
-  )('%s takes only a session UUID, as its REST route does', (_name, tool) => {
-    const sessionIdIssues = (sessionId: string) =>
-      (tool.inputSchema.safeParse({ sessionId }).error?.issues ?? []).filter(issue => issue.path[0] === 'sessionId');
-    expect(sessionIdIssues('my-session')).not.toHaveLength(0);
-    expect(sessionIdIssues('11111111-1111-4111-8111-111111111111')).toHaveLength(0);
   });
 });

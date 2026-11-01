@@ -141,10 +141,8 @@ describe('chat-restricted tool calls', () => {
     const descriptor = sessionTools({ listChats, getChats } as unknown as SessionService).find(
       t => t.name === 'SessionGetChats',
     )!;
-    await expect(call(descriptor, { sessionId: '11111111-1111-4111-8111-111111111111', limit: 1 })).resolves.toEqual([
-      { id: CHAT },
-    ]);
-    expect(listChats).toHaveBeenCalledWith('11111111-1111-4111-8111-111111111111', undefined);
+    await expect(call(descriptor, { sessionId: 's1', limit: 1 })).resolves.toEqual([{ id: CHAT }]);
+    expect(listChats).toHaveBeenCalledWith('s1', undefined);
     expect(getChats).not.toHaveBeenCalled();
   });
 

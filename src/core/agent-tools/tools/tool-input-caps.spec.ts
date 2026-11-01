@@ -306,11 +306,7 @@ describe('MCP tool chat ids take the shape the REST bodies require', () => {
   it.each(CASES)('%s accepts and rejects the same chat ids as its REST body', async (name, dtoClass, extra) => {
     const tool = tools.find(t => t.name === name)!;
     for (const chatId of [...WELL_FORMED, ...MALFORMED]) {
-      const toolAccepts = tool.inputSchema.safeParse({
-        sessionId: '11111111-1111-4111-8111-111111111111',
-        chatId,
-        ...extra,
-      }).success;
+      const toolAccepts = tool.inputSchema.safeParse({ sessionId: 's1', chatId, ...extra }).success;
       const errors = await validate(plainToInstance(dtoClass, { chatId, ...extra }, PIPE_TRANSFORM_OPTS));
       const restAccepts = !errors.some(e => e.property === 'chatId');
       expect({ chatId, toolAccepts }).toEqual({ chatId, toolAccepts: restAccepts });
