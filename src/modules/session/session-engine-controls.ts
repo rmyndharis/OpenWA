@@ -371,6 +371,11 @@ export class SessionEngineControls {
       // initializingSessions reservation added synchronously at start() entry: its finally removes it
       // again, so a refused start does not leave a false "already starting" mark behind (briefly held).
       await this.fences.awaitPendingTeardown(session.name);
+      // A reconnect waiting on the same teardown resumes first and launches its engine; launching another over
+      // it would push it out of the registry while it runs. Refused before anything below is touched.
+      if (this.engines.has(id)) {
+        throw new BadRequestException('Session is already started');
+      }
 
       // A delete still running outranks every start, however long it has run: the mark it set is not a
       // stale one, and clearing it below would let an engine start under the delete that is removing the
