@@ -10,7 +10,7 @@ import { createLogger } from '../../common/services/logger.service';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
-import { EngineNotSentError } from '../../common/errors/engine-not-sent.error';
+import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { toParticipantWid } from '../../engine/identity/wa-id';
@@ -63,19 +63,18 @@ export function countsTowardSendBreaker(error: unknown): boolean {
 /**
  * Whether a send that threw provably never went out, so its admission can be handed back: a client or
  * refusal status (4xx), a 501 for something the engine cannot do, a media URL the SSRF guard blocked
- * before any fetch, a WhatsApp rate limit (EngineThrottledError), turned away before it ran, or a transport
- * failure before the message was handed to WhatsApp (EngineNotSentError). Anything else (a deadline, a
- * dropped socket, a dead page) leaves the outcome unknown; WhatsApp may have taken the message, so its
- * admission stays held.
+ * before any fetch, a WhatsApp rate limit (EngineThrottledError), turned away before it ran, or an error
+ * raised before the message was handed to WhatsApp (EngineNotSentError, or any error markNothingSent
+ * recorded, whatever its status: the proof a keyed send frees its Idempotency-Key on). Anything else (a
+ * deadline, a dropped socket, a dead page) leaves the outcome unknown; WhatsApp may have taken the message,
+ * so its admission stays held.
  */
 export function sentNothing(error: unknown): boolean {
   return (
     error instanceof SsrfBlockedError ||
+    provesNothingSent(error) ||
     (error instanceof HttpException &&
-      (error.getStatus() < 500 ||
-        error instanceof EngineNotSupportedError ||
-        error instanceof EngineThrottledError ||
-        error instanceof EngineNotSentError))
+      (error.getStatus() < 500 || error instanceof EngineNotSupportedError || error instanceof EngineThrottledError))
   );
 }
 
