@@ -68,26 +68,34 @@ describe('HealthController key validation failure and limiter refund', () => {
     );
   });
 
-  it('does not write an API_KEY_AUTH_FAILED audit row or spend the limiter budget when the key store fails to read', async () => {
+  it('audits no credential probe when the key store fails to read, keeps the slot spent, and logs the failure once', async () => {
     (controller as unknown as { keyValidationLimiter: SlidingWindowLimiter }).keyValidationLimiter =
-      new SlidingWindowLimiter(1, 60_000);
+      new SlidingWindowLimiter(3, 60_000);
+    const logger = (controller as unknown as { logger: { error: (message: string, trace?: string) => void } }).logger;
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
     const { rawKey } = await authService.createApiKey({ name: 'health monitor', role: ApiKeyRole.VIEWER });
-    jest
+    const findOne = jest
       .spyOn(keys, 'findOne')
-      .mockRejectedValueOnce(new QueryFailedError('SELECT', [], new Error('SQLITE_BUSY: database is locked')));
+      .mockRejectedValue(new QueryFailedError('SELECT', [], new Error('SQLITE_IOERR: disk I/O error')));
 
-    const res = await controller.check(reqWith(rawKey));
+    for (let probe = 0; probe < 5; probe++) {
+      const res = await controller.check(reqWith(rawKey));
+      expect(res.status).toBe('ok');
+      expect(res).not.toHaveProperty('version');
+    }
     await flushAuditWrites();
 
-    expect(res.status).toBe('ok');
-    expect(res).not.toHaveProperty('version');
+    // The budget bounds the lookups that reach the failing store: the fourth and fifth never get there.
+    expect(findOne).toHaveBeenCalledTimes(3);
     expect(logWarnSpy).not.toHaveBeenCalled();
     const rows = await audits.find({ where: { action: AuditAction.API_KEY_AUTH_FAILED } });
     expect(rows).toHaveLength(0);
+    // Operators hear of it, once rather than once per probe.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
 
-    // Because the transient read error refunded its limiter reservation, the next probe with the valid key still runs.
-    const nextRes = await controller.check(reqWith(rawKey));
-    expect(nextRes.version).toBeDefined();
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   it('still audits and charges the limiter budget on 401 and 403 credential refusals', async () => {

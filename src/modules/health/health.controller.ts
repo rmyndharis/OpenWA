@@ -21,6 +21,7 @@ import { AuditAction } from '../audit/entities/audit-log.entity';
 import { SlidingWindowLimiter } from '../events/ws-rate-limit';
 import { limiterKeyForIp, resolveClientIp } from '../../common/utils/ip';
 import { presentedApiKey } from '../../common/security/bearer-token';
+import { createLogger } from '../../common/services/logger.service';
 
 interface DependencyStatus {
   status: 'up' | 'down';
@@ -66,6 +67,11 @@ export class HealthController {
   // budget the probe still answers 200, without `version` and without touching the key table.
   private readonly keyValidationLimiter = new SlidingWindowLimiter(30, 60_000);
 
+  private readonly logger = createLogger('HealthController');
+
+  // A key table that cannot be read fails every presentation the same way: log it once a minute, not once a probe.
+  private readonly keyStoreFailureLogLimiter = new SlidingWindowLimiter(1, 60_000);
+
   @Get()
   @ApiOperation({ summary: 'Basic health check' })
   @ApiResponse({ status: 200, description: 'Application is healthy', type: HealthCheckResponseDto })
@@ -100,10 +106,16 @@ export class HealthController {
       this.keyValidationLimiter.refund(subject, reservation);
       return true;
     } catch (err) {
-      // Only a 401/403 refusal judged the credential; an unreadable key table refunds the slot and
-      // skips logWarn, matching the other key-validation surfaces.
+      // Only a 401/403 refusal judged the credential. An unreadable key table gave no verdict, so it is not
+      // audited as a credential probe, but its slot stays spent (as on the WebSocket handshake) to keep the
+      // lookups against a failing store bounded, and the failure is logged for operators.
       if (!(err instanceof UnauthorizedException || err instanceof ForbiddenException)) {
-        this.keyValidationLimiter.refund(subject, reservation);
+        if (this.keyStoreFailureLogLimiter.allow('key-store')) {
+          this.logger.error(
+            'Health probe could not check the presented API key',
+            err instanceof Error ? err.stack : String(err),
+          );
+        }
         return false;
       }
       // A PRESENTED key that failed validation is a credential probe against an endpoint every
