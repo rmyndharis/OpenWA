@@ -36,6 +36,10 @@
  * loudly instead of being skipped (the vacuous-pass failure mode), and the run refuses to gate
  * fewer than 8 pairs per client for the same reason (the dashboard's mappable surface is smaller than the SDK's; exclusions are explicit and counted either way).
  *
+ * Not read by the hand parser: the members of a type alias written as an object literal or an
+ * intersection (`type X = { ... }`, `A & B`), and of an array of inline objects. A field typed through
+ * one of them is held to presence and optionality, and the members behind it are not compared.
+ *
  * Pairs that drift today live in EXCLUDED with a one-line reason, mirroring the per-advisory
  * allowlist culture of check-audit: an exclusion is a recorded decision, not a silent skip, and
  * the goal is to shrink it to zero (usually by tightening the hand type; where the CONTRACT
@@ -222,9 +226,9 @@ const MAPPINGS = {
  * added makes the shrink loud.
  */
 const MINIMUM_MAPPED = {
-  'sdk/javascript/src/types.ts': 118,
+  'sdk/javascript/src/types.ts': 120,
   'dashboard/src/services/api.ts': 22,
-  'sdk/python/openwa/types.py': 130,
+  'sdk/python/openwa/types.py': 131,
   'sdk/go': 131,
   'sdk/java': 135,
 };
