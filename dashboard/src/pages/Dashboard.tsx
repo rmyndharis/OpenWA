@@ -22,6 +22,10 @@ import { formatLastActive, formatSessionStatus } from '../utils/sessionDisplay';
 // main/login bundle, and only for an unscoped admin key: /stats/messages refuses every other key.
 const DashboardCharts = lazy(() => import('../components/DashboardCharts').then(m => ({ default: m.DashboardCharts })));
 
+// How often the overview re-reads the sessions and their statistics while it stays open. It holds no socket, so without
+// this a session dropping changed nothing here until the window lost and regained focus. Paused while the tab is hidden.
+const SESSION_REFRESH_MS = 30_000;
+
 export function Dashboard() {
   const { t } = useTranslation();
   useDocumentTitle(t('dashboard.title'));
@@ -35,8 +39,8 @@ export function Dashboard() {
     isLoading: loadingSessions,
     error: sessionsError,
     isLoadingError: sessionsNeverLoaded,
-  } = useSessionsQuery();
-  const { data: stats } = useSessionStatsQuery();
+  } = useSessionsQuery(SESSION_REFRESH_MS);
+  const { data: stats } = useSessionStatsQuery(SESSION_REFRESH_MS);
   // GET /webhooks is OPERATOR-only and /stats/overview ADMIN-only. A key without the role is not sent
   // them, since the gateway audits every refusal as a failed authentication; their cards show the
   // unavailable placeholder.

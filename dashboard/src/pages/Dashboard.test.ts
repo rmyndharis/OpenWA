@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, environmentManager } from '@tanstack/react-query';
 
 let webhooksStatus = 403;
 let webhookList: unknown[] = [];
@@ -120,6 +120,28 @@ function statValue(label: string): string {
   const card = rtl.screen.getByText(label).closest('.stat-card');
   return card?.querySelector('.stat-value')?.textContent ?? '';
 }
+
+// The overview holds no socket and its reads were only marked stale after 30 s, which refetches nothing by itself: a tab
+// kept open and focused showed a session that had dropped as connected until the window lost and regained focus.
+test('the overview reads the sessions and their statistics again while it stays open', async t => {
+  // React Query decides it runs on a server when it loads before jsdom's window, as it does here, and then schedules no
+  // refetch timer at all. A browser always has a window.
+  const wasServer = environmentManager.isServer();
+  environmentManager.setIsServer(() => false);
+  t.after(() => environmentManager.setIsServer(() => wasServer));
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  sessionList = [READY_SESSION];
+  renderDashboard();
+  await rtl.screen.findByText('Main');
+  const reads = () => [
+    requested.filter(path => path === '/api/sessions').length,
+    requested.filter(path => path === '/api/sessions/stats/overview').length,
+  ];
+  const [sessionReads, statsReads] = reads();
+
+  rtl.act(() => t.mock.timers.tick(30_000));
+  assert.deepEqual(reads(), [sessionReads + 1, statsReads + 1], 'the overview did not read the sessions again');
+});
 
 test('a refused webhook read shows the unavailable placeholder, not zero webhooks', async () => {
   webhooksStatus = 403;

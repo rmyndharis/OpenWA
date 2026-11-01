@@ -40,19 +40,23 @@ export const queryKeys = {
 
 // ── Session Queries ───────────────────────────────────────────────────
 
-export function useSessionsQuery() {
+// `refetchInterval` is for a page that shows live session state with no socket of its own; the pages that read the list
+// only to pick a session leave it out. A stale query refetches only on mount, focus or an invalidation.
+export function useSessionsQuery(refetchInterval?: number) {
   return useQuery({
     queryKey: queryKeys.sessions,
     queryFn: sessionApi.list,
     staleTime: 30_000,
+    refetchInterval,
   });
 }
 
-export function useSessionStatsQuery() {
+export function useSessionStatsQuery(refetchInterval?: number) {
   return useQuery({
     queryKey: queryKeys.sessionStats,
     queryFn: sessionApi.getStats,
     staleTime: 30_000,
+    refetchInterval,
   });
 }
 
