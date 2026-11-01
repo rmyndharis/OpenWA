@@ -1434,7 +1434,8 @@ export class WwebjsLifecycle {
         lastError = error;
         const reason = error instanceof Error ? error.message : String(error);
         // A request that lands on the reloaded document before whatsapp-web.js has re-exposed window.AuthStore dies
-        // on the missing store, and one that lands before WhatsApp Web has booted on window.require.
+        // on the missing store (the PairingCodeLinkUtils read). The navigation shapes are retried as well, so a
+        // request that lands mid-navigation, or before WhatsApp Web has booted, gets another attempt.
         const transient =
           error instanceof PairingCodeAttemptTimeoutError ||
           isNavigationShapedInitRejection(reason) ||

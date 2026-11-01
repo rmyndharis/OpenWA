@@ -911,8 +911,8 @@ export class SessionController {
     status: 400,
     description:
       `${SESSION_NOT_STARTED_400} Also an invalid chatId / muteUntil, or a chatId the whatsapp-web.js engine ` +
-      'cannot resolve. The Baileys engine writes the mute without resolving the chat first and ' +
-      'answers `success: true` for a chat that does not exist.',
+      'cannot resolve. The Baileys engine answers `success: true` for a chat it has never seen, and `400` for a ' +
+      'phone chatId held under a LID that neither the stored mapping nor a WhatsApp lookup pairs.',
   })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
@@ -949,8 +949,8 @@ export class SessionController {
     description:
       `${SESSION_NOT_STARTED_400} Also a chatId the session cannot resolve. An unknown chat is reported here ` +
       'rather than as `success: false`, which on this route means only that the three-pin cap ' +
-      'refused a real chat. The Baileys engine cannot resolve chats ahead of the write and answers ' +
-      '`success: true` for an unknown chat.',
+      'refused a real chat. The Baileys engine answers `success: true` for a chat it has never seen, and `400` ' +
+      'for a phone chatId held under a LID that neither the stored mapping nor a WhatsApp lookup pairs.',
   })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({

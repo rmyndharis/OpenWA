@@ -1055,9 +1055,10 @@ adapter boundary — none silently stubs.
   batch refusal string; Baileys returns per-jid `[{status}]`. Both are mapped onto the HTTP
   `results` field; a total refusal throws. A participant whose privacy settings allow joining only by
   invitation (code `403`) is answered differently: whatsapp-web.js sends that person a private group invite
-  message and the adapter reports `success: true` with a message saying the invite was sent, while Baileys
-  sends nothing and reports `success: false, status: 403`, so a batch made only of such participants answers
-  `200` on wwjs and `403` on Baileys.
+  message when WhatsApp allows one and the adapter reports `success: true` with a message saying the invite was
+  sent once it went out (otherwise `success: false, status: 403`), while Baileys sends nothing and reports
+  `success: false, status: 403`, so a batch made only of such participants answers `200` on wwjs when every
+  invite went out and `403` on Baileys.
 - **Group owner and group event ids (wwjs).** whatsapp-web.js folds a group's participant list to the phone
   dialect, but the group `owner` (`getGroupInfo`, `getGroupJoinInfo`) and the actor and participant ids of group
   events reach the adapter as WhatsApp Web holds them, which on a LID-addressed group is `<lid>@lid` even when the

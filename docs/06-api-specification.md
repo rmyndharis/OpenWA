@@ -872,7 +872,7 @@ Request an 8-char pairing code to link via phone number (alternative to QR).
 
 On Baileys the session waits 5 minutes from the latest request for the code to be entered, and a repeat request starts the 5 minutes over. Past them the session registers again with a new QR, and the code it handed out can no longer link. From 60 s after the latest request until that new QR, `GET /api/sessions/:sessionId/qr` answers `400` (QR not ready yet): the QR shown before the request can no longer link either.
 
-**Errors:** `400` validation, or session not started, or already authenticated · `401` · `403` · `404` not found · `409` session not waiting to be linked yet; wait for `status` to read `qr_ready` and retry (after a code was accepted, wait for `ready` instead). On Baileys a session that already reads `qr_ready` can still answer `409` while its socket is closing, for up to the WebSocket close timeout (30 s); that is retryable and the status follows shortly. On whatsapp-web.js a `409` also answers a number that is the stored phone of another session; log that session out or delete it before pairing this one. · `503` whatsapp-web.js only: the gateway stopped waiting after its attempt budget, usually because WhatsApp Web kept reloading its QR page; retryable, and the last attempt's reason rides in the message. An attempt that timed out may still have reached WhatsApp, and a retry starts the linking flow again, so the unlink warning above applies to the retry too.
+**Errors:** `400` validation, or session not started, or already authenticated · `401` · `403` · `404` not found · `409` session not waiting to be linked yet; wait for `status` to read `qr_ready` and retry (after a code was accepted, wait for `ready` instead). On Baileys a session that already reads `qr_ready` can still answer `409` while its socket is closing, for up to the WebSocket close timeout (30 s); that is retryable and the status follows shortly. On whatsapp-web.js a `409` also answers a number that is the stored phone of another session; log that session out or delete it before pairing this one. The refusal also tells a key scoped to this session alone that the number is linked to another session; it stays, since pairing that number can revoke the other session's device. · `503` whatsapp-web.js only: the gateway stopped waiting after its attempt budget, usually because WhatsApp Web kept reloading its QR page; retryable, and the last attempt's reason rides in the message. An attempt that timed out may still have reached WhatsApp, and a retry starts the linking flow again, so the unlink warning above applies to the retry too.
 
 #### POST /api/sessions/:sessionId/presence/subscribe
 
@@ -934,6 +934,8 @@ mean actively typing or recording _in this chat_, `paused` means they stopped wi
 `lastSeen` is epoch **seconds** and is absent whenever the contact's privacy settings hide last-seen,
 which is the default for most accounts and is not an error. `groupOnlineCount` appears for groups
 when WhatsApp reports it. A 1:1 chat still returns a `participants` array, holding the one contact.
+
+The chat may be written in any form the subscribe route accepts (`@c.us`, `@s.whatsapp.net`, a `:device` suffix, upper case). On Baileys a phone number also finds the report WhatsApp sent from the contact's `@lid` once that pairing has been reported, and the body's `chatId` is the id the report came from.
 
 `observedAt` is when **this gateway** received the report, not a WhatsApp timestamp. Presence is
 short-lived, so an old `observedAt` means the state is stale rather than steady.
@@ -1166,7 +1168,7 @@ Mute a chat's notifications until a given moment, or unmute it.
 
 > **`muteUntil` is required, and `null` is not the same as omitting it.** The two plausible readings
 > of a missing field — unmute, or mute forever — are opposites, so the endpoint rejects the omission
-> with a `400` instead of guessing. Send `null` to unmute. To mute indefinitely, send a far-future
+> with a `400` instead of guessing. Send `null` to unmute; a form-encoded body can set a number but cannot carry `null`, so unmuting needs a JSON body. To mute indefinitely, send a far-future
 > timestamp, at most `9007199254740991` (`Number.MAX_SAFE_INTEGER`, the largest integer a JSON number
 > carries exactly; a larger one is a `400`): neither engine exposes a portable "forever" value
 > (whatsapp-web.js uses `-1` internally, Baileys has none), so the API keeps one well-defined shape.
@@ -1181,7 +1183,7 @@ Mute a chat's notifications until a given moment, or unmute it.
 > last message on either engine, so a chat with no known history mutes like any other. The response is
 > always `{ "success": true }` or an error.
 
-**Errors:** `400` session not started, invalid `chatId`/`muteUntil`, or a `chatId` the whatsapp-web.js engine cannot resolve (the Baileys engine writes the mute without resolving the chat first and answers `success: true` for a chat that does not exist) · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
+**Errors:** `400` session not started, invalid `chatId`/`muteUntil`, or a `chatId` the whatsapp-web.js engine cannot resolve (the Baileys engine answers `success: true` for a chat it has never seen, and `400` for a phone `chatId` held under a LID that neither the stored mapping nor a WhatsApp lookup pairs) · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
 
 #### POST /api/sessions/:sessionId/chats/pin
 
@@ -3120,7 +3122,7 @@ Status is forced to `200` via `@HttpCode(HttpStatus.OK)` (overriding the POST de
 
 Each entry is a `ParticipantOperationResult`: `id` (the participant the outcome belongs to), `success` (true only when the engine confirmed the change for that participant), and the optional engine-reported `status`/`message` (e.g. `200` ok, `403` invite-only/not-admin, `404` not registered, `409` already a member). Engines that only confirm the batch as a whole report one success entry per requested participant.
 
-A participant whose privacy settings allow joining only by invitation is answered differently by the engines: whatsapp-web.js sends that person a private group invite message and reports `success: true` with a message saying the invite was sent, while Baileys sends nothing and reports `success: false, status: 403`. A batch made only of such participants therefore answers `200` on whatsapp-web.js and `403` on Baileys.
+A participant whose privacy settings allow joining only by invitation is answered differently by the engines: whatsapp-web.js sends that person a private group invite message when WhatsApp allows one and, once it went out, reports `success: true` with a message saying the invite was sent (otherwise `success: false, status: 403`), while Baileys sends nothing and reports `success: false, status: 403`. A batch made only of such participants therefore answers `200` on whatsapp-web.js when every invite went out and `403` on Baileys.
 
 **Errors:** `400` validation / session not started, or a participant does not name an individual (phone, `<phone>@c.us` or `<lid>@lid`), or (send pacing on) the request names more new contacts than the whole day's cold-reachout allowance (no `retryAfterSeconds`; split the batch, see Send pacing) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or WhatsApp refused every listed participant (a partial refusal still returns `200`) · `404` group not found · `409` conflict or engine not ready (retryable) · `429` `SEND_PACING_LIMITED` when send pacing is enabled (cold-reachout cap reached for today, see Send pacing) · `503` session not ready or dependency unavailable (retryable), or WhatsApp did not answer within the request budget, so no per-participant outcome was read; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
