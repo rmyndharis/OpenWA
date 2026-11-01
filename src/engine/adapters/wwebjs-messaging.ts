@@ -33,7 +33,7 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
-import { toCapturedPageError } from './wwebjs-lifecycle';
+import { PAGE_RELOADING_MESSAGE, isNavigationError, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
 
 /**
@@ -402,6 +402,8 @@ export class WwebjsMessaging {
     } catch (error) {
       this.host.reportIfPageTransportError(error, context);
       this.ensureReadyToSend();
+      // A reload that cut the read short is the retryable 409 every other call gets for it, and nothing was sent.
+      if (isNavigationError(error)) throw markNothingSent(new EngineNotReadyError(PAGE_RELOADING_MESSAGE));
       throw error;
     }
   }

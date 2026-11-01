@@ -937,6 +937,13 @@ export class WwebjsLifecycle {
     if (message.startsWith(CAPTURED_PAGE_ERROR_PREFIX)) {
       return false;
     }
+    // A call the page navigation killed while it ran keeps CDP's 'Protocol error' prefix (puppeteer rewrites only
+    // the shapes that end with a context-gone suffix), and it dies before the re-inject window is stamped. It names
+    // a reload, not a death: a page that is really gone still reports through the close, error and disconnected
+    // listeners above.
+    if (isNavigationError(error)) {
+      return false;
+    }
     return WwebjsLifecycle.PAGE_TRANSPORT_ERROR_PATTERN.test(message);
   }
 
@@ -984,9 +991,9 @@ export class WwebjsLifecycle {
   }
 
   private reportDeath(error: unknown, context: string): void {
-    // Inside the navigation re-inject window the same signatures ride a HEALING page: an in-flight
-    // evaluate killed by the navigation keeps its 'Protocol error' prefix (puppeteer only rewrites
-    // the shapes that END with a context-gone suffix), and a navigating page transiently detaches
+    // Inside the navigation re-inject window the same signatures ride a HEALING page (a call the
+    // navigation killed while it ran is not read as a death at all, see isPageTransportError): a
+    // navigating page transiently detaches
     // frames. Reporting that as death would tear down the session whatsapp-web.js is about to
     // re-inject — faster than the watchdog the grace protects against (#1081). Log the match so the
     // theory stays falsifiable from field logs; the error still propagates to the caller, and a

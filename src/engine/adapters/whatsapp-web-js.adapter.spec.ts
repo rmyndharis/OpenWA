@@ -21,6 +21,7 @@ import {
   isExecutionContextDestroyedError,
   NAVIGATION_REINJECT_GRACE_MS,
   NAVIGATION_EPISODE_CAP_MS,
+  PAGE_RELOADING_MESSAGE,
   type WwebjsLifecycle,
 } from './wwebjs-lifecycle';
 import { READY_RECONCILE_TIMEOUT_MS, READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS } from './wwebjs-reconcile';
@@ -50,6 +51,7 @@ import { RecipientUnreachableError } from '../../common/errors/recipient-unreach
 import { EditedMessage, EngineStatus, GroupEvent, IncomingCallEvent } from '../interfaces/whatsapp-engine.interface';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
+import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
 import { readCurrentLid } from './wwebjs-contacts';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
@@ -6981,6 +6983,88 @@ describe('WhatsAppWebJsAdapter navigation re-inject grace (#1081)', () => {
     );
 
     expect(adapter.getStatus()).toBe(EngineStatus.READY);
+  });
+
+  describe('a call the reload kills while it runs, before the window is stamped', () => {
+    // What CDP answers for a call running when the page navigates, passed on by puppeteer with its prefix. The
+    // navigation itself is dispatched on a later turn, so the call's catch runs before the window exists.
+    const IN_FLIGHT = 'Protocol error (Runtime.callFunctionOn): Execution context was destroyed.';
+    const GROUP = '120363000000000000@g.us';
+
+    const wire = (overrides: Record<string, jest.Mock>) => {
+      const onDisconnected = jest.fn();
+      const { adapter, client } = wireAdapter(overrides as Partial<NavFakeClient>);
+      (adapter as unknown as { callbacks: unknown }).callbacks = { onDisconnected };
+      const navigateLater = async (): Promise<void> => {
+        await new Promise(resolve => setImmediate(resolve));
+        client.pupPage.emit('framenavigated', navFrame());
+      };
+      return { adapter, client, onDisconnected, navigateLater };
+    };
+
+    it('answers a read with the reload 409 and keeps the session ready', async () => {
+      const { adapter, onDisconnected, navigateLater } = wire({
+        getNumberId: jest.fn().mockRejectedValue(new Error(IN_FLIGHT)),
+      });
+
+      await expect(adapter.getNumberId('628123456789')).rejects.toEqual(
+        expect.objectContaining({ message: PAGE_RELOADING_MESSAGE }),
+      );
+      await navigateLater();
+
+      expect(adapter.getStatus()).toBe(EngineStatus.READY);
+      expect(onDisconnected).not.toHaveBeenCalled();
+    });
+
+    it('keeps the session ready when a send dies that way', async () => {
+      const { adapter, onDisconnected, navigateLater } = wire({
+        sendMessage: jest.fn().mockRejectedValue(new Error(IN_FLIGHT)),
+      });
+
+      await expect(adapter.sendTextMessage(GROUP, 'hi')).rejects.toThrow(IN_FLIGHT);
+      await navigateLater();
+
+      expect(adapter.getStatus()).toBe(EngineStatus.READY);
+      expect(onDisconnected).not.toHaveBeenCalled();
+    });
+
+    it('answers a reply whose quoted message read dies that way with the reload 409', async () => {
+      const { adapter, onDisconnected, navigateLater } = wire({
+        getChatById: jest.fn().mockRejectedValue(new Error(IN_FLIGHT)),
+      });
+
+      const error = await adapter.replyToMessage(GROUP, 'Q1', 'hi').catch((e: unknown) => e);
+      expect(error).toEqual(expect.objectContaining({ message: PAGE_RELOADING_MESSAGE }));
+      // Nothing was sent, so a keyed send frees its key for the retry the 409 asks for.
+      expect(provesNothingSent(error)).toBe(true);
+      await navigateLater();
+
+      expect(adapter.getStatus()).toBe(EngineStatus.READY);
+      expect(onDisconnected).not.toHaveBeenCalled();
+    });
+
+    it('still reports the session dead when the page then closes', async () => {
+      const { adapter, client, onDisconnected } = wire({
+        getNumberId: jest.fn().mockRejectedValue(new Error(IN_FLIGHT)),
+      });
+
+      await expect(adapter.getNumberId('628123456789')).rejects.toBeInstanceOf(EngineNotReadyError);
+      client.pupPage.emit('close');
+
+      expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+      expect(onDisconnected).toHaveBeenCalledWith('Page closed');
+    });
+
+    it('still reports a closed target as a death', async () => {
+      const { adapter, onDisconnected } = wire({
+        getNumberId: jest.fn().mockRejectedValue(new Error('Protocol error (Runtime.callFunctionOn): Target closed')),
+      });
+
+      await expect(adapter.getNumberId('628123456789')).rejects.toBeInstanceOf(EngineTransportError);
+
+      expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+      expect(onDisconnected).toHaveBeenCalledWith('Page transport error during getNumberId');
+    });
   });
 
   it('reports a transport-matching error as death again once the window expired', () => {
