@@ -9,8 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Read a whatsapp-web.js group whose refresh fails one of WhatsApp Web's own invariants from the metadata the page already holds, so `GET /api/sessions/{sessionId}/groups/{groupId}` and `/labels/{labelId}/chats` no longer answer 404 for it (#1962).
+- Read a whatsapp-web.js group whose refresh fails one of WhatsApp Web's own invariants from the metadata the page already holds across group, chat, label and message routes (#1962).
 - Reload the active API key index after seeding the first admin key, so a failed first read no longer leaves body admission without it until the next refresh. Thanks @Purushotham-Prajapati-24.
+- Clear or update both the `@lid` and `@s.whatsapp.net` Baileys chat previews when a history-sync revoke or a live edit or revoke arrives under the counterpart chat id.
+- Pin a Baileys send to the socket and ready state that started it across pre-send media, quote, preview and catalog work, and map a connection drop during `sendProduct`'s catalog lookup to `EngineNotReadyError`.
+- Ignore an old engine's disconnect report while `executeReconnect` is tearing that engine down, flush a deferred terminal-unlink read retry when a reconnect is cancelled or shut down, and register the `logout` credential-teardown fence before waiting on initial status.
+- Reject WhatsApp JIDs with more than one `@` or an empty local part, canonicalize `groupId` on group picture routes, and validate `channelId` on `demoteChannelAdmin` and `transferChannelOwnership`.
+- Retract retired or rolled-back wildcard instance secrets from the plugin base config and `registry.json` when an infrastructure backup is imported.
+- Refund the `/health` API key validation limiter slot by reservation token and skip `API_KEY_AUTH_FAILED` logging when the key store itself fails to read, and reject boolean `true` on numeric DTO fields with `@Min(1)`.
+- Stop throttled dashboard media retries after the API key changes or is cleared, keep the dashboard chat composer's in-flight state per conversation, and restore keyboard focus after an infrastructure export or import finishes.
+- Refuse `.` and `..` path segments on raw Python and PHP SDK `request` calls, preserve leading `//` paths on raw Python SDK `request` and `request_bytes` calls, and align `GroupInfo.owner`, `ChatHistoryMessage.mentionedIds`, `MessageContact.labels`, `BulkMessageItem.content` and `EngineHistoryMessage.media` across the SDK and dashboard contract types.
 
 ## [0.27.0] - 2026-10-31
 
