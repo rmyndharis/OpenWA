@@ -34,6 +34,8 @@ const THUMBNAIL_TIMEOUT_MS = 10_000;
 const THUMBNAIL_MAX_BYTES = 64 * 1024;
 /** Reads running at once. Each is a whole child process. */
 const reads = new ConcurrencyLimiter(2);
+/** Thumbnails running at once, apart from the reads: a voice note read that hangs must not hold a video send. */
+const thumbnails = new ConcurrencyLimiter(2);
 /** The directory holding node_modules, whether this file runs from src/ or from dist/. */
 const APP_ROOT = join(__dirname, '..', '..', '..');
 
@@ -177,10 +179,10 @@ export async function describeAudio(data: Buffer, ptt: boolean): Promise<AudioDe
  * Baileys would make. Baileys makes it, whenever the content has none, by running ffmpeg through a shell on
  * the caller's file with no protocol or format whitelist, no deadline and no bound on how many run at once:
  * a stream description or a manifest sent as a video reaches the network from there. Made here through
- * runFfmpeg instead, under the limiter the audio reads use. Never rejects.
+ * runFfmpeg instead, under a limiter of its own. Never rejects.
  */
 export async function describeVideo(data: Buffer): Promise<{ jpegThumbnail: string }> {
-  const jpeg = await reads
+  const jpeg = await thumbnails
     .run(() =>
       runFfmpeg(data, 'bin', 'jpg', ['-frames:v', '1', '-vf', 'scale=32:-1', '-f', 'image2'], {
         ffmpegPath: process.env.FFMPEG_PATH || 'ffmpeg',
