@@ -33,9 +33,9 @@ import { createLogger } from '../../common/services/logger.service';
  * surface is small and the text format (v0.0.4) is trivial to emit by hand.
  *
  * Scraping is gated by METRICS_TOKEN: when it is unset the endpoint is disabled entirely
- * (404, so a scanner cannot even confirm it exists); when set, a matching `Bearer` token
- * is required. This keeps operational internals (session counts, failure totals) from
- * being exposed publicly by default on a self-hosted box.
+ * (404, whose message names METRICS_TOKEN, so it shows the endpoint exists and serves nothing);
+ * when set, a matching `Bearer` token is required. This keeps operational internals (session
+ * counts, failure totals) from being exposed publicly by default on a self-hosted box.
  */
 /**
  * How long a rendered scrape is reused before recomputing. getOverview() runs a full session scan plus
