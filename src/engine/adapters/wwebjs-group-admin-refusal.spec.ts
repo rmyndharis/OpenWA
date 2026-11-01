@@ -18,6 +18,7 @@ describe('whatsapp-web.js group admin writes and reads for an account that is no
     if (self) participants.push({ id: { _serialized: SELF, user: '628000000001' }, ...self });
     const batch = jest.fn().mockResolvedValue({ status: 200, matched: [true] });
     const getGroupMembershipRequests = jest.fn().mockResolvedValue([]);
+    const requestAction = jest.fn().mockResolvedValue([]);
     const chat = {
       id: { _serialized: GROUP },
       isGroup: true,
@@ -32,8 +33,10 @@ describe('whatsapp-web.js group admin writes and reads for an account that is no
       info: { wid: { _serialized: SELF, user: '628000000001' } },
       getChatById: jest.fn().mockResolvedValue(chat),
       getGroupMembershipRequests,
+      approveGroupMembershipRequests: requestAction,
+      rejectGroupMembershipRequests: requestAction,
     };
-    return { adapter, batch, getGroupMembershipRequests };
+    return { adapter, batch, getGroupMembershipRequests, requestAction };
   }
 
   const ops = ['removeParticipants', 'promoteParticipants', 'demoteParticipants'] as const;
@@ -50,6 +53,25 @@ describe('whatsapp-web.js group admin writes and reads for an account that is no
 
     await expect(adapter.getGroupMembershipRequests(GROUP)).rejects.toBeInstanceOf(EngineRefusedError);
     expect(getGroupMembershipRequests).not.toHaveBeenCalled();
+  });
+
+  // Approving or rejecting every pending request reads the same store, so for a non-admin it would answer an empty
+  // list that reads as "nothing pending".
+  it.each(['approveGroupMembershipRequests', 'rejectGroupMembershipRequests'] as const)(
+    '%s without named requesters refuses a member that is not an admin, before the page is asked',
+    async op => {
+      const { adapter, requestAction } = setup({ isAdmin: false, isSuperAdmin: false });
+
+      await expect(adapter[op](GROUP)).rejects.toBeInstanceOf(EngineRefusedError);
+      expect(requestAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it('lets an admin approve every pending request', async () => {
+    const { adapter, requestAction } = setup({ isAdmin: true, isSuperAdmin: false });
+
+    await expect(adapter.approveGroupMembershipRequests(GROUP)).resolves.toEqual([]);
+    expect(requestAction).toHaveBeenCalledTimes(1);
   });
 
   it.each([

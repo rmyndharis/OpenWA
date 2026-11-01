@@ -686,7 +686,10 @@ export class WwebjsGroups {
   ): Promise<ParticipantOperationResult[]> {
     // Resolved first, like the list above: the page reads the group's metadata without checking it
     // exists, so an unknown or non-group id rejected there and answered 500 instead of 404.
-    await this.requireGroupChat(groupId, op);
+    const chat = await this.requireGroupChat(groupId, op);
+    // Naming nobody takes every pending request from the page's own store, which answers a non-admin with an empty
+    // list, as the read above does. Named requesters get the server's per-requester answer.
+    if (!participants) this.refuseNonAdmin(chat, op, groupId);
     const options = {
       // Qualified like every other participant write in this file: the service blesses a bare phone
       // number, and the page maps requesterIds straight through `createWid` (Injected/Utils.js) —
