@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThan, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { ChatState } from './baileys-chat-state.entity';
 import { createLogger } from '../../common/services/logger.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
@@ -124,13 +124,6 @@ const SEP = '\u0000'; // a null byte never appears in a session name or JID, so 
 // evicted row still answers undefined, so the chat list shows that chat's live record once; the first
 // eviction is logged for that reason.
 export const CHAT_STATE_CACHE_DEFAULT = 5000;
-
-/**
- * How long a chat deletion is kept. Its row only has to outlast the messages sent before it that can still
- * arrive, and WhatsApp keeps an undelivered message for 30 days. Kept for good, every chat ever deleted held a
- * row in the table and in the cache all sessions share. Dropped when the session next starts.
- */
-export const CHAT_DELETION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * Backs the Baileys `muted`/`archived`/`pinned` chat fields with the persisted {@link ChatState} table.
@@ -646,31 +639,16 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
       if (k.startsWith(prefix)) this.states.delete(k);
     }
     let skipped = false;
-    let expired = false;
-    const cutoff = Date.now() - CHAT_DELETION_TTL_MS;
     for (const row of [...rows].reverse()) {
       // Oldest first, as in reload.
       const k = this.key(sessionId, row.chatId);
       if (this.changedSince(k, since)) skipped = true;
-      else if (row.deletedAt != null && row.deletedAt < cutoff) expired = true;
       else this.index(k, fromRow(row));
     }
     // Marked after the loop: indexing these rows can evict other sessions' keys, never this one's.
     // Only this session's writes can leave its keys out of the load, so another session's do not count.
     if (this.loadWasWhole(rows.length, idle && writes.seq === seq && writes.pending.size === 0 && !skipped)) {
       this.completeSessions.add(sessionId);
-    }
-    if (expired) await this.dropExpiredDeletions(sessionId, cutoff);
-  }
-
-  /** Deletes the session's chat deletions older than the cutoff; one that fails stays for the next start. */
-  private async dropExpiredDeletions(sessionId: string, cutoff: number): Promise<void> {
-    try {
-      await this.repo.delete({ sessionId, deletedAt: LessThan(cutoff) });
-    } catch (err) {
-      this.logger.warn(
-        `Could not drop expired chat deletions for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
-      );
     }
   }
 
