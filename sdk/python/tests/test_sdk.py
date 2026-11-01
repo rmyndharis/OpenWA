@@ -306,6 +306,14 @@ class TestClientCore:
         client.request("GET", "//api/sessions", query={"limit": 5})
         assert calls == ["http://localhost:2785//api/sessions?limit=5"]
 
+    def test_a_base_url_path_prefix_is_kept_by_typed_and_raw_calls(self) -> None:
+        # Behind a reverse proxy at /openwa/, losing the prefix would send every call to a route that 404s.
+        backend = MockBackend().on("GET", "/openwa/", body=[])
+        client = make_client(backend, base_url="http://h/openwa/")
+        client.sessions.list()
+        client.request("GET", "//api/x", query={"limit": 5})
+        assert [c.url for c in backend.calls] == ["http://h/openwa/api/sessions", "http://h/openwa//api/x?limit=5"]
+
     def test_204_is_none(self):
         # `delete` is declared `-> None`, so asserting on its result is a type error and proves
         # nothing the signature does not already guarantee. What is worth asserting is that a 204

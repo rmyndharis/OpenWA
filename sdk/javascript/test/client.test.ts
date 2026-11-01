@@ -60,6 +60,15 @@ describe('OpenWAClient', () => {
     expect(t.lastCall!.url).toBe('http://localhost:2785/api/sessions');
   });
 
+  it('keeps a base URL path prefix on typed and raw calls', async () => {
+    // Behind a reverse proxy at /openwa/, losing the prefix would send every call to a route that 404s.
+    const t = new MockTransport().on('GET', '/openwa/', { body: [] });
+    const c = new OpenWAClient({ baseUrl: 'http://h/openwa/', apiKey: 'k', fetch: t.asFetch() });
+    await c.sessions.list();
+    await c.request({ method: 'GET', path: '//api/x', query: { limit: 5 } });
+    expect(t.calls.map(call => call.url)).toEqual(['http://h/openwa/api/sessions', 'http://h/openwa//api/x?limit=5']);
+  });
+
   it('does not auto-follow redirects (passes redirect: manual to fetch)', async () => {
     // Auto-following a redirect would re-send X-API-Key to the redirect target,
     // potentially a different origin. The SDK must not follow silently.
