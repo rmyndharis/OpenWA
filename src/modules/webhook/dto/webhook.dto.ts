@@ -416,7 +416,9 @@ export class WebhookDeliveryFailureDto {
   @ApiPropertyOptional({
     type: Number,
     nullable: true,
-    description: 'Last HTTP status when the failure was a non-2xx response; null for a network/timeout error.',
+    description:
+      'Last HTTP status when the failure was a non-2xx response; null for a network/timeout error, a blocked ' +
+      'destination, or a redirect (a 3xx answer is never followed and is recorded without its status).',
     example: null,
   })
   lastStatusCode?: number | null;
@@ -526,7 +528,12 @@ export class WebhookTestResponseDto {
   @ApiProperty({ description: 'True when the receiver answered 2xx.', example: true })
   success!: boolean;
 
-  @ApiPropertyOptional({ description: 'The HTTP status the receiver answered, when it answered.', example: 200 })
+  @ApiPropertyOptional({
+    description:
+      'The HTTP status the receiver answered, when it answered. A redirect (3xx) is never followed and is ' +
+      'reported as an error with no status.',
+    example: 200,
+  })
   statusCode?: number;
 
   @ApiPropertyOptional({ description: 'The delivery error, when the attempt failed.', example: 'timeout' })
