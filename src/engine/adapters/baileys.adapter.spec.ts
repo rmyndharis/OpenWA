@@ -1912,10 +1912,15 @@ describe('BaileysAdapter location + contact + poll sends', () => {
   it('sanitizes CRLF in a contact name to prevent vCard line-injection', async () => {
     const adapter = await ready();
     await adapter.sendContactMessage('628111@s.whatsapp.net', { name: 'Eve\nEMAIL:evil@x.com', number: '123' });
-    const [, call] = fakeSock.sendMessage.mock.calls[0] as [string, { contacts: { contacts: { vcard: string }[] } }];
+    const [, call] = fakeSock.sendMessage.mock.calls[0] as [
+      string,
+      { contacts: { contacts: { displayName?: string; vcard: string }[] } },
+    ];
     const vcard = call.contacts.contacts[0].vcard;
     expect(vcard).not.toMatch(/\nEMAIL:evil@x\.com/);
     expect(vcard).toContain('FN:Eve EMAIL:evil@x.com');
+    // The name the bubble shows reads as the vCard's FN does on whatsapp-web.js, line break read as a space.
+    expect(call.contacts.contacts[0].displayName).toBe('Eve EMAIL:evil@x.com');
   });
 
   it('sendPollMessage maps name/values and defaults to single choice (selectableCount 1)', async () => {

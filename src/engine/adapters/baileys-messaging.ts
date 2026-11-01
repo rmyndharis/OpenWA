@@ -25,7 +25,7 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { refusedStatusCode, toEngineParticipants } from './baileys-groups';
 import { findSelfParticipant } from './baileys-group-mapper';
-import { buildVCard } from './vcard';
+import { buildVCard, stripLineBreaks } from './vcard';
 import {
   baileysChatJid,
   isBaileysCatalogShare,
@@ -759,7 +759,10 @@ export class BaileysMessaging {
       chatId,
       {
         // A single card is built from the entry alone, so the entry carries the name the bubble shows.
-        contacts: { displayName: contact.name, contacts: [{ displayName: contact.name, vcard: buildVCard(contact) }] },
+        contacts: {
+          displayName: contact.name,
+          contacts: [{ displayName: stripLineBreaks(contact.name), vcard: buildVCard(contact) }],
+        },
       },
       await this.quoteOption(contact.quotedMessageId, socket),
       socket,
