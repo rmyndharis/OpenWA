@@ -44,6 +44,13 @@ type ContactPhoneResponse struct {
 	Phone     *string `json:"phone"`
 }
 
+// ContactLidResponse carries the @lid WhatsApp holds for a phone number. Lid is nil when it holds none
+// (an unregistered number answers the same).
+type ContactLidResponse struct {
+	Number string  `json:"number"`
+	Lid    *string `json:"lid"`
+}
+
 // ListContactsQuery paginates the contact list.
 type ListContactsQuery struct {
 	Limit  *int

@@ -5,6 +5,7 @@ import static com.rmyndharis.openwa.http.Http.encodeSegment;
 import com.rmyndharis.openwa.OpenWAClient;
 import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.model.CheckNumberResponse;
+import com.rmyndharis.openwa.model.ContactLidResponse;
 import com.rmyndharis.openwa.model.ContactPhoneResponse;
 import com.rmyndharis.openwa.model.ContactRecord;
 import com.rmyndharis.openwa.model.ListContactsQuery;
@@ -84,6 +85,19 @@ public final class ContactsResource {
             null,
             null,
             ContactPhoneResponse.class);
+    }
+
+    /**
+     * Look up the {@code @lid} WhatsApp holds for a phone number, without sending anything. {@code lid} is
+     * {@code null} when WhatsApp holds none, which an unregistered number also answers. Requires an OPERATOR-level key.
+     */
+    public ContactLidResponse lid(String sessionId, String number) {
+        return client.request(
+            HttpMethod.GET,
+            "/api/sessions/" + encodeSegment(sessionId) + "/contacts/" + encodeSegment(number) + "/lid",
+            null,
+            null,
+            ContactLidResponse.class);
     }
 
     /** Block a contact. Requires an OPERATOR-level key. */

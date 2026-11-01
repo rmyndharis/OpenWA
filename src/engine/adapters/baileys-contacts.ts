@@ -1,6 +1,6 @@
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
-import { queryLidPhone } from './baileys-identity-query';
+import { lidOfPhone, phoneLidQuery, queryLidPhone } from './baileys-identity-query';
 import type { WAMessage, WAMessageKey, WASocket } from '@whiskeysockets/baileys';
 import {
   ChatSummary,
@@ -390,6 +390,29 @@ export class BaileysContacts {
       return userPart(pn);
     }
     throw new LidNotMappedError(contactId);
+  }
+
+  /**
+   * The `<lid>@lid` WhatsApp holds for a phone number, or null when it holds none, which an unregistered number
+   * answers too. The server query is run directly rather than through `getLIDForPN`: that one answers null for
+   * an unanswered query as well, and it stores the pair in Baileys' own mapping, which `resolveContactPhone`
+   * then reads back. A lookup is a read, so it records nothing, and an unanswered query rejects (503).
+   */
+  async getContactLid(number: string): Promise<string | null> {
+    this.host.ensureReady();
+    const phone = userPart(number).replace(/\D/g, '');
+    if (!phone) return null;
+    const socket = this.sock();
+    const library = await this.host.loadLib?.();
+    if (!library) throw new EngineNotReadyError();
+    const result = await withQueryDeadline(
+      this.sock(socket).executeUSyncQuery(phoneLidQuery(library, phone)),
+      this.queryBudgetMs,
+      'WhatsApp did not answer the LID lookup in time',
+    );
+    // Baileys resolves undefined, not an error, when its own timeout passes: no answer is not "no LID".
+    if (result === undefined) throw new EngineTransportError('WhatsApp did not answer the LID lookup');
+    return lidOfPhone(result, phone);
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await

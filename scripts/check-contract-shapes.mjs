@@ -169,6 +169,7 @@ const MAPPINGS = {
     ChatPresence: 'ChatPresenceResponseDto',
     CheckNumberResponse: 'NumberCheckResponseDto',
     ClickButtonRequest: 'ClickButtonDto',
+    ContactLidResponse: 'ContactLidResponseDto',
     ContactPhoneResponse: 'ResolvedPhoneResponseDto',
     ContactRecord: 'ContactDto',
     ConvertMediaInput: 'ConvertMediaDto',
@@ -226,11 +227,11 @@ const MAPPINGS = {
  * added makes the shrink loud.
  */
 const MINIMUM_MAPPED = {
-  'sdk/javascript/src/types.ts': 120,
+  'sdk/javascript/src/types.ts': 121,
   'dashboard/src/services/api.ts': 22,
-  'sdk/python/openwa/types.py': 131,
-  'sdk/go': 131,
-  'sdk/java': 135,
+  'sdk/python/openwa/types.py': 132,
+  'sdk/go': 132,
+  'sdk/java': 136,
 };
 
 /** Known drift, deliberately not gated yet — each line is a to-adjudicate follow-up. */
@@ -421,6 +422,7 @@ const PYTHON_MAPPING = {
   ChatPresence: 'ChatPresenceResponseDto',
   CheckNumberResponse: 'NumberCheckResponseDto',
   ClickButtonRequest: 'ClickButtonDto',
+  ContactLidResponse: 'ContactLidResponseDto',
   ContactPhoneResponse: 'ResolvedPhoneResponseDto',
   ContactRecord: 'ContactDto',
   ConvertedMedia: 'ConvertedMediaResponseDto',
@@ -553,6 +555,7 @@ const GO_MAPPING = {
   ChatPresence: 'ChatPresenceResponseDto',
   CheckNumberResponse: 'NumberCheckResponseDto',
   ClickButtonRequest: 'ClickButtonDto',
+  ContactLidResponse: 'ContactLidResponseDto',
   ContactPhoneResponse: 'ResolvedPhoneResponseDto',
   ContactRecord: 'ContactDto',
   ConvertMediaInput: 'ConvertMediaDto',
@@ -693,6 +696,7 @@ const JAVA_MAPPING = {
   CheckNumberResponse: 'NumberCheckResponseDto',
   ClickButtonRequest: 'ClickButtonDto',
   Contact: 'ChatHistoryContactDto',
+  ContactLidResponse: 'ContactLidResponseDto',
   ContactPhoneResponse: 'ResolvedPhoneResponseDto',
   ContactRecord: 'ContactDto',
   ConvertMediaRequest: 'ConvertMediaDto',

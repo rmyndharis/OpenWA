@@ -1363,6 +1363,13 @@ export interface ContactCapability {
    */
   resolveContactPhone(contactId: string): Promise<string | null>;
 
+  /**
+   * The `<lid>@lid` WhatsApp holds for a phone number, the reverse of {@link resolveContactPhone}, or null
+   * when it holds none (an unregistered number answers the same). A read: the gateway records nothing from it.
+   * A lookup that went unanswered rejects instead of answering null.
+   */
+  getContactLid(number: string): Promise<string | null>;
+
   getProfilePicture(contactId: string): Promise<string | null>;
 
   blockContact(contactId: string): Promise<void>;

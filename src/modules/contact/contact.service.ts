@@ -80,6 +80,11 @@ export class ContactService {
     }
   }
 
+  /** Unlike {@link resolveContactPhone}, a failed lookup is not swallowed: a null here would claim "no lid". */
+  getContactLid(sessionId: string, number: string) {
+    return this.getEngine(sessionId).getContactLid(number);
+  }
+
   getProfilePicture(sessionId: string, contactId: string) {
     return this.getEngine(sessionId).getProfilePicture(contactId);
   }

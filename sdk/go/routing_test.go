@@ -64,6 +64,7 @@ func TestRouting(t *testing.T) {
 		{"Contacts.ProfilePicture", func(c *Client) { c.Contacts.ProfilePicture(ctx, "s1", "u1") }, "GET", "/api/sessions/s1/contacts/u1/profile-picture"},
 		{"Contacts.ProfilePictures", func(c *Client) { c.Contacts.ProfilePictures(ctx, "s1", []string{"u1"}) }, "GET", "/api/sessions/s1/contacts/profile-pictures"},
 		{"Contacts.Phone", func(c *Client) { c.Contacts.Phone(ctx, "s1", "u1") }, "GET", "/api/sessions/s1/contacts/u1/phone"},
+		{"Contacts.Lid", func(c *Client) { c.Contacts.Lid(ctx, "s1", "628") }, "GET", "/api/sessions/s1/contacts/628/lid"},
 		{"Contacts.Upsert", func(c *Client) { c.Contacts.Upsert(ctx, "s1", "c1", UpsertContactRequest{}) }, "PUT", "/api/sessions/s1/contacts/c1"},
 		{"Contacts.Delete", func(c *Client) { c.Contacts.Delete(ctx, "s1", "c1") }, "DELETE", "/api/sessions/s1/contacts/c1"},
 		{"Contacts.Block", func(c *Client) { c.Contacts.Block(ctx, "s1", "u1") }, "POST", "/api/sessions/s1/contacts/u1/block"},

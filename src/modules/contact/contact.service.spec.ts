@@ -68,6 +68,24 @@ describe('ContactService', () => {
     expect(resolveContactPhone).toHaveBeenCalledWith('123@lid');
   });
 
+  describe('getContactLid', () => {
+    it('delegates to the engine', async () => {
+      const getContactLid = jest.fn().mockResolvedValue('123@lid');
+      await expect(makeService({ getContactLid }).getContactLid('s1', '628123456789')).resolves.toBe('123@lid');
+      expect(getContactLid).toHaveBeenCalledWith('628123456789');
+    });
+
+    it('lets a failed lookup through: unlike resolveContactPhone, a null here would claim "no lid"', async () => {
+      const failure = new EngineTransportError('WhatsApp did not answer the LID lookup');
+      const svc = makeService({ getContactLid: jest.fn().mockRejectedValue(failure) });
+      await expect(svc.getContactLid('s1', '628123456789')).rejects.toBe(failure);
+    });
+
+    it('throws 400 when the session is not started', () => {
+      expect(() => makeService(undefined).getContactLid('s1', '628123456789')).toThrow(BadRequestException);
+    });
+  });
+
   it('batch-resolves profile pictures, nulling per-id failures without aborting', async () => {
     const getProfilePicture = jest
       .fn()

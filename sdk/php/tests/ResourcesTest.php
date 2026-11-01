@@ -190,6 +190,16 @@ class ResourcesTest extends TestCase
         $this->assertRequest($backend, 'GET', '/api/sessions/s/contacts/x@lid/phone');
     }
 
+    public function testContactLid(): void
+    {
+        $backend = new MockBackend();
+        $backend->on(200, ['number' => '628123', 'lid' => null]);
+        $client = $backend->makeClient();
+        $res = $client->contacts->lid('s', '628123');
+        $this->assertRequest($backend, 'GET', '/api/sessions/s/contacts/628123/lid');
+        $this->assertNull($res['lid']);
+    }
+
     public function testBlockUnblock(): void
     {
         $backend = new MockBackend();

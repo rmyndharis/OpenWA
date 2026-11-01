@@ -110,6 +110,21 @@ export class ResolvedPhoneResponseDto {
   phone!: string | null;
 }
 
+export class ContactLidResponseDto {
+  @ApiProperty({ description: 'The number exactly as supplied in the path.', example: '628123456789' })
+  number!: string;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      'The `<lid>@lid` WhatsApp holds for the number, or null when it holds none. An unregistered number ' +
+      'answers null too, so call `check/{number}` to tell the two apart.',
+    example: '12345678901234@lid',
+  })
+  lid!: string | null;
+}
+
 export class ContactAckResponseDto {
   @ApiProperty({ description: 'Always true — a failure is reported as a non-2xx status, not as false.', example: true })
   success!: boolean;

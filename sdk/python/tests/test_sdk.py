@@ -1047,6 +1047,15 @@ class TestContacts:
         client.contacts.profile_picture("s", "a@c.us")
         client.contacts.phone("s", "x@lid")
 
+    def test_lid_gets_the_number_route_and_a_null_lid_comes_through(self):
+        backend = MockBackend().on("GET", "/lid", body={"number": "628123", "lid": None})
+        client = make_client(backend)
+        res = client.contacts.lid("s", "628123")
+        call = backend.calls[-1]
+        assert call.method == "GET"
+        assert "/api/sessions/s/contacts/628123/lid" in call.url
+        assert res["lid"] is None
+
     def test_block_unblock(self):
         backend = MockBackend()
         backend.on("POST", "/block", body={"success": True})

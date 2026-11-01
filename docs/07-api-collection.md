@@ -655,6 +655,15 @@ curl -X GET "$BASE/api/sessions/$SESSION_ID/contacts/12345678901234@lid/phone" \
   -H "X-API-Key: $API_KEY"
 ```
 
+#### GET /api/sessions/:sessionId/contacts/:number/lid
+
+Look up the `@lid` WhatsApp holds for a phone number, without sending a message (`lid` is `null` when it holds none). Requires an `OPERATOR` key.
+
+```bash
+curl -X GET "$BASE/api/sessions/$SESSION_ID/contacts/628123456789/lid" \
+  -H "X-API-Key: $API_KEY"
+```
+
 #### PUT /api/sessions/:sessionId/contacts/:contactId
 
 Save or edit an addressbook contact.
