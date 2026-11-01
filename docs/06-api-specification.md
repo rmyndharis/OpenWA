@@ -87,7 +87,7 @@ Errors use the NestJS default shape, published in `openapi.json` as the `ErrorRe
 ```json
 {
   "statusCode": 404,
-  "message": "Session 'my-session' not found",
+  "message": "Session with id '8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a' not found",
   "error": "Not Found"
 }
 ```
@@ -2506,7 +2506,7 @@ The rendered text is bounded the same way, by `TEMPLATE_RENDER_MAX_CHARS` (defau
   "status": "pending",
   "totalMessages": 2,
   "estimatedCompletionTime": "2026-06-25T09:21:00.000Z",
-  "statusUrl": "/api/sessions/my-session/messages/batch/batch_a1b2c3d4"
+  "statusUrl": "/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/messages/batch/batch_a1b2c3d4"
 }
 ```
 
@@ -4769,7 +4769,7 @@ List all webhooks for a session, ordered by `createdAt` descending.
 [
   {
     "id": "f1e2d3c4-b5a6-7890-1234-567890abcdef",
-    "sessionId": "my-session",
+    "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
     "url": "https://your-server.com/webhook",
     "events": ["message.received", "session.status"],
     "filters": null,
@@ -4804,7 +4804,7 @@ Get a single webhook by ID, scoped to the session.
 ```json
 {
   "id": "f1e2d3c4-b5a6-7890-1234-567890abcdef",
-  "sessionId": "my-session",
+  "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
   "url": "https://your-server.com/webhook",
   "events": ["message.received"],
   "filters": null,
@@ -4837,7 +4837,7 @@ List webhooks visible to the calling API key, scoped to its allowed sessions.
 [
   {
     "id": "f1e2d3c4-b5a6-7890-1234-567890abcdef",
-    "sessionId": "my-session",
+    "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
     "url": "https://your-server.com/webhook",
     "events": ["message.received"],
     "filters": null,
@@ -4875,10 +4875,10 @@ List webhook deliveries that exhausted their retries or were not sent (attempts 
   {
     "id": "8c0b1f2e-3d4a-5b6c-7d8e-9f0a1b2c3d4e",
     "webhookId": "f1e2d3c4-b5a6-7890-1234-567890abcdef",
-    "sessionId": "my-session",
+    "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
     "event": "message.received",
     "url": "https://your-server.com/webhook",
-    "idempotencyKey": "msg_my-session_3EB0..._f1e2d3c4-b5a6-7890-1234-567890abcdef",
+    "idempotencyKey": "msg_8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a_3EB0..._f1e2d3c4-b5a6-7890-1234-567890abcdef",
     "deliveryId": "dlv_0f8c1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b",
     "attempts": 4,
     "lastStatusCode": 502,
@@ -4980,7 +4980,7 @@ Create a webhook for the session.
 ```json
 {
   "id": "f1e2d3c4-b5a6-7890-1234-567890abcdef",
-  "sessionId": "my-session",
+  "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
   "url": "https://your-server.com/webhook",
   "events": ["message.received", "session.status"],
   "filters": {
@@ -5040,7 +5040,7 @@ Update a webhook. Partial — only fields present in the body are changed.
 ```json
 {
   "id": "f1e2d3c4-b5a6-7890-1234-567890abcdef",
-  "sessionId": "my-session",
+  "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
   "url": "https://your-server.com/webhook",
   "events": ["*"],
   "filters": null,
@@ -7280,7 +7280,7 @@ Command acknowledgements are **flat** and include an ISO-8601 `timestamp`:
 ```json
 {
   "type": "subscribed",
-  "sessionId": "main",
+  "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
   "events": ["message.received", "session.status"],
   "requestId": "r1",
   "timestamp": "2026-06-25T10:00:00.000Z"
@@ -7288,7 +7288,12 @@ Command acknowledgements are **flat** and include an ISO-8601 `timestamp`:
 ```
 
 ```json
-{ "type": "unsubscribed", "sessionId": "main", "requestId": "r2", "timestamp": "2026-06-25T10:00:01.000Z" }
+{
+  "type": "unsubscribed",
+  "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
+  "requestId": "r2",
+  "timestamp": "2026-06-25T10:00:01.000Z"
+}
 ```
 
 ```json
@@ -7313,7 +7318,7 @@ Live events are pushed as a **nested** envelope (note: `data` is under `payload`
   "timestamp": "2026-06-25T10:00:05.000Z",
   "payload": {
     "event": "message.received",
-    "sessionId": "main",
+    "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
     "data": { "id": "ABCD1234", "from": "6281234567890@c.us", "body": "hi", "timestamp": 1750000000 }
   }
 }
@@ -7321,7 +7326,7 @@ Live events are pushed as a **nested** envelope (note: `data` is under `payload`
 
 `payload.data` has the fields the [webhook event catalog](#event-catalog) sketches for the same event, with two differences. The session events (`session.status`, `session.qr`, `session.authenticated`, `session.disconnected` and `session.restriction`) leave `sessionId` out of `data`, since `payload.sessionId` carries it. And `session.qr` names its PNG data URL `qrCode`: its socket `data` is `{ qrCode }`, where the webhook's is `{ sessionId, qr }`.
 
-Error `code` values include `UNAUTHORIZED`, `INVALID_MESSAGE`, `INVALID_SESSION`, `INVALID_EVENTS`, `FORBIDDEN_SESSION`, `FORBIDDEN_EVENTS`, `TOO_MANY_SUBSCRIPTIONS`, `SUBSCRIPTION_CANCELLED`, `RATE_LIMITED`, and `INTERNAL_ERROR`. `INTERNAL_ERROR` means the server could not check the API key (its key store failed), not that the key was refused: on connect it is followed by a disconnect, on a subscribe the socket stays open and the subscribe can be retried. `RATE_LIMITED` is followed by a disconnect when a handshake exceeds the per-IP connection-attempt window or the key's concurrent-socket cap; a frame over the per-key frame budget gets `RATE_LIMITED` and is dropped undispatched, and the socket stays open. A subscribe answers `INVALID_SESSION` when `sessionId` is missing, or is neither `"*"` nor a session id of at most 128 letters, digits and hyphens. An unsubscribe answers `INVALID_SESSION` when `sessionId` is missing, empty, not a string, or neither `"*"` nor such a session id. A subscribe still checking the API key when an unsubscribe for the same session, or for `"*"`, arrives answers `SUBSCRIPTION_CANCELLED` and joins no rooms. A subscribe answers `TOO_MANY_SUBSCRIPTIONS` when it would take the connection past 4096 rooms; chat-restricted subscriptions count every literal chat address form for each session and event. When the rooms already held are the cause, unsubscribe before subscribing to more. A chat-restricted frame can also need more than 4096 on its own (its address forms times the events it names); unsubscribing cannot help there: name fewer events or subscribe with `"*"`, and a list stored before the 2000-entry bound whose address forms alone exceed 4096 has to be shortened.
+Error `code` values include `UNAUTHORIZED`, `INVALID_MESSAGE`, `INVALID_SESSION`, `INVALID_EVENTS`, `FORBIDDEN_SESSION`, `FORBIDDEN_EVENTS`, `TOO_MANY_SUBSCRIPTIONS`, `SUBSCRIPTION_CANCELLED`, `RATE_LIMITED`, and `INTERNAL_ERROR`. `INTERNAL_ERROR` means the server could not check the API key (its key store failed), not that the key was refused: on connect it is followed by a disconnect, on a subscribe the socket stays open and the subscribe can be retried. `RATE_LIMITED` is followed by a disconnect when a handshake exceeds the per-IP connection-attempt window or the key's concurrent-socket cap; a frame over the per-key frame budget gets `RATE_LIMITED` and is dropped undispatched, and the socket stays open. A subscribe answers `INVALID_SESSION` when `sessionId` is missing, or is neither `"*"` nor a session id of at most 128 letters, digits and hyphens. It checks only that form: with a key not restricted to sessions, a subscribe that names a session by its name, or by an id no session has, is answered `subscribed` and never receives an event. An unsubscribe answers `INVALID_SESSION` when `sessionId` is missing, empty, not a string, or neither `"*"` nor such a session id. A subscribe still checking the API key when an unsubscribe for the same session, or for `"*"`, arrives answers `SUBSCRIPTION_CANCELLED` and joins no rooms. A subscribe answers `TOO_MANY_SUBSCRIPTIONS` when it would take the connection past 4096 rooms; chat-restricted subscriptions count every literal chat address form for each session and event. When the rooms already held are the cause, unsubscribe before subscribing to more. A chat-restricted frame can also need more than 4096 on its own (its address forms times the events it names); unsubscribing cannot help there: name fewer events or subscribe with `"*"`, and a list stored before the 2000-entry bound whose address forms alone exceed 4096 has to be shortened.
 
 ### Subscribable events
 
@@ -7379,7 +7384,7 @@ const socket = io('ws://localhost:2785/events', {
 socket.on('connect', () => {
   socket.emit('message', {
     type: 'subscribe',
-    sessionId: 'main',
+    sessionId: '8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a', // the session id, not its name
     events: ['message.received', 'message.ack', 'session.status'],
     requestId: 'sub-1',
   });
@@ -7402,8 +7407,8 @@ Every registered webhook receives an HTTP `POST` with a JSON body of this shape:
 {
   "event": "message.received",
   "timestamp": "2026-02-02T10:00:00.000Z",
-  "sessionId": "my-session",
-  "idempotencyKey": "msg_my-session_3EB0ABC123_f1e2d3c4-b5a6-7890-1234-567890abcdef",
+  "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
+  "idempotencyKey": "msg_8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a_3EB0ABC123_f1e2d3c4-b5a6-7890-1234-567890abcdef",
   "deliveryId": "dlv_550e8400-e29b-41d4-a716-446655440000",
   "data": {}
 }
