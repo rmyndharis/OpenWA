@@ -89,6 +89,22 @@ export function toUnixSeconds(ts: number | string | { toNumber(): number } | nul
   return Number.isFinite(converted) ? converted : now();
 }
 
+/**
+ * The key a history revoke is judged against when neither its chunk nor the store holds the message it names.
+ * The revoker's client writes that key from its own side (Baileys flips it for a live revoke), so only the
+ * account's own revoke reads as is. A contact's `fromMe` in a 1:1 chat can only be their own message there. A group
+ * member's `fromMe` is either their own message or, read from this side, the account's, so that revoke keeps just
+ * the id: only the stored copy can say which message it is, and without one nothing is written.
+ */
+function revokeFallbackKey(target: WAMessageKey, envelope: WAMessageKey): WAMessageKey {
+  if (envelope.fromMe === true || target.fromMe !== true) {
+    return { ...target, remoteJid: target.remoteJid ?? envelope.remoteJid };
+  }
+  const kind = parseWaId(envelope.remoteJid ?? '').kind;
+  if (kind !== 'user' && kind !== 'lid') return { id: target.id };
+  return { remoteJid: envelope.remoteJid, remoteJidAlt: envelope.remoteJidAlt, fromMe: false, id: target.id };
+}
+
 export class BaileysHistory {
   private static readonly TRACKED_LID_MESSAGES_LIMIT = 2_000;
   private readonly lidByMessageId = new Map<string, { chatId: string; fromMe: boolean }>();
@@ -159,7 +175,7 @@ export class BaileysHistory {
     for (const { message, target } of revokes) {
       const original = targets.get(target.id!);
       const key = await this.host.applyHistoryRevoke(
-        original?.key ?? { ...target, remoteJid: target.remoteJid ?? message.key.remoteJid },
+        original?.key ?? revokeFallbackKey(target, message.key),
         message.key,
       );
       if (!current()) return;
