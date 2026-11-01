@@ -602,6 +602,7 @@
     "session": "सत्र",
     "events": "घटनाएँ",
     "noEvents": "कम से कम एक घटना चुनें।",
+    "urlInvalid": "पूरे http:// या https:// पते का उपयोग करें, जैसे https://example.com/webhook।",
     "available": "उपलब्ध घटनाएँ",
     "saveChanges": "परिवर्तन सहेजें",
     "filters": {

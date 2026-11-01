@@ -602,6 +602,7 @@
     "session": "Oturum",
     "events": "Olaylar",
     "noEvents": "En az bir olay seçin.",
+    "urlInvalid": "http:// veya https:// ile başlayan tam bir adres girin, örneğin https://example.com/webhook.",
     "available": "Kullanılabilir Olaylar",
     "saveChanges": "Değişiklikleri Kaydet",
     "filters": {

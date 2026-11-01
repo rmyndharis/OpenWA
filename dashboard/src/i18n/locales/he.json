@@ -613,6 +613,7 @@
     "session": "Session",
     "events": "אירועים",
     "noEvents": "בחרו לפחות אירוע אחד.",
+    "urlInvalid": "יש להזין כתובת מלאה שמתחילה ב-http:// או ב-https://, למשל https://example.com/webhook.",
     "available": "אירועים זמינים",
     "saveChanges": "שמירת שינויים",
     "filters": {

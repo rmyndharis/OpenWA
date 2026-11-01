@@ -602,6 +602,7 @@
     "session": "Sitzung",
     "events": "Ereignisse",
     "noEvents": "Wähle mindestens ein Ereignis aus.",
+    "urlInvalid": "Gib eine vollständige http://- oder https://-Adresse ein, z. B. https://example.com/webhook.",
     "available": "Verfügbare Ereignisse",
     "saveChanges": "Änderungen speichern",
     "filters": {

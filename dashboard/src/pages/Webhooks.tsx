@@ -21,6 +21,7 @@ import { buildHeaderMap, generateSecret, secretError, type HeaderRow } from '../
 import { copyToClipboard } from '../utils/clipboard';
 import { filtersIncomplete } from '../utils/webhookFilters';
 import { isComposingKey } from '../utils/composition';
+import { isHttpMediaUrl } from '../utils/bulkMedia';
 import { useRole } from '../hooks/useRole';
 import { useToast } from '../hooks/useToast';
 import {
@@ -274,9 +275,20 @@ export function Webhooks() {
   const editAuthError =
     (editAuth.removeSecret ? null : secretError(editAuth.secret)) ??
     (editAuth.replaceHeaders && !editHeaders.ok ? editHeaders.error : null);
+  // The gateway takes an http(s) URL of at most 2048 code points (webhook.dto.ts). A production gateway answers anything
+  // else with a bare "Bad Request" that names no field, and a URL stored before the scheme was required fails each edit.
+  const urlError = (url: string): string | null => {
+    if (!url.trim()) return null;
+    if (!isHttpMediaUrl(url)) return t('webhooks.urlInvalid');
+    const count = [...url].length;
+    return count > 2048 ? t('common.fieldTooLong', { max: 2048, count }) : null;
+  };
+  const newUrlError = urlError(newWebhook.url);
+  const editUrlError = editWebhook ? urlError(editWebhook.url) : null;
   const canCreate =
     !createMutation.isPending &&
     !!newWebhook.url.trim() &&
+    !newUrlError &&
     !!newWebhook.sessionId &&
     newWebhook.events.length > 0 &&
     !filtersInvalid(newWebhook.events, newWebhook.filters) &&
@@ -285,6 +297,7 @@ export function Webhooks() {
     !!editWebhook &&
     !updateMutation.isPending &&
     !!editWebhook.url.trim() &&
+    !editUrlError &&
     editWebhook.events.length > 0 &&
     !filtersInvalid(editWebhook.events, editWebhook.filters) &&
     !editAuthError;
@@ -499,6 +512,11 @@ export function Webhooks() {
             value={newWebhook.url}
             onChange={e => setNewWebhook({ ...newWebhook, url: e.target.value })}
           />
+          {newUrlError && (
+            <span className="hint error" role="status">
+              {newUrlError}
+            </span>
+          )}
           <label>{t('webhooks.events')}</label>
           <div className="event-tags">
             {availableEventNames.map(name => {
@@ -588,6 +606,11 @@ export function Webhooks() {
             value={editWebhook.url}
             onChange={e => setEditWebhook({ ...editWebhook, url: e.target.value })}
           />
+          {editUrlError && (
+            <span className="hint error" role="status">
+              {editUrlError}
+            </span>
+          )}
           <label>{t('webhooks.events')}</label>
           <div className="event-tags">
             {availableEventNames.map(name => {

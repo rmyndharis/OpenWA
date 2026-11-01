@@ -623,6 +623,7 @@
     "session": "الجلسة",
     "events": "الأحداث",
     "noEvents": "اختر حدثًا واحدًا على الأقل.",
+    "urlInvalid": "استخدم عنوانًا كاملًا يبدأ بـ http:// أو https://، مثل https://example.com/webhook.",
     "available": "الأحداث المتاحة",
     "saveChanges": "حفظ التغييرات",
     "filters": {

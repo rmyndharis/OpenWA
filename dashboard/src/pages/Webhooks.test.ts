@@ -329,6 +329,33 @@ test('Create stays disabled with a hint while no event is selected', async () =>
   assert.equal(create.disabled, false);
 });
 
+// The gateway takes an http(s) URL of at most 2048 characters. Anything else was sent, and a production gateway, which
+// hides validation detail, answered "Failed to create webhook: Bad Request", naming no field.
+const LONG_URL = `https://example.test/${'a'.repeat(2030)}`;
+for (const [url, hint] of [
+  ['example.com/hook', 'Use a full http:// or https:// address, like https://example.com/webhook.'],
+  ['localhost:3000/hook', 'Use a full http:// or https:// address, like https://example.com/webhook.'],
+  ['ftp://example.com/hook', 'Use a full http:// or https:// address, like https://example.com/webhook.'],
+  [LONG_URL, `Limited to 2048 characters (${LONG_URL.length} now).`],
+] as const) {
+  test(`Create holds a URL the gateway refuses, and says why (${url.slice(0, 24)})`, async () => {
+    const { screen, fireEvent } = rtl;
+    webhooksStatus = 200;
+    sessionList = [{ id: 'sess-1', name: 'Main', status: 'ready', createdAt: '2026-01-01T00:00:00.000Z' }];
+    window.sessionStorage.setItem('openwa_user_role', 'operator');
+    renderWebhooks();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Webhook' }));
+    const sessionSelect = screen.getByLabelText<HTMLSelectElement>('Session');
+    await rtl.findByText(sessionSelect, 'Main');
+    fireEvent.change(sessionSelect, { target: { value: 'sess-1' } });
+    fireEvent.change(screen.getByLabelText('URL'), { target: { value: url } });
+    const create = screen.getByRole<HTMLButtonElement>('button', { name: 'Create' });
+    assert.equal(create.disabled, true, 'Create was offered for a URL the gateway refuses');
+    screen.getByText(hint);
+  });
+}
+
 async function openEditModal(): Promise<HTMLButtonElement> {
   webhooksStatus = 200;
   webhookList = [
@@ -359,6 +386,18 @@ test('Save stays disabled with a hint while no event is selected', async () => {
   fireEvent.click(save);
   await new Promise(resolve => setTimeout(resolve, 50));
   assert.equal(updateCalls, 0);
+});
+
+// A URL stored before the gateway required a scheme is sent back on every save and refused with a bare "Bad Request",
+// so the edit says what is wrong with it instead of failing each time.
+test('Save holds a stored URL the gateway now refuses, and says why', async () => {
+  const { screen, fireEvent } = rtl;
+  const save = await openEditModal();
+  fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'example.com/hook' } });
+  assert.equal(save.disabled, true, 'Save was offered for a URL the gateway refuses');
+  screen.getByText('Use a full http:// or https:// address, like https://example.com/webhook.');
+  fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://example.com/hook' } });
+  assert.equal(save.disabled, false);
 });
 
 test('Save stays disabled while the URL is empty', async () => {

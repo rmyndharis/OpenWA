@@ -602,6 +602,7 @@
     "session": "సెషన్",
     "events": "ఈవెంట్స్",
     "noEvents": "కనీసం ఒక ఈవెంట్‌ను ఎంచుకోండి.",
+    "urlInvalid": "http:// లేదా https://తో మొదలయ్యే పూర్తి చిరునామాను ఉపయోగించండి, ఉదా: https://example.com/webhook.",
     "available": "అందుబాటులో ఉన్న ఈవెంట్స్",
     "saveChanges": "మార్పులను సేవ్ చేయి",
     "filters": {
