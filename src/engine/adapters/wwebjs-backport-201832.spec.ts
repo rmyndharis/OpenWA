@@ -205,6 +205,51 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     expect(() => applyBackport(dir)).toThrow(/PARTIALLY patched/);
   });
 
+  /** The message applyBackport refuses `dir` with. */
+  function refusal(dir: string): string {
+    try {
+      applyBackport(dir);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    throw new Error('applyBackport did not refuse the tree');
+  }
+
+  // A run writes the files in the patch's order, so one cut short leaves the missing sites at the END of that
+  // order. A gap before a site that landed, or no site of ours at all, comes from a release (or an edit) that
+  // changed the ids its own way, which a reinstall brings straight back.
+  it('refuses a release that words one site its own way without calling it an interrupted run', () => {
+    const dir = copyWwjs();
+    applyBackport(dir);
+    const groupChat = path.join(dir, 'src', 'structures', 'GroupChat.js');
+    fs.writeFileSync(
+      groupChat,
+      fs.readFileSync(groupChat, 'utf8').replace('pWid._serialized || pWid.$1', 'pWid._serialized ?? pWid.$1'),
+    );
+
+    const message = refusal(dir);
+    expect(message).toMatch(/no interrupted run of this patcher leaves[\s\S]*GroupChat\.js[\s\S]*retire this backport/);
+    expect(message).not.toMatch(/Reinstall the dependency/);
+  });
+
+  it('refuses a release that reads $1 in Message.js its own way without listing Message.js as normalizing', () => {
+    const dir = copyWwjs();
+    const msgJs = path.join(dir, 'src', 'structures', 'Message.js');
+    fs.writeFileSync(
+      msgJs,
+      fs
+        .readFileSync(msgJs, 'utf8')
+        .replace(
+          'this.id = data.id;',
+          'this.id = data.id._serialized ? data.id : { ...data.id, _serialized: data.id.$1 };',
+        ),
+    );
+
+    const message = refusal(dir);
+    expect(message).toMatch(/none of this backport's sites[\s\S]*retire this backport/);
+    expect(message).not.toMatch(/Reinstall the dependency|normalizes ids but/);
+  });
+
   it('fails with a curated version-skew error when Message.js is missing', () => {
     const dir = copyWwjs();
     // A future whatsapp-web.js could keep Base.js but drop or rename Message.js — the patcher must

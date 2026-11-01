@@ -10,8 +10,10 @@
  * `Base._normalizeId()` helper and reapplies it across the model constructors.
  * This script backports that fix into node_modules at image build time.
  *
- * Self-removing: it no-ops once the installed whatsapp-web.js already defines
- * `Base._normalizeId` (i.e. upstream shipped #201832 and OpenWA bumped its dep).
+ * Self-removing: it no-ops once every site it writes already carries this
+ * backport's text, as a release that ships #201832 as merged does. A release that
+ * fixes the ids another way is refused, with a message that says so, until the
+ * backport is retired by hand.
  *
  * Why `patch` first and not `git apply`: a bare `git -C node_modules/whatsapp-web.js
  * apply` silently no-ops ("Skipped / 0 files changed") because the parent repo's
@@ -229,6 +231,39 @@ function applyWithGit(wwjsDir, patchFile) {
   }
 }
 
+/**
+ * Why a tree whose Message.js already reads ids the new way is still refused. A run of this patcher writes the
+ * files in the patch's order, so one cut short leaves every missing site after every landed one, and a reinstall
+ * cures it. A missing site before a landed one, or no site of ours at all, is a release (or an edit) that changed
+ * the ids its own way: a reinstall brings it straight back, so the message must not send the operator there.
+ */
+function standDownRefusal(patchFile, missing) {
+  const order = [...fs.readFileSync(patchFile, 'utf8').matchAll(/^diff --git a\/(\S+) /gm)].map(m => m[1]);
+  const landed = REQUIRED_SITES.map(([rel]) => rel).filter(rel => !missing.includes(rel));
+  const lastLanded = Math.max(-1, ...landed.map(rel => order.indexOf(rel)));
+  const advice =
+    'Reinstalling will not change that. If the installed release fixes #201832 at every site, retire this ' +
+    'backport; otherwise re-base scripts/wwebjs-201832.patch on it.';
+  if (!landed.length) {
+    return (
+      'whatsapp-web.js reads message ids its own way: Message.js uses `_normalizeId(` or `$1`, but none of ' +
+      `this backport's sites are present, which no run of this patcher leaves. ${advice}`
+    );
+  }
+  if (missing.some(rel => order.indexOf(rel) < lastLanded)) {
+    return (
+      'whatsapp-web.js is PARTIALLY patched in a way no interrupted run of this patcher leaves: the backport is ' +
+      `missing from ${missing.join(', ')} while ${order[lastLanded]} has it, and a run writes the files in the ` +
+      `patch's order. ${advice}`
+    );
+  }
+  return (
+    `whatsapp-web.js is PARTIALLY patched: ${missing.join(', ')} did not land. A previous run left the tree ` +
+    'half-patched; it cannot repair itself. Reinstall the dependency (`rm -rf node_modules/whatsapp-web.js && npm ci`) ' +
+    'and re-run. If the installed version genuinely ships its own fix, drop this backport instead.'
+  );
+}
+
 function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
   const baseJs = path.join(wwjsDir, 'src', 'structures', 'Base.js');
   if (!fs.existsSync(baseJs)) {
@@ -238,8 +273,9 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
   // aside. Detect on the id-normalizing READ in the Message constructor rather than on Base.js's
   // helper: Message.js is the load-bearing site (OpenWA reads `msg.id._serialized` in ~40 places),
   // and keying off Base.js alone would treat a half-patched tree — helper present, constructor not —
-  // as "already fixed" and ship it. Matched loosely (`Base._normalizeId(` OR an inline `$1` fallback)
-  // so a future upstream release that fixes this differently still stands the patcher down.
+  // as "already fixed" and ship it. Matched loosely (`Base._normalizeId(` OR an inline `$1` fallback),
+  // then every site must carry this backport's own text: a release that fixes this differently is refused
+  // below, naming it as such, rather than stood down on.
   const msgJs = path.join(wwjsDir, 'src', 'structures', 'Message.js');
   if (!fs.existsSync(msgJs)) {
     // A dep tree with Base.js but no Message.js is version skew vs the backport base — say so,
@@ -259,19 +295,12 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
     // latch that half-patched tree in permanently, because every later run takes this same branch and never
     // reaches the assertions below. An upstream release that fixes this lands every site at once; a crashed
     // run does not. Proving the tree is whole is what tells the two apart.
-    const missing = REQUIRED_SITES.filter(([rel]) => !siteLanded(wwjsDir, rel));
+    const missing = REQUIRED_SITES.filter(([rel]) => !siteLanded(wwjsDir, rel)).map(([rel]) => rel);
     if (missing.length) {
       // `partialTree`, so `--best-effort` cannot warn past this. The tree this detects is precisely the
       // one that flag must never wave through: half-patched, self-disable reading it as healthy, and
       // unrepairable by any later run.
-      throw partialTree(
-        new Error(
-          'whatsapp-web.js is PARTIALLY patched — Message.js normalizes ids but ' +
-            `${missing.map(([rel]) => rel).join(', ')} did not land. A previous run left the tree half-patched; ` +
-            'it cannot repair itself. Reinstall the dependency (`rm -rf node_modules/whatsapp-web.js && npm ci`) ' +
-            'and re-run. If the installed version genuinely ships its own fix, drop this backport instead.',
-        ),
-      );
+      throw partialTree(new Error(standDownRefusal(patchFile, missing)));
     }
     return { skipped: true, reason: 'installed whatsapp-web.js already normalizes message ids' };
   }
