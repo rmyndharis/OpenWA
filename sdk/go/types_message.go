@@ -69,7 +69,8 @@ type SendAudioRequest struct {
 	Mentions []string `json:"mentions,omitempty"`
 }
 
-// SendLocationRequest sends a location pin. ChatID/Latitude/Longitude required.
+// SendLocationRequest sends a location pin. ChatID/Latitude/Longitude required. A coordinate left
+// unset is sent as 0, a real place, and the gateway sends a pin there, so always set both.
 type SendLocationRequest struct {
 	ChatID      string  `json:"chatId"`
 	Latitude    float64 `json:"latitude"`

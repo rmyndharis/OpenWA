@@ -9,7 +9,7 @@ public record SetOwnPresenceRequest(boolean available) {
     public static final class Builder {
         private boolean available;
 
-        /** {@code true} to appear online; {@code false} to appear offline. */
+        /** {@code true} to appear online; {@code false}, also sent when this is never called, to appear offline. */
         public Builder available(boolean v) {
             this.available = v;
             return this;

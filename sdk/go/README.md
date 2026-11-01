@@ -75,6 +75,9 @@ func main() {
   `WithMiddleware`, `WithTimeout`, `WithUserAgent`, `WithHeader`.
 - **Typed errors** — match with `errors.Is` against the sentinels, or unwrap the
   concrete `*APIError` with `errors.As`.
+- **Set both coordinates**: `SendLocationRequest.Latitude` and `Longitude` are
+  plain `float64`, so one left unset is sent as `0`, a real place, and the
+  gateway sends a pin there instead of refusing the request.
 
 ## Configuration
 
