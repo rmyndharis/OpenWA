@@ -39,10 +39,15 @@ export async function withQueryDeadline<T>(work: Promise<T>, timeoutMs: number, 
       }),
     ]);
   } catch (error) {
-    // A WebSocket that closes under a pending query rejects it with the bare close code (Baileys hands the
-    // `close` event's argument to reject), which no caller can classify, so it would reach the client as a 500.
-    if (typeof error === 'number') {
-      throw new EngineTransportError(`The connection to WhatsApp closed (code ${error}) before it answered`);
+    // The connection closed under the call: a query still waiting rejects with the bare WebSocket close code
+    // (Baileys hands the `close` event's argument to reject), and a write on a socket that is no longer open
+    // throws Baileys' Boom('Connection Closed', 428), which carries no data. Neither has a WA code a caller can
+    // classify, so both would reach the client as a 500. A WhatsApp answer carries its code or GraphQL error as data.
+    const boom = error as { isBoom?: unknown; data?: unknown; output?: { statusCode?: unknown } } | null;
+    if (typeof error === 'number' || (boom?.isBoom === true && boom.output?.statusCode === 428 && !boom.data)) {
+      throw new EngineTransportError(
+        `The connection to WhatsApp closed${typeof error === 'number' ? ` (code ${error})` : ''} before it answered`,
+      );
     }
     throw error;
   } finally {
