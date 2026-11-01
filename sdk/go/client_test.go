@@ -1279,6 +1279,49 @@ func TestWebhooksListAllSendsPagingButNoSessionFilter(t *testing.T) {
 	}
 }
 
+// No contract gate reads these keys (a request map, a query key, a nested struct's tags), and the
+// gateway answers an unknown body or query key with 400, so a renamed one would fail every such call.
+func TestMemberLabelSearchMatchAndPreviewImageWireKeys(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("member label body", func(t *testing.T) {
+		rt := &recordTransport{status: 200, body: `{"success":true}`}
+		if _, err := newTestClient(t, rt).Groups.SetMemberLabel(ctx, "s1", "g@g.us", "Lead"); err != nil {
+			t.Fatalf("SetMemberLabel: %v", err)
+		}
+		if got := string(rt.lastRaw); got != `{"label":"Lead"}` {
+			t.Fatalf("body = %s", got)
+		}
+	})
+
+	t.Run("search match query", func(t *testing.T) {
+		rt := &recordTransport{status: 200, body: `{"hits":[],"total":0,"tookMs":1,"provider":"builtin-fts"}`}
+		match := "contains"
+		if _, err := newTestClient(t, rt).Search.Search(ctx, SearchQuery{Q: "voic", Match: &match}); err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		if got := rt.lastReq.URL.Query().Get("match"); got != "contains" {
+			t.Fatalf("match = %q in %q", got, rt.lastReq.URL.RawQuery)
+		}
+	})
+
+	t.Run("link preview image fields", func(t *testing.T) {
+		rt := &recordTransport{status: 201, body: `{"messageId":"m","timestamp":1}`}
+		preview := &CustomLinkPreview{
+			URL: "https://x.test", Title: "T", ThumbnailURL: "https://x.test/i.png", ThumbnailBase64: "aGk=",
+		}
+		body := SendTextRequest{ChatID: "a@c.us", Text: "https://x.test", CustomLinkPreview: preview}
+		if _, err := newTestClient(t, rt).Messages.SendText(ctx, "s1", body); err != nil {
+			t.Fatalf("SendText: %v", err)
+		}
+		for _, want := range []string{`"thumbnailUrl":"https://x.test/i.png"`, `"thumbnailBase64":"aGk="`} {
+			if got := string(rt.lastRaw); !strings.Contains(got, want) {
+				t.Fatalf("body = %s, want it to contain %s", got, want)
+			}
+		}
+	})
+}
+
 // The Event* constants are the wire values of the server's WEBHOOK_EVENTS
 // catalog — a typo here silently subscribes to nothing.
 func TestWebhookEventWireValues(t *testing.T) {
