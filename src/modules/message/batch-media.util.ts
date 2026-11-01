@@ -33,10 +33,14 @@ export async function failUnfinishedSessionBatches(
   sessionId: string,
 ): Promise<void> {
   const batches = dataSource.getRepository(MessageBatch);
+  // Ids first, then one whole row at a time, so the read holds one batch's media payloads, not every batch's.
   const unfinished = await batches.find({
+    select: { id: true },
     where: { sessionId, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
   });
-  for (const batch of unfinished) {
+  for (const { id } of unfinished) {
+    const batch = await batches.findOne({ where: { id } });
+    if (!batch) continue;
     stripBatchMediaPayloads(batch.messages);
     await batches.update({ id: batch.id, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) }, {
       status: BatchStatus.FAILED,
