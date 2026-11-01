@@ -71,7 +71,12 @@ export class ProductDto {
   @ApiProperty({ description: 'Product link, empty when the engine reports none.', example: 'https://wa.me/p/123/628' })
   url!: string;
 
-  @ApiProperty({ description: 'Whether the engine reports the product as in stock.', example: true })
+  @ApiProperty({
+    description:
+      'Whether the product is in stock. The Baileys engine reads no stock state from WhatsApp and reports true ' +
+      'for every product, a hidden one included.',
+    example: true,
+  })
   isAvailable!: boolean;
 
   @ApiPropertyOptional({ description: "The merchant's own SKU, when set.", example: 'SKU-001' })
