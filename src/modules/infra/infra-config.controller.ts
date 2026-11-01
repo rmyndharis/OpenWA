@@ -529,6 +529,9 @@ export class InfraConfigController {
   @ApiBody({ required: false, type: RestartDto })
   async requestRestart(@Body() body?: RestartDto): Promise<RestartResult> {
     if (this.restartInFlight) throw this.restartAlreadyRunning('Another restart request is still running.');
+    // A restart that already answered keeps the server up for the grace before it goes down: a second request there
+    // would orchestrate and tear down again for nothing.
+    if (this.shutdownService.isShuttingDown()) throw this.restartAlreadyRunning('The server is already restarting.');
     this.restartInFlight = true;
     try {
       return await this.restartWithProfiles(body);

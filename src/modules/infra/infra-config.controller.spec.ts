@@ -2673,7 +2673,7 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
     new InfraConfigController(
       {} as never, // engineFactory
       dockerService as never,
-      { shutdown: jest.fn() } as never, // shutdownService
+      { shutdown: jest.fn(), isShuttingDown: () => false } as never, // shutdownService
     );
 
   it('tears down only allowlisted profiles, never an unknown or empty entry', async () => {
@@ -2730,7 +2730,7 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
             provide: DockerService,
             useValue: { isDockerAvailable: () => true, stopManagedService, orchestrateProfiles },
           },
-          { provide: ShutdownService, useValue: { shutdown: jest.fn() } },
+          { provide: ShutdownService, useValue: { shutdown: jest.fn(), isShuttingDown: () => false } },
         ],
       }).compile();
       app = moduleRef.createNestApplication({ logger: false });
@@ -3204,6 +3204,17 @@ describe('InfraConfigController.requestRestart when the built-in database does n
     await expect(controller.requestRestart({ profiles: ['redis'] })).resolves.toMatchObject({ restarting: true });
   });
 
+  it('refuses a restart requested while the server is already shutting down for one', async () => {
+    const controller = build({ ...failedStart, success: true, containersStarted: ['redis'], errors: [] });
+    isShuttingDown.mockReturnValue(true);
+
+    const refusal = await refusalOf(controller.requestRestart({ profiles: ['redis'] }));
+
+    expect(refusal.getResponse()).toMatchObject({ statusCode: 409, code: 'RESTART_ALREADY_RUNNING' });
+    expect(orchestrateProfiles).not.toHaveBeenCalled();
+    expect(shutdown).not.toHaveBeenCalled();
+  });
+
   it('frees the restart for the next request after a refusal', async () => {
     const controller = build(failedStart);
     const profiles = saveBuiltIn(controller);
@@ -3214,11 +3225,14 @@ describe('InfraConfigController.requestRestart when the built-in database does n
     expect(again.getResponse()).toMatchObject({ code: 'RESTART_DATABASE_NOT_STARTED' });
   });
 
-  it('puts nothing back when the server is already shutting down for another restart', async () => {
+  it('puts nothing back when the server begins shutting down for another restart during the start', async () => {
     const controller = build(failedStart);
     const profiles = saveBuiltIn(controller);
     const writesBefore = writes().length;
-    isShuttingDown.mockReturnValue(true);
+    orchestrateProfiles.mockImplementationOnce(() => {
+      isShuttingDown.mockReturnValue(true);
+      return Promise.resolve(failedStart);
+    });
 
     const refusal = await refusalOf(controller.requestRestart({ profiles }));
 
@@ -3321,7 +3335,7 @@ describe('InfraConfigController audit trail (light-dependency handlers)', () => 
     const audit = makeAudit();
     const controller = build(audit, {
       dockerService: { isDockerAvailable: () => false },
-      shutdownService: { shutdown: jest.fn() },
+      shutdownService: { shutdown: jest.fn(), isShuttingDown: () => false },
     });
     await controller.requestRestart({ profiles: ['postgres'], profilesToRemove: [] });
     const calls = audit.logInfo.mock.calls as Array<[AuditAction, { metadata: { profiles: string[] } }]>;

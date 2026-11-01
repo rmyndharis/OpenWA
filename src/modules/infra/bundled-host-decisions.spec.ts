@@ -135,7 +135,11 @@ afterEach(() => {
 });
 
 const controller = (docker: Record<string, unknown> = {}) =>
-  new InfraConfigController({} as never, docker as never, { shutdown: jest.fn() } as never);
+  new InfraConfigController(
+    {} as never,
+    docker as never,
+    { shutdown: jest.fn(), isShuttingDown: () => false } as never,
+  );
 
 function saved(payload: unknown): Record<string, string> {
   controller().saveConfig(payload as never);
