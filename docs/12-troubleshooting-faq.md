@@ -748,8 +748,8 @@ that reads a message id fails. Source installs only; the Docker image always app
 **Solution:**
 
 ```bash
-# Is the backport missing? Works on every platform, including Windows without grep.
-node -e "console.log(require('fs').readFileSync('node_modules/whatsapp-web.js/src/structures/Base.js','utf8').includes('_normalizeId')?'PATCHED':'NOT PATCHED')"
+# Is the backport missing, or only partly applied? Works on every platform, including Windows without grep.
+node -e "const s=require('./scripts/patch-wwebjs-201832.js').missingSites();const m=require('fs').readFileSync('node_modules/whatsapp-web.js/src/structures/Message.js','utf8');console.log(s.length?'PARTIAL: '+s.join(', '):m.includes('_normalizeId(')?'PATCHED':'NOT PATCHED')"
 
 # Apply it, then restart
 node scripts/patch-wwebjs-201832.js
@@ -795,7 +795,9 @@ node scripts/patch-wwebjs-group-description.js
 
 If a patcher answers with an unsupported-shape error instead of applying, the installed library has
 moved and the transform needs re-evaluating against it. Reinstalling will not help; open an issue
-quoting the message it printed.
+quoting the message it printed. The one exception is `patch-baileys-pairing.js` saying the backport
+was cut short: an interrupted install left it half applied, and reinstalling `@whiskeysockets/baileys`
+(`rm -rf node_modules/@whiskeysockets/baileys && npm ci`) is the fix.
 
 > `patch-wwebjs-201832.js` is not in that list. It carries its own startup check and its own entry
 > above, because a partially applied backport needs different advice than one that never ran.
