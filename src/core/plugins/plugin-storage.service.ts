@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DEFAULT_DATA_DIR } from '../../config/configuration';
@@ -16,7 +17,10 @@ let tmpWriteSeq = 0;
  * a reader sees either the old complete file or the new complete file, never a partial one.
  */
 function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: number }): void {
-  const tmp = `${filePath}.${process.pid}.${tmpWriteSeq++}.tmp`;
+  // Named by a hash of the target, not the target plus a suffix: that ran past the 255-byte name limit for a long
+  // storage key, which then failed once the write counter grew a digit. Still one temp name space per target.
+  const target = createHash('sha256').update(path.basename(filePath)).digest('hex').slice(0, 16);
+  const tmp = path.join(path.dirname(filePath), `.${target}.${process.pid}.${tmpWriteSeq++}.tmp`);
   try {
     fs.writeFileSync(tmp, data, options);
     fs.renameSync(tmp, filePath);

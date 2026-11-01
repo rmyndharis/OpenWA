@@ -35,6 +35,15 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
     }
   };
 
+  // A temp name built by appending to the key's file name ran past the 255-byte name limit first, so a key near the
+  // limit failed, and one a little shorter started failing once the process-wide write counter grew a digit.
+  it('writes and rewrites a key whose file name is at the 255-byte limit', async () => {
+    const key = 'k'.repeat(184); // key- + 246 base64url characters + .json
+    await storage.set(key, { v: 1 });
+    await storage.set(key, { v: 2 });
+    expect(await storage.get(key)).toEqual({ v: 2 });
+  });
+
   it('round-trips a normal key', async () => {
     await storage.set('state', { a: 1 });
     expect(await storage.get('state')).toEqual({ a: 1 });
