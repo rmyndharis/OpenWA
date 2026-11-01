@@ -1129,7 +1129,8 @@ export class InfraDataService {
             notices.push(
               `Plugin instance bindings could not be re-applied after the restore ` +
                 `(${error instanceof Error ? error.message : String(error)}): check each plugin's active sessions ` +
-                `and per-session config (GET /api/plugins/:id, PUT /api/plugins/:id/sessions) against its restored instances.`,
+                `and per-session config (GET /api/plugins/:id, PUT /api/plugins/:id/sessions) against its restored instances, ` +
+                `and its base config for a secret a dropped session-wide instance left behind (PUT /api/plugins/:id/config).`,
             );
           }
         }
