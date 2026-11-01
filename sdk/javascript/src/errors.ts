@@ -10,7 +10,11 @@
  * @packageDocumentation
  */
 
-/** Base class for every error thrown by the SDK. */
+/**
+ * Base class for errors the SDK throws for an API response or a timeout. A network failure rejects with
+ * the error `fetch` raised (a `TypeError` on Node), an invalid argument such as an empty or dot id with a
+ * `TypeError`, and invalid client options throw an `Error`.
+ */
 export class OpenWAError extends Error {
   constructor(message: string) {
     super(message);

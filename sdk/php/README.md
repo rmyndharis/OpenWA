@@ -68,8 +68,11 @@ A non-2xx response throws a typed `OpenWA\Exceptions\OpenWAApiException` subclas
 `OpenWAConflictException` (409), `OpenWARateLimitException` (429), `OpenWANotImplementedException`
 (501), `OpenWAServiceUnavailableException` (503) — each exposing `getStatus()` and the parsed
 `getBody()`. A timeout throws `OpenWATimeoutException`, though the gateway may still complete the
-request: retry a send only with the same `Idempotency-Key`. 503 means the gateway could not complete
-the request right now: the path to WhatsApp failed, the gateway is draining or short of a dependency,
+request: retry a send only with the same `Idempotency-Key`. Both extend `OpenWAException`, which
+covers API responses and timeouts only: a transport failure (a refused or reset connection, a DNS
+failure, a cut body) is a `GuzzleHttp\Exception\TransferException`, and an invalid argument (an empty
+or dot id, a bad raw path or idempotency key) an `\InvalidArgumentException`. 503 means the gateway
+could not complete the request right now: the path to WhatsApp failed, the gateway is draining or short of a dependency,
 or, on Baileys, WhatsApp throttled (code 429) or timed out (code 408) the request. Back off and
 retry later instead of at once, because repeating a throttled request straight away prolongs the
 throttle; a catalog 503 can persist because WhatsApp may never answer that query, so bound any
