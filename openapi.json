@@ -14228,6 +14228,16 @@
               }
             }
           },
+          "404": {
+            "description": "The id is not a channel id (it does not end in `@newsletter`). Retrying the same id cannot succeed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "409": {
             "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and for those few seconds the answer is a `409` naming the reload; retry shortly.",
             "content": {
@@ -14332,6 +14342,16 @@
           },
           "403": {
             "description": "The engine did not transfer the channel. On whatsapp-web.js this is the only outcome a failure can produce: the page swallows every error into a plain false, so the cause is not reported. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The id is not a channel id (it does not end in `@newsletter`). Retrying the same id cannot succeed.",
             "content": {
               "application/json": {
                 "schema": {

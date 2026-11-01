@@ -93,17 +93,20 @@ describe('ChannelController OpenAPI 400 responses', () => {
   );
 });
 
-describe('ChannelController OpenAPI 404 on delete and unsubscribe', () => {
-  // Both routes refuse only an id that is not a channel id; neither looks the channel up, so the
+describe('ChannelController OpenAPI 404 on the routes that refuse a non-channel id up front', () => {
+  // These routes refuse only an id that is not a channel id; none looks the channel up, so the
   // subscribed-list "not synced yet" wording would invite a retry that cannot succeed.
-  it.each(['remove', 'unsubscribe'] as const)('%s describes the 404 as a malformed channel id', route => {
-    const responses = Reflect.getMetadata(
-      'swagger/apiResponse',
-      Object.getOwnPropertyDescriptor(ChannelController.prototype, route)?.value as object,
-    ) as Record<string, { description?: string }>;
-    expect(responses['404']?.description).toContain('@newsletter');
-    expect(responses['404']?.description).not.toContain('synced');
-  });
+  it.each(['remove', 'unsubscribe', 'demoteAdmin', 'transferOwnership'] as const)(
+    '%s describes the 404 as a malformed channel id',
+    route => {
+      const responses = Reflect.getMetadata(
+        'swagger/apiResponse',
+        Object.getOwnPropertyDescriptor(ChannelController.prototype, route)?.value as object,
+      ) as Record<string, { description?: string }>;
+      expect(responses['404']?.description).toContain('@newsletter');
+      expect(responses['404']?.description).not.toContain('synced');
+    },
+  );
 });
 
 describe('ChannelController OpenAPI 503 responses', () => {
