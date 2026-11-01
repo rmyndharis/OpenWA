@@ -1,3 +1,4 @@
+import { keepsSameKey } from './authLifecycle.ts';
 import { retryThrottled } from './fetchAllPages.ts';
 
 // The gateway answers a route 10 times a second per IP by default and refuses the rest with a 429,
@@ -50,9 +51,12 @@ function waitForTurn(signal: AbortSignal): Promise<void> {
 }
 
 export function loadArchivedMedia<T>(signal: AbortSignal, load: () => Promise<T>, retryDelayMs = 1000): Promise<T> {
+  const sameKey = keepsSameKey();
   return retryThrottled(
     async () => {
+      if (!sameKey()) throw new DOMException('Aborted', 'AbortError');
       await waitForTurn(signal);
+      if (!sameKey()) throw new DOMException('Aborted', 'AbortError');
       return load();
     },
     retryDelayMs,

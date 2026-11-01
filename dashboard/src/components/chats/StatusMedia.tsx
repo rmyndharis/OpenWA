@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { sessionApi } from '../../services/api';
+import { keepsSameKey } from '../../utils/authLifecycle';
 import { loadArchivedMedia } from '../../utils/archivedMediaLoad';
 
 // Status image item. <img src="/api/..."> can't carry the X-API-Key header, so the bytes are
@@ -25,17 +26,21 @@ function StatusMedia({
     if (!sessionId) return undefined;
     let objectUrl: string | null = null;
     let cancelled = false;
+    const sameKey = keepsSameKey();
     const controller = new AbortController();
     setSrc(null);
     setError(false);
-    loadArchivedMedia(controller.signal, () => sessionApi.getStatusMediaBlob(sessionId, statusId, controller.signal))
+    loadArchivedMedia(controller.signal, () => {
+      if (!sameKey()) throw new DOMException('Aborted', 'AbortError');
+      return sessionApi.getStatusMediaBlob(sessionId, statusId, controller.signal);
+    })
       .then(blob => {
-        if (cancelled) return;
+        if (cancelled || !sameKey()) return;
         objectUrl = URL.createObjectURL(blob);
         setSrc(objectUrl);
       })
       .catch(() => {
-        if (!cancelled) setError(true);
+        if (!cancelled && sameKey()) setError(true);
       });
     return () => {
       cancelled = true;

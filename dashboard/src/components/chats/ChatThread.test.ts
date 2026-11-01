@@ -2089,16 +2089,31 @@ test('a media download answered 404 says the media is unavailable without asking
   );
 });
 
+test('a media download waiting to retry after a refusal is cancelled on sign-out without asking again', async () => {
+  await clickDownload(
+    call => (call === 1 ? poolFull() : new Response(new Blob(['x']), { status: 200 })),
+    async ({ container, saved, calls }) => {
+      await rtl.waitFor(() => assert.equal(calls(), 1));
+      window.sessionStorage.removeItem('openwa_api_key');
+      await new Promise(resolve => setTimeout(resolve, 1_250));
+      assert.equal(calls(), 1);
+      assert.deepEqual(saved, [], 'the media file was saved after the sign-out');
+      assert.equal(saysUnavailable(container), false, 'sign-out marked the media as unavailable');
+    },
+  );
+});
+
 test('a media download whose retry is answered after sign-out saves no file', async () => {
   const retried = new Response(new Blob(['x']), { status: 200 });
   const readBlob = retried.blob.bind(retried);
   let read: Promise<Blob> | undefined;
-  retried.blob = () => (read = readBlob());
+  retried.blob = () => {
+    window.sessionStorage.removeItem('openwa_api_key');
+    return (read = readBlob());
+  };
   await clickDownload(
     call => (call === 1 ? poolFull() : retried),
     async ({ saved, calls }) => {
-      await rtl.waitFor(() => assert.equal(calls(), 1));
-      window.sessionStorage.removeItem('openwa_api_key');
       await rtl.waitFor(() => assert.ok(read, 'the refused download was not tried again'), { timeout: 10_000 });
       await read;
       // The rest of the download after the body is read is promise jobs, all run before this timer.
