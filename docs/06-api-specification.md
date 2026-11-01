@@ -5104,6 +5104,8 @@ No content (empty body; explicit `@HttpCode(204)`).
 
 API keys are managed under `/api/auth/api-keys`. All management routes (create/list/get/update/delete/revoke) require an **ADMIN** key **with no session scope**: the controller is fenced with `@RequireUnscopedKey`, so a key whose `allowedSessions` is non-empty is rejected with `403` whatever its role — otherwise a confined admin key could mint an unrestricted one. The guard evaluates the role requirement _before_ that fence, so a scoped VIEWER/OPERATOR key is refused with `Insufficient permissions. Required: admin`; only a scoped ADMIN key reaches the fence and sees `Session-scoped API keys are not permitted on this route`. Both are `403`. A key restricted with `allowedChats` that passes the role check is refused next, before the session fence, with `403 "API key is restricted to selected chats"`: no management route is open to a chat-scoped key. The plaintext key string is returned **only once**, at creation. Validation of the caller's own key lives at `POST /api/auth/validate` (a separate controller, not fenced) and accepts any valid key except one its `allowedIps` refuses or one restricted with `allowedChats`, each refused with `403` (the latter like every route not open to a chat-scoped key).
 
+There is no rotate route: rotate a key by creating a new one, moving its clients to it, then revoking the old one with `POST /api/auth/api-keys/:id/revoke`.
+
 #### GET /api/auth/api-keys
 
 List all API keys, newest first. The plaintext key is never returned.
