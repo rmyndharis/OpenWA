@@ -18,6 +18,12 @@ describe('e2e boot environment', () => {
     expect(process.env.QUEUE_ENABLED).toBe('false');
     expect(process.env.REDIS_ENABLED).toBe('false');
   });
+
+  // The boot sweep deletes an archive in the checkout's ./data/exports once its embedded creation time is
+  // this many milliseconds old, so an age past the current epoch time deletes none.
+  it('boots with an export sweep that deletes no archive from the checkout', () => {
+    expect(Number(process.env.STORAGE_EXPORT_SWEEP_MAX_AGE_MS)).toBeGreaterThan(Date.now());
+  });
 });
 
 @Controller()
