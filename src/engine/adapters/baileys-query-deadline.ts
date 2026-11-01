@@ -38,6 +38,13 @@ export async function withQueryDeadline<T>(work: Promise<T>, timeoutMs: number, 
         timer.unref?.();
       }),
     ]);
+  } catch (error) {
+    // A WebSocket that closes under a pending query rejects it with the bare close code (Baileys hands the
+    // `close` event's argument to reject), which no caller can classify, so it would reach the client as a 500.
+    if (typeof error === 'number') {
+      throw new EngineTransportError(`The connection to WhatsApp closed (code ${error}) before it answered`);
+    }
+    throw error;
   } finally {
     // clearTimeout tolerates undefined, so no guard — a guard here would be a branch no test can
     // reach, since the race always assigns the timer before it can settle.

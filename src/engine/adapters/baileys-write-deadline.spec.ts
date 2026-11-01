@@ -1,7 +1,9 @@
 import type { WASocket } from '@whiskeysockets/baileys';
 import { BaileysGroups, BaileysGroupsHost } from './baileys-groups';
 import { BaileysContacts, BaileysContactsHost } from './baileys-contacts';
+import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
+import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 
 /**
  * Every group and profile WRITE goes through a Baileys method that awaits `groupQuery`/`query` and
@@ -105,5 +107,32 @@ describe('profile writes report an unconfirmed write rather than success', () =>
     const updateProfileName = jest.fn().mockResolvedValue(undefined);
     await expect(contacts({ updateProfileName }, 500).setProfileName('Ada')).resolves.toBeUndefined();
     expect(updateProfileName).toHaveBeenCalledWith('Ada');
+  });
+});
+
+describe('a connection that closes under a pending query', () => {
+  // Baileys rejects a query still waiting for its answer with the bare WebSocket close code (1006 when the
+  // connection drops), which carries no WA code for any caller to classify.
+  const closed = () => jest.fn().mockRejectedValue(1006);
+
+  it.each([
+    ['a group write', () => groups({ groupUpdateSubject: closed() }, 500).setGroupSubject('123@g.us', 'X')],
+    ['a group read', () => groups({ groupFetchAllParticipating: closed() }, 500).getGroups()],
+    ['a profile write', () => contacts({ updateProfileName: closed() }, 500).setProfileName('Ada')],
+    ['a block', () => contacts({ updateBlockStatus: closed() }, 500).blockContact('628111@c.us')],
+  ])('answers 503 for %s', async (_name, call) => {
+    await expect(call()).rejects.toBeInstanceOf(EngineTransportError);
+  });
+
+  it('leaves a WhatsApp error answer to the caller that classifies it', async () => {
+    const refused = jest.fn().mockRejectedValue(Object.assign(new Error('forbidden'), { data: 403 }));
+    await expect(groups({ groupUpdateSubject: refused }, 500).setGroupSubject('123@g.us', 'X')).rejects.toBeInstanceOf(
+      EngineRefusedError,
+    );
+    // updateBlockStatus refuses an id it cannot map with a Boom 400 that carries no WA code.
+    const unmapped = jest.fn().mockRejectedValue(Object.assign(new Error('no lid'), { output: { statusCode: 400 } }));
+    await expect(contacts({ updateBlockStatus: unmapped }, 500).blockContact('628111@c.us')).rejects.toBeInstanceOf(
+      RecipientUnreachableError,
+    );
   });
 });
