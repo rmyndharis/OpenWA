@@ -1315,6 +1315,10 @@ export class BaileysLifecycle {
     }
     const sock = this.sock;
     const code = await sock.requestPairingCode(phoneNumber);
+    // A stop, logout or new socket while WhatsApp answered leaves a code nothing can link any more.
+    if (this.sock !== sock || this.getStatus() !== EngineStatus.QR_READY) {
+      throw new EngineNotReadyError('Session stopped waiting to be linked while the pairing code was requested.');
+    }
     this.armPairingWindow(sock);
     return code;
   }
