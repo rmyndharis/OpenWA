@@ -1683,6 +1683,50 @@ test('sends answered with no message id each keep their own bubble', async () =>
   assert.ok(within(thread).queryByText('second id-less'), 'the later id-less send is missing');
 });
 
+// A send is drawn at the browser's clock until the gateway answers with its own. The fixtures are years older than the
+// browser clock, so a sent message left on it sorts after every one of them.
+test('a send whose echo lands before its answer takes the time the gateway gave it', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  firstPageExtra = [
+    {
+      ...DB_MESSAGE,
+      id: 'db-later',
+      waMessageId: 'wamid.later',
+      body: 'a reply from alice after it',
+      timestamp: 1_700_000_200,
+      createdAt: new Date(1_700_000_200_000).toISOString(),
+    },
+  ];
+  const release = holdSend();
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  const thread = container.querySelector('.room-messages') as HTMLElement;
+  await within(thread).findByText('a reply from alice after it');
+
+  fireEvent.change(screen.getByPlaceholderText('Type a message...'), { target: { value: 'sent before the reply' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  receiveEvent('message.sent', {
+    id: 'wamid.out.1',
+    chatId: CHAT.id,
+    from: 'me',
+    to: CHAT.id,
+    body: 'sent before the reply',
+    type: 'text',
+    fromMe: true,
+    timestamp: 1_700_000_100,
+  });
+  await waitFor(() => assert.ok(thread.querySelector('[data-wa-message-id="wamid.out.1"]')));
+  release();
+  await waitFor(() => assert.equal(within(thread).getAllByText('sent before the reply').length, 1));
+  await flush();
+
+  const order = [...thread.querySelectorAll('[data-wa-message-id]')].map(el => el.getAttribute('data-wa-message-id'));
+  assert.ok(
+    order.indexOf('wamid.out.1') < order.indexOf('wamid.later'),
+    `the sent message sorts by the browser clock: ${order.join(', ')}`,
+  );
+});
+
 test('a caption sent with a document shows in its bubble', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   resetFetchCalls();

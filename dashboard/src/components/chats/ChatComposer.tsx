@@ -306,6 +306,9 @@ function ChatComposer({
         ...tempMessage,
         id: result.messageId || tempId.replace(/^temp_/, 'sent_'),
         waMessageId: result.messageId || undefined,
+        // The row sorts and is labelled by this; merged into an echo that came first, it would otherwise fall back to
+        // the browser clock in createdAt, which stays the placeholder's (the media viewer finds the row by it).
+        timestamp: result.timestamp,
         status: 'sent',
       };
       upsertCachedMessage(queryClient, sendKey, reconciled, { dropId: tempId });
