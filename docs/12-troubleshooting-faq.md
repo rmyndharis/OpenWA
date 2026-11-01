@@ -1528,7 +1528,10 @@ A media message also carries `media: { mimetype, filename?, data?, omitted?, siz
 | 413  | Payload Too Large   | File too large                                                                                                                | Reduce file size                                                                                 |
 | 429  | Too Many Requests   | Rate limited                                                                                                                  | Reduce request rate                                                                              |
 | 500  | Internal Error      | Server error                                                                                                                  | Check logs                                                                                       |
-| 503  | Service Unavailable | The engine transport died during a read, or a media fetch through the session proxy failed                                    | Retry; restart the session if it persists                                                        |
+| 501  | Not Implemented     | The active engine cannot do it (docs/29), or search has no active provider, or no ready index for the requested `match`       | Use the engine that supports it (docs/29); for search, see docs/26                               |
+| 502  | Bad Gateway         | A stop, logout or force-kill stopped the session locally but did not complete, or a search plugin returned invalid results    | Follow the `code` (docs/06): retry the stop or logout; for search, check the plugin              |
+| 503  | Service Unavailable | WhatsApp did not answer or rate-limited it, the engine connection died, a proxied fetch failed, or S3 is unreachable or busy  | Retry after a pause (`Retry-After` when sent); a write may have applied, so check first          |
+| 504  | Gateway Timeout     | `POST .../start`: the engine did not finish starting within its timeout                                                       | Check network access to WhatsApp and the host's resources, then start again                      |
 
 ### Error Body Shape
 
