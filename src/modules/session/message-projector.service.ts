@@ -1739,6 +1739,9 @@ export class MessageProjector {
   applyMessageEditQueued(id: string, message: EditedMessage): void {
     const source = { kind: 'edit', chatId: message.chatId, fromMe: message.fromMe, author: message.author } as const;
     void this.changeInFlight(id, message.messageId, source, (needsRow, entry) => {
+      // Revoked before its row was written: the row will be stored cleared and message.revoked has gone out, so the
+      // edit is neither held nor announced. Once the row exists, applyMessageEdit refuses a revoked one itself.
+      if (entry && !needsRow && entry.revoked) return;
       if (entry && !needsRow) this.holdEdit(entry, message.body);
       this.mutationProjector.applyMessageEditQueued(id, message, needsRow);
     });
