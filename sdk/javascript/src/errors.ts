@@ -139,7 +139,10 @@ export class OpenWANotImplementedError extends OpenWAApiError {}
  */
 export class OpenWAServiceUnavailableError extends OpenWAApiError {}
 
-/** Thrown when a request exceeds the configured timeout. */
+/**
+ * Thrown when a request exceeds the configured timeout. The gateway may still complete the request: retry
+ * a send only with the same `Idempotency-Key`, and re-read state before repeating any other write.
+ */
 export class OpenWATimeoutError extends OpenWAError {
   constructor(timeoutMs: number) {
     super(`Request timed out after ${timeoutMs}ms`);

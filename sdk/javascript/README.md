@@ -50,8 +50,9 @@ Non-2xx responses throw a typed `OpenWAApiError` subclass (`OpenWAAuthError`,
 `OpenWAForbiddenError`, `OpenWANotFoundError`, `OpenWAConflictError`,
 `OpenWARateLimitError`, `OpenWANotImplementedError`,
 `OpenWAServiceUnavailableError` for 503), each carrying `.status` and the parsed
-`.body`. Timeouts throw `OpenWATimeoutError`. The SDK does **not** retry — wrap
-calls with your own backoff if needed. 503 means the gateway could not complete
+`.body`. Timeouts throw `OpenWATimeoutError`, though the gateway may still
+complete the request: retry a send only with the same `Idempotency-Key`. The SDK
+does **not** retry — wrap calls with your own backoff if needed. 503 means the gateway could not complete
 the request right now: the path to WhatsApp failed, the gateway is draining or
 short of a dependency, or, on Baileys, WhatsApp throttled (code 429) or timed
 out (code 408) the request. Back off and retry later instead of at once, because

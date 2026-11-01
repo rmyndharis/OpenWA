@@ -130,7 +130,8 @@ from the body: a few seconds when only sends still in flight caused it, the rest
 of the failure breaker's cooldown (`SEND_PACING_BREAKER_COOLDOWN_MS`, 15 minutes
 by default) after a run of send failures, otherwise up to the next UTC day.
 `APIError.Header` holds the response headers. A timeout surfaces as
-`*openwa.TimeoutError`. A 503 does not always prove a write was never carried
+`*openwa.TimeoutError`, though the gateway may still complete the request: retry
+a send only with the same `Idempotency-Key`. A 503 does not always prove a write was never carried
 out: when WhatsApp timed out, the change may still have been applied, so re-read
 the state before repeating it. A throttle on a send or a single write was turned
 away before it ran, so nothing was sent or applied; a send also sent nothing

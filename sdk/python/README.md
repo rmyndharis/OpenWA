@@ -82,8 +82,9 @@ to sessions or chats, so read it with `get`.
 A non-2xx response raises a typed `OpenWAApiError` subclass — `OpenWAAuthError` (401),
 `OpenWAForbiddenError` (403), `OpenWANotFoundError` (404), `OpenWAConflictError` (409),
 `OpenWARateLimitError` (429), `OpenWANotImplementedError` (501), `OpenWAServiceUnavailableError`
-(503) — each carrying `.status` and the parsed `.body`. A timeout raises `OpenWATimeoutError`. 503
-means the gateway could not complete the request right now: the path to WhatsApp failed, the gateway
+(503) — each carrying `.status` and the parsed `.body`. A timeout raises `OpenWATimeoutError`,
+though the gateway may still complete the request: retry a send only with the same `Idempotency-Key`.
+503 means the gateway could not complete the request right now: the path to WhatsApp failed, the gateway
 is draining or short of a dependency, or, on Baileys, WhatsApp throttled (code 429) or timed out
 (code 408) the request. Back off and retry later instead of at once, because repeating a throttled
 request straight away prolongs the throttle; a catalog 503 can persist because WhatsApp may never

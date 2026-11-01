@@ -289,7 +289,10 @@ testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
   up to about twice the `timeout`. A body that keeps trickling bytes is therefore
   not cut off. There a `0` still leaves PHP's `default_socket_timeout` (60s by
   default) before the response headers, and that wait ends with a Guzzle
-  exception, not `OpenWATimeoutException`; see the PHP README. Path segments (chat / message ids) are percent-encoded; a base-URL path
+  exception, not `OpenWATimeoutException`; see the PHP README. A timeout ends the
+  wait, not the call: the gateway may still complete the request, so retry a send
+  only with the same `Idempotency-Key` and re-read state before repeating any other
+  write. Path segments (chat / message ids) are percent-encoded; a base-URL path
   prefix (e.g. behind a proxy at `/v1`) is preserved.
 
 ## Development
