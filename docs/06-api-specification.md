@@ -6641,7 +6641,11 @@ Key facts:
   "method": "tools/call",
   "params": {
     "name": "MessageSendText",
-    "arguments": { "sessionId": "default", "chatId": "6281234567890@c.us", "text": "Hello from MCP" }
+    "arguments": {
+      "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
+      "chatId": "6281234567890@c.us",
+      "text": "Hello from MCP"
+    }
   }
 }
 ```
