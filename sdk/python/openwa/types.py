@@ -603,7 +603,7 @@ class MessageContact(TypedDict, total=False):
     verifiedName: str
     verifiedLevel: int
     isBlocked: bool
-    labels: list
+    labels: list[str]
 
 
 class ChatHistoryPoll(TypedDict):
@@ -630,7 +630,7 @@ ChatHistoryMessage = TypedDict(
         "isStatusBroadcast": NotRequired[bool],
         "ephemeralDuration": NotRequired[int],
         "author": NotRequired[Jid],
-        "mentionedIds": NotRequired[list],
+        "mentionedIds": NotRequired[list[str]],
         "call": NotRequired[MessageCall],
         "isLidSender": NotRequired[bool],
         "senderPhone": NotRequired[Optional[str]],

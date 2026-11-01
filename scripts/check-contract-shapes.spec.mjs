@@ -899,3 +899,77 @@ for (const [name, value] of [
     assert.deepEqual(comparePair('Sample', java, 'Dto', numeric, {}, false), []);
   });
 }
+
+test('resolves TypeScript export type aliases and typeof-const unions in handToken and comparePair', () => {
+  const jsSrc = readFileSync(join(gateRoot, 'sdk/javascript/src/types.ts'), 'utf8');
+  const jsTypes = parseHandTypes(jsSrc);
+  assert.equal(handToken(jsTypes.GroupInfo.owner.token, jsTypes), 'string');
+  const fakeDriftedWebhook = {
+    url: { optional: false, token: jsTypes.CreateWebhookRequest.url.token },
+    events: { optional: true, token: 'WebhookEvent[];' },
+  };
+  const fakeSchema = {
+    type: 'object',
+    required: ['url'],
+    properties: {
+      url: { type: 'string' },
+      events: { type: 'array', items: { type: 'string', enum: ['only.one.event'] } },
+    },
+  };
+  const diffs = comparePair('CreateWebhookRequest', fakeDriftedWebhook, 'CreateWebhookDto', fakeSchema, {
+    CreateWebhookDto: fakeSchema,
+  });
+  assert.ok(
+    diffs.length > 0,
+    'comparePair should gate TypeScript fields typed via export type aliases (WebhookEvent[])',
+  );
+
+  const constTupleTypes = parseHandTypes(
+    "export const KINDS = ['a', 'b'] as const;\nexport type Kind = (typeof KINDS)[number];\nexport interface Item {\n  kind: Kind;\n}\n",
+  );
+  assert.deepEqual(
+    comparePair(
+      'Item',
+      constTupleTypes.Item,
+      'ItemDto',
+      { type: 'object', required: ['kind'], properties: { kind: { type: 'string', enum: ['a', 'b'] } } },
+      {},
+    ),
+    [],
+  );
+});
+
+test('parsePythonTypes parses functional TypedDicts with comment lines, comma-bearing Literal types, and functional base classes', () => {
+  const pySrc = readFileSync(join(gateRoot, 'sdk/python/openwa/types.py'), 'utf8');
+  const pyTypes = parsePythonTypes(pySrc);
+  assert.ok(pyTypes.ListMessagesQuery, 'ListMessagesQuery should be parsed by parsePythonTypes');
+  assert.equal(pyTypes.ListMessagesQuery.direction.token, 'enum(["incoming","outgoing"])');
+  assert.equal(pyTypes.ListMessagesQuery.orderBy.token, 'enum(["createdAt","timestamp"])');
+  assert.ok(
+    pyTypes.SearchQueryParams?.match,
+    'SearchQueryParams.match (Literal["word", "contains"]) should not be dropped by parsePythonTypes',
+  );
+  assert.equal(pyTypes.SearchQueryParams.match.token, 'enum(["contains","word"])');
+  assert.ok(
+    pyTypes.SearchHit,
+    'SearchHit (subclass of functional TypedDict _SearchHitRequired) should be parsed by parsePythonTypes',
+  );
+});
+
+test('parsePythonTypes classifies bare list as unknown and types ChatHistoryMessage.mentionedIds and MessageContact.labels as array<string>', () => {
+  const pySrc = readFileSync(join(gateRoot, 'sdk/python/openwa/types.py'), 'utf8');
+  const pyTypes = parsePythonTypes(pySrc);
+  assert.equal(pyTypes.ChatHistoryMessage.mentionedIds.token, 'array<string>');
+  assert.equal(pyTypes.MessageContact.labels.token, 'array<string>');
+
+  const bareListTypes = parsePythonTypes('class Sample(TypedDict):\n    items: list\n');
+  assert.equal(bareListTypes.Sample.items.token, 'unknown');
+  const diffs = comparePair(
+    'Sample',
+    bareListTypes.Sample,
+    'SampleDto',
+    { type: 'object', required: ['items'], properties: { items: { type: 'array', items: { type: 'string' } } } },
+    {},
+  );
+  assert.deepEqual(diffs, ['"items": hand unknown, contract array<string>']);
+});

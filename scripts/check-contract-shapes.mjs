@@ -14,13 +14,10 @@
  * which is worse than no gate at all. Comparing parsed declarations against JSON schemas is
  * deterministic, and it is the same mechanism the other check-* gates trust.
  *
- * Known blind spots, so nobody reads a green run as more than it is: TypeScript type-ALIASED
- * enums (e.g. `status: SessionStatus`) resolve to their alias name and are compared by presence
- * and optionality only, so the literal sets themselves are ungated on the TS clients. Everywhere
- * else the vocabulary IS compared member by member: Python Literals, Go const blocks and Java
- * enum constants (by their `@SerializedName`, or the constant's own name when it has none, which
- * is what Gson emits; a bare `UNKNOWN` is the decode-only sentinel and is skipped), whether the
- * field carries one member or a list of them.
+ * Everywhere the vocabulary IS compared member by member: TypeScript type aliases and `as const`
+ * tuple unions, Python Literals, Go const blocks and Java enum constants (by their `@SerializedName`,
+ * or the constant's own name when it has none, which is what Gson emits; a bare `UNKNOWN` is the
+ * decode-only sentinel and is skipped), whether the field carries one member or a list of them.
  *
  * One exception, in Java only: Gson serializes an enum constant by name, i.e. as a JSON string, so
  * a NUMERIC enum cannot be modelled as a Java enum without a custom adapter: the wire would carry
@@ -156,6 +153,7 @@ const MAPPINGS = {
     VotePollRequest: 'VotePollDto',
     WebhookDeliveryFailure: 'WebhookDeliveryFailureDto',
     WebhookFilterCondition: 'WebhookFilterConditionDto',
+    WebhookFilters: 'WebhookFiltersDto',
     WebhookRedriveResult: 'WebhookRedriveResultDto',
     WebhookResponse: 'WebhookResponseDto',
     // Payloads that sat outside every mapping until the coverage check required one.
@@ -368,6 +366,7 @@ const PYTHON_MAPPING = {
   ReactMessageRequest: 'ReactMessageDto',
   ReplyMessageRequest: 'ReplyMessageDto',
   RequestPairingCodeRequest: 'RequestPairingCodeDto',
+  SearchHit: 'SearchHitDto',
   SendAudioRequest: 'SendAudioMessageDto',
   SendBulkRequest: 'SendBulkMessageDto',
   SendChatStateRequest: 'SendChatStateDto',
@@ -731,10 +730,25 @@ const JAVA_MAPPING = {
 
 // ── hand-type parsing (declarations follow the regular formatting of the two files) ──
 
+const memberContext = new WeakMap();
+let lastAliases = {};
+
 export function parseHandTypes(source) {
   source = source.replace(/\r\n/g, '\n');
   const types = {};
   const parents = {};
+  const constArrays = {};
+  for (const [, name, body] of source.matchAll(/export const (\w+)\s*=\s*\[([\s\S]*?)\]\s*as const;/g)) {
+    const items = [...body.matchAll(/'([^']*)'|"([^"]*)"/g)].map(m => `'${m[1] ?? m[2]}'`);
+    if (items.length) constArrays[name] = items.join(' | ');
+  }
+  const aliases = {};
+  for (const [, name, raw] of source.matchAll(/export type (\w+)\s*=\s*([^{;]+);/g)) {
+    const rhs = raw.trim();
+    const typeofMatch = rhs.match(/^\(\s*typeof\s+(\w+)\s*\)\s*\[number\]$/);
+    aliases[name] = typeofMatch && constArrays[typeofMatch[1]] ? constArrays[typeofMatch[1]] : rhs;
+  }
+  lastAliases = { ...lastAliases, ...aliases };
   const iface = /export interface (\w+)(?: extends (\w+))? \{([\s\S]*?)\n\}/g;
   for (const [, name, parent, body] of source.matchAll(iface)) {
     types[name] = parseMembers(body);
@@ -745,6 +759,10 @@ export function parseHandTypes(source) {
   // CreatedApiKey (extends ApiKey) can never conform.
   for (const [name, parent] of Object.entries(parents)) {
     if (types[parent]) types[name] = { ...types[parent], ...types[name] };
+  }
+  const ctx = { types, aliases };
+  for (const members of Object.values(types)) {
+    memberContext.set(members, ctx);
   }
   return types;
 }
@@ -806,10 +824,19 @@ const sortEnumMembers = members =>
       });
 const enumToken = members => `enum(${JSON.stringify(sortEnumMembers(members))})`;
 
-export function handToken(text, types, depth = 0) {
-  const t = text.trim().replace(/;$/, '');
-  if (t.endsWith('[]')) return `array<${handToken(t.slice(0, -2), types, depth)}>`;
+export function handToken(text, types = {}, depth = 0, aliases = lastAliases) {
+  const t = text
+    .trim()
+    .replace(/;$/, '')
+    .replace(/^\|\s*/, '')
+    .trim();
+  if (t.endsWith('[]')) return `array<${handToken(t.slice(0, -2), types, depth, aliases)}>`;
+  const arrMatch = t.match(/^Array<([\s\S]+)>$/);
+  if (arrMatch) return `array<${handToken(arrMatch[1], types, depth, aliases)}>`;
   if (/^(string|number|boolean|unknown|any)$/.test(t)) return t;
+  if (aliases && aliases[t] && depth < MAX_DEPTH) {
+    return handToken(aliases[t], types, depth + 1, aliases);
+  }
   const literals = [...t.matchAll(/'([^']*)'|"([^"]*)"/g)].map(m => m[1] ?? m[2]);
   // Unquoted numeric literals (font enums like 0|1|2|6) count too.
   const numerics = [...t.matchAll(/(?<![\w.'"])(-?\d+(?:\.\d+)?)(?![\w.])/g)].map(m => Number(m[1]));
@@ -822,19 +849,26 @@ export function handToken(text, types, depth = 0) {
       .filter(p => p && p !== 'undefined');
     const nullable = parts.includes('null');
     const rest = parts.filter(p => p !== 'null');
-    if (nullable && rest.length === 1) return `${handToken(rest[0], types, depth)}|null`;
+    if (nullable && rest.length === 1) return `${handToken(rest[0], types, depth, aliases)}|null`;
     // A nullable literal union ('a' | 'b' | null) is the enum of its literals with a null arm.
-    const inner = nullable && rest.length > 1 ? handToken(rest.join(' | '), types, depth) : '';
+    const inner = nullable && rest.length > 1 ? handToken(rest.join(' | '), types, depth, aliases) : '';
     if (inner.startsWith('enum(')) return `${inner}|null`;
     return `union(${rest
-      .map(p => handToken(p, types, depth))
+      .map(p => handToken(p, types, depth, aliases))
+      .sort()
+      .join(',')})`;
+  }
+  if (t.startsWith('{') && t.endsWith('}') && depth < MAX_DEPTH) {
+    const inlineMembers = parseMembers(t.slice(1, -1).replace(/;\s*/g, ';\n'));
+    return `object(${Object.entries(inlineMembers)
+      .map(([f, v]) => `${f}${v.optional ? '?' : ''}:${handToken(v.token, types, depth + 1, aliases)}`)
       .sort()
       .join(',')})`;
   }
   const ref = types[t];
   if (ref && depth < MAX_DEPTH) {
     return `object(${Object.entries(ref)
-      .map(([f, v]) => `${f}${v.optional ? '?' : ''}:${handToken(v.token, types, depth + 1)}`)
+      .map(([f, v]) => `${f}${v.optional ? '?' : ''}:${handToken(v.token, types, depth + 1, aliases)}`)
       .sort()
       .join(',')})`;
   }
@@ -954,6 +988,7 @@ export function comparePair(
   namesOnly = false,
 ) {
   const diffs = [];
+  const ctx = memberContext.get(handMembers);
   const schemaFields = parseObjectToken(schemaToken(schema, schemas));
   for (const [field, handInfo] of Object.entries(handMembers)) {
     const sField = schemaFields[field];
@@ -971,7 +1006,7 @@ export function comparePair(
     if (isSimpleToken(sField.token)) {
       let hand = isSimpleToken(handInfo.token)
         ? handInfo.token
-        : handToken(handInfo.token, { [handName]: handMembers });
+        : handToken(handInfo.token, ctx?.types ?? { [handName]: handMembers }, 0, ctx?.aliases ?? lastAliases);
       let contract = sField.token;
       if (!compareOptionality) {
         // Java (the only such client) cannot express non-null references — strip null arms on
@@ -1016,6 +1051,7 @@ export function parsePythonTypes(source) {
   const joined = [];
   let carry = '';
   for (const line of source.split('\n')) {
+    if (line.trim().startsWith('#')) continue;
     carry = carry ? carry + ' ' + line.trim() : line;
     let depth = 0;
     for (const ch of carry) {
@@ -1042,7 +1078,7 @@ export function parsePythonTypes(source) {
     const members = {};
     // The bracket-joining preprocessing above collapses the dict to ONE line, so fields are
     // delimited by the next `"key":` (lookahead), not by newlines.
-    for (const f of body.matchAll(/"([^"]+)"\s*:\s*(".*?"|[^,]+?)(?=\s*,?\s*(?:\}|$)|\s*,\s*"[^"]+"\s*:)/g)) {
+    for (const f of body.matchAll(/"([^"]+)"\s*:\s*([\s\S]+?)(?=\s*,?\s*(?:\}|$)|\s*,\s*"[^"]+"\s*:)/g)) {
       // Optional[...] stays verbatim: the comparator reads it as `T|null` (nullability), distinct
       // from optionality. Only total=False / NotRequired mark a member optional.
       let token = f[2].trim().replace(/,$/, '');
@@ -1056,7 +1092,7 @@ export function parsePythonTypes(source) {
     }
     dicts[name] = members;
   }
-  const blocks = [...source.matchAll(/class (\w+)\(([^)]*)\):\n([\s\S]*?)(?=\nclass |\n[A-Z]\w+ = |\n*$)/g)];
+  const blocks = [...source.matchAll(/class (\w+)\(([^)]*)\):\n([\s\S]*?)(?=\nclass |\n_?[A-Z]\w+ = |\n*$)/g)];
   // A subclass never re-mentions TypedDict — accept any class whose base chain reaches one
   // (fixpoint: a class is rooted when a base is itself a rooted class).
   const basesOf = Object.fromEntries(
@@ -1068,7 +1104,10 @@ export function parsePythonTypes(source) {
         .filter(x => x && x !== 'TypedDict' && !x.includes('=')),
     ]),
   );
-  let rooted = new Set(blocks.filter(([, , b]) => /(^|\W)TypedDict(\W|$)/.test(b)).map(([, n]) => n));
+  let rooted = new Set([
+    ...Object.keys(dicts),
+    ...blocks.filter(([, , b]) => /(^|\W)TypedDict(\W|$)/.test(b)).map(([, n]) => n),
+  ]);
   let grew = true;
   while (grew) {
     grew = false;
@@ -1170,6 +1209,7 @@ function pythonToken(text, resolve, depth = 0) {
     if (t === 'int' || t === 'float') return 'number';
     if (t === 'bool') return 'boolean';
     if (t === 'Any') return 'any';
+    if (t === 'list' || t === 'List') return 'unknown';
     const lit = t.match(/^Literal\[(.+)\]$/s);
     if (lit) {
       // Quoted members are string enums; bare members are the numeric ones (a status font, a pin

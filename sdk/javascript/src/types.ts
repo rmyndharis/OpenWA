@@ -850,7 +850,7 @@ export interface GroupInfo {
   locked?: boolean;
   /** Who may add participants. Absent when the engine did not report it. */
   memberAddMode?: 'all' | 'admins';
-  owner?: Jid | null;
+  owner?: Jid;
   /** Unix timestamp in seconds. */
   createdAt?: number;
   participants: GroupParticipant[];
