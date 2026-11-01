@@ -41,7 +41,7 @@ console.log(result.messageId);
 CommonJS consumers use `require('@rmyndharis/openwa')` identically.
 
 For an endpoint the SDK does not wrap, call `client.request({ method, path, query, body })`, which
-takes an `Idempotency-Key` as its second argument, or `client.requestBytes(...)` for a binary body. A
+takes an `Idempotency-Key` as its second argument, or `client.requestBytes(...)` for a binary response body. A
 path that does not begin with `/`, or has a `.` or `..` segment (also after an encoded slash, as in
 `..%2F`), rejects with a `TypeError` before anything is sent. An id with a `.` or `..` part between
 slashes, such as `../x`, is refused the same way.
