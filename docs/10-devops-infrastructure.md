@@ -1010,7 +1010,7 @@ export class MetricsService {
 | `openwa_session_reconnect_loop_alerts_total` | counter   | —                                   | Reconnect-loop alerts emitted since process start                                                                                   |
 | `openwa_sessions_restricted`                 | gauge     | —                                   | Sessions whose account WhatsApp is currently restricting                                                                            |
 | `openwa_send_pacing_refusals_total`          | counter   | `reason`                            | Sends refused by the pacing governor since process start                                                                            |
-| `http_requests_total`                        | counter   | `method`, `route`, `status`         | HTTP requests served, by method, route and status                                                                                   |
+| `http_requests_total`                        | counter   | `method`, `route`, `status`         | API (`/api`) requests answered, by method, route and status, including the ones refused before routing (`(unmatched)`)              |
 | `http_request_duration_seconds`              | histogram | `method`, `route`                   | HTTP request duration (`_bucket` / `_sum` / `_count`)                                                                               |
 
 The last two are deliberately **unprefixed** so a generic RED dashboard or alert rule matches them

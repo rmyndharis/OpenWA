@@ -7,11 +7,12 @@ const SKIPPED_PREFIXES = ['/api/health', '/api/metrics'];
 
 /**
  * Per-request ownership marker for the single RED observation, shared with
- * RequestMetricsInterceptor. Nest runs middleware BEFORE guards and interceptors, so this
- * boundary middleware sees every API request — including ones the throttler (429) or the
+ * RequestMetricsInterceptor. configureApp mounts this boundary middleware on /api ahead of every
+ * other middleware, so it sees every API request: the ones that middleware answers itself (the
+ * shutdown 503, the in-flight budget, parser errors) and the ones the throttler (429) or the
  * API-key guard (401/403) reject before the interceptor chain ever runs. The interceptor
  * claims the requests it observes; at response time this middleware records only requests
- * left unclaimed, so every response is counted exactly once.
+ * left unclaimed, so every API response is counted exactly once.
  */
 export const HTTP_REQUEST_METRICS_CLAIMED = Symbol('openwa.httpRequestMetricsClaimed');
 
