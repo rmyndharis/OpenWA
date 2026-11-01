@@ -720,7 +720,15 @@ export class BaileysSessionStore {
     accept?: (key: WAMessageKey) => boolean,
   ): void {
     if (!messageId) return;
-    for (const key of new Set([chatId, this.toEngineJid(chatId)])) {
+    const targets = new Set([chatId, this.toEngineJid(chatId)]);
+    if (accept && parseWaId(chatId).kind === 'user') {
+      for (const [key, existing] of this.lastMessages.entries()) {
+        if (existing.key.id === messageId && parseWaId(key).kind === 'lid') {
+          targets.add(key);
+        }
+      }
+    }
+    for (const key of targets) {
       const existing = this.lastMessages.get(key);
       if (existing?.key.id === messageId && (!accept || accept(existing.key)))
         this.lastMessages.set(key, { ...existing, text, type: type ?? existing.type });
