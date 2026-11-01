@@ -157,14 +157,13 @@ export class BaileysHistory {
     // Targets can precede or follow their revokes, including across separate history chunks.
     const crossFormRevokes: { confirmedKey: string; extra: IncomingMessage }[] = [];
     for (const { message, target } of revokes) {
-      const fallbackKey = { ...target, remoteJid: target.remoteJid ?? message.key.remoteJid };
-      const candidate = targets.get(target.id!);
-      const key =
-        (candidate && (await this.host.applyHistoryRevoke(candidate.key, message.key))) ??
-        (await this.host.applyHistoryRevoke(fallbackKey, message.key));
+      const original = targets.get(target.id!);
+      const key = await this.host.applyHistoryRevoke(
+        original?.key ?? { ...target, remoteJid: target.remoteJid ?? message.key.remoteJid },
+        message.key,
+      );
       if (!current()) return;
       if (!key?.remoteJid) continue;
-      const original = candidate?.key === key ? candidate : undefined;
       const timestamp = toUnixSeconds(original?.messageTimestamp ?? message.messageTimestamp);
       const cleared = this.revokedMessage(key, timestamp);
       mapped.push(cleared);
@@ -228,7 +227,7 @@ export class BaileysHistory {
             const phone = await this.host.findPersistedLidPhone?.(lidChatId).catch(() => null);
             if (!current()) return;
             if (phone && `${phone}@c.us` === this.host.toNeutralJid(m.chatId)) {
-              this.host.recordMessageEdit(lidChatId, m.id, '', 'revoked');
+              this.host.recordMessageEdit(lidChatId, m.id, '', 'revoked', key => (key.fromMe === true) === m.fromMe);
             }
           }
         } else {

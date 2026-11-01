@@ -35,6 +35,7 @@ describe('Baileys history revokes across LID and phone chat keys', () => {
   let repo: Repository<Message>;
   let raw: BaileysMessageStoreService;
   let history: BaileysHistory;
+  let historyHost: BaileysHistoryHost;
   let previews: BaileysSessionStore;
   let pending: Promise<IncomingMessage[]>[];
   let events: BaileysEvents;
@@ -118,7 +119,8 @@ describe('Baileys history revokes across LID and phone chat keys', () => {
       wasDeletedForEveryone: (id: string) => events.wasDeletedForEveryone(id),
       pendingEditOf: (id: string, key: WAMessage['key']) => events.pendingEditOf(id, key),
     };
-    history = new BaileysHistory(shared as unknown as BaileysHistoryHost);
+    historyHost = shared as unknown as BaileysHistoryHost;
+    history = new BaileysHistory(historyHost);
   });
 
   afterEach(async () => {
@@ -284,6 +286,50 @@ describe('Baileys history revokes across LID and phone chat keys', () => {
     });
     expect(previews.listChats().find(chat => chat.id === foreignLid)).toMatchObject({
       lastMessage: 'foreign chat secret',
+      lastMessageType: 'text',
+    });
+  });
+
+  it('keeps a history message when a revoke from another chat names its id in the same batch', async () => {
+    const OTHER_CHAT_JID = '628333@s.whatsapp.net';
+    const bobs = target({
+      key: { id: 'X2', remoteJid: PHONE_JID, fromMe: false },
+      message: { conversation: 'bob history text' },
+    });
+
+    await capture([
+      bobs,
+      revoke({ id: 'X2', remoteJid: OTHER_CHAT_JID, fromMe: false }, { remoteJid: OTHER_CHAT_JID }),
+    ]);
+
+    const rows = await repo.find({ where: { sessionId: 's1', waMessageId: 'X2' } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ chatId: PHONE_CHAT, type: 'text', body: 'bob history text' });
+  });
+
+  it('dates the tombstone of a history message from the message when its raw copy is stored', async () => {
+    const own = target({ key: { id: 'X5', remoteJid: PHONE_JID, fromMe: true } });
+    await raw.put('s1', own);
+
+    await capture([own, revoke(own.key, { fromMe: true })]);
+
+    const row = await repo.findOneByOrFail({ sessionId: 's1', waMessageId: 'X5' });
+    expect(row).toMatchObject({ type: 'revoked', timestamp: 1_700_000_000 });
+  });
+
+  it('leaves a lid twin preview of the other direction alone when a history revoke names the phone chat', async () => {
+    previews.recordMessage(
+      target({ key: { id: 'X4', remoteJid: LID_JID, fromMe: false }, message: { conversation: 'bob text' } }),
+      'text',
+    );
+    const ours = target({ key: { id: 'X4', remoteJid: PHONE_JID, fromMe: true } });
+    const withTwins = new BaileysHistory({ ...historyHost, chatTwins: () => [LID_JID] });
+
+    await withTwins.captureHistoryMessages([ours, revoke(ours.key, { fromMe: true })]);
+    await Promise.all(pending);
+
+    expect(previews.listChats().find(chat => chat.id === LID_JID)).toMatchObject({
+      lastMessage: 'bob text',
       lastMessageType: 'text',
     });
   });
