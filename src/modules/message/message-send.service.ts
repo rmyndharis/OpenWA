@@ -327,6 +327,8 @@ export class MessageSendService {
       if (error instanceof TemplateRenderError) throw new BadRequestException(error.message);
       throw error;
     }
+    // send-text refuses an empty text before anything is stored or sent; a render that leaves none is the same.
+    if (!text) throw new BadRequestException('Rendered template is empty');
 
     return this.sendText(sessionId, {
       chatId: dto.chatId,

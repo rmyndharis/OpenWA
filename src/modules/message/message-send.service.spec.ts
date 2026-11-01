@@ -780,6 +780,16 @@ describe('MessageSendService', () => {
       expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
     });
 
+    it('answers a 400 and stores nothing for a template that renders to no text, as send-text does', async () => {
+      (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: '{{customer}}' }));
+
+      await expect(
+        service.sendTemplate('sess-1', { chatId: 'test@c.us', templateId: 'tpl-1', vars: { customer: '' } }),
+      ).rejects.toThrow(new BadRequestException('Rendered template is empty'));
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+
     it('still renders a number sent for a variable', async () => {
       (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'Order {{orderId}}' }));
 
