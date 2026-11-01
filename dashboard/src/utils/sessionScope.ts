@@ -106,7 +106,7 @@ function isIpOrCidr(entry: string): boolean {
 function isChatId(entry: string): boolean {
   if (/^\d{5,}$/.test(entry)) return true;
   const at = entry.lastIndexOf('@');
-  if (at === -1) return false;
+  if (at === -1 || entry.indexOf('@') !== at) return false;
   const user = entry.slice(0, at).split(':')[0];
   const domain = entry.slice(at + 1).toLowerCase();
   if (domain === 'g.us') return /^\d+(?:-\d+)?$/.test(user);

@@ -220,7 +220,7 @@ test('a chat entry must be a phone number, a group or a contact id, as the gatew
     ]),
     null,
   );
-  for (const bad of ['1234', 'abc@c.us', '12@c.us', '120363000@x.us', 'someone']) {
+  for (const bad of ['1234', 'abc@c.us', '12@c.us', '120363000@x.us', 'someone', '6281234:0@g.us@c.us']) {
     assert.equal(invalidChatEntry([bad]), bad, bad);
   }
 });
