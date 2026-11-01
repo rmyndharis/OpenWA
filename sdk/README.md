@@ -258,14 +258,16 @@ testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
   outside local development.
 - **No automatic retries by default.** A failed request raises/throws
   immediately; wrap calls in your own backoff if you need retries (especially
-  for `429`). The injectable transport (`fetch` / `transport` / `httpClient`) is
-  the extension point for retry or observability middleware. The Go client is
-  the exception: it ships an opt-in policy (`WithRetry(DefaultRetryPolicy())`)
-  that retries idempotent requests on network errors and `429`/`5xx`, retries a
-  `POST`/`PATCH` only on `429`/`503` (never after a network error), never
-  retries a send-pacing `429` (`code: "SEND_PACING_LIMITED"`), honors
-  `Retry-After`, and rewinds request bodies —
-  still off unless you ask for it.
+  for `429`), and replay a send answered `503` only with the same
+  `Idempotency-Key`: the message may already have gone out. The injectable
+  transport (`fetch` / `transport` / `httpClient`) is the extension point for
+  retry or observability middleware. The Go client is the exception: it ships an
+  opt-in policy (`WithRetry(DefaultRetryPolicy())`) that retries idempotent
+  requests on network errors and `429`/`5xx`, retries a `POST`/`PATCH` only on
+  `429`, or on `503` when it carries an `Idempotency-Key` or the `503` carries
+  `Retry-After` (never after a network error), never retries a send-pacing `429`
+  (`code: "SEND_PACING_LIMITED"`), honors `Retry-After`, and rewinds request
+  bodies; it is still off unless you ask for it.
 - **Webhook signatures.** Every SDK verifies a delivery's `X-OpenWA-Signature`
   against the raw request body: `verifyWebhookSignature` (JavaScript),
   `verify_webhook_signature` (Python), `VerifyWebhookSignature` (Go),

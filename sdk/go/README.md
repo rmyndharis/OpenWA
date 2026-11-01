@@ -146,13 +146,19 @@ answers 502 or 504, and a 503 from the owner itself is relayed unchanged.
 Off by default. Opt in with a policy. Idempotent requests (GET, HEAD, OPTIONS,
 PUT, DELETE) are retried on network errors and on the policy's statuses (default
 429/500/502/503/504). A POST or PATCH (every send endpoint is a POST) is never
-retried after a network error and is retried only on 429 or 503 (when the policy
-lists them): a 500/502/504 can arrive after the message was already sent, so
-replaying it could send it twice. A 429 whose body has `code: "SEND_PACING_LIMITED"` is
+retried after a network error or a 500/502/504, which can arrive after the
+message was already sent. It is retried on 429, and on 503 only when it carries
+an `Idempotency-Key` (a send made with `WithIdempotencyKey`) or the 503 carries
+`Retry-After` (the gateway refusing a request before reading it), when the policy
+lists them. A 503 can answer a send or status post WhatsApp may already have
+delivered (on Baileys, a query it timed out with code 408): a keyed send replayed
+then gets a `409` `IDEMPOTENCY_OUTCOME_UNKNOWN` instead of a second message, while
+an unkeyed POST, including every status post (which takes no key), comes back after
+one attempt as an `*APIError` matching `ErrServiceUnavailable`. A 429 whose body has `code: "SEND_PACING_LIMITED"` is
 never retried, whatever the method: its delay is the body's `retryAfterSeconds`, which can be
 hours. Backoff is exponential, `Retry-After` is honored, and request bodies are safely rewound
 on each attempt. A 503 can be WhatsApp throttling a Baileys send, and the default backoff (three
-retries from 200ms) replays it within about a second and a half; for sends raise `BaseDelay` or lower
+retries from 200ms) replays a keyed one within about a second and a half; for sends raise `BaseDelay` or lower
 `MaxRetries`, or retry the throttled send yourself later.
 
 ```go
@@ -294,7 +300,7 @@ Cutting a release:
 
 The example below requires SDK 0.6.0 or later and OpenWA 0.25.0 or later. SDK 0.5.1 does not expose this per-send key argument.
 
-Supply a unique caller-owned key for one logical send and reuse it when retrying that same call. Keys contain 1-255 visible ASCII characters; unrelated calls must use different keys. The SDK forwards the key without changing its retry policy or generating one automatically. On the twelve routes below `net/http` may still send a keyed request once more after a dropped keep-alive connection; the gateway deduplicates it, so the call returns the first answer or a `409` `IDEMPOTENCY_KEY_IN_PROGRESS` to retry later with the same key.
+Supply a unique caller-owned key for one logical send and reuse it when retrying that same call. Keys contain 1-255 visible ASCII characters; unrelated calls must use different keys. The SDK never generates a key; with `WithRetry`, the key is what lets a send answered `503` be retried (see [Retries](#retries)). On the twelve routes below `net/http` may still send a keyed request once more after a dropped keep-alive connection; the gateway deduplicates it, so the call returns the first answer or a `409` `IDEMPOTENCY_KEY_IN_PROGRESS` to retry later with the same key.
 
 ```go
 ctx := openwa.WithIdempotencyKey(context.Background(), "order-123")

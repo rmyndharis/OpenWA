@@ -382,7 +382,8 @@ func TestRetryPolicy(t *testing.T) {
 		MaxDelay:   5 * time.Millisecond,
 	}))
 
-	res, err := c.Messages.SendText(context.Background(), "s1", SendTextRequest{ChatID: "x", Text: "y"})
+	ctx := WithIdempotencyKey(context.Background(), "order-1")
+	res, err := c.Messages.SendText(ctx, "s1", SendTextRequest{ChatID: "x", Text: "y"})
 	if err != nil {
 		t.Fatalf("SendText with retry: %v", err)
 	}
@@ -400,10 +401,12 @@ func TestRetryPolicy(t *testing.T) {
 	}
 }
 
-// statusTransport always replies with the same status, counting attempts.
+// statusTransport always replies with the same status, counting attempts. A
+// non-empty retryAfter is sent as the Retry-After header.
 type statusTransport struct {
-	status int
-	calls  int32
+	status     int
+	retryAfter string
+	calls      int32
 }
 
 func (t *statusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -411,17 +414,21 @@ func (t *statusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Body != nil {
 		io.Copy(io.Discard, req.Body)
 	}
+	header := http.Header{}
+	if t.retryAfter != "" {
+		header.Set("Retry-After", t.retryAfter)
+	}
 	return &http.Response{
 		StatusCode: t.status,
 		Body:       io.NopCloser(strings.NewReader(`{"statusCode":500,"message":"boom","error":"Internal"}`)),
-		Header:     http.Header{},
+		Header:     header,
 		Request:    req,
 	}, nil
 }
 
 // A 500/502/504 can be returned after the gateway already sent the message, so
-// replaying a POST on those would double-send. Only 429/503 — which prove the
-// server declined before acting — may retry a non-idempotent request.
+// replaying a POST on those would double-send. A non-idempotent request may
+// retry only a 429, or a 503 it carried a key for or that came with Retry-After.
 func TestRetryDoesNotReplayPostOnAmbiguousStatus(t *testing.T) {
 	for _, status := range []int{500, 502, 504} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
@@ -460,22 +467,79 @@ func TestRetryStillReplaysIdempotentOnAmbiguousStatus(t *testing.T) {
 	}
 }
 
-// 429/503 mean the server declined before acting, so a POST may still retry.
+// A 429 means the gateway declined before acting, so a POST may retry it. A
+// keyed send may retry a 503 too: the gateway answers a replay of a send that
+// may have gone out with 409 IDEMPOTENCY_OUTCOME_UNKNOWN instead of sending it
+// again, and a 503 with Retry-After was refused before the request was read.
 func TestRetryReplaysPostOnBackpressure(t *testing.T) {
-	for _, status := range []int{429, 503} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			rt := &statusTransport{status: status}
+	for _, tc := range []struct {
+		name       string
+		status     int
+		retryAfter string
+		key        string
+	}{
+		{"429", 429, "", ""},
+		{"503 keyed send", 503, "", "order-1"},
+		{"503 with Retry-After", 503, "0", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &statusTransport{status: tc.status, retryAfter: tc.retryAfter}
 			c := newTestClient(t, rt, WithRetry(RetryPolicy{
 				MaxRetries: 2, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond,
 				RetryableStatuses: []int{429, 500, 502, 503, 504},
 			}))
+			ctx := context.Background()
+			if tc.key != "" {
+				ctx = WithIdempotencyKey(ctx, tc.key)
+			}
 
-			_, err := c.Messages.SendText(context.Background(), "s1", SendTextRequest{ChatID: "x", Text: "y"})
+			_, err := c.Messages.SendText(ctx, "s1", SendTextRequest{ChatID: "x", Text: "y"})
 			if err == nil {
 				t.Fatal("expected an error")
 			}
 			if rt.calls != 3 {
-				t.Fatalf("POST on %d is backpressure and should retry: got %d attempts, want 3", status, rt.calls)
+				t.Fatalf("POST on %s should retry: got %d attempts, want 3", tc.name, rt.calls)
+			}
+		})
+	}
+}
+
+// A 503 can answer a write WhatsApp did not confirm (a Baileys send or status
+// post whose query timed out with code 408), so the message may have gone out.
+// Without an Idempotency-Key the gateway cannot tell a replay from a new send,
+// so the POST is issued once. A status post and a route outside the keyed sends
+// carry no header even when the context holds a key.
+func TestRetryDoesNotReplayPostOn503WithoutIdempotencyKey(t *testing.T) {
+	keyed := WithIdempotencyKey(context.Background(), "order-1")
+	for _, tc := range []struct {
+		name string
+		do   func(c *Client) error
+	}{
+		{"send without a key", func(c *Client) error {
+			_, err := c.Messages.SendText(context.Background(), "s1", SendTextRequest{ChatID: "x", Text: "y"})
+			return err
+		}},
+		{"status post", func(c *Client) error {
+			_, err := c.Status.SendText(keyed, "s1", SendTextStatusRequest{Text: "y"})
+			return err
+		}},
+		{"do on another route", func(c *Client) error {
+			return c.Do(keyed, "POST", "/api/sessions/s1/groups", nil, map[string]string{}, nil)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &statusTransport{status: 503}
+			c := newTestClient(t, rt, WithRetry(RetryPolicy{
+				MaxRetries: 3, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond,
+				RetryableStatuses: []int{429, 500, 502, 503, 504},
+			}))
+
+			err := tc.do(c)
+			if !errors.Is(err, ErrServiceUnavailable) {
+				t.Fatalf("expected the 503 back, got %v", err)
+			}
+			if rt.calls != 1 {
+				t.Fatalf("an unkeyed POST answered 503 must be issued once: got %d attempts", rt.calls)
 			}
 		})
 	}

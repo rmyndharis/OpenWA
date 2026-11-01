@@ -31,42 +31,54 @@ var idempotentMethods = map[string]bool{
 func isIdempotent(method string) bool { return idempotentMethods[method] }
 
 // backpressureStatuses are the statuses a non-idempotent method may retry on:
-// 429 (rate limited) and 503 (unavailable), which usually mean the server
-// declined the request before acting on it. Not always: a 503 for a write
-// WhatsApp did not confirm in time can follow a write that was applied, so a
-// replayed POST may then report a conflict for a change that succeeded, and a
+// 429 (rate limited), which the gateway answers before acting on the request,
+// and 503 (unavailable) on the condition retryableForMethod checks. A
 // send-pacing 429 is never retried at all (see isSendPacingRefusal).
 //
 // The rest of the retryable set (500/502/504) can be returned AFTER the gateway
-// has already sent the WhatsApp message — a 504 from a reverse proxy is the
-// textbook case — so replaying a POST on those would duplicate the send. The
+// has already sent the WhatsApp message (a 504 from a reverse proxy is the
+// textbook case), so replaying a POST on those would duplicate the send. The
 // SDK declines the retry rather than risk a second message, with or without an
-// idempotency key from WithIdempotencyKey: it does not widen the policy for one.
+// idempotency key from WithIdempotencyKey.
 var backpressureStatuses = map[int]bool{
 	http.StatusTooManyRequests:    true, // 429
 	http.StatusServiceUnavailable: true, // 503
 }
 
 // retryableForMethod reports whether a retryable status may be retried for this
-// method. Idempotent methods may retry any status in the policy; a
-// non-idempotent one (POST) is limited to the backpressure statuses.
-func retryableForMethod(method string, status int) bool {
-	if isIdempotent(method) {
+// request. Idempotent methods may retry any status in the policy; a
+// non-idempotent one (POST) is limited to the backpressure statuses, and to a
+// 503 only when the request carries an Idempotency-Key or the 503 carries
+// Retry-After. A 503 can answer a write WhatsApp did not confirm in time (a
+// Baileys send or status post whose query timed out, code 408), so the message
+// may have gone out. The gateway answers a keyed replay of such a send with 409
+// IDEMPOTENCY_OUTCOME_UNKNOWN instead of sending it again, and frees the key
+// when nothing was sent; the SDK sets the header on those send routes only. A
+// 503 with Retry-After is the gateway refusing a request before reading it.
+func retryableForMethod(req *http.Request, resp *http.Response) bool {
+	if isIdempotent(req.Method) {
 		return true
 	}
-	return backpressureStatuses[status]
+	if !backpressureStatuses[resp.StatusCode] {
+		return false
+	}
+	return resp.StatusCode != http.StatusServiceUnavailable ||
+		req.Header.Get("Idempotency-Key") != "" || resp.Header.Get("Retry-After") != ""
 }
 
 // RetryPolicy controls automatic retries. Retries are OFF by default — pass one
 // with WithRetry to opt in. Only network errors and the statuses in
 // RetryableStatuses are retried; a non-retryable response is returned as-is.
 //
-// Non-idempotent requests (POST — every send endpoint) are retried
-// conservatively, with or without an idempotency key from WithIdempotencyKey:
-// never after a network error, and on a retryable status only for 429 and 503,
-// which usually mean the server declined the request before acting on it. A
-// 500/502/504 may arrive after the gateway already sent the message, so a POST
-// is not replayed on those. Idempotent methods retry the full policy.
+// Non-idempotent requests (POST, which every send endpoint uses) are retried
+// conservatively: never after a network error or a 500/502/504, which may
+// arrive after the gateway already sent the message; on a 429; and on a 503
+// only when the request carries an idempotency key from WithIdempotencyKey or
+// the 503 carries Retry-After. A 503 can follow a send WhatsApp may have
+// delivered, and only a keyed send lets the gateway refuse the duplicate (409
+// IDEMPOTENCY_OUTCOME_UNKNOWN). The key reaches the gateway's keyed send routes
+// only, so a status post or any other POST answered 503 is returned at once.
+// Idempotent methods retry the full policy.
 //
 // A 429 whose body carries code SEND_PACING_LIMITED is never retried, whatever
 // the method: it has no Retry-After, and its delay (body.retryAfterSeconds)
@@ -225,12 +237,11 @@ func retryMiddleware(p RetryPolicy, log Logger) Middleware {
 					retryable = isIdempotent(req.Method)
 				case resp != nil && p.retryableStatus(resp.StatusCode):
 					// A retryable HTTP status is the server explicitly telling
-					// us to back off, but only 429/503 usually mean it declined
-					// the request before acting on it. A 500/502/504 can arrive
-					// after the gateway already sent the message, so replaying
-					// a POST on those would double-send. A send-pacing 429 is
-					// usually not transient, so it goes back to the caller.
-					retryable = retryableForMethod(req.Method, resp.StatusCode) && attempt < p.MaxRetries
+					// us to back off, but a POST retries only where a replay
+					// cannot send the message twice (see retryableForMethod).
+					// A send-pacing 429 is usually not transient, so it goes
+					// back to the caller.
+					retryable = retryableForMethod(req, resp) && attempt < p.MaxRetries
 					if retryable {
 						pacing, readErr := isSendPacingRefusal(resp)
 						if readErr != nil {
