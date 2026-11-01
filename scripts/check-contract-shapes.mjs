@@ -59,6 +59,8 @@
  * (request bodies and 2xx responses, nested schemas included, the resources sdk/README.md declares
  * unexposed left out) must be compared by at least one of the JavaScript, Python, Go and Java
  * clients, or be recorded in UNMAPPED_SCHEMAS with a reason. The dashboard does not count towards it.
+ * An operation that declares its body inline has no schema name for a client to map, so it is
+ * recorded in INLINE_BODIES instead, and a new one fails the run.
  */
 
 import { readFileSync, readdirSync, realpathSync } from 'node:fs';
@@ -315,6 +317,19 @@ const UNMAPPED_SCHEMAS = {
   SessionGroupSummaryDto:
     'GET /groups is read as GroupSummary, the shape the create route answers, which also carries a participantsCount and an isAdmin that a listing never sends',
   StatusDeletedResponseDto: 'every client discards the {message} body of DELETE status and returns nothing',
+};
+
+/**
+ * Exposed operations that send or return an object declared inline (an `@ApiBody({ schema })`) rather
+ * than through a named schema. No hand type can be mapped to it, so renaming one of its fields
+ * changes the contract with no comparison to notice. Each is recorded with its reason; a new one
+ * fails the run, and so does an entry whose operation names its schema now. Naming the DTO in the
+ * controller gates it.
+ */
+const INLINE_BODIES = {
+  'POST /api/sessions/{sessionId}/labels/chat/{chatId}': 'the body {labelId} is declared inline in label.controller.ts',
+  'POST /api/sessions/{sessionId}/channels/subscribe':
+    'the body {inviteCode} is declared inline in channel.controller.ts',
 };
 
 // UpdateWebhookRequest is mapped on the three clients that declare it as a named type. The
@@ -1558,6 +1573,27 @@ export function exposedSchemas(openapi, unexposed) {
   return seen;
 }
 
+/** The exposed operations whose request body or 2xx response holds an object no schema name stands for. */
+export function inlineBodies(openapi, unexposed) {
+  const inline = node =>
+    Boolean(node) &&
+    typeof node === 'object' &&
+    !node.$ref &&
+    (Boolean(node.properties) || Object.values(node).some(inline));
+  const found = [];
+  for (const [path, item] of Object.entries(openapi.paths)) {
+    if (isUnexposedPath(path, unexposed)) continue;
+    for (const [verb, operation] of Object.entries(item)) {
+      if (!operation || typeof operation !== 'object') continue;
+      const success = Object.entries(operation.responses ?? {}).filter(([status]) => status.startsWith('2'));
+      if (inline(operation.requestBody) || success.some(([, response]) => inline(response))) {
+        found.push(`${verb.toUpperCase()} ${path}`);
+      }
+    }
+  }
+  return found;
+}
+
 /**
  * What stands between the exposed schemas and a green run: a schema no client compares and
  * UNMAPPED_SCHEMAS does not record, and a record that no longer describes anything.
@@ -1719,7 +1755,8 @@ if (isDirectRun) {
     }
   }
 
-  const exposed = exposedSchemas(openapi, unexposedResources(readFileSync(`${REPO_ROOT}sdk/README.md`, 'utf8')));
+  const unexposed = unexposedResources(readFileSync(`${REPO_ROOT}sdk/README.md`, 'utf8'));
+  const exposed = exposedSchemas(openapi, unexposed);
   const comparedSchemas = new Set(
     CLIENTS.filter(c => c.sdk)
       .flatMap(c => Object.entries(c.mapping).filter(([handName]) => !c.excluded[handName]))
@@ -1731,6 +1768,24 @@ if (isDirectRun) {
   );
   for (const line of uncovered) console.log(`  ${line}`);
   failures += uncovered.length;
+
+  const inline = inlineBodies(openapi, unexposed);
+  const inlineProblems = [
+    ...inline
+      .filter(operation => !(operation in INLINE_BODIES))
+      .map(
+        operation =>
+          `${operation} declares an inline object no client can map: name its DTO in the controller, or record it in INLINE_BODIES with a reason`,
+      ),
+    ...Object.keys(INLINE_BODIES)
+      .filter(operation => !inline.includes(operation))
+      .map(operation => `INLINE_BODIES lists ${operation}, which no longer declares an inline object: remove it`),
+  ];
+  console.log(
+    `inline bodies: ${inline.length} declared, ${Object.keys(INLINE_BODIES).length} recorded in INLINE_BODIES, ${inlineProblems.length ? 'FAILURES' : 'all recorded'}`,
+  );
+  for (const line of inlineProblems) console.log(`  ${line}`);
+  failures += inlineProblems.length;
 
   console.log(
     failures

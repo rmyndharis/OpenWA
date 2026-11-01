@@ -19,6 +19,7 @@ import {
   comparePair,
   exposedSchemas,
   handToken,
+  inlineBodies,
   parseGoTypes,
   parseHandTypes,
   parseJavaTypes,
@@ -663,6 +664,47 @@ test('the gate exits 0 on the repository and finds every exposed schema covered'
     run.output,
     /schema coverage: \d+ schemas sent or returned, \d+ recorded unmapped in UNMAPPED_SCHEMAS, all covered/,
   );
+});
+
+test('inlineBodies names the exposed operations that send or return an object no schema name stands for', () => {
+  const object = { type: 'object', properties: { labelId: { type: 'string' } } };
+  const openapi = {
+    paths: {
+      '/api/sessions/{sessionId}/inline': { post: { requestBody: json(object), responses: { 201: json(ref('A')) } } },
+      '/api/sessions/{sessionId}/named': { post: { requestBody: json(ref('A')), responses: { 200: json(ref('A')) } } },
+      '/api/sessions/{sessionId}/listed': { get: { responses: { 200: json({ type: 'array', items: object }) } } },
+      '/api/sessions/{sessionId}/wrapped': { get: { responses: { 200: json({ nullable: true, allOf: [ref('A')] }) } } },
+      '/api/sessions/{sessionId}/failing': { get: { responses: { 400: json(object) } } },
+      '/api/audit/inline': { post: { requestBody: json(object) } },
+    },
+  };
+  assert.deepEqual(inlineBodies(openapi, new Set(['audit'])), [
+    'POST /api/sessions/{sessionId}/inline',
+    'GET /api/sessions/{sessionId}/listed',
+  ]);
+});
+
+test('the gate exits 1 on a new inline body and on a recorded one that is gone', () => {
+  // Renaming a field of an inline body changes the contract with no hand type to compare it against.
+  const added = runGateOnCopy({
+    contract: contract => {
+      contract.paths['/api/sessions/{sessionId}/brand-new'] = {
+        post: { requestBody: json({ type: 'object', properties: { id: { type: 'string' } } }), responses: {} },
+      };
+      return contract;
+    },
+  });
+  assert.equal(added.status, 1, added.output);
+  assert.match(added.output, /POST \/api\/sessions\/\{sessionId\}\/brand-new declares an inline object/);
+
+  const named = runGateOnCopy({
+    contract: contract => {
+      contract.paths['/api/sessions/{sessionId}/channels/subscribe'].post.requestBody = json(ref('UpsertLabelDto'));
+      return contract;
+    },
+  });
+  assert.equal(named.status, 1, named.output);
+  assert.match(named.output, /INLINE_BODIES lists POST \/api\/sessions\/\{sessionId\}\/channels\/subscribe.*remove it/);
 });
 
 test('the gate exits 1 and names an exposed payload that no client maps', () => {
