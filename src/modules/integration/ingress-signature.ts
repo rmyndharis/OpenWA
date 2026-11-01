@@ -99,7 +99,12 @@ export function ingressDeliveryVerified(
   query: Record<string, string>,
 ): boolean {
   if (scheme === 'none') return false;
-  return scheme === 'shared-secret' || rawBody !== '' || Object.keys(query).length === 0;
+  return scheme === 'shared-secret' || !isQueryBorne(rawBody, query);
+}
+
+/** Whether a delivery carries its content in the query string of an empty body. */
+export function isQueryBorne(rawBody: string, query: Record<string, string> | undefined): boolean {
+  return rawBody === '' && Object.keys(query ?? {}).length > 0;
 }
 
 /**
