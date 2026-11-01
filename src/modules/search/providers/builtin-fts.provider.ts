@@ -204,8 +204,9 @@ interface CountRow {
 type PlaceholderFn = () => string;
 
 /**
- * Built-in, DB-native full-text provider. Index sync is DB-level (generated tsvector / FTS5 triggers),
- * so this class ONLY queries — it never writes the index. See migration 1782400000000-AddMessagesFts.
+ * Built-in, DB-native full-text provider. The database keeps each index in step with every write (generated
+ * tsvector / FTS5 triggers, see migration 1782400000000-AddMessagesFts). This class queries them, and at boot it
+ * repairs the ones it queries (ensureFtsSchema) and builds the opt-in trigram index (buildContainsIndex).
  *
  * Two match modes, each on its own index: `word` (the default) matches whole words through the word
  * index above and ranks them in SQL; `contains` matches any substring of three or more characters,
