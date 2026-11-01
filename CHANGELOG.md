@@ -40,17 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refuse `.` and `..` path segments, percent-encoded ones too, in raw Python and PHP SDK `request` paths, as the JavaScript, Go and Java SDKs do.
 - Keep the first segment of a raw Python SDK `request` path that starts with `//`, which httpx read as a host name and dropped.
 - Type `GroupInfo.owner` as a non-null JID in the JavaScript SDK, and `ChatHistoryMessage.mentionedIds` and `MessageContact.labels` as `list[str]` in the Python SDK.
-- Answer `503` instead of `500` when the Baileys connection drops under a group, channel, catalog, label, contact, profile, block, chat or call request.
+- Answer `503` instead of `500` when the Baileys connection drops under a group or channel request (a create excepted), a catalog, label, contact, profile, block, chat or call request.
 - Answer `404` instead of `500` when WhatsApp refuses a Baileys group read with a 4xx code other than the ones already mapped.
 - Answer `503` instead of `500`, with nothing sent and a keyed send's `Idempotency-Key` freed, when the identity check behind a Baileys reply, forward, button click, reaction, edit, delete, star, pin or unpin is rate-limited or loses its connection; the chat writes and read receipts that run the same check answer `503` too.
-- Make the preview of a Baileys video send or video status through the gateway's bounded ffmpeg run, instead of letting Baileys run ffmpeg on the caller's bytes with no format whitelist, deadline or limit; the video goes out without a preview when ffmpeg is missing or takes over 10 seconds.
 - Free a keyed Baileys sticker send's `Idempotency-Key` when sharp cannot load, and keep that failure out of the send breaker.
 - Refuse with `403` a Baileys edit of a message that has no text or caption, as whatsapp-web.js does, instead of answering `200` and rewriting the stored body.
 - Send a Baileys contact card with its display name.
 - Clear a Baileys message and its chat preview when a contact's delete for everyone reaches history sync in a later chunk than the message.
 - Stop recording a Baileys history-sync group delete, for a message the session does not hold, as a deleted message sent by the account.
 - Answer `409` to a Baileys pairing-code request when the session stops or reconnects while the code is being requested, instead of returning a code nothing can link or a `500`.
-- Answer `GET /api/sessions/{sessionId}/presence/{chatId}` on Baileys for a chat id written with `@s.whatsapp.net`, a `:device` suffix or in upper case, and for a contact whose presence WhatsApp reports from its `@lid` once that pairing has been reported, all of which answered `null`.
+- Answer `GET /api/sessions/{sessionId}/presence/{chatId}` for a chat id written with `@s.whatsapp.net`, a `:device` suffix or in upper case, and on Baileys for a contact whose presence WhatsApp reports from its `@lid` once that pairing has been reported, all of which answered `null`.
 - Keep a whatsapp-web.js session `READY` when a WhatsApp Web reload cuts a page call short, which marked it disconnected and forced a full reconnect; a read cut short this way answers the retryable reload `409`, where it answered `503`.
 - Apply whatsapp-web.js chat label adds and removes addressed by a contact's `<phone>@c.us` id to its chat when WhatsApp Web keys that chat by `@lid`, which answered `200` and changed nothing.
 - Free the `Idempotency-Key` of a whatsapp-web.js send refused before anything was sent (an unknown chat or quoted message; a reply, location or contact card to a channel, status or broadcast list; a poll or sticker to a status or broadcast list; media to a channel; a custom link preview), which a retry answered with `409` outcome unknown.
@@ -69,7 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Store the forwarded message's type, text and media on the row `POST /api/sessions/{sessionId}/messages/forward` writes, instead of a `[Forwarded]` placeholder that the message list, the dashboard and search kept showing; a new forward is no longer typed `forward` in `?type=forward` and in the `byType` statistics.
 - Read unfinished bulk batches one at a time when failing them at startup, on a session takeover, delete or data import, so a restart after a crash mid-run no longer loads every batch's media payloads at once, nor a live peer's.
 - Answer `400` to `POST /api/sessions/{sessionId}/messages/send-template` when the template renders to an empty text (header, body and footer included), as `send-text` does, instead of storing and sending an empty message.
-- Hand back a bulk item's or product card's send-pacing admission when the engine marks its failure as raised before anything was sent, whatever the status, and keep such a failure out of the send breaker.
+- Hand back a bulk item's or product card's send-pacing admission when the engine marks its failure as raised before anything was sent, whatever the status, and stop counting any send failure marked that way toward the send breaker.
 - Delete expired finished bulk batches 500 at a time under `MESSAGE_RETENTION_DAYS`, so a large backlog no longer holds SQLite's single writer in one statement.
 - Keep a session `initializing`, with the timeout as `lastError`, while a reconnect whose relaunch hit the engine init deadline waits for its next attempt, instead of reporting `disconnected` with no `lastError`.
 - Keep another node's lapsed claim when `POST /api/sessions/{sessionId}/logout` or `/force-kill` cannot read the session, so the takeover sweep can still adopt it.
@@ -85,7 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Take a sandboxed plugin's search-provider declaration once per worker, so a repeated one cannot retake the active provider.
 - Keep a later webhook failure's event data on the delivery's earlier terminal failure row while payload retention is on, so the event can still be redriven.
 - Keep an S3 media download open for a slow client when the store took more than 3 seconds to send its headers; such downloads were cut after about 30 seconds instead of the 10 minutes a stalled reader is allowed.
-- Rank and highlight `match=contains` hits on the first 4,096 characters of each message, so a search over long received messages no longer blocks every session for seconds; a hit whose terms appear only past that point scores 0 and gets a snippet without `<mark>`.
+- Rank and highlight `match=contains` hits on the first 4,096 UTF-16 units of each message, so a search over long received messages no longer blocks every session for seconds; a hit whose terms appear only past that point scores 0 and gets a snippet without `<mark>`.
 - Count API requests answered before routing (the shutdown `503`, the in-flight body budget's `503`/`413`/`415`, an encoded-NUL `400`, malformed or too deeply nested bodies) in `http_requests_total` and `http_request_duration_seconds` under the `(unmatched)` route, together with CORS preflights.
 - Log a failing Redis check of the rate limiter once per outage, and once more when Redis answers again, instead of three warnings for every request while it lasts.
 - Stop warning at every boot that `WEBHOOK_SHUTDOWN_DRAIN_MS` is shorter than `WEBHOOK_TIMEOUT` when both are at their defaults; a changed value that leaves them crossed still warns.
@@ -130,7 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
-- The API reference gives the socket `data` of each event, including `qrCode` on `session.qr`, and uses session ids rather than names in its examples.
+- The API reference says how the socket `data` of an event differs from its webhook payload, including `qrCode` on `session.qr`, and uses session ids rather than names in its examples.
 - The API reference says the LID lookup needs an OPERATOR key and lists `quotedMessageId` and `ptt` in the shared media table.
 - The migration guide lists the 0.27.0 `DATABASE_SYNCHRONIZE` boot refusal and the `restore.sh` and scoped-backup client floors as upgrade hazards.
 - The SDK design doc names the Baileys `409` of a logout with no linked device.
@@ -138,11 +137,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` and the plugin search guide say a search plugin is chosen by enabling it, since `SEARCH_PROVIDER` takes no plugin id.
 - The troubleshooting FAQ lists the `501`, `502` and `504` answers and the common causes of a `503`.
 - The phone-number pairing guide gives the Baileys pairing code window.
-- The API reference and the global search guide say that the built-in `match=word` `score` is lower for a better hit on SQLite (FTS5 bm25) and higher on PostgreSQL (`ts_rank`), and that `match=contains` stops at its 1,000 newest matches on PostgreSQL 13 or newer only.
-- The SDK design doc and the SDK READMEs say a client timeout does not stop the gateway, what the base error class does not cover, and that webhook receivers should dedupe on `idempotencyKey`.
+- The API reference and the global search guide say that the built-in `match=word` `score` is lower for a better hit on SQLite (FTS5 bm25) and higher on PostgreSQL (`ts_rank`), and that on PostgreSQL the early stop of `match=contains` at its 1,000 newest matches needs version 13.
+- The SDK READMEs say a client timeout does not stop the gateway, what the base error class does not cover, and that webhook receivers should dedupe on `idempotencyKey`.
 
 ### Security
 
+- Make the preview of a Baileys video send or video status through the gateway's bounded ffmpeg run, instead of letting Baileys run ffmpeg on the caller's bytes with no protocol or format whitelist, deadline or limit, which let a crafted video make ffmpeg connect to an address of the caller's choosing outside the SSRF guard; the video goes out without a preview when ffmpeg is missing or takes over 10 seconds.
 - Deliver an ingress request that carries its content in the query string of an empty body with `verified: false` on `hmac-sha256` and `standard-webhooks` routes, including a delivery recorded as verified by an earlier release that is retried or redriven, since no signature covers the query and one captured signature on an empty body vouched for any query.
 - Answer `400` to a `send-bulk` entry that is itself an array, which the chat fence and the 100-entry cap did not see.
 - Stop printing the first characters of an `API_MASTER_KEY` in the startup banner on every boot after the first.

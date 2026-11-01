@@ -102,6 +102,8 @@ A few refusals add a stable machine-readable `code`, so a client can branch with
 | `SESSION_FORCE_KILL_INCOMPLETE` | `502`  | The engine did not confirm the force-kill; its process may still be running                                                                   |
 | `SEND_PACING_LIMITED`           | `429`  | Send pacing refused the send; the body also carries `retryAfterSeconds`                                                                       |
 | `ENGINE_PAGE_ERROR`             | `500`  | whatsapp-web.js: WhatsApp Web rejected the operation in the page; the body also carries `pageError` and, when the page could read it, `build` |
+| `RESTART_DATABASE_NOT_STARTED`  | `409`  | The built-in PostgreSQL the restart starts did not start; nothing was stopped, and a configuration saved since boot was put back              |
+| `RESTART_ALREADY_RUNNING`       | `409`  | Another restart request is running, or the server is already restarting                                                                       |
 | `IMPORT_ALREADY_RUNNING`        | `409`  | Another data import is in progress                                                                                                            |
 | `IMPORT_WOULD_ORPHAN_ENGINES`   | `409`  | The backup lacks sessions running, starting or waiting to relaunch here; retry with `stopOrphans=true` or `force=true`                        |
 | `IMPORT_NESTED_TRANSACTION`     | `409`  | Another database transaction is open on the connection; retry with no other data operation in flight                                          |
@@ -1225,7 +1227,7 @@ Pin a chat to the top of the chat list, or unpin it. Chat-level — distinct fro
 > not "the chat is pinned". Unlike `chats/archive` the patch is not keyed to the chat's last message,
 > so a chat with no known history pins normally.
 
-**Errors:** `400` session not started, or a `chatId` the whatsapp-web.js engine cannot resolve (the Baileys engine answers `success: true` for a chat that does not exist) · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
+**Errors:** `400` session not started, or a `chatId` the whatsapp-web.js engine cannot resolve (the Baileys engine answers `success: true` for a chat it has never seen, and `400` for a phone `chatId` held under a LID that neither the stored mapping nor a WhatsApp lookup pairs) · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
 
 #### POST /api/sessions/:sessionId/chats/delete
 
