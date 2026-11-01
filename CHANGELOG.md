@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Answer `GET /api/sessions/{sessionId}/contacts/{contactId}/phone` for a phone id from the id itself on whatsapp-web.js, which no longer asks WhatsApp whether the number exists and so no longer works as a number check for keys below OPERATOR.
+- Answer `503`, not `500`, to `GET /api/sessions/{sessionId}/contacts/check/{number}` when WhatsApp rate-limits, refuses or drops the query on Baileys, or the whatsapp-web.js page does not answer in time.
 - Read a whatsapp-web.js group whose refresh fails one of WhatsApp Web's own invariants from the metadata the page already holds, so `GET /api/sessions/{sessionId}/groups/{groupId}` and `/labels/{labelId}/chats` no longer answer 404 for it, and the chat lookups behind its group setting, chat action, chat label and message routes use that metadata too (#1962).
 - Reload the active API key index after seeding the first admin key, so a failed first read no longer leaves body admission without it until the next refresh. Thanks @Purushotham-Prajapati-24.
 - Stop sending `message.edited` on the webhook and socket for an edit that reaches a message already deleted for everyone, which handed consumers new text for a message `message.revoked` had already withdrawn. Thanks @rupeshreddynagolu.
