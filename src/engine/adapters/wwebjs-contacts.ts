@@ -299,6 +299,13 @@ export class WwebjsContacts {
 
   async resolveContactPhone(contactId: string): Promise<string | null> {
     this.host.ensureReady();
+    // Only a privacy id needs the page. A phone id already carries its number, as it does on Baileys, and handing
+    // it to getContactLidAndPhone would run an existence query for that number (the page asks WhatsApp when it
+    // holds no LID): the check `GET contacts/check/{number}` reserves for OPERATOR keys, run for any key through
+    // this route. Any other kind names no phone at all.
+    const parsed = parseWaId(contactId);
+    if (parsed.kind === 'user') return parsed.userPart.replace(/\D/g, '') || null;
+    if (parsed.kind !== 'lid') return null;
     // Queried one id at a time: the batch form is prone to "Evaluation failed" and rate-limiting
     // (whatsapp-web.js #3857/#3969). `pn` is the phone JID (`<digits>@c.us`) when the account knows
     // the mapping. An empty/absent pn RESOLVES to null (a definitive "no mapping" answer); a thrown
