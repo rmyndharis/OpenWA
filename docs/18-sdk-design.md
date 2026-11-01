@@ -1,6 +1,6 @@
 # 18 - SDK Design
 
-> This document describes `main`. `contacts.lid` (`Contacts.Lid` in Go) is an unreleased addition after SDK 0.8.0 and requires the corresponding server change after OpenWA 0.27.0. `setMemberLabel` (`set_member_label` in Python, `SetMemberLabel` in Go), the search `match` option, and the `thumbnailUrl` and `thumbnailBase64` fields of `customLinkPreview` require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
+> This document describes `main`. `contacts.lid` (`Contacts.Lid` in Go) is an unreleased addition after SDK 0.8.0 and requires OpenWA 0.27.1 or later. `setMemberLabel` (`set_member_label` in Python, `SetMemberLabel` in Go), the search `match` option, and the `thumbnailUrl` and `thumbnailBase64` fields of `customLinkPreview` require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
 
 ## 18.1 Overview
 
