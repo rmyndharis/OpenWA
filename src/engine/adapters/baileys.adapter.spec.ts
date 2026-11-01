@@ -24,6 +24,7 @@ jest.mock('../../common/media/load-remote-media', () => ({
 // The probe runs a child process; its own spec drives the real one.
 jest.mock('./baileys-audio-probe', () => ({
   describeAudio: jest.fn(() => Promise.resolve({ seconds: 0 })),
+  describeVideo: jest.fn(() => Promise.resolve({ jpegThumbnail: null })),
 }));
 
 // A fake Baileys socket: an event emitter wearing the methods the adapter calls.
@@ -243,7 +244,7 @@ import { EngineThrottledError } from '../../common/errors/engine-throttled.error
 import { LidNotMappedError } from '../../common/errors/lid-not-mapped.error';
 import { countsTowardSendBreaker, sentNothing } from '../../modules/message/send-pacing.service';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
-import { describeAudio } from './baileys-audio-probe';
+import { describeAudio, describeVideo } from './baileys-audio-probe';
 import * as safeLinkPreview from './safe-link-preview';
 import sharp from 'sharp';
 
@@ -4389,7 +4390,29 @@ describe('BaileysAdapter media sends', () => {
       video: Buffer.from([9]),
       caption: undefined,
       mimetype: 'video/mp4',
+      jpegThumbnail: null,
     });
+  });
+
+  // Baileys runs ffmpeg through a shell on the file itself whenever the content has no thumbnail.
+  it('sendVideoMessage hands Baileys the thumbnail made outside it, so it runs no ffmpeg of its own', async () => {
+    (describeVideo as jest.Mock).mockResolvedValueOnce({ jpegThumbnail: '/9j/2Q==' });
+    const adapter = await ready();
+
+    await adapter.sendVideoMessage('628111@s.whatsapp.net', { mimetype: 'video/mp4', data: Buffer.from([7]) });
+
+    expect(describeVideo).toHaveBeenLastCalledWith(Buffer.from([7]));
+    const [, content] = fakeSock.sendMessage.mock.calls[0] as [string, Record<string, unknown>];
+    expect(content).toHaveProperty('jpegThumbnail', '/9j/2Q==');
+  });
+
+  it('sendVideoMessage keeps a null thumbnail null rather than leaving the key for Baileys to fill', async () => {
+    const adapter = await ready();
+
+    await adapter.sendVideoMessage('628111@s.whatsapp.net', { mimetype: 'video/mp4', data: Buffer.from([7]) });
+
+    const [, content] = fakeSock.sendMessage.mock.calls[0] as [string, Record<string, unknown>];
+    expect(content).toHaveProperty('jpegThumbnail', null);
   });
 
   it('sendAudioMessage sets ptt:false', async () => {
@@ -8825,9 +8848,21 @@ describe('BaileysAdapter status posting', () => {
     await adapter.postVideoStatus({ mimetype: 'video/mp4', data: 'AAAA' }, { recipients: ['628111@c.us'] });
     expect(fakeSock.sendMessage).toHaveBeenCalledWith(
       'status@broadcast',
-      { video: Buffer.from('AAAA', 'base64'), caption: undefined, mimetype: 'video/mp4' },
+      { video: Buffer.from('AAAA', 'base64'), caption: undefined, mimetype: 'video/mp4', jpegThumbnail: null },
       { statusJidList: ['628111@s.whatsapp.net'], backgroundColor: undefined, font: undefined },
     );
+  });
+
+  it('postVideoStatus hands Baileys the thumbnail made outside it, as a chat video does', async () => {
+    (describeVideo as jest.Mock).mockResolvedValueOnce({ jpegThumbnail: '/9j/2Q==' });
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'VID2' }, messageTimestamp: 1719600000 });
+    const adapter = await ready();
+
+    await adapter.postVideoStatus({ mimetype: 'video/mp4', data: 'AAAA' }, { recipients: ['628111@c.us'] });
+
+    expect(describeVideo).toHaveBeenLastCalledWith(Buffer.from('AAAA', 'base64'));
+    const [, content] = fakeSock.sendMessage.mock.calls[0] as [string, Record<string, unknown>];
+    expect(content).toHaveProperty('jpegThumbnail', '/9j/2Q==');
   });
 
   // A URL posted without a declared type carries the octet-stream placeholder, so the fetched

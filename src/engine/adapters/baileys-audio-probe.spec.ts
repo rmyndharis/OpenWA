@@ -1,4 +1,6 @@
-import { describeAudio, WAVEFORM_BARS } from './baileys-audio-probe';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { describeAudio, describeVideo, WAVEFORM_BARS } from './baileys-audio-probe';
 import { runFfmpeg } from '../../modules/media/ffmpeg';
 
 // ffmpeg is the one dependency of the waveform; the duration read runs the real child process.
@@ -131,5 +133,48 @@ describe('describeAudio', () => {
 
     await expect(describeAudio(oversizedAiff(), false)).resolves.toEqual({ seconds: 0 });
     await expect(describeAudio(oversizedAiff(), true)).resolves.toMatchObject({ seconds: 0 });
+  });
+});
+
+describe('describeVideo', () => {
+  beforeEach(() => ffmpeg.mockReset());
+
+  it('makes the 32-pixel first-frame JPEG Baileys would, through the bounded ffmpeg run', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    ffmpeg.mockResolvedValue(jpeg);
+
+    await expect(describeVideo(Buffer.from('video'))).resolves.toEqual({ jpegThumbnail: jpeg.toString('base64') });
+    expect(ffmpeg).toHaveBeenCalledWith(
+      Buffer.from('video'),
+      'bin',
+      'jpg',
+      ['-frames:v', '1', '-vf', 'scale=32:-1', '-f', 'image2'],
+      expect.objectContaining({ timeoutMs: 10_000, maxOutputBytes: 64 * 1024 }),
+    );
+  });
+
+  it('answers a null thumbnail, never an undefined one, when none could be made', async () => {
+    ffmpeg.mockRejectedValue(new Error('Format not on whitelist'));
+
+    const described = await describeVideo(Buffer.from('v=0\nc=IN IP4 169.254.169.254\n'));
+
+    expect(described).toHaveProperty('jpegThumbnail', null);
+  });
+});
+
+/**
+ * describeVideo answers null when it has no thumbnail, and that keeps Baileys from making one itself only
+ * while the library tests the key for undefined. A falsy or `== null` test would run its unbounded ffmpeg
+ * on every video that has no thumbnail, so an upgrade that changes the test fails here first.
+ */
+describe('Baileys makes a video thumbnail itself only when jpegThumbnail is undefined', () => {
+  it('tests the key with typeof undefined', () => {
+    const file = join(__dirname, '../../../node_modules/@whiskeysockets/baileys/lib/Utils/messages.js');
+    const tests = readFileSync(file, 'utf8')
+      .split('\n')
+      .filter(line => line.includes('requiresThumbnailComputation ='));
+
+    expect(tests).toHaveLength(1);
+    expect(tests[0]).toContain("typeof uploadData['jpegThumbnail'] === 'undefined'");
   });
 });

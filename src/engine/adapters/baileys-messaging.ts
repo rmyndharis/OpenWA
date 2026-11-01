@@ -46,7 +46,7 @@ import { EngineNotSentError, markNothingSent } from '../../common/errors/engine-
 import { parseWaId, userPart } from '../identity/wa-id';
 import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, guardLookup, withQueryDeadline } from './baileys-query-deadline';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
-import { describeAudio } from './baileys-audio-probe';
+import { describeAudio, describeVideo } from './baileys-audio-probe';
 
 /**
  * Messaging-domain operations extracted from BaileysAdapter. The adapter keeps the public
@@ -646,6 +646,8 @@ export class BaileysMessaging {
         video: data,
         caption: media.caption,
         mimetype,
+        // Made outside Baileys, which would otherwise run ffmpeg on the file itself (see describeVideo).
+        ...(await describeVideo(data)),
         ...this.withMentions(media.mentions),
       },
       await this.quoteOption(media.quotedMessageId, socket),
