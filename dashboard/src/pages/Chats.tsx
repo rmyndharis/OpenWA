@@ -201,6 +201,8 @@ export function Chats() {
 
   // Chats list
   const [chats, setChats] = useState<Chat[]>([]);
+  // The session whose list `chats` holds, as listedSessionRef below says it, for rendering.
+  const [listedSession, setListedSession] = useState<string>('');
   const [loadingChats, setLoadingChats] = useState<boolean>(false);
   // Why the list on screen is not the session's: its last foreground read failed. A list that could not be read
   // is told apart from one that is empty, which the sidebar alone would render the same way.
@@ -301,6 +303,23 @@ export function Chats() {
   // itself — state, contacts query, submit — is components/chats/StatusComposeModal.
   const [composeOpen, setComposeOpen] = useState<boolean>(false);
 
+  // The session the open chat, channel or status, the status form, the group dialog and the new-chat panel belong to. A
+  // switch closes them while rendering, as menuOpenedFor is cleared: closed by the session effect below, they were
+  // drawn once more with the new session, and the hooks keyed by session asked it about the one left (the chat's
+  // thread, history, picture and phone, the channel's posts, the group's info, the panel's address book). The status
+  // form posts through the session selected, so kept open it sent what was written, and addressed, for one account
+  // through another.
+  const [openViewsSession, setOpenViewsSession] = useState<string>(selectedSessionId);
+  if (openViewsSession !== selectedSessionId) {
+    setOpenViewsSession(selectedSessionId);
+    setActiveChat(null);
+    setActiveChannel(null);
+    setActiveStatusContactId(null);
+    setComposeOpen(false);
+    setGroupDialogChat(null);
+    setShowNewChat(false);
+  }
+
   const {
     data: messages = [],
     isLoading: loadingMessages,
@@ -379,6 +398,13 @@ export function Chats() {
     setMessageInput(draftsRef.current.get(key) ?? '');
     draftsRef.current.delete(key);
   }, [selectedSessionId, openChatId, messageInput]);
+  // A refused send gives back the text it took from the field, as the draft of its thread, unless something was typed
+  // there since: its failed bubble lasts only until the thread is read again, and then the text was nowhere.
+  const restoreRefusedDraft = useCallback((sessionId: string, chatId: string, text: string) => {
+    const key = readKey(sessionId, chatId);
+    if (draftKeyRef.current === key) setMessageInput(current => (current === '' ? text : current));
+    else if (!draftsRef.current.get(key)) draftsRef.current.set(key, text);
+  }, []);
 
   // Per-chat scroll-position memory + auto-scroll heuristic.
   // Pass `messages.length > 0` as the loaded signal: it stays stable once the
@@ -406,8 +432,12 @@ export function Chats() {
 
   // Batch profile-picture fetch for the visible chat list — ONE request for the whole sidebar
   // (per-row queries burst the per-IP throttle into 429s). Sorted-key cached 1h; rows fall back
-  // to the generic icon for ids that resolve null.
-  const chatIds = useMemo(() => chats.map(c => c.id), [chats]);
+  // to the generic icon for ids that resolve null. A list a switch leaves on screen is the account left, whose chats
+  // the session switched to is not asked about.
+  const chatIds = useMemo(
+    () => (listedSession === selectedSessionId ? chats.map(c => c.id) : []),
+    [chats, listedSession, selectedSessionId],
+  );
   const listPics = useProfilePictures(selectedSessionId || undefined, chatIds);
 
   // Profile-picture fetch for the active room (cached 1h by useProfilePicture; TanStack Query
@@ -515,8 +545,8 @@ export function Chats() {
   // holds the chat and would bring it back; one asked for after it is as good as the engine's own answer.
   const deletedRowsRef = useRef(new Map<string, number>());
   // A chat this page has read shows nothing unread, and a reload asked for before the read keeps it so. That also
-  // replaces a Mark as unread still remembered for the chat, which the read has undone. A session switch leaves the
-  // open chat the previous account's for one render, and that account's row must not be remembered for this one.
+  // replaces a Mark as unread still remembered for the chat, which the read has undone. Until a switch's list lands, the
+  // list on screen is the previous account's, and a row of it must not be remembered for this one.
   const markRowRead = useCallback(
     (chatId: string) => {
       if (listedSessionRef.current !== selectedSessionId) return;
@@ -570,6 +600,7 @@ export function Chats() {
         const listed = data.filter(c => !gone.has(c.id));
         const merge = background && listedSessionRef.current === sessionId;
         listedSessionRef.current = sessionId;
+        setListedSession(sessionId);
         setChats(prev => {
           const live = new Map(merge ? prev.map(c => [c.id, c] as const) : []);
           const fetchedIds = new Set(listed.map(c => c.id));
@@ -591,6 +622,7 @@ export function Chats() {
         if (background) return false;
         setChatsFailure(err instanceof Error ? err.message : '');
         listedSessionRef.current = sessionId;
+        setListedSession(sessionId);
         setChats([]);
         return false;
       } finally {
@@ -641,9 +673,6 @@ export function Chats() {
     // A session deleted while it was open leaves none selected when no other is ready: what belonged to it is
     // cleared all the same, with no list to load in its place.
     if (selectedSessionId) void loadChats(selectedSessionId);
-    setActiveChat(null);
-    setActiveChannel(null);
-    setActiveStatusContactId(null);
     // A staged attachment or reply belongs to a chat in the session being left, so it is dropped here
     // rather than carried across — the close/reopen round trip that preserves it is scoped to a
     // single session. Clearing previewUrl runs the revoke effect's cleanup; the composer
@@ -652,10 +681,8 @@ export function Chats() {
     setPreviewUrl(null);
     setReplyingTo(null);
     lastRoomIdRef.current = null;
-    // The new-chat panel lists the address book of the session being left, and an open group dialog
-    // edits a group through it.
+    // The new-chat panel lists the address book of the session being left.
     setShowNewChat(false);
-    setGroupDialogChat(null);
     setConfirmAction(null);
     setMuteDialogChat(null);
     setContactDialogChat(null);
@@ -737,9 +764,8 @@ export function Chats() {
   );
 
   // Marking a chat read is an operator write; a read-only key would only collect 403 toasts.
-  // A session switch rebuilds the coalescer for the new session one render before the open chat is
-  // cleared, so until the new session's list is on screen the open chat is still the previous
-  // account's and nothing is marked read.
+  // A session switch rebuilds the coalescer for the new session, and until that session's list is on
+  // screen the list is still the previous account's, so nothing is marked read.
   const markChatRead = useCallback(
     (chatId: string) => {
       if (keptUnread.has(readKey(selectedSessionId, chatId))) return;
@@ -1508,8 +1534,8 @@ export function Chats() {
   // Best-effort scroll to the hit message. Runs as a layout effect (after useChatScrollPosition's
   // own restore on the same commit) so it overrides the bottom/saved jump with no visible flash.
   // Degrades silently to session+chat selection when the element isn't present — the message is
-  // still visible in the conversation. Until the hit's session has its list on screen, the open chat
-  // still belongs to the session being left, even when it has the hit's chat id.
+  // still visible in the conversation. Until the hit's session has its list on screen, a chat open
+  // under the hit's chat id is not the one the hit opened.
   useLayoutEffect(() => {
     const pending = pendingHitRef.current;
     if (!pending || listedSessionRef.current !== pending.sessionId || activeChat?.id !== pending.chatId) return;
@@ -1888,14 +1914,16 @@ export function Chats() {
     ? (activeStatusGroup.contact.name ?? activeStatusGroup.contact.pushName ?? activeStatusGroup.contact.id)
     : '';
 
-  // Same open-at-newest behavior for the status viewer pane, keyed off the active contact and its
-  // item list. Declared after activeStatusGroup: the viewer follows refetches because the deps are
-  // the derived group's items, not a click-time snapshot.
+  // Same open-at-newest behavior for the status viewer pane, keyed off the active contact and the
+  // ids of its items. Declared after activeStatusGroup: the viewer follows refetches because the deps
+  // are the derived group's, not a click-time snapshot. The ids, not the item list, which is grouped
+  // anew on every render of the page and moved a reader who had scrolled up on any live message.
   const statusFeedRef = useRef<HTMLDivElement | null>(null);
+  const activeStatusItemIds = activeStatusGroup?.items.map(item => item.id).join(',');
   useEffect(() => {
     const el = statusFeedRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [activeStatusGroup?.contact.id, activeStatusGroup?.items]);
+  }, [activeStatusGroup?.contact.id, activeStatusItemIds]);
 
   // Escape closes the open view and returns to the list. Anything that owns the key already keeps
   // it: a modal (Modal renders role="dialog" only while open) and the language menu (role="menu")
@@ -2208,6 +2236,7 @@ export function Chats() {
                   onMessageAppended={onMessageAppended}
                   onSent={promoteSentChat}
                   onSendConfirmed={(tempId, key) => setLightbox(v => (v?.key === tempId ? { ...v, key } : v))}
+                  onSendFailed={restoreRefusedDraft}
                   messageInput={messageInput}
                   setMessageInput={setMessageInput}
                   attachment={attachment}

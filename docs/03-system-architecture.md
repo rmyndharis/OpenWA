@@ -1335,7 +1335,8 @@ On S3 every key sits under the `S3_KEY_PREFIX` root (default `media/`).
 **MinIO is not a separate type** — it is the `s3` backend. The S3 client is created from credentials
 alone, so plain AWS S3 works with no endpoint (the SDK derives one from the region); `S3_ENDPOINT` is
 for S3-compatible stores (MinIO, R2, …), and setting it is also what enables `forcePathStyle: true`.
-The public method set is `putFile` / `getFile` / `deleteFile` / `iterateFiles` /
+The public method set is `putFile` / `getFile` / `openFile` (a read stream; the chat and status
+media downloads use it) / `deleteFile` / `iterateFiles` /
 `createExportStream` (export) / `importFromStream` (import), plus `getFileCount`,
 `getCurrentStorageType` and `refreshS3Availability` (re-probes the bucket; the infra status endpoint
 calls it to report S3 reachability).

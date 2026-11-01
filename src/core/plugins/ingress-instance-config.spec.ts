@@ -437,6 +437,47 @@ describe('ingress dispatch keeps what was decided when the delivery was admitted
     },
   );
 
+  it('does not label a delivery carried in the query string verified when it predates the recorded verdict', async () => {
+    const { bridge, calls } = makeBridge({
+      rows: [row()],
+      manifestOverrides: { ingress: [route('hmac-sha256')] },
+    });
+    const queryBorne = job('acct-a', 'S1');
+    queryBorne.payload = { ...queryBorne.payload, query: { text: 'hello' }, body: '', rawBody: '' };
+
+    await bridge.dispatchWebhookForInstance(queryBorne);
+
+    expect(calls[0].verified).toBe(false);
+  });
+
+  it('does not keep a query-borne delivery verified that an earlier release admitted as verified', async () => {
+    const { bridge, calls } = makeBridge({
+      rows: [row()],
+      manifestOverrides: { ingress: [route('hmac-sha256')] },
+    });
+    const queryBorne = job('acct-a', 'S1', { verified: true });
+    queryBorne.payload = { ...queryBorne.payload, query: { text: 'hello' }, body: '', rawBody: '' };
+
+    await bridge.dispatchWebhookForInstance(queryBorne);
+
+    expect(calls[0].verified).toBe(false);
+  });
+
+  it('keeps a query-borne delivery verified on a shared-secret route', async () => {
+    const { bridge, calls } = makeBridge({
+      rows: [row()],
+      manifestOverrides: {
+        ingress: [{ ...route('hmac-sha256'), signature: { scheme: 'shared-secret' as const, header: 'x-token' } }],
+      },
+    });
+    const queryBorne = job('acct-a', 'S1', { verified: true });
+    queryBorne.payload = { ...queryBorne.payload, query: { text: 'hello' }, body: '', rawBody: '' };
+
+    await bridge.dispatchWebhookForInstance(queryBorne);
+
+    expect(calls[0].verified).toBe(true);
+  });
+
   it('refuses a delivery admitted for a session the instance has since left', async () => {
     const rebound = instanceRow('acct-a', { apiToken: 'token-A' }, 'S-new');
     const { bridge, calls } = makeBridge({ rows: [rebound], sessionConfig: { 'S-new': { endpoint: 'https://new' } } });

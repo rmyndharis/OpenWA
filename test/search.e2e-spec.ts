@@ -11,7 +11,6 @@ import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
 import { applyGlobalValidation } from '../src/config/app-validation';
 import { Message, MessageDirection } from '../src/modules/message/entities/message.entity';
-import { AddMessagesFts1782400000000 } from '../src/database/migrations/1782400000000-AddMessagesFts';
 import { SearchController } from '../src/modules/search/search.controller';
 import { SearchService } from '../src/modules/search/search.service';
 import { SearchProviderRegistry } from '../src/modules/search/search-provider.registry';
@@ -23,10 +22,10 @@ import { SearchProviderRegistry } from '../src/modules/search/search-provider.re
  * the full AppModule so the SEARCH_BOOTSTRAP factory, the `@InjectDataSource('data')` wiring, and the
  * conditional `SEARCH_ENABLED` gate are all exercised exactly as production runs them.
  *
- * setup-e2e.ts sets DATABASE_SYNCHRONIZE=true, so TypeORM creates the `messages` table from the entity
- * but the FTS virtual table + triggers come from a MIGRATION that doesn't run under synchronize. The
- * spec applies that migration's up() manually after boot — proving the provider queries the FTS schema
- * the migration establishes, not a test-only stub.
+ * setup-e2e.ts sets DATABASE_SYNCHRONIZE=true, so no migration runs: TypeORM creates the `messages` table
+ * from the entity, and the FTS virtual table + triggers come from the provider's own repair at boot
+ * (BuiltInFtsProvider.onModuleInit), as on any synchronize deployment. The migration that creates the same
+ * schema is covered by its own spec (src/database/migrations/__tests__/1782400000000-AddMessagesFts.spec.ts).
  */
 describe('GET /api/search (e2e)', () => {
   let app: INestApplication<App>;
@@ -37,12 +36,6 @@ describe('GET /api/search (e2e)', () => {
     app = moduleFixture.createNestApplication();
     applyGlobalValidation(app);
     await app.init();
-
-    // The FTS migration is gated behind migrationsRun (off under DATABASE_SYNCHRONIZE=true), so apply
-    // it manually here against the 'data' connection that owns `messages`. This is the same shape the
-    // provider's own spec uses, and proves the e2e path queries a real FTS index, not a stand-in.
-    const dataSource = app.get<DataSource>(getDataSourceToken('data'));
-    await new AddMessagesFts1782400000000().up(dataSource.createQueryRunner());
 
     messageRepo = app.get<Repository<Message>>(getRepositoryToken(Message, 'data'));
     await messageRepo.insert([
@@ -70,11 +63,7 @@ describe('GET /api/search (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('returns matching hits over the full route → provider → FTS stack (200)', async () => {
@@ -153,8 +142,6 @@ describe('GET /api/search?match=contains with SEARCH_CONTAINS_ENABLED=true (e2e)
     app = moduleFixture.createNestApplication();
     applyGlobalValidation(app);
     await app.init();
-    const dataSource = app.get<DataSource>(getDataSourceToken('data'));
-    await new AddMessagesFts1782400000000().up(dataSource.createQueryRunner());
     await app.get<Repository<Message>>(getRepositoryToken(Message, 'data')).insert({
       sessionId: 'sess-search-2',
       chatId: 'chat-2@c.us',
@@ -171,13 +158,11 @@ describe('GET /api/search?match=contains with SEARCH_CONTAINS_ENABLED=true (e2e)
   afterAll(async () => {
     if (previous === undefined) delete process.env.SEARCH_CONTAINS_ENABLED;
     else process.env.SEARCH_CONTAINS_ENABLED = previous;
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
+  // The test's timeout outlasts the poll's 100 tries, so a build that never finishes fails on the status
+  // rather than as a timeout.
   it('finds part of a word once the build that followed listen() completes', async () => {
     const search = () =>
       request(app.getHttpServer()).get('/api/search?q=voic&match=contains').set('X-API-Key', 'dev-admin-key');
@@ -191,6 +176,15 @@ describe('GET /api/search?match=contains with SEARCH_CONTAINS_ENABLED=true (e2e)
     const body = res.body as { hits: Array<{ sessionId: string; snippet: string }> };
     expect(body.hits.map(h => h.sessionId)).toEqual(['sess-search-2']);
     expect(body.hits[0].snippet).toContain('In<mark>voic</mark>e');
+  }, 15_000);
+
+  // This instance booted on the rows the first describe indexed, as a restart does. Rank 1 checks the
+  // index against the messages it was built from, which shows a row indexed twice.
+  it('leaves the word index matching its messages after booting on an indexed database', async () => {
+    const dataSource = app.get<DataSource>(getDataSourceToken('data'));
+    await expect(
+      dataSource.query(`INSERT INTO "messages_fts"("messages_fts", "rank") VALUES ('integrity-check', 1)`),
+    ).resolves.not.toThrow();
   });
 });
 

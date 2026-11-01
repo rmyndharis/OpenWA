@@ -213,13 +213,13 @@ const TERMINAL_UNLINK_REASONS = new Set(['LOGOUT', 'UNPAIRED', 'UNPAIRED_IDLE', 
  * empty phone at ready (client.info unreadable), and the account-binding guard in
  * SessionEngineEventWiring skips an empty incoming phone rather than rebind-rejecting it, so writing
  * it here would silently clear the stored number and drop the binding guard until the next non-empty
- * ready. In that case keep the existing binding and update only the liveness fields.
+ * ready. In that case keep the existing binding and its push name, which the same unreadable info
+ * reports empty, and update only the liveness fields.
  */
 export function readyRowUpdate(phone: string, pushName: string, at: Date) {
   return {
     status: SessionStatus.READY,
-    ...(phone ? { phone } : {}),
-    pushName,
+    ...(phone ? { phone, pushName } : {}),
     connectedAt: at,
     lastActiveAt: at,
   };
@@ -839,7 +839,9 @@ export class SessionEngineLifecycle {
         // Force-kill whatever got launched so a retry doesn't collide with an orphaned browser.
         // teardownEngineSafely is itself time-bound, so this can't wedge a second time.
         await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
-        if (isCurrentTimeout()) {
+        // A reconnect's own attempt leaves the row INITIALIZING, as a relaunch that rejects does: its catch arms
+        // the next attempt, and the reason stored above is the lastError the backoff shows.
+        if (isCurrentTimeout() && reconnectAttempt === undefined) {
           // Only on a row that is still this node's or has no owner, as retireLaunchedEngine writes: once the
           // lease was lost during this init, the row belongs to the peer that adopted it and runs its engine.
           const nodeId = this.ownership?.nodeId;

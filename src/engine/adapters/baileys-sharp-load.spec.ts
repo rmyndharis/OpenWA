@@ -9,11 +9,35 @@ jest.mock('sharp', () => {
 
 import { BaileysMessaging, loadSharp, type BaileysMessagingHost } from './baileys-messaging';
 import { createLogger } from '../../common/services/logger.service';
+import { markEngineSendFailure } from '../../common/errors/engine-send-failure';
+import { sendFailureProvesNothingSent } from '../../modules/message/idempotency/send-idempotency.interceptor';
 
 describe('loadSharp', () => {
   it('maps a sharp native-load failure to a 500, not the decode path 400', async () => {
     // A valid PNG would hit this same path, so a 400 would wrongly blame the caller's image.
     await expect(loadSharp()).rejects.toBeInstanceOf(InternalServerErrorException);
+  });
+
+  it('fails a sticker that needs converting as a send that handed nothing to WhatsApp', async () => {
+    const sock = { sendMessage: jest.fn() };
+    const host = {
+      ensureReady: jest.fn(),
+      sessionProxyUrl: () => undefined,
+      getSocket: () => sock as unknown as WASocket,
+      getSocketOrNull: () => sock as unknown as WASocket,
+    } as unknown as BaileysMessagingHost;
+
+    const error: unknown = await new BaileysMessaging(host)
+      .sendStickerMessage('628111@s.whatsapp.net', { mimetype: 'image/png', data: Buffer.from('png') })
+      .then(
+        () => undefined,
+        (failure: unknown) => failure,
+      );
+
+    expect(error).toBeInstanceOf(InternalServerErrorException);
+    // The send service marks every engine failure before the idempotency interceptor sees it.
+    expect(sendFailureProvesNothingSent(markEngineSendFailure(error))).toBe(true);
+    expect(sock.sendMessage).not.toHaveBeenCalled();
   });
 });
 

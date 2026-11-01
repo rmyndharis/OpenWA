@@ -4,12 +4,12 @@
 // the gateway never returned. POST /sessions/:id/stop
 // is OPERATOR-only: a viewer is offered no Disconnect, and a failed stop is reported, not swallowed.
 import '../test-helpers/register-hooks.ts';
-import { test, before, afterEach } from 'node:test';
+import { test, before, afterEach, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, environmentManager } from '@tanstack/react-query';
 
 let webhooksStatus = 403;
 let webhookList: unknown[] = [];
@@ -17,6 +17,8 @@ let sessionList: unknown[] = [];
 let stopStatus = 200;
 let sessionsStatus = 200;
 let holdWebhooks = false;
+// Whether GET /sessions/stats/overview answers; refused by default, as for a key the route does not admit.
+let statsReadable = false;
 const requested: string[] = [];
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -47,6 +49,12 @@ function installFetchStub(): void {
         stopStatus === 200
           ? jsonResponse({ ...READY_SESSION, status: 'disconnected' })
           : jsonResponse({ message: 'Engine not loaded' }, stopStatus),
+      );
+    }
+    if (path === '/api/sessions/stats/overview' && statsReadable) {
+      const memoryUsage = { heapUsed: 0, heapTotal: 0, rss: 0 };
+      return Promise.resolve(
+        jsonResponse({ total: 1, active: 1, ready: 1, disconnected: 0, byStatus: { ready: 1 }, memoryUsage }),
       );
     }
     if (path === '/api/webhooks') {
@@ -96,6 +104,7 @@ afterEach(() => {
   stopStatus = 200;
   sessionsStatus = 200;
   holdWebhooks = false;
+  statsReadable = false;
   requested.length = 0;
   window.sessionStorage.setItem('openwa_user_role', 'viewer');
   window.sessionStorage.removeItem('openwa_key_scoped');
@@ -120,6 +129,47 @@ function statValue(label: string): string {
   const card = rtl.screen.getByText(label).closest('.stat-card');
   return card?.querySelector('.stat-value')?.textContent ?? '';
 }
+
+// The overview holds no socket and its reads were only marked stale after 30 s, which refetches nothing by itself: a tab
+// kept open and focused showed a session that had dropped as connected until the window lost and regained focus.
+// Polls run on a clock the test moves. React Query decides it runs on a server when it loads before jsdom's window, as
+// it does here, and then schedules no refetch timer at all; a browser always has a window.
+function pollOnTestClock(t: TestContext): void {
+  const wasServer = environmentManager.isServer();
+  environmentManager.setIsServer(() => false);
+  t.after(() => environmentManager.setIsServer(() => wasServer));
+  t.mock.timers.enable({ apis: ['setInterval'] });
+}
+
+const sessionReads = () => [
+  requested.filter(path => path === '/api/sessions').length,
+  requested.filter(path => path === '/api/sessions/stats/overview').length,
+];
+
+test('the overview reads the sessions and their statistics again while it stays open', async t => {
+  pollOnTestClock(t);
+  sessionList = [READY_SESSION];
+  statsReadable = true;
+  renderDashboard();
+  await rtl.screen.findByText('Main');
+  const [sessions, stats] = sessionReads();
+
+  rtl.act(() => t.mock.timers.tick(30_000));
+  assert.deepEqual(sessionReads(), [sessions + 1, stats + 1], 'the overview did not read the sessions again');
+});
+
+// A key the session routes refuse (one restricted to selected chats is refused both) is refused, and audited as a failed
+// authentication, on every read: polled, that would be two more refusals every 30 s for as long as the tab stays open.
+test('a refused read of the sessions or their statistics is not polled again', async t => {
+  pollOnTestClock(t);
+  sessionsStatus = 403;
+  renderDashboard();
+  await rtl.screen.findByRole('alert');
+  const before = sessionReads();
+
+  rtl.act(() => t.mock.timers.tick(90_000));
+  assert.deepEqual(sessionReads(), before, 'a refused read was sent again');
+});
 
 test('a refused webhook read shows the unavailable placeholder, not zero webhooks', async () => {
   webhooksStatus = 403;

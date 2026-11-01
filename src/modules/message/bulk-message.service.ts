@@ -185,13 +185,17 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
    * because the two cannot diverge: only the engine holder can send.
    */
   async onApplicationBootstrap(): Promise<void> {
+    // Ids first, then one whole row at a time: an unfinished row still holds its media payloads, and a run that
+    // crashed with many of them must not need room for all at once, nor for a live peer's.
     const unfinished = await this.batchRepository.find({
+      select: { id: true, sessionId: true },
       where: { status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
     });
     const orphaned = await this.ownedByThisNode(unfinished);
     let failed = 0;
-    for (const batch of orphaned) {
-      if (await this.failOrphanedBatch(batch)) failed++;
+    for (const { id } of orphaned) {
+      const batch = await this.batchRepository.findOne({ where: { id } });
+      if (await this.failOrphanedBatch(batch ?? { id })) failed++;
     }
     if (failed > 0) {
       this.logger.warn(`Marked ${failed} orphaned unfinished batch(es) FAILED on startup (interrupted by a restart)`);
@@ -269,14 +273,17 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
    */
   async reapProcessingBatches(sessionId: string, reason: string, manager?: EntityManager): Promise<number> {
     const repository = manager?.getRepository(MessageBatch) ?? this.batchRepository;
+    // Ids first, as at boot: the payloads are read one row at a time, and never for a batch left alone.
     const unfinished = (
       await repository.find({
+        select: { id: true },
         where: { status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]), sessionId },
       })
     ).filter(batch => !this.processingBatches.has(batch.id));
     let failed = 0;
-    for (const batch of unfinished) {
-      if (await this.failOrphanedBatch(batch, false, repository)) failed++;
+    for (const { id } of unfinished) {
+      const batch = await repository.findOne({ where: { id } });
+      if (await this.failOrphanedBatch(batch ?? { id }, false, repository)) failed++;
     }
     if (failed > 0) {
       this.logger.warn(`Marked ${failed} unfinished batch(es) FAILED for session ${sessionId} (${reason})`);

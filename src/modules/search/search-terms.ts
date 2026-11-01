@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { SEARCH_CONTAINS_RANKED_LENGTH } from './search.constants';
 
 /**
  * What the built-in index (SQLite FTS5, unicode61) makes of a query, as an upper bound on its words. A
@@ -70,6 +71,17 @@ export function foldSearchText(text: string): string {
  */
 export function foldForMatching(text: string): string {
   return foldSearchText(text).replace(/ς/g, 'σ');
+}
+
+/**
+ * The part of a body the score and the highlight read: its first SEARCH_CONTAINS_RANKED_LENGTH UTF-16 units,
+ * one fewer when the last of them is the first half of a surrogate pair.
+ */
+export function containsRankedText(body: string): string {
+  if (body.length <= SEARCH_CONTAINS_RANKED_LENGTH) return body;
+  const last = body.charCodeAt(SEARCH_CONTAINS_RANKED_LENGTH - 1);
+  const splitsPair = last >= 0xd800 && last <= 0xdbff;
+  return body.slice(0, SEARCH_CONTAINS_RANKED_LENGTH - (splitsPair ? 1 : 0));
 }
 
 /**

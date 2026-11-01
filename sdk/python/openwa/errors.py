@@ -160,7 +160,11 @@ class OpenWAServiceUnavailableError(OpenWAApiError):
 
 
 class OpenWATimeoutError(OpenWAError):
-    """Raised when a request exceeds the configured timeout."""
+    """Raised when a request exceeds the configured timeout.
+
+    The gateway may still complete the request: retry a send only with the same
+    ``Idempotency-Key``, and re-read state before repeating any other write.
+    """
 
     def __init__(self, timeout: float) -> None:
         super().__init__(f"Request timed out after {timeout}s")

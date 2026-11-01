@@ -4,7 +4,9 @@
  * the engine adapters) — fails to load without this stub once the package lands in the unit test
  * graph. Jest applies this stub in the e2e lane too (test/ is that config's rootDir, so test/__mocks__
  * stubs node modules there automatically), and no e2e suite calls jest.unmock('socks-proxy-agent'),
- * so the real module runs in no test lane. No suite opens a real SOCKS connection, so a class that
+ * so neither jest lane runs the real module; `npm run test:engine-real` does, from the compiled build,
+ * through a real SOCKS5 handshake. No jest suite opens a connection through this module (the specs that
+ * open real SOCKS connections go through the `socks` package in proxy-dispatcher), so a class that
  * records the proxy URL and satisfies the `Agent` return type of createProxyAgent is sufficient, and
  * because the spec's `instanceof` checks import the same mapped module, they run against this very
  * class. `proxy` mirrors the library's parsed object (parseSocksURL: `host` is URL.hostname, brackets

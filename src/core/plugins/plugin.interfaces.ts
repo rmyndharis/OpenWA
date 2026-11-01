@@ -290,7 +290,8 @@ export interface PluginIngressRoute {
    * legitimately differ in the body (a fresh timestamp or nonce inside the signed payload) keeps
    * the default, since `body` would then dedup nothing. When the body is empty the hash also covers
    * the method and the query string, so query-borne deliveries stay apart; a delivery with neither
-   * a body nor a query has one id per route, and its repeats collapse.
+   * a body nor a query has one id per route, and its repeats collapse. No scheme signs the query, so
+   * on hmac-sha256 and standard-webhooks a query-borne delivery reaches the handler unverified.
    */
   dedupOn?: 'header' | 'body';
   /** Optional synchronous-response contract (host-side preflight + ack). Additive; absent = today's

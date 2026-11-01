@@ -1,6 +1,7 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
+import type { Socket } from 'net';
 import * as path from 'path';
 import { Readable, PassThrough, Transform, finished, pipeline } from 'stream';
 import {
@@ -60,8 +61,8 @@ export const S3_PROBE_TIMEOUT_MS = 10_000;
  * forever, holding its media buffer and the caller. The socket bound is an idle timeout, so a long
  * upload or download that keeps moving bytes is not cut off. A bare requestTimeout would not do:
  * the HTTP handler only logs a warning when it expires. The HTTP handler stops applying the socket
- * bound once the response headers arrive, so an object body gets the same idle bound in openS3File,
- * and a listing page S3_LIST_TIMEOUT_MS.
+ * bound when the response headers arrive within 3 s and keeps it on the body otherwise, so openS3File
+ * turns it off and gives an object body the same idle bound, and a listing page has S3_LIST_TIMEOUT_MS.
  */
 export const S3_CONNECT_TIMEOUT_MS = 5_000;
 export const S3_SOCKET_TIMEOUT_MS = 30_000;
@@ -444,16 +445,18 @@ export class StorageService implements OnModuleDestroy {
 
   async getFileCount(): Promise<{ count: number; sizeBytes: number }> {
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
-      // ListObjectsV2 already returns each object's Size, so report the real total instead of a
-      // 100KB-per-file estimate — no extra API calls beyond the listing we'd do anyway.
-      const s3 = await this.getS3CountAndSize();
       // Union with the local fallback dir (media written locally while S3 was down is not in the
       // bucket listing): a local-only file counts with its real on-disk size; for a key present in
-      // both, the S3 copy is authoritative.
-      const s3Keys = new Set(s3.keys);
-      let { count, sizeBytes } = s3;
+      // both, the S3 copy is authoritative. As in iterateFiles, the local keys are the ones remembered,
+      // so the bucket's pages, which can list millions of keys, stream past without being kept.
+      const local = new Set<string>();
       for await (const file of this.iterateLocalFiles()) {
-        if (s3Keys.has(file) || !this.isExportableKey(file)) continue;
+        if (this.isExportableKey(file)) local.add(file);
+      }
+      // ListObjectsV2 already returns each object's Size, so report the real total instead of a
+      // 100KB-per-file estimate — no extra API calls beyond the listing we'd do anyway.
+      let { count, sizeBytes } = await this.getS3CountAndSize(local);
+      for (const file of local) {
         count += 1;
         try {
           // Same reason as the local branch below: the walk covers the whole store, so the stat must yield.
@@ -485,12 +488,10 @@ export class StorageService implements OnModuleDestroy {
     return { count: files.length, sizeBytes };
   }
 
-  private async getS3CountAndSize(): Promise<{ count: number; sizeBytes: number; keys: string[] }> {
+  /** Counts and sizes the bucket's exportable objects, dropping from `local` every key the bucket also holds. */
+  private async getS3CountAndSize(local: Set<string>): Promise<{ count: number; sizeBytes: number }> {
     let count = 0;
     let sizeBytes = 0;
-    // Keys (prefix-stripped) are kept so getFileCount can union the local fallback dir without a
-    // second listing.
-    const keys: string[] = [];
     let continuationToken: string | undefined;
 
     do {
@@ -508,13 +509,13 @@ export class StorageService implements OnModuleDestroy {
         if (key === null || !this.isExportableKey(key)) continue;
         count += 1;
         sizeBytes += obj.Size ?? 0;
-        keys.push(key);
+        local.delete(key);
       }
 
       continuationToken = response.NextContinuationToken;
     } while (continuationToken);
 
-    return { count, sizeBytes, keys };
+    return { count, sizeBytes };
   }
 
   // ============================================================================
@@ -676,6 +677,11 @@ export class StorageService implements OnModuleDestroy {
       throw new Error('Empty response body');
     }
     const body = response.Body as Readable;
+    // Headers that took over 3 s leave the SDK's socket timer armed for the body, cutting a reader held back for 27 s;
+    // withIdleBound bounds the body instead. A checksummed body (the SDK sends a checksum with every upload) wraps the
+    // response as its internal `source`, which storage.service.s3-late-headers.spec.ts pins.
+    const raw = body as Readable & { socket?: Socket | null; source?: { socket?: Socket | null } };
+    (raw.socket ?? raw.source?.socket)?.setTimeout(0);
     // Released on the SDK body, which holds the socket: it goes back once the body is read to the end, fails, or
     // is destroyed (a client that went away, or the idle bound). Released on the guard instead, a reader that
     // stopped with the last chunks in the guard's buffer would hold the place after the socket went back.

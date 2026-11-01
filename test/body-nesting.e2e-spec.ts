@@ -54,17 +54,22 @@ describe('Request body nesting bound over the real application (e2e)', () => {
 
   afterAll(async () => {
     process.env.SIMULATE_TYPING = prevSimulateTyping;
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   beforeEach(() => jest.clearAllMocks());
 
-  it('sends normally with an Idempotency-Key, so the interceptor path under test is live', async () => {
-    await sendText('{"chatId":"628123@c.us","text":"hello"}', 'nesting-control-1').expect(201);
+  it('sends once per Idempotency-Key, replays a retry and refuses the key for another body', async () => {
+    const body = '{"chatId":"628123@c.us","text":"hello"}';
+    const first = await sendText(body, 'nesting-control-1').expect(201);
+    expect(first.headers['idempotent-replayed']).toBeUndefined();
+
+    const retry = await sendText(body, 'nesting-control-1').expect(201);
+    expect(retry.headers['idempotent-replayed']).toBe('true');
+    expect(retry.body).toEqual(first.body);
+
+    const reused = await sendText('{"chatId":"628123@c.us","text":"other"}', 'nesting-control-1').expect(422);
+    expect(reused.body).toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
     expect(engine.sendTextMessage).toHaveBeenCalledTimes(1);
   });
 

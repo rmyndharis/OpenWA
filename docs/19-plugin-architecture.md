@@ -499,6 +499,13 @@ export type HookEvent =
 timestamps and so on), never the stored `proxyUrl` or `config`; `session:deleted` carries
 `{ id, name, phone, pushName }`.
 
+`webhook:delivered` fires after every successful POST (a queued job, the direct path, or the direct fallback
+after a failed queue add). `webhook:after` is legacy: it fires only after a successful direct or fallback POST,
+always with `success: true`. `webhook:error` fires when a dispatch did not deliver: retries exhausted, a job
+that stalled out, a dispatch shed or refused before sending, or a failed queue add. It is not always final: a
+failed queue add is followed by a direct fallback, and a shed dispatch stays in the outbox for a later replay
+under a new `deliveryId`, so either can still end in `webhook:delivered`.
+
 ### Hook context and result
 
 ```typescript

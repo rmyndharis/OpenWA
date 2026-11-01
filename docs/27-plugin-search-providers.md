@@ -15,9 +15,10 @@ A **search-provider plugin** owns a search backend. It does two things:
    `SearchResults` to the caller.
 
 The core never talks to the search backend directly — all vendor-specific logic (the query builder, the
-API client, the index schema) lives in the plugin. Swapping backends is a config change
-(`SEARCH_PROVIDER`), not a code change. See [26 - Global Search](./26-global-search.md) for the
-user-facing feature and the built-in DB-FTS default.
+API client, the index schema) lives in the plugin. Swapping backends means enabling another plugin, not
+a code change: under the default `SEARCH_PROVIDER=auto` an enabled plugin supersedes the built-in (see
+27.4), and `SEARCH_PROVIDER` accepts no plugin id. See [26 - Global Search](./26-global-search.md) for
+the user-facing feature and the built-in DB-FTS default.
 
 ## 27.2 The contract
 
@@ -93,8 +94,10 @@ text (escape-then-highlight), never as HTML. Do not inject HTML.
 ## 27.3 Indexing via the `message:persisted` hook
 
 The core fires `message:persisted` for every live message (outbound on send, inbound on receive, and again
-when a stored message is edited or revoked) — never for history backfill. Register a handler to keep your index in
-sync:
+when a stored message is edited or revoked) — never for history backfill, with one exception. A message that
+a history sync reports deleted is handed over as its cleared row (`type: 'revoked'`, empty `body`), so an index drops
+the content; that row can be one your index never received, and a later sync that carries the message again hands it
+over again. Register a handler to keep your index in sync:
 
 ```ts
 ctx.registerHook('message:persisted', async hookCtx => {

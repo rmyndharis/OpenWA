@@ -32,6 +32,7 @@ import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.servic
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
+import { MEDIA_MESSAGE_TYPES, OMITTED_MEDIA } from '../session/message-row.mapper';
 
 /** Default cap on a rendered template's final text; overridable via TEMPLATE_RENDER_MAX_CHARS. */
 export const DEFAULT_TEMPLATE_RENDER_MAX_CHARS = 64 * 1024;
@@ -312,7 +313,7 @@ export class MessageSendService {
     const maxChars =
       this.configService?.get<number>('template.renderMaxChars', DEFAULT_TEMPLATE_RENDER_MAX_CHARS) ??
       DEFAULT_TEMPLATE_RENDER_MAX_CHARS;
-    let text: string;
+    let rendered: string[];
     try {
       const length =
         parts.reduce((sum, part) => sum + renderedLength(part, vars), 0) +
@@ -322,11 +323,15 @@ export class MessageSendService {
           `Rendered template is ${length} characters, over the ${maxChars}-character limit`,
         );
       }
-      text = parts.map(part => renderTemplate(part, vars)).join(separator);
+      rendered = parts.map(part => renderTemplate(part, vars));
     } catch (error) {
       if (error instanceof TemplateRenderError) throw new BadRequestException(error.message);
       throw error;
     }
+    // send-text refuses an empty text before anything is stored or sent; a render that leaves none is the same. Each
+    // part is tested, not the joined text: the separator between empty parts would make it non-empty.
+    if (rendered.every(part => !part)) throw new BadRequestException('Rendered template is empty');
+    const text = rendered.join(separator);
 
     return this.sendText(sessionId, {
       chatId: dto.chatId,
@@ -668,10 +673,14 @@ export class MessageSendService {
     sessionId: string,
     dto: { fromChatId: string; toChatId: string; messageId: string },
   ): Promise<MessageResponseDto> {
-    const { message, finalDto, engine } = await this.applySendingGate(sessionId, 'forward', dto, finalDto => ({
+    // The row carries what is forwarded: the own-send echo that also carries it loses the insert race to this
+    // row whenever the send path writes the engine id first, so a placeholder stored here stayed for good.
+    const { message, finalDto, engine } = await this.applySendingGate(sessionId, 'forward', dto, async finalDto => ({
       chatId: finalDto.toChatId,
-      body: '[Forwarded]',
-      type: 'forward',
+      ...((await this.storedForwardContent(sessionId, finalDto.fromChatId, finalDto.messageId)) ?? {
+        body: '[Forwarded]',
+        type: 'forward',
+      }),
     }));
 
     let result: MessageResult;
@@ -725,6 +734,46 @@ export class MessageSendService {
     } catch (err) {
       this.logger.warn(`Failed to resolve quoted message ${quotedMessageId}`, { error: String(err) });
       return '';
+    }
+  }
+
+  /**
+   * The type, text and media of the message a forward copies, from its row in `fromChatId` (any of the chat's
+   * phone, lid or group forms, as for a quote), or undefined when no such row is stored, it was revoked, or the
+   * read fails. A quote or mention it carried is not copied: the forwarded copy has neither. Media the source row
+   * holds no bytes for is stored as the omitted marker, as the echo and history paths store it, without an archive
+   * pointer that names the source row's file; it never replaces an echo's bytes (see mergeSentMetadata).
+   */
+  private async storedForwardContent(
+    sessionId: string,
+    fromChatId: string,
+    messageId: string,
+  ): Promise<Pick<SaveOutgoingMessageData, 'body' | 'type' | 'metadata'> | undefined> {
+    try {
+      const store = this.lidMappingStore;
+      const expanded = await resolveJidCandidates(
+        fromChatId,
+        store && {
+          resolveLid: lid => store.findPhoneForLid(lid),
+          lidsForPhone: phone => store.findLidsForPhone(phone),
+        },
+      );
+      const source = await this.messageRepository.findOne({
+        where: { sessionId, chatId: In([...new Set([fromChatId, ...expanded])]), waMessageId: messageId },
+      });
+      if (!source || source.type === 'revoked') return undefined;
+      const { media, poll } = (source.metadata ?? {}) as { media?: Record<string, unknown>; poll?: unknown };
+      let copied = typeof media?.data === 'string' && media.data ? media : undefined;
+      if (!copied && MEDIA_MESSAGE_TYPES.has(source.type)) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { data, archived, ...kept } = media ?? {};
+        copied = { ...OMITTED_MEDIA, ...kept, omitted: true };
+      }
+      const metadata = { ...(copied ? { media: copied } : {}), ...(poll ? { poll } : {}) };
+      return { type: source.type, body: source.body, metadata: Object.keys(metadata).length ? metadata : undefined };
+    } catch (err) {
+      this.logger.warn(`Failed to read forwarded message ${messageId}`, { error: String(err) });
+      return undefined;
     }
   }
 

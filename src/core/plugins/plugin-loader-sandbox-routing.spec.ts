@@ -591,6 +591,32 @@ describe('PluginLoaderService - sandbox search provider ownership', () => {
     expect(registry.active()?.id).toBe('plugin:p1');
   });
 
+  // Plugin code can post the declaration itself, as often as it likes.
+  it('takes one declaration per worker, so a repeat cannot retake the active slot', async () => {
+    const { loader, registry } = await setup();
+    registry.register({ id: 'plugin:other', label: 'Other', search: jest.fn(), health: jest.fn() });
+    registry.setActive('plugin:other');
+
+    loader.capturedOnSearchProviderRegister!();
+
+    expect(registry.active()?.id).toBe('plugin:other');
+  });
+
+  it('denies an undeclared provider with one warning per worker', async () => {
+    const loader = makeLoader(new SearchProviderRegistry());
+    seed(loader, { builtIn: false, instance: null });
+    await loader.enablePlugin('p1');
+    const logger = (loader as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger;
+    const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+    loader.capturedOnSearchProviderRegister!();
+    loader.capturedOnSearchProviderRegister!();
+
+    expect(
+      warn.mock.calls.filter(([, meta]) => (meta as { action?: string })?.action === 'sandbox_search_provider_denied'),
+    ).toHaveLength(1);
+  });
+
   it.each(['disable', 'unload'])('removes the provider during normal %s', async operation => {
     const { loader, registry } = await setup();
     const onExit = loader.capturedOnWorkerExit!;

@@ -239,6 +239,27 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     expect((await provider.search({ q: 'hello', chatIds: ['c2'], sessionIds: ['s1'] })).total).toBe(0);
   });
 
+  // The documented direction of the match=word score on SQLite: FTS5's bm25 rank, negative, lower for the
+  // more relevant hit, which comes first. PostgreSQL's ts_rank runs the other way.
+  it('reports the word score as the FTS5 rank: negative, lowest for the most relevant hit', async () => {
+    await ds.getRepository(Message).insert({
+      sessionId: 's1',
+      chatId: 'c1',
+      from: 'a@c.us',
+      to: 'dest@c.us',
+      body: 'hello hello hello',
+      type: 'text',
+      direction: MessageDirection.OUTGOING,
+      timestamp: 1,
+    });
+
+    const { hits } = await provider.search({ q: 'hello' });
+    const scores = hits.map(hit => hit.score as number);
+    expect(hits[0].body).toBe('hello hello hello');
+    expect(scores.every(score => score < 0)).toBe(true);
+    expect([...scores].sort((a, b) => a - b)).toEqual(scores);
+  });
+
   // bm25 weighs a term by how many messages the whole index holds, so the rank of a hit a session- or
   // chat-scoped caller may read still reflects sessions and chats it may not. The hits stay ordered by it;
   // the value is withheld.

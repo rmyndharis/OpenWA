@@ -18,6 +18,7 @@ import type { WebhookService } from '../webhook/webhook.service';
 import type { StatusStoreService } from '../status-store/status-store.service';
 import type { SessionLidResolver } from '../session/session-lid-resolver.service';
 import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 
 // Every outgoing row of one account names the same sender, whichever writer stored it: the REST send
 // path, or the own-send echo of a message composed on the linked phone. The `from` filter of the message
@@ -202,5 +203,131 @@ describe('the sender stored on an outgoing row', () => {
     await sender.sendText(sessionId, { chatId: CHAT, text: 'sent while unlinked' });
     expect((await messages.findOneByOrFail({ sessionId, waMessageId: 'WA_FROM_API' })).from).toBe('me');
     expect(await idsFrom('me')).toEqual(['WA_FROM_API']);
+  });
+
+  // A forward's row and its own-send echo race for the same id, and the echo loses whenever the send path
+  // writes the id first. The row must then already hold what was forwarded.
+  describe('a forward', () => {
+    const SOURCE_CHAT = '628111111111@c.us';
+    const BYTES = Buffer.from('jpeg bytes').toString('base64');
+
+    const storeSource = (chatId: string): Promise<Message> =>
+      messages.save(
+        messages.create({
+          sessionId,
+          waMessageId: 'WA_SOURCE',
+          chatId,
+          from: chatId,
+          to: OWN_JID,
+          body: 'the caption',
+          type: 'image',
+          direction: MessageDirection.INCOMING,
+          status: MessageStatus.SENT,
+          timestamp: 1_700_000_000,
+          metadata: { media: { mimetype: 'image/jpeg', data: BYTES }, quotedMessage: { id: 'WA_OLDER', body: 'x' } },
+        }),
+      );
+
+    // What Baileys echoes for an API send: the content, with a marker in place of the media bytes.
+    const echo: IncomingMessage = {
+      id: 'WA_FORWARDED',
+      chatId: CHAT,
+      from: OWN_JID,
+      to: CHAT,
+      body: 'the caption',
+      type: 'image',
+      timestamp: 1_700_000_100,
+      fromMe: true,
+      isGroup: false,
+      kind: 'individual',
+      media: { mimetype: 'image/jpeg', omitted: true, sizeBytes: 10 },
+    };
+
+    const forwardWith = (deliverEcho: () => Promise<void>): Promise<unknown> => {
+      (engine as unknown as { forwardMessage: jest.Mock }).forwardMessage = jest.fn(async () => {
+        await deliverEcho();
+        return { id: 'WA_FORWARDED', timestamp: 1_700_000_100 };
+      });
+      return sender.forward(sessionId, { fromChatId: SOURCE_CHAT, toChatId: CHAT, messageId: 'WA_SOURCE' });
+    };
+
+    const forwardedRows = async () =>
+      (await messages.find({ where: { sessionId, chatId: CHAT } })).map(row => ({
+        waMessageId: row.waMessageId,
+        type: row.type,
+        body: row.body,
+        status: row.status,
+        metadata: row.metadata,
+      }));
+
+    it.each([
+      [
+        'while the echo still runs its hooks',
+        () => Promise.resolve(projector.handleOwnSendEcho(sessionId, engine, echo)),
+      ],
+      [
+        'before the echo arrives',
+        () => Promise.resolve(void setImmediate(() => projector.handleOwnSendEcho(sessionId, engine, echo))),
+      ],
+      [
+        'after the echo is stored',
+        () => Promise.resolve(projector.handleOwnSendEcho(sessionId, engine, echo)).then(flush),
+      ],
+    ])('stores the forwarded message itself when the engine answers %s', async (_when, deliverEcho) => {
+      await storeSource(SOURCE_CHAT);
+
+      await forwardWith(deliverEcho);
+      await flush();
+      projector.handleMessageAck(sessionId, engine, 'WA_FORWARDED', 'delivered');
+      await flush();
+
+      expect(await forwardedRows()).toEqual([
+        {
+          waMessageId: 'WA_FORWARDED',
+          type: 'image',
+          body: 'the caption',
+          status: MessageStatus.DELIVERED,
+          metadata: { media: { mimetype: 'image/jpeg', data: BYTES } },
+        },
+      ]);
+    });
+
+    it('keeps the bytes a whatsapp-web.js echo downloaded when the source row holds none', async () => {
+      await storeSource(SOURCE_CHAT);
+      await messages.update(
+        { sessionId, waMessageId: 'WA_SOURCE' },
+        { metadata: { media: { mimetype: 'image/jpeg', omitted: true, archived: true, sizeBytes: 10 } } },
+      );
+      const downloaded = { ...echo, media: { mimetype: 'image/jpeg', data: BYTES } };
+
+      await forwardWith(() => Promise.resolve(projector.handleOwnSendEcho(sessionId, engine, downloaded)).then(flush));
+      await flush();
+
+      expect(await forwardedRows()).toEqual([
+        {
+          waMessageId: 'WA_FORWARDED',
+          type: 'image',
+          body: 'the caption',
+          status: MessageStatus.SENT,
+          metadata: { media: { mimetype: 'image/jpeg', data: BYTES } },
+        },
+      ]);
+    });
+
+    it('copies nothing from a message stored under another chat', async () => {
+      await storeSource('628333333333@c.us');
+      // What either engine answers for an id that is not in the source chat.
+      (engine as unknown as { forwardMessage: jest.Mock }).forwardMessage = jest
+        .fn()
+        .mockRejectedValue(new MessageNotFoundError('WA_SOURCE', SOURCE_CHAT));
+
+      await expect(
+        sender.forward(sessionId, { fromChatId: SOURCE_CHAT, toChatId: CHAT, messageId: 'WA_SOURCE' }),
+      ).rejects.toBeInstanceOf(MessageNotFoundError);
+
+      expect(await forwardedRows()).toEqual([
+        { waMessageId: null, type: 'forward', body: '[Forwarded]', status: MessageStatus.FAILED, metadata: null },
+      ]);
+    });
   });
 });

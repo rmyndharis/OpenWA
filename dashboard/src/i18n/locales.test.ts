@@ -427,6 +427,23 @@ test('the Templates nav item reads the same as the page it opens in every locale
   }
 });
 
+// A confirm dialog sets its action beside Cancel, so a label that does not mean Cancel must not read as that
+// locale's Cancel: two buttons reading Cancel leave nothing to tell the one that acts from the one that backs out.
+test("no label reads as its locale's Cancel unless it means Cancel", () => {
+  const leaves = (node: unknown, path = ''): [string, unknown][] =>
+    node && typeof node === 'object'
+      ? Object.entries(node).flatMap(([key, value]) => leaves(value, path ? `${path}.${key}` : key))
+      : [[path, node]];
+  const english = new Map(leaves(resources.en.translation));
+  for (const lng of LOCALE_IDS) {
+    const cancel = i18n.t('common.cancel', { lng });
+    const lookalikes = leaves(resources[lng].translation)
+      .filter(([key, value]) => value === cancel && english.get(key) !== english.get('common.cancel'))
+      .map(([key]) => key);
+    assert.deepEqual(lookalikes, [], `${lng} labels that read as its Cancel`);
+  }
+});
+
 // Both databases apply their pending migrations at startup unless *_SYNCHRONIZE=true opts into
 // TypeORM synchronize, so the Infrastructure card must not name synchronize as the default.
 test('English migrations status describes migrations, not schema synchronize', () => {

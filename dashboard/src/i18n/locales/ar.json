@@ -623,6 +623,7 @@
     "session": "الجلسة",
     "events": "الأحداث",
     "noEvents": "اختر حدثًا واحدًا على الأقل.",
+    "urlInvalid": "استخدم عنوانًا كاملًا يبدأ بـ http:// أو https://، مثل https://example.com/webhook.",
     "available": "الأحداث المتاحة",
     "saveChanges": "حفظ التغييرات",
     "filters": {
@@ -847,14 +848,14 @@
     },
     "confirm": {
       "deleteTitle": "حذف مفتاح API",
-      "revokeTitle": "إلغاء مفتاح API",
+      "revokeTitle": "إبطال مفتاح API",
       "deleteMessage": "هل أنت متأكد من الحذف النهائي لـ <strong>{{name}}</strong>؟ لا يمكن التراجع عن هذا الإجراء.",
-      "revokeMessage": "هل أنت متأكد من إلغاء <strong>{{name}}</strong>؟ لن يعمل بعد الآن.",
+      "revokeMessage": "هل أنت متأكد من إبطال <strong>{{name}}</strong>؟ لن يعمل بعد الآن.",
       "delete": "حذف",
-      "revoke": "إلغاء"
+      "revoke": "إبطال"
     },
     "actions": {
-      "revoke": "إلغاء",
+      "revoke": "إبطال",
       "delete": "حذف",
       "edit": "تعديل الوصول"
     },

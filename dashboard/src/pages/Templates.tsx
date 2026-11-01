@@ -15,6 +15,7 @@ import {
 import { PageHeader } from '../components/PageHeader';
 import { Modal } from '../components/Modal';
 import { copyToClipboard } from '../utils/clipboard';
+import { captionLength } from '../utils/bulkMedia';
 import './Templates.css';
 
 type TemplateForm = {
@@ -56,6 +57,17 @@ function toPayload(form: TemplateForm): TemplatePayload {
   };
 }
 
+// The gateway's limits (template.dto.ts), past which a production gateway answers a bare "Bad Request" naming no field.
+// The name is counted in code points, the other fields the way class-validator's MaxLength counts them.
+const NAME_MAX_LENGTH = 100;
+const BODY_MAX_LENGTH = 4096;
+const HEADER_FOOTER_MAX_LENGTH = 1024;
+
+// A preview value the operator gave for this placeholder. The gateway fills only own properties, so a placeholder named
+// like an inherited member (constructor, toString, __proto__) must not read that member.
+const ownValue = (values: Record<string, string>, key: string): string | undefined =>
+  Object.hasOwn(values, key) ? values[key] : undefined;
+
 function renderPreview(template: TemplateForm, values: Record<string, string>) {
   return (
     [template.header, template.body, template.footer]
@@ -65,7 +77,7 @@ function renderPreview(template: TemplateForm, values: Record<string, string>) {
       .replace(
         PLACEHOLDER_PATTERN,
         (match, doubleKey: string | undefined, singleKey: string | undefined) =>
-          values[doubleKey ?? singleKey!] || match,
+          ownValue(values, doubleKey ?? singleKey!) || match,
       )
   );
 }
@@ -117,6 +129,20 @@ export function Templates() {
     );
   }, [searchTerm, templates]);
   const isSaving = createMutation.isPending || updateMutation.isPending;
+  // Measured on what a save sends (trimmed), each with its gateway limit.
+  const sent = toPayload(form);
+  const limits = {
+    name: [[...sent.name].length, NAME_MAX_LENGTH],
+    header: [captionLength(sent.header ?? ''), HEADER_FOOTER_MAX_LENGTH],
+    body: [captionLength(sent.body), BODY_MAX_LENGTH],
+    footer: [captionLength(sent.footer ?? ''), HEADER_FOOTER_MAX_LENGTH],
+  } as const;
+  const overLimit = Object.values(limits).some(([count, max]) => count > max);
+  const limitHint = ([count, max]: readonly [number, number]) => (
+    <span className="field-error" role="status">
+      {count > max ? t('common.fieldTooLong', { max, count }) : ''}
+    </span>
+  );
   // The row whose update is in flight: the list shows its pre-save values until the update settles, and
   // reopening it then would load them into the editor to be saved back. Every other row is current.
   const updatingId = updateMutation.isPending ? updateMutation.variables?.id : undefined;
@@ -136,13 +162,8 @@ export function Templates() {
   }, [selectedSessionId, sessions]);
 
   useEffect(() => {
-    setPreviewValues(current => {
-      const next: Record<string, string> = {};
-      for (const { key } of placeholders) {
-        next[key] = current[key] || '';
-      }
-      return next;
-    });
+    // Built as own entries: an assignment to `__proto__` would set the prototype instead of a value.
+    setPreviewValues(current => Object.fromEntries(placeholders.map(({ key }) => [key, ownValue(current, key) || ''])));
   }, [placeholders]);
 
   const resetForm = () => {
@@ -413,6 +434,7 @@ export function Templates() {
                   placeholder={t('templates.namePlaceholder')}
                   disabled={!canWrite}
                 />
+                {limitHint(limits.name)}
               </div>
 
               <div className="template-message-fields">
@@ -425,6 +447,7 @@ export function Templates() {
                     placeholder={t('templates.headerPlaceholder')}
                     disabled={!canWrite}
                   />
+                  {limitHint(limits.header)}
                 </div>
 
                 <div className="form-group body-field">
@@ -437,6 +460,7 @@ export function Templates() {
                     rows={10}
                     disabled={!canWrite}
                   />
+                  {limitHint(limits.body)}
                 </div>
 
                 <div className="form-group">
@@ -448,6 +472,7 @@ export function Templates() {
                     placeholder={t('templates.footerPlaceholder')}
                     disabled={!canWrite}
                   />
+                  {limitHint(limits.footer)}
                 </div>
               </div>
 
@@ -458,7 +483,9 @@ export function Templates() {
                 <button
                   className="btn-primary"
                   onClick={handleSave}
-                  disabled={!canWrite || isSaving || !selectedSessionId || !form.name.trim() || !form.body.trim()}
+                  disabled={
+                    !canWrite || isSaving || !selectedSessionId || !form.name.trim() || !form.body.trim() || overLimit
+                  }
                   type="button"
                 >
                   {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />}
@@ -485,7 +512,7 @@ export function Templates() {
                     <label key={key}>
                       <span>{token}</span>
                       <input
-                        value={previewValues[key] || ''}
+                        value={ownValue(previewValues, key) || ''}
                         onChange={event => setPreviewValues({ ...previewValues, [key]: event.target.value })}
                         placeholder={t('templates.previewValuePlaceholder')}
                       />

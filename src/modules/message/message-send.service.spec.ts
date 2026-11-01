@@ -780,6 +780,32 @@ describe('MessageSendService', () => {
       expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
     });
 
+    it('answers a 400 and stores nothing for a template that renders to no text, as send-text does', async () => {
+      (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: '{{customer}}' }));
+
+      await expect(
+        service.sendTemplate('sess-1', { chatId: 'test@c.us', templateId: 'tpl-1', vars: { customer: '' } }),
+      ).rejects.toThrow(new BadRequestException('Rendered template is empty'));
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+
+    it('answers a 400 for a template whose header, body and footer all render empty', async () => {
+      (templateService.resolve as jest.Mock).mockResolvedValue(
+        mockTemplate({ header: '{{a}}', body: '{{b}}', footer: '{{c}}' }),
+      );
+
+      await expect(
+        service.sendTemplate('sess-1', {
+          chatId: 'test@c.us',
+          templateId: 'tpl-1',
+          vars: { a: '', b: '', c: '' },
+        }),
+      ).rejects.toThrow(new BadRequestException('Rendered template is empty'));
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+
     it('still renders a number sent for a variable', async () => {
       (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'Order {{orderId}}' }));
 
@@ -1678,6 +1704,70 @@ describe('MessageSendService', () => {
       });
 
       expect(assertSendAllowed).toHaveBeenCalledWith('sess-1', 'to@c.us', { whilePreparing: true });
+    });
+
+    const pendingRow = (): unknown => ((repository.create as jest.Mock).mock.calls as unknown[][])[0][0];
+    const forwardIt = (svc: MessageSendService = service) =>
+      svc.forward('sess-1', { fromChatId: '628111@c.us', toChatId: 'to@c.us', messageId: 'wa-src' });
+
+    it('stores a poll it finds under the lid form of the source chat, with its options', async () => {
+      const poll = { name: 'Lunch?', options: ['yes', 'no'], allowMultipleAnswers: false };
+      (repository.findOne as jest.Mock).mockImplementation(({ where }: { where: { chatId: FindOperator<string> } }) =>
+        Promise.resolve(
+          (where.chatId.value as unknown as string[]).includes('999@lid')
+            ? { type: 'poll', body: 'Lunch?', metadata: { poll, quotedMessage: { id: 'q', body: 'x' } } }
+            : null,
+        ),
+      );
+      const store = {
+        findPhoneForLid: jest.fn().mockResolvedValue(null),
+        findLidsForPhone: jest.fn((phone: string) => Promise.resolve(phone === '628111' ? ['999'] : [])),
+      } as unknown as LidMappingStoreService;
+      const withStore = new MessageSendService(
+        repository as Repository<Message>,
+        sessionService as unknown as SessionService,
+        engines,
+        hookManager as HookManager,
+        templateService as unknown as TemplateService,
+        inertPacing(),
+        undefined,
+        undefined,
+        store,
+      );
+
+      await forwardIt(withStore);
+
+      expect(pendingRow()).toMatchObject({ chatId: 'to@c.us', type: 'poll', body: 'Lunch?', metadata: { poll } });
+      expect(pendingRow()).not.toHaveProperty('metadata.quotedMessage');
+    });
+
+    // A media row always carries a media field (an empty bubble otherwise), and an archive pointer names the source
+    // row's file, which this row does not have.
+    it.each([
+      [
+        'archived',
+        { media: { mimetype: 'image/jpeg', omitted: true, archived: true, sizeBytes: 10 } },
+        { mimetype: 'image/jpeg', omitted: true, sizeBytes: 10 },
+      ],
+      ['missing', null, { mimetype: '', omitted: true }],
+    ])('stores media the source row holds no bytes for (%s) as the omitted marker', async (_how, metadata, media) => {
+      (repository.findOne as jest.Mock).mockResolvedValue({ type: 'image', body: 'the caption', metadata });
+
+      await forwardIt();
+
+      expect((pendingRow() as { metadata: unknown }).metadata).toEqual({ media });
+    });
+
+    it.each([
+      ['was deleted', () => (repository.findOne as jest.Mock).mockResolvedValue({ type: 'revoked', body: '' })],
+      ['cannot be read', () => (repository.findOne as jest.Mock).mockRejectedValue(new Error('db down'))],
+    ])('stores the placeholder and still forwards when the stored message %s', async (_why, arrange) => {
+      arrange();
+
+      await forwardIt();
+
+      expect(pendingRow()).toMatchObject({ type: 'forward', body: '[Forwarded]' });
+      expect(mockEngine.forwardMessage).toHaveBeenCalledWith('628111@c.us', 'to@c.us', 'wa-src');
     });
   });
 

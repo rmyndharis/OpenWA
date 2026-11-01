@@ -189,6 +189,45 @@ func TestEmptyAndDotSegmentsRefused(t *testing.T) {
 	}
 }
 
+// An id is sent as one percent-encoded segment, so "../x" goes out as "..%2Fx". A reverse proxy that
+// decodes %2F before it resolves dot segments (nginx with a URI on proxy_pass) reads that as "../x" and
+// sends the call, API key included, to another route, so a dot part inside a segment is refused too.
+func TestDotPartInsideASegmentRefused(t *testing.T) {
+	var sent []string
+	rt := RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		sent = append(sent, req.URL.EscapedPath())
+		return &http.Response{StatusCode: 204, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}, Request: req}, nil
+	})
+	c := newTestClient(t, rt)
+	ctx := context.Background()
+
+	for name, err := range map[string]error{
+		`Templates.Delete "../../../sessions/V"`: c.Templates.Delete(ctx, "S", "../../../sessions/V"),
+		`Webhooks.Delete "a/./b"`:                c.Webhooks.Delete(ctx, "s1", "a/./b"),
+		`Webhooks.Delete "..\x"`:                 c.Webhooks.Delete(ctx, "s1", `..\x`),
+		`Do ..%2F`:                               c.Do(ctx, "DELETE", "/api/sessions/s1/contacts/..%2Fwebhooks%2Fw1", nil, nil, nil),
+		`Do %2e%2E%2f`:                           c.Do(ctx, "DELETE", "/api/sessions/s1/contacts/%2e%2E%2fx", nil, nil, nil),
+	} {
+		if err == nil || !strings.Contains(err.Error(), "dot path segment") {
+			t.Errorf("%s: err = %v, want a dot path segment error", name, err)
+		}
+	}
+	if len(sent) != 0 {
+		t.Fatalf("sent %v, want nothing", sent)
+	}
+
+	// A slash inside an id with no dot part, as a caller-chosen batch or label id may hold, still goes out.
+	for _, id := range []string{"a/b", "v1.0/x", "a/"} {
+		if err := c.Webhooks.Delete(ctx, "s1", id); err != nil {
+			t.Errorf("Webhooks.Delete %q: %v", id, err)
+		}
+	}
+	want := []string{"/api/sessions/s1/webhooks/a%2Fb", "/api/sessions/s1/webhooks/v1.0%2Fx", "/api/sessions/s1/webhooks/a%2F"}
+	if strings.Join(sent, " ") != strings.Join(want, " ") {
+		t.Fatalf("sent %v, want %v", sent, want)
+	}
+}
+
 func TestListSessionsQueryName(t *testing.T) {
 	rt := &recordTransport{status: 200, body: `[]`}
 	c := newTestClient(t, rt)
@@ -382,7 +421,8 @@ func TestRetryPolicy(t *testing.T) {
 		MaxDelay:   5 * time.Millisecond,
 	}))
 
-	res, err := c.Messages.SendText(context.Background(), "s1", SendTextRequest{ChatID: "x", Text: "y"})
+	ctx := WithIdempotencyKey(context.Background(), "order-1")
+	res, err := c.Messages.SendText(ctx, "s1", SendTextRequest{ChatID: "x", Text: "y"})
 	if err != nil {
 		t.Fatalf("SendText with retry: %v", err)
 	}
@@ -400,10 +440,12 @@ func TestRetryPolicy(t *testing.T) {
 	}
 }
 
-// statusTransport always replies with the same status, counting attempts.
+// statusTransport always replies with the same status, counting attempts. A
+// non-empty retryAfter is sent as the Retry-After header.
 type statusTransport struct {
-	status int
-	calls  int32
+	status     int
+	retryAfter string
+	calls      int32
 }
 
 func (t *statusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -411,17 +453,21 @@ func (t *statusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Body != nil {
 		io.Copy(io.Discard, req.Body)
 	}
+	header := http.Header{}
+	if t.retryAfter != "" {
+		header.Set("Retry-After", t.retryAfter)
+	}
 	return &http.Response{
 		StatusCode: t.status,
 		Body:       io.NopCloser(strings.NewReader(`{"statusCode":500,"message":"boom","error":"Internal"}`)),
-		Header:     http.Header{},
+		Header:     header,
 		Request:    req,
 	}, nil
 }
 
 // A 500/502/504 can be returned after the gateway already sent the message, so
-// replaying a POST on those would double-send. Only 429/503 — which prove the
-// server declined before acting — may retry a non-idempotent request.
+// replaying a POST on those would double-send. A non-idempotent request may
+// retry only a 429, or a 503 it carried a key for or that came with Retry-After.
 func TestRetryDoesNotReplayPostOnAmbiguousStatus(t *testing.T) {
 	for _, status := range []int{500, 502, 504} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
@@ -460,22 +506,79 @@ func TestRetryStillReplaysIdempotentOnAmbiguousStatus(t *testing.T) {
 	}
 }
 
-// 429/503 mean the server declined before acting, so a POST may still retry.
+// A 429 means the gateway declined before acting, so a POST may retry it. A
+// keyed send may retry a 503 too: the gateway answers a replay of a send that
+// may have gone out with 409 IDEMPOTENCY_OUTCOME_UNKNOWN instead of sending it
+// again, and a 503 with Retry-After was refused before the request was read.
 func TestRetryReplaysPostOnBackpressure(t *testing.T) {
-	for _, status := range []int{429, 503} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			rt := &statusTransport{status: status}
+	for _, tc := range []struct {
+		name       string
+		status     int
+		retryAfter string
+		key        string
+	}{
+		{"429", 429, "", ""},
+		{"503 keyed send", 503, "", "order-1"},
+		{"503 with Retry-After", 503, "0", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &statusTransport{status: tc.status, retryAfter: tc.retryAfter}
 			c := newTestClient(t, rt, WithRetry(RetryPolicy{
 				MaxRetries: 2, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond,
 				RetryableStatuses: []int{429, 500, 502, 503, 504},
 			}))
+			ctx := context.Background()
+			if tc.key != "" {
+				ctx = WithIdempotencyKey(ctx, tc.key)
+			}
 
-			_, err := c.Messages.SendText(context.Background(), "s1", SendTextRequest{ChatID: "x", Text: "y"})
+			_, err := c.Messages.SendText(ctx, "s1", SendTextRequest{ChatID: "x", Text: "y"})
 			if err == nil {
 				t.Fatal("expected an error")
 			}
 			if rt.calls != 3 {
-				t.Fatalf("POST on %d is backpressure and should retry: got %d attempts, want 3", status, rt.calls)
+				t.Fatalf("POST on %s should retry: got %d attempts, want 3", tc.name, rt.calls)
+			}
+		})
+	}
+}
+
+// A 503 can answer a write WhatsApp did not confirm (a Baileys send or status
+// post whose query timed out with code 408), so the message may have gone out.
+// Without an Idempotency-Key the gateway cannot tell a replay from a new send,
+// so the POST is issued once. A status post and a route outside the keyed sends
+// carry no header even when the context holds a key.
+func TestRetryDoesNotReplayPostOn503WithoutIdempotencyKey(t *testing.T) {
+	keyed := WithIdempotencyKey(context.Background(), "order-1")
+	for _, tc := range []struct {
+		name string
+		do   func(c *Client) error
+	}{
+		{"send without a key", func(c *Client) error {
+			_, err := c.Messages.SendText(context.Background(), "s1", SendTextRequest{ChatID: "x", Text: "y"})
+			return err
+		}},
+		{"status post", func(c *Client) error {
+			_, err := c.Status.SendText(keyed, "s1", SendTextStatusRequest{Text: "y"})
+			return err
+		}},
+		{"do on another route", func(c *Client) error {
+			return c.Do(keyed, "POST", "/api/sessions/s1/groups", nil, map[string]string{}, nil)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &statusTransport{status: 503}
+			c := newTestClient(t, rt, WithRetry(RetryPolicy{
+				MaxRetries: 3, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond,
+				RetryableStatuses: []int{429, 500, 502, 503, 504},
+			}))
+
+			err := tc.do(c)
+			if !errors.Is(err, ErrServiceUnavailable) {
+				t.Fatalf("expected the 503 back, got %v", err)
+			}
+			if rt.calls != 1 {
+				t.Fatalf("an unkeyed POST answered 503 must be issued once: got %d attempts", rt.calls)
 			}
 		})
 	}
@@ -1198,6 +1301,64 @@ func TestRejectCallNotRinging(t *testing.T) {
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("errors.Is ErrNotFound = false for %v", err)
 	}
+}
+
+// GET /api/webhooks has no session filter, so the shared query's SessionID must
+// not travel as one.
+func TestWebhooksListAllSendsPagingButNoSessionFilter(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `[]`}
+	c := newTestClient(t, rt)
+	session, limit, offset := "s1", 5, 10
+	query := &DeliveryFailureQuery{SessionID: &session, Limit: &limit, Offset: &offset}
+	if _, err := c.Webhooks.ListAll(context.Background(), query); err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if got := rt.lastReq.URL.RawQuery; got != "limit=5&offset=10" {
+		t.Fatalf("query = %q, want limit=5&offset=10", got)
+	}
+}
+
+// No contract gate reads these keys (a request map, a query key, a nested struct's tags), and the
+// gateway answers an unknown body or query key with 400, so a renamed one would fail every such call.
+func TestMemberLabelSearchMatchAndPreviewImageWireKeys(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("member label body", func(t *testing.T) {
+		rt := &recordTransport{status: 200, body: `{"success":true}`}
+		if _, err := newTestClient(t, rt).Groups.SetMemberLabel(ctx, "s1", "g@g.us", "Lead"); err != nil {
+			t.Fatalf("SetMemberLabel: %v", err)
+		}
+		if got := string(rt.lastRaw); got != `{"label":"Lead"}` {
+			t.Fatalf("body = %s", got)
+		}
+	})
+
+	t.Run("search match query", func(t *testing.T) {
+		rt := &recordTransport{status: 200, body: `{"hits":[],"total":0,"tookMs":1,"provider":"builtin-fts"}`}
+		match := "contains"
+		if _, err := newTestClient(t, rt).Search.Search(ctx, SearchQuery{Q: "voic", Match: &match}); err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		if got := rt.lastReq.URL.Query().Get("match"); got != "contains" {
+			t.Fatalf("match = %q in %q", got, rt.lastReq.URL.RawQuery)
+		}
+	})
+
+	t.Run("link preview image fields", func(t *testing.T) {
+		rt := &recordTransport{status: 201, body: `{"messageId":"m","timestamp":1}`}
+		preview := &CustomLinkPreview{
+			URL: "https://x.test", Title: "T", ThumbnailURL: "https://x.test/i.png", ThumbnailBase64: "aGk=",
+		}
+		body := SendTextRequest{ChatID: "a@c.us", Text: "https://x.test", CustomLinkPreview: preview}
+		if _, err := newTestClient(t, rt).Messages.SendText(ctx, "s1", body); err != nil {
+			t.Fatalf("SendText: %v", err)
+		}
+		for _, want := range []string{`"thumbnailUrl":"https://x.test/i.png"`, `"thumbnailBase64":"aGk="`} {
+			if got := string(rt.lastRaw); !strings.Contains(got, want) {
+				t.Fatalf("body = %s, want it to contain %s", got, want)
+			}
+		}
+	})
 }
 
 // The Event* constants are the wire values of the server's WEBHOOK_EVENTS

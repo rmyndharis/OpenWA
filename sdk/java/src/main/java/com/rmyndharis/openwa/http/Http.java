@@ -34,15 +34,17 @@ public final class Http {
      *
      * @throws IllegalArgumentException if the path does not begin with {@code /} (appended to the
      *     base, any other path can change the host the request and its API key go to), or has a
-     *     {@code .} or {@code ..} segment (also written {@code %2e}); empty segments, such as a
-     *     trailing slash, are kept as written.
+     *     {@code .} or {@code ..} segment (also written {@code %2e}, or inside a segment after an
+     *     encoded slash); empty segments, such as a trailing slash, are kept as written.
      */
     public static String buildUrl(String baseUrl, String path, Object query, Gson gson) {
         if (!path.startsWith("/")) {
             throw new IllegalArgumentException("OpenWA: path must begin with \"/\": \"" + path + "\"");
         }
         String pathOnly = path.split("[?#]", 2)[0];
-        for (String segment : pathOnly.split("/", -1)) {
+        // %2F and %5C split too: a proxy that decodes them before it resolves dot segments reads an id sent
+        // as "..%2Fx" as "../x" and sends the call to another route.
+        for (String segment : pathOnly.split("(?i)/|%2f|%5c", -1)) {
             String dots = segment.replaceAll("(?i)%2e", ".");
             if (dots.equals(".") || dots.equals("..")) {
                 throw new IllegalArgumentException("OpenWA: dot path segment in \"" + path + "\"");

@@ -197,3 +197,69 @@ describe('chat label membership updates', () => {
     expect(fixture.original.labels()).toEqual(['A']);
   });
 });
+
+describe('chat label writes on a chat WhatsApp Web keys by its lid', () => {
+  // WhatsApp Web keys a migrated contact's chat by its lid, and finds that chat for the phone id too.
+  const LID_CHAT = '159442138038327@lid';
+
+  function lidKeyedChat() {
+    const definitions = [{ id: 'A', name: 'A', hexColor: '#000000' }];
+    const chat = { id: { _serialized: LID_CHAT }, labels: [] as string[] };
+    const window = {
+      WWebJS: { getLabels: () => definitions },
+      require(module: string) {
+        if (module === 'WAWebConnModel') return { Conn: { platform: 'smba' } };
+        return {
+          Chat: { filter: (predicate: (candidate: typeof chat) => boolean) => [chat].filter(predicate) },
+          Label: {
+            addOrRemoveLabels(actions: Action[], selected: (typeof chat)[]) {
+              for (const target of selected) {
+                const ids = new Set(target.labels);
+                for (const action of actions) {
+                  if (action.type === 'add') ids.add(action.id);
+                  else ids.delete(action.id);
+                }
+                target.labels = [...ids];
+              }
+              return Promise.resolve();
+            },
+          },
+        };
+      },
+    };
+    const client = {
+      getChatById: (id: string) =>
+        Promise.resolve(
+          id === CHAT || id === LID_CHAT
+            ? { id: chat.id, getLabels: () => Promise.resolve(definitions.filter(d => chat.labels.includes(d.id))) }
+            : undefined,
+        ),
+      getLabels: () => Promise.resolve(definitions),
+      addOrRemoveLabels: (ids: string[], chatIds: string[]) =>
+        Client.prototype.addOrRemoveLabels.call(client as unknown as Client, ids, chatIds),
+      pupPage: {
+        evaluate: (fn: (...args: unknown[]) => Promise<unknown>, ...args: unknown[]) =>
+          (runInNewContext(`(${fn.toString()})`, { window }) as typeof fn)(...args),
+      },
+    };
+    const host = {
+      ensureReady: jest.fn(),
+      getClient: () => client as unknown as Client,
+      isPageTransportError: () => false,
+      reportIfPageTransportError: jest.fn(),
+      logger: { debug: jest.fn() },
+      config: { sessionId: 'label-session' },
+    } as unknown as WwebjsEngineHost;
+    return { labels: new WwebjsLabels(host), chat };
+  }
+
+  it('adds and removes the label on the chat a phone id resolves to', async () => {
+    const { labels, chat } = lidKeyedChat();
+
+    await labels.addLabelToChat(CHAT, 'A');
+    expect(chat.labels).toEqual(['A']);
+
+    await labels.removeLabelFromChat(CHAT, 'A');
+    expect(chat.labels).toEqual([]);
+  });
+});

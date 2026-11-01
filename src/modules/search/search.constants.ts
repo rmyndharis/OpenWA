@@ -54,8 +54,19 @@ export const SEARCH_CONTAINS_TERMS_MAX_LENGTH = 64;
 /**
  * How many candidates a match=contains search ranks: the most recently stored matches, fetched from
  * the index in recency order so the database stops once it holds this many, then ranked in the
- * application. It bounds the ranking work of one search (ranking every match in SQL took about
- * 100 ms on SQLite and 1.6 s on Postgres for 200k matches) and is therefore also the most `total` can
- * report in this mode. Fixed rather than env-driven, like SEARCH_OFFSET_MAX.
+ * application. With SEARCH_CONTAINS_RANKED_LENGTH it bounds the ranking work of one search (ranking
+ * every match in SQL took about 100 ms on SQLite and 1.6 s on Postgres for 200k matches) and is
+ * therefore also the most `total` can report in this mode. Fixed rather than env-driven, like
+ * SEARCH_OFFSET_MAX.
  */
 export const SEARCH_CONTAINS_WINDOW = 1000;
+
+/**
+ * How much of each candidate's body a match=contains search ranks and highlights, in UTF-16 units: the number
+ * MESSAGE_TEXT_MAX_LENGTH caps a sent text at, though that cap counts an emoji as one character where this cut
+ * counts two, so an emoji-heavy API text can run past it. A received message is stored whole and can be far
+ * longer: over a window of 64 KB messages, folding and scanning whole bodies blocked the event loop for about
+ * 2.8 s per search, reading this much of each about 240 ms. A message whose terms appear only past this
+ * point still matches: it scores 0 and its snippet starts at the beginning, without `<mark>`.
+ */
+export const SEARCH_CONTAINS_RANKED_LENGTH = 4096;

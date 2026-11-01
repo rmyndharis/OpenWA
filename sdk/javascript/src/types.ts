@@ -1483,8 +1483,10 @@ export interface SendProductRequest {
 
 /**
  * How `q` matches: `word` (the server default) matches whole words; `contains` matches any part of a
- * word, ignoring case and accents, and needs at least one term of 3+ characters and a server with
- * `SEARCH_CONTAINS_ENABLED=true` (501 otherwise).
+ * word, ignoring case and accents. `contains` needs `SEARCH_CONTAINS_ENABLED=true` and a finished index
+ * build on the server (501 otherwise) and at least one term of 3+ characters with at most 64 characters
+ * across its terms (400 otherwise); it ranks the 1000 most recently stored matches, so `total` is at
+ * most 1000.
  */
 export type SearchMatch = 'word' | 'contains';
 

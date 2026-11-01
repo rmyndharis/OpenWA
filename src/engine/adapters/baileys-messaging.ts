@@ -25,7 +25,7 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { refusedStatusCode, toEngineParticipants } from './baileys-groups';
 import { findSelfParticipant } from './baileys-group-mapper';
-import { buildVCard } from './vcard';
+import { buildVCard, stripLineBreaks } from './vcard';
 import {
   baileysChatJid,
   isBaileysCatalogShare,
@@ -44,9 +44,9 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { EngineNotSentError, markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { parseWaId, userPart } from '../identity/wa-id';
-import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, withQueryDeadline } from './baileys-query-deadline';
+import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, guardLookup, withQueryDeadline } from './baileys-query-deadline';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
-import { describeAudio } from './baileys-audio-probe';
+import { describeAudio, describeVideo } from './baileys-audio-probe';
 
 /**
  * Messaging-domain operations extracted from BaileysAdapter. The adapter keeps the public
@@ -131,13 +131,16 @@ function isWebpBuffer(data: Buffer): boolean {
  * Load the deferred `sharp` binary, mapping a LOAD failure to a 500 rather than the decode path's 400.
  * A native-binary load failure (older CPU, stripped/musl image, missing prebuilt) is a host capability
  * gap: a valid PNG would hit it too, so reporting it as a 400 tells the caller their image is malformed.
+ * Every caller loads it before anything is written, so the 500 carries markNothingSent.
  */
 export async function loadSharp() {
   try {
     return (await import('sharp')).default;
   } catch (error) {
-    throw new InternalServerErrorException(
-      `Sticker conversion is unavailable: sharp could not load (${error instanceof Error ? error.message : String(error)}).`,
+    throw markNothingSent(
+      new InternalServerErrorException(
+        `Sticker conversion is unavailable: sharp could not load (${error instanceof Error ? error.message : String(error)}).`,
+      ),
     );
   }
 }
@@ -516,10 +519,13 @@ export class BaileysMessaging {
 
   async getNumberId(number: string): Promise<string | null> {
     this.host.ensureReady();
-    const results = await withQueryDeadline(
-      this.sock().onWhatsApp(number),
-      this.queryBudgetMs,
-      'WhatsApp did not answer the number-check query in time',
+    const results = await guardLookup(
+      withQueryDeadline(
+        this.sock().onWhatsApp(number),
+        this.queryBudgetMs,
+        'WhatsApp did not answer the number-check query in time',
+      ),
+      'The number check',
     );
     // onWhatsApp has no else branch after `if (results)`, so it resolves undefined when the usync
     // query goes unanswered — and Baileys' query() swallows its own timeout rather than throwing.
@@ -643,6 +649,8 @@ export class BaileysMessaging {
         video: data,
         caption: media.caption,
         mimetype,
+        // Made outside Baileys, which would otherwise run ffmpeg on the file itself (see describeVideo).
+        ...(await describeVideo(data)),
         ...this.withMentions(media.mentions),
       },
       await this.quoteOption(media.quotedMessageId, socket),
@@ -750,7 +758,11 @@ export class BaileysMessaging {
     return this.sendContent(
       chatId,
       {
-        contacts: { displayName: contact.name, contacts: [{ vcard: buildVCard(contact) }] },
+        // A single card is built from the entry alone, so the entry carries the name the bubble shows.
+        contacts: {
+          displayName: contact.name,
+          contacts: [{ displayName: stripLineBreaks(contact.name), vcard: buildVCard(contact) }],
+        },
       },
       await this.quoteOption(contact.quotedMessageId, socket),
       socket,
@@ -925,6 +937,19 @@ export class BaileysMessaging {
         `the edit of message ${messageId} was rejected — only the account's own messages can be edited`,
       );
     }
+    // WhatsApp edits a text or the caption of a photo, video or document: the slots setBaileysText writes. The
+    // edit of anything else resolved all the same, and the stored body took the new text while recipients kept
+    // the original. whatsapp-web.js refuses it from the page.
+    const b = await this.host.loadLib();
+    const content = b.normalizeMessageContent(target.message ?? undefined);
+    if (
+      typeof content?.conversation !== 'string' &&
+      !(content?.extendedTextMessage ?? content?.imageMessage ?? content?.videoMessage ?? content?.documentMessage)
+    ) {
+      throw new EngineRefusedError(
+        `the edit of message ${messageId} was rejected: only a text or a caption can be edited`,
+      );
+    }
     // An edit keeps the original message id, so it is neither re-persisted nor echoed as a new send.
     // The destination is resolved like any other send: a lid-migrated contact rejects PN-addressed
     // sends with ack error 463 (see toDeliverableJid).
@@ -935,7 +960,6 @@ export class BaileysMessaging {
     // protocolMessage edit envelope, so an edit can re-tag participants. An edit REPLACES the
     // content, so omitting mentions drops whatever tags the original carried.
     const editContent = { text: body, ...this.withMentions(mentions), edit: target.key };
-    const b = await this.host.loadLib();
     await this.send(jid, this.previewSafe(editContent), this.previewSafeOptions(editContent), socket);
     // Update the preview and raw copy immediately, ahead of the buffered echo.
     this.host.recordMessageEdit(target.key.remoteJid ?? chatId, messageId, body);
@@ -1265,7 +1289,18 @@ export class BaileysMessaging {
       if (typeof socket.executeUSyncQuery === 'function') {
         const library = await this.host.loadLib();
         this.sock(socket);
-        const confirmed = await queryLidPhone(socket, library, phone, lid, this.queryBudgetMs);
+        let confirmed: boolean;
+        try {
+          confirmed = await queryLidPhone(socket, library, phone, lid, this.queryBudgetMs);
+        } catch (error) {
+          this.sock(socket);
+          // A read before any write, so no message went out whatever stopped it. A rate limit keeps its own
+          // class, which already says so.
+          if (error instanceof EngineTransportError && !(error instanceof EngineThrottledError)) {
+            throw new EngineNotSentError(error.message);
+          }
+          throw markNothingSent(error);
+        }
         this.sock(socket);
         if (confirmed) {
           this.host.recordLidMapping(`${lid}@lid`, `${phone}@s.whatsapp.net`);

@@ -597,6 +597,52 @@ test('status compose modal posts a text status with the baileys recipient allow-
   });
 });
 
+// The form was filled for the account its session is, its recipients picked from that account's contacts: when the
+// session is deleted elsewhere and the next ready one is opened, Post would send the status through that one.
+test('a status being composed closes when its session gives way to another, reading nothing through it', async () => {
+  const { screen, fireEvent, within, waitFor, act } = rtl;
+  twoSessions = true;
+  let mainDeleted = false;
+  const sent: string[] = [];
+  const stub = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input).replace(/^https?:\/\/[^/]+/, '');
+    sent.push(url);
+    if ((init?.method ?? 'GET') === 'GET' && url === '/api/sessions' && mainDeleted) {
+      return Promise.resolve(jsonResponse([SESSION_2]));
+    }
+    return stub(input, init);
+  }) as typeof fetch;
+  try {
+    const { container } = renderChats();
+    await screen.findByText(SESSION.name);
+    fireEvent.click(screen.getByRole('tab', { name: 'Status' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Post a status' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByPlaceholderText('Text'), { target: { value: STATUS_TEXT } });
+    await within(dialog).findByText('Bob');
+    fireEvent.click(within(dialog).getByRole('checkbox'));
+    sent.length = 0;
+
+    // Deleted from another tab: showing the page again reads the list, which opens the next ready session.
+    mainDeleted = true;
+    await act(async () => {
+      document.dispatchEvent(new window.Event('visibilitychange'));
+    });
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION_2.id));
+    await flush();
+    assert.equal(screen.queryByRole('dialog') === null, true, 'the status form stayed open for the next session');
+    assert.deepEqual(
+      sent.filter(url => url.startsWith(`/api/sessions/${SESSION_2.id}/contacts?`)),
+      [],
+      "the next session's address book was read for the form",
+    );
+  } finally {
+    globalThis.fetch = stub;
+    twoSessions = false;
+  }
+});
+
 test('Refresh on a feed that never connected refetches the open thread once the socket is back', async () => {
   const { screen, fireEvent, within, waitFor, act } = rtl;
   resetFetchCalls();
@@ -713,6 +759,146 @@ test('a typed draft stays with its session: the same chat on another account ope
   } finally {
     twoSessions = false;
   }
+});
+
+/** Run `body` with every send to `route` refused as a gateway whose engine reconnects refuses it, once `gate()` opens. */
+async function withSendsRefused(
+  route: string,
+  body: () => Promise<void>,
+  gate: () => Promise<void> = () => Promise.resolve(),
+): Promise<void> {
+  const stub = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    if (!String(input).endsWith(`/messages/${route}`)) return stub(input, init);
+    return gate().then(() => jsonResponse({ statusCode: 409, message: 'Engine not ready', error: 'Conflict' }, 409));
+  }) as typeof fetch;
+  try {
+    await body();
+  } finally {
+    globalThis.fetch = stub;
+  }
+}
+
+// The field is emptied as Send is pressed, and the bubble of a refused send lasts only until the thread is read again (a
+// session switch and back, a reconnect), so the text the gateway refused goes back where it was typed.
+test('a refused send puts its text back in the field, where it stays across a session switch and back', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  twoSessions = true;
+  try {
+    await withSendsRefused('send-text', async () => {
+      const { container } = renderChats();
+      const composer = () => screen.getByPlaceholderText('Type a message...') as HTMLInputElement;
+      const thread = () => container.querySelector('.room-messages') as HTMLElement;
+      await screen.findByText(SESSION.name);
+      fireEvent.click(await screen.findByText('Alice'));
+      await within(thread()).findByText('hello from alice');
+      fireEvent.change(composer(), { target: { value: 'a reply worth keeping' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await waitFor(() => assert.ok(thread().querySelector('.message-status-icon.failed'), 'the send was not refused'));
+      assert.equal(composer().value, 'a reply worth keeping');
+
+      selectSession(container, SESSION_2.id);
+      await waitFor(() => assert.equal(selectedSessionId(container), SESSION_2.id));
+      selectSession(container, SESSION.id);
+      await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+      fireEvent.click(await within(container.querySelector('.chats-sidebar') as HTMLElement).findByText('Alice'));
+      await within(thread()).findByText('hello from alice');
+      assert.equal(composer().value, 'a reply worth keeping');
+    });
+  } finally {
+    twoSessions = false;
+  }
+});
+
+// The text goes back to the chat it was typed in, and never over what was typed since: carried into the chat open by
+// then, the next Enter would send it to the wrong recipient.
+test('a refused send gives its text back to its own chat only, and not over text typed since', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  // Each send waits for its own answer.
+  let answer = () => {};
+  const gate = () =>
+    new Promise<void>(resolve => {
+      answer = resolve;
+    });
+  await withSendsRefused(
+    'send-text',
+    async () => {
+      const { container } = renderChats();
+      const composer = () => screen.getByPlaceholderText('Type a message...') as HTMLInputElement;
+      const failed = () => container.querySelectorAll('.room-messages .message-status-icon.failed').length;
+      const open = async (name: string) => {
+        fireEvent.click(within(container.querySelector('.chats-sidebar') as HTMLElement).getByText(name));
+        await within(container.querySelector('.room-header') as HTMLElement).findByText(name);
+      };
+      await screen.findByText('Alice');
+      await open('Alice');
+      fireEvent.change(composer(), { target: { value: 'for alice only' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await open('Carol');
+      answer();
+      await screen.findByText('Failed to send message');
+      assert.equal(composer().value, '', "the refused text went into Carol's field");
+      await open('Alice');
+      assert.equal(composer().value, 'for alice only');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      fireEvent.change(composer(), { target: { value: 'typed while it was out' } });
+      answer();
+      await waitFor(() => assert.equal(failed(), 2, 'the second send was not refused'));
+      assert.equal(composer().value, 'typed while it was out');
+    },
+    gate,
+  );
+});
+
+test('a refused file send puts its caption back in the field', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  await withSendsRefused('send-document', async () => {
+    const { container } = renderChats();
+    fireEvent.click(await screen.findByText('Alice'));
+    const thread = container.querySelector('.room-messages') as HTMLElement;
+    await within(thread).findByText('hello from alice');
+    await stageAttachment(container, 'contract.pdf');
+    fireEvent.change(screen.getByPlaceholderText('Add a caption...'), { target: { value: 'the signed copy' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => assert.ok(thread.querySelector('.message-status-icon.failed'), 'the send was not refused'));
+    assert.equal((screen.getByPlaceholderText('Type a message...') as HTMLInputElement).value, 'the signed copy');
+  });
+});
+
+// The gateway refuses a text past 4096 characters and a caption past 1024, counting an astral character as one. The
+// composer holds such a send and says why, instead of leaving it to a refusal.
+test('the composer holds a message past the gateway limit and says why', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  const field = () => container.querySelector('.message-text-input') as HTMLInputElement;
+  const send = () => screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+  const hint = () => container.querySelector('.room-input-footer [role="status"]')?.textContent;
+
+  fireEvent.change(field(), { target: { value: 'a'.repeat(4097) } });
+  assert.equal(send().disabled, true, 'a text the gateway refuses can be sent');
+  assert.equal(hint(), 'Limited to 4096 characters (4097 now).');
+  fireEvent.submit(container.querySelector('.input-form') as HTMLFormElement);
+  await flush();
+  assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/messages/send-text`), 0, 'Enter sent it');
+
+  // 4096 emoji are 8192 UTF-16 units, and 4096 characters to the gateway.
+  fireEvent.change(field(), { target: { value: '😀'.repeat(4096) } });
+  assert.equal(send().disabled, false, 'a text the gateway takes is held');
+  assert.equal(hint(), '');
+
+  fireEvent.change(field(), { target: { value: 'c'.repeat(1025) } });
+  await stageAttachment(container, 'contract.pdf');
+  assert.equal(send().disabled, true, 'a caption the gateway refuses can be sent');
+  assert.equal(hint(), 'Limited to 1024 characters (1025 now).');
+
+  // Text next to audio is not sent with it, so it holds nothing back.
+  await stageAttachment(container, 'voice.ogg', 'audio/ogg');
+  assert.equal(send().disabled, false, 'text that does not travel with the audio held it');
+  assert.equal(hint(), '');
 });
 
 test('Escape dismisses the emoji picker instead of the conversation behind it', async () => {
@@ -1637,6 +1823,50 @@ test('sends answered with no message id each keep their own bubble', async () =>
   assert.ok(within(thread).queryByText('second id-less'), 'the later id-less send is missing');
 });
 
+// A send is drawn at the browser's clock until the gateway answers with its own. The fixtures are years older than the
+// browser clock, so a sent message left on it sorts after every one of them.
+test('a send whose echo lands before its answer takes the time the gateway gave it', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  firstPageExtra = [
+    {
+      ...DB_MESSAGE,
+      id: 'db-later',
+      waMessageId: 'wamid.later',
+      body: 'a reply from alice after it',
+      timestamp: 1_700_000_200,
+      createdAt: new Date(1_700_000_200_000).toISOString(),
+    },
+  ];
+  const release = holdSend();
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  const thread = container.querySelector('.room-messages') as HTMLElement;
+  await within(thread).findByText('a reply from alice after it');
+
+  fireEvent.change(screen.getByPlaceholderText('Type a message...'), { target: { value: 'sent before the reply' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  receiveEvent('message.sent', {
+    id: 'wamid.out.1',
+    chatId: CHAT.id,
+    from: 'me',
+    to: CHAT.id,
+    body: 'sent before the reply',
+    type: 'text',
+    fromMe: true,
+    timestamp: 1_700_000_100,
+  });
+  await waitFor(() => assert.ok(thread.querySelector('[data-wa-message-id="wamid.out.1"]')));
+  release();
+  await waitFor(() => assert.equal(within(thread).getAllByText('sent before the reply').length, 1));
+  await flush();
+
+  const order = [...thread.querySelectorAll('[data-wa-message-id]')].map(el => el.getAttribute('data-wa-message-id'));
+  assert.ok(
+    order.indexOf('wamid.out.1') < order.indexOf('wamid.later'),
+    `the sent message sorts by the browser clock: ${order.join(', ')}`,
+  );
+});
+
 test('a caption sent with a document shows in its bubble', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   resetFetchCalls();
@@ -1863,6 +2093,106 @@ test('a staged reply is dropped when another session is opened', async () => {
     );
   } finally {
     twoSessions = false;
+  }
+});
+
+/** Run `body` with every request URL recorded as sent, before the stub folds session 2's routes onto session 1's. */
+async function withSentUrls(body: (sent: string[]) => Promise<void>): Promise<void> {
+  const sent: string[] = [];
+  const stub = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    sent.push(String(input).replace(/^https?:\/\/[^/]+/, ''));
+    return stub(input, init);
+  }) as typeof fetch;
+  try {
+    await body(sent);
+  } finally {
+    globalThis.fetch = stub;
+  }
+}
+
+// A switch leaves the previous session's list on screen until the new one lands, and the chat open in it. Both
+// belong to the account left: the session switched to is asked nothing about them.
+for (const engine of ['baileys', 'whatsapp-web.js']) {
+  test(`a session switch on ${engine} asks the new session nothing about the chat open in the previous one`, async () => {
+    const { screen, fireEvent, within, waitFor } = rtl;
+    twoSessions = true;
+    window.sessionStorage.setItem('openwa_engine_type', engine);
+    // Session 2 does not list Alice.
+    chatsResponder = sessionId => Promise.resolve(jsonResponse(sessionId === SESSION.id ? [CHAT, CHAT_2] : [CHAT_2]));
+    try {
+      await withSentUrls(async sent => {
+        const { container } = renderChats();
+        await screen.findByText(SESSION.name);
+        fireEvent.click(await screen.findByText('Alice'));
+        await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+        sent.length = 0;
+
+        selectSession(container, SESSION_2.id);
+        await waitFor(() => assert.equal(screen.queryByText('Alice') === null, true, "session 2's list did not land"));
+        await flush();
+        const aliceThroughTwo = sent.filter(
+          url => url.includes(`/sessions/${SESSION_2.id}/`) && url.includes(encodeURIComponent(CHAT.id)),
+        );
+        assert.deepEqual(aliceThroughTwo, [], 'session 2 was asked about a chat only session 1 lists');
+      });
+    } finally {
+      twoSessions = false;
+      window.sessionStorage.setItem('openwa_engine_type', 'baileys');
+    }
+  });
+}
+
+test('a session switch asks the new session for the pictures of its own list, not of the one it replaces', async () => {
+  const { screen, waitFor } = rtl;
+  twoSessions = true;
+  chatsResponder = sessionId => Promise.resolve(jsonResponse(sessionId === SESSION.id ? [CHAT, CHAT_2] : [CHAT_2]));
+  try {
+    await withSentUrls(async sent => {
+      const { container } = renderChats();
+      await screen.findByText('Alice');
+      sent.length = 0;
+
+      selectSession(container, SESSION_2.id);
+      await waitFor(() => assert.equal(screen.queryByText('Alice') === null, true, "session 2's list did not land"));
+      await flush();
+      const asked = sent
+        .filter(url => url.startsWith(`/api/sessions/${SESSION_2.id}/contacts/profile-pictures`))
+        .map(url => new URL(url, 'http://localhost').searchParams.get('ids'));
+      assert.deepEqual(asked, [CHAT_2.id], "session 2 was not asked for exactly its own list's pictures");
+    });
+  } finally {
+    twoSessions = false;
+  }
+});
+
+test('a session switch with a channel open asks the new session nothing about that channel', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  twoSessions = true;
+  engineType = 'whatsapp-web.js';
+  window.sessionStorage.setItem('openwa_engine_type', engineType);
+  channels = [CHANNEL];
+  channelPosts = [{ id: 'post-1', body: 'news of the day', timestamp: 1_700_000_000, hasMedia: false }];
+  try {
+    await withSentUrls(async sent => {
+      const { container } = renderChats();
+      await screen.findByText(SESSION.name);
+      fireEvent.click(screen.getByRole('tab', { name: 'Channels' }));
+      fireEvent.click(await screen.findByText(CHANNEL.name));
+      await screen.findByText('news of the day');
+      sent.length = 0;
+
+      selectSession(container, SESSION_2.id);
+      await waitFor(() => assert.ok(container.querySelector('.chats-room-placeholder'), 'the channel stayed open'));
+      await flush();
+      const channelThroughTwo = sent.filter(url =>
+        url.startsWith(`/api/sessions/${SESSION_2.id}/channels/${encodeURIComponent(CHANNEL.id)}`),
+      );
+      assert.deepEqual(channelThroughTwo, [], "session 2 was asked for the posts of session 1's open channel");
+    });
+  } finally {
+    twoSessions = false;
+    window.sessionStorage.setItem('openwa_engine_type', 'baileys');
   }
 });
 
@@ -2447,6 +2777,47 @@ test('the New chat panel leaves no way to another session, and a hit after it cl
   }
 });
 
+// The panel lists the address book of the session it was opened for: when that session is deleted elsewhere and the
+// next ready one is opened, the panel closes with the switch instead of reading the next account's contacts first.
+test('the New chat panel closes when its session gives way to another, reading nothing through it', async () => {
+  const { screen, fireEvent, waitFor, act } = rtl;
+  twoSessions = true;
+  let mainDeleted = false;
+  const sent: string[] = [];
+  const stub = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input).replace(/^https?:\/\/[^/]+/, '');
+    sent.push(url);
+    if ((init?.method ?? 'GET') === 'GET' && url === '/api/sessions' && mainDeleted) {
+      return Promise.resolve(jsonResponse([SESSION_2]));
+    }
+    return stub(input, init);
+  }) as typeof fetch;
+  try {
+    const { container } = renderChats();
+    await screen.findByText('Alice');
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    assert.ok(container.querySelector('.new-chat-panel'), 'the panel did not open');
+    sent.length = 0;
+
+    mainDeleted = true;
+    await act(async () => {
+      document.dispatchEvent(new window.Event('visibilitychange'));
+    });
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION_2.id));
+    await flush();
+    assert.equal(container.querySelector('.new-chat-panel'), null, 'the panel stayed open for the next session');
+    assert.deepEqual(
+      sent.filter(url => url.startsWith(`/api/sessions/${SESSION_2.id}/contacts?`)),
+      [],
+      "the next session's address book was read for the panel",
+    );
+  } finally {
+    globalThis.fetch = stub;
+    twoSessions = false;
+  }
+});
+
 test('a search hit in a session that is not connected stays on the selected session', async () => {
   const { screen, waitFor } = rtl;
   thirdSessionStatus = 'disconnected';
@@ -2992,6 +3363,63 @@ test('a channel post or status caption carrying mention delimiters renders them 
   const caption = await bubbleText();
   assert.equal(caption.textContent, '@Mallory says hi');
   assert.ok(!caption.querySelector('bdi'), 'the status caption rendered a mention');
+});
+
+// The viewer opens at the newest status and follows a new one. Anything else that draws the page again, a message for
+// another chat or a search that keeps the contact, leaves a reader who scrolled up to the older ones where they are.
+test('the status viewer moves to the newest only when the statuses it shows change', async () => {
+  const { screen, fireEvent } = rtl;
+  const contact = { id: '15550009999@c.us', name: 'Dora' };
+  const status = (n: number): StatusUpdate => ({
+    id: `status-${n}`,
+    contact,
+    type: 'text',
+    caption: `status number ${n}`,
+    timestamp: new Date(1_700_000_000_000 + n * 60_000).toISOString(),
+    expiresAt: new Date(1_800_000_000_000).toISOString(),
+  });
+  // Newest first, as the store answers.
+  statuses = [3, 2, 1].map(status);
+  const { container } = renderChats();
+  await screen.findByText(SESSION.name);
+  fireEvent.click(screen.getByRole('tab', { name: 'Status' }));
+  fireEvent.click(await screen.findByText('Dora'));
+  await screen.findByText('status number 1');
+  const feed = container.querySelector('.channel-room .messages-list') as HTMLElement;
+  // The reader has scrolled up to the oldest.
+  let top = 0;
+  const moves: number[] = [];
+  Object.defineProperty(feed, 'scrollHeight', { configurable: true, get: () => 3000 });
+  Object.defineProperty(feed, 'scrollTop', {
+    configurable: true,
+    get: () => top,
+    set: (value: number) => {
+      moves.push(value);
+      top = value;
+    },
+  });
+
+  receiveEvent('message.received', {
+    id: 'wamid.elsewhere.1',
+    chatId: CHAT.id,
+    from: CHAT.id,
+    to: 'me',
+    body: 'a message for another chat',
+    type: 'text',
+    fromMe: false,
+    timestamp: 1_700_000_900,
+  });
+  await flush();
+  await flush();
+  fireEvent.change(screen.getByPlaceholderText('Search chats...'), { target: { value: 'Dor' } });
+  await flush();
+  assert.deepEqual(moves, [], 'the viewer moved a reader who had scrolled up');
+
+  statuses = [4, 3, 2, 1].map(status);
+  receiveEvent('status.received', { id: 'status-4' });
+  await screen.findByText('status number 4');
+  await flush();
+  assert.deepEqual(moves, [3000], 'a new status did not move the viewer to it');
 });
 
 /**

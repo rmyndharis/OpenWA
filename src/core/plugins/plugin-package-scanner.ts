@@ -10,7 +10,7 @@ import {
   warnUnauthenticatedIngressRoutes,
   warnUnsignedTimestampRoutes,
 } from './plugin.interfaces';
-import { dropMalformedConfigFields, validatePluginManifest } from './plugin-manifest';
+import { dropMalformedConfigFields, dropMalformedDisplayFields, validatePluginManifest } from './plugin-manifest';
 import { PluginStorageService } from './plugin-storage.service';
 import { seedConfigDefaults } from './config-defaults.util';
 import { resolvePluginMainPath, pluginUpdateStagingDirName } from './plugin-paths';
@@ -317,6 +317,7 @@ export class PluginPackageScanner {
     // unexpected code) at enable time.
     validatePluginManifest(manifest);
     dropMalformedConfigFields(manifest.configSchema);
+    dropMalformedDisplayFields(manifest);
 
     // Anchor `main` inside THIS on-disk directory: the lexical check above is forward-slash only,
     // so a platform-separator escape (e.g. Windows-style `..\x`) would slip past it — resolve and

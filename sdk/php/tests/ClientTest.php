@@ -292,6 +292,35 @@ class ClientTest extends TestCase
         $this->assertSame('/api/sessions/s1/webhooks/628123@c.us', $backend->lastCall()['path']);
     }
 
+    public function testADotPartInsideAnIdIsRefusedBeforeSending(): void
+    {
+        // An id goes out as one encoded segment ("..%2Fx"); a proxy that decodes %2F before it resolves dot
+        // segments reads it as "../x" and sends the call, API key included, to another route.
+        $backend = new MockBackend();
+        $client = $backend->makeClient();
+        $attempts = [
+            fn () => $client->templates->delete('S', '../../../sessions/V'),
+            fn () => $client->webhooks->delete('s1', 'a/./b'),
+            fn () => $client->request('DELETE', '/api/sessions/s1/contacts/..%2Fwebhooks%2Fw1'),
+        ];
+        foreach ($attempts as $attempt) {
+            try {
+                $attempt();
+                $this->fail('expected InvalidArgumentException');
+            } catch (\InvalidArgumentException $e) {
+                $this->assertStringContainsString('dot path segment', $e->getMessage());
+            }
+        }
+        $this->assertSame([], $backend->calls());
+
+        // A slash inside an id with no dot part, as a caller-chosen batch or label id may hold, still goes out.
+        foreach (['a/b' => 'a%2Fb', 'v1.0/x' => 'v1.0%2Fx'] as $id => $sent) {
+            $backend->on(204);
+            $client->webhooks->delete('s1', $id);
+            $this->assertSame("/api/sessions/s1/webhooks/{$sent}", $backend->lastCall()['path']);
+        }
+    }
+
     public function testRawRequestEscapeHatch(): void
     {
         $backend = (new MockBackend())->on(200, ['ok' => true]);

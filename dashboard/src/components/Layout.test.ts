@@ -210,6 +210,42 @@ test('the closed phone drawer is inert, the open one and the desktop sidebar are
   }
 });
 
+// The open drawer covers the page under a dimmed overlay, but the page stayed in the tab order after it: Tab past
+// Logout went on into controls the user could not see.
+test('the page behind the open phone drawer is inert until the drawer closes', () => {
+  try {
+    resizeTo(390);
+    const phone = renderLayout();
+    const main = phone.container.querySelector('main')!;
+    assert.ok(!main.hasAttribute('inert'), 'the page is inert with the drawer closed');
+    rtl.fireEvent.click(phone.container.querySelector('.mobile-menu-btn')!);
+    assert.ok(main.hasAttribute('inert'), 'the page behind the open drawer is still focusable');
+    rtl.fireEvent.click(phone.container.querySelector('.mobile-menu-btn')!);
+    assert.ok(!main.hasAttribute('inert'), 'the page stayed inert after the drawer closed');
+    phone.unmount();
+
+    resizeTo(1024);
+    assert.ok(!renderLayout().container.querySelector('main')!.hasAttribute('inert'), 'the desktop page is inert');
+  } finally {
+    resizeTo(1024);
+  }
+});
+
+// The menu's items go away when it closes, so a keyboard user whose focus was on one landed on the page body.
+for (const how of ['Escape', 'a pick'] as const) {
+  test(`closing the language menu with ${how} returns focus to its button`, () => {
+    const { container } = renderLayout();
+    const button = container.querySelector<HTMLButtonElement>('.language-menu > button')!;
+    rtl.fireEvent.click(button);
+    const item = rtl.screen.getAllByRole('menuitemradio')[0];
+    item.focus();
+    if (how === 'Escape') rtl.fireEvent.keyDown(document, { key: 'Escape' });
+    else rtl.fireEvent.click(item);
+    assert.equal(rtl.screen.queryByRole('menu') === null, true, 'the menu stayed open');
+    assert.ok(document.activeElement === button, `focus is on ${document.activeElement?.tagName}`);
+  });
+}
+
 // Between 767 and 767.5 CSS px (110% zoom of an 844px window, 125% of a 959px one) innerWidth reads 767 while the
 // phone styles' (max-width: 767px) does not match. The page draws the desktop sidebar there, and a width test in
 // script made it inert: no link, language, theme or logout button could be clicked or reached with Tab.

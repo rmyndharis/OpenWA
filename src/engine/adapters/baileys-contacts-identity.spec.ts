@@ -1,8 +1,15 @@
+import { Boom } from '@hapi/boom';
 import type { WASocket } from '@whiskeysockets/baileys';
 import { BaileysContacts, BaileysContactsHost } from './baileys-contacts';
 import { BaileysMessaging, BaileysMessagingHost } from './baileys-messaging';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EngineNotSentError } from '../../common/errors/engine-not-sent.error';
+import { markEngineSendFailure } from '../../common/errors/engine-send-failure';
+import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { createLogger } from '../../common/services/logger.service';
+import { sendFailureProvesNothingSent } from '../../modules/message/idempotency/send-idempotency.interceptor';
+import { countsTowardSendBreaker, sentNothing } from '../../modules/message/send-pacing.service';
 import { toNeutralJid } from '../identity/wa-id';
 
 const operations: Array<[string, (contacts: BaileysContacts) => Promise<unknown>]> = [
@@ -279,6 +286,8 @@ describe.each(['stored', 'persisted', 'library', 'recipient'] as const)(
           return {
             key: { id: 'M1', remoteJid: '111@lid', fromMe: true },
             message: {
+              // A text as well as the buttons, so an edit has something it may change.
+              conversation: 'Choose',
               buttonsMessage: {
                 contentText: 'Choose',
                 buttons: [{ buttonId: 'yes', buttonText: { displayText: 'Yes' } }],
@@ -317,3 +326,83 @@ describe.each(['stored', 'persisted', 'library', 'recipient'] as const)(
     });
   },
 );
+
+/** The ways the phone/LID identity query fails to answer, as Baileys rejects for each. */
+const failedIdentityQueries: Array<[string, () => Promise<never>, typeof EngineTransportError]> = [
+  ['WhatsApp rate-limits it', () => Promise.reject(new Boom('rate-overlimit', { data: 429 })), EngineThrottledError],
+  // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Baileys rejects with the bare close code
+  ['the WebSocket closes under it', () => Promise.reject(1006), EngineNotSentError],
+  [
+    'the socket was closed before it was written',
+    () => Promise.reject(new Boom('Connection Closed', { statusCode: 428 })),
+    EngineNotSentError,
+  ],
+  ['WhatsApp leaves it unanswered', () => new Promise<never>(() => undefined), EngineNotSentError],
+];
+
+describe.each(failedIdentityQueries)('An identity check that fails because %s', (_cause, query, expected) => {
+  it.each(messageActions)('fails %s as a request that sent nothing', async (_name, act) => {
+    const socket = { executeUSyncQuery: jest.fn(query), sendMessage: jest.fn(), chatModify: jest.fn() };
+    const host = {
+      ensureReady: () => undefined,
+      getSocket: () => socket,
+      getSocketOrNull: () => socket,
+      getStoredMessage: () =>
+        Promise.resolve({
+          key: { id: 'M1', remoteJid: '111@lid', fromMe: true },
+          message: { conversation: 'mine' },
+          messageTimestamp: 1,
+        }),
+      wasDeletedForEveryone: () => false,
+      pendingEditOf: () => undefined,
+      findPersistedLidPhone: () => Promise.resolve(null),
+      loadLib: () => Promise.resolve({ USyncQuery: Query, USyncUser: User }),
+      toEngineJid: (jid: string) => jid,
+      recordLidMapping: jest.fn(),
+      logger: createLogger('IdentityQueryFailure'),
+    } as unknown as BaileysMessagingHost;
+
+    const error: unknown = await act(new BaileysMessaging(host, 20)).then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
+
+    expect(error).toBeInstanceOf(expected);
+    // The send service marks every engine failure before the idempotency interceptor sees it.
+    expect(sendFailureProvesNothingSent(markEngineSendFailure(error))).toBe(true);
+    expect(sentNothing(error)).toBe(true);
+    // Only WhatsApp refusing this account's traffic says something about the account.
+    expect(countsTowardSendBreaker(error)).toBe(expected === EngineThrottledError);
+    expect(socket.sendMessage).not.toHaveBeenCalled();
+    expect(socket.chatModify).not.toHaveBeenCalled();
+  });
+
+  it.each(operations)('answers %s with a retryable 503, not a bare 500', async (_name, act) => {
+    const key = { remoteJid: '111@lid', id: 'M1', fromMe: false };
+    const socket = {
+      executeUSyncQuery: jest.fn(query),
+      chatModify: jest.fn(),
+      readMessages: jest.fn(),
+      fetchBlocklist: jest.fn().mockResolvedValue([]),
+    };
+    const host = {
+      ensureReady: () => undefined,
+      getSocket: () => socket as unknown as WASocket,
+      loadLib: () => Promise.resolve({ USyncQuery: Query, USyncUser: User }),
+      logger: createLogger('IdentityQueryFailure'),
+      findPersistedLidPhone: () => Promise.resolve(null),
+      recordLidMapping: jest.fn(),
+      chatJid: () => '111@lid',
+      toNeutralJid,
+      toEngineJid: (jid: string) => jid,
+      lastMessage: () => ({ key, jid: '111@lid', timestamp: 1 }),
+      lastInboundMessage: () => ({ key, timestamp: 1 }),
+      chatDeletedAt: () => null,
+      findContact: () => ({ id: '111@lid', number: '628111', isWAContact: true }),
+    } as unknown as BaileysContactsHost;
+
+    await expect(act(new BaileysContacts(host, 20))).rejects.toBeInstanceOf(EngineTransportError);
+    expect(socket.chatModify).not.toHaveBeenCalled();
+    expect(socket.readMessages).not.toHaveBeenCalled();
+  });
+});

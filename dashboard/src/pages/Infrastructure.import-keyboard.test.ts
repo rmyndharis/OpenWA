@@ -180,7 +180,8 @@ test('keyboard focus stays on Import data after a backup file is imported', asyn
   rtl.fireEvent.change(chooser, { target: { files: [file] } });
   await rtl.waitFor(() => assert.equal(chooser.disabled, true));
   await rtl.waitFor(() => assert.equal(chooser.disabled, false));
-  assert.equal(focusedLabel(), 'Import data');
+  // The page restores focus in an effect after the commit that re-enables the chooser.
+  await rtl.waitFor(() => assert.equal(focusedLabel(), 'Import data'));
 });
 
 test('keyboard focus returns to Import data when the import confirmation is declined', async () => {
@@ -204,7 +205,8 @@ test('keyboard focus returns to Import data when the import confirmation is decl
   });
   rtl.fireEvent.change(chooser, { target: { files: [file] } });
   await rtl.waitFor(() => assert.equal(chooser.disabled, false));
-  assert.equal(focusedLabel(), 'Import data');
+  // The page restores focus in an effect after the commit that re-enables the chooser.
+  await rtl.waitFor(() => assert.equal(focusedLabel(), 'Import data'));
 });
 
 test('keyboard focus stays on Export data after a backup is exported', async () => {
@@ -225,9 +227,12 @@ test('keyboard focus stays on Export data after a backup is exported', async () 
   rtl.fireEvent.click(exportBtn);
   await rtl.waitFor(() => assert.equal(exportBtn.disabled, true));
   await rtl.waitFor(() => assert.equal(exportBtn.disabled, false));
-  assert.equal(
-    document.activeElement === document.body ? 'body' : document.activeElement?.textContent?.trim(),
-    'Export data',
+  // The page restores focus in an effect after the commit that re-enables the button.
+  await rtl.waitFor(() =>
+    assert.equal(
+      document.activeElement === document.body ? 'body' : document.activeElement?.textContent?.trim(),
+      'Export data',
+    ),
   );
 });
 

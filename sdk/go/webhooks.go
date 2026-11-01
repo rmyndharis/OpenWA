@@ -11,10 +11,13 @@ func (s *WebhooksService) base(sessionID string) string {
 }
 
 // ListAll returns webhooks across EVERY session the key can see, not one session's. Requires an
-// OPERATOR-level key.
+// OPERATOR-level key. The route pages with Limit and Offset only: query.SessionID is not sent, so use
+// List for one session's webhooks.
 func (s *WebhooksService) ListAll(ctx context.Context, query *DeliveryFailureQuery) ([]WebhookResponse, error) {
 	var out []WebhookResponse
-	err := s.client.do(ctx, "GET", "/api/webhooks", query.values(), nil, &out)
+	values := query.values()
+	values.Del("sessionId")
+	err := s.client.do(ctx, "GET", "/api/webhooks", values, nil, &out)
 	return out, err
 }
 

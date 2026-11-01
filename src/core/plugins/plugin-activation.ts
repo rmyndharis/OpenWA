@@ -22,7 +22,8 @@ export function isPluginActiveForSession(
   activeSessions: string[],
   sessionId: string | undefined,
 ): boolean {
-  if (!sessionScoped) return true;
+  // Only an explicit false: the API and dashboard show any other manifest value as session-scoped.
+  if (sessionScoped === false) return true;
   if (sessionId === undefined) return true;
   if (activeSessions.includes('*')) return true;
   return activeSessions.includes(sessionId);

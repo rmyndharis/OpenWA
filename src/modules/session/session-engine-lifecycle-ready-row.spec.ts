@@ -20,14 +20,20 @@ describe('readyRowUpdate', () => {
     });
   });
 
-  it('omits phone on an empty-phone ready, keeping the bound number', () => {
-    const update = readyRowUpdate('', 'Alice', at);
-    expect(update).not.toHaveProperty('phone');
-    expect(update).toMatchObject({
+  it('writes only the liveness fields on an empty-phone ready, keeping the bound number and its push name', () => {
+    expect(readyRowUpdate('', 'Alice', at)).toEqual({
       status: SessionStatus.READY,
-      pushName: 'Alice',
       connectedAt: at,
       lastActiveAt: at,
     });
+  });
+
+  // whatsapp-web.js reports both empty when client.info cannot be read at ready.
+  it('keeps the stored push name when the ready could read neither the phone nor the name', () => {
+    expect(readyRowUpdate('', '', at)).not.toHaveProperty('pushName');
+  });
+
+  it('writes an empty push name the account reports along with its phone', () => {
+    expect(readyRowUpdate('628111', '', at)).toMatchObject({ phone: '628111', pushName: '' });
   });
 });

@@ -602,6 +602,7 @@
     "session": "工作階段",
     "events": "事件",
     "noEvents": "請至少選擇一個事件。",
+    "urlInvalid": "請輸入以 http:// 或 https:// 開頭的完整地址，例如 https://example.com/webhook。",
     "available": "可用事件",
     "saveChanges": "儲存變更",
     "filters": {

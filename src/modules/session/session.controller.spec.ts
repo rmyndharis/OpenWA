@@ -10,6 +10,7 @@ import type { ChatSummary } from '../../engine/interfaces/whatsapp-engine.interf
 import { ApiKeyRole, type ApiKey } from '../auth/entities/api-key.entity';
 import { REQUIRED_ROLE_KEY, UNSCOPED_KEY } from '../auth/decorators/auth.decorators';
 import { BadGatewayException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { ENGINE_NOT_READY_409, SESSION_NOT_STARTED_400 } from '../../common/openapi/engine-status-responses';
 
 // POST /sessions declared a SessionResponseDto in its Swagger metadata but returned the raw
 // TypeORM entity, leaking internal columns (config, proxyUrl, proxyType) and the entity-only
@@ -366,6 +367,31 @@ describe('SessionController — muteChat', () => {
     await controller.muteChat('sess-uuid-1', { chatId: '628123@c.us', muteUntil: null });
 
     expect(sessionService.muteChat).toHaveBeenCalledWith('sess-uuid-1', '628123@c.us', null);
+  });
+});
+
+// A session with no engine answers 400 "Session is not started"; a started one that is not ready answers the 409
+// these routes also list. A 400 described as "not ready" sends a client waiting for a session nobody started.
+describe('SessionController chat routes document the 400 of a session that is not started', () => {
+  const declared = (handler: keyof SessionController): Record<string, { description?: string }> =>
+    (Reflect.getMetadata(
+      'swagger/apiResponse',
+      Object.getOwnPropertyDescriptor(SessionControllerClass.prototype, handler)?.value as object,
+    ) ?? {}) as Record<string, { description?: string }>;
+
+  it.each([
+    'getGroups',
+    'getChats',
+    'markChatRead',
+    'markChatUnread',
+    'clearChatMessages',
+    'archiveChat',
+    'muteChat',
+    'pinChat',
+    'deleteChat',
+  ] as const)('%s', handler => {
+    expect(declared(handler)['400']?.description).toContain(SESSION_NOT_STARTED_400);
+    expect(declared(handler)['409']?.description).toBe(ENGINE_NOT_READY_409);
   });
 });
 

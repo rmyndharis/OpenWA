@@ -602,6 +602,7 @@
     "session": "会话",
     "events": "事件",
     "noEvents": "请至少选择一个事件。",
+    "urlInvalid": "请输入以 http:// 或 https:// 开头的完整地址，例如 https://example.com/webhook。",
     "available": "可用事件",
     "saveChanges": "保存更改",
     "filters": {

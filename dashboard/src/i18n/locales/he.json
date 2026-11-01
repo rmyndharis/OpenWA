@@ -613,6 +613,7 @@
     "session": "Session",
     "events": "אירועים",
     "noEvents": "בחרו לפחות אירוע אחד.",
+    "urlInvalid": "יש להזין כתובת מלאה שמתחילה ב-http:// או ב-https://, למשל https://example.com/webhook.",
     "available": "אירועים זמינים",
     "saveChanges": "שמירת שינויים",
     "filters": {
@@ -835,14 +836,14 @@
     },
     "confirm": {
       "deleteTitle": "מחיקת מפתח API",
-      "revokeTitle": "ביטול מפתח API",
+      "revokeTitle": "שלילת מפתח API",
       "deleteMessage": "האם למחוק לצמיתות את <strong>{{name}}</strong>? לא ניתן לשחזר פעולה זו.",
-      "revokeMessage": "האם לבטל את <strong>{{name}}</strong>? המפתח יפסיק לפעול.",
+      "revokeMessage": "האם לשלול את <strong>{{name}}</strong>? המפתח יפסיק לפעול.",
       "delete": "מחיקה",
-      "revoke": "ביטול"
+      "revoke": "שלילה"
     },
     "actions": {
-      "revoke": "ביטול",
+      "revoke": "שלילה",
       "delete": "מחיקה",
       "edit": "עריכת גישה"
     },

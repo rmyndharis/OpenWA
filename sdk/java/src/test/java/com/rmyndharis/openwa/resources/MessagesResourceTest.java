@@ -254,6 +254,20 @@ class MessagesResourceTest {
     }
 
     @Test
+    void locationBuilderRefusesAnUnsetCoordinateButKeepsZero() {
+        // 0.0 is a real place, so a coordinate left unset must not become a pin there.
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> SendLocationRequest.builder().chatId("628@c.us").longitude(98.7).build());
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> SendLocationRequest.builder().chatId("628@c.us").latitude(12.5).build());
+        SendLocationRequest origin = SendLocationRequest.builder().chatId("628@c.us").latitude(0).longitude(0).build();
+        assertEquals(0.0, origin.latitude());
+        assertEquals(0.0, origin.longitude());
+    }
+
+    @Test
     void sendContactHitsSendContactPath() {
         tx.respond(200, MSG);
         client.messages.sendContact(

@@ -192,9 +192,13 @@ class OpenWAClient:
         *,
         query: Mapping[str, Any] | None = None,
         body: Any = None,
+        idempotency_key: str | None = None,
     ) -> Any:
-        """Issue a raw request against the API (advanced use). ``path`` begins with ``/``."""
-        return self._http.request(method, path, query=query, body=body)
+        """Issue a raw request against the API (advanced use). ``path`` begins with ``/``.
+
+        ``idempotency_key`` is sent as ``Idempotency-Key``, which the gateway honors on its keyed send routes.
+        """
+        return self._http.request(method, path, query=query, body=body, idempotency_key=idempotency_key)
 
     # ── Lifecycle ────────────────────────────────────────────────────
 

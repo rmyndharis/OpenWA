@@ -1445,6 +1445,31 @@ test('an open session deleted with no status frame gives way once the page is sh
   assert.equal(container.querySelector('.room-header') === null, true, "the deleted session's chat stayed open");
 });
 
+test('an open session deleted with its group dialog up asks the next session nothing about that group', async () => {
+  const { screen, waitFor, act } = rtl;
+  listSecond = true;
+  listGroup = true;
+  const { container } = renderPage();
+  await openGroupInfo();
+  const before = fetchCalls.length;
+
+  mainDeleted = true;
+  act(() => void document.dispatchEvent(new window.Event('visibilitychange')));
+  await waitFor(() => assert.equal(selectedSessionName(container), SECOND_SESSION.name));
+  await settle();
+  assert.equal(screen.queryByRole('dialog') === null, true, "the deleted session's group dialog stayed open");
+  const group = encodeURIComponent(GROUP.id);
+  const asked = fetchCalls
+    .slice(before)
+    .map(c => c.path)
+    .filter(
+      path =>
+        path.startsWith(`/api/sessions/${SECOND_SESSION.id}/`) &&
+        (path.includes(`/groups/${group}`) || path.includes(`/contacts/${group}/`)),
+    );
+  assert.deepEqual(asked, [], 'the next session was asked about the group the dialog had open');
+});
+
 test('the session list read at load does not undo a newer list a status frame read before it answered', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   listOffline = true;

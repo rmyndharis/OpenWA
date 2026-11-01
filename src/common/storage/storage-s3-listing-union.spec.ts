@@ -83,6 +83,18 @@ describe('listing an S3 store unioned with its local fallback dir', () => {
     expect([...listed].sort()).toEqual([...bucketKeys, localOnly].sort());
   });
 
+  it('counts the bucket with the fallback dir without keeping the bucket keys it counts', async () => {
+    // Calls through: the Sets keep working, the spy only records what goes into them.
+    const added = jest.spyOn(Set.prototype, 'add');
+
+    // The shared key counts once, at its S3 size (none listed here); the local-only one at its own, 1 byte.
+    expect(await storage.getFileCount()).toEqual({ count: bucketKeys.length + 1, sizeBytes: 1 });
+    const remembered = added.mock.calls.map(([value]) => value as unknown);
+    expect(
+      remembered.filter(value => typeof value === 'string' && bucketKeys.includes(value) && value !== shared),
+    ).toEqual([]);
+  });
+
   it('does not keep the bucket keys it streams past', async () => {
     // Calls through: the Sets keep working, the spy only records what goes into them.
     const added = jest.spyOn(Set.prototype, 'add');

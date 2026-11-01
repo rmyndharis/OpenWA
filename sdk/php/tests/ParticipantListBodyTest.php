@@ -60,4 +60,35 @@ class ParticipantListBodyTest extends TestCase
         $this->assertSame($path, $backend->lastCall()['path']);
         $this->assertSame('{"participants":["a@c.us","b@c.us"]}', $backend->rawBody(0));
     }
+
+    public function testGroupCreateSendsADeduplicatedListAsAJsonArray(): void
+    {
+        $backend = new MockBackend();
+        $backend->on(201, ['id' => 'g@g.us']);
+        $client = $backend->makeClient();
+
+        $client->groups->create('s', ['name' => 'g', 'participants' => array_unique(['a@c.us', 'a@c.us', 'b@c.us'])]);
+
+        $this->assertSame('{"name":"g","participants":["a@c.us","b@c.us"]}', $backend->rawBody(0));
+    }
+
+    public function testSendBulkSendsAFilteredMessageListAsAJsonArray(): void
+    {
+        $backend = new MockBackend();
+        $backend->on(202, ['batchId' => 'b']);
+        $client = $backend->makeClient();
+
+        $items = [
+            ['chatId' => 'a@c.us', 'type' => 'text', 'content' => ['text' => 'x']],
+            null,
+            ['chatId' => 'b@c.us', 'type' => 'text', 'content' => ['text' => 'y']],
+        ];
+        $client->messages->sendBulk('s', ['messages' => array_filter($items)]);
+
+        $this->assertSame(
+            '{"messages":[{"chatId":"a@c.us","type":"text","content":{"text":"x"}},'
+            . '{"chatId":"b@c.us","type":"text","content":{"text":"y"}}]}',
+            $backend->rawBody(0)
+        );
+    }
 }

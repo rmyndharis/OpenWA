@@ -238,9 +238,10 @@ class HttpExecutor
             throw new \InvalidArgumentException('OpenWA: path must begin with "/": ' . $path);
         }
         $rawPath = explode('#', explode('?', $path, 2)[0], 2)[0];
-        foreach (explode('/', str_replace('\\', '/', $rawPath)) as $seg) {
-            $decoded = rawurldecode($seg);
-            if ($decoded === '.' || $decoded === '..') {
+        // Decoded before it is split: a proxy that decodes %2F before it resolves dot segments reads an id sent as
+        // "..%2Fx" as "../x" and sends the call to another route.
+        foreach (explode('/', str_replace('\\', '/', rawurldecode($rawPath))) as $seg) {
+            if ($seg === '.' || $seg === '..') {
                 throw new \InvalidArgumentException('OpenWA: path must not contain a dot path segment: ' . $path);
             }
         }

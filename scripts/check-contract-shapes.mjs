@@ -26,11 +26,12 @@
  * through a record, which is why it alone runs with compareOptionality=false.
  *
  * What one comparison covers, per mapped pair: field-name sets in both directions, required vs
- * optional (hand `?` vs the schema's `required` array), and — for fields whose both sides reduce
- * to a simple token (primitive, enum literal set, array of those, null union; on the hand side, any
- * union too) — the token itself,
+ * optional (hand `?` vs the schema's `required` array), and, for fields whose contract side reduces
+ * to a simple token (primitive, enum literal set, array of those, null union), the hand token itself,
  * which is what catches `string` widened to `string | number` or a re-ordered enum growing a
- * member. Complex/nested fields are compared by presence and optionality only; that limit is
+ * member. A hand type no parser reduces to a token (an alias that is not exported, a TypeScript
+ * enum, a Go type outside the known kinds) fails such a field instead of leaving it uncompared.
+ * Complex/nested fields are compared by presence and optionality only; that limit is
  * deliberate (the hand parser stays regular), and the exclusions below record what is known to be
  * unpinned. Every mapping entry must resolve on BOTH sides — a renamed hand type or schema fails
  * loudly instead of being skipped (the vacuous-pass failure mode), and the run refuses to gate
@@ -58,6 +59,8 @@
  * (request bodies and 2xx responses, nested schemas included, the resources sdk/README.md declares
  * unexposed left out) must be compared by at least one of the JavaScript, Python, Go and Java
  * clients, or be recorded in UNMAPPED_SCHEMAS with a reason. The dashboard does not count towards it.
+ * An operation that declares its body inline has no schema name for a client to map, so it is
+ * recorded in INLINE_BODIES instead, and a new one fails the run.
  */
 
 import { readFileSync, readdirSync, realpathSync } from 'node:fs';
@@ -224,14 +227,15 @@ const MAPPINGS = {
  * Floor on the mapping SIZE per client. The per-file compared-pairs guard above cannot see a
  * rewrite that silently DROPS entries (protection shrinks while everything stays green: a rewrite
  * once lost four conforming pairs and the run still passed). Raising these floors as pairs are
- * added makes the shrink loud.
+ * added makes the shrink loud. Each must EQUAL its mapping's size, and the run fails when it does
+ * not: a floor left below its mapping let that many pairs be dropped with nothing failing.
  */
 const MINIMUM_MAPPED = {
   'sdk/javascript/src/types.ts': 121,
   'dashboard/src/services/api.ts': 22,
   'sdk/python/openwa/types.py': 132,
-  'sdk/go': 132,
-  'sdk/java': 136,
+  'sdk/go': 133,
+  'sdk/java': 138,
 };
 
 /** Known drift, deliberately not gated yet — each line is a to-adjudicate follow-up. */
@@ -313,6 +317,19 @@ const UNMAPPED_SCHEMAS = {
   SessionGroupSummaryDto:
     'GET /groups is read as GroupSummary, the shape the create route answers, which also carries a participantsCount and an isAdmin that a listing never sends',
   StatusDeletedResponseDto: 'every client discards the {message} body of DELETE status and returns nothing',
+};
+
+/**
+ * Exposed operations that send or return an object declared inline (an `@ApiBody({ schema })`) rather
+ * than through a named schema. No hand type can be mapped to it, so renaming one of its fields
+ * changes the contract with no comparison to notice. Each is recorded with its reason; a new one
+ * fails the run, and so does an entry whose operation names its schema now. Naming the DTO in the
+ * controller gates it.
+ */
+const INLINE_BODIES = {
+  'POST /api/sessions/{sessionId}/labels/chat/{chatId}': 'the body {labelId} is declared inline in label.controller.ts',
+  'POST /api/sessions/{sessionId}/channels/subscribe':
+    'the body {inviteCode} is declared inline in channel.controller.ts',
 };
 
 // UpdateWebhookRequest is mapped on the three clients that declare it as a named type. The
@@ -560,6 +577,7 @@ const GO_MAPPING = {
   ContactRecord: 'ContactDto',
   ConvertMediaInput: 'ConvertMediaDto',
   ConvertedMedia: 'ConvertedMediaResponseDto',
+  CustomLinkPreview: 'CustomLinkPreviewDto',
   GroupPictureResponse: 'GroupPictureResponseDto',
   GroupSettings: ['GroupSettingsResponseDto', 'GroupSettingsDto'],
   HealthResponse: 'HealthCheckResponseDto',
@@ -701,6 +719,7 @@ const JAVA_MAPPING = {
   ContactRecord: 'ContactDto',
   ConvertMediaRequest: 'ConvertMediaDto',
   ConvertedMedia: 'ConvertedMediaResponseDto',
+  CustomLinkPreview: 'CustomLinkPreviewDto',
   GroupPictureResponse: 'GroupPictureResponseDto',
   GroupSettings: ['GroupSettingsResponseDto', 'GroupSettingsDto'],
   HealthResponse: 'HealthCheckResponseDto',
@@ -796,6 +815,11 @@ function parseMembers(body) {
           depth = countUnbalanced(m[3]);
           buffer = m[3];
         }
+        continue;
+      }
+      // A union too long for one line, as prettier wraps it: each `| member` line continues the field above.
+      if (field && cleaned.startsWith('|')) {
+        members[field].token = `${members[field].token} ${cleaned}`.trim();
         continue;
       }
     }
@@ -970,7 +994,7 @@ export function parseObjectToken(token) {
   return members;
 }
 
-/** Fields whose both sides reduce to a primitive/enum/array/null-union get token-level diffing.
+/** Fields whose contract side reduces to a primitive/enum/array/null-union get token-level diffing.
  *  `array<enum(...)>` counts: an array of enum members is exactly as comparable as a bare one, and
  *  leaving it out silently ungated every vocabulary that travels as a list, the webhook event set
  *  above all, on every client at once. So does a null arm after an enum or an array: a nullable
@@ -1063,9 +1087,15 @@ export function comparePair(
         }
       }
       const absorbs = handInfo.absorbsNull && contract === `${hand}|null`;
-      // A union never equals a simple contract token, so it is drift, not a shape too complex to read.
-      if (hand !== contract && !absorbs && (isSimpleToken(hand) || hand.startsWith('union('))) {
-        diffs.push(`"${field}": hand ${hand}, contract ${contract}`);
+      // Any other hand token is drift. One no parser could reduce (an alias that is not exported, an enum, a
+      // type outside the known kinds) fails too: skipping it left the field uncompared while the run passed.
+      if (hand !== contract && !absorbs) {
+        const read = isSimpleToken(hand) || /^(?:union\(|object\(|array<|dict$|object$)/.test(hand);
+        diffs.push(
+          read
+            ? `"${field}": hand ${hand}, contract ${contract}`
+            : `"${field}": hand type could not be read (${hand || 'empty'}), contract ${contract}`,
+        );
       }
     }
   }
@@ -1285,7 +1315,16 @@ export function parseGoTypes(sources) {
   const structs = {};
   const scalarAliases = {};
   const constGroups = {};
-  const kindMap = { string: 'string', int: 'number', int64: 'number', float64: 'number', bool: 'boolean', any: 'any' };
+  // A time.Time marshals to an RFC 3339 string.
+  const kindMap = {
+    string: 'string',
+    int: 'number',
+    int64: 'number',
+    float64: 'number',
+    bool: 'boolean',
+    any: 'any',
+    'time.Time': 'string',
+  };
 
   for (const source of sources) {
     for (const [, name, underlying] of source.matchAll(/^type (\w+) (string|int|int64|float64|bool|any)$/gm)) {
@@ -1536,6 +1575,27 @@ export function exposedSchemas(openapi, unexposed) {
   return seen;
 }
 
+/** The exposed operations whose request body or 2xx response holds an object no schema name stands for. */
+export function inlineBodies(openapi, unexposed) {
+  const inline = node =>
+    Boolean(node) &&
+    typeof node === 'object' &&
+    !node.$ref &&
+    (Boolean(node.properties) || Object.values(node).some(inline));
+  const found = [];
+  for (const [path, item] of Object.entries(openapi.paths)) {
+    if (isUnexposedPath(path, unexposed)) continue;
+    for (const [verb, operation] of Object.entries(item)) {
+      if (!operation || typeof operation !== 'object') continue;
+      const success = Object.entries(operation.responses ?? {}).filter(([status]) => status.startsWith('2'));
+      if (inline(operation.requestBody) || success.some(([, response]) => inline(response))) {
+        found.push(`${verb.toUpperCase()} ${path}`);
+      }
+    }
+  }
+  return found;
+}
+
 /**
  * What stands between the exposed schemas and a green run: a schema no client compares and
  * UNMAPPED_SCHEMAS does not record, and a record that no longer describes anything.
@@ -1677,6 +1737,12 @@ if (isDirectRun) {
         `  only ${Object.keys(client.mapping).length} mapped pairs for ${client.label} (floor ${client.floor}) — entries were dropped`,
       );
       failures++;
+    } else if (Object.keys(client.mapping).length > client.floor) {
+      const mapped = Object.keys(client.mapping).length;
+      fileResults.push(
+        `  ${mapped} mapped pairs for ${client.label}, above its floor of ${client.floor}: raise the floor`,
+      );
+      failures++;
     }
     if (fileCompared < 8) {
       fileResults.push(`  only ${fileCompared} pairs compared for ${client.label} — vacuous-pass guard`);
@@ -1691,7 +1757,8 @@ if (isDirectRun) {
     }
   }
 
-  const exposed = exposedSchemas(openapi, unexposedResources(readFileSync(`${REPO_ROOT}sdk/README.md`, 'utf8')));
+  const unexposed = unexposedResources(readFileSync(`${REPO_ROOT}sdk/README.md`, 'utf8'));
+  const exposed = exposedSchemas(openapi, unexposed);
   const comparedSchemas = new Set(
     CLIENTS.filter(c => c.sdk)
       .flatMap(c => Object.entries(c.mapping).filter(([handName]) => !c.excluded[handName]))
@@ -1703,6 +1770,24 @@ if (isDirectRun) {
   );
   for (const line of uncovered) console.log(`  ${line}`);
   failures += uncovered.length;
+
+  const inline = inlineBodies(openapi, unexposed);
+  const inlineProblems = [
+    ...inline
+      .filter(operation => !(operation in INLINE_BODIES))
+      .map(
+        operation =>
+          `${operation} declares an inline object no client can map: name its DTO in the controller, or record it in INLINE_BODIES with a reason`,
+      ),
+    ...Object.keys(INLINE_BODIES)
+      .filter(operation => !inline.includes(operation))
+      .map(operation => `INLINE_BODIES lists ${operation}, which no longer declares an inline object: remove it`),
+  ];
+  console.log(
+    `inline bodies: ${inline.length} declared, ${Object.keys(INLINE_BODIES).length} recorded in INLINE_BODIES, ${inlineProblems.length ? 'FAILURES' : 'all recorded'}`,
+  );
+  for (const line of inlineProblems) console.log(`  ${line}`);
+  failures += inlineProblems.length;
 
   console.log(
     failures

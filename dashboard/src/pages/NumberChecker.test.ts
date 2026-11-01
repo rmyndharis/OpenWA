@@ -146,6 +146,18 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
+// A read that never produced a list says nothing about the sessions: during a gateway restart the page told an operator
+// with a ready session to go and link one.
+test('NumberChecker: a failed sessions read is reported, not shown as "no session connected"', async () => {
+  globalThis.fetch = (() => Promise.resolve(jsonResponse({ message: 'gateway restarting' }, 502))) as typeof fetch;
+  renderComponent();
+
+  const alert = await rtl.screen.findByRole('alert');
+  rtl.within(alert).getByText(/Failed to load data/);
+  rtl.within(alert).getByText(/gateway restarting/);
+  assert.equal(rtl.screen.queryByText('No active WhatsApp session connected.') === null, true);
+});
+
 test('NumberChecker: renders single check form and tabs', () => {
   const { getByText, getByPlaceholderText } = renderComponent();
   assert.ok(getByText('Check Single Account'));

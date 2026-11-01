@@ -250,6 +250,24 @@ describe('WebhookProcessor', () => {
     );
   });
 
+  // The outbox copy is closed after this record, so a row recorded while retention was off has to take the copy now.
+  it('hands the replay copy to a terminal row of the same delivery recorded without one', async () => {
+    configService.get.mockImplementation((key: string, def?: unknown) =>
+      key === 'webhook.failurePayloadRetentionHours' ? 24 : def,
+    );
+    mockFetch.mockResolvedValue({ ok: false, status: 503, statusText: 'Service Unavailable' });
+    failureRows.push({ webhookId: 'wh-1', idempotencyKey: 'k', attempts: 3 });
+
+    await expect(processor.process(makeJob({ maxRetries: 3, replayData: { body: 'hi' } }, 2))).rejects.toThrow();
+
+    expect(failureRepo.insert).not.toHaveBeenCalled();
+    expect(failureRepo.update).toHaveBeenCalledWith(
+      expect.objectContaining({ webhookId: 'wh-1', idempotencyKey: 'k' }),
+      { payload: { body: 'hi' } },
+    );
+    expect(outbox.close).toHaveBeenCalled();
+  });
+
   it.each(['terminal', 'stalled'])('drops an old queued replay copy after retention is disabled (%s)', async mode => {
     const job = makeJob({ replayData: { body: 'private' } }, 2);
     mockFetch.mockResolvedValue({ ok: false, status: 503, statusText: 'Unavailable' });

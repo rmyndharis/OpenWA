@@ -118,6 +118,9 @@ for (const [key, name] of [
 ] as const) {
   process.env[key] = join(tmpdir(), `openwa-e2e-${name}-${e2eRunId}`);
 }
+// The export directory has no knob: each boot sweeps the checkout's ./data/exports and deletes the
+// archives older than this, a day-old one the developer kept to export, restart and import included.
+process.env.STORAGE_EXPORT_SWEEP_MAX_AGE_MS = String(Number.MAX_SAFE_INTEGER);
 process.env.DATABASE_TYPE = 'sqlite';
 // Isolate the e2e data DB to a throwaway temp file so suites never pollute the developer's
 // ./data/openwa.sqlite. e2e creates sessions/webhooks and doesn't self-clean, so without this they

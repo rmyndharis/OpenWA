@@ -1,6 +1,6 @@
 # rmyndharis/openwa
 
-This document describes `main`. `contacts->lid` is an unreleased addition after SDK 0.8.0 and requires the corresponding server change after OpenWA 0.27.0. `groups->setMemberLabel` and the `match` search key require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
+This document describes `main`. `contacts->lid` is an unreleased addition after SDK 0.8.0 and requires OpenWA 0.27.1 or later. `groups->setMemberLabel` and the `match` search key require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
 
 Official PHP SDK for [OpenWA](https://github.com/rmyndharis/OpenWA), the open-source WhatsApp API Gateway. OpenWA is an independent project, not affiliated with or endorsed by WhatsApp or Meta.
 
@@ -67,8 +67,12 @@ A non-2xx response throws a typed `OpenWA\Exceptions\OpenWAApiException` subclas
 `OpenWAAuthException` (401), `OpenWAForbiddenException` (403), `OpenWANotFoundException` (404),
 `OpenWAConflictException` (409), `OpenWARateLimitException` (429), `OpenWANotImplementedException`
 (501), `OpenWAServiceUnavailableException` (503) — each exposing `getStatus()` and the parsed
-`getBody()`. A timeout throws `OpenWATimeoutException`. 503 means the gateway could not complete the
-request right now: the path to WhatsApp failed, the gateway is draining or short of a dependency,
+`getBody()`. A timeout throws `OpenWATimeoutException`, though the gateway may still complete the
+request: retry a send only with the same `Idempotency-Key`. Both extend `OpenWAException`, which
+covers API responses and timeouts only: a transport failure (a refused or reset connection, a DNS
+failure, a cut body) is a `GuzzleHttp\Exception\TransferException`, and an invalid argument (an empty
+or dot id, a bad raw path or idempotency key) an `\InvalidArgumentException`. 503 means the gateway
+could not complete the request right now: the path to WhatsApp failed, the gateway is draining or short of a dependency,
 or, on Baileys, WhatsApp throttled (code 429) or timed out (code 408) the request. Back off and
 retry later instead of at once, because repeating a throttled request straight away prolongs the
 throttle; a catalog 503 can persist because WhatsApp may never answer that query, so bound any
@@ -140,17 +144,27 @@ $delivery = json_decode($raw, true);
 // Process $delivery['event'] and $delivery['data'] here.
 ```
 
+The signature covers the body only and carries no timestamp, so a captured delivery still verifies
+when it is sent again. Dedupe on `$delivery['idempotencyKey']` (also the `X-OpenWA-Idempotency-Key`
+header): the gateway's own retries and an operator's redrive of a failed delivery reuse it, so a key
+you have already handled is the same event arriving again.
+
 ## Notes
 
 - **Use HTTPS in production** — the API key is sent as `X-API-Key` and is bearer-equivalent.
   Over plaintext `http://` to a non-localhost host the client writes a warning with `error_log()`;
   pass `'allowInsecureHttp' => true` to skip it (for example on a private Docker network).
+- A list you build into a body (`mentions`, poll `options`, status `recipients`) must be a PHP list:
+  `json_encode` writes an array whose keys have gaps, as `array_unique` and `array_filter` leave them,
+  as an object, which the gateway answers with `400`. Pass it through `array_values()`; the SDK does
+  that itself for participant lists and the bulk `messages` list.
 - The SDK does **not** retry, and **never follows redirects** (so the key is never re-sent to
   a redirect target). Path segments are percent-encoded; a base-URL path prefix (e.g. behind a
   reverse proxy) is preserved.
 - Escape hatch for endpoints the SDK does not wrap:
-  `$client->request($method, $path, $query, $body)`. A path with a `.` or `..` segment, or one that does not
-  begin with `/`, throws `InvalidArgumentException` before anything is sent.
+  `$client->request($method, $path, $query, $body)`. A path with a `.` or `..` segment (also after an encoded
+  slash, as in `..%2F`), or one that does not begin with `/`, throws `InvalidArgumentException` before anything
+  is sent. An id with a `.` or `..` part between slashes, such as `../x`, is refused the same way.
 
 ## Releasing
 

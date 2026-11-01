@@ -1308,7 +1308,7 @@
             }
           },
           "503": {
-            "description": "The gateway is shutting down, or the engine's browser or socket connection died during launch and the one automatic retry failed too; no engine is left running, so the start can be retried.",
+            "description": "The gateway is shutting down, the session could not be claimed for this node (a database error; nothing was launched), or the engine's browser or socket connection died during launch and the one automatic retry failed too (no engine is left running); the start can be retried.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1837,7 +1837,7 @@
             }
           },
           "400": {
-            "description": "Session not ready",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2050,7 +2050,7 @@
             }
           },
           "400": {
-            "description": "Session not ready",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2152,7 +2152,7 @@
             }
           },
           "400": {
-            "description": "Session not ready",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2557,7 +2557,7 @@
             }
           },
           "400": {
-            "description": "Session not ready",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2659,7 +2659,7 @@
             }
           },
           "400": {
-            "description": "Session not ready",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2761,7 +2761,7 @@
             }
           },
           "400": {
-            "description": "Session not ready",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2863,7 +2863,7 @@
             }
           },
           "400": {
-            "description": "Session not ready, an invalid chatId / muteUntil, or a chatId the whatsapp-web.js engine cannot resolve. The Baileys engine writes the mute without resolving the chat first and answers `success: true` for a chat that does not exist.",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry. Also an invalid chatId / muteUntil, or a chatId the whatsapp-web.js engine cannot resolve. The Baileys engine answers `success: true` for a chat it has never seen, and `400` for a phone chatId held under a LID that neither the stored mapping nor a WhatsApp lookup pairs.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2965,7 +2965,7 @@
             }
           },
           "400": {
-            "description": "Session not ready, or a chatId the session cannot resolve. An unknown chat is reported here rather than as `success: false`, which on this route means only that the three-pin cap refused a real chat. The Baileys engine cannot resolve chats ahead of the write and answers `success: true` for an unknown chat.",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry. Also a chatId the session cannot resolve. An unknown chat is reported here rather than as `success: false`, which on this route means only that the three-pin cap refused a real chat. The Baileys engine answers `success: true` for a chat it has never seen, and `400` for a phone chatId held under a LID that neither the stored mapping nor a WhatsApp lookup pairs.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3068,7 +3068,7 @@
             }
           },
           "400": {
-            "description": "Session not ready",
+            "description": "The session is not started: no engine is running for it (never started, stopped, or logged out). Start the session and retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6169,7 +6169,7 @@
         },
         "responses": {
           "201": {
-            "description": "Message forwarded",
+            "description": "Message forwarded. `messageId` is the forwarded copy's id, or an empty string when the engine could not read it back.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7401,7 +7401,7 @@
         },
         "responses": {
           "200": {
-            "description": "Message edited",
+            "description": "Message edited. Both fields describe the edited message, not the edit: `messageId` is its id and `timestamp` the time it was originally sent.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7431,7 +7431,7 @@
             }
           },
           "403": {
-            "description": "The engine refused the edit. The Baileys adapter refuses a message the account did not send; whatsapp-web.js reads the refusal from the page, which also covers a message that is not text. Past its own guard the Baileys engine has no acceptance signal and answers 200. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "description": "The engine refused the edit. Both engines refuse a message the account did not send and one with no text or caption to edit (a location, sticker, poll, contact card or audio); whatsapp-web.js reads the refusal from the page. Past its own guards the Baileys engine has no acceptance signal and answers 200. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8432,6 +8432,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Not restarted. `code: RESTART_DATABASE_NOT_STARTED`: a request that starts the built-in PostgreSQL could not start its container, so the next start could not connect to it; nothing was stopped, and a configuration saved since this server started is put back to the one it runs (`message` says which and carries the error). `code: RESTART_ALREADY_RUNNING`: another restart request is still running, or the server is already restarting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Request server restart with Docker orchestration",
@@ -8881,7 +8891,7 @@
           },
           {
             "name": "ids",
-            "required": true,
+            "required": false,
             "in": "query",
             "description": "Comma-separated contact ids (max 50 used)",
             "schema": {
@@ -9450,7 +9460,7 @@
             }
           },
           "400": {
-            "description": "Session is not started",
+            "description": "Session is not started, or `number` is an id of another kind (a privacy id, a group or a channel) rather than a phone number",
             "content": {
               "application/json": {
                 "schema": {
@@ -20126,7 +20136,7 @@
           },
           "statusCode": {
             "type": "number",
-            "description": "The HTTP status the receiver answered, when it answered.",
+            "description": "The HTTP status the receiver answered, when it answered. A redirect (3xx) is not followed, unless WEBHOOK_SSRF_PROTECT=false and WEBHOOK_SSRF_REDIRECTS=true are both set, and is reported as an error with no status.",
             "example": 200
           },
           "error": {
@@ -20179,7 +20189,7 @@
           "lastStatusCode": {
             "type": "number",
             "nullable": true,
-            "description": "Last HTTP status when the failure was a non-2xx response; null for a network/timeout error.",
+            "description": "Last HTTP status when the failure was a non-2xx response; null for a network/timeout error, a blocked destination, or a redirect (a 3xx answer is not followed, unless WEBHOOK_SSRF_PROTECT=false and WEBHOOK_SSRF_REDIRECTS=true are both set, and is recorded without its status).",
             "example": null
           },
           "lastError": {
@@ -25503,7 +25513,7 @@
           },
           "isAvailable": {
             "type": "boolean",
-            "description": "Whether the engine reports the product as in stock.",
+            "description": "Whether the product is in stock. The Baileys engine reads no stock state from WhatsApp and reports true for every product, a hidden one included.",
             "example": true
           },
           "retailerId": {
@@ -26127,7 +26137,7 @@
           },
           "score": {
             "type": "number",
-            "description": "Relevance score, when the provider reports one.",
+            "description": "Relevance score, when the provider reports one. Hits come back most relevant first, while the direction of the value is the backend's: the built-in match=word score is FTS5's bm25 rank on SQLite (negative, lower is more relevant) and ts_rank on PostgreSQL (higher is more relevant); a match=contains score is higher for a better match on both.",
             "example": 0.87
           }
         },

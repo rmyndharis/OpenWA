@@ -28,6 +28,14 @@ describe('isPluginActiveForSession', () => {
     expect(isPluginActiveForSession(true, [], 'sess-1')).toBe(false);
   });
 
+  // A manifest is third-party JSON: every other reader treats anything but `false` as session-scoped, and the
+  // gates pass the manifest value through as it was declared.
+  it.each([0, '', null])('keeps the activation of a manifest declaring sessionScoped %p', declared => {
+    const sessionScoped = (declared ?? true) as boolean;
+    expect(isPluginActiveForSession(sessionScoped, ['sess-a'], 'sess-a')).toBe(true);
+    expect(isPluginActiveForSession(sessionScoped, ['sess-a'], 'sess-b')).toBe(false);
+  });
+
   it('a non-session-attributed event (no sessionId) is not gated', () => {
     expect(isPluginActiveForSession(true, [], undefined)).toBe(true);
   });

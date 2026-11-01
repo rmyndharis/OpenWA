@@ -10,7 +10,11 @@
  * @packageDocumentation
  */
 
-/** Base class for every error thrown by the SDK. */
+/**
+ * Base class for errors the SDK throws for an API response or a timeout. A network failure rejects with
+ * the error `fetch` raised (a `TypeError` on Node), an invalid argument such as an empty or dot id with a
+ * `TypeError`, and invalid client options throw an `Error`.
+ */
 export class OpenWAError extends Error {
   constructor(message: string) {
     super(message);
@@ -139,7 +143,10 @@ export class OpenWANotImplementedError extends OpenWAApiError {}
  */
 export class OpenWAServiceUnavailableError extends OpenWAApiError {}
 
-/** Thrown when a request exceeds the configured timeout. */
+/**
+ * Thrown when a request exceeds the configured timeout. The gateway may still complete the request: retry
+ * a send only with the same `Idempotency-Key`, and re-read state before repeating any other write.
+ */
 export class OpenWATimeoutError extends OpenWAError {
   constructor(timeoutMs: number) {
     super(`Request timed out after ${timeoutMs}ms`);

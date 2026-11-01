@@ -1,4 +1,4 @@
-import { foldForMatching } from './search-terms';
+import { containsRankedText, foldForMatching } from './search-terms';
 
 /**
  * Snippets for match=contains hits, built in the application rather than the database so both
@@ -71,12 +71,14 @@ function matchRanges(body: string, terms: string[]): Array<[number, number]> {
 /**
  * Up to `maxWords` words of `body`, starting a few words before the first match (or at the start when
  * none is found, e.g. a short term LIKE matched on SQLite's ASCII-only case folding), with every match
- * in the window marked.
+ * in the window marked. Only the part containsRankedText keeps is read, so a longer body ends in `…`
+ * when the window reaches that point.
  */
 export function containsSnippet(body: string, terms: string[], maxWords: number): string {
-  const words = [...body.matchAll(/\S+/g)];
+  const text = containsRankedText(body);
+  const words = [...text.matchAll(/\S+/g)];
   if (words.length === 0) return '';
-  const ranges = matchRanges(body, terms);
+  const ranges = matchRanges(text, terms);
   const firstHit = ranges.length ? words.findIndex(w => (w.index ?? 0) + w[0].length > ranges[0][0]) : 0;
   // Never more context than the window can hold next to the match itself.
   const before = Math.min(WORDS_BEFORE_MATCH, maxWords - 1);
@@ -91,9 +93,9 @@ export function containsSnippet(body: string, terms: string[], maxWords: number)
     if (end <= sliceStart || start >= sliceEnd) continue;
     const markStart = Math.max(start, sliceStart);
     const markEnd = Math.min(end, sliceEnd);
-    snippet += `${body.slice(cursor, markStart)}<mark>${body.slice(markStart, markEnd)}</mark>`;
+    snippet += `${text.slice(cursor, markStart)}<mark>${text.slice(markStart, markEnd)}</mark>`;
     cursor = markEnd;
   }
-  snippet += body.slice(cursor, sliceEnd);
-  return to < words.length ? `${snippet}…` : snippet;
+  snippet += text.slice(cursor, sliceEnd);
+  return to < words.length || text.length < body.trimEnd().length ? `${snippet}…` : snippet;
 }

@@ -50,10 +50,8 @@ test('a run through a symlinked path still reports', () => {
   }
 });
 
-test('the key validation route is required of every SDK, the key management routes are not', () => {
-  // sdk/README.md lists `auth/api-keys` as unexposed and says key validation itself is exposed. The scope used to
-  // cut every entry to its first segment, which made all of /api/auth unexposed, so an SDK without its auth()
-  // method kept the gate green. The gate runs on a copy of the sources it reads, with the PHP auth() emptied.
+/** A copy of the sources the gate reads, so a case can break one of them; `fn` gets an edit helper and a runner. */
+function withCopy(fn) {
   const repo = fileURLToPath(new URL('..', import.meta.url));
   const dir = mkdtempSync(join(tmpdir(), 'sdk-coverage-copy-'));
   try {
@@ -72,19 +70,79 @@ test('the key validation route is required of every SDK, the key management rout
     }
     const run = () =>
       spawnSync(process.execPath, [join(dir, 'scripts', 'check-sdk-coverage.mjs')], { encoding: 'utf8' });
+    /** Replace `from` in a copied file, returning a function that puts the original back. */
+    const edit = (path, from, to) => {
+      const file = join(dir, path);
+      const source = readFileSync(file, 'utf8');
+      assert.ok(source.includes(from), `${path} no longer contains ${JSON.stringify(from)}: move this anchor`);
+      writeFileSync(file, source.replace(from, to));
+      return () => writeFileSync(file, source);
+    };
     const whole = run();
     assert.equal(whole.status, 0, whole.stdout + whole.stderr);
+    fn({ edit, run });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
-    const client = join(dir, 'sdk', 'php', 'src', 'Client.php');
-    const source = readFileSync(client, 'utf8');
-    const call = "return $this->http->request('POST', '/api/auth/validate') ?? [];";
-    assert.ok(source.includes(call), 'the PHP auth() call has moved: move this anchor');
-    writeFileSync(client, source.replace(call, 'return [];'));
+test('the key validation route is required of every SDK, the key management routes are not', () => {
+  // sdk/README.md lists `auth/api-keys` as unexposed and says key validation itself is exposed. The scope used to
+  // cut every entry to its first segment, which made all of /api/auth unexposed, so an SDK without its auth()
+  // method kept the gate green. The gate runs on a copy of the sources it reads, with the PHP auth() emptied.
+  withCopy(({ edit, run }) => {
+    edit('sdk/php/src/Client.php', "return $this->http->request('POST', '/api/auth/validate') ?? [];", 'return [];');
     const without = run();
     assert.equal(without.status, 1, without.stdout + without.stderr);
     assert.match(without.stderr, /\/api\/auth\/validate .*built by no method in: php/);
     assert.doesNotMatch(without.stderr, /\/api\/auth\/api-keys/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
+});
+
+test('a builder whose last segment is a variable covers only the names its callers pass', () => {
+  // Every client builds the send-media routes as `.../messages/${segment}`, and Go builds the membership-request
+  // actions as `.../membership-requests/" + verb`. Such a wildcard must not stand in for every sibling route.
+  withCopy(({ edit, run }) => {
+    const missing = (output, route, clients) =>
+      assert.match(output, new RegExp(`${route.replace(/\*/g, '\\*')} .*built by no method in: ${clients}$`, 'm'));
+
+    // A message route one client stopped building.
+    let restore = edit(
+      'sdk/php/src/Resources/MessagesResource.php',
+      'return $this->http->request(\'POST\', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/react", [], $body);',
+      'return [];',
+    );
+    let result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    missing(result.stderr, '/api/sessions/*/messages/react', 'php');
+    restore();
+
+    // A send-media verb one client no longer passes to its builder.
+    restore = edit(
+      'sdk/javascript/src/resources/messages.ts',
+      "sendMedia(sessionId, 'send-sticker',",
+      "sendMedia(sessionId, 'send-image',",
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    missing(result.stderr, '/api/sessions/*/messages/send-sticker', 'javascript');
+    restore();
+
+    // New routes no client builds at all, in both builder families.
+    restore = edit(
+      'openapi.json',
+      '"paths": {',
+      '"paths": {"/api/sessions/{sessionId}/messages/send-brand-new":{"post":{"responses":{"201":{"description":"ok"}}}},' +
+        '"/api/sessions/{sessionId}/groups/{groupId}/membership-requests/brand-new":{"post":{"responses":{"201":{"description":"ok"}}}},',
+    );
+    result = run();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    missing(result.stderr, '/api/sessions/*/messages/send-brand-new', 'javascript, python, php, java, go');
+    missing(
+      result.stderr,
+      '/api/sessions/*/groups/*/membership-requests/brand-new',
+      'javascript, python, php, java, go',
+    );
+    restore();
+  });
 });

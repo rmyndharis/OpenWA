@@ -4,6 +4,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { applyGlobalValidation } from './../src/config/app-validation';
+import { configureApp } from './../src/configure-app';
 import { AuthService } from './../src/modules/auth/auth.service';
 import { ApiKeyRole } from './../src/modules/auth/entities/api-key.entity';
 import { renderHttpRequestMetrics, resetHttpRequestMetrics } from './../src/common/metrics/request-metrics';
@@ -28,14 +29,7 @@ describe('App smoke (e2e)', () => {
   });
 
   afterAll(async () => {
-    // app.close() can throw a "could not find DataSource" during TypeORM's shutdown hook because
-    // both connections are NAMED ('main'/'data') with no default DataSource — a teardown-only
-    // artifact, not an app bug (the smoke assertions above already validated a healthy boot).
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('GET /api/health is public and returns ok', () => {
@@ -139,7 +133,9 @@ describe('App RED metrics (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication();
+    // `bodyParser: false` matches main.ts: configureApp installs the only parsers, and the metrics boundary.
+    app = moduleFixture.createNestApplication({ bodyParser: false });
+    configureApp(app);
     applyGlobalValidation(app);
     await app.init();
 
@@ -152,11 +148,7 @@ describe('App RED metrics (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('records a guard-rejected request (401, no API key) with its real status and route', async () => {

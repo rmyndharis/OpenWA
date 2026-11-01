@@ -229,7 +229,7 @@ export function buildEditedMessage(message: IncomingMessage, hasMedia: boolean):
  * full wwebjs `Contact`, and so the async getters stay out by construction.
  */
 export interface RawContactFields {
-  id?: { _serialized?: string };
+  id?: SerializedWid;
   number?: string;
   name?: string;
   pushname?: string;
@@ -257,7 +257,7 @@ export function mapContactFields(contact: RawContactFields, full = false): Messa
   if (contact.name) out.name = contact.name;
   if (contact.pushname) out.pushName = contact.pushname;
   if (!full) return out;
-  const id = contact.id?._serialized;
+  const id = readWid(contact.id);
   if (id) out.id = id;
   if (contact.number) out.number = contact.number;
   if (contact.shortName) out.shortName = contact.shortName;

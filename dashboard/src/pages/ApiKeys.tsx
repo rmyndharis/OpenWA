@@ -264,6 +264,8 @@ export function ApiKeys() {
     setShowModal(false);
     setCreatedKey(null);
     setNewKey(emptyKeyForm);
+    // The answer holds the plaintext key too; drop it with the dialog.
+    createMutation.reset();
   };
 
   // A datetime-local with a blank segment reports an empty value, the same as no expiry at all, and
@@ -566,13 +568,18 @@ export function ApiKeys() {
         <Modal
           open
           // The key exists once the request lands, and its secret is shown only here, so the modal
-          // cannot be dismissed until the request settles.
-          onClose={createMutation.isPending ? () => {} : closeCreateModal}
-          hideCloseButton={createMutation.isPending}
+          // cannot be dismissed until the request settles. Once shown, an Escape or a click beside the
+          // dialog must not lose it either: it closes only on its own Close button.
+          onClose={createMutation.isPending || createdKey ? () => {} : closeCreateModal}
+          hideCloseButton={createMutation.isPending || !!createdKey}
           title={createdKey ? t('apiKeys.createdTitle') : t('apiKeys.modalTitle')}
           closeLabel={t('common.close')}
           footer={
-            !createdKey ? (
+            createdKey ? (
+              <button className="btn-primary" onClick={closeCreateModal}>
+                {t('common.close')}
+              </button>
+            ) : (
               <>
                 <button className="btn-secondary" onClick={closeCreateModal} disabled={createMutation.isPending}>
                   {t('common.cancel')}
@@ -581,7 +588,7 @@ export function ApiKeys() {
                   {createMutation.isPending ? <Loader2 className="animate-spin" size={16} /> : t('common.create')}
                 </button>
               </>
-            ) : undefined
+            )
           }
         >
           {createdKey ? (

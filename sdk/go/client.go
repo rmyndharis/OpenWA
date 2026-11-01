@@ -376,7 +376,8 @@ func isTimeout(err error) bool {
 // pathEscape percent-encodes a single path segment so a value containing "/",
 // "#", or "?" can't break out of its path position. WhatsApp-JID characters
 // that are already path-safe ("@", ":", "+") are kept readable. An empty, "."
-// or ".." id is left as is and refused by doRaw before anything is sent.
+// or ".." id, or one with a "." or ".." part between slashes, is refused by
+// doRaw before anything is sent.
 func pathEscape(segment string) string {
 	escaped := url.PathEscape(segment)
 	return jidRestorer.Replace(escaped)
@@ -386,10 +387,15 @@ var jidRestorer = strings.NewReplacer("%40", "@", "%3A", ":", "%2B", "+")
 
 var dotFolder = strings.NewReplacer("%2e", ".", "%2E", ".")
 
+// slashFolder reads an encoded slash or backslash as a separator, as a proxy that decodes the path
+// before it resolves dot segments does: such a proxy turns an id sent as "..%2Fx" into "../x".
+var slashFolder = strings.NewReplacer("%2f", "/", "%2F", "/", "%5c", "/", "%5C", "/", `\`, "/")
+
 // checkPathSegments refuses a path that does not begin with "/" (appended to the
 // base URL, "@host/x" would move the request and its API key to another host), a
-// "." or ".." segment (also written %2e), and an empty one unless allowEmpty. The
-// query and fragment are not path segments.
+// "." or ".." segment (also written %2e, or inside a segment after an encoded
+// slash), and an empty one unless allowEmpty. The query and fragment are not
+// path segments.
 func checkPathSegments(path string, allowEmpty bool) error {
 	if !strings.HasPrefix(path, "/") {
 		return fmt.Errorf("openwa: path must begin with \"/\": %q", path)
@@ -399,12 +405,15 @@ func checkPathSegments(path string, allowEmpty bool) error {
 		p = p[:i]
 	}
 	for _, seg := range strings.Split(p, "/")[1:] {
-		switch dotFolder.Replace(seg) {
-		case ".", "..":
-			return fmt.Errorf("openwa: dot path segment in %q", path)
-		case "":
+		if seg == "" {
 			if !allowEmpty {
 				return fmt.Errorf("openwa: empty path segment in %q", path)
+			}
+			continue
+		}
+		for _, part := range strings.Split(slashFolder.Replace(seg), "/") {
+			if dots := dotFolder.Replace(part); dots == "." || dots == ".." {
+				return fmt.Errorf("openwa: dot path segment in %q", path)
 			}
 		}
 	}

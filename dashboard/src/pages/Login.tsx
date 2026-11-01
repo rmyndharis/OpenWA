@@ -46,7 +46,15 @@ export function Login({ onLogin }: LoginProps) {
       if (response.ok) {
         // The validate body already carries the key's role — hand it up so the app can set it
         // directly instead of re-validating the same key a second time.
-        const data: { role?: string; engineType?: string; scoped?: unknown } = await response.json().catch(() => ({}));
+        const data: { valid?: unknown; role?: string; engineType?: string; scoped?: unknown } = await response
+          .json()
+          .catch(() => ({}));
+        // A 200 is the gateway's answer only if it says the key is valid, as the startup check requires: a reverse proxy
+        // serving the app's HTML for a misrouted /api would otherwise sign any typed text in as a viewer.
+        if (data.valid !== true) {
+          setError(t('login.connectionError'));
+          return;
+        }
         onLogin(
           key,
           data.role,

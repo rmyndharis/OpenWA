@@ -141,12 +141,14 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 # Postgres the compose file does not control, where 17 is the current default. Pinning to 16 would
 # have left every such deployment unable to back up. Verified against live 16 and 17 servers.
 #
-# The signing key is committed rather than fetched at build time. Fetched, it was the one build input
-# nothing pinned: `signed-by` attests only that the .debs match whatever that request returned, so a
-# compromised host, or a build behind a TLS-intercepting proxy whose root is in the trust store,
-# would swap the trust anchor with nothing to notice. Committed, it is reviewed once and diffable
-# forever, and it removes one of the two network calls the release build makes uncached
-# (release.yml's `no-cache-filters: production` rebuilds this stage every tag, on both platforms).
+# The signing key is committed rather than fetched at build time. Fetched, nothing pinned it:
+# `signed-by` attests only that the .debs match whatever that request returned, so a compromised
+# host, or a build behind a TLS-intercepting proxy whose root is in the trust store, would swap the
+# trust anchor with nothing to notice. Committed, it is reviewed once and diffable forever. It is not
+# the only such input: this stage re-fetches on every release build (release.yml's
+# `no-cache-filters: production` rebuilds it every tag, on both platforms), and npm and its Undici
+# below are pinned by version over TLS only, as is the amd64 Chrome for Testing archive, which has no
+# checksum.
 # Verify with `gpg --show-keys --with-fingerprint scripts/pgdg-ACCC4CF8.asc`:
 #   B97B0AFC AA1A47F0 44F244A0 7FCC7D46 ACCC4CF8, uid "PostgreSQL Debian Repository".
 #
@@ -187,16 +189,16 @@ COPY package*.json ./
 
 # Backport upstream whatsapp-web.js#201832 (id._serialized -> id.$1 normalization,
 # broken by WA Web 2.3000.x ~2026-07-14) into the installed dep at build time.
-# The patcher self-disables once whatsapp-web.js ships the fix upstream.
+# The patcher stands down once every site it writes carries the fix; a release that fixes the ids
+# another way fails the build until the backport is retired.
 # scripts/postinstall.js rides along so a bare local `npm ci` keeps working, but the
 # --ignore-scripts install below skips the hook here: the explicit fatal run right
 # after is the sole (and stricter) applier for the image.
 COPY scripts/postinstall.js scripts/atomic-write.js scripts/patch-wwebjs-201832.js scripts/wwebjs-201832.patch scripts/patch-wwebjs-newsletter-preview.js scripts/patch-wwebjs-status.js scripts/patch-wwebjs-ready-sync.js scripts/patch-wwebjs-participant-arity.js scripts/patch-wwebjs-block.js scripts/patch-wwebjs-group-description.js scripts/patch-wwebjs-media-id.js scripts/patch-wwebjs-send-error.js scripts/patch-wwebjs-puppeteer.js scripts/patch-baileys-appstate.js scripts/patch-baileys-newsletter-create.js scripts/patch-baileys-pairing.js ./scripts/
 
-# Install production dependencies only, then apply the backports. The status patcher runs after
-# the two patchers it depends on: its transforms were written against the tree they leave behind.
-# The send-error patcher runs after the other two that edit Client.js, so theirs still meet the
-# tree they were written against.
+# Install production dependencies only, then apply the backports. Each patcher matches the pristine
+# library on its own and none depends on another's edits, so the order below is not load-bearing:
+# applied in reverse, they leave the same tree.
 # scripts/dockerfile-patchers.spec.js derives this list from scripts/patch-*.js and fails if a
 # patcher is added without being copied AND run here — a hand-written list loses one silently, and
 # the Baileys one shipped in postinstall for a whole release without ever reaching the image.

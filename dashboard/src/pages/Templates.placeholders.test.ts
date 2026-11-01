@@ -97,6 +97,16 @@ test('the page reads placeholders with the pattern the gateway renders with', ()
   assert.deepEqual(read, renderer.templateVariableNames(body));
 });
 
+// The gateway fills only values it was given (an own-property check), so a placeholder named like a member every object
+// inherits is left as written there. The preview read the inherited member and showed a function's source instead.
+test('a placeholder named like an inherited object member previews as written, as the gateway sends it', async () => {
+  const body = 'Hi {{constructor}}, total {toString}, ref {{__proto__}}';
+  const { panel, preview } = await openTemplate(body);
+  assert.equal(preview(), body);
+  const values = [...panel.querySelectorAll('input')].map(input => input.value);
+  assert.deepEqual(values, ['', '', '']);
+});
+
 test('a template using the single-brace form lists that placeholder and previews it', async () => {
   assert.equal(renderer.renderTemplate('Your code is {code}', { code: '4821' }), 'Your code is 4821');
   const { panel, preview } = await openTemplate('Your code is {code}');

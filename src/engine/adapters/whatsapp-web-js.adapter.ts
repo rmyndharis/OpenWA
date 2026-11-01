@@ -40,6 +40,7 @@ import { LidMappingStore } from '../identity/lid-mapping-store.service';
 import { createLogger } from '../../common/services/logger.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { ChannelMediaNotSupportedError } from '../../common/errors/channel-media-not-supported.error';
+import { markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { WwebjsGroups } from './wwebjs-groups';
 import { type WwebjsEngineHost } from './wwebjs-host';
 import { registerWwebjsMessageEvents } from './wwebjs-message-events';
@@ -980,7 +981,7 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
     // upstream wwebjs#201823 — WA Web removed Msg.avParams). Text→channel works; media does not.
     // Fail fast with a typed 501 instead of surfacing the raw TypeError as a 500 (#673).
     if (isChannelJid(chatId)) {
-      throw new ChannelMediaNotSupportedError();
+      throw markNothingSent(new ChannelMediaNotSupportedError());
     }
   }
 }

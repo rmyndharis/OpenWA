@@ -13,6 +13,7 @@ import {
   GatewayTimeoutException,
   HttpException,
   HttpStatus,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -1975,6 +1976,37 @@ describe('SessionService', () => {
       expect(ownership.release.mock.calls.length).toBeGreaterThan(releasesBefore);
     });
 
+    // A claim that could not be written launched nothing, so the start answers the retryable 503 a delete
+    // answers for the same failure, not a 500.
+    it('start() answers 503 and launches nothing when its claim cannot be written', async () => {
+      const ownership = withOwnership();
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      ownership.claim.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+
+      await expect(service.start('sess-uuid-1', { explicit: true })).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
+
+      expect(mockEngine.initialize).not.toHaveBeenCalled();
+      expect(lifecycle.isEngineActive('sess-uuid-1')).toBe(false);
+    });
+
+    it('start() answers 503 when the re-claim of its one retry cannot be written', async () => {
+      const ownership = withOwnership();
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (engineFactory.create as jest.Mock).mockClear().mockReturnValue(mockEngine);
+      mockEngine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
+      ownership.claim
+        .mockResolvedValueOnce(true)
+        .mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+
+      await expect(service.start('sess-uuid-1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+      expect(mockEngine.initialize).toHaveBeenCalledTimes(1);
+      expect(lifecycle.isEngineActive('sess-uuid-1')).toBe(false);
+    });
+
     // The same race with a force-kill: the start sent while the engine still ran launched a new one
     // once its claim resolved and cleared the stop record the kill had just written.
     it.each([false, true])('retires a pending start after logout (incomplete: %s)', async incomplete => {
@@ -2500,7 +2532,11 @@ describe('SessionService', () => {
 
     it('logout() releases on the 502-incomplete path too — the engine is down either way', async () => {
       const ownership = withOwnership();
-      jest.spyOn(lifecycle, 'logout').mockRejectedValue(new BadGatewayException('incomplete'));
+      // The 502 comes once the engine was found and torn down, as in SessionEngineControls.logout.
+      jest.spyOn(lifecycle, 'logout').mockImplementation((_id, hooks) => {
+        hooks?.onEngineFound?.();
+        return Promise.reject(new BadGatewayException('incomplete'));
+      });
       jest.spyOn(lifecycle, 'isEngineActive').mockReturnValue(false);
 
       await expect(service.logout('sess-uuid-1')).rejects.toThrow(BadGatewayException);
@@ -3168,6 +3204,19 @@ describe('SessionService', () => {
         (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id }));
 
         await expect(call(service, row.id)).rejects.toThrow(BadRequestException);
+
+        expect(await nodeIdOf(row.id)).toBe('dead-node');
+      });
+
+      // A failed read of the row took nothing down either.
+      it.each([
+        ['logout', (s: SessionService, id: string) => s.logout(id)],
+        ['forceKill', (s: SessionService, id: string) => s.forceKill(id)],
+      ])('%s() whose row read fails keeps a lapsed foreign claim', async (_verb, call) => {
+        const row = await seed({ nodeId: 'dead-node', leaseExpiresAt: new Date(Date.now() - 60_000) });
+        (repository.findOne as jest.Mock).mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+
+        await expect(call(service, row.id)).rejects.toThrow('Connection terminated unexpectedly');
 
         expect(await nodeIdOf(row.id)).toBe('dead-node');
       });
@@ -5917,6 +5966,66 @@ describe('SessionService', () => {
       await expect(service.getPresence('sess-uuid-1', 'c@c.us')).resolves.toMatchObject({
         chatId: 'c@c.us',
         participants: [{ id: 'c@c.us', state: 'composing' }],
+      });
+    });
+
+    // Baileys subscribes a phone through the contact's lid once it knows one, and WhatsApp then reports
+    // presence from that lid, so the report is stored under the lid and not under the id subscribed.
+    describe('a read in another form of the reported chat', () => {
+      const PHONE = '628111222333';
+      const LID = '123456789012345';
+      const report = (chatId: string) => ({ chatId, participants: [{ id: chatId, state: 'composing' as const }] });
+
+      beforeEach(() => {
+        (lidMappingStore.findLidsForPhone as jest.Mock).mockImplementation((phone: string) =>
+          Promise.resolve(phone === PHONE ? [LID] : []),
+        );
+        (lidMappingStore.findPhoneForLid as jest.Mock).mockImplementation((lid: string) =>
+          Promise.resolve(lid.startsWith(LID) ? PHONE : null),
+        );
+      });
+
+      it('serves a report stored under the lid paired with the phone it is read by', async () => {
+        const callbacks = await startAndCapture();
+        callbacks.onPresenceUpdate?.(report(`${LID}@lid`));
+
+        await expect(service.getPresence('sess-uuid-1', `${PHONE}@c.us`)).resolves.toMatchObject(report(`${LID}@lid`));
+      });
+
+      it('serves a report stored under the phone to a read by its lid', async () => {
+        const callbacks = await startAndCapture();
+        callbacks.onPresenceUpdate?.(report(`${PHONE}@c.us`));
+
+        await expect(service.getPresence('sess-uuid-1', `${LID}@lid`)).resolves.toMatchObject(report(`${PHONE}@c.us`));
+      });
+
+      // The subscribe route accepts every spelling of an id, while reports are stored under the neutral one.
+      it.each([`${PHONE}@s.whatsapp.net`, `${PHONE}:12@c.us`, `${PHONE}@C.US`])(
+        'serves a read spelled %s',
+        async id => {
+          const callbacks = await startAndCapture();
+          callbacks.onPresenceUpdate?.(report(`${PHONE}@c.us`));
+
+          await expect(service.getPresence('sess-uuid-1', id)).resolves.toMatchObject(report(`${PHONE}@c.us`));
+        },
+      );
+
+      it('serves the newest report when the phone and its lid both have one', async () => {
+        const callbacks = await startAndCapture();
+        callbacks.onPresenceUpdate?.(report(`${PHONE}@c.us`));
+        await new Promise(resolve => setTimeout(resolve, 5));
+        callbacks.onPresenceUpdate?.(report(`${LID}@lid`));
+
+        await expect(service.getPresence('sess-uuid-1', `${PHONE}@c.us`)).resolves.toMatchObject({
+          chatId: `${LID}@lid`,
+        });
+      });
+
+      it('serves nothing for a lid that is not paired with the phone read', async () => {
+        const callbacks = await startAndCapture();
+        callbacks.onPresenceUpdate?.(report('999999999999999@lid'));
+
+        await expect(service.getPresence('sess-uuid-1', `${PHONE}@c.us`)).resolves.toBeNull();
       });
     });
 

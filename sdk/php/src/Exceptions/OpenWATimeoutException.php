@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace OpenWA\Exceptions;
 
-/** Raised when a request exceeds the configured timeout. */
+/**
+ * Raised when a request exceeds the configured timeout. The gateway may still complete the request:
+ * retry a send only with the same Idempotency-Key, and re-read state before repeating any other write.
+ */
 class OpenWATimeoutException extends OpenWAException
 {
     private float $timeout;

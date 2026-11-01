@@ -1,4 +1,5 @@
 import { BadGatewayException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
+import { SEARCH_DEFAULT_LIMIT } from '../search.constants';
 import type { SearchProvider, SearchQuery, SearchResults, SearchHealth } from '../search.types';
 
 /**
@@ -106,14 +107,16 @@ export class PluginSearchProvider implements SearchProvider {
       tookMs: Math.round(reply.results.tookMs),
       hits: reply.results.hits.map(h => ({ ...h, timestamp: Math.trunc(h.timestamp) })),
     };
+    // A plugin can answer with more hits than were asked for; the caller gets the page it asked for.
+    const limit = query.limit ?? SEARCH_DEFAULT_LIMIT;
     // Keep the existing session defense: plugins must apply sessionIds before paging and counting.
     // Preserve total for compliant pages; discard it when an out-of-scope hit is returned.
     const sessionFilter = query.sessionIds?.length ? new Set(query.sessionIds) : null;
-    if (!sessionFilter) return results;
+    if (!sessionFilter) return { ...results, hits: results.hits.slice(0, limit) };
     const scoped = results.hits.filter(h => sessionFilter.has(h.sessionId));
     const leaked = results.hits.length - scoped.length;
     return {
-      hits: scoped,
+      hits: scoped.slice(0, limit),
       total: leaked > 0 ? scoped.length : results.total,
       tookMs: results.tookMs,
       provider: results.provider,

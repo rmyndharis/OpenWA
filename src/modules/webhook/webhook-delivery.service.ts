@@ -265,15 +265,16 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
-    // Warn on the default-derived misconfiguration that silently truncates in-flight deliveries at
-    // shutdown: WEBHOOK_SHUTDOWN_DRAIN_MS (default 5s) bounds how long onModuleDestroy waits for a
-    // delivery in flight, while WEBHOOK_TIMEOUT (default 10s) bounds the delivery itself. When the
-    // drain is shorter than the timeout, a delivery that takes nearly the full timeout is abandoned
-    // (logged, not dead-lettered — the receiver may already have it). The defaults already cross, so
-    // surface the cross so an operator who raised the timeout without raising the drain notices.
+    // WEBHOOK_SHUTDOWN_DRAIN_MS (default 5s) bounds how long onModuleDestroy waits for a delivery in
+    // flight, while WEBHOOK_TIMEOUT (default 10s) bounds the delivery itself. When the drain is shorter
+    // than the timeout, a delivery that takes nearly the full timeout is abandoned at shutdown (logged,
+    // not dead-lettered: the receiver may already have it). The defaults cross, the drain being sized to
+    // the shutdown budget, so only a changed value is warned about: an operator who raised the timeout
+    // without raising the drain notices, and a default install does not warn at every boot.
     const drainMs = this.configService.get<number>('webhook.shutdownDrainMs', DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS);
     const deliveryTimeoutMs = this.configService.get<number>('webhook.timeout', 10_000);
-    if (Number.isFinite(drainMs) && Number.isFinite(deliveryTimeoutMs) && drainMs < deliveryTimeoutMs) {
+    const atDefaults = drainMs === DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS && deliveryTimeoutMs === 10_000;
+    if (!atDefaults && Number.isFinite(drainMs) && Number.isFinite(deliveryTimeoutMs) && drainMs < deliveryTimeoutMs) {
       this.logger.warn(
         `WEBHOOK_SHUTDOWN_DRAIN_MS (${drainMs}ms) is shorter than WEBHOOK_TIMEOUT (${deliveryTimeoutMs}ms) — ` +
           `an in-flight delivery that takes nearly the full timeout will be abandoned at shutdown. ` +
@@ -1242,7 +1243,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       lastError: unsent?.lastError
         ? `Webhook replay budget exhausted; last error: ${unsent.lastError}`
         : 'Webhook replay budget exhausted',
-      ...(this.keepsFailurePayload() ? { payload: row.payload } : {}),
+      ...(this.keepsFailurePayload()
+        ? { payload: row.payload, payloadRetentionHours: this.payloadRetentionHours() }
+        : {}),
     });
     if (recorded === true) incrementWebhookDeliveryFailures();
     return recorded !== null;
@@ -1253,7 +1256,11 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * built from, so an operator can redrive it. Off (0) by default, which stores nothing new.
    */
   private keepsFailurePayload(): boolean {
-    return this.configService.get<number>('webhook.failurePayloadRetentionHours', 0) > 0;
+    return this.payloadRetentionHours() > 0;
+  }
+
+  private payloadRetentionHours(): number {
+    return this.configService.get<number>('webhook.failurePayloadRetentionHours', 0);
   }
 
   /** What the direct path needs from the dispatch context: the slot, the replay copy, the attempt cap. */
@@ -1371,7 +1378,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           deliveryId: payload.deliveryId,
           attempts: attempt,
           error,
-          ...(options.replayData ? { payload: options.replayData } : {}),
+          ...(options.replayData
+            ? { payload: options.replayData, payloadRetentionHours: this.payloadRetentionHours() }
+            : {}),
         });
         if (recorded !== false) incrementWebhookDeliveryFailures();
         if (recorded === null) throw new UnrecordedWebhookFailure(redactSsrfError(error));

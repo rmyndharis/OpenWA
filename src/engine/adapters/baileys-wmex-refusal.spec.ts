@@ -73,13 +73,15 @@ describe('a refused channel lookup is "no such channel", not a bare 500', () => 
     expect(sock.newsletterFollow).not.toHaveBeenCalled();
   });
 
-  it('a dead socket or the no-answer shape on the lookup still propagates', async () => {
+  it('a dead socket on the lookup answers 503 and the no-answer shape still propagates, neither as 404', async () => {
     const connectionClosed = new Boom('Connection Closed', { statusCode: 428 });
+    const closedLookup = jest.fn().mockRejectedValue(connectionClosed);
+    await expect(
+      channels({ newsletterMetadata: closedLookup }, 500).getChannelById('120363@newsletter'),
+    ).rejects.toBeInstanceOf(EngineTransportError);
     const noAnswer = new Boom('Failed to newsletter metadata, unexpected response structure.', { statusCode: 400 });
-    for (const error of [connectionClosed, noAnswer]) {
-      const newsletterMetadata = jest.fn().mockRejectedValue(error);
-      await expect(channels({ newsletterMetadata }, 500).getChannelById('120363@newsletter')).rejects.toBe(error);
-    }
+    const newsletterMetadata = jest.fn().mockRejectedValue(noAnswer);
+    await expect(channels({ newsletterMetadata }, 500).getChannelById('120363@newsletter')).rejects.toBe(noAnswer);
   });
 
   it("Baileys' own send timeout on the lookup propagates, not as 404", async () => {
@@ -110,10 +112,12 @@ describe('a refused channel lookup is "no such channel", not a bare 500', () => 
 });
 
 describe('what must NOT be classified as a refusal', () => {
-  it('a dead socket still propagates rather than becoming a 403', async () => {
+  it('a dead socket answers a retryable 503 rather than becoming a 403', async () => {
     const connectionClosed = new Boom('Connection Closed', { statusCode: 428 });
     const newsletterDelete = jest.fn().mockRejectedValue(connectionClosed);
-    await expect(channels({ newsletterDelete }, 500).deleteChannel('120363@newsletter')).rejects.toBe(connectionClosed);
+    await expect(channels({ newsletterDelete }, 500).deleteChannel('120363@newsletter')).rejects.toBeInstanceOf(
+      EngineTransportError,
+    );
   });
 
   it("Baileys' own send timeout still propagates rather than becoming a 403", async () => {

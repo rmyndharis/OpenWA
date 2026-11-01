@@ -138,6 +138,8 @@ func (e *APIError) Is(target error) bool {
 
 // TimeoutError is returned when a request exceeds the configured timeout (or the
 // caller's context deadline), whether waiting for the response or reading its body.
+// The gateway may still complete the request: retry a send only with the same
+// Idempotency-Key, and re-read state before repeating any other write.
 type TimeoutError struct {
 	// Timeout is the client timeout that ran out, or zero when the caller's
 	// context deadline fired first.

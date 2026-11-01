@@ -105,7 +105,10 @@ time blocks the event loop every session shares) and 1.6 s on Postgres. So `cont
    every term, newest first. Both dialects answer that order from an index and stop once they hold
    1,000 matches. SQLite reads its trigram index in insertion order; Postgres walks the existing
    `IDX_messages_createdAt` b-tree backward for a common term, or reads the few matches of a rare one
-   from the GIN index. The window bounds the matches, not the messages read to find them: a message
+   from the GIN index. That early stop needs PostgreSQL 13 or newer, whose incremental sort breaks
+   `createdAt` ties by `id` during the walk: PostgreSQL 12 reads and sorts every match, so there a
+   common term costs in proportion to the messages holding it (about 40 ms for 80,000 matches).
+   The window bounds the matches, not the messages read to find them: a message
    the index yields that another term then rules out (a short term, or one `pg_trgm` cannot look up)
    costs a check and counts for nothing. So a query whose looked-up term is in most messages while a
    narrowing term is in none reads every message holding the looked-up term, on Postgres each
@@ -113,9 +116,12 @@ time blocks the event loop every session shares) and 1.6 s on Postgres. So `cont
 2. The application ranks the candidates and pages them: each term scores **3** as a whole word, **2**
    at the start of a word and **1** inside a word (compared without case or accents), the hit's `score`
    is the sum over the terms, and ties go to the newest message, then to `messageId`. The same code
-   ranks both dialects, so the same candidates come back in the same order.
+   ranks both dialects, so the same candidates come back in the same order. It reads the first **4,096
+   characters** of each body, counted in UTF-16 units (an emoji counts two), the number the API caps a
+   sent text at: a received message can be far longer, and one whose terms appear only past that point
+   still matches, but scores 0 and gets a snippet from its start without `<mark>`.
 
-Both phases together take about 2 ms on SQLite and 10 to 20 ms on Postgres at that size. The trade-off is that relevance orders the window, not the whole history: `total` is at most
+Both phases together take about 2 ms on SQLite and 10 to 20 ms on Postgres at that size. Long bodies cost more, up to that cut: 1,000 candidates of 64 KB, each matching at every character, took about 240 ms on SQLite for a page of 100. The trade-off is that relevance orders the window, not the whole history: `total` is at most
 1,000 in this mode, and pages past it are empty. Reach older matches by narrowing the query (more
 terms, `chatId`, `dateTo`). Because a score reads only its own message, it is returned to scoped keys
 as well (unlike the SQLite `word` score, see below).
@@ -233,7 +239,9 @@ GET /api/search?q=<term>&match=<word|contains>&sessionId=<id>&chatId=<id>&direct
   reads only its own message, so every key gets it.
 - **Response** is a `SearchResults` object: `{ hits: SearchHit[], total, tookMs, provider }`. Each hit
   carries `messageId`, `waMessageId`, `sessionId`, `chatId`, `body`, `snippet`, `timestamp`, `type`,
-  `direction`, `from`, and optional `score`. `total` is an exact count (bounded; computed lazily only
+  `direction`, `from`, and optional `score`: with `match=word` FTS5's bm25 rank on SQLite, where lower
+  is more relevant, and `ts_rank` on Postgres, where higher is; with `match=contains` higher on both.
+  Hits come back most relevant first either way. `total` is an exact count (bounded; computed lazily only
   when the page could be full). `tookMs` is the provider-side query time. `provider` names which
   backend answered (e.g. `builtin-fts`).
 - **Errors:** `400` empty/whitespace `q` or one holding a NUL character, a non-numeric numeric param,
@@ -276,7 +284,8 @@ keep working unchanged when you switch backends.
 > **Backfill is the plugin's responsibility.** The `message:persisted` hook fires only for **live**
 > traffic — outbound on send, inbound on receive, and again when a stored message is edited or
 > revoked (see [27.3](./27-plugin-search-providers.md#273-indexing-via-the-messagepersisted-hook)) — never for
-> history-backfill persistence. So a plugin provider installed on a deployment that already has message
+> history-backfill persistence, except to hand over the cleared row of a message a history sync reports deleted. So a
+> plugin provider installed on a deployment that already has message
 > history must perform its own one-time backfill at enablement, through `ctx.engine.getChats` +
 > `getChatHistory` (needs `engine:read`, works on whatsapp-web.js only and returns at most 100 messages
 > per chat; Baileys has no backfill path, see

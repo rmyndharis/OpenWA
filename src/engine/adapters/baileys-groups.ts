@@ -234,11 +234,12 @@ export class BaileysGroups {
       // Only a SERVER refusal may become null (→ service 404): the group does not exist or the
       // account cannot see it. Anything else — a dropped socket, a timeout, a protocol error —
       // folded into null makes a dead transport look like a missing group, so it propagates.
+      // Every other 4xx answer (a malformed or non-group id) is not-found too, as getGroupJoinInfo reads it.
       const code = refusedStatusCode(err);
       if (code === 408 || code === 429) {
         throw new EngineTransportError(`WhatsApp rate-limited or timed out the group metadata query (code ${code})`);
       }
-      if (code === 401 || code === 403 || code === 404) {
+      if (code !== undefined && code >= 400 && code < 500) {
         this.host.logger.debug('groupMetadata refused; treating as not-found', {
           groupId,
           error: err instanceof Error ? err.message : String(err),
@@ -251,9 +252,9 @@ export class BaileysGroups {
 
   /**
    * Deliberately NOT bounded by a deadline, unlike the reads either side of it. Creating a group is
-   * the one non-idempotent operation here, and 503 is a backpressure status the Go SDK retries three
-   * times for POST (sdk/go/retry.go) — an OpenWA deadline abandons the call without cancelling it,
-   * so a slow-but-succeeding create could be issued four times and leave duplicate groups. An
+   * the one non-idempotent operation here, and 503 is a status a client that retries a POST replays (the Go SDK
+   * does with an Idempotency-Key or a Retry-After, sdk/go/retry.go) — an OpenWA deadline abandons the call without
+   * cancelling it, so a slow-but-succeeding create could be issued again and leave duplicate groups. An
    * unanswered query therefore still surfaces opaquely rather than as something retryable, and so
    * does WA code 408: a server timeout does not say whether the group was created.
    */

@@ -245,6 +245,16 @@
   gap: 0.5rem;
 }
 
+.templates-page .template-form .field-error {
+  color: var(--error-text);
+  font-size: 0.75rem;
+}
+
+/* Kept in the tree empty so a screen reader announces the limit when it appears; it takes no gap meanwhile. */
+.templates-page .template-form .field-error:empty {
+  margin-top: -0.5rem;
+}
+
 .templates-page .template-form label,
 .templates-page .placeholder-list label > span {
   color: var(--text-secondary);

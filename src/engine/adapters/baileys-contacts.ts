@@ -11,7 +11,7 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { assertReadableImage, resolveMediaBuffer } from './baileys-messaging';
 import { type createLogger } from '../../common/services/logger.service';
-import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, withQueryDeadline } from './baileys-query-deadline';
+import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, guardLookup, withQueryDeadline } from './baileys-query-deadline';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { LidNotMappedError } from '../../common/errors/lid-not-mapped.error';
@@ -405,10 +405,13 @@ export class BaileysContacts {
     const socket = this.sock();
     const library = await this.host.loadLib?.();
     if (!library) throw new EngineNotReadyError();
-    const result = await withQueryDeadline(
-      this.sock(socket).executeUSyncQuery(phoneLidQuery(library, phone)),
-      this.queryBudgetMs,
-      'WhatsApp did not answer the LID lookup in time',
+    const result = await guardLookup(
+      withQueryDeadline(
+        this.sock(socket).executeUSyncQuery(phoneLidQuery(library, phone)),
+        this.queryBudgetMs,
+        'WhatsApp did not answer the LID lookup in time',
+      ),
+      'The LID lookup',
     );
     // Baileys resolves undefined, not an error, when its own timeout passes: no answer is not "no LID".
     if (result === undefined) throw new EngineTransportError('WhatsApp did not answer the LID lookup');

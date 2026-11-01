@@ -1171,7 +1171,9 @@ sudo certbot certificates
 
 # Restart nginx/proxy
 sudo systemctl restart nginx
-# or
+# or, for a proxy run as a compose service, as in the release compose file of 10 - DevOps &
+# Infrastructure (the shipped compose files run no proxy); add -f <file> when that file is not your
+# default compose file
 docker compose restart nginx
 
 # Verify HTTPS

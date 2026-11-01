@@ -242,15 +242,16 @@ class MessagesResource
     /** @return array<string,mixed> */
     public function sendBulk(string $sessionId, array $body): array
     {
-        // Rebuild each array layer so referenced maps, items and lists stay untouched.
+        // Rebuild each array layer so referenced maps, items and lists stay untouched. array_values keeps a
+        // filtered list a JSON array: json_encode writes one with key gaps as an object, which the gateway refuses.
         if (isset($body['messages']) && is_array($body['messages'])) {
             $body = array_merge($body, [
-                'messages' => array_map(static function ($item) {
+                'messages' => array_values(array_map(static function ($item) {
                     if (is_array($item) && isset($item['variables']) && is_array($item['variables'])) {
                         return array_merge($item, ['variables' => (object) $item['variables']]);
                     }
                     return $item;
-                }, $body['messages']),
+                }, $body['messages'])),
             ]);
         }
         if (isset($body['options']) && is_array($body['options'])) {

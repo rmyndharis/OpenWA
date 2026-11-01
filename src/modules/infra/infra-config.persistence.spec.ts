@@ -79,7 +79,7 @@ function build(available = true) {
     controller: new InfraConfigController(
       { getAvailableEngines: () => [{ id: 'baileys' }, { id: 'whatsapp-web.js' }] } as never,
       { isDockerAvailable: () => available, stopManagedService: stop, orchestrateProfiles: jest.fn() } as never,
-      { shutdown } as never,
+      { shutdown, isShuttingDown: () => false } as never,
     ),
   };
 }

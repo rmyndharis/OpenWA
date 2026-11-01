@@ -315,9 +315,11 @@ const containsOn = new ConfigService({ search: { containsEnabled: true } });
       expect(await plan(['enable_seqscan', 'enable_indexscan'], 'voic')).toContain('idx_messages_body_trgm');
     });
 
-    it('can fetch the most recently stored candidates by walking IDX_messages_createdAt', async () => {
-      expect(await plan(['enable_seqscan', 'enable_bitmapscan'], 'voic')).toContain(
-        'Index Scan Backward using "IDX_messages_createdAt"',
+    // The incremental sort finishes the `id` tiebreak per createdAt, so the limit stops the walk at the window. A
+    // full sort over the same scan (all PostgreSQL 12 can do) would read every match first.
+    it('can fetch the most recently stored candidates by walking IDX_messages_createdAt and stopping at the window', async () => {
+      expect(await plan(['enable_seqscan', 'enable_bitmapscan'], 'voic')).toMatch(
+        /Limit[\s\S]*Incremental Sort[\s\S]*Index Scan Backward using "IDX_messages_createdAt"/,
       );
     });
   });

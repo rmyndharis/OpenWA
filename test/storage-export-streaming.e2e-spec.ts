@@ -217,26 +217,20 @@ describe('Storage export streams one file at a time (e2e)', () => {
     ['longer', 2 * FILE_BYTES],
     ['shorter', FILE_BYTES / 2],
   ])('fails the output, without an uncaught exception, when a file reads %s than its size', async (_, length) => {
-    const uncaught: Error[] = [];
-    const onUncaught = (err: Error): void => void uncaught.push(err);
-    process.on('uncaughtException', onUncaught);
-    try {
-      const openFile = (name: string): Promise<ExportFileSource> =>
-        Promise.resolve({
-          stream: Readable.from([randomBytes(length)]),
-          size: name === 'media/file-b.bin' ? FILE_BYTES : length,
-        });
-      const output = await createExportStream(() => Promise.resolve(files), openFile, makeLogger() as never);
-
-      const error = await new Promise<Error>(resolve => {
-        output.on('error', resolve);
-        output.resume();
+    const openFile = (name: string): Promise<ExportFileSource> =>
+      Promise.resolve({
+        stream: Readable.from([randomBytes(length)]),
+        size: name === 'media/file-b.bin' ? FILE_BYTES : length,
       });
-      expect(error.message).toMatch(/media\/file-b\.bin/);
-      await new Promise(resolve => setTimeout(resolve, 100));
-      expect(uncaught).toEqual([]);
-    } finally {
-      process.removeListener('uncaughtException', onUncaught);
-    }
+    const output = await createExportStream(() => Promise.resolve(files), openFile, makeLogger() as never);
+
+    const error = await new Promise<Error>(resolve => {
+      output.on('error', resolve);
+      output.resume();
+    });
+    expect(error.message).toMatch(/media\/file-b\.bin/);
+    // Jest's own handler fails the run on an uncaught exception, which a process listener added here never
+    // sees (the test's `process` is a copy); the wait lets one land while this test is still running.
+    await new Promise(resolve => setTimeout(resolve, 100));
   });
 });

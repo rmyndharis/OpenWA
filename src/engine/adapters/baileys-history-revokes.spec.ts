@@ -295,6 +295,47 @@ describe('Baileys history revokes', () => {
     expect((await raw.getMessage('s1', 'M1'))?.message).toBeNull();
   });
 
+  // The key inside a revoke is written by the revoker's client from its own side: a contact names this
+  // account's chat and marks its own message fromMe.
+  describe('a revoke in a later chunk, keyed as the revoker wrote it', () => {
+    const GROUP = '1@g.us';
+    const MEMBER = '628333@s.whatsapp.net';
+    const memberRevoke = () =>
+      revoke({ id: 'M1', remoteJid: GROUP, fromMe: true }, { remoteJid: GROUP, fromMe: false, participant: MEMBER });
+
+    it('clears the contact message it names in a 1:1 chat', async () => {
+      await capture([target()]);
+      await capture([revoke({ id: 'M1', remoteJid: SELF, fromMe: true }, { remoteJid: CHAT, fromMe: false })]);
+      expect(await cleared()).toMatchObject({ direction: MessageDirection.INCOMING });
+      expect(previews.listChats().find(chat => chat.id === '628111@c.us')).toMatchObject({
+        lastMessage: '',
+        lastMessageType: 'revoked',
+      });
+    });
+
+    it('writes nothing for a group revoke whose target neither the chunk nor the store holds', async () => {
+      await capture([memberRevoke()]);
+      expect(await repo.count()).toBe(0);
+
+      const posted = target({ key: { id: 'M1', remoteJid: GROUP, fromMe: false, participant: MEMBER } });
+      await capture([posted]);
+      await capture([memberRevoke()]);
+      expect(await repo.findOneByOrFail({ waMessageId: 'M1' })).toMatchObject({
+        direction: MessageDirection.INCOMING,
+        body: 'withdrawn secret',
+      });
+    });
+
+    it('clears a group message the store holds, keeping its direction', async () => {
+      const posted = target({ key: { id: 'M1', remoteJid: GROUP, fromMe: false, participant: MEMBER } });
+      await raw.put('s1', posted);
+      await capture([posted]);
+      await capture([memberRevoke()]);
+      expect(await cleared()).toMatchObject({ direction: MessageDirection.INCOMING });
+      expect((await raw.getMessage('s1', 'M1'))?.message).toBeNull();
+    });
+  });
+
   it('does not write history tombstones after the session is retired', async () => {
     isLive = false;
     await capture([revoke()]);

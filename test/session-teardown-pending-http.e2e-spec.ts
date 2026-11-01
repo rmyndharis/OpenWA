@@ -16,12 +16,13 @@ import { SessionService } from './../src/modules/session/session.service';
  * which is correct-but-unverified for THIS code path.
  *
  * Driven through the real HTTP stack (AppModule + applyGlobalValidation, the exact production bootstrap)
- * with NO custom exception filter registered, so the object-response ConflictException that
- * `SessionEngineLifecycle.awaitPendingTeardown()` throws is serialized by Nest's default filter — proving the
- * stable `code` field reaches the response body unchanged. The service is overridden to throw the exact
- * ConflictException shape the source constructs, so this exercises the real Nest serialization path
+ * with NO custom exception filter registered, so an object-response ConflictException of the shape
+ * `SessionLifecycleFences.awaitPendingTeardown()` (session-lifecycle-fences.ts) throws is serialized by Nest's
+ * default filter, showing the stable `code` field reaches the response body unchanged. The service is
+ * overridden to throw a copy of that shape built here, so this exercises the real Nest serialization path
  * (controller + DI + filter) rather than re-running the 10s bounded-wait (which needs fake timers and
- * would fight supertest's socket handling in an e2e boot).
+ * would fight supertest's socket handling in an e2e boot). The thrown code itself is pinned at its source
+ * by session-lifecycle-fences.spec.ts and logout-teardown-race.spec.ts.
  */
 describe('Session name-scoped teardown fence: 409 code survives HTTP serialization (e2e)', () => {
   let app: INestApplication<App>;
@@ -29,9 +30,8 @@ describe('Session name-scoped teardown fence: 409 code survives HTTP serializati
   let sessionId: string;
 
   beforeAll(async () => {
-    // The exact object-response ConflictException the service throws on a name-scoped teardown still
-    // pending past its 10s fail-closed bound — constructed once and returned by both overridden handlers
-    // so this asserts the same shape that production code emits, not a hand-rolled approximation.
+    // A copy of the object-response ConflictException the fence throws on a name-scoped teardown still
+    // pending past its 10s fail-closed bound, built once and returned by both overridden handlers.
     const teardownPending = new ConflictException({
       statusCode: HttpStatus.CONFLICT,
       message:
@@ -68,11 +68,7 @@ describe('Session name-scoped teardown fence: 409 code survives HTTP serializati
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('DELETE /api/sessions/:sessionId serializes the teardown-pending 409 with the code field in the body', async () => {

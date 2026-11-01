@@ -114,6 +114,8 @@ function resetFetchCalls(): void {
   configPatchGate = null;
   proxyPatchGate = null;
   afterMutation = null;
+  listThrottle = null;
+  listRefusedUntil = 0;
 }
 
 function findFetchCall(method: string, path: string): FetchCall | undefined {
@@ -167,6 +169,16 @@ let proxyPatchGate: Promise<void> | null = null;
 // When set, runs on the macrotask after a create or delete has answered: a push that lands before
 // React has rendered what that answer wrote.
 let afterMutation: (() => void) | null = null;
+// When set, GET /api/sessions answers after `delayMs` and is refused past `limit` reads in a one-second window, as
+// the gateway's per-route throttle refuses them.
+let listThrottle: { limit: number; delayMs: number; windowStart: number; hits: number } | null = null;
+// Until this time, GET /api/sessions is refused as throttled, naming a one-second wait.
+let listRefusedUntil = 0;
+const throttled = (): Response =>
+  new Response(JSON.stringify({ statusCode: 429, message: 'ThrottlerException: Too Many Requests' }), {
+    status: 429,
+    headers: { 'Content-Type': 'application/json', 'Retry-After': '1' },
+  });
 let sessionProxy = {
   enabled: false,
   proxyType: null as string | null,
@@ -191,6 +203,16 @@ function installFetchStub(): void {
     fetchCalls.push({ method, path, body });
 
     if (method === 'GET' && path === '/api/sessions') {
+      if (Date.now() < listRefusedUntil) return Promise.resolve(throttled());
+      if (listThrottle) {
+        const now = Date.now();
+        if (now - listThrottle.windowStart >= 1_000) Object.assign(listThrottle, { windowStart: now, hits: 0 });
+        const refused = ++listThrottle.hits > listThrottle.limit;
+        const snapshot: unknown = JSON.parse(JSON.stringify(SESSIONS));
+        return new Promise(resolve =>
+          setTimeout(() => resolve(refused ? throttled() : jsonResponse(snapshot)), listThrottle?.delayMs ?? 0),
+        );
+      }
       if (sessionListFailures > 0) {
         sessionListFailures -= 1;
         const message = distinctFailureMessages
@@ -1150,6 +1172,40 @@ test('a start whose re-read shows the session ready opens no QR modal', async ()
   }
 });
 
+// A stop keeps the account linked (only a logout unlinks it), and a start answers before the engine has connected,
+// so the re-read shows `initializing` with the phone still set. There is nothing to scan, and a QR modal over that
+// session offers a phone re-link for an account that is linked.
+for (const failed of [false, true]) {
+  test(`a start of a stopped session that is still linked opens no QR modal${failed ? ', even when it times out' : ''}`, async () => {
+    const { screen, fireEvent, within, waitFor, act } = rtl;
+    resetFetchCalls();
+    const comingUp: Partial<Session> = { status: 'initializing', engineLoaded: true };
+    if (failed) startFailure = { status: 504, message: 'Gateway Timeout', leaves: comingUp };
+    else startResult = { answer: comingUp };
+    SESSIONS.push({
+      ...SESSION_QR,
+      id: 'sess-linked-stopped-1',
+      name: 'linked-stopped',
+      status: 'disconnected',
+      engineLoaded: false,
+      phone: '15550001111',
+    });
+    try {
+      renderSessions();
+      const card = (await screen.findByText('linked-stopped')).closest('.session-card') as HTMLElement;
+      const reads = () => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
+      const before = reads();
+      fireEvent.click(within(card).getByRole('button', { name: 'Start' }));
+      // The start's own re-read is what the modal is decided on; let that decision run before looking.
+      await waitFor(() => assert.ok(reads() > before));
+      await act(() => new Promise(resolve => setTimeout(resolve, 50)));
+      assert.ok(!screen.queryByRole('dialog'), 'a QR modal opened for a session that is still linked');
+    } finally {
+      SESSIONS.pop();
+    }
+  });
+}
+
 // A start can answer 200 with an engine that is gone by the time the list is read back: a stop that landed
 // while it ran retires it, and an engine can fail right after answering. The re-read decides, not the
 // answer, since a QR modal over that session could only spin.
@@ -2029,6 +2085,75 @@ test('a connect retries a failed list read once, even when each failure carries 
   // Give a re-read driven by the changed error time to fire before counting.
   await act(() => new Promise(resolve => setTimeout(resolve, 50)));
   assert.equal(listReads(), 2);
+});
+
+// A network drop brings every session back at about the same time, and each ready push asks for the list. The
+// gateway refuses this route past 10 reads a second per client: one read per push left the newest read refused,
+// its error over the page and the phones the pushes asked for unread.
+test('a burst of ready pushes over a second shares a few list reads and is not throttled', async () => {
+  const { screen, waitFor, act } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  const burst: Session[] = Array.from({ length: 12 }, (_, i) => ({
+    ...SESSION_RECONNECTING,
+    id: `sess-burst-${i}`,
+    name: `burst-${i}`,
+    phone: `1555010${String(i).padStart(4, '0')}`,
+  }));
+  SESSIONS.push(...burst);
+  try {
+    renderSessions();
+    await screen.findByText('burst-11');
+    await waitFor(() => assert.ok(lastSocket()?.connected));
+    await act(() => new Promise(resolve => setTimeout(resolve, 300)));
+    const listReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
+    const before = listReads();
+    listThrottle = { limit: 10, delayMs: 20, windowStart: 0, hits: 0 };
+    for (const [i, row] of burst.entries()) {
+      // The phone the gateway writes on ready, which only a list read brings to the card.
+      Object.assign(row, { status: 'ready', phone: `1555020${String(i).padStart(4, '0')}` });
+      pushSessionStatus(row.id, 'ready');
+      await act(() => new Promise(resolve => setTimeout(resolve, 80)));
+    }
+    await act(() => new Promise(resolve => setTimeout(resolve, 600)));
+    const reads = listReads() - before;
+    assert.ok(reads <= 6, `12 pushes sent ${reads} list reads`);
+    assert.equal(screen.queryByText('ThrottlerException: Too Many Requests') === null, true, 'a list read was refused');
+    for (const row of burst) screen.getByText(row.phone as string);
+  } finally {
+    SESSIONS.splice(SESSIONS.length - burst.length, burst.length);
+  }
+});
+
+// A refused read names its wait in Retry-After. A retry sent at once lands in the same window and is refused too,
+// which spent the one retry a connect allows and left the throttle error over a stale list.
+test('a throttled list read is retried after the wait the gateway names', async () => {
+  const { screen, waitFor, act } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  renderSessions();
+  await screen.findByText('new-device');
+  await waitFor(() => assert.ok(lastSocket()?.connected));
+  const socket = lastSocket()!;
+
+  listRefusedUntil = Date.now() + 1_000;
+  act(() =>
+    socket.receive('message', {
+      type: 'event',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      payload: { event: 'session.restriction', sessionId: SESSION_QR.id, data: {} },
+    }),
+  );
+  await screen.findByText('ThrottlerException: Too Many Requests');
+  await waitFor(
+    () =>
+      assert.equal(
+        screen.queryByText('ThrottlerException: Too Many Requests') === null,
+        true,
+        'the throttle error stayed after its window passed',
+      ),
+    { timeout: 3_000 },
+  );
 });
 
 test('a read-only key gets no Show QR button, since the QR is operator-only', async () => {

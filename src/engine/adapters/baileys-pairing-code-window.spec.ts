@@ -1,6 +1,7 @@
 jest.mock('@whiskeysockets/baileys', () => ({ __esModule: true }));
 
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { BAILEYS_PAIRING_CODE_WINDOW_MS, BaileysLifecycle, type BaileysLifecycleHost } from './baileys-lifecycle';
 
 /**
@@ -145,6 +146,53 @@ describe('Baileys pairing code requested and never entered', () => {
 
     expect(sock.end).not.toHaveBeenCalled();
     expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('answers not ready and arms nothing when the session stops while the code is being requested', async () => {
+    const { lifecycle, sock, internals } = qrStage();
+    let answer!: (code: string) => void;
+    sock.requestPairingCode.mockImplementationOnce(() => new Promise<string>(resolve => (answer = resolve)));
+    const requesting = lifecycle.requestPairingCode('628123456789');
+
+    internals.sock = null;
+    internals.status = EngineStatus.DISCONNECTED;
+    answer('ABCD1234');
+
+    await expect(requesting).rejects.toBeInstanceOf(EngineNotReadyError);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('answers not ready when the stop closes the socket under the request and the request rejects', async () => {
+    const { lifecycle, sock, internals } = qrStage();
+    let fail!: (error: Error) => void;
+    sock.requestPairingCode.mockImplementationOnce(() => new Promise<string>((_, reject) => (fail = reject)));
+    const requesting = lifecycle.requestPairingCode('628123456789');
+
+    internals.sock = null;
+    internals.status = EngineStatus.DISCONNECTED;
+    fail(new Error('Connection Closed'));
+
+    await expect(requesting).rejects.toBeInstanceOf(EngineNotReadyError);
+  });
+
+  it('answers not ready when the socket was replaced while the status still reads QR_READY', async () => {
+    const { lifecycle, sock, internals } = qrStage();
+    let answer!: (code: string) => void;
+    sock.requestPairingCode.mockImplementationOnce(() => new Promise<string>(resolve => (answer = resolve)));
+    const requesting = lifecycle.requestPairingCode('628123456789');
+
+    internals.sock = { ...sock, end: jest.fn() };
+    answer('ABCD1234');
+
+    await expect(requesting).rejects.toBeInstanceOf(EngineNotReadyError);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('keeps the failure of a request that nothing stopped', async () => {
+    const { lifecycle, sock } = qrStage();
+    sock.requestPairingCode.mockImplementationOnce(() => Promise.reject(new Error('rate-overlimit')));
+
+    await expect(lifecycle.requestPairingCode('628123456789')).rejects.toThrow('rate-overlimit');
   });
 
   it('does nothing to a socket that has been replaced since the request', async () => {

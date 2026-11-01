@@ -602,6 +602,7 @@
     "session": "సెషన్",
     "events": "ఈవెంట్స్",
     "noEvents": "కనీసం ఒక ఈవెంట్‌ను ఎంచుకోండి.",
+    "urlInvalid": "http:// లేదా https://తో మొదలయ్యే పూర్తి చిరునామాను ఉపయోగించండి, ఉదా: https://example.com/webhook.",
     "available": "అందుబాటులో ఉన్న ఈవెంట్స్",
     "saveChanges": "మార్పులను సేవ్ చేయి",
     "filters": {
@@ -822,14 +823,14 @@
     },
     "confirm": {
       "deleteTitle": "API కీని తొలగించండి",
-      "revokeTitle": "API కీని రద్దు చేయండి",
+      "revokeTitle": "API కీని ఉపసంహరించండి",
       "deleteMessage": "మీరు ఖచ్చితంగా <strong>{{name}}</strong> ని శాశ్వతంగా తొలగించాలనుకుంటున్నారా? ఈ చర్యను వెనక్కి తీసుకోలేము.",
-      "revokeMessage": "మీరు ఖచ్చితంగా <strong>{{name}}</strong> ని రద్దు చేయాలనుకుంటున్నారా? ఇది ఇకపై పనిచేయదు.",
+      "revokeMessage": "మీరు ఖచ్చితంగా <strong>{{name}}</strong> ని ఉపసంహరించాలనుకుంటున్నారా? ఇది ఇకపై పనిచేయదు.",
       "delete": "తొలగించు",
-      "revoke": "రద్దు చేయి"
+      "revoke": "ఉపసంహరించు"
     },
     "actions": {
-      "revoke": "రద్దు చేయి",
+      "revoke": "ఉపసంహరించు",
       "delete": "తొలగించు",
       "edit": "యాక్సెస్ సవరించు"
     },

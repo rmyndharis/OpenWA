@@ -263,6 +263,14 @@ describe('mapContactFields', () => {
       expect('labels' in r).toBe(false);
     });
 
+    it('reads the id under the name a renamed WA Web build gives it', () => {
+      // WA Web 2.3000.x serializes a Wid as `$1` instead of `_serialized` (#747).
+      expect(mapContactFields({ id: { $1: '584145200715@c.us' }, number: '584145200715' }, true)).toEqual({
+        id: '584145200715@c.us',
+        number: '584145200715',
+      });
+    });
+
     it('returns an empty object when nothing is set', () => {
       expect(mapContactFields({}, true)).toEqual({});
     });

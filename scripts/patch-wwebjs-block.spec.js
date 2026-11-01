@@ -105,6 +105,24 @@ test('refuses an unknown shape instead of shipping unpatched', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('refuses a body that occurs twice, or beside its own replacement', () => {
+  // A replace of the first copy, checked by "is the replacement present", reads either tree as patched while
+  // the other copy still calls the removed helper.
+  const pristine = pristineSource();
+  const block = GROUPS.find(group => group.name === 'block');
+  const patched = GROUPS.reduce((source, group) => source.replace(group.find, group.replace), pristine);
+  for (const source of [
+    pristine.replace(block.find, `${block.find}\n${block.find}`),
+    patched.replace(block.replace, `${block.replace}\n${block.find}`),
+  ]) {
+    const { dir, file } = fakeWwjs(source);
+    assert.throws(() => applyBlockPatches({ wwjsDir: dir }), /unexpected block\(\) shape/);
+    assert.equal(fs.readFileSync(file, 'utf8'), source, 'nothing may be written');
+    assert.equal(isApplied(dir), false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('refuses a tree with no Contact.js at all', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwjs-block-empty-'));
   assert.throws(() => applyBlockPatches({ wwjsDir: dir }), /Contact\.js not found/);

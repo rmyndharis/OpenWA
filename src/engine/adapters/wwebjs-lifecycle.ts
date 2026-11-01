@@ -235,6 +235,8 @@ export interface WwebjsLifecycleHost {
 export class WwebjsLifecycle {
   /** Live whatsapp-web.js client, null once torn down. Aliased by the adapter's `client` accessor. */
   client: Client | null = null;
+  /** The client whose initialize() has not settled yet, kept past a teardown that nulled `client`: see forceDestroy. */
+  private launching: Client | null = null;
   /** Current engine status. Aliased by the adapter's `status` accessor. */
   status: EngineStatus = EngineStatus.DISCONNECTED;
   /** Last encoded QR, cleared on authentication. Aliased by the adapter's `qrCode` accessor. */
@@ -325,9 +327,12 @@ export class WwebjsLifecycle {
 
     try {
       // Build puppeteer args, including proxy if configured
-      const puppeteerArgs = this.host.config.puppeteer?.args
-        ? [...this.host.config.puppeteer.args]
-        : withPinnedBrowserLocale(DEFAULT_PUPPETEER_ARGS);
+      // Pinned on configured args too: a plugin config stored through the API replaces the whole puppeteer object
+      // (checked only to be an object), so the pin the env path applies never reaches it. A copy, never mutated.
+      const configuredArgs: unknown = this.host.config.puppeteer?.args;
+      const puppeteerArgs = withPinnedBrowserLocale(
+        Array.isArray(configuredArgs) ? (configuredArgs as string[]) : DEFAULT_PUPPETEER_ARGS,
+      );
 
       // Add proxy configuration if provided. A stored proxy that does not parse to a supported scheme
       // fails the session, as on Baileys (#859): launching without it would send the session's traffic
@@ -549,9 +554,11 @@ export class WwebjsLifecycle {
     // browser exists, so it cannot pull the files out from under a running Chromium.
     await removeStaleSingletonFiles(this.host.config.sessionId, this.host.config.sessionDataPath, this.host.logger);
     if (this.tearingDown) return;
+    this.launching = client;
     try {
       await client.initialize();
     } finally {
+      if (this.launching === client) this.launching = null;
       // A stop, delete or logout that landed mid-launch ran Client.destroy() before whatsapp-web.js
       // assigned pupBrowser, so it closed nothing. The handle exists now: close the browser here, or
       // it stays logged in with no owner until the process exits.
@@ -937,6 +944,13 @@ export class WwebjsLifecycle {
     if (message.startsWith(CAPTURED_PAGE_ERROR_PREFIX)) {
       return false;
     }
+    // A call the page navigation killed while it ran keeps CDP's 'Protocol error' prefix (puppeteer rewrites only
+    // the shapes that end with a context-gone suffix), and it dies before the re-inject window is stamped. It names
+    // a reload, not a death: a page that is really gone still reports through the close, error and disconnected
+    // listeners above.
+    if (isNavigationError(error)) {
+      return false;
+    }
     return WwebjsLifecycle.PAGE_TRANSPORT_ERROR_PATTERN.test(message);
   }
 
@@ -984,9 +998,9 @@ export class WwebjsLifecycle {
   }
 
   private reportDeath(error: unknown, context: string): void {
-    // Inside the navigation re-inject window the same signatures ride a HEALING page: an in-flight
-    // evaluate killed by the navigation keeps its 'Protocol error' prefix (puppeteer only rewrites
-    // the shapes that END with a context-gone suffix), and a navigating page transiently detaches
+    // Inside the navigation re-inject window the same signatures ride a HEALING page (a call the
+    // navigation killed while it ran is not read as a death at all, see isPageTransportError): a
+    // navigating page transiently detaches
     // frames. Reporting that as death would tear down the session whatsapp-web.js is about to
     // re-inject — faster than the watchdog the grace protects against (#1081). Log the match so the
     // theory stays falsifiable from field logs; the error still propagates to the caller, and a
@@ -1192,17 +1206,22 @@ export class WwebjsLifecycle {
    */
   async forceDestroy(): Promise<void> {
     const client = this.beginClientTeardown();
-    if (!client) return;
+    // With the client already let go, a launch still in progress can own a browser: whatsapp-web.js assigns
+    // pupBrowser only after puppeteer.launch, so a stop that landed before that closed nothing, and a page that
+    // never loads (page.goto without a timeout) never reaches the finally in runInitAttempt that would close it.
+    const target = client ?? this.launching;
+    if (!target) return;
 
     try {
       // pupBrowser is the Puppeteer Browser; .process() is the Chromium ChildProcess (null if already gone).
       const proc = (
-        client as unknown as { pupBrowser?: { process?: () => { kill?: (sig: string) => void } | null } }
+        target as unknown as { pupBrowser?: { process?: () => { kill?: (sig: string) => void } | null } }
       ).pupBrowser?.process?.();
       proc?.kill?.('SIGKILL');
     } catch (err) {
       this.host.logger.warn('forceDestroy: failed to kill the browser process', { error: String(err) });
     }
+    if (!client) return;
 
     try {
       await client.destroy();
@@ -1414,9 +1433,13 @@ export class WwebjsLifecycle {
       } catch (error) {
         lastError = error;
         const reason = error instanceof Error ? error.message : String(error);
+        // A request that lands on the reloaded document before whatsapp-web.js has re-exposed window.AuthStore dies
+        // on the missing store (the PairingCodeLinkUtils read). The navigation shapes are retried as well, so a
+        // request that lands mid-navigation, or before WhatsApp Web has booted, gets another attempt.
         const transient =
           error instanceof PairingCodeAttemptTimeoutError ||
-          isExecutionContextDestroyedError(reason) ||
+          isNavigationShapedInitRejection(reason) ||
+          /reading 'PairingCodeLinkUtils'/.test(reason) ||
           isProtocolTimeout(error) ||
           /callfunctionon timed out/i.test(reason);
         if (!transient) {

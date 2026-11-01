@@ -15,8 +15,9 @@ public record SendLocationRequest(
 
     public static final class Builder {
         private String chatId;
-        private double latitude;
-        private double longitude;
+        // Boxed so build() can tell a coordinate never set from 0.0, which is a real place.
+        private Double latitude;
+        private Double longitude;
         private String description;
         private String address;
         private String quotedMessageId;
@@ -56,7 +57,14 @@ public record SendLocationRequest(
             return this;
         }
 
+        /**
+         * @throws IllegalArgumentException when latitude or longitude was never set: the request would carry 0.0
+         *     and the gateway would send a pin at that point.
+         */
         public SendLocationRequest build() {
+            if (latitude == null || longitude == null) {
+                throw new IllegalArgumentException("OpenWA: a location needs both latitude and longitude");
+            }
             return new SendLocationRequest(chatId, latitude, longitude, description, address, quotedMessageId);
         }
     }

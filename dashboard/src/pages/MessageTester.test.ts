@@ -1156,6 +1156,130 @@ for (const field of ['recipient', 'forward target'] as const) {
   });
 }
 
+// The number check and the send of one personal recipient, recorded, with every number answered as unregistered.
+function stubPersonalSend(): { checked: string[]; writes: unknown[] } {
+  const record = { checked: [] as string[], writes: [] as unknown[] };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith('/sessions')) return jsonResponse([{ id: 's1', name: 'Main', status: 'ready' }]);
+    if (path.includes('/contacts/check')) {
+      record.checked.push(path.split('/contacts/check')[1]);
+      return jsonResponse({ number: '0', exists: false });
+    }
+    if (path.includes('/messages/')) {
+      record.writes.push(JSON.parse(String(init?.body)));
+      return jsonResponse({ messageId: 'sent', timestamp: 1 });
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+  sessionStorage.setItem('openwa_api_key', 'original-key');
+  sessionStorage.setItem('openwa_user_role', 'operator');
+  return record;
+}
+
+function renderTesterForKey(): { container: HTMLElement; client: QueryClient } {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
+  const view = rtl.render(
+    createElement(QueryClientProvider, { client }, createElement(RoleProvider, null, createElement(MessageTester))),
+  );
+  return { container: view.container, client };
+}
+
+// Read as a phone number, a pasted chat id lost its meaning: a lid's digits were looked up as a number nobody has,
+// and a device suffix was glued onto the phone, making a different number that could belong to a stranger.
+for (const chatId of ['185290012345678@lid', '628123456789:5@s.whatsapp.net']) {
+  test(`a recipient written as a chat id (${chatId}) is sent to as it is, without a number lookup`, async () => {
+    const { checked, writes } = stubPersonalSend();
+    const { container, client } = renderTesterForKey();
+    try {
+      await rtl.screen.findByRole('option', { name: /Main/ });
+      type(container, '#mt-13', ` ${chatId} `);
+      type(container, '#mt-2', 'hello');
+      rtl.fireEvent.click(sendButton());
+      await rtl.waitFor(() => assert.ok(writes.length + checked.length > 0));
+      assert.deepEqual(checked, [], 'the chat id was looked up as a phone number');
+      assert.deepEqual(writes, [{ chatId, text: 'hello' }]);
+    } finally {
+      client.clear();
+      sessionStorage.removeItem('openwa_api_key');
+    }
+  });
+}
+
+// No phone number starts with 0, so `00` in front of one is the international exit code. Kept, it made a registered
+// number look unregistered, and a full-length number written with it read as more than one number.
+for (const [typed, number] of [
+  ['00 49 151 2345 6789', '4915123456789'],
+  ['00 123 456 789 012 345', '123456789012345'],
+] as const) {
+  test(`a recipient written as ${typed} is looked up without its 00 exit code`, async () => {
+    const { checked } = stubPersonalSend();
+    const { container, client } = renderTesterForKey();
+    try {
+      await rtl.screen.findByRole('option', { name: /Main/ });
+      type(container, '#mt-13', typed);
+      type(container, '#mt-2', 'hello');
+      rtl.fireEvent.click(sendButton());
+      await rtl.screen.findAllByText(/not registered|More than 15 digits/);
+      assert.deepEqual(checked, [`/${number}`]);
+    } finally {
+      client.clear();
+      sessionStorage.removeItem('openwa_api_key');
+    }
+  });
+}
+
+// With no digit and no @ there is no number to check: the lookup went out as GET .../contacts/check/, which the gateway
+// routes to the contact read with the id "check", and the tester showed that answer instead of asking for a number.
+for (const field of ['recipient', 'forward target'] as const) {
+  test(`a ${field} with no digit and no @ holds Send`, async () => {
+    const { checked } = stubPersonalSend();
+    const { container, client } = renderTesterForKey();
+    try {
+      await rtl.screen.findByRole('option', { name: /Main/ });
+      type(container, '#mt-13', field === 'recipient' ? ' abc ' : '15550000001');
+      if (field === 'recipient') {
+        type(container, '#mt-2', 'hello');
+      } else {
+        rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+        type(container, '#mt-9', 'abc');
+        type(container, '#mt-10', 'original-message');
+      }
+      assert.equal(sendButton().disabled, true, 'Send was offered for a field with no number in it');
+      rtl.fireEvent.click(sendButton());
+      assert.deepEqual(checked, []);
+    } finally {
+      client.clear();
+      sessionStorage.removeItem('openwa_api_key');
+    }
+  });
+}
+
+// The recipient is only the default chat a forward is taken from. With From Chat ID filled it goes unused, yet Send
+// still required it and its lookup ran first, so a stale or mistyped number refused the forward as "not registered".
+test('a forward from a named chat neither needs nor looks up the personal recipient', async () => {
+  const { checked, writes } = stubPersonalSend();
+  const { container, client } = renderTesterForKey();
+  try {
+    await rtl.screen.findByRole('option', { name: /Main/ });
+    rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+    type(container, '#mt-17', '120363000000000000@g.us');
+    type(container, '#mt-9', '120363999999999999@g.us');
+    type(container, '#mt-10', 'original-message');
+    assert.equal(sendButton().disabled, false, 'Send waited for a recipient the forward does not use');
+    type(container, '#mt-13', '123');
+    rtl.fireEvent.click(sendButton());
+    await rtl.waitFor(() => assert.ok(writes.length + checked.length > 0));
+    assert.deepEqual(checked, [], 'the unused recipient was looked up');
+    assert.deepEqual(writes, [
+      { fromChatId: '120363000000000000@g.us', toChatId: '120363999999999999@g.us', messageId: 'original-message' },
+    ]);
+  } finally {
+    client.clear();
+    sessionStorage.removeItem('openwa_api_key');
+  }
+});
+
 test('an unchanged actor sends to canonical personal and forward destinations', async () => {
   const writes: { path: string; key: string | null; body: unknown }[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

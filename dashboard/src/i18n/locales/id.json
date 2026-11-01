@@ -602,6 +602,7 @@
     "session": "Sesi",
     "events": "Kejadian",
     "noEvents": "Pilih minimal satu kejadian.",
+    "urlInvalid": "Gunakan alamat http:// atau https:// lengkap, seperti https://example.com/webhook.",
     "available": "Kejadian Tersedia",
     "saveChanges": "Simpan Perubahan",
     "filters": {

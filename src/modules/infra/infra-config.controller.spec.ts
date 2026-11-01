@@ -28,7 +28,7 @@ jest.mock('../../config/storage-root', () => {
 });
 
 import type { Server } from 'http';
-import { BadRequestException, type INestApplication } from '@nestjs/common';
+import { BadRequestException, ConflictException, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -2673,7 +2673,7 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
     new InfraConfigController(
       {} as never, // engineFactory
       dockerService as never,
-      { shutdown: jest.fn() } as never, // shutdownService
+      { shutdown: jest.fn(), isShuttingDown: () => false } as never, // shutdownService
     );
 
   it('tears down only allowlisted profiles, never an unknown or empty entry', async () => {
@@ -2730,7 +2730,7 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
             provide: DockerService,
             useValue: { isDockerAvailable: () => true, stopManagedService, orchestrateProfiles },
           },
-          { provide: ShutdownService, useValue: { shutdown: jest.fn() } },
+          { provide: ShutdownService, useValue: { shutdown: jest.fn(), isShuttingDown: () => false } },
         ],
       }).compile();
       app = moduleRef.createNestApplication({ logger: false });
@@ -3047,6 +3047,247 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
   });
 });
 
+// The next boot dials the database the saved file names. Restarting into a built-in PostgreSQL that did not start
+// fails that boot and every one after it, with the dashboard that could undo the save down.
+describe('InfraConfigController.requestRestart when the built-in database does not start', () => {
+  const RUNNING = 'DATABASE_TYPE=sqlite\nENGINE_TYPE=baileys\n';
+  const SAVED_BUILT_IN =
+    'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=postgres\nDATABASE_USERNAME=openwa\n' +
+    'DATABASE_PASSWORD=openwa\nDATABASE_NAME=openwa\n';
+  const startError = "Failed to create or start the 'postgres' container; see the server log for the Docker error.";
+  const failedStart = {
+    success: false,
+    message: startError,
+    containersStarted: [],
+    containersStopped: [],
+    errors: [startError],
+    estimatedTime: 35,
+  };
+  const parsed = (text: string) => jest.requireActual<typeof import('dotenv')>('dotenv').parse(text);
+  const writes = (): string[] => ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>).map(c => c[1]);
+  let shutdown: jest.Mock;
+  let isShuttingDown: jest.Mock;
+  let stopManagedService: jest.Mock;
+  let orchestrateProfiles: jest.Mock;
+
+  const build = (orchestration: object, audit?: { logInfo: jest.Mock; logWarn: jest.Mock }): InfraConfigController => {
+    shutdown = jest.fn();
+    isShuttingDown = jest.fn().mockReturnValue(false);
+    stopManagedService = jest.fn().mockResolvedValue(true);
+    orchestrateProfiles = jest.fn().mockResolvedValue(orchestration);
+    const dockerService = { isDockerAvailable: () => true, stopManagedService, orchestrateProfiles };
+    return new InfraConfigController(
+      {} as never,
+      dockerService as never,
+      { shutdown, isShuttingDown } as never,
+      audit as never,
+    );
+  };
+  // The page's own save of the built-in database over the file this process booted from.
+  const saveBuiltIn = (controller: InfraConfigController): string[] => {
+    const { saved, profiles } = controller.saveConfig({ database: { type: 'postgres', builtIn: true } });
+    expect(saved).toBe(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue(writes().at(-1));
+    return profiles;
+  };
+  const refusalOf = async (promise: Promise<unknown>): Promise<ConflictException> => {
+    const error = await promise.then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(ConflictException);
+    return error as ConflictException;
+  };
+
+  beforeEach(() => {
+    (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue(RUNNING);
+    (fs.writeFileSync as jest.Mock).mockClear();
+    recordPinnedEnvKeys({});
+  });
+  afterEach(() => {
+    delete process.env.DATABASE_TYPE;
+    delete process.env.DATABASE_HOST;
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.readFileSync as jest.Mock).mockReturnValue('');
+  });
+
+  it('answers 409, stops nothing, and puts back the configuration this server runs', async () => {
+    const controller = build(failedStart);
+    const profiles = saveBuiltIn(controller);
+    expect(profiles).toContain('postgres');
+
+    const refusal = await refusalOf(controller.requestRestart({ profiles, profilesToRemove: ['redis'] }));
+
+    expect(refusal.getResponse()).toMatchObject({ statusCode: 409, code: 'RESTART_DATABASE_NOT_STARTED' });
+    expect(refusal.message).toContain('put back');
+    expect(refusal.message).toContain(startError);
+    expect(shutdown).not.toHaveBeenCalled();
+    expect(stopManagedService).not.toHaveBeenCalled();
+    expect(parsed(writes().at(-1)!)).toEqual(parsed(RUNNING));
+  });
+
+  it('says the saved configuration still selects it when this process saved nothing to put back', async () => {
+    (fs.readFileSync as jest.Mock).mockReturnValue(SAVED_BUILT_IN);
+    const controller = build({ ...failedStart, errors: [], message: 'Docker is not available' });
+
+    const refusal = await refusalOf(controller.requestRestart({ profiles: ['postgres'] }));
+
+    expect(refusal.message).toContain('still selects it');
+    expect(refusal.message).toContain('Docker is not available');
+    expect(shutdown).not.toHaveBeenCalled();
+    expect(writes()).toEqual([]);
+  });
+
+  it('says the saved configuration still selects it when putting it back fails', async () => {
+    const controller = build(failedStart);
+    const profiles = saveBuiltIn(controller);
+    (fs.writeFileSync as jest.Mock).mockImplementationOnce(() => {
+      throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    });
+
+    const refusal = await refusalOf(controller.requestRestart({ profiles }));
+
+    expect(refusal.message).toContain('still selects it');
+    expect(shutdown).not.toHaveBeenCalled();
+  });
+
+  it('restarts when the built-in database started, whatever else failed', async () => {
+    const controller = build({
+      ...failedStart,
+      success: true,
+      containersStarted: ['postgres'],
+      errors: ["Failed to create or start the 'redis' container; see the server log for the Docker error."],
+    });
+    const profiles = saveBuiltIn(controller);
+
+    const result = await controller.requestRestart({ profiles: [...profiles, 'redis'] });
+
+    expect(result.restarting).toBe(true);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('restarts as before when this server already runs on the built-in database', async () => {
+    process.env.DATABASE_TYPE = 'postgres';
+    process.env.DATABASE_HOST = 'postgres';
+    (fs.readFileSync as jest.Mock).mockReturnValue(SAVED_BUILT_IN);
+    const controller = build(failedStart);
+
+    await controller.requestRestart({ profiles: ['postgres'] });
+
+    expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts back the overlay this process booted from after more than one save', async () => {
+    const controller = build(failedStart);
+    expect(controller.saveConfig({ engine: { headless: false } }).saved).toBe(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue(writes().at(-1));
+    const profiles = saveBuiltIn(controller);
+
+    await refusalOf(controller.requestRestart({ profiles }));
+
+    expect(parsed(writes().at(-1)!)).toEqual(parsed(RUNNING));
+  });
+
+  it('refuses a second restart while the first is still running, and accepts one after it', async () => {
+    const controller = build(failedStart);
+    let finish!: (orchestration: object) => void;
+    orchestrateProfiles.mockImplementationOnce(() => new Promise<object>(resolve => (finish = resolve)));
+    const first = controller.requestRestart({ profiles: ['redis'] });
+
+    const refusal = await refusalOf(controller.requestRestart({ profiles: ['redis'] }));
+    expect(refusal.getResponse()).toMatchObject({ statusCode: 409, code: 'RESTART_ALREADY_RUNNING' });
+    expect(orchestrateProfiles).toHaveBeenCalledTimes(1);
+
+    finish({ ...failedStart, success: true, containersStarted: ['redis'], errors: [] });
+    await expect(first).resolves.toMatchObject({ restarting: true });
+    await expect(controller.requestRestart({ profiles: ['redis'] })).resolves.toMatchObject({ restarting: true });
+  });
+
+  it('refuses a restart requested while the server is already shutting down for one', async () => {
+    const controller = build({ ...failedStart, success: true, containersStarted: ['redis'], errors: [] });
+    isShuttingDown.mockReturnValue(true);
+
+    const refusal = await refusalOf(controller.requestRestart({ profiles: ['redis'] }));
+
+    expect(refusal.getResponse()).toMatchObject({ statusCode: 409, code: 'RESTART_ALREADY_RUNNING' });
+    expect(orchestrateProfiles).not.toHaveBeenCalled();
+    expect(shutdown).not.toHaveBeenCalled();
+  });
+
+  it('frees the restart for the next request after a refusal', async () => {
+    const controller = build(failedStart);
+    const profiles = saveBuiltIn(controller);
+
+    await refusalOf(controller.requestRestart({ profiles }));
+    const again = await refusalOf(controller.requestRestart({ profiles }));
+
+    expect(again.getResponse()).toMatchObject({ code: 'RESTART_DATABASE_NOT_STARTED' });
+  });
+
+  it('puts nothing back when the server begins shutting down for another restart during the start', async () => {
+    const controller = build(failedStart);
+    const profiles = saveBuiltIn(controller);
+    const writesBefore = writes().length;
+    orchestrateProfiles.mockImplementationOnce(() => {
+      isShuttingDown.mockReturnValue(true);
+      return Promise.resolve(failedStart);
+    });
+
+    const refusal = await refusalOf(controller.requestRestart({ profiles }));
+
+    expect(refusal.getResponse()).toMatchObject({ code: 'RESTART_ALREADY_RUNNING' });
+    expect(writes()).toHaveLength(writesBefore);
+    expect(shutdown).not.toHaveBeenCalled();
+  });
+
+  it('records a refused restart in the audit log with whether the configuration was put back', async () => {
+    const audit = { logInfo: jest.fn().mockResolvedValue(null), logWarn: jest.fn().mockResolvedValue(null) };
+    const controller = build(failedStart, audit);
+    const profiles = saveBuiltIn(controller);
+
+    await refusalOf(controller.requestRestart({ profiles, profilesToRemove: ['redis'] }));
+
+    expect(audit.logWarn).toHaveBeenCalledWith(AuditAction.INFRA_RESTART_REQUESTED, {
+      metadata: {
+        profiles,
+        profilesToRemove: ['redis'],
+        refused: 'RESTART_DATABASE_NOT_STARTED',
+        configRestored: true,
+      },
+    });
+    expect(audit.logInfo).not.toHaveBeenCalledWith(AuditAction.INFRA_RESTART_REQUESTED, expect.anything());
+  });
+
+  it('answers the refusal on the wire as a 409 with its code', async () => {
+    (fs.readFileSync as jest.Mock).mockReturnValue(SAVED_BUILT_IN);
+    const moduleRef = await Test.createTestingModule({
+      controllers: [InfraConfigController],
+      providers: [
+        { provide: EngineFactory, useValue: {} },
+        {
+          provide: DockerService,
+          useValue: { isDockerAvailable: () => true, orchestrateProfiles: jest.fn().mockResolvedValue(failedStart) },
+        },
+        { provide: ShutdownService, useValue: { shutdown: jest.fn(), isShuttingDown: () => false } },
+      ],
+    }).compile();
+    const app = moduleRef.createNestApplication({ logger: false });
+    applyGlobalValidation(app);
+    await app.init();
+    try {
+      const res = await request(app.getHttpServer() as Server)
+        .post('/api/infra/restart')
+        .send({ profiles: ['postgres'] });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({ code: 'RESTART_DATABASE_NOT_STARTED' });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 // The infra module's sensitive ADMIN operations (credential config write, restart/Docker
 // orchestration, full-DB + storage export/import) must leave an audit trail — each emits an AuditAction.
 describe('InfraConfigController audit trail (light-dependency handlers)', () => {
@@ -3094,7 +3335,7 @@ describe('InfraConfigController audit trail (light-dependency handlers)', () => 
     const audit = makeAudit();
     const controller = build(audit, {
       dockerService: { isDockerAvailable: () => false },
-      shutdownService: { shutdown: jest.fn() },
+      shutdownService: { shutdown: jest.fn(), isShuttingDown: () => false },
     });
     await controller.requestRestart({ profiles: ['postgres'], profilesToRemove: [] });
     const calls = audit.logInfo.mock.calls as Array<[AuditAction, { metadata: { profiles: string[] } }]>;

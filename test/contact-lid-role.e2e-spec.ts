@@ -59,11 +59,7 @@ describe('Contact LID lookup gate (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore TypeORM multi-datasource teardown quirk */
-    }
+    await app?.close();
   });
 
   beforeEach(() => jest.clearAllMocks());
@@ -97,13 +93,19 @@ describe('Contact LID lookup gate (e2e)', () => {
     expect(res.body).toEqual({ number: '628123456789', lid: null });
   });
 
+  it('refuses a privacy id or a group id as the number (400) without asking the engine', async () => {
+    await lidGet(operatorKey, '234767895240796@lid').expect(400);
+    await lidGet(operatorKey, '120363021234567890@g.us').expect(400);
+    expect(engine.getContactLid).not.toHaveBeenCalled();
+  });
+
   it('passes an unanswered lookup through as 503, never as lid:null', async () => {
     engine.getContactLid.mockRejectedValue(new EngineTransportError('WhatsApp did not answer the LID lookup'));
 
     await lidGet(operatorKey).expect(503);
   });
 
-  it('keeps the single-segment contact route and the number check on their own handlers', async () => {
+  it('keeps the number check on its own handler', async () => {
     const check = jest.fn().mockResolvedValue('628123456789@c.us');
     app.get(EngineRegistry).set(sessionId, { ...engine, getNumberId: check } as unknown as IWhatsAppEngine);
 

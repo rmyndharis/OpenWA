@@ -11,7 +11,13 @@ import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import type { ScrollDirection } from '../../utils/scrollDecision';
 import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
+import { BULK_CAPTION_MAX_LENGTH, captionLength } from '../../utils/bulkMedia';
 import { isComposingKey } from '../../utils/composition';
+
+// The gateway's bound on the text of a send and of a reply, MESSAGE_TEXT_MAX_LENGTH in
+// src/modules/message/dto/send-message.dto.ts. A caption is bounded at BULK_CAPTION_MAX_LENGTH, as SendMediaMessageDto
+// bounds it.
+const MESSAGE_TEXT_MAX_LENGTH = 4096;
 
 // Map an attachment MIME type to the neutral MessageType for the optimistic outgoing bubble, so the
 // placeholder matches what the backend will persist (e.g. a PDF is `document`, not `application`).
@@ -40,6 +46,8 @@ interface ChatComposerProps {
   onSent: (sessionId: string, chatId: string, snippet: string, sentAt: number) => void;
   /** A send was confirmed: the placeholder `tempId` is now the thread row keyed `key` (its waMessageId ?? id). */
   onSendConfirmed?: (tempId: string, key: string) => void;
+  /** A send was refused: `text` is what it took from the field of the thread (`sessionId`, `chatId`) it was typed in. */
+  onSendFailed?: (sessionId: string, chatId: string, text: string) => void;
   messageInput: string;
   setMessageInput: Dispatch<SetStateAction<string>>;
   attachment: StagedAttachment | null;
@@ -60,6 +68,7 @@ function ChatComposer({
   onMessageAppended,
   onSent,
   onSendConfirmed,
+  onSendFailed,
   messageInput,
   setMessageInput,
   attachment,
@@ -82,6 +91,11 @@ function ChatComposer({
   const typeLabel = (type: string) => `[${t(`chats.messageType.${type}`, { defaultValue: type })}]`;
   // Audio carries no caption on either engine, so text typed next to it is never sent with it.
   const attachmentIsAudio = attachment?.mimetype.startsWith('audio/') ?? false;
+  // The text a send carries is held to the gateway's bound, counted as it counts (an astral character is one), before
+  // the send instead of by a refusal.
+  const textLength = captionLength(messageInput.trim());
+  const textMax = attachment ? BULK_CAPTION_MAX_LENGTH : MESSAGE_TEXT_MAX_LENGTH;
+  const textTooLong = !attachmentIsAudio && textLength > textMax;
 
   const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
   // Monotonic token invalidating an in-flight attachment FileReader: picking a second file (or
@@ -213,7 +227,7 @@ function ChatComposer({
   // 7. Handle sending a message / media
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!selectedSessionId || !activeChat || sending) return;
+    if (!selectedSessionId || !activeChat || sending || textTooLong) return;
 
     const textToSend = messageInput.trim();
     if (!textToSend && !attachment) return;
@@ -306,6 +320,9 @@ function ChatComposer({
         ...tempMessage,
         id: result.messageId || tempId.replace(/^temp_/, 'sent_'),
         waMessageId: result.messageId || undefined,
+        // The row sorts and is labelled by this; merged into an echo that came first, it would otherwise fall back to
+        // the browser clock in createdAt, which stays the placeholder's (the media viewer finds the row by it).
+        timestamp: result.timestamp,
         status: 'sent',
       };
       upsertCachedMessage(queryClient, sendKey, reconciled, { dropId: tempId });
@@ -319,6 +336,8 @@ function ChatComposer({
     } catch (err) {
       showErrorToast(t('chats.errors.send'), err instanceof Error ? err.message : undefined);
       updateMessage(selectedSessionId, activeChat.id, tempId, { status: 'failed' });
+      // The field was emptied as Send was pressed (text next to audio was left in it).
+      if (textToSend && !attachmentIsAudio) onSendFailed?.(selectedSessionId, activeChat.id, messageInput);
     } finally {
       setSendingByThread(prev => {
         const nextCount = (prev[threadKey] ?? 0) - 1;
@@ -439,7 +458,7 @@ function ChatComposer({
 
           <button
             type="submit"
-            disabled={!canWrite || (!messageInput.trim() && !attachment) || sending}
+            disabled={!canWrite || (!messageInput.trim() && !attachment) || sending || textTooLong}
             onPointerDown={e => {
               sendPressRef.current = e.pointerType;
             }}
@@ -453,6 +472,10 @@ function ChatComposer({
             {sending ? <Loader2 className="animate-spin" size={22} /> : <Send size={20} strokeWidth={2.25} />}
           </button>
         </form>
+        {/* Kept mounted, unstyled while empty: a live region inserted with its text is often not announced. */}
+        <span className={textTooLong ? 'input-hint' : undefined} role="status">
+          {textTooLong ? t('common.fieldTooLong', { max: textMax, count: textLength }) : ''}
+        </span>
       </footer>
     </>
   );

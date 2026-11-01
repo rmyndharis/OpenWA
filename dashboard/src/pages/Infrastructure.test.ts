@@ -107,6 +107,8 @@ let overrides: {
   saveProfiles?: string[];
   saveGate?: Promise<void>;
   readyFails?: boolean;
+  // Holds the backup export's answer back (an export still being built).
+  exportGate?: Promise<void>;
 } = {};
 
 // ENGINE_TYPE supplied by the container environment, so the dashboard cannot change it.
@@ -206,9 +208,9 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse({ status: 'ok', details: {} }));
     }
     if (method === 'GET' && path === '/api/infra/export-data') {
-      return Promise.resolve(
-        jsonResponse({ exportedAt: new Date(0).toISOString(), dataDbType: 'postgres', tables: {}, counts: {} }),
-      );
+      const answer = () =>
+        jsonResponse({ exportedAt: new Date(0).toISOString(), dataDbType: 'postgres', tables: {}, counts: {} });
+      return overrides.exportGate ? overrides.exportGate.then(answer) : Promise.resolve(answer());
     }
     if (method === 'POST' && path === '/api/infra/import-data') {
       return Promise.resolve(jsonResponse({ imported: true, counts: {} }));
@@ -513,6 +515,26 @@ test('a successful save opens the restart modal', async () => {
   // unmount) is covered by the last test in this file.
   within(dialog).getByRole('button', { name: 'Restart Now' });
   within(dialog).getByRole('button', { name: 'Restart Later' });
+});
+
+// The restart closes the database and drops open connections, so an export still being built is cut and no
+// backup file arrives, while the failure reads as the connection loss a restart is expected to cause.
+test('Restart Now waits for a backup export in flight', async () => {
+  const { screen, waitFor, fireEvent, within } = rtl;
+  resetFetchCalls();
+  let release: () => void = () => {};
+  overrides = { exportGate: new Promise<void>(resolve => (release = resolve)) };
+  renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  fireEvent.click(screen.getByRole('button', { name: 'Export data' }));
+  await waitFor(() => assert.ok(findFetchCall('GET', '/api/infra/export-data')));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const restartNow = within(await screen.findByRole('dialog')).getByRole('button', { name: 'Restart Now' });
+  assert.equal((restartNow as HTMLButtonElement).disabled, true, 'a restart was offered while the export ran');
+  release();
+  await waitFor(() => assert.equal((restartNow as HTMLButtonElement).disabled, false));
 });
 
 const DB_SWITCH_WARNING = 'The new database starts empty.';

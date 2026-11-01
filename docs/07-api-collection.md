@@ -1789,8 +1789,8 @@ curl "$BASE/api/sessions/$SESSION_ID/media/convert" \
 #### POST /api/sessions/:sessionId/media/convert/voice
 
 Convert audio (or a video's audio track) into a WhatsApp voice note — Ogg/Opus, mono, 48 kHz
-(OPERATOR). Exactly one of `url` / `base64`. Post the returned `base64` to `messages/send-audio`
-with `ptt: true` (or to `status/send-voice`).
+(OPERATOR). At least one of `url` / `base64`; when both are given, `base64` is used. Post the
+returned `base64` to `messages/send-audio` with `ptt: true` (or to `status/send-voice`).
 
 ```bash
 curl -X POST "$BASE/api/sessions/$SESSION_ID/media/convert/voice" \

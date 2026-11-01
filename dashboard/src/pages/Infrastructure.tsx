@@ -1128,7 +1128,8 @@ export function Infrastructure() {
                 <button className="btn-secondary" onClick={restartFlow.close}>
                   {t('infrastructure.restart.later')}
                 </button>
-                <button className="btn-primary" onClick={restartFlow.start}>
+                {/* A restart closes the database and drops open connections, so it would cut a backup in flight. */}
+                <button className="btn-primary" onClick={restartFlow.start} disabled={dataBackup.migrating}>
                   {t('infrastructure.restart.now')}
                 </button>
               </div>

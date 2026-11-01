@@ -59,11 +59,7 @@ describe('Session request forwarding (e2e)', () => {
     if (prevNodeId === undefined) delete process.env.NODE_ID;
     else process.env.NODE_ID = prevNodeId;
     await new Promise<void>(resolve => owner.close(() => resolve()));
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   const seedOwnedElsewhere = async (): Promise<Session> =>

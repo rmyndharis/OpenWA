@@ -105,7 +105,11 @@ otherwise refuses, gets an HTTP error with a JSON-RPC body (`401` carries
 `WWW-Authenticate: Bearer`) and an `API_KEY_AUTH_FAILED` audit row (a missing or unknown
 key's row is capped at 10 per client IP a minute, a budget shared with REST and the queue
 dashboard), and no MCP method runs.
-Past the gate, a tool call flows through five steps, in this order:
+Past the gate, the MCP SDK first checks the arguments against the tool's Zod input schema. Arguments it
+refuses come back as an `isError` tool result whose text reads `MCP error -32602: Input validation
+error: ...`, without reaching authentication: a key that lacks the tool's role or session gets that
+error rather than a `403`, and no audit row is written. A call whose arguments pass flows through five
+steps, in this order:
 
 1. **Key extraction.** The adapter reads the API key from the `X-API-Key` header or
    `Authorization: Bearer …`.
@@ -114,9 +118,10 @@ Past the gate, a tool call flows through five steps, in this order:
    `allowedSessions` scope, and the IP allow-list (fail-closed). Then `hasPermission()`
    enforces the tool's required role. A key restricted to selected chats may then run only
    a tool that carries a chat scope (`403` otherwise). Auth runs **before** the handler.
-3. **Validation.** The tool's Zod input schema validates the arguments (a failure maps to
-   a `400`-style error), exactly bounding what reaches the service. A NUL character in the
-   input is refused the same way.
+3. **Validation.** `invokeTool` parses the arguments with the same schema again, exactly
+   bounding what reaches the service (a failure there would map to a `400`-style error, but the
+   SDK check above has already refused such input). A NUL character in the input is refused
+   with that `400`-style error.
 4. **Chat arguments.** For a chat-restricted key, each chat argument of the tool, read from
    the parsed values, must name a chat inside the key's allowlist, and a `quotedMessageId`
    is refused unless the tool allows one (`403`).

@@ -104,11 +104,7 @@ describe('Ingress per-instance fairness throttle (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   const send = (instanceId: string, deliveryId: string) =>

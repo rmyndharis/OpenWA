@@ -347,6 +347,23 @@ test('a selection the environment pins is left out of a save until the operator 
   assert.deepEqual([database?.host, redis?.host, storage?.s3Bucket], ['pg.internal', 'redis.internal', 'media']);
 });
 
+// QUEUE_ENABLED is one of the keys that decide whether Redis is used, a selection like REDIS_ENABLED. Written back from
+// the pin it replaced the stored value, and with the pin switching the queue off a save dropped a stored bundled Redis.
+test('a pinned QUEUE_ENABLED is left out of a save until the operator changes it or switches Redis off', () => {
+  const pinned: InfraStatus = { ...RUNNING, envPinned: ['QUEUE_ENABLED'] };
+  const untouched = renderForm({ status: pinned, saved: SAVED }).result;
+  assert.equal(untouched.current.buildSavePayload().queue?.enabled, undefined);
+
+  rtl.act(() => untouched.current.setQueueEnabled(false));
+  assert.equal(untouched.current.buildSavePayload().queue?.enabled, false);
+
+  const redisOff = renderForm({ status: pinned, saved: SAVED }).result;
+  rtl.act(() => redisOff.current.setRedisEnabled(false));
+  assert.equal(redisOff.current.buildSavePayload().queue?.enabled, false);
+
+  assert.equal(renderForm({ status: RUNNING, saved: SAVED }).result.current.buildSavePayload().queue?.enabled, true);
+});
+
 test('a pinned selection the operator changes is sent, and an unpinned one always is', () => {
   const { result } = renderForm({ status: PINNED_SELECTIONS, saved: SAVED });
 

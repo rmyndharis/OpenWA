@@ -607,6 +607,7 @@
     "session": "Sessione",
     "events": "Eventi",
     "noEvents": "Seleziona almeno un evento.",
+    "urlInvalid": "Usa un indirizzo completo con http:// o https://, per esempio https://example.com/webhook.",
     "available": "Eventi Disponibili",
     "saveChanges": "Salva Modifiche",
     "filters": {

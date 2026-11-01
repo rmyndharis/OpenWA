@@ -526,7 +526,9 @@ export class MessageController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({
     status: 201,
-    description: 'Message forwarded',
+    description:
+      "Message forwarded. `messageId` is the forwarded copy's id, or an empty string when the engine could not " +
+      'read it back.',
     type: MessageResponseDto,
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
@@ -937,7 +939,9 @@ export class MessageController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({
     status: 200,
-    description: 'Message edited',
+    description:
+      'Message edited. Both fields describe the edited message, not the edit: `messageId` is its id and ' +
+      '`timestamp` the time it was originally sent.',
     type: MessageResponseDto,
   })
   @ApiResponse({
@@ -947,9 +951,9 @@ export class MessageController {
   @ApiResponse({
     status: 403,
     description:
-      'The engine refused the edit. The Baileys adapter refuses a message the account did not send; ' +
-      'whatsapp-web.js reads the refusal from the page, which also covers a message that is not text. ' +
-      'Past its own guard the Baileys engine has no acceptance signal and answers 200.',
+      'The engine refused the edit. Both engines refuse a message the account did not send and one with no ' +
+      'text or caption to edit (a location, sticker, poll, contact card or audio); whatsapp-web.js reads the ' +
+      'refusal from the page. Past its own guards the Baileys engine has no acceptance signal and answers 200.',
   })
   @ApiResponse({ status: 404, description: 'Message not found' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })

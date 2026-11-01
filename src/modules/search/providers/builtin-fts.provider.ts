@@ -204,8 +204,9 @@ interface CountRow {
 type PlaceholderFn = () => string;
 
 /**
- * Built-in, DB-native full-text provider. Index sync is DB-level (generated tsvector / FTS5 triggers),
- * so this class ONLY queries — it never writes the index. See migration 1782400000000-AddMessagesFts.
+ * Built-in, DB-native full-text provider. The database keeps each index in step with every write (generated
+ * tsvector / FTS5 triggers, see migration 1782400000000-AddMessagesFts). This class queries them, and at boot it
+ * repairs the ones it queries (ensureFtsSchema) and builds the opt-in trigram index (buildContainsIndex).
  *
  * Two match modes, each on its own index: `word` (the default) matches whole words through the word
  * index above and ranks them in SQL; `contains` matches any substring of three or more characters,
@@ -712,9 +713,10 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    *  1. The database returns at most SEARCH_CONTAINS_WINDOW candidates: the most recently stored
    *     messages that contain every term, found through the trigram index, newest first. Both
    *     dialects answer that order from an index and stop once the window is full, so a common match
-   *     costs no more than a rare one. A message the index yields that a narrowing term then rules out
-   *     does not fill it, so the messages holding the looked-up terms bound the work, multiplied by
-   *     the length of the terms (SEARCH_CONTAINS_TERMS_MAX_LENGTH).
+   *     costs no more than a rare one (on PostgreSQL 13 or newer, see buildPostgresCandidates). A
+   *     message the index yields that a narrowing term then rules out does not fill it, so the messages
+   *     holding the looked-up terms bound the work, multiplied by the length of the terms
+   *     (SEARCH_CONTAINS_TERMS_MAX_LENGTH).
    *  2. The application ranks the candidates with containsScore (whole word, then word start, then
    *     inside a word), newest first within a score and `id` last for a total order, and pages them in
    *     memory.
@@ -918,7 +920,8 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
   // leaves alone (Ł, ß, Ø, œ), so Postgres finds some matches SQLite does not (docs/26). The most
   // recently stored first, as on SQLite: IDX_messages_createdAt lets the planner walk them backward and
   // stop at the window when a term is common, while for a rare one it reads the few matches from the
-  // GIN index and sorts them.
+  // GIN index and sorts them. The early stop needs PostgreSQL 13's incremental sort for the `id` tiebreak;
+  // PostgreSQL 12 sorts every match.
   private buildPostgresCandidates(q: SearchQuery, terms: string[]) {
     const ph = this.pgPlaceholder();
     const params: unknown[] = [];

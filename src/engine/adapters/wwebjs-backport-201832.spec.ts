@@ -205,6 +205,93 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     expect(() => applyBackport(dir)).toThrow(/PARTIALLY patched/);
   });
 
+  /** The message applyBackport refuses `dir` with. */
+  function refusal(dir: string): string {
+    try {
+      applyBackport(dir);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    throw new Error('applyBackport did not refuse the tree');
+  }
+
+  // A failed run of this patcher on a drifted release patches the hunks it can and leaves a .rej for the rest: every
+  // later run reads Message.js as normalizing with a site missing before one that landed, but a reinstall is the way
+  // to see the real error, not a sign that the release fixed the ids itself.
+  it('says a leftover patch artifact comes from a failed run of this patcher, not from a release fix', () => {
+    const dir = copyWwjs();
+    applyBackport(dir);
+    const groupChat = path.join(dir, 'src', 'structures', 'GroupChat.js');
+    fs.writeFileSync(
+      groupChat,
+      fs.readFileSync(groupChat, 'utf8').replace('pWid._serialized || pWid.$1', 'pWid._serialized ?? pWid.$1'),
+    );
+    fs.writeFileSync(`${groupChat}.rej`, '*** rejected hunk ***');
+
+    const message = refusal(dir);
+    expect(message).toMatch(/failed here left[\s\S]*GroupChat\.js\.rej[\s\S]*Reinstall the dependency/);
+    expect(message).not.toMatch(/retire this backport/);
+  });
+
+  it('keeps the refusal of a half-patched tree a partial tree when the patch file cannot be read', () => {
+    const dir = copyWwjs();
+    const messageJs = path.join(dir, 'src', 'structures', 'Message.js');
+    const utilsJs = path.join(dir, 'src', 'util', 'Injected', 'Utils.js');
+    const pristine = [messageJs, utilsJs].map(file => fs.readFileSync(file, 'utf8'));
+    applyBackport(dir);
+    fs.writeFileSync(messageJs, pristine[0]);
+    fs.writeFileSync(utilsJs, pristine[1]);
+    fs.writeFileSync(
+      messageJs,
+      fs.readFileSync(messageJs, 'utf8').replace('this.id = data.id', 'this.id = Base._normalizeId(data.id)'),
+    );
+
+    let thrown: unknown;
+    try {
+      applyBackport(dir, path.join(dir, 'missing.patch'));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as Error).message).toMatch(/PARTIALLY patched/);
+    expect((thrown as { leftPartialTree?: boolean }).leftPartialTree).toBe(true);
+  });
+
+  // A run writes the files in the patch's order, so one cut short leaves the missing sites at the END of that
+  // order. A gap before a site that landed, or no site of ours at all, comes from a release (or an edit) that
+  // changed the ids its own way, which a reinstall brings straight back.
+  it('refuses a release that words one site its own way without calling it an interrupted run', () => {
+    const dir = copyWwjs();
+    applyBackport(dir);
+    const groupChat = path.join(dir, 'src', 'structures', 'GroupChat.js');
+    fs.writeFileSync(
+      groupChat,
+      fs.readFileSync(groupChat, 'utf8').replace('pWid._serialized || pWid.$1', 'pWid._serialized ?? pWid.$1'),
+    );
+
+    const message = refusal(dir);
+    expect(message).toMatch(/no interrupted run of this patcher leaves[\s\S]*GroupChat\.js[\s\S]*retire this backport/);
+    expect(message).not.toMatch(/Reinstall the dependency/);
+  });
+
+  it('refuses a release that reads $1 in Message.js its own way without listing Message.js as normalizing', () => {
+    const dir = copyWwjs();
+    const msgJs = path.join(dir, 'src', 'structures', 'Message.js');
+    fs.writeFileSync(
+      msgJs,
+      fs
+        .readFileSync(msgJs, 'utf8')
+        .replace(
+          'this.id = data.id;',
+          'this.id = data.id._serialized ? data.id : { ...data.id, _serialized: data.id.$1 };',
+        ),
+    );
+
+    const message = refusal(dir);
+    expect(message).toMatch(/none of this backport's sites[\s\S]*retire this backport/);
+    expect(message).not.toMatch(/Reinstall the dependency|normalizes ids but/);
+  });
+
   it('fails with a curated version-skew error when Message.js is missing', () => {
     const dir = copyWwjs();
     // A future whatsapp-web.js could keep Base.js but drop or rename Message.js — the patcher must
@@ -338,6 +425,27 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
       expect(res.status).toBe(0);
       // Every normalization site landed, and the tree is whole enough that a second run stands down —
       // the same bar the `patch` path is held to, since git apply must not diverge from it.
+      expect(applyBackport(dir)).toEqual({
+        skipped: true,
+        reason: 'installed whatsapp-web.js already normalizes message ids',
+      });
+    });
+
+    it('falls back to `git apply` when `patch` refuses its options without touching the tree', () => {
+      // BusyBox's patch applet takes none of `-d`, `-F0` or `--ignore-whitespace`: it prints its usage and
+      // exits 1, the status a rejected hunk gives, but leaves no .rej and changes nothing.
+      const dir = copyWwjs();
+      const bin = gitOnlyPath();
+      fs.writeFileSync(path.join(bin, 'patch'), '#!/bin/sh\necho "BusyBox v1.36.1 multi-call binary." >&2\nexit 1\n', {
+        mode: 0o755,
+      });
+
+      const res = spawnSync(process.execPath, [SCRIPT, '--best-effort', dir], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: bin },
+      });
+
+      expect(res.status).toBe(0);
       expect(applyBackport(dir)).toEqual({
         skipped: true,
         reason: 'installed whatsapp-web.js already normalizes message ids',

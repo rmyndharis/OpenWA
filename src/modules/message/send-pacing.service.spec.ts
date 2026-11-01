@@ -4,9 +4,11 @@ import {
   HttpException,
   InternalServerErrorException,
   NotFoundException,
+  NotImplementedException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { SendPacingService, SEND_PACING_LIMITED, countsTowardSendBreaker } from './send-pacing.service';
+import { SendPacingService, SEND_PACING_LIMITED, countsTowardSendBreaker, sentNothing } from './send-pacing.service';
+import { markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { EnginePageError, RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -628,6 +630,10 @@ describe('countsTowardSendBreaker', () => {
       'a send whose recipient lookup did not answer (500 RecipientLookupUnansweredError)',
       new RecipientLookupUnansweredError({ name: 'Error', message: 'No LID for user' }, new Error('No LID for user')),
     ],
+    [
+      'a server-side fault the engine marked as raised before anything was sent',
+      markNothingSent(new InternalServerErrorException('sharp could not load')),
+    ],
   ])('does not count %s', (_label, error) => {
     expect(countsTowardSendBreaker(error)).toBe(false);
   });
@@ -643,5 +649,17 @@ describe('countsTowardSendBreaker', () => {
     ],
   ])('counts %s', (_label, error) => {
     expect(countsTowardSendBreaker(error)).toBe(true);
+  });
+});
+
+// A bulk item or product card whose engine proves nothing went out hands its admission back at once, as a keyed
+// send frees its Idempotency-Key on the same proof. Held instead, it refused the next send near the cap.
+describe('sentNothing', () => {
+  it('reads any refusal the engine marked as raised before the send as nothing sent, a 501 included', () => {
+    const refusal = (): NotImplementedException =>
+      new NotImplementedException('whatsapp-web.js cannot send a poll to a channel; nothing was sent.');
+
+    expect(sentNothing(markNothingSent(refusal()))).toBe(true);
+    expect(sentNothing(refusal())).toBe(false);
   });
 });

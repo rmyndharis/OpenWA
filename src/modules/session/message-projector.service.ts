@@ -1562,7 +1562,9 @@ export class MessageProjector {
       announce();
       if (!messageStatus) return;
       const target = messageStatus;
-      // A row the verdict did not see is only advanced by the retry, which judges it again once it is written.
+      // A row the verdict did not see is advanced by the retry, which judges it again once it is written, and for a
+      // message still in flight by its insert, with the status parked above: that one had only the check against the
+      // in-flight entry, which resolves no lid.
       const judged = async (): Promise<number> =>
         (await this.receiptVerdict(id, messageId, receiptChat)) === 'stored'
           ? this.advanceAck(id, messageId, target)
@@ -1739,8 +1741,9 @@ export class MessageProjector {
   applyMessageEditQueued(id: string, message: EditedMessage): void {
     const source = { kind: 'edit', chatId: message.chatId, fromMe: message.fromMe, author: message.author } as const;
     void this.changeInFlight(id, message.messageId, source, (needsRow, entry) => {
-      // Revoked before its row was written: the row will be stored cleared and message.revoked has gone out, so the
-      // edit is neither held nor announced. Once the row exists, applyMessageEdit refuses a revoked one itself.
+      // Deleted before its row was written, for everyone or through a REST delete for this account only: the row will
+      // be stored cleared, so the edit is neither held nor announced. Once the row exists, applyMessageEdit refuses a
+      // revoked one itself.
       if (entry && !needsRow && entry.revoked) return;
       if (entry && !needsRow) this.holdEdit(entry, message.body);
       this.mutationProjector.applyMessageEditQueued(id, message, needsRow);

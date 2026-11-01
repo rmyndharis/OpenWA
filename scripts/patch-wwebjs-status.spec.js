@@ -215,3 +215,15 @@ test('media repair passes the upstream options object and returns a model built 
   );
   assert.ok(MEDIA_SEND_REPLACE.includes(': msg;'), 'text status return value is unchanged');
 });
+
+test('applies to a copy of the installed whatsapp-web.js, or finds it applied there already', () => {
+  // The fixtures above are built from this patcher's own find strings, so they pass just the same once the
+  // library stops containing them. A copy of the installed file does not.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwjs-status-installed-'));
+  const file = path.join('src', 'util', 'Injected', 'Utils.js');
+  fs.mkdirSync(path.join(dir, path.dirname(file)), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js', file), path.join(dir, file));
+  applyStatusPatches(dir);
+  assert.equal(isApplied(dir), true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

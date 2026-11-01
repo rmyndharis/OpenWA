@@ -127,6 +127,10 @@ describe('SendBulkMessageDto nested objects refuse an array', () => {
     await rejects({ ...textItem('hi'), options: value });
   });
 
+  it('refuses a message entry given as an array', async () => {
+    await rejects({ messages: [[{ chatId: 'c@c.us', type: 'text', content: { text: 'hi' } }]] });
+  });
+
   it('refuses a message content given as an array', async () => {
     await rejects({ messages: [{ chatId: 'c@c.us', type: 'text', content: [{ text: 'hi' }] }] });
   });

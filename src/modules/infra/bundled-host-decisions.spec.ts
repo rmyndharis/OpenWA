@@ -135,7 +135,11 @@ afterEach(() => {
 });
 
 const controller = (docker: Record<string, unknown> = {}) =>
-  new InfraConfigController({} as never, docker as never, { shutdown: jest.fn() } as never);
+  new InfraConfigController(
+    {} as never,
+    docker as never,
+    { shutdown: jest.fn(), isShuttingDown: () => false } as never,
+  );
 
 function saved(payload: unknown): Record<string, string> {
   controller().saveConfig(payload as never);
@@ -148,7 +152,7 @@ async function restart(body: { profiles?: string[]; profilesToRemove?: string[] 
   const result = await controller({
     isDockerAvailable: () => true,
     stopManagedService,
-    orchestrateProfiles: jest.fn().mockResolvedValue({}),
+    orchestrateProfiles: jest.fn((profiles: string[]) => Promise.resolve({ containersStarted: profiles, errors: [] })),
   }).requestRestart(body);
   return { result, stopped: stopManagedService.mock.calls.length > 0 };
 }

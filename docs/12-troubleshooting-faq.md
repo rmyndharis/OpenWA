@@ -748,8 +748,8 @@ that reads a message id fails. Source installs only; the Docker image always app
 **Solution:**
 
 ```bash
-# Is the backport missing? Works on every platform, including Windows without grep.
-node -e "console.log(require('fs').readFileSync('node_modules/whatsapp-web.js/src/structures/Base.js','utf8').includes('_normalizeId')?'PATCHED':'NOT PATCHED')"
+# Is the backport missing, or only partly applied? Works on every platform, including Windows without grep.
+node -e "const s=require('./scripts/patch-wwebjs-201832.js').missingSites();const m=require('fs').readFileSync('node_modules/whatsapp-web.js/src/structures/Message.js','utf8');console.log(s.length?'PARTIAL: '+s.join(', '):m.includes('_normalizeId(')?'PATCHED':'NOT PATCHED')"
 
 # Apply it, then restart
 node scripts/patch-wwebjs-201832.js
@@ -795,7 +795,9 @@ node scripts/patch-wwebjs-group-description.js
 
 If a patcher answers with an unsupported-shape error instead of applying, the installed library has
 moved and the transform needs re-evaluating against it. Reinstalling will not help; open an issue
-quoting the message it printed.
+quoting the message it printed. The one exception is `patch-baileys-pairing.js` saying the backport
+was cut short: an interrupted install left it half applied, and reinstalling `@whiskeysockets/baileys`
+(`rm -rf node_modules/@whiskeysockets/baileys && npm ci`) is the fix.
 
 > `patch-wwebjs-201832.js` is not in that list. It carries its own startup check and its own entry
 > above, because a partially applied backport needs different advice than one that never ran.
@@ -1517,18 +1519,21 @@ A media message also carries `media: { mimetype, filename?, data?, omitted?, siz
 
 ### HTTP Error Codes
 
-| Code | Meaning             | Common Cause                                                                                                                  | Solution                                                                                         |
-| ---- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| 400  | Bad Request         | Invalid parameters, or the session is not started                                                                             | Check request body/params; start the session                                                     |
-| 401  | Unauthorized        | Missing/invalid API key                                                                                                       | Add X-API-Key header                                                                             |
-| 403  | Forbidden           | Insufficient permissions                                                                                                      | Check API key permissions                                                                        |
-| 404  | Not Found           | Invalid session/endpoint                                                                                                      | Verify session exists                                                                            |
-| 409  | Conflict            | Session name already exists, the session is not ready (retryable), or an idempotent send is in progress or of unknown outcome | Use a different session name, wait for `ready`, or follow the `code` (docs/06, idempotent sends) |
-| 422  | Unprocessable       | An `Idempotency-Key` reused with another route or body                                                                        | Use a new key for a different send                                                               |
-| 413  | Payload Too Large   | File too large                                                                                                                | Reduce file size                                                                                 |
-| 429  | Too Many Requests   | Rate limited                                                                                                                  | Reduce request rate                                                                              |
-| 500  | Internal Error      | Server error                                                                                                                  | Check logs                                                                                       |
-| 503  | Service Unavailable | The engine transport died during a read, or a media fetch through the session proxy failed                                    | Retry; restart the session if it persists                                                        |
+| Code | Meaning             | Common Cause                                                                                                                                                                                                                        | Solution                                                                                                                                |
+| ---- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | Bad Request         | Invalid parameters, or the session is not started                                                                                                                                                                                   | Check request body/params; start the session                                                                                            |
+| 401  | Unauthorized        | Missing/invalid API key                                                                                                                                                                                                             | Add X-API-Key header                                                                                                                    |
+| 403  | Forbidden           | Insufficient permissions                                                                                                                                                                                                            | Check API key permissions                                                                                                               |
+| 404  | Not Found           | Invalid session/endpoint                                                                                                                                                                                                            | Verify session exists                                                                                                                   |
+| 409  | Conflict            | Session name already exists, the session is not ready (retryable), or an idempotent send is in progress or of unknown outcome                                                                                                       | Use a different session name, wait for `ready`, or follow the `code` (docs/06, idempotent sends)                                        |
+| 422  | Unprocessable       | An `Idempotency-Key` reused with another route or body                                                                                                                                                                              | Use a new key for a different send                                                                                                      |
+| 413  | Payload Too Large   | File too large                                                                                                                                                                                                                      | Reduce file size                                                                                                                        |
+| 429  | Too Many Requests   | Rate limited                                                                                                                                                                                                                        | Reduce request rate                                                                                                                     |
+| 500  | Internal Error      | Server error                                                                                                                                                                                                                        | Check logs                                                                                                                              |
+| 501  | Not Implemented     | The active engine cannot do it (docs/29), or search has no active provider, or no ready index for the requested `match`                                                                                                             | Use the engine that supports it (docs/29); for search, see docs/26                                                                      |
+| 502  | Bad Gateway         | A stop, logout or force-kill stopped the session locally but did not complete, a search plugin returned invalid results, or (multi-node) a request forwarded to its session's node failed; that one may have been carried out there | Follow the `code` (docs/06): retry the stop or logout; for search, check the plugin; for a forwarded request, check before repeating it |
+| 503  | Service Unavailable | WhatsApp did not answer or rate-limited it, the engine connection died, a proxied fetch failed, or S3 is unreachable or busy                                                                                                        | Retry after a pause (`Retry-After` when sent); a write may have applied, so check first                                                 |
+| 504  | Gateway Timeout     | `POST .../start`: the engine did not finish starting within its timeout; or (multi-node) a request forwarded to its session's node got no answer in time and may have been carried out there                                        | Check network access to WhatsApp and the host's resources, then start again; for a forwarded request, check before repeating it         |
 
 ### Error Body Shape
 

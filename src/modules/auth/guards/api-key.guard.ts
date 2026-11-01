@@ -185,6 +185,8 @@ export class ApiKeyGuard implements CanActivate {
       throw new BadRequestException(`messages must contain at most ${ApiKeyGuard.CHAT_BULK_MAX} entries`);
     }
     messages.forEach((item, i) => {
+      // An array entry would hide its chatId from the read below, so it is refused rather than skipped.
+      if (Array.isArray(item)) throw new BadRequestException(`messages[${i}] must be an object`);
       if (item === null || typeof item !== 'object') return;
       out.push([`messages[${i}].chatId`, (item as { chatId?: unknown }).chatId]);
     });

@@ -1045,7 +1045,7 @@ describe('BaileysSessionStore', () => {
         name: 'Alice',
       }) as Record<string, unknown>;
 
-    it('lists one row and keeps a state WhatsApp syncs under the lid, across a restart', () => {
+    it('lists the phone and lid records apart and keeps a state WhatsApp syncs under the lid, across a restart', () => {
       const s = newStore();
       s.upsertChats([historyChat(PHONE)]);
       s.addLidMappings([{ lid: LID, pn: PHONE }]);
@@ -1055,7 +1055,10 @@ describe('BaileysSessionStore', () => {
         { id: LID, muteEndTime: -1 },
       ]);
       const expected = { id: '628111@c.us', name: 'Alice', pinned: true, archived: true, muted: true };
-      expect(s.listChats()).toEqual(expect.arrayContaining([expect.objectContaining(expected)]));
+      expect(s.listChats()).toEqual([
+        expect.objectContaining(expected),
+        expect.objectContaining({ id: '484848@lid', pinned: true, archived: true, muted: true }),
+      ]);
       expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
 
       const restarted = newStore();

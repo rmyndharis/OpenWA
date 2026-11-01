@@ -241,11 +241,7 @@ describeQueueOn('Queued dispatch paths (e2e, QUEUE_ENABLED=true)', () => {
     await new Promise<void>(resolve => receiver?.close(() => resolve()));
     if (prevSsrf === undefined) delete process.env.WEBHOOK_SSRF_PROTECT;
     else process.env.WEBHOOK_SSRF_PROTECT = prevSsrf;
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('boots with QUEUE_ENABLED=true and both BullMQ queues resolved', () => {
@@ -488,18 +484,17 @@ describeQueueOn('An ingress job waiting in Redis when the gateway starts (e2e, Q
     try {
       await booting;
       await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
-    // A job left behind by a failed run would be dispatched by the next run's first suite.
-    await Promise.allSettled([held, served].map(d => queue?.remove(d.deliveryId)));
-    await queue?.close();
-    bootstrap?.mockRestore();
-    enable?.mockRestore();
-    dispatch?.mockRestore();
-    for (const [key, value] of Object.entries(prevEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+    } finally {
+      // A job left behind by a failed run would be dispatched by the next run's first suite.
+      await Promise.allSettled([held, served].map(d => queue?.remove(d.deliveryId)));
+      await queue?.close();
+      bootstrap?.mockRestore();
+      enable?.mockRestore();
+      dispatch?.mockRestore();
+      for (const [key, value] of Object.entries(prevEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 

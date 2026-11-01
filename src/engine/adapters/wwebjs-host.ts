@@ -62,7 +62,8 @@ export function requireClient(host: WwebjsEngineHost): Client {
  * that exists. A navigation is not a death: nothing is reported.
  */
 export function rethrowIfNavigation(host: WwebjsEngineHost, error: unknown): void {
-  // A page the host already reads as dead is reported as dead, whatever the message says.
+  // The lifecycle never reads a navigation-shaped error as a dead page, so with it this is the navigation test alone;
+  // a host that does read one as dead keeps it a death. A page that really died reports through the death listeners.
   if (isNavigationError(error) && !host.isPageTransportError(error))
     throw new EngineNotReadyError(PAGE_RELOADING_MESSAGE);
 }

@@ -79,7 +79,7 @@ export class ContactController {
       'later chunks are skipped and their ids are absent from the response.',
   })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
-  @ApiQuery({ name: 'ids', required: true, description: 'Comma-separated contact ids (max 50 used)' })
+  @ApiQuery({ name: 'ids', required: false, description: 'Comma-separated contact ids (max 50 used)' })
   @ApiResponse({ status: 200, description: 'Picture URL per requested id', type: ProfilePicturesResponseDto })
   @ApiResponse({ status: 400, description: 'Session is not started' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
@@ -195,7 +195,12 @@ export class ContactController {
     description: 'The number and its LID, or null',
     type: ContactLidResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Session is not started' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Session is not started, or `number` is an id of another kind (a privacy id, a group or a channel) rather ' +
+      'than a phone number',
+  })
   @ApiResponse({
     status: 503,
     description:

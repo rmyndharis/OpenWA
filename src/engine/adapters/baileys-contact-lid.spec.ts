@@ -2,6 +2,7 @@ import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { WASocket } from '@whiskeysockets/baileys';
 import { BaileysContacts, BaileysContactsHost } from './baileys-contacts';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 
 /** Stand-ins for the library's USync classes: the query only has to carry what it was built with. */
@@ -106,6 +107,27 @@ describe('BaileysContacts.getContactLid', () => {
 
     await expect(setup(execute, 200, false).contacts.getContactLid(PHONE)).rejects.toBeInstanceOf(EngineNotReadyError);
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  // Baileys rejects with a raw Boom when WhatsApp answers the query with an error node (data is the WA code)
+  // and when the connection closes mid-query. Neither is a verdict about the number, and neither may become a 500.
+  it('rejects a rate-limited query as throttled, a 503 the caller can back off from', async () => {
+    const execute = jest.fn().mockRejectedValue(Object.assign(new Error('rate-overlimit'), { data: 429 }));
+
+    await expect(setup(execute).contacts.getContactLid(PHONE)).rejects.toBeInstanceOf(EngineThrottledError);
+  });
+
+  it.each([
+    ['an error node with a server code', Object.assign(new Error('internal-server-error'), { data: 500 })],
+    ['an error node with a client code', Object.assign(new Error('bad-request'), { data: 400 })],
+    [
+      'a connection that closed mid-query',
+      Object.assign(new Error('Connection Closed'), { output: { statusCode: 428 } }),
+    ],
+  ])('rejects %s as a failure to ask (503), never as lid: null', async (_label, failure) => {
+    const execute = jest.fn().mockRejectedValue(failure);
+
+    await expect(setup(execute).contacts.getContactLid(PHONE)).rejects.toBeInstanceOf(EngineTransportError);
   });
 
   it('rejects when the query outruns the deadline', async () => {

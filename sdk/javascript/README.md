@@ -1,6 +1,6 @@
 # @rmyndharis/openwa
 
-This document describes `main`. `contacts.lid` is an unreleased addition after SDK 0.8.0 and requires the corresponding server change after OpenWA 0.27.0. `groups.setMemberLabel`, the `match` key of the search query, and the `thumbnailUrl` and `thumbnailBase64` fields of `customLinkPreview` require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later. The `message.receipt` and `poll.vote` webhook event names require OpenWA 0.26.0 or later.
+This document describes `main`. `contacts.lid` is an unreleased addition after SDK 0.8.0 and requires OpenWA 0.27.1 or later. `groups.setMemberLabel`, the `match` key of the search query, and the `thumbnailUrl` and `thumbnailBase64` fields of `customLinkPreview` require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later. The `message.receipt` and `poll.vote` webhook event names require OpenWA 0.26.0 or later.
 
 Official JavaScript/TypeScript SDK for [OpenWA](https://github.com/rmyndharis/OpenWA), the open-source WhatsApp API Gateway. OpenWA is an independent project, not affiliated with or endorsed by WhatsApp or Meta.
 
@@ -40,6 +40,12 @@ console.log(result.messageId);
 
 CommonJS consumers use `require('@rmyndharis/openwa')` identically.
 
+For an endpoint the SDK does not wrap, call `client.request({ method, path, query, body })`, which
+takes an `Idempotency-Key` as its second argument, or `client.requestBytes(...)` for a binary response body. A
+path that does not begin with `/`, or has a `.` or `..` segment (also after an encoded slash, as in
+`..%2F`), rejects with a `TypeError` before anything is sent. An id with a `.` or `..` part between
+slashes, such as `../x`, is refused the same way.
+
 ## Messaging
 
 > Voice notes: pass `ptt: true` to `sendAudio` to send a real WhatsApp voice note (PTT). Supply `audio/ogg; codecs=opus` audio for reliable playback; the server defaults the mimetype to that when `ptt` is set without one.
@@ -50,8 +56,9 @@ Non-2xx responses throw a typed `OpenWAApiError` subclass (`OpenWAAuthError`,
 `OpenWAForbiddenError`, `OpenWANotFoundError`, `OpenWAConflictError`,
 `OpenWARateLimitError`, `OpenWANotImplementedError`,
 `OpenWAServiceUnavailableError` for 503), each carrying `.status` and the parsed
-`.body`. Timeouts throw `OpenWATimeoutError`. The SDK does **not** retry — wrap
-calls with your own backoff if needed. 503 means the gateway could not complete
+`.body`. Timeouts throw `OpenWATimeoutError`, though the gateway may still
+complete the request: retry a send only with the same `Idempotency-Key`. The SDK
+does **not** retry — wrap calls with your own backoff if needed. 503 means the gateway could not complete
 the request right now: the path to WhatsApp failed, the gateway is draining or
 short of a dependency, or, on Baileys, WhatsApp throttled (code 429) or timed
 out (code 408) the request. Back off and retry later instead of at once, because
@@ -104,6 +111,12 @@ app.post('/openwa/webhook', express.raw({ type: 'application/json' }), async (re
   return res.status(200).send('OK');
 });
 ```
+
+The signature covers the body only and carries no timestamp, so a captured
+delivery still verifies when it is sent again. Dedupe on
+`delivery.idempotencyKey` (also the `X-OpenWA-Idempotency-Key` header): the
+gateway's own retries and an operator's redrive of a failed delivery reuse it, so
+a key you have already handled is the same event arriving again.
 
 ## Releasing
 
