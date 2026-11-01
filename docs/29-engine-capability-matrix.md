@@ -1048,7 +1048,11 @@ adapter boundary — none silently stubs.
   messages depending on direction.
 - **`addParticipants` result shape.** wwjs returns a per-participant `{code,message}` object or a
   batch refusal string; Baileys returns per-jid `[{status}]`. Both are mapped onto the HTTP
-  `results` field; a total refusal throws.
+  `results` field; a total refusal throws. A participant whose privacy settings allow joining only by
+  invitation (code `403`) is answered differently: whatsapp-web.js sends that person a private group invite
+  message and the adapter reports `success: true` with a message saying the invite was sent, while Baileys
+  sends nothing and reports `success: false, status: 403`, so a batch made only of such participants answers
+  `200` on wwjs and `403` on Baileys.
 - **`setGroupMemberAddMode` read side.** The engines disagree (Baileys boolean
   `memberAddMode`, wwjs raw WhatsApp strings — and wwjs's own type declares the opposite sense);
   both are normalized to `'all'|'admins'` at the adapter.
