@@ -169,6 +169,8 @@ describe('GET /api/search?match=contains with SEARCH_CONTAINS_ENABLED=true (e2e)
     }
   });
 
+  // The test's timeout outlasts the poll's 100 tries, so a build that never finishes fails on the status
+  // rather than as a timeout.
   it('finds part of a word once the build that followed listen() completes', async () => {
     const search = () =>
       request(app.getHttpServer()).get('/api/search?q=voic&match=contains').set('X-API-Key', 'dev-admin-key');
@@ -182,7 +184,7 @@ describe('GET /api/search?match=contains with SEARCH_CONTAINS_ENABLED=true (e2e)
     const body = res.body as { hits: Array<{ sessionId: string; snippet: string }> };
     expect(body.hits.map(h => h.sessionId)).toEqual(['sess-search-2']);
     expect(body.hits[0].snippet).toContain('In<mark>voic</mark>e');
-  });
+  }, 15_000);
 
   // This instance booted on the rows the first describe indexed, as a restart does. Rank 1 checks the
   // index against the messages it was built from, which shows a row indexed twice.

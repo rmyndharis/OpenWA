@@ -109,7 +109,7 @@ describe('Contact LID lookup gate (e2e)', () => {
     await lidGet(operatorKey).expect(503);
   });
 
-  it('keeps the single-segment contact route and the number check on their own handlers', async () => {
+  it('keeps the number check on its own handler', async () => {
     const check = jest.fn().mockResolvedValue('628123456789@c.us');
     app.get(EngineRegistry).set(sessionId, { ...engine, getNumberId: check } as unknown as IWhatsAppEngine);
 

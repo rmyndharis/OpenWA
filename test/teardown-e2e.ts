@@ -3,12 +3,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 /**
- * Remove the throwaway state roots the lane creates.
+ * Remove the throwaway state roots earlier runs left behind.
  *
  * Every suite gets its own root (setupFiles runs once per test file), so a run leaves one directory
  * per suite behind. Nothing removed them before and the temp dir accumulated hundreds of entries.
- * Anything older than an hour is swept rather than only this run's roots: a killed run leaves its
- * own litter, and the age bound keeps this from deleting a root a concurrent run is still using.
+ * Only entries older than an hour are swept, so this run's own roots, databases and key files stay
+ * until a later run removes them: the age bound keeps this from deleting a root a concurrent run is
+ * still using, and a killed run's litter goes the same way.
  */
 const MAX_AGE_MS = 60 * 60 * 1000;
 
