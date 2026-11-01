@@ -287,13 +287,13 @@ flowchart TB
 
 ### Validation Examples
 
-| Field                        | Rules                                                                                                                                                                      |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `chatId`                     | Non-empty string of at most 255 characters — **no format pattern**; the engine resolves the id, so `@c.us`, `@g.us`, `@lid`, `@newsletter` and `status@broadcast` all pass |
-| `phoneNumber` (pairing code) | Pattern: `^[0-9]{6,15}$` — digits only, international format                                                                                                               |
-| `url`                        | Valid URL (`require_tld: false`, so single-label hosts like `http://localhost:3000` pass); HTTPS is a recommendation, not enforced                                         |
-| `text`                       | Max 4096 chars (`send-text`)                                                                                                                                               |
-| `sessionName`                | Alphanumeric + hyphen, 3-50 chars                                                                                                                                          |
+| Field                        | Rules                                                                                                                                                                                                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `chatId`                     | Non-empty string of at most 255 characters in the form `localpart@host`: one `@` and no whitespace, so a bare phone number is refused with `400`. The host is not checked, so `@c.us`, `@g.us`, `@lid`, `@newsletter` and `status@broadcast` all pass and the engine resolves the id |
+| `phoneNumber` (pairing code) | Pattern: `^[0-9]{6,15}$` — digits only, international format                                                                                                                                                                                                                         |
+| `url`                        | Valid URL (`require_tld: false`, so single-label hosts like `http://localhost:3000` pass); HTTPS is a recommendation, not enforced                                                                                                                                                   |
+| `text`                       | Max 4096 chars (`send-text`)                                                                                                                                                                                                                                                         |
+| `sessionName`                | Alphanumeric + hyphen, 3-50 chars                                                                                                                                                                                                                                                    |
 
 ### DTO Validation
 
@@ -303,6 +303,7 @@ export class SendTextMessageDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH) // 255
+  @Matches(CHAT_JID_PATTERN, { message: CHAT_JID_MESSAGE }) // /^[^\s@]+@[^\s@]+$/: localpart@host
   chatId: string;
 
   @IsString()
