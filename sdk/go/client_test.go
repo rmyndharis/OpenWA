@@ -1264,6 +1264,21 @@ func TestRejectCallNotRinging(t *testing.T) {
 	}
 }
 
+// GET /api/webhooks has no session filter, so the shared query's SessionID must
+// not travel as one.
+func TestWebhooksListAllSendsPagingButNoSessionFilter(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `[]`}
+	c := newTestClient(t, rt)
+	session, limit, offset := "s1", 5, 10
+	query := &DeliveryFailureQuery{SessionID: &session, Limit: &limit, Offset: &offset}
+	if _, err := c.Webhooks.ListAll(context.Background(), query); err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if got := rt.lastReq.URL.RawQuery; got != "limit=5&offset=10" {
+		t.Fatalf("query = %q, want limit=5&offset=10", got)
+	}
+}
+
 // The Event* constants are the wire values of the server's WEBHOOK_EVENTS
 // catalog — a typo here silently subscribes to nothing.
 func TestWebhookEventWireValues(t *testing.T) {

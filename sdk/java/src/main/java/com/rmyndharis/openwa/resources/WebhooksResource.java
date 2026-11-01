@@ -24,10 +24,13 @@ public final class WebhooksResource {
 
     /**
      * List webhooks across EVERY session the key can see, not one session's. Requires an
-     * OPERATOR-level key.
+     * OPERATOR-level key. The route pages with {@code limit} and {@code offset} only: the query's
+     * {@code sessionId} is not sent, so use {@link #list(String)} for one session's webhooks.
      */
     public List<WebhookResponse> listAll(DeliveryFailureQuery query) {
-        return client.requestList(HttpMethod.GET, "/api/webhooks", query, null, WebhookResponse.class);
+        DeliveryFailureQuery paging =
+            query == null ? null : new DeliveryFailureQuery(null, query.limit(), query.offset());
+        return client.requestList(HttpMethod.GET, "/api/webhooks", paging, null, WebhookResponse.class);
     }
 
     /**
