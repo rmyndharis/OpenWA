@@ -2541,7 +2541,7 @@ Cancel a running (pending/processing) bulk batch. No request body.
 
 ### 6.4.3 Contacts
 
-Contact endpoints are scoped under a session: `/api/sessions/:sessionId/contacts`. All read routes require a valid API key, except the number check (`GET .../check/:number`), which requires an `OPERATOR` key because each call queries WhatsApp about a third party and bulk checks put the linked account's standing at risk; every write (saving or removing an addressbook entry with `PUT`/`DELETE` `/:contactId`, block and unblock) requires an `OPERATOR` key. Every route returns `400 "Session is not started"` when the session has no running engine (missing or stopped); a started session whose engine is not ready yet (initializing, waiting for QR, reconnecting) answers `409` (retryable). Responses are the raw handler payload (no envelope).
+Contact endpoints are scoped under a session: `/api/sessions/:sessionId/contacts`. All read routes require a valid API key, except the number check (`GET .../check/:number`) and the LID lookup (`GET .../:number/lid`), which require an `OPERATOR` key because each call can query WhatsApp about a third party and bulk lookups put the linked account's standing at risk; every write (saving or removing an addressbook entry with `PUT`/`DELETE` `/:contactId`, block and unblock) requires an `OPERATOR` key. Every route returns `400 "Session is not started"` when the session has no running engine (missing or stopped); a started session whose engine is not ready yet (initializing, waiting for QR, reconnecting) answers `409` (retryable). Responses are the raw handler payload (no envelope).
 
 The `Contact` object returned by the list and get-by-id routes has this shape:
 
