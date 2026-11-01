@@ -129,6 +129,32 @@ test('comparePair flags a primitive widened to a union of primitives', () => {
   assert.ok(diffs.some(d => d.includes('"count": hand union(int,str), contract number')));
 });
 
+test('comparePair fails a field whose hand type it cannot read instead of skipping it', () => {
+  const schema = {
+    type: 'object',
+    required: ['status'],
+    properties: { status: { type: 'string', enum: ['ready', 'failed'] } },
+  };
+  const compare = types => comparePair('Sample', types.Sample, 'SampleDto', schema, {});
+  // A union too long for one line, as prettier wraps it, with 'failed' replaced.
+  const wrapped = parseHandTypes("export interface Sample {\n  status:\n    | 'ready'\n    | 'gone';\n}\n");
+  assert.deepEqual(compare(wrapped), ['"status": hand enum(["gone","ready"]), contract enum(["failed","ready"])']);
+  // Forms no parser reduces: an alias that is not exported, a TypeScript enum, a Go type outside the known kinds.
+  for (const types of [
+    parseHandTypes("type Status = 'ready' | 'gone';\nexport interface Sample {\n  status: Status;\n}\n"),
+    parseHandTypes("export enum Status {\n  Ready = 'ready',\n}\nexport interface Sample {\n  status: Status;\n}\n"),
+  ]) {
+    assert.deepEqual(compare(types), [
+      '"status": hand type could not be read (Status), contract enum(["failed","ready"])',
+    ]);
+  }
+  assert.deepEqual(compare(parseGoTypes(['type Sample struct {\n\tStatus pb.Status `json:"status"`\n}'])), [
+    '"status": hand type could not be read (pb.Status), contract enum(["failed","ready"])',
+  ]);
+  // Go writes a time.Time as an RFC 3339 string.
+  assert.equal(parseGoTypes(['type Sample struct {\n\tAt time.Time `json:"at"`\n}']).Sample.at.token, 'string');
+});
+
 test('comparePair with namesOnly keeps the field names and drops optionality and token', () => {
   // The excluded Go and Java pairs keep a deliberately looser type: that stays accepted, a renamed field does not.
   const loose = {

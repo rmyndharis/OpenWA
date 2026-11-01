@@ -26,11 +26,12 @@
  * through a record, which is why it alone runs with compareOptionality=false.
  *
  * What one comparison covers, per mapped pair: field-name sets in both directions, required vs
- * optional (hand `?` vs the schema's `required` array), and — for fields whose both sides reduce
- * to a simple token (primitive, enum literal set, array of those, null union; on the hand side, any
- * union too) — the token itself,
+ * optional (hand `?` vs the schema's `required` array), and, for fields whose contract side reduces
+ * to a simple token (primitive, enum literal set, array of those, null union), the hand token itself,
  * which is what catches `string` widened to `string | number` or a re-ordered enum growing a
- * member. Complex/nested fields are compared by presence and optionality only; that limit is
+ * member. A hand type no parser reduces to a token (an alias that is not exported, a TypeScript
+ * enum, a Go type outside the known kinds) fails such a field instead of leaving it uncompared.
+ * Complex/nested fields are compared by presence and optionality only; that limit is
  * deliberate (the hand parser stays regular), and the exclusions below record what is known to be
  * unpinned. Every mapping entry must resolve on BOTH sides — a renamed hand type or schema fails
  * loudly instead of being skipped (the vacuous-pass failure mode), and the run refuses to gate
@@ -799,6 +800,11 @@ function parseMembers(body) {
         }
         continue;
       }
+      // A union too long for one line, as prettier wraps it: each `| member` line continues the field above.
+      if (field && cleaned.startsWith('|')) {
+        members[field].token = `${members[field].token} ${cleaned}`.trim();
+        continue;
+      }
     }
     if (depth > 0) {
       buffer += ' ' + cleaned;
@@ -971,7 +977,7 @@ export function parseObjectToken(token) {
   return members;
 }
 
-/** Fields whose both sides reduce to a primitive/enum/array/null-union get token-level diffing.
+/** Fields whose contract side reduces to a primitive/enum/array/null-union get token-level diffing.
  *  `array<enum(...)>` counts: an array of enum members is exactly as comparable as a bare one, and
  *  leaving it out silently ungated every vocabulary that travels as a list, the webhook event set
  *  above all, on every client at once. So does a null arm after an enum or an array: a nullable
@@ -1064,9 +1070,15 @@ export function comparePair(
         }
       }
       const absorbs = handInfo.absorbsNull && contract === `${hand}|null`;
-      // A union never equals a simple contract token, so it is drift, not a shape too complex to read.
-      if (hand !== contract && !absorbs && (isSimpleToken(hand) || hand.startsWith('union('))) {
-        diffs.push(`"${field}": hand ${hand}, contract ${contract}`);
+      // Any other hand token is drift. One no parser could reduce (an alias that is not exported, an enum, a
+      // type outside the known kinds) fails too: skipping it left the field uncompared while the run passed.
+      if (hand !== contract && !absorbs) {
+        const read = isSimpleToken(hand) || /^(?:union\(|object\(|array<|dict$|object$)/.test(hand);
+        diffs.push(
+          read
+            ? `"${field}": hand ${hand}, contract ${contract}`
+            : `"${field}": hand type could not be read (${hand || 'empty'}), contract ${contract}`,
+        );
       }
     }
   }
@@ -1286,7 +1298,16 @@ export function parseGoTypes(sources) {
   const structs = {};
   const scalarAliases = {};
   const constGroups = {};
-  const kindMap = { string: 'string', int: 'number', int64: 'number', float64: 'number', bool: 'boolean', any: 'any' };
+  // A time.Time marshals to an RFC 3339 string.
+  const kindMap = {
+    string: 'string',
+    int: 'number',
+    int64: 'number',
+    float64: 'number',
+    bool: 'boolean',
+    any: 'any',
+    'time.Time': 'string',
+  };
 
   for (const source of sources) {
     for (const [, name, underlying] of source.matchAll(/^type (\w+) (string|int|int64|float64|bool|any)$/gm)) {
