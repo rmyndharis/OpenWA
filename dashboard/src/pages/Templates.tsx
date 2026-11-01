@@ -63,6 +63,11 @@ const NAME_MAX_LENGTH = 100;
 const BODY_MAX_LENGTH = 4096;
 const HEADER_FOOTER_MAX_LENGTH = 1024;
 
+// A preview value the operator gave for this placeholder. The gateway fills only own properties, so a placeholder named
+// like an inherited member (constructor, toString, __proto__) must not read that member.
+const ownValue = (values: Record<string, string>, key: string): string | undefined =>
+  Object.hasOwn(values, key) ? values[key] : undefined;
+
 function renderPreview(template: TemplateForm, values: Record<string, string>) {
   return (
     [template.header, template.body, template.footer]
@@ -72,7 +77,7 @@ function renderPreview(template: TemplateForm, values: Record<string, string>) {
       .replace(
         PLACEHOLDER_PATTERN,
         (match, doubleKey: string | undefined, singleKey: string | undefined) =>
-          values[doubleKey ?? singleKey!] || match,
+          ownValue(values, doubleKey ?? singleKey!) || match,
       )
   );
 }
@@ -157,13 +162,8 @@ export function Templates() {
   }, [selectedSessionId, sessions]);
 
   useEffect(() => {
-    setPreviewValues(current => {
-      const next: Record<string, string> = {};
-      for (const { key } of placeholders) {
-        next[key] = current[key] || '';
-      }
-      return next;
-    });
+    // Built as own entries: an assignment to `__proto__` would set the prototype instead of a value.
+    setPreviewValues(current => Object.fromEntries(placeholders.map(({ key }) => [key, ownValue(current, key) || ''])));
   }, [placeholders]);
 
   const resetForm = () => {
@@ -512,7 +512,7 @@ export function Templates() {
                     <label key={key}>
                       <span>{token}</span>
                       <input
-                        value={previewValues[key] || ''}
+                        value={ownValue(previewValues, key) || ''}
                         onChange={event => setPreviewValues({ ...previewValues, [key]: event.target.value })}
                         placeholder={t('templates.previewValuePlaceholder')}
                       />
