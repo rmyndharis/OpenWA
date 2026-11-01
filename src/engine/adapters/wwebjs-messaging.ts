@@ -17,7 +17,7 @@ import { BadRequestException, NotImplementedException } from '@nestjs/common';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
-import { chatKind, userPart } from '../identity/wa-id';
+import { chatKind, parseWaId, toNeutralJid, userPart } from '../identity/wa-id';
 import {
   chatHistoryMediaBudgetBytes,
   coerceDeclaredSize,
@@ -443,10 +443,13 @@ export class WwebjsMessaging {
    * {@link resolveSendId} together with whether the lookup answered. A `getNumberId` that threw says nothing
    * about the recipient: the id is then the unresolved one, and `failure` is what the lookup threw.
    */
-  private async lookupSendId(chatId: string): Promise<{ id: string; answered: boolean; failure?: unknown }> {
-    if (!chatId.endsWith('@c.us')) {
-      return { id: chatId, answered: true };
+  private async lookupSendId(recipient: string): Promise<{ id: string; answered: boolean; failure?: unknown }> {
+    // Every spelling of a phone id (the `s.whatsapp.net` dialect, upper case, a `:device` suffix) names one recipient,
+    // resolved and cached in its neutral `<phone>@c.us` form, as the Baileys engine classifies its sends.
+    if (parseWaId(recipient).kind !== 'user') {
+      return { id: recipient, answered: true };
     }
+    const chatId = toNeutralJid(recipient);
     const cached = this.resolvedSendIds.get(chatId);
     if (cached) {
       if (this.unreportedLids.delete(chatId)) this.reportLid(chatId, cached);
@@ -563,11 +566,11 @@ export class WwebjsMessaging {
       if (quotedMessageId && isQuoteUnresolvedError(err)) {
         throw markNothingSent(new MessageNotFoundError(quotedMessageId));
       }
-      if (!chatId.endsWith('@c.us') || !isNoLidForUserError(err)) {
+      if (parseWaId(chatId).kind !== 'user' || !isNoLidForUserError(err)) {
         throw toCapturedPageError(err);
       }
-      this.resolvedSendIds.delete(chatId);
-      this.unreportedLids.delete(chatId);
+      this.resolvedSendIds.delete(toNeutralJid(chatId));
+      this.unreportedLids.delete(toNeutralJid(chatId));
       const lookup = await this.lookupSendId(chatId);
       const fresh = lookup.id;
       // Same gap as above, and before the comparison: a lookup that failed because the session went away
