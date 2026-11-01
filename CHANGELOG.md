@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-11-02
+
 ### Added
 
 - Add `GET /api/sessions/{sessionId}/contacts/{number}/lid`, which looks up the `@lid` WhatsApp holds for a phone number without sending a message and needs an OPERATOR key, and `contacts.lid` in all five SDKs (#1969). Thanks @farresyh for the report.
