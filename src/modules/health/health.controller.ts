@@ -1,4 +1,11 @@
-import { Controller, Get, Req, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Controller,
+  ForbiddenException,
+  Get,
+  Req,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { HealthCheckResponseDto, LivenessResponseDto, ReadinessResponseDto } from './dto/health-response.dto';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -86,12 +93,19 @@ export class HealthController {
     if (!rawKey) return false;
     const clientIp = resolveClientIp(req, this.configService.get<string[]>('security.trustedProxies') ?? []);
     const subject = limiterKeyForIp(clientIp);
-    if (!this.keyValidationLimiter.allow(subject)) return false;
+    const reservation = {};
+    if (!this.keyValidationLimiter.allow(subject, reservation)) return false;
     try {
       await this.authService.validateApiKey(rawKey, clientIp);
-      this.keyValidationLimiter.refund(subject);
+      this.keyValidationLimiter.refund(subject, reservation);
       return true;
     } catch (err) {
+      // Only a 401/403 refusal judged the credential; an unreadable key table refunds the slot and
+      // skips logWarn, matching the other key-validation surfaces.
+      if (!(err instanceof UnauthorizedException || err instanceof ForbiddenException)) {
+        this.keyValidationLimiter.refund(subject, reservation);
+        return false;
+      }
       // A PRESENTED key that failed validation is a credential probe against an endpoint every
       // other key-validation surface audits (REST guard, WebSocket, MCP mount, Bull Board). This
       // route was the one blind spot: the failure only withheld the version, invisibly. Fire-and-
