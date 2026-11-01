@@ -32,6 +32,7 @@ import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.servic
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
+import { MEDIA_MESSAGE_TYPES, OMITTED_MEDIA } from '../session/message-row.mapper';
 
 /** Default cap on a rendered template's final text; overridable via TEMPLATE_RENDER_MAX_CHARS. */
 export const DEFAULT_TEMPLATE_RENDER_MAX_CHARS = 64 * 1024;
@@ -737,9 +738,9 @@ export class MessageSendService {
   /**
    * The type, text and media of the message a forward copies, from its row in `fromChatId` (any of the chat's
    * phone, lid or group forms, as for a quote), or undefined when no such row is stored, it was revoked, or the
-   * read fails. A quote or mention it carried is not copied: the forwarded copy has neither. Media is copied only
-   * with its bytes: a marker would offer a download this row cannot serve, and merged onto an echo that won the
-   * race it would replace the bytes whatsapp-web.js downloads for it (see persistSentState).
+   * read fails. A quote or mention it carried is not copied: the forwarded copy has neither. Media the source row
+   * holds no bytes for is stored as the omitted marker, as the echo and history paths store it, without an archive
+   * pointer that names the source row's file; it never replaces an echo's bytes (see mergeSentMetadata).
    */
   private async storedForwardContent(
     sessionId: string,
@@ -759,11 +760,14 @@ export class MessageSendService {
         where: { sessionId, chatId: In([...new Set([fromChatId, ...expanded])]), waMessageId: messageId },
       });
       if (!source || source.type === 'revoked') return undefined;
-      const { media, poll } = (source.metadata ?? {}) as { media?: { data?: unknown }; poll?: unknown };
-      const metadata = {
-        ...(typeof media?.data === 'string' && media.data ? { media } : {}),
-        ...(poll ? { poll } : {}),
-      };
+      const { media, poll } = (source.metadata ?? {}) as { media?: Record<string, unknown>; poll?: unknown };
+      let copied = typeof media?.data === 'string' && media.data ? media : undefined;
+      if (!copied && MEDIA_MESSAGE_TYPES.has(source.type)) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { data, archived, ...kept } = media ?? {};
+        copied = { ...OMITTED_MEDIA, ...kept, omitted: true };
+      }
+      const metadata = { ...(copied ? { media: copied } : {}), ...(poll ? { poll } : {}) };
       return { type: source.type, body: source.body, metadata: Object.keys(metadata).length ? metadata : undefined };
     } catch (err) {
       this.logger.warn(`Failed to read forwarded message ${messageId}`, { error: String(err) });

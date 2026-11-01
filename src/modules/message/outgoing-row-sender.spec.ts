@@ -292,6 +292,28 @@ describe('the sender stored on an outgoing row', () => {
       ]);
     });
 
+    it('keeps the bytes a whatsapp-web.js echo downloaded when the source row holds none', async () => {
+      await storeSource(SOURCE_CHAT);
+      await messages.update(
+        { sessionId, waMessageId: 'WA_SOURCE' },
+        { metadata: { media: { mimetype: 'image/jpeg', omitted: true, archived: true, sizeBytes: 10 } } },
+      );
+      const downloaded = { ...echo, media: { mimetype: 'image/jpeg', data: BYTES } };
+
+      await forwardWith(() => Promise.resolve(projector.handleOwnSendEcho(sessionId, engine, downloaded)).then(flush));
+      await flush();
+
+      expect(await forwardedRows()).toEqual([
+        {
+          waMessageId: 'WA_FORWARDED',
+          type: 'image',
+          body: 'the caption',
+          status: MessageStatus.SENT,
+          metadata: { media: { mimetype: 'image/jpeg', data: BYTES } },
+        },
+      ]);
+    });
+
     it('copies nothing from a message stored under another chat', async () => {
       await storeSource('628333333333@c.us');
       // What either engine answers for an id that is not in the source chat.

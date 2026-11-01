@@ -1725,16 +1725,21 @@ describe('MessageSendService', () => {
       expect(pendingRow()).not.toHaveProperty('metadata.quotedMessage');
     });
 
-    it('stores the type and caption of media whose bytes the source row does not hold, without its marker', async () => {
-      (repository.findOne as jest.Mock).mockResolvedValue({
-        type: 'image',
-        body: 'the caption',
-        metadata: { media: { mimetype: 'image/jpeg', omitted: true, archived: true, sizeBytes: 10 } },
-      });
+    // A media row always carries a media field (an empty bubble otherwise), and an archive pointer names the source
+    // row's file, which this row does not have.
+    it.each([
+      [
+        'archived',
+        { media: { mimetype: 'image/jpeg', omitted: true, archived: true, sizeBytes: 10 } },
+        { mimetype: 'image/jpeg', omitted: true, sizeBytes: 10 },
+      ],
+      ['missing', null, { mimetype: '', omitted: true }],
+    ])('stores media the source row holds no bytes for (%s) as the omitted marker', async (_how, metadata, media) => {
+      (repository.findOne as jest.Mock).mockResolvedValue({ type: 'image', body: 'the caption', metadata });
 
       await forwardIt();
 
-      expect(pendingRow()).toMatchObject({ type: 'image', body: 'the caption', metadata: undefined });
+      expect((pendingRow() as { metadata: unknown }).metadata).toEqual({ media });
     });
 
     it.each([

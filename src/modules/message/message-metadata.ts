@@ -28,11 +28,15 @@ export async function updateMessageMetadata(
   throw new Error('Message metadata changed repeatedly during update');
 }
 
-/** An already archived echo keeps its media marker when the REST writer supplies inline bytes. */
+/**
+ * An already archived echo keeps its media marker when the REST writer supplies inline bytes, and an echo keeps
+ * its media when the REST writer has no bytes to give (a forward of media the gateway does not hold).
+ */
 export function mergeSentMetadata(
   current: Record<string, unknown>,
   incoming: Record<string, unknown>,
 ): Record<string, unknown> {
   const media = current.media as { archived?: boolean; omitted?: boolean } | undefined;
-  return { ...current, ...incoming, ...(media?.archived && media.omitted ? { media } : {}) };
+  const bytes = (incoming.media as { data?: unknown } | undefined)?.data;
+  return { ...current, ...incoming, ...(media && ((media.archived && media.omitted) || !bytes) ? { media } : {}) };
 }
