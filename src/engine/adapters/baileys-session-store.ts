@@ -722,8 +722,14 @@ export class BaileysSessionStore {
     if (!messageId) return;
     const targets = new Set([chatId, this.toEngineJid(chatId)]);
     if (accept && parseWaId(chatId).kind === 'user') {
+      // Only a preview whose own message sits in a lid chat: `accept` judges the chat of exactly those, and a
+      // received broadcast-list message previews under its sender's lid with the list as its remoteJid.
       for (const [key, existing] of this.lastMessages.entries()) {
-        if (existing.key.id === messageId && parseWaId(key).kind === 'lid') {
+        if (
+          existing.key.id === messageId &&
+          parseWaId(key).kind === 'lid' &&
+          parseWaId(existing.key.remoteJid ?? '').kind === 'lid'
+        ) {
           targets.add(key);
         }
       }

@@ -527,6 +527,22 @@ describe('BaileysSessionStore', () => {
     });
   });
 
+  it('does not let a change under another phone id reach the preview of a broadcast-list message filed under a lid', () => {
+    // A received broadcast-list message previews in its sender's chat, with the list as the message's remoteJid.
+    store.recordMessage({
+      key: { remoteJid: 'list1@broadcast', participant: '111@lid', id: 'X', fromMe: false },
+      message: { conversation: 'bob broadcast text' },
+      messageTimestamp: 200,
+    });
+    store.upsertChats([{ id: '111@lid' }]);
+    // An accept that judges nothing: previewAuthor says the same for an envelope that carries no participant.
+    const accept = (): boolean => true;
+    store.recordMessageEdit('628333@s.whatsapp.net', 'X', 'text from another contact', undefined, accept);
+    store.recordMessageEdit('628333@s.whatsapp.net', 'X', '', 'revoked', accept);
+    expect(store.listChats()[0]).toMatchObject({ lastMessage: 'bob broadcast text' });
+    expect(store.listChats()[0].lastMessageType).not.toBe('revoked');
+  });
+
   it('flags a group chat by jid', () => {
     store.upsertChats([{ id: '123-456@g.us', name: 'Grp' }]);
     expect(store.listChats()[0].isGroup).toBe(true);
