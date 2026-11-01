@@ -340,6 +340,21 @@ describe('ChatStateStoreService', () => {
         't/gone',
       ]);
     });
+
+    it('stays out of the cache and is dropped at a later start when the delete fails', async () => {
+      const repo = db.getRepository(ChatState);
+      const expired = Date.now() - CHAT_DELETION_TTL_MS - 60_000;
+      await repo.save({ sessionId: 's', chatId: 'gone', deletedAt: expired, observed: 'deletedAt' });
+      jest.spyOn(repo, 'delete').mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+      const svc = new ChatStateStoreService(repo);
+
+      await expect(svc.refreshSession('s')).resolves.toBeUndefined();
+      expect(svc.get('s', 'gone')).toBeUndefined();
+      expect(await repo.count()).toBe(1);
+
+      await svc.refreshSession('s');
+      expect(await repo.count()).toBe(0);
+    });
   });
 
   describe('a session whose rows all fit in the cache answers a miss without a query', () => {
