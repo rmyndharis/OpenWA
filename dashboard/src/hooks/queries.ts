@@ -41,13 +41,21 @@ export const queryKeys = {
 // ── Session Queries ───────────────────────────────────────────────────
 
 // `refetchInterval` is for a page that shows live session state with no socket of its own; the pages that read the list
-// only to pick a session leave it out. A stale query refetches only on mount, focus or an invalidation.
+// only to pick a session leave it out. A stale query refetches only on mount, focus or an invalidation. The poll stops
+// while its last read failed: a route that refuses the key (one restricted to selected chats is refused both reads)
+// would otherwise be refused, and audited as a failed authentication, every interval. A read that succeeds again, on
+// focus or mount, starts it again.
+const pollWhileReadable = (interval?: number) =>
+  interval === undefined
+    ? undefined
+    : (query: { state: { status: string } }) => (query.state.status === 'error' ? false : interval);
+
 export function useSessionsQuery(refetchInterval?: number) {
   return useQuery({
     queryKey: queryKeys.sessions,
     queryFn: sessionApi.list,
     staleTime: 30_000,
-    refetchInterval,
+    refetchInterval: pollWhileReadable(refetchInterval),
   });
 }
 
@@ -56,7 +64,7 @@ export function useSessionStatsQuery(refetchInterval?: number) {
     queryKey: queryKeys.sessionStats,
     queryFn: sessionApi.getStats,
     staleTime: 30_000,
-    refetchInterval,
+    refetchInterval: pollWhileReadable(refetchInterval),
   });
 }
 
