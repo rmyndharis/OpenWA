@@ -303,11 +303,12 @@ export function Chats() {
   // itself — state, contacts query, submit — is components/chats/StatusComposeModal.
   const [composeOpen, setComposeOpen] = useState<boolean>(false);
 
-  // The session the open chat, channel or status, the status form and the group dialog belong to. A switch closes them
-  // while rendering, as menuOpenedFor is cleared: closed by the session effect below, they were drawn once more with
-  // the new session, and the hooks keyed by session asked it about the one left (the chat's thread, history, picture
-  // and phone, the channel's posts, the group's info). The status form posts through the session selected, so kept
-  // open it sent what was written, and addressed, for one account through another.
+  // The session the open chat, channel or status, the status form, the group dialog and the new-chat panel belong to. A
+  // switch closes them while rendering, as menuOpenedFor is cleared: closed by the session effect below, they were
+  // drawn once more with the new session, and the hooks keyed by session asked it about the one left (the chat's
+  // thread, history, picture and phone, the channel's posts, the group's info, the panel's address book). The status
+  // form posts through the session selected, so kept open it sent what was written, and addressed, for one account
+  // through another.
   const [openViewsSession, setOpenViewsSession] = useState<string>(selectedSessionId);
   if (openViewsSession !== selectedSessionId) {
     setOpenViewsSession(selectedSessionId);
@@ -316,6 +317,7 @@ export function Chats() {
     setActiveStatusContactId(null);
     setComposeOpen(false);
     setGroupDialogChat(null);
+    setShowNewChat(false);
   }
 
   const {

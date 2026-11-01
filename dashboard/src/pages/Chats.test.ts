@@ -2777,6 +2777,47 @@ test('the New chat panel leaves no way to another session, and a hit after it cl
   }
 });
 
+// The panel lists the address book of the session it was opened for: when that session is deleted elsewhere and the
+// next ready one is opened, the panel closes with the switch instead of reading the next account's contacts first.
+test('the New chat panel closes when its session gives way to another, reading nothing through it', async () => {
+  const { screen, fireEvent, waitFor, act } = rtl;
+  twoSessions = true;
+  let mainDeleted = false;
+  const sent: string[] = [];
+  const stub = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input).replace(/^https?:\/\/[^/]+/, '');
+    sent.push(url);
+    if ((init?.method ?? 'GET') === 'GET' && url === '/api/sessions' && mainDeleted) {
+      return Promise.resolve(jsonResponse([SESSION_2]));
+    }
+    return stub(input, init);
+  }) as typeof fetch;
+  try {
+    const { container } = renderChats();
+    await screen.findByText('Alice');
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    assert.ok(container.querySelector('.new-chat-panel'), 'the panel did not open');
+    sent.length = 0;
+
+    mainDeleted = true;
+    await act(async () => {
+      document.dispatchEvent(new window.Event('visibilitychange'));
+    });
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION_2.id));
+    await flush();
+    assert.equal(container.querySelector('.new-chat-panel'), null, 'the panel stayed open for the next session');
+    assert.deepEqual(
+      sent.filter(url => url.startsWith(`/api/sessions/${SESSION_2.id}/contacts?`)),
+      [],
+      "the next session's address book was read for the panel",
+    );
+  } finally {
+    globalThis.fetch = stub;
+    twoSessions = false;
+  }
+});
+
 test('a search hit in a session that is not connected stays on the selected session', async () => {
   const { screen, waitFor } = rtl;
   thirdSessionStatus = 'disconnected';
