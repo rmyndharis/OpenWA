@@ -58,9 +58,11 @@ class ContactsResource:
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/contacts/{quote_segment(contact_id)}/phone")
 
     def lid(self, session_id: str, number: str) -> ContactLidResponse:
-        """Look up the ``@lid`` WhatsApp holds for a phone number, without sending anything (OPERATOR).
+        """Look up the ``@lid`` WhatsApp holds for a phone number, without sending a message (OPERATOR).
 
-        ``lid`` is ``None`` when WhatsApp holds none, which an unregistered number also answers.
+        ``lid`` is ``None`` when WhatsApp holds none, which an unregistered number also answers. The lookup can
+        query WhatsApp (Baileys on every call, whatsapp-web.js when the page holds no LID), so bulk lookups put
+        the linked account at risk.
         """
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/contacts/{quote_segment(number)}/lid")
 

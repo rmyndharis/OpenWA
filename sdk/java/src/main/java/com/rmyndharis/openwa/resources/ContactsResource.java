@@ -88,8 +88,10 @@ public final class ContactsResource {
     }
 
     /**
-     * Look up the {@code @lid} WhatsApp holds for a phone number, without sending anything. {@code lid} is
-     * {@code null} when WhatsApp holds none, which an unregistered number also answers. Requires an OPERATOR-level key.
+     * Look up the {@code @lid} WhatsApp holds for a phone number, without sending a message. {@code lid} is
+     * {@code null} when WhatsApp holds none, which an unregistered number also answers. The lookup can query
+     * WhatsApp (Baileys on every call, whatsapp-web.js when the page holds no LID), so bulk lookups put the
+     * linked account at risk. Requires an OPERATOR-level key.
      */
     public ContactLidResponse lid(String sessionId, String number) {
         return client.request(

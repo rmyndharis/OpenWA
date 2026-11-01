@@ -73,8 +73,10 @@ class ContactsResource
     }
 
     /**
-     * Look up the `@lid` WhatsApp holds for a phone number, without sending anything. `lid` is null when WhatsApp
-     * holds none, which an unregistered number also answers. Requires an OPERATOR key.
+     * Look up the `@lid` WhatsApp holds for a phone number, without sending a message. `lid` is null when WhatsApp
+     * holds none, which an unregistered number also answers. The lookup can query WhatsApp (Baileys on every call,
+     * whatsapp-web.js when the page holds no LID), so bulk lookups put the linked account at risk. Requires an
+     * OPERATOR key.
      *
      * @return array<string,mixed>
      */

@@ -196,7 +196,7 @@ Media bodies share the `SendMediaRequest` shape: `{ chatId, url? | base64?, mime
 | `profilePicture`  | `profilePicture(sessionId, contactId)` | Get the contact's profile picture URL (or null).                                     |
 | `profilePictures` | `profilePictures(sessionId, ids)`      | Profile picture URLs for up to 50 contacts; ids skipped after a timeout are absent.  |
 | `phone`           | `phone(sessionId, contactId)`          | Resolve a contact id (e.g. a `@lid`) to a phone number.                              |
-| `lid`             | `lid(sessionId, number)`               | Look up the `@lid` of a phone number; null if none is held. **OPERATOR**             |
+| `lid`             | `lid(sessionId, number)`               | Get a number's `@lid` or null; may query WhatsApp, so not in bulk. **OPERATOR**      |
 | `block`           | `block(sessionId, contactId)`          | Block a contact. **OPERATOR**                                                        |
 | `upsert`          | `upsert(sessionId, contactId, body)`   | Save a contact to the account's addressbook, or edit an existing entry. **OPERATOR** |
 | `delete`          | `delete(sessionId, contactId)`         | Remove a contact from the account's addressbook. **OPERATOR**                        |
@@ -576,7 +576,7 @@ Resources are accessed as properties on the client (e.g. `client.messages`). All
 | `profile_picture`  | `profile_picture(session_id, contact_id) -> ProfilePictureResponse` | Get a contact's profile picture.                                                     |
 | `profile_pictures` | `profile_pictures(session_id, ids) -> ProfilePicturesResponse`      | Profile picture URLs for up to 50 contacts; ids skipped after a timeout are absent.  |
 | `phone`            | `phone(session_id, contact_id) -> ContactPhoneResponse`             | Resolve a contact's phone number.                                                    |
-| `lid`              | `lid(session_id, number) -> ContactLidResponse`                     | Look up the `@lid` of a phone number; null if none is held. **OPERATOR**             |
+| `lid`              | `lid(session_id, number) -> ContactLidResponse`                     | Get a number's `@lid` or null; may query WhatsApp, so not in bulk. **OPERATOR**      |
 | `block`            | `block(session_id, contact_id) -> SuccessResult`                    | Block a contact. **OPERATOR**                                                        |
 | `upsert`           | `upsert(session_id, contact_id, body) -> SuccessResult`             | Save a contact to the account's addressbook, or edit an existing entry. **OPERATOR** |
 | `delete`           | `delete(session_id, contact_id) -> SuccessResult`                   | Remove a contact from the account's addressbook. **OPERATOR**                        |
@@ -931,7 +931,7 @@ All payloads are associative arrays; all listed methods are synchronous and retu
 | `profilePicture`  | `profilePicture(string $sessionId, string $contactId): array`      | Get a contact's profile picture.                                                     |
 | `profilePictures` | `profilePictures(string $sessionId, array $ids): array`            | Profile picture URLs for up to 50 contacts; ids skipped after a timeout are absent.  |
 | `phone`           | `phone(string $sessionId, string $contactId): array`               | Resolve a contact's phone number.                                                    |
-| `lid`             | `lid(string $sessionId, string $number): array`                    | Look up the `@lid` of a phone number; null if none is held. **OPERATOR**             |
+| `lid`             | `lid(string $sessionId, string $number): array`                    | Get a number's `@lid` or null; may query WhatsApp, so not in bulk. **OPERATOR**      |
 | `block`           | `block(string $sessionId, string $contactId): array`               | Block a contact. **OPERATOR**                                                        |
 | `upsert`          | `upsert(string $sessionId, string $contactId, array $body): array` | Save a contact to the account's addressbook, or edit an existing entry. **OPERATOR** |
 | `delete`          | `delete(string $sessionId, string $contactId): array`              | Remove a contact from the account's addressbook. **OPERATOR**                        |
