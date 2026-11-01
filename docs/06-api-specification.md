@@ -2967,6 +2967,8 @@ Raw object (no envelope). `engine.getGroupInfo()` returns `GroupInfo | null`; th
 
 A participant's `number` is MSISDN digits for a `<phone>@c.us` id. For a `<lid>@lid` participant it carries the lid's digits on both engines, which are not a phone number.
 
+On whatsapp-web.js `owner` is `<lid>@lid` on a LID-addressed group even when `participants` shows the same person as `<phone>@c.us`, and the actor and participant ids of that engine's group events can be lids too. Baileys answers the phone form wherever it knows the phone.
+
 **Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `403` a key restricted to selected chats names a group outside its allowlist · `404` `Group <groupId> not found` · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### GET /api/sessions/:sessionId/groups/:groupId/picture
