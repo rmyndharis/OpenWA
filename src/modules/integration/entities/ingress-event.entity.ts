@@ -55,8 +55,9 @@ export class IngressEvent {
   // `method` is the request's HTTP method, so a replay reaches the handler as the live attempt did. Rows
   // written before it was persisted lack it, and dispatch falls back to 'POST' for them.
   // `admission.verified` is what the host decided when it accepted the request (false on a route that
-  // authenticates nothing); a replay or retry hands the handler that verdict, not the route's current scheme.
-  // Rows written before it was persisted lack it, and dispatch reads the route as it stands.
+  // authenticates nothing, and for a query no signature covered); a replay or retry hands the handler that
+  // verdict, not the route's current scheme. Rows written before it was persisted lack it, and dispatch reads
+  // the route as it stands.
   @Column({ type: jsonColumnType(), nullable: true })
   payload!: {
     headers: Record<string, string>;

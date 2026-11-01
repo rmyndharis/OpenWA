@@ -211,7 +211,9 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   should keep the default, since `body` would dedup nothing for it. The same content hash is the delivery id
   whenever no usable dedup header arrives; for an empty body it also covers the method and the query string, so
   query-borne deliveries (a GET callback, a bodiless POST) stay apart, while deliveries with neither a body nor a
-  query share one id per route and collapse within the window. Freshness is enforced whenever a route declares
+  query share one id per route and collapse within the window. On `hmac-sha256` and `standard-webhooks` such a
+  query-borne delivery reaches the handler with `verified: false`, because the signature of an empty body vouches
+  for any query sent with it. Freshness is enforced whenever a route declares
   `signature.timestampHeader`: the declared `toleranceSec` wins, and otherwise the host default
   (`INGRESS_TIMESTAMP_TOLERANCE_SEC`, default 300) applies — a declared timestamp is never accepted
   without a freshness check. Freshness alone is not replay protection, though: an **unsigned**
@@ -237,7 +239,9 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   instance's scope.
 - **Fail-closed by construction.** No request — including an empty-body request — is accepted by an
   authenticating scheme without the correct per-instance secret. HMAC and Standard Webhooks bind body
-  integrity; `shared-secret` authenticates only the caller header and does not bind the body.
+  integrity; `shared-secret` authenticates only the caller header and does not bind the body. No scheme
+  signs the query string or the method, so a handler must not treat either as authenticated, even when the
+  delivery arrives with `verified: true`.
   `scheme: "none"` is the only unauthenticated path, and a route declaring it **fails the whole plugin's
   load** unless the operator has explicitly opted in with `ALLOW_UNSIGNED_INGRESS=true` — manifest
   validation throws, so none of that plugin's other routes load either and its registry status is set to
