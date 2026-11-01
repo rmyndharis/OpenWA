@@ -154,6 +154,10 @@ you have already handled is the same event arriving again.
 - **Use HTTPS in production** — the API key is sent as `X-API-Key` and is bearer-equivalent.
   Over plaintext `http://` to a non-localhost host the client writes a warning with `error_log()`;
   pass `'allowInsecureHttp' => true` to skip it (for example on a private Docker network).
+- A list you build into a body (`mentions`, poll `options`, status `recipients`) must be a PHP list:
+  `json_encode` writes an array whose keys have gaps, as `array_unique` and `array_filter` leave them,
+  as an object, which the gateway answers with `400`. Pass it through `array_values()`; the SDK does
+  that itself for participant lists and the bulk `messages` list.
 - The SDK does **not** retry, and **never follows redirects** (so the key is never re-sent to
   a redirect target). Path segments are percent-encoded; a base-URL path prefix (e.g. behind a
   reverse proxy) is preserved.
