@@ -75,11 +75,7 @@ describe('Session-scoped query endpoints (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   describe('GET /api/audit', () => {

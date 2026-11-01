@@ -59,11 +59,7 @@ describe('Contact LID lookup gate (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore TypeORM multi-datasource teardown quirk */
-    }
+    await app?.close();
   });
 
   beforeEach(() => jest.clearAllMocks());

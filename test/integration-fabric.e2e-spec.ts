@@ -112,11 +112,7 @@ describe('Integration Fabric ingress (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   beforeEach(async () => {

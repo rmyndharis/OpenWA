@@ -28,14 +28,7 @@ describe('App smoke (e2e)', () => {
   });
 
   afterAll(async () => {
-    // app.close() can throw a "could not find DataSource" during TypeORM's shutdown hook because
-    // both connections are NAMED ('main'/'data') with no default DataSource — a teardown-only
-    // artifact, not an app bug (the smoke assertions above already validated a healthy boot).
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('GET /api/health is public and returns ok', () => {
@@ -152,11 +145,7 @@ describe('App RED metrics (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('records a guard-rejected request (401, no API key) with its real status and route', async () => {

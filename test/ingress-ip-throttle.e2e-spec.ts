@@ -34,11 +34,7 @@ describe('Ingress per-IP rate bound (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   const sendTo = (n: number) =>

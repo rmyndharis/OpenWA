@@ -68,11 +68,7 @@ describe('Session name-scoped teardown fence: 409 code survives HTTP serializati
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('DELETE /api/sessions/:sessionId serializes the teardown-pending 409 with the code field in the body', async () => {

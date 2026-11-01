@@ -36,11 +36,7 @@ describe('Baileys engine boot (e2e)', () => {
 
   afterAll(async () => {
     process.env.ENGINE_TYPE = prevEngine;
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('selects baileys as the current engine', () => {

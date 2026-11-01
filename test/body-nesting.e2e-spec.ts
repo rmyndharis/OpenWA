@@ -54,11 +54,7 @@ describe('Request body nesting bound over the real application (e2e)', () => {
 
   afterAll(async () => {
     process.env.SIMULATE_TYPING = prevSimulateTyping;
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   beforeEach(() => jest.clearAllMocks());

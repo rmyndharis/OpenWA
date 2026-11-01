@@ -111,11 +111,7 @@ describe('Message send endpoints (e2e)', () => {
 
   afterAll(async () => {
     process.env.SIMULATE_TYPING = prevSimulateTyping;
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   beforeEach(() => jest.clearAllMocks());

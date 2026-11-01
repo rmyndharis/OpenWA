@@ -63,11 +63,7 @@ describe('GET /api/search (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('returns matching hits over the full route → provider → FTS stack (200)', async () => {
@@ -162,11 +158,7 @@ describe('GET /api/search?match=contains with SEARCH_CONTAINS_ENABLED=true (e2e)
   afterAll(async () => {
     if (previous === undefined) delete process.env.SEARCH_CONTAINS_ENABLED;
     else process.env.SEARCH_CONTAINS_ENABLED = previous;
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   // The test's timeout outlasts the poll's 100 tries, so a build that never finishes fails on the status

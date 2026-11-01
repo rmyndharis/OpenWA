@@ -86,11 +86,7 @@ describe('IntegrationInstanceController (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   // InfraDataService re-syncs plugin bindings after an import through a non-strict lookup of

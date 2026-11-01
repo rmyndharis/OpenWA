@@ -81,11 +81,7 @@ describe('Chat-restricted API keys (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('refuses a route with no chat dimension, which an unrestricted key reaches', async () => {

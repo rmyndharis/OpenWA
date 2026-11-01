@@ -43,11 +43,7 @@ describe('Plugin routes reject session-scoped keys (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   describe('fenced routes', () => {

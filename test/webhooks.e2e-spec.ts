@@ -114,11 +114,7 @@ describe('Webhooks (e2e)', () => {
     else process.env.WEBHOOK_MAX_PER_SESSION = prevMaxPerSession;
     if (prevMediaInlineMax === undefined) delete process.env.WEBHOOK_MEDIA_INLINE_MAX_BYTES;
     else process.env.WEBHOOK_MEDIA_INLINE_MAX_BYTES = prevMediaInlineMax;
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   beforeEach(() => {
