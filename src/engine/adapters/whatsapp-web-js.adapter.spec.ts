@@ -5158,17 +5158,14 @@ describe('outbound document mode (#989)', () => {
       (undiciFetch as jest.Mock).mockResolvedValue(remoteResponse({ 'content-type': 'application/octet-stream' }));
       const sendMessage = jest.fn().mockResolvedValue(sentMessage);
 
-      await ready({ sendMessage }).sendStickerMessage('628@c.us', {
-        mimetype: declaredMimetype,
-        data: 'https://files.example.com/sticker-source',
-      });
-
-      // The placeholder sticks — exactly what the DTO would have produced before this change.
-      expect(sendMessage).toHaveBeenCalledWith(
-        '628@c.us',
-        expect.objectContaining({ mimetype: 'application/octet-stream' }),
-        expect.objectContaining({ sendMediaAsSticker: true }),
-      );
+      // The placeholder sticks, and whatsapp-web.js cannot convert it, so the send is refused before it.
+      await expect(
+        ready({ sendMessage }).sendStickerMessage('628@c.us', {
+          mimetype: declaredMimetype,
+          data: 'https://files.example.com/sticker-source',
+        }),
+      ).rejects.toThrow("Received 'application/octet-stream'");
+      expect(sendMessage).not.toHaveBeenCalled();
     });
 
     // The document/image normal path (trustDeclaredType is undefined, not false) is unchanged by the

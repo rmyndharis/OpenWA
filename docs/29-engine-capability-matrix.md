@@ -936,7 +936,8 @@ adapter boundary — none silently stubs.
 - **`sendStickerMessage` — what each engine converts.** Both engines guarantee the payload really is
   WebP, but they reach it differently and they do not accept the same inputs. whatsapp-web.js passes
   `sendMediaAsSticker: true`, and `Util.formatToWebpSticker` converts `image/*` **and** `video/*`
-  (the latter via ffmpeg), rejecting anything else with `Invalid media format`. Baileys stamps
+  (the latter via ffmpeg). It throws `Invalid media format` for anything else, so the adapter refuses
+  that with a `400` before the send, as Baileys does. Baileys stamps
   `image/webp` on the payload unconditionally and transcodes nothing
   (`prepareWAMessageMedia` → `MIMETYPE_MAP.sticker`), so the adapter converts before the socket:
   WebP passes through byte-identical (preserving its sticker-pack EXIF), other raster `image/*`

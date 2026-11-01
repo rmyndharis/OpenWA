@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { HttpException } from '@nestjs/common';
+import { BadRequestException, HttpException } from '@nestjs/common';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
 import { type WwebjsMessaging } from './wwebjs-messaging';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
@@ -113,6 +113,30 @@ describe('whatsapp-web.js send refusals raised before anything is sent', () => {
     expect(status(error)).toBe(501);
     expect(provesNothingSent(error)).toBe(true);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  // whatsapp-web.js converts only a type it reads as an image or a video, and throws a bare error before the page
+  // send for anything else.
+  it.each(['application/pdf', 'audio/ogg', 'application/octet-stream'])(
+    'refuses a %s sticker with a 400 before the send',
+    async mimetype => {
+      // What Util.formatToWebpSticker throws for it, in Node, before the page send.
+      const sendMessage = jest.fn().mockRejectedValue(new Error('Invalid media format'));
+
+      const error = await refusal(ready({ sendMessage }).sendStickerMessage(GROUP, { mimetype, data: 'aGk=' }));
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect(provesNothingSent(error)).toBe(true);
+      expect(sendMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['image/png', 'video/mp4'])('hands a %s sticker to whatsapp-web.js to convert', async mimetype => {
+    const sendMessage = jest.fn().mockResolvedValue({ id: { _serialized: 'true_x_M1' }, timestamp: 1 });
+
+    await ready({ sendMessage }).sendStickerMessage(GROUP, { mimetype, data: 'aGk=' });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it('leaves the quote 404 of a retry unmarked, since the first attempt may have been sent', async () => {

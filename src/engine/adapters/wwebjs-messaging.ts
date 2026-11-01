@@ -759,6 +759,17 @@ export class WwebjsMessaging {
     // Keep the fetched content-type for a remote URL: here the mimetype selects the conversion, and
     // whatsapp-web.js returns the media unconverted once it reads as webp (Util.formatImageToWebpSticker).
     const messageMedia = await toMessageMedia(media, this.host.config.proxy?.url, { trustDeclaredType: false });
+    // whatsapp-web.js converts only a type it reads as an image or a video, and throws a bare 'Invalid media format'
+    // for anything else before the page send (Util.formatToWebpSticker): a 500 the send breaker counted. Same test as
+    // the library's, refused as the 400 Baileys gives.
+    const type = messageMedia.mimetype ?? '';
+    if (!type.includes('image') && !type.includes('video')) {
+      throw markNothingSent(
+        new BadRequestException(
+          `A sticker must be an image or a video whatsapp-web.js can convert. Received '${type}'.`,
+        ),
+      );
+    }
 
     const msg = await this.sendResolved(
       chatId,
