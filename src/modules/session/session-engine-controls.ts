@@ -740,6 +740,17 @@ export class SessionEngineControls {
     // The teardown helper keeps only whether the call settled; the engine's refusal of a session with no
     // linked device is kept here so it can answer instead of the 502.
     let neverLinked: EngineNotReadyError | undefined;
+    let releaseTeardown!: () => void;
+    let teardownLaunched = false;
+    // Register in pendingTeardowns synchronously before yielding on awaitInitialStatus so a
+    // concurrent delete() that evicts engine while awaitInitialStatus is suspended still observes
+    // this logout at Fence #2.
+    this.fences.trackPendingCredentialTeardown(
+      session.name,
+      new Promise<void>(resolve => {
+        releaseTeardown = resolve;
+      }),
+    );
     try {
       // Await THIS engine's in-flight INITIALIZING write before teardown / the final DISCONNECTED
       // write so a delayed pre-initialize status update can never settle after the retirement.
@@ -750,11 +761,15 @@ export class SessionEngineControls {
       unlinked = await this.fences.teardownEngineSafely(
         id,
         engine,
-        e =>
-          e.logout().catch((error: unknown) => {
+        e => {
+          const raw = e.logout().catch((error: unknown) => {
             if (error instanceof EngineNotReadyError) neverLinked = error;
             throw error;
-          }),
+          });
+          teardownLaunched = true;
+          void raw.then(releaseTeardown, releaseTeardown);
+          return raw;
+        },
         'logout',
         session.name,
       );
@@ -768,6 +783,9 @@ export class SessionEngineControls {
       await this.sessionRepository.update(id, { phone: null });
       await this.host.updateStatus(id, SessionStatus.DISCONNECTED);
     } finally {
+      if (!teardownLaunched) {
+        releaseTeardown();
+      }
       if (this.operatorTeardowns.get(id) === engine) {
         this.operatorTeardowns.delete(id);
       }
