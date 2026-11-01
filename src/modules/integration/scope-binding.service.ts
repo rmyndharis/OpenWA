@@ -62,7 +62,7 @@ export class ScopeBindingService implements OnApplicationBootstrap {
    * The boot pass itself, shared with {@link resyncAfterImport}. Rejects only when the instance rows
    * cannot be listed; a single binding failure is absorbed by applyScopeBinding.
    */
-  async reconcile(): Promise<void> {
+  async reconcile(previousWildcardConfigs?: ReadonlyMap<string, Record<string, unknown>>): Promise<void> {
     const rows = await this.instances.listAll();
 
     // Order-independent reconciliation: listAll() is repo.find() with no ORDER BY, so its row order
@@ -85,7 +85,11 @@ export class ScopeBindingService implements OnApplicationBootstrap {
       if (!inst.enabled) continue;
       // Skip instances whose plugin isn't loaded — applyScopeBinding would only no-op/log for them.
       if (!this.loader.getPlugin(inst.pluginId)) continue;
-      await this.applyScopeBinding(inst.pluginId, inst.sessionScope, inst.config ?? {}, true, { additive: true });
+      const isWildcard = !inst.sessionScope || inst.sessionScope === '*';
+      await this.applyScopeBinding(inst.pluginId, inst.sessionScope, inst.config ?? {}, true, {
+        additive: true,
+        previousConfig: isWildcard ? previousWildcardConfigs?.get(inst.pluginId) : undefined,
+      });
       await this.warnIfScopeHasNoSession(inst);
       count++;
     }
@@ -113,13 +117,36 @@ export class ScopeBindingService implements OnApplicationBootstrap {
    * checks read the restored rows.
    */
   async resyncAfterImport(
-    previous: ReadonlyArray<{ pluginId: string; sessionScope: string | null; enabled: boolean }>,
+    previous: ReadonlyArray<{
+      pluginId: string;
+      instanceId?: string;
+      sessionScope: string | null;
+      enabled: boolean;
+      config?: Record<string, unknown> | null;
+    }>,
   ): Promise<void> {
     const bound = new Set(
       (await this.instances.listAll())
         .filter(row => row.enabled)
         .map(row => `${row.pluginId}\u0000${sessionScopeKey(row.sessionScope)}`),
     );
+    const previousWildcardConfigs = new Map<string, Record<string, unknown>>();
+    const wildcardRows = previous
+      .filter(row => row.enabled && sessionScopeKey(row.sessionScope) === '*' && row.config)
+      .slice()
+      .sort((a, b) => String(a.instanceId ?? '').localeCompare(String(b.instanceId ?? '')));
+    for (const row of wildcardRows) {
+      const currentPluginConfig = this.loader.getPlugin(row.pluginId)?.config;
+      const merged = { ...(previousWildcardConfigs.get(row.pluginId) ?? {}) };
+      for (const [key, value] of Object.entries(row.config ?? {})) {
+        if (!isDefined(value) && isDefined(merged[key])) continue;
+        if (isDefined(merged[key]) && isDeepStrictEqual(currentPluginConfig?.[key], merged[key])) continue;
+        merged[key] = value;
+      }
+      if (Object.keys(merged).length > 0) {
+        previousWildcardConfigs.set(row.pluginId, merged);
+      }
+    }
     const retired = new Map<string, { pluginId: string; sessionScope: string | null }>();
     for (const row of previous) {
       const key = `${row.pluginId}\u0000${sessionScopeKey(row.sessionScope)}`;
@@ -127,9 +154,13 @@ export class ScopeBindingService implements OnApplicationBootstrap {
     }
     for (const { pluginId, sessionScope } of retired.values()) {
       if (!this.loader.getPlugin(pluginId)) continue;
-      await this.applyScopeBinding(pluginId, sessionScope, {}, false, { additive: true });
+      const isWildcard = sessionScopeKey(sessionScope) === '*';
+      await this.applyScopeBinding(pluginId, sessionScope, {}, false, {
+        additive: true,
+        previousConfig: isWildcard ? previousWildcardConfigs.get(pluginId) : undefined,
+      });
     }
-    await this.reconcile();
+    await this.reconcile(previousWildcardConfigs);
   }
 
   /**
@@ -311,7 +342,7 @@ export class ScopeBindingService implements OnApplicationBootstrap {
         !isDefined(config[key]) &&
         // Only what this instance put there: a value set on the plugin since, or one a sibling projected
         // after it, is not the instance's to take back.
-        isDeepStrictEqual(plugin?.config[key], before[key]),
+        isDeepStrictEqual(plugin?.config?.[key], before[key]),
     );
     if (removed.length === 0) return {};
     const siblings = (await this.instances.list(pluginId))
