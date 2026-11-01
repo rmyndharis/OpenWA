@@ -68,7 +68,7 @@ Storage: SHA-256 hash only (never store plain key); `keyPrefix` keeps the first 
 Every key minted through the API-keys endpoints uses that format. The bootstrap seed key is the only
 exception: an explicit `API_MASTER_KEY` is taken verbatim (surrounding whitespace is stripped), and `ALLOW_DEV_API_KEY=true` opts into the
 fixed `dev-admin-key`; with neither set, the seed key is generated in the format above. The `keyPrefix` of a key seeded from
-`API_MASTER_KEY` is its first 12 characters, which every ADMIN key can read in the key list, so replace it with a minted key
+`API_MASTER_KEY` is its first 12 characters, which every ADMIN key with no session or chat restriction can read in the key list, so replace it with a minted key
 (see the rotation note in §4.12) rather than keeping a chosen passphrase as the admin key.
 
 ### Permission Model
@@ -607,7 +607,7 @@ flowchart TB
 
 ### Security Alerts
 
-> **Not implemented.** There is no alerting or automatic temp-block subsystem; the table below is a design target, not shipped behavior. The signals do get recorded: rejected authentication and WebSocket rate-limit violations write persisted audit rows, and an IP-restricted key used from a disallowed IP also emits a `logger.warn`; but nothing acts on them. A REST, queue-dashboard or MCP rejection that names no stored key (missing or unknown) is capped at 10 rows per client IP per minute; a rejection of a stored key by the API-key guard (revoked, expired, IP or session refused, insufficient role) is recorded every time there. Four refusals that depend on the request body or query run after the guard and write no row: a chat-restricted key listing messages without `chatId`, a key without the ADMIN role creating a session with `proxyUrl`, a session-scoped key binding an integration instance outside its sessions, and a chat-restricted key searching through a plugin search provider. The public `/api/health` route bounds every auth-failure row it writes, stored key or not, at 10 per client IP per minute. Rate-limit violations are sampled. Forward the audit log / application log to your SIEM to build these alerts.
+> **Not implemented.** There is no alerting or automatic temp-block subsystem; the table below is a design target, not shipped behavior. The signals do get recorded: rejected authentication and WebSocket rate-limit violations write persisted audit rows, and an IP-restricted key used from a disallowed IP also emits a `logger.warn`; but nothing acts on them. A REST, queue-dashboard or MCP rejection that names no stored key (missing or unknown) is capped at 10 rows per client IP per minute; a rejection of a stored key (revoked, expired, IP or session refused, insufficient role) by the API-key guard, the queue dashboard or MCP is recorded every time. Four refusals that depend on the request body or query run after the guard and write no row: a chat-restricted key listing messages without `chatId`, a key without the ADMIN role creating a session with `proxyUrl`, a session-scoped key binding an integration instance outside its sessions, and a chat-restricted key searching through a plugin search provider. The public `/api/health` route bounds every auth-failure row it writes, stored key or not, at 10 per client IP per minute. Rate-limit violations are sampled. Forward the audit log / application log to your SIEM to build these alerts.
 
 | Event                | Severity | Intended action (roadmap) |
 | -------------------- | -------- | ------------------------- |
