@@ -56,7 +56,8 @@ export class ChatState {
    * Epoch MILLISECONDS WhatsApp deleted the chat (on the phone, or through the API), else null. WhatsApp
    * keeps nothing of a deleted chat while the gateway keeps its stored messages, so the row stays with
    * its state reset and this set: a message from before it neither keys a chat write nor brings the chat
-   * back. A later message re-creates the chat on WhatsApp, and the row goes.
+   * back. A later message re-creates the chat on WhatsApp, and the row goes; so does a row older than
+   * CHAT_DELETION_TTL_MS, when the session next starts.
    */
   @Column({
     type: 'bigint',

@@ -1,5 +1,5 @@
-import { Repository } from 'typeorm';
-import { ChatStateStoreService, mergeTwinStates } from './baileys-chat-state-store.service';
+import { DataSource, Repository } from 'typeorm';
+import { CHAT_DELETION_TTL_MS, ChatStateStoreService, mergeTwinStates } from './baileys-chat-state-store.service';
 import { ChatState } from './baileys-chat-state.entity';
 import { BaileysSessionStore } from './baileys-session-store';
 
@@ -302,6 +302,44 @@ describe('ChatStateStoreService', () => {
     expect(svc.get('s', 'b')).toEqual(expect.objectContaining({ pinned: true }));
     expect(svc.get('t', 'gone')).toEqual(expect.objectContaining({ archived: true }));
     expect(svc.get('s', 'a')).toEqual(expect.objectContaining({ archived: true })); // cached rows are kept
+  });
+
+  describe('a chat deletion older than the deletion TTL', () => {
+    let db: DataSource;
+    beforeEach(async () => {
+      db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [ChatState], synchronize: true });
+      await db.initialize();
+    });
+    afterEach(() => db.destroy());
+
+    it('is dropped from the table and the cache when the session starts', async () => {
+      const repo = db.getRepository(ChatState);
+      const deleted = (sessionId: string, chatId: string, at: number) => ({
+        sessionId,
+        chatId,
+        deletedAt: at,
+        observed: 'muteEndTime,archived,pinned,deletedAt',
+      });
+      const expired = Date.now() - CHAT_DELETION_TTL_MS - 60_000;
+      await repo.save([
+        deleted('s', 'gone', expired),
+        deleted('s', 'deleted', Date.now() - 60_000),
+        { sessionId: 's', chatId: 'muted', muteEndTime: -1, observed: 'muteEndTime' },
+        deleted('t', 'gone', expired),
+      ]);
+      const svc = new ChatStateStoreService(repo);
+
+      await svc.refreshSession('s');
+
+      expect(svc.chatIds('s').sort()).toEqual(['deleted', 'muted']);
+      expect(svc.get('s', 'gone')).toBeUndefined();
+      // Another session's rows wait for its own start.
+      expect((await repo.find()).map(r => `${r.sessionId}/${r.chatId}`).sort()).toEqual([
+        's/deleted',
+        's/muted',
+        't/gone',
+      ]);
+    });
   });
 
   describe('a session whose rows all fit in the cache answers a miss without a query', () => {
