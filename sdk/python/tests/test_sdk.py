@@ -306,6 +306,15 @@ class TestClientCore:
         client.request("GET", "//api/sessions", query={"limit": 5})
         assert calls == ["http://localhost:2785//api/sessions?limit=5"]
 
+    def test_raw_request_carries_an_idempotency_key(self) -> None:
+        backend = MockBackend().on("POST", "/messages/send-text", body={"messageId": "m", "timestamp": 1})
+        client = make_client(backend)
+        client.request("POST", "/api/sessions/s/messages/send-text", body={"chatId": "a@c.us", "text": "hi"}, idempotency_key="order-1")
+        assert backend.last_call.headers.get("idempotency-key") == "order-1"
+        with pytest.raises(ValueError):
+            client.request("POST", "/api/sessions/s/messages/send-text", body={}, idempotency_key="has space")
+        assert len(backend.calls) == 1
+
     def test_a_base_url_path_prefix_is_kept_by_typed_and_raw_calls(self) -> None:
         # Behind a reverse proxy at /openwa/, losing the prefix would send every call to a route that 404s.
         backend = MockBackend().on("GET", "/openwa/", body=[])

@@ -503,11 +503,11 @@ OpenWAClient(
 
 The client also exposes a few non-resource members:
 
-| Member    | Signature                                                | Description                                                                                                            |
-| --------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `auth`    | `auth() -> AuthValidateResponse`                         | `POST /api/auth/validate` — validate the configured API key; a key restricted to selected chats is refused with `403`. |
-| `request` | `request(method, path, *, query=None, body=None) -> Any` | Raw escape hatch; `path` begins with `/`.                                                                              |
-| `close`   | `close() -> None`                                        | Close the underlying `httpx.Client`.                                                                                   |
+| Member    | Signature                                                                      | Description                                                                                                            |
+| --------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `auth`    | `auth() -> AuthValidateResponse`                                               | `POST /api/auth/validate` — validate the configured API key; a key restricted to selected chats is refused with `403`. |
+| `request` | `request(method, path, *, query=None, body=None, idempotency_key=None) -> Any` | Raw escape hatch; `path` begins with `/`.                                                                              |
+| `close`   | `close() -> None`                                                              | Close the underlying `httpx.Client`.                                                                                   |
 
 ### Resources & Methods
 
