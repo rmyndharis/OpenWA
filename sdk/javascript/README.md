@@ -105,6 +105,12 @@ app.post('/openwa/webhook', express.raw({ type: 'application/json' }), async (re
 });
 ```
 
+The signature covers the body only and carries no timestamp, so a captured
+delivery still verifies when it is sent again. Dedupe on
+`delivery.idempotencyKey` (also the `X-OpenWA-Idempotency-Key` header): the
+gateway's own retries and an operator's redrive of a failed delivery reuse it, so
+a key you have already handled is the same event arriving again.
+
 ## Releasing
 
 Publishing to npm is done by the

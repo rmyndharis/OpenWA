@@ -242,6 +242,12 @@ http.HandleFunc("/openwa/webhook", func(w http.ResponseWriter, r *http.Request) 
 })
 ```
 
+The signature covers the body only and carries no timestamp, so a captured
+delivery still verifies when it is sent again. Dedupe on
+`delivery.IdempotencyKey` (also the `X-OpenWA-Idempotency-Key` header): the
+gateway's own retries and an operator's redrive of a failed delivery reuse it, so
+a key you have already handled is the same event arriving again.
+
 ## Security & reliability
 
 - **Use HTTPS in production.** The API key is sent as `X-API-Key` on every

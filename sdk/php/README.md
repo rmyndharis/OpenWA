@@ -140,6 +140,11 @@ $delivery = json_decode($raw, true);
 // Process $delivery['event'] and $delivery['data'] here.
 ```
 
+The signature covers the body only and carries no timestamp, so a captured delivery still verifies
+when it is sent again. Dedupe on `$delivery['idempotencyKey']` (also the `X-OpenWA-Idempotency-Key`
+header): the gateway's own retries and an operator's redrive of a failed delivery reuse it, so a key
+you have already handled is the same event arriving again.
+
 ## Notes
 
 - **Use HTTPS in production** — the API key is sent as `X-API-Key` and is bearer-equivalent.
