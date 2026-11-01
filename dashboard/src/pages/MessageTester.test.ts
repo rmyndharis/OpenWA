@@ -1229,6 +1229,32 @@ for (const [typed, number] of [
   });
 }
 
+// With no digit and no @ there is no number to check: the lookup went out as GET .../contacts/check/, which the gateway
+// routes to the contact read with the id "check", and the tester showed that answer instead of asking for a number.
+for (const field of ['recipient', 'forward target'] as const) {
+  test(`a ${field} with no digit and no @ holds Send`, async () => {
+    const { checked } = stubPersonalSend();
+    const { container, client } = renderTesterForKey();
+    try {
+      await rtl.screen.findByRole('option', { name: /Main/ });
+      type(container, '#mt-13', field === 'recipient' ? ' abc ' : '15550000001');
+      if (field === 'recipient') {
+        type(container, '#mt-2', 'hello');
+      } else {
+        rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+        type(container, '#mt-9', 'abc');
+        type(container, '#mt-10', 'original-message');
+      }
+      assert.equal(sendButton().disabled, true, 'Send was offered for a field with no number in it');
+      rtl.fireEvent.click(sendButton());
+      assert.deepEqual(checked, []);
+    } finally {
+      client.clear();
+      sessionStorage.removeItem('openwa_api_key');
+    }
+  });
+}
+
 test('an unchanged actor sends to canonical personal and forward destinations', async () => {
   const writes: { path: string; key: string | null; body: unknown }[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

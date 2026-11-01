@@ -126,6 +126,9 @@ const TERMINAL_BATCH_STATUSES: readonly BatchStatus[] = ['completed', 'cancelled
 // A leading 00 is the international exit code (no number starts with 0): dropped before measuring, as the Number
 // Checker drops it.
 const PHONE_DIGITS_MAX = 15;
+// Whether a recipient field names anything: a digit to look up, or an @ of a chat id. With neither, the number check
+// went out as GET .../contacts/check/, which the gateway routes to the contact read of the id "check".
+const namesRecipient = (text: string): boolean => /[0-9@]/.test(normalizePhoneText(text));
 const phoneDigits = (text: string): string | null => {
   let digits = normalizePhoneText(text).replace(/[^0-9]/g, '');
   if (digits.startsWith('00') && digits.length >= 12) digits = digits.slice(2);
@@ -401,7 +404,7 @@ export function MessageTester() {
       pollOptionsFilled.length >= 2 &&
       pollOptionsFilled.every(option => captionLength(option) <= POLL_OPTION_MAX_LENGTH);
   } else if (messageType === 'forward') {
-    formValid = forwardTo.trim().length > 0 && forwardMessageId.trim().length > 0;
+    formValid = namesRecipient(forwardTo) && forwardMessageId.trim().length > 0;
   } else if (messageType === 'bulk') {
     formValid =
       (content.trim().length > 0 || bulkAttachment !== null) &&
@@ -423,7 +426,7 @@ export function MessageTester() {
     batchCancelling ||
     !session ||
     !formValid ||
-    (messageType !== 'bulk' && (recipientType === 'group' ? selectedGroups.length === 0 : !recipient));
+    (messageType !== 'bulk' && (recipientType === 'group' ? selectedGroups.length === 0 : !namesRecipient(recipient)));
 
   // Says why Send is held when a field runs past its bound, counted the way `formValid` counts it.
   const tooLongHint = (value: string, max: number) => {
