@@ -1085,7 +1085,7 @@ On success the gateway also removes its stored copies of the chat's messages (ro
 > with no message in memory or stored — the clear is an app-state modification keyed to the chat's
 > last message, and the gateway never guesses one.
 
-**Errors:** `400` session not ready · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
+**Errors:** `400` session not started · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
 
 #### POST /api/sessions/:sessionId/chats/archive
 
@@ -1127,7 +1127,7 @@ Archive or unarchive a chat.
 > account itself made (remote-device archives arrive later via chat-update diffing), and
 > whatsapp-web.js's `chat_archived` event is not wired. Treat the HTTP response as the outcome.
 
-**Errors:** `400` session not ready · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
+**Errors:** `400` session not started · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
 
 #### POST /api/sessions/:sessionId/chats/mute
 
@@ -1179,7 +1179,7 @@ Mute a chat's notifications until a given moment, or unmute it.
 > last message on either engine, so a chat with no known history mutes like any other. The response is
 > always `{ "success": true }` or an error.
 
-**Errors:** `400` session not ready, invalid `chatId`/`muteUntil`, or a `chatId` the whatsapp-web.js engine cannot resolve (the Baileys engine writes the mute without resolving the chat first and answers `success: true` for a chat that does not exist) · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
+**Errors:** `400` session not started, invalid `chatId`/`muteUntil`, or a `chatId` the whatsapp-web.js engine cannot resolve (the Baileys engine writes the mute without resolving the chat first and answers `success: true` for a chat that does not exist) · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
 
 #### POST /api/sessions/:sessionId/chats/pin
 
@@ -1221,7 +1221,7 @@ Pin a chat to the top of the chat list, or unpin it. Chat-level — distinct fro
 > not "the chat is pinned". Unlike `chats/archive` the patch is not keyed to the chat's last message,
 > so a chat with no known history pins normally.
 
-**Errors:** `400` session not ready, or a `chatId` the whatsapp-web.js engine cannot resolve (the Baileys engine answers `success: true` for a chat that does not exist) · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
+**Errors:** `400` session not started, or a `chatId` the whatsapp-web.js engine cannot resolve (the Baileys engine answers `success: true` for a chat that does not exist) · `401` missing/invalid API key · `404` session not found · `409` the session is not connected (engine exists but is not `ready`) · `503` WhatsApp did not answer within the request budget, or the engine’s browser page died — the change may or may not have been applied
 
 #### POST /api/sessions/:sessionId/chats/delete
 

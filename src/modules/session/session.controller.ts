@@ -62,6 +62,7 @@ import {
   PAIRING_NOT_READY_409,
   PAIRING_TRANSPORT_503,
   RECIPIENT_LOOKUP_503,
+  SESSION_NOT_STARTED_400,
 } from '../../common/openapi/engine-status-responses';
 
 @ApiTags('sessions')
@@ -577,7 +578,7 @@ export class SessionController {
     description: 'List of groups the session is a member of',
     type: [SessionGroupSummaryDto],
   })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 503,
@@ -612,7 +613,7 @@ export class SessionController {
   @ApiOperation({ summary: 'Get active chats for a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({ status: 200, description: 'List of active chats (most recent first)', type: [ChatSummaryDto] })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({
@@ -659,7 +660,7 @@ export class SessionController {
       'whatsapp-web.js engine reads the chat from the page and needs no local history.',
     type: SessionActionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 503,
@@ -805,7 +806,7 @@ export class SessionController {
       'with no known message, which the phone leaves unmarked without one.',
     type: SessionActionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 503,
@@ -842,7 +843,7 @@ export class SessionController {
       'last message.',
     type: SessionActionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 503,
@@ -874,7 +875,7 @@ export class SessionController {
       'chat for answers `false`.',
     type: SessionActionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 503,
@@ -908,7 +909,7 @@ export class SessionController {
   @ApiResponse({
     status: 400,
     description:
-      'Session not ready, an invalid chatId / muteUntil, or a chatId the whatsapp-web.js engine ' +
+      `${SESSION_NOT_STARTED_400} Also an invalid chatId / muteUntil, or a chatId the whatsapp-web.js engine ` +
       'cannot resolve. The Baileys engine writes the mute without resolving the chat first and ' +
       'answers `success: true` for a chat that does not exist.',
   })
@@ -945,7 +946,7 @@ export class SessionController {
   @ApiResponse({
     status: 400,
     description:
-      'Session not ready, or a chatId the session cannot resolve. An unknown chat is reported here ' +
+      `${SESSION_NOT_STARTED_400} Also a chatId the session cannot resolve. An unknown chat is reported here ` +
       'rather than as `success: false`, which on this route means only that the three-pin cap ' +
       'refused a real chat. The Baileys engine cannot resolve chats ahead of the write and answers ' +
       '`success: true` for an unknown chat.',
@@ -982,7 +983,7 @@ export class SessionController {
       'last message.',
     type: SessionActionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 503,
