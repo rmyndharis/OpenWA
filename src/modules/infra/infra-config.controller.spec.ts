@@ -3066,17 +3066,22 @@ describe('InfraConfigController.requestRestart when the built-in database does n
   const parsed = (text: string) => jest.requireActual<typeof import('dotenv')>('dotenv').parse(text);
   const writes = (): string[] => ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>).map(c => c[1]);
   let shutdown: jest.Mock;
+  let isShuttingDown: jest.Mock;
   let stopManagedService: jest.Mock;
+  let orchestrateProfiles: jest.Mock;
 
-  const build = (orchestration: object): InfraConfigController => {
+  const build = (orchestration: object, audit?: { logInfo: jest.Mock; logWarn: jest.Mock }): InfraConfigController => {
     shutdown = jest.fn();
+    isShuttingDown = jest.fn().mockReturnValue(false);
     stopManagedService = jest.fn().mockResolvedValue(true);
-    const dockerService = {
-      isDockerAvailable: () => true,
-      stopManagedService,
-      orchestrateProfiles: jest.fn().mockResolvedValue(orchestration),
-    };
-    return new InfraConfigController({} as never, dockerService as never, { shutdown } as never);
+    orchestrateProfiles = jest.fn().mockResolvedValue(orchestration);
+    const dockerService = { isDockerAvailable: () => true, stopManagedService, orchestrateProfiles };
+    return new InfraConfigController(
+      {} as never,
+      dockerService as never,
+      { shutdown, isShuttingDown } as never,
+      audit as never,
+    );
   };
   // The page's own save of the built-in database over the file this process booted from.
   const saveBuiltIn = (controller: InfraConfigController): string[] => {
@@ -3173,6 +3178,73 @@ describe('InfraConfigController.requestRestart when the built-in database does n
     expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
+  it('puts back the overlay this process booted from after more than one save', async () => {
+    const controller = build(failedStart);
+    expect(controller.saveConfig({ engine: { headless: false } }).saved).toBe(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue(writes().at(-1));
+    const profiles = saveBuiltIn(controller);
+
+    await refusalOf(controller.requestRestart({ profiles }));
+
+    expect(parsed(writes().at(-1)!)).toEqual(parsed(RUNNING));
+  });
+
+  it('refuses a second restart while the first is still running, and accepts one after it', async () => {
+    const controller = build(failedStart);
+    let finish!: (orchestration: object) => void;
+    orchestrateProfiles.mockImplementationOnce(() => new Promise<object>(resolve => (finish = resolve)));
+    const first = controller.requestRestart({ profiles: ['redis'] });
+
+    const refusal = await refusalOf(controller.requestRestart({ profiles: ['redis'] }));
+    expect(refusal.getResponse()).toMatchObject({ statusCode: 409, code: 'RESTART_ALREADY_RUNNING' });
+    expect(orchestrateProfiles).toHaveBeenCalledTimes(1);
+
+    finish({ ...failedStart, success: true, containersStarted: ['redis'], errors: [] });
+    await expect(first).resolves.toMatchObject({ restarting: true });
+    await expect(controller.requestRestart({ profiles: ['redis'] })).resolves.toMatchObject({ restarting: true });
+  });
+
+  it('frees the restart for the next request after a refusal', async () => {
+    const controller = build(failedStart);
+    const profiles = saveBuiltIn(controller);
+
+    await refusalOf(controller.requestRestart({ profiles }));
+    const again = await refusalOf(controller.requestRestart({ profiles }));
+
+    expect(again.getResponse()).toMatchObject({ code: 'RESTART_DATABASE_NOT_STARTED' });
+  });
+
+  it('puts nothing back when the server is already shutting down for another restart', async () => {
+    const controller = build(failedStart);
+    const profiles = saveBuiltIn(controller);
+    const writesBefore = writes().length;
+    isShuttingDown.mockReturnValue(true);
+
+    const refusal = await refusalOf(controller.requestRestart({ profiles }));
+
+    expect(refusal.getResponse()).toMatchObject({ code: 'RESTART_ALREADY_RUNNING' });
+    expect(writes()).toHaveLength(writesBefore);
+    expect(shutdown).not.toHaveBeenCalled();
+  });
+
+  it('records a refused restart in the audit log with whether the configuration was put back', async () => {
+    const audit = { logInfo: jest.fn().mockResolvedValue(null), logWarn: jest.fn().mockResolvedValue(null) };
+    const controller = build(failedStart, audit);
+    const profiles = saveBuiltIn(controller);
+
+    await refusalOf(controller.requestRestart({ profiles, profilesToRemove: ['redis'] }));
+
+    expect(audit.logWarn).toHaveBeenCalledWith(AuditAction.INFRA_RESTART_REQUESTED, {
+      metadata: {
+        profiles,
+        profilesToRemove: ['redis'],
+        refused: 'RESTART_DATABASE_NOT_STARTED',
+        configRestored: true,
+      },
+    });
+    expect(audit.logInfo).not.toHaveBeenCalledWith(AuditAction.INFRA_RESTART_REQUESTED, expect.anything());
+  });
+
   it('answers the refusal on the wire as a 409 with its code', async () => {
     (fs.readFileSync as jest.Mock).mockReturnValue(SAVED_BUILT_IN);
     const moduleRef = await Test.createTestingModule({
@@ -3183,7 +3255,7 @@ describe('InfraConfigController.requestRestart when the built-in database does n
           provide: DockerService,
           useValue: { isDockerAvailable: () => true, orchestrateProfiles: jest.fn().mockResolvedValue(failedStart) },
         },
-        { provide: ShutdownService, useValue: { shutdown: jest.fn() } },
+        { provide: ShutdownService, useValue: { shutdown: jest.fn(), isShuttingDown: () => false } },
       ],
     }).compile();
     const app = moduleRef.createNestApplication({ logger: false });

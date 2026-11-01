@@ -90,6 +90,16 @@ interface SavedConfigResponse {
 // Errors of replacing the overlay by rename that the in-place write v0.25.0 used can still get past.
 const IN_PLACE_FALLBACK_CODES = ['EBUSY', 'EXDEV', 'EACCES', 'EPERM', 'EROFS'];
 
+interface RestartResult {
+  message: string;
+  restarting: boolean;
+  profiles: string[];
+  profilesToRemove: string[];
+  estimatedTime: number;
+  orchestration?: object;
+  removal?: object;
+}
+
 @ApiTags('infrastructure')
 @Controller('infra')
 // Every route here is deployment-global (data export/import, infra config, service orchestration),
@@ -102,6 +112,9 @@ export class InfraConfigController {
   // data/.env.generated as the first save of this process found it, so the overlay this process booted from. A restart
   // refused because a later save's built-in database did not start writes it back, so no later boot dials that one.
   private bootOverlay?: Record<string, string>;
+  // A restart request is running. A second would race it for the same containers and the same overlay, and one that
+  // loses a container create to the first would read it as a database that did not start.
+  private restartInFlight = false;
 
   constructor(
     private readonly engineFactory: EngineFactory,
@@ -507,20 +520,24 @@ export class InfraConfigController {
   @ApiResponse({
     status: 409,
     description:
-      'Not restarted (`code: RESTART_DATABASE_NOT_STARTED`): the built-in PostgreSQL container the saved configuration ' +
-      'selects did not start, so the next start could not connect to it. Nothing was stopped, and a configuration ' +
-      'saved since this server started is put back to the one it runs; `message` says which and carries the error.',
+      'Not restarted. `code: RESTART_DATABASE_NOT_STARTED`: a request that starts the built-in PostgreSQL could not ' +
+      'start its container, so the next start could not connect to it; nothing was stopped, and a configuration ' +
+      'saved since this server started is put back to the one it runs (`message` says which and carries the ' +
+      'error). `code: RESTART_ALREADY_RUNNING`: another restart request is still running, or the server is ' +
+      'already restarting.',
   })
   @ApiBody({ required: false, type: RestartDto })
-  async requestRestart(@Body() body?: RestartDto): Promise<{
-    message: string;
-    restarting: boolean;
-    profiles: string[];
-    profilesToRemove: string[];
-    estimatedTime: number;
-    orchestration?: object;
-    removal?: object;
-  }> {
+  async requestRestart(@Body() body?: RestartDto): Promise<RestartResult> {
+    if (this.restartInFlight) throw this.restartAlreadyRunning('Another restart request is still running.');
+    this.restartInFlight = true;
+    try {
+      return await this.restartWithProfiles(body);
+    } finally {
+      this.restartInFlight = false;
+    }
+  }
+
+  private async restartWithProfiles(body?: RestartDto): Promise<RestartResult> {
     // Never start a bundled service whose host the environment pins elsewhere: the pin outranks the saved file, so
     // the next boot dials the pinned host and the container would run with nothing using it.
     const requestedStart = body?.profiles || [];
@@ -605,7 +622,7 @@ export class InfraConfigController {
           !runsOnBundled &&
           !started.containersStarted.includes('postgres')
         ) {
-          this.refuseRestartWithoutDatabase(started);
+          await this.refuseRestartWithoutDatabase(started, { profiles, profilesToRemove });
         }
       }
 
@@ -688,7 +705,13 @@ export class InfraConfigController {
 
   // Answer the restart without restarting, and put back the overlay this process booted from, so that no later
   // restart (a crash, a host reboot) boots into the database that did not start either.
-  private refuseRestartWithoutDatabase(orchestration: { message: string; errors: string[] }): never {
+  private async refuseRestartWithoutDatabase(
+    orchestration: { message: string; errors: string[] },
+    request: { profiles: string[]; profilesToRemove: string[] },
+  ): Promise<never> {
+    // A restart that already scheduled the shutdown owns the overlay now: this refusal comes from losing a container
+    // create to it, not from a database that failed to start, and putting the old overlay back would undo its save.
+    if (this.shutdownService.isShuttingDown()) throw this.restartAlreadyRunning('The server is already restarting.');
     let restored = false;
     if (this.bootOverlay) {
       try {
@@ -703,6 +726,11 @@ export class InfraConfigController {
     }
     const detail = orchestration.errors.length > 0 ? orchestration.errors.join('; ') : orchestration.message;
     this.logger.warn('Restart refused: the built-in PostgreSQL container did not start', { detail, restored });
+    // The refusal still started containers and may have rewritten data/.env.generated, so it leaves its row, as the
+    // restart it refused would have.
+    await this.auditService?.logWarn(AuditAction.INFRA_RESTART_REQUESTED, {
+      metadata: { ...request, refused: 'RESTART_DATABASE_NOT_STARTED', configRestored: restored },
+    });
     throw new ConflictException({
       statusCode: 409,
       error: 'Conflict',
@@ -716,5 +744,9 @@ export class InfraConfigController {
         `Details: ${detail}`,
       code: 'RESTART_DATABASE_NOT_STARTED',
     });
+  }
+
+  private restartAlreadyRunning(message: string): ConflictException {
+    return new ConflictException({ statusCode: 409, error: 'Conflict', message, code: 'RESTART_ALREADY_RUNNING' });
   }
 }
