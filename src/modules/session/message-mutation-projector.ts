@@ -156,6 +156,7 @@ export class MessageMutationProjector {
       });
       return;
     }
+    let revoked = false;
     try {
       // Never onto a revoked row: a late edit must not bring back text the sender deleted. An event that repeats the
       // stored text is no edit, and the marker would label an unedited message. The write compares, not the read
@@ -167,10 +168,20 @@ export class MessageMutationProjector {
       if (result.affected) {
         await this.markMessageEdited(id, message.messageId);
         await this.onTextChanged(id, message.messageId);
+      } else {
+        // Nor announced onto one: consumers were already told the message is gone, and the payload carries the new
+        // text. Asked only when the write changed nothing, so an ordinary edit costs no extra read. A revoke runs on
+        // this same per-message chain, so none can land between the write and this read.
+        revoked =
+          (await this.messageRepository.findOne({
+            where: { sessionId: id, waMessageId: message.messageId, type: 'revoked' },
+            select: { id: true },
+          })) !== null;
       }
     } catch (err) {
       this.logger.error(`Failed to update edited message: ${message.messageId}`, String(err));
     }
+    if (revoked) return;
 
     const editedPayload = message as unknown as Record<string, unknown>;
     this.eventsGateway.emitMessageEdited(id, editedPayload);

@@ -512,4 +512,42 @@ describe('edited marker for a message whose row is not written yet', () => {
     expect(received).toEqual([expect.objectContaining({ body: '', type: 'revoked' })]);
     expect(received[0]).not.toHaveProperty('edited');
   });
+
+  // Deleted for everyone while its row was not written yet, then edited: the revoke is announced at once, so an
+  // edit announced after it hands consumers the text of a message they were told is gone.
+  it.each([
+    ['whatsapp-web.js, which names no actor', undefined],
+    ['Baileys, which names the actor', { fromMe: false }],
+  ])('announces no edit of a message revoked before its row was written (%s)', async (_engine, actor) => {
+    const insert = deferred<void>();
+    stalled.set('A', insert.promise);
+    projector.handleInboundMessage('s1', engine, incoming('A'));
+    await flush();
+
+    projector.handleMessageRevoked(
+      's1',
+      engine,
+      {
+        id: 'A',
+        revokedId: 'A',
+        chatId: CHAT,
+        from: CHAT,
+        to: 'me@c.us',
+        type: 'revoked',
+        body: '',
+        timestamp: 1_700_000_050,
+      },
+      actor,
+    );
+    await flush();
+    projector.applyMessageEditQueued('s1', editOf('A', 'text written after the delete'));
+    await flush();
+    insert.resolve();
+    await flush();
+
+    expect(await stored('A')).toEqual(expect.objectContaining({ body: '', type: 'revoked', metadata: null }));
+    expect(announced.map(a => a.event)).toContain('message.revoked');
+    expect(announced.filter(a => /edited/i.test(a.event))).toEqual([]);
+    expect(JSON.stringify(announced)).not.toContain('text written after the delete');
+  });
 });
