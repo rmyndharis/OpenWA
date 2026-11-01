@@ -68,7 +68,9 @@ func (s *ChatsService) Archive(ctx context.Context, sessionID string, body Archi
 }
 
 // Pin pins a chat to the top of the list, or unpins it. A false Success means
-// WhatsApp declined — an account may pin only three chats at a time.
+// WhatsApp declined: an account may pin only three chats at a time. Only
+// whatsapp-web.js reports that refusal; Baileys cannot observe the cap and
+// always answers true.
 func (s *ChatsService) Pin(ctx context.Context, sessionID string, body PinChatRequest) (*SuccessResult, error) {
 	return s.post(ctx, sessionID, "/pin", body)
 }

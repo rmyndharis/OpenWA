@@ -99,8 +99,9 @@ export class ChatsResource {
   }
 
   /**
-   * Pin a chat to the top of the list, or unpin it. `success: false` means WhatsApp declined —
-   * an account may pin only three chats at a time.
+   * Pin a chat to the top of the list, or unpin it. `success: false` means WhatsApp declined: an
+   * account may pin only three chats at a time. Only whatsapp-web.js reports that refusal; Baileys
+   * cannot observe the cap and always answers `true`.
    */
   pin(sessionId: string, body: PinChatRequest): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({

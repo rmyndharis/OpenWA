@@ -100,7 +100,8 @@ class ChatsResource
     /**
      * Pin a chat to the top of the list, or unpin it.
      *
-     * `success: false` means WhatsApp declined — an account may pin only three chats at a time.
+     * `success: false` means WhatsApp declined: an account may pin only three chats at a time. Only
+     * whatsapp-web.js reports that refusal; Baileys cannot observe the cap and always answers true.
      *
      * @param array<string,mixed> $body chatId and pin (bool).
      * @return array<string,mixed>

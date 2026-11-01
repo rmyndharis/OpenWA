@@ -74,7 +74,8 @@ class ChatsResource:
     def pin(self, session_id: str, body: PinChatRequest) -> SuccessResult:
         """Pin a chat to the top of the list, or unpin it.
 
-        success=False means WhatsApp declined — an account may pin only three chats at a time.
+        success=False means WhatsApp declined: an account may pin only three chats at a time. Only
+        whatsapp-web.js reports that refusal; Baileys cannot observe the cap and always answers True.
         """
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/chats/pin", body=body)
 
