@@ -148,7 +148,7 @@ async function restart(body: { profiles?: string[]; profilesToRemove?: string[] 
   const result = await controller({
     isDockerAvailable: () => true,
     stopManagedService,
-    orchestrateProfiles: jest.fn().mockResolvedValue({}),
+    orchestrateProfiles: jest.fn((profiles: string[]) => Promise.resolve({ containersStarted: profiles, errors: [] })),
   }).requestRestart(body);
   return { result, stopped: stopManagedService.mock.calls.length > 0 };
 }

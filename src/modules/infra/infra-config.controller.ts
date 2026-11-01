@@ -5,6 +5,7 @@ import {
   Post,
   Body,
   BadRequestException,
+  ConflictException,
   HttpException,
   HttpCode,
   HttpStatus,
@@ -98,6 +99,9 @@ const IN_PLACE_FALLBACK_CODES = ['EBUSY', 'EXDEV', 'EACCES', 'EPERM', 'EROFS'];
 @RequireUnscopedKey()
 export class InfraConfigController {
   private readonly logger = createLogger('InfraConfigController');
+  // data/.env.generated as the first save of this process found it, so the overlay this process booted from. A restart
+  // refused because a later save's built-in database did not start writes it back, so no later boot dials that one.
+  private bootOverlay?: Record<string, string>;
 
   constructor(
     private readonly engineFactory: EngineFactory,
@@ -221,6 +225,7 @@ export class InfraConfigController {
       this.assertProductionBootable(merged);
       this.assertBootValidates(existing, merged);
       this.assertStorageRootWritable(updates, merged);
+      this.bootOverlay ??= existing;
       this.persistGeneratedEnv(envPath, merged);
       this.auditConfigSaved(config, profiles);
 
@@ -499,6 +504,13 @@ export class InfraConfigController {
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Request server restart with Docker orchestration' })
   @ApiResponse({ status: 200, description: 'Server will restart with new profiles', type: InfraRestartResponseDto })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Not restarted (`code: RESTART_DATABASE_NOT_STARTED`): the built-in PostgreSQL container the saved configuration ' +
+      'selects did not start, so the next start could not connect to it. Nothing was stopped, and a configuration ' +
+      'saved since this server started is put back to the one it runs; `message` says which and carries the error.',
+  })
   @ApiBody({ required: false, type: RestartDto })
   async requestRestart(@Body() body?: RestartDto): Promise<{
     message: string;
@@ -567,7 +579,37 @@ export class InfraConfigController {
         this.logger.warn('Ignoring non-managed profiles in profilesToRemove', { ignored });
       }
 
-      // First, stop containers for disabled services (stop-only: retained, never deleted)
+      // First, start containers for enabled services, so a refused restart leaves the running ones as they are.
+      // Start shares the SAME managed allowlist as teardown below: a non-managed name reaching orchestrateProfiles
+      // could, via container-name matching, select an unrelated host container, so constrain start to the managed
+      // profiles too and drop anything else. (DockerService already hard-prefixes openwa-<service> and filters on
+      // the com.openwa.service label, so this is defense-in-depth, not the sole control.)
+      const toStart = profiles.filter(p => MANAGED_DOCKER_PROFILES.includes(p));
+      const ignoredStart = profiles.filter(p => !MANAGED_DOCKER_PROFILES.includes(p));
+      if (ignoredStart.length > 0) {
+        this.logger.warn('Ignoring non-managed profiles in profiles', { ignoredStart });
+      }
+      if (toStart.length > 0) {
+        this.logger.log('Orchestrating enabled profiles...');
+        const started = await this.dockerService.orchestrateProfiles(toStart);
+        orchestrationResult = started;
+        this.logger.log('Orchestration result', { orchestrationResult });
+        // The next boot dials this built-in database: if it did not start, that boot fails, and so does every one after
+        // it as the container restarts the app. Not when this server already runs on it: its container is up.
+        const runsOnBundled =
+          datastoreInUse('postgres', key => process.env[key]) &&
+          namesBundledContainer('postgres', process.env.DATABASE_HOST);
+        if (
+          toStart.includes('postgres') &&
+          dialsBundled('postgres') &&
+          !runsOnBundled &&
+          !started.containersStarted.includes('postgres')
+        ) {
+          this.refuseRestartWithoutDatabase(started);
+        }
+      }
+
+      // Then stop containers for disabled services (stop-only: retained, never deleted)
       if (toRemove.length > 0) {
         this.logger.log('Stopping disabled profiles (containers retained)...', { toRemove });
         removalResult = { stopped: [], errors: [] };
@@ -585,22 +627,6 @@ export class InfraConfigController {
           }
         }
         this.logger.log('Teardown result', { removalResult });
-      }
-
-      // Then, start containers for enabled services. Start shares the SAME managed allowlist as
-      // teardown above: a non-managed name reaching orchestrateProfiles could, via container-name
-      // matching, select an unrelated host container, so constrain start to the managed profiles too
-      // and drop anything else. (DockerService already hard-prefixes openwa-<service> and filters on
-      // the com.openwa.service label, so this is defense-in-depth, not the sole control.)
-      const toStart = profiles.filter(p => MANAGED_DOCKER_PROFILES.includes(p));
-      const ignoredStart = profiles.filter(p => !MANAGED_DOCKER_PROFILES.includes(p));
-      if (ignoredStart.length > 0) {
-        this.logger.warn('Ignoring non-managed profiles in profiles', { ignoredStart });
-      }
-      if (toStart.length > 0) {
-        this.logger.log('Orchestrating enabled profiles...');
-        orchestrationResult = await this.dockerService.orchestrateProfiles(toStart);
-        this.logger.log('Orchestration result', { orchestrationResult });
       }
     } else {
       this.logger.warn('Docker not available, writing signal file instead');
@@ -658,5 +684,37 @@ export class InfraConfigController {
       orchestration: orchestrationResult,
       removal: removalResult,
     };
+  }
+
+  // Answer the restart without restarting, and put back the overlay this process booted from, so that no later
+  // restart (a crash, a host reboot) boots into the database that did not start either.
+  private refuseRestartWithoutDatabase(orchestration: { message: string; errors: string[] }): never {
+    let restored = false;
+    if (this.bootOverlay) {
+      try {
+        this.persistGeneratedEnv(generatedEnvPath(), this.bootOverlay);
+        restored = true;
+      } catch (err) {
+        this.logger.error(
+          'Failed to put back the running configuration',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+    const detail = orchestration.errors.length > 0 ? orchestration.errors.join('; ') : orchestration.message;
+    this.logger.warn('Restart refused: the built-in PostgreSQL container did not start', { detail, restored });
+    throw new ConflictException({
+      statusCode: 409,
+      error: 'Conflict',
+      message:
+        'The server was not restarted because the built-in PostgreSQL container did not start. ' +
+        (restored
+          ? 'The saved configuration was put back to the one this server runs; save it again once the ' +
+            'container can start. '
+          : 'The saved configuration still selects it, so any restart fails until it starts: fix the Docker error, ' +
+            'or save another database. ') +
+        `Details: ${detail}`,
+      code: 'RESTART_DATABASE_NOT_STARTED',
+    });
   }
 }
