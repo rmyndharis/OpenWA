@@ -668,10 +668,14 @@ export class MessageSendService {
     sessionId: string,
     dto: { fromChatId: string; toChatId: string; messageId: string },
   ): Promise<MessageResponseDto> {
-    const { message, finalDto, engine } = await this.applySendingGate(sessionId, 'forward', dto, finalDto => ({
+    // The row carries what is forwarded: the own-send echo that also carries it loses the insert race to this
+    // row whenever the send path writes the engine id first, so a placeholder stored here stayed for good.
+    const { message, finalDto, engine } = await this.applySendingGate(sessionId, 'forward', dto, async finalDto => ({
       chatId: finalDto.toChatId,
-      body: '[Forwarded]',
-      type: 'forward',
+      ...((await this.storedForwardContent(sessionId, finalDto.fromChatId, finalDto.messageId)) ?? {
+        body: '[Forwarded]',
+        type: 'forward',
+      }),
     }));
 
     let result: MessageResult;
@@ -725,6 +729,43 @@ export class MessageSendService {
     } catch (err) {
       this.logger.warn(`Failed to resolve quoted message ${quotedMessageId}`, { error: String(err) });
       return '';
+    }
+  }
+
+  /**
+   * The type, text and media of the message a forward copies, from its row in `fromChatId` (any of the chat's
+   * phone, lid or group forms, as for a quote), or undefined when no such row is stored, it was revoked, or the
+   * read fails. A quote or mention it carried is not copied: the forwarded copy has neither. Media is copied only
+   * with its bytes: a marker would offer a download this row cannot serve, and merged onto an echo that won the
+   * race it would replace the bytes whatsapp-web.js downloads for it (see persistSentState).
+   */
+  private async storedForwardContent(
+    sessionId: string,
+    fromChatId: string,
+    messageId: string,
+  ): Promise<Pick<SaveOutgoingMessageData, 'body' | 'type' | 'metadata'> | undefined> {
+    try {
+      const store = this.lidMappingStore;
+      const expanded = await resolveJidCandidates(
+        fromChatId,
+        store && {
+          resolveLid: lid => store.findPhoneForLid(lid),
+          lidsForPhone: phone => store.findLidsForPhone(phone),
+        },
+      );
+      const source = await this.messageRepository.findOne({
+        where: { sessionId, chatId: In([...new Set([fromChatId, ...expanded])]), waMessageId: messageId },
+      });
+      if (!source || source.type === 'revoked') return undefined;
+      const { media, poll } = (source.metadata ?? {}) as { media?: { data?: unknown }; poll?: unknown };
+      const metadata = {
+        ...(typeof media?.data === 'string' && media.data ? { media } : {}),
+        ...(poll ? { poll } : {}),
+      };
+      return { type: source.type, body: source.body, metadata: Object.keys(metadata).length ? metadata : undefined };
+    } catch (err) {
+      this.logger.warn(`Failed to read forwarded message ${messageId}`, { error: String(err) });
+      return undefined;
     }
   }
 

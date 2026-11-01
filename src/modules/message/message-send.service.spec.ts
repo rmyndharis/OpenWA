@@ -1679,6 +1679,65 @@ describe('MessageSendService', () => {
 
       expect(assertSendAllowed).toHaveBeenCalledWith('sess-1', 'to@c.us', { whilePreparing: true });
     });
+
+    const pendingRow = (): unknown => ((repository.create as jest.Mock).mock.calls as unknown[][])[0][0];
+    const forwardIt = (svc: MessageSendService = service) =>
+      svc.forward('sess-1', { fromChatId: '628111@c.us', toChatId: 'to@c.us', messageId: 'wa-src' });
+
+    it('stores a poll it finds under the lid form of the source chat, with its options', async () => {
+      const poll = { name: 'Lunch?', options: ['yes', 'no'], allowMultipleAnswers: false };
+      (repository.findOne as jest.Mock).mockImplementation(({ where }: { where: { chatId: FindOperator<string> } }) =>
+        Promise.resolve(
+          (where.chatId.value as unknown as string[]).includes('999@lid')
+            ? { type: 'poll', body: 'Lunch?', metadata: { poll, quotedMessage: { id: 'q', body: 'x' } } }
+            : null,
+        ),
+      );
+      const store = {
+        findPhoneForLid: jest.fn().mockResolvedValue(null),
+        findLidsForPhone: jest.fn((phone: string) => Promise.resolve(phone === '628111' ? ['999'] : [])),
+      } as unknown as LidMappingStoreService;
+      const withStore = new MessageSendService(
+        repository as Repository<Message>,
+        sessionService as unknown as SessionService,
+        engines,
+        hookManager as HookManager,
+        templateService as unknown as TemplateService,
+        inertPacing(),
+        undefined,
+        undefined,
+        store,
+      );
+
+      await forwardIt(withStore);
+
+      expect(pendingRow()).toMatchObject({ chatId: 'to@c.us', type: 'poll', body: 'Lunch?', metadata: { poll } });
+      expect(pendingRow()).not.toHaveProperty('metadata.quotedMessage');
+    });
+
+    it('stores the type and caption of media whose bytes the source row does not hold, without its marker', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue({
+        type: 'image',
+        body: 'the caption',
+        metadata: { media: { mimetype: 'image/jpeg', omitted: true, archived: true, sizeBytes: 10 } },
+      });
+
+      await forwardIt();
+
+      expect(pendingRow()).toMatchObject({ type: 'image', body: 'the caption', metadata: undefined });
+    });
+
+    it.each([
+      ['was deleted', () => (repository.findOne as jest.Mock).mockResolvedValue({ type: 'revoked', body: '' })],
+      ['cannot be read', () => (repository.findOne as jest.Mock).mockRejectedValue(new Error('db down'))],
+    ])('stores the placeholder and still forwards when the stored message %s', async (_why, arrange) => {
+      arrange();
+
+      await forwardIt();
+
+      expect(pendingRow()).toMatchObject({ type: 'forward', body: '[Forwarded]' });
+      expect(mockEngine.forwardMessage).toHaveBeenCalledWith('628111@c.us', 'to@c.us', 'wa-src');
+    });
   });
 
   // ── pacing admission release ──────────────────────────────────────
