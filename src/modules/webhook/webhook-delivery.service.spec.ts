@@ -244,8 +244,8 @@ describe('WebhookDeliveryService', () => {
   });
 
   // The drain bound at shutdown must cover the per-delivery timeout, or a delivery that takes nearly
-  // the full timeout is abandoned at shutdown. The defaults already cross (drain 5s < timeout 10s),
-  // so the warning is the only signal an operator gets that their config silently truncates deliveries.
+  // the full timeout is abandoned at shutdown. The defaults cross (drain 5s < timeout 10s), which a
+  // default install is not warned about; a changed value that leaves them crossed is.
   describe('onModuleInit drain-vs-timeout warning', () => {
     const drainSpy = () =>
       jest.spyOn((service as unknown as { logger: { warn: jest.Mock; error: jest.Mock } }).logger, 'warn');
@@ -268,12 +268,21 @@ describe('WebhookDeliveryService', () => {
       }
     };
 
-    it('warns when WEBHOOK_SHUTDOWN_DRAIN_MS < WEBHOOK_TIMEOUT (the default-derived cross)', () => {
+    it.each([
+      ['a raised WEBHOOK_TIMEOUT', 5000, 30000],
+      ['a lowered WEBHOOK_SHUTDOWN_DRAIN_MS', 2000, 10000],
+    ])('warns when %s leaves the drain shorter than the timeout', (_label, drainMs, timeoutMs) => {
       const warn = drainSpy();
-      withConfig(5000, 10000, () => service.onModuleInit());
+      withConfig(drainMs, timeoutMs, () => service.onModuleInit());
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0][0]).toContain('WEBHOOK_SHUTDOWN_DRAIN_MS');
       expect(warn.mock.calls[0][0]).toContain('WEBHOOK_TIMEOUT');
+    });
+
+    it('does not warn at the defaults, which cross by design', () => {
+      const warn = drainSpy();
+      withConfig(5000, 10000, () => service.onModuleInit());
+      expect(warn).not.toHaveBeenCalled();
     });
 
     it('does not warn when WEBHOOK_SHUTDOWN_DRAIN_MS >= WEBHOOK_TIMEOUT (drain covers the delivery)', () => {
