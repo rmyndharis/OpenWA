@@ -2532,7 +2532,11 @@ describe('SessionService', () => {
 
     it('logout() releases on the 502-incomplete path too — the engine is down either way', async () => {
       const ownership = withOwnership();
-      jest.spyOn(lifecycle, 'logout').mockRejectedValue(new BadGatewayException('incomplete'));
+      // The 502 comes once the engine was found and torn down, as in SessionEngineControls.logout.
+      jest.spyOn(lifecycle, 'logout').mockImplementation((_id, hooks) => {
+        hooks?.onEngineFound?.();
+        return Promise.reject(new BadGatewayException('incomplete'));
+      });
       jest.spyOn(lifecycle, 'isEngineActive').mockReturnValue(false);
 
       await expect(service.logout('sess-uuid-1')).rejects.toThrow(BadGatewayException);
@@ -3200,6 +3204,19 @@ describe('SessionService', () => {
         (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id }));
 
         await expect(call(service, row.id)).rejects.toThrow(BadRequestException);
+
+        expect(await nodeIdOf(row.id)).toBe('dead-node');
+      });
+
+      // A failed read of the row took nothing down either.
+      it.each([
+        ['logout', (s: SessionService, id: string) => s.logout(id)],
+        ['forceKill', (s: SessionService, id: string) => s.forceKill(id)],
+      ])('%s() whose row read fails keeps a lapsed foreign claim', async (_verb, call) => {
+        const row = await seed({ nodeId: 'dead-node', leaseExpiresAt: new Date(Date.now() - 60_000) });
+        (repository.findOne as jest.Mock).mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+
+        await expect(call(service, row.id)).rejects.toThrow('Connection terminated unexpectedly');
 
         expect(await nodeIdOf(row.id)).toBe('dead-node');
       });

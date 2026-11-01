@@ -1110,8 +1110,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // The 502-incomplete path tears the engine down, so its claim must not survive the call. A 400
       // "not started" refusal changed nothing and keeps whatever claim there is: release() also
       // clears a LAPSED foreign claim, which would take a crashed node's session out of takeover.
+      // Neither did a failure before an engine was found (the row read): only a request means one was.
       if (error instanceof BadRequestException) withdraw();
-      if (!(error instanceof BadRequestException)) await this.releaseAfterTeardown(id);
+      if (request && !(error instanceof BadRequestException)) await this.releaseAfterTeardown(id);
       throw error;
     } finally {
       if (request) this.endStop(id, request);
@@ -1140,10 +1141,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       await this.releaseAfterTeardown(id);
       return session;
     } catch (error) {
-      // The 400 "not started" also keeps its claim as in logout(). The 502 did evict the engine: its
-      // request stands and it releases.
+      // The 400 "not started" and a failed row read also keep their claim as in logout(). The 502 did
+      // evict the engine: its request stands and it releases.
       if (error instanceof BadRequestException) withdraw();
-      if (!(error instanceof BadRequestException)) await this.releaseAfterTeardown(id);
+      if (request && !(error instanceof BadRequestException)) await this.releaseAfterTeardown(id);
       throw error;
     } finally {
       if (request) this.endStop(id, request);
