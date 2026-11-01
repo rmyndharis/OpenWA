@@ -56,7 +56,11 @@ export interface Quotable {
 export interface MediaInput extends Quotable {
   mimetype: string;
   data: Buffer | string; // Buffer or base64 or URL
-  /** Caller-supplied filename wins. Document sends fall back to 'file' when omitted (wwebjs first derives the URL basename); image/video/audio sends carry no filename. */
+  /**
+   * Caller-supplied filename wins. A document falls back to 'file' when omitted (wwebjs first derives the URL
+   * basename), except a whatsapp-web.js document to a status or broadcast list, which goes out without one.
+   * Image/video/audio sends carry no filename.
+   */
   filename?: string;
   caption?: string;
   /** Neutral WIDs (`<phone>@c.us`) to @mention in the caption. The adapter de-normalizes per engine. */
@@ -493,9 +497,12 @@ export interface StatusPostOptions {
    * whatsapp-web.js, which broadcasts to the account's status-privacy audience.
    */
   recipients?: string[];
-  /** Hex background colour (#RRGGBB). Honoured on text and voice statuses (Baileys engine). */
+  /** Hex background colour (#RRGGBB). Honoured on text statuses by both engines, and on voice statuses by Baileys. */
   backgroundColor?: string;
-  /** Font index. Honoured on text and voice statuses (Baileys engine). */
+  /**
+   * Font index. Honoured on text statuses by both engines (whatsapp-web.js clamps anything above 7 to the
+   * default), and on voice statuses by Baileys.
+   */
   font?: number;
   /** Caption. Image/video status only. */
   caption?: string;
@@ -860,7 +867,7 @@ export type CallOutcome = 'accepted' | 'rejected' | 'missed';
 /**
  * A call that was ringing has ended.
  *
- * The engines report the outcome but not WHO caused it: an accept can come from any of the account's
+ * Baileys reports the outcome but not WHO caused it: an accept can come from any of the account's
  * linked devices, and a reject can equally be the account declining or WhatsApp giving up. So this
  * says what happened to the call, never who did it.
  */
@@ -1085,7 +1092,8 @@ export interface EngineEventCallbacks {
   /**
    * Fired when a call that was ringing ends — answered, declined, or never picked up. Distinct from
    * `onCall`, which announces the ring itself: an outcome must never re-enter that path, or a call
-   * being declined would look like a fresh incoming call and (with auto-reject on) be answered.
+   * being declined would look like a fresh incoming call and (with auto-reject on) be answered. Baileys
+   * only: whatsapp-web.js reports the ring, never its outcome.
    */
   onCallOutcome?: (event: CallOutcomeEvent) => void;
   /**
