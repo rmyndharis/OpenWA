@@ -122,6 +122,35 @@ export function dropMalformedConfigFields(schema: unknown): void {
   }
 }
 
+const dropNonText = (obj: Record<string, unknown>, ...keys: string[]): void => {
+  for (const key of keys) if (key in obj && typeof obj[key] !== 'string') delete obj[key];
+};
+
+/**
+ * Remove, in place, the manifest text the dashboard renders when it is not text: `description` and `author`, the
+ * entries of `provides` (all of it when it is not a list), and a locale's `name`, `description` and config field
+ * `title`/`description` under `i18n`. Each is a React child on the plugin list, and an object there took down the
+ * Plugins page for every operator, the page that would disable or remove the plugin. Not a refusal: such a package
+ * loads today.
+ */
+export function dropMalformedDisplayFields(manifest: PluginManifest): void {
+  const m = manifest as unknown as Record<string, unknown>;
+  dropNonText(m, 'description', 'author');
+  if ('provides' in m) {
+    if (Array.isArray(m.provides)) m.provides = m.provides.filter(item => typeof item === 'string');
+    else delete m.provides;
+  }
+  if (!isPlainObject(m.i18n)) return;
+  for (const locale of Object.values(m.i18n)) {
+    if (!isPlainObject(locale)) continue;
+    dropNonText(locale, 'name', 'description');
+    if (!isPlainObject(locale.config)) continue;
+    for (const field of Object.values(locale.config)) {
+      if (isPlainObject(field)) dropNonText(field, 'title', 'description');
+    }
+  }
+}
+
 function assertStringArray(value: unknown, field: string): void {
   if (value !== undefined && value !== null && !(Array.isArray(value) && value.every(v => typeof v === 'string'))) {
     throw new Error(`manifest.json ${field} must be an array of strings`);
