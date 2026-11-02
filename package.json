@@ -68,7 +68,7 @@
     "migration:show:main:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source-main.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1156.0",
+    "@aws-sdk/client-s3": "^3.1160.0",
     "@bull-board/api": "^9.10.5",
     "@bull-board/express": "^9.10.5",
     "@bull-board/nestjs": "^9.10.5",
@@ -89,7 +89,7 @@
     "adm-zip": "^0.6.1",
     "audio-decode": "^2.2.3",
     "better-sqlite3": "^13.0.3",
-    "bullmq": "^6.4.2",
+    "bullmq": "^6.5.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "dockerode": "^5.0.1",
@@ -139,7 +139,7 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.72.0"
+    "typescript-eslint": "^8.72.1"
   },
   "jest": {
     "moduleFileExtensions": [
