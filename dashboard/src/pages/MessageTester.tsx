@@ -458,7 +458,7 @@ export function MessageTester() {
         chatIds,
         async chatId => {
           const result = await sendTo(chatId);
-          if (!result.messageId) throw new Error(t('messageTester.sendFailed'));
+          if (typeof result.messageId !== 'string') throw new Error(t('messageTester.sendFailed'));
         },
         {
           delayMs: GROUP_SEND_DELAY_MS,
@@ -646,7 +646,7 @@ export function MessageTester() {
       assertCurrent();
 
       setResponse({
-        success: !!result.messageId,
+        success: typeof result.messageId === 'string',
         messageId: result.messageId,
         timestamp: result.timestamp ? new Date(result.timestamp * 1000).toISOString() : new Date().toISOString(),
       });

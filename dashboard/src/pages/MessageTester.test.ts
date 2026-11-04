@@ -145,7 +145,7 @@ function groupJsonResponse(data: unknown, status = 200): Response {
 }
 
 // How the first text send fails: an HTTP status, a fetch that never gets an answer, or a 201 with no message id.
-type FirstSendFailure = number | 'unreachable' | 'unconfirmed' | 'vetoed';
+type FirstSendFailure = number | 'unreachable' | 'unconfirmed' | 'empty-id' | 'vetoed';
 
 function stubGroupGateway(
   groups: { id: string; name?: string }[],
@@ -173,6 +173,9 @@ function stubGroupGateway(
       if (refuseFirstWith && textSends.length === 1) {
         if (refuseFirstWith === 'unreachable') return Promise.reject(new TypeError('Failed to fetch'));
         if (refuseFirstWith === 'unconfirmed') return Promise.resolve(groupJsonResponse({ timestamp: 1 }, 201));
+        if (refuseFirstWith === 'empty-id') {
+          return Promise.resolve(groupJsonResponse({ messageId: '', timestamp: 1 }, 201));
+        }
         // A plugin that vetoes one chat's send: the gateway answers 400 for that chat alone.
         if (refuseFirstWith === 'vetoed') {
           return Promise.resolve(groupJsonResponse({ message: 'Message sending blocked by plugin' }, 400));
@@ -322,7 +325,7 @@ test('a gateway that does not answer stops the run, and the notice says so', asy
 });
 
 // The page's own "no message id" failure has no HTTP status either, but the gateway did answer.
-test('a send answered without a message id fails that group and the run goes on', async () => {
+test('a send answered without a messageId field fails that group and the run goes on', async () => {
   const gateway = stubGroupGateway(
     [
       { id: 'g1@g.us', name: 'Family' },
@@ -338,6 +341,23 @@ test('a send answered without a message id fails that group and the run goes on'
   assert.deepEqual(gateway.textSends, ['g1@g.us', 'g2@g.us']);
   assert.ok(rtl.screen.getByText(/Failed to send message/, { selector: 'li' }));
   assert.equal(rtl.screen.queryByText(/stopped/) === null, true);
+});
+
+test('an accepted group send with an empty message id counts as sent', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    'empty-id',
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  await rtl.screen.findByText('2/2 sent', {}, { timeout: 8000 });
+  assert.deepEqual(gateway.textSends, ['g1@g.us', 'g2@g.us']);
+  assert.ok(rtl.screen.getByText('Success'));
+  assert.equal(rtl.screen.queryByText('Failed'), null);
 });
 
 test('a 502 from a reverse proxy stops the run, since the gateway behind it is down', async () => {
