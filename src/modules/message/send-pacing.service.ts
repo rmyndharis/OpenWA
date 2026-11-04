@@ -1,7 +1,7 @@
 import { BadRequestException, HttpException, HttpStatus, Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { MoreThanOrEqual, Repository } from 'typeorm';
+import { In, MoreThanOrEqual, Repository } from 'typeorm';
 import { Message, MessageDirection } from './entities/message.entity';
 import { Session } from '../session/entities/session.entity';
 import { resolveSendPacingConfig, type SendPacingConfig } from './send-pacing.config';
@@ -13,7 +13,9 @@ import { EngineThrottledError } from '../../common/errors/engine-throttled.error
 import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
-import { toParticipantWid } from '../../engine/identity/wa-id';
+import { ContactDirectory, resolveJidCandidates } from '../../engine/identity/jid-candidates';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { parseWaId, toParticipantWid } from '../../engine/identity/wa-id';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 
@@ -172,6 +174,8 @@ interface RefusalSample {
 const REFUSAL_AUDIT_WINDOW_MS = 60_000;
 /** Bound on the sampling map, so a churn of session ids cannot grow it without limit. */
 const MAX_REFUSAL_KEYS = 1000;
+/** Ids per IN list in a history read: SQLite binds at most 32766 variables in a statement, PostgreSQL 65535. */
+const LOOKUP_CHUNK = 500;
 
 /**
  * Refuses outbound sends that a young or misbehaving session should not be making.
@@ -237,6 +241,10 @@ export class SendPacingService {
     // a running gateway it is always present; absent means the console log is the only record.
     @Optional()
     private readonly auditService?: AuditService,
+    // @Optional for the same reason. EngineModule is @Global, so a running gateway always has it; absent means
+    // a chat is matched under its two user dialects only, never under a lid.
+    @Optional()
+    private readonly lidMappingStore?: LidMappingStoreService,
   ) {}
 
   /**
@@ -412,19 +420,19 @@ export class SendPacingService {
     this.assertBreakerClosed(sessionId, config);
     if (config.coldSchedule.length === 0 || contactIds.length === 0) return NO_RESERVATION;
 
-    // The same id twice in one request is one contact, and must cost one. Each contact is probed
-    // under both user-id dialects (see dialectVariants) — a contact known under the other spelling
-    // is not a stranger.
+    // The same id twice in one request is one contact, and must cost one. Each contact is probed under
+    // every form it is stored under (see storedForms): a contact known under the other user-id spelling,
+    // or under its lid or phone, is not a stranger.
     const unique = [...new Set(contactIds.map(toParticipantWid))];
-    const variantsByContact = new Map(unique.map(id => [id, dialectVariants(id)]));
+    const formsByContact = await this.storedForms(unique);
     const knownRows = await this.messageRepository
       .createQueryBuilder('m')
       .select('DISTINCT m.chatId', 'chatId')
       .where('m.sessionId = :sessionId', { sessionId })
-      .andWhere('m.chatId IN (:...ids)', { ids: [...new Set([...variantsByContact.values()].flat())] })
+      .andWhere('m.chatId IN (:...ids)', { ids: [...new Set([...formsByContact.values()].flat())] })
       .getRawMany<{ chatId: string }>();
     const knownIds = new Set(knownRows.map(row => row.chatId));
-    const coldCount = unique.filter(id => !variantsByContact.get(id)!.some(v => knownIds.has(v))).length;
+    const coldCount = unique.filter(id => !formsByContact.get(id)!.some(v => knownIds.has(v))).length;
     if (coldCount === 0) return NO_RESERVATION;
 
     const session = await this.sessionRepository.findOne({ where: { id: sessionId } });
@@ -641,10 +649,11 @@ export class SendPacingService {
   /**
    * Read what the cold-reachout rule needs for this send, or null when the rule does not apply.
    *
-   * "Cold" means this account has no history with the chat in EITHER direction: answering someone
-   * who wrote to you first is not a reachout, and counting it as one would throttle exactly the
-   * traffic WhatsApp wants to see. A chat with no `chatId` (a status post) is not addressed to
-   * anyone, so the rule does not apply to it.
+   * "Cold" means this account has no history with the contact in EITHER direction, under any form it
+   * is stored by as far as the lid table pairs them (a phone sees every lid paired with it, a lid sees
+   * its phone but not that phone's other lids): answering someone who wrote to you first is not a
+   * reachout, and counting it as one would throttle exactly the traffic WhatsApp wants to see. A chat
+   * with no `chatId` (a status post) is not addressed to anyone, so the rule does not apply to it.
    *
    * The cheap probe runs first and settles most sends in one indexed lookup; the aggregate that
    * counts the day's cold reachouts only runs when this send is itself cold.
@@ -662,10 +671,18 @@ export class SendPacingService {
     // and this is an existing relationship rather than a reachout. Probed under both user-id
     // dialects (see dialectVariants). The send being checked has not persisted its own row yet —
     // the gate runs before saveOutgoingMessage — so this cannot see it.
+    const variants = dialectVariants(chatId);
     const hasHistory = await this.messageRepository.exists({
-      where: dialectVariants(chatId).map(id => ({ sessionId, chatId: id })),
+      where: variants.map(id => ({ sessionId, chatId: id })),
     });
     if (hasHistory) return null;
+
+    // Only on a miss: the same contact under the forms the lid table pairs with this one, as the message
+    // list reads it. History stored under its lid makes a send addressed by phone a reply, and the reverse.
+    const twins = (await resolveJidCandidates(chatId, this.lidDirectory())).filter(id => !variants.includes(id));
+    if (twins.length > 0 && (await this.messageRepository.exists({ where: { sessionId, chatId: In(twins) } }))) {
+      return null;
+    }
 
     return {
       allowance: this.allowanceForAge(config.coldSchedule, ageDays),
@@ -706,19 +723,20 @@ export class SendPacingService {
    * today, and nobody wrote to it first — a chat whose counterpart messaged earlier the same day is
    * an answered conversation, not a reachout (the "cold" rule above), however new the chat is.
    * Expressed as NOT EXISTS probes so the outer query stays on the `(sessionId, createdAt)` index
-   * and each probe seeks `(sessionId, chatId, createdAt)`; the only aggregate is a per-chat MIN over
-   * today's outgoing rows.
+   * and each probe seeks `(sessionId, chatId, createdAt)`; the probes use the chat's two user dialects
+   * and today's first outgoing row of those. Another form of the same contact (its lid, or its phone)
+   * is applied to what this returns, by countColdReachoutsToday.
    */
-  private countColdReachoutsToday(sessionId: string, dayStart: Date): Promise<number> {
+  private startedChatsToday(sessionId: string, dayStart: Date): Promise<string[]> {
     return (
       this.messageRepository
         .createQueryBuilder('m')
-        // Counted per CONTACT, not per stored spelling: the same person reached under both user-id
-        // dialects today is one reachout, and the correlated lookups below match either spelling
+        // One id per user-id dialect pair, not per stored spelling: the same person reached under both
+        // user-id dialects today is one chat, and the correlated lookups below match either spelling
         // (see dialectVariants — a chat known as @s.whatsapp.net is not a stranger as @c.us).
         // REPLACE is the portable normalisation both SQLite and Postgres carry; the paired IN keeps
         // the inner side's `chatId` index usable.
-        .select(`COUNT(DISTINCT REPLACE(m."chatId", '@s.whatsapp.net', '@c.us'))`, 'count')
+        .select(`DISTINCT REPLACE(m."chatId", '@s.whatsapp.net', '@c.us')`, 'chatId')
         .where('m.sessionId = :sessionId', { sessionId })
         .andWhere('m.direction = :direction', { direction: MessageDirection.OUTGOING })
         .andWhere('m.createdAt >= :dayStart', { dayStart })
@@ -734,8 +752,126 @@ export class SendPacingService {
           `NOT EXISTS (SELECT 1 FROM "messages" i WHERE i."sessionId" = :sessionId AND i."chatId" IN (${DIALECT_PAIR('m')}) AND i."direction" = :incoming AND i."createdAt" < (SELECT MIN(o."createdAt") FROM "messages" o WHERE o."sessionId" = :sessionId AND o."chatId" IN (${DIALECT_PAIR('m')}) AND o."direction" = :direction AND o."createdAt" >= :dayStart))`,
           { incoming: MessageDirection.INCOMING },
         )
-        .getRawOne<{ count: string | number }>()
-        .then(row => Number(row?.count ?? 0))
+        .getRawMany<{ chatId: string }>()
+        .then(rows => rows.map(row => row.chatId))
+    );
+  }
+
+  /**
+   * Distinct contacts this session started a conversation with today: the chats it started (see
+   * startedChatsToday), less those another form of the same contact shows to be an answer, and counted
+   * once per contact. A phone and the lid the table pairs with it are one contact, as the per-send probe
+   * (readColdReachouts) reads them, or the two would disagree about who is a stranger.
+   *
+   * The other forms are read for history from before today together, in chunks of LOOKUP_CHUNK ids, which
+   * settles the common chat (a reply to a contact with older history under its other form) without a
+   * statement of its own. A chat whose other forms hold no such history, and whose contact is not counted
+   * yet, is checked on its own (answeredUnderOtherForm), one statement each.
+   */
+  private async countColdReachoutsToday(sessionId: string, dayStart: Date): Promise<number> {
+    const chats = await this.startedChatsToday(sessionId, dayStart);
+    const forms = await this.storedForms(chats);
+    const twinsOf = new Map<string, string[]>();
+    for (const chatId of chats) {
+      const own = dialectVariants(chatId);
+      const twins = forms.get(chatId)!.filter(id => !own.includes(id));
+      twinsOf.set(chatId, twins);
+    }
+    const older = await this.chatsWithRowsBefore(sessionId, dayStart, [...new Set([...twinsOf.values()].flat())]);
+    const contacts = new Set<string>();
+    for (const chatId of chats) {
+      const twins = twinsOf.get(chatId)!;
+      if (twins.some(id => older.has(id))) continue;
+      // Keyed by the phone form when the table gives one, so a lid and its phone reached today are one
+      // reachout, and so are two lids of one phone.
+      const contact = forms.get(chatId)!.find(id => id.endsWith('@c.us')) ?? chatId;
+      if (contacts.has(contact)) continue;
+      if (twins.length > 0 && (await this.answeredUnderOtherForm(sessionId, dayStart, chatId, twins))) continue;
+      contacts.add(contact);
+    }
+    return contacts.size;
+  }
+
+  /**
+   * Which of these chats hold a row from before today, in either direction. One statement per chunk of ids
+   * (see LOOKUP_CHUNK), however many chats there are.
+   */
+  private async chatsWithRowsBefore(sessionId: string, dayStart: Date, chatIds: string[]): Promise<Set<string>> {
+    const found = new Set<string>();
+    for (let i = 0; i < chatIds.length; i += LOOKUP_CHUNK) {
+      const rows = await this.messageRepository
+        .createQueryBuilder('t')
+        .select('DISTINCT t.chatId', 'chatId')
+        .where('t.sessionId = :sessionId', { sessionId })
+        .andWhere('t.chatId IN (:...ids)', { ids: chatIds.slice(i, i + LOOKUP_CHUNK) })
+        .andWhere('t.createdAt < :dayStart', { dayStart })
+        .getRawMany<{ chatId: string }>();
+      for (const row of rows) found.add(row.chatId);
+    }
+    return found;
+  }
+
+  /**
+   * Whether another form of this chat's contact shows today's first message to the chat to be an answer: a row
+   * we received from it earlier than our first message to this chat today (history from before today is read
+   * beforehand, by chatsWithRowsBefore). The first outgoing row of today stays that of the chat's own dialects,
+   * as in startedChatsToday; a contact reached under several forms is still counted once, because
+   * countColdReachoutsToday keys the survivors on the contact's phone form.
+   */
+  private answeredUnderOtherForm(sessionId: string, dayStart: Date, chatId: string, twins: string[]): Promise<boolean> {
+    const own = dialectVariants(chatId);
+    return this.messageRepository
+      .createQueryBuilder('t')
+      .where('t.sessionId = :sessionId', { sessionId })
+      .andWhere('t.chatId IN (:...twins)', { twins })
+      .andWhere('t.direction = :incoming', { incoming: MessageDirection.INCOMING })
+      .andWhere(
+        `t."createdAt" < (SELECT MIN(o."createdAt") FROM "messages" o WHERE o."sessionId" = :sessionId AND o."chatId" IN (:...own) AND o."direction" = :direction AND o."createdAt" >= :dayStart)`,
+        { dayStart, direction: MessageDirection.OUTGOING, own },
+      )
+      .getExists();
+  }
+
+  /**
+   * The lid table as the message list reads it (MessageService.resolveJidCandidates), or none when it is
+   * not wired. For one chat at a time; see storedForms for a list.
+   */
+  private lidDirectory(): ContactDirectory | undefined {
+    const store = this.lidMappingStore;
+    return (
+      store && {
+        resolveLid: lid => store.findPhoneForLid(lid),
+        lidsForPhone: phone => store.findLidsForPhone(phone),
+      }
+    );
+  }
+
+  /**
+   * Every id each of these chats is stored under: its user dialects and the lids or phone the lid table
+   * pairs with it, by the rules the message list and the chat fence share (resolveJidCandidates). The table
+   * is read once for the whole list, not once per chat. A pairing it does not hold, or holds only as a
+   * display lookup, links nothing: the chat stays a separate one.
+   */
+  private async storedForms(chatIds: string[]): Promise<Map<string, string[]>> {
+    const phones = new Set<string>();
+    const lids = new Set<string>();
+    for (const id of chatIds) {
+      const { kind, userPart } = parseWaId(id);
+      // A bare number parses as unknown, and resolveJidCandidates qualifies it as a phone.
+      if (kind === 'lid') lids.add(userPart);
+      else if (kind === 'user' || kind === 'unknown') phones.add(userPart);
+    }
+    const store = this.lidMappingStore;
+    const lidsByPhone: Record<string, string[]> =
+      store && phones.size ? await store.lidsForPhonesPersisted([...phones]) : {};
+    const phoneByLid: Record<string, string | null> =
+      store && lids.size ? await store.phonesForLidsPersisted([...lids]) : {};
+    const directory: ContactDirectory = {
+      resolveLid: lid => phoneByLid[lid],
+      lidsForPhone: phone => lidsByPhone[phone] ?? [],
+    };
+    return new Map(
+      await Promise.all(chatIds.map(async id => [id, await resolveJidCandidates(id, directory)] as const)),
     );
   }
 
@@ -776,7 +912,8 @@ const DAY_MS = 86_400_000;
  * Both spellings of a user id. Stored rows carry either dialect — inbound rows are neutralized to
  * `@c.us`, outbound rows keep the caller's raw form — so a byte-exact history probe misreads a
  * known contact addressed the other way as cold and over-draws the budget. Non-user ids (groups,
- * lids, …) pass through unchanged; a lid has no derivable phone twin to probe.
+ * lids, …) pass through unchanged: a lid's phone, and a phone's lids, are not derivable from the id and
+ * come from the lid table (see storedForms).
  */
 /**
  * SQL for both user-id spellings of `<alias>."chatId"`, for use as an `IN (…)` list. The same idea
@@ -786,7 +923,11 @@ const DAY_MS = 86_400_000;
 const DIALECT_PAIR = (alias: string): string =>
   `REPLACE(${alias}."chatId", '@s.whatsapp.net', '@c.us'), REPLACE(${alias}."chatId", '@c.us', '@s.whatsapp.net')`;
 
-/** A chat id folded the way countColdReachoutsToday folds it, so the window counts contacts alike. */
+/**
+ * A chat id folded per user dialect, so the window counts the two spellings of a contact alike. Not folded
+ * through the lid table: a phone and a lid sent to inside the window count twice, the conservative side,
+ * and once the first row lands the per-send probe reads the second as known.
+ */
 function coldChatKey(chatId: string): string {
   return chatId.replace('@s.whatsapp.net', '@c.us');
 }
