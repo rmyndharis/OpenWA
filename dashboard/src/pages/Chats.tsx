@@ -28,6 +28,7 @@ import {
 import { useProfilePicture } from '../hooks/useProfilePicture';
 import { useProfilePictures } from '../hooks/useProfilePictures';
 import { useResolvedPhone, resolvedPhoneQuery, isResolvedPhoneHeld } from '../hooks/useResolvedPhone';
+import { keepsSameKey } from '../utils/authLifecycle';
 import { chatTitle, formatPhoneForDisplay } from '../utils/formatPhone';
 import {
   sessionApi,
@@ -1348,6 +1349,10 @@ export function Chats() {
   const findListedChat = useCallback(
     async (phoneId: string): Promise<string | null> => {
       const sessionId = selectedSessionRef.current;
+      const sameKey = keepsSameKey();
+      const isCurrent = () =>
+        sameKey() && selectedSessionRef.current === sessionId && listedSessionRef.current === sessionId;
+      if (!isCurrent()) return null;
       const spelled = chatsRef.current.find(c => contactKey(c.id) === contactKey(phoneId));
       if (spelled) return spelled.id;
       const phone = phoneId.split('@')[0].replace(/\D/g, '');
@@ -1356,18 +1361,19 @@ export function Chats() {
         .slice(0, LID_CHATS_SEARCHED);
       let lastAskedAt = 0;
       for (let i = 0; i < privacyChats.length; i += LID_LOOKUPS_AT_ONCE) {
+        if (!isCurrent()) return null;
         const batch = privacyChats.slice(i, i + LID_LOOKUPS_AT_ONCE);
         // A group the page already holds answers for goes ahead at once; only one that reaches the gateway waits.
         if (batch.some(c => !isResolvedPhoneHeld(queryClient, sessionId, c.id))) {
           const wait = lastAskedAt + LID_LOOKUP_GAP_MS - Date.now();
           if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
-          if (selectedSessionRef.current !== sessionId) return null;
+          if (!isCurrent()) return null;
           lastAskedAt = Date.now();
         }
         const phones = await Promise.all(
           batch.map(c => queryClient.fetchQuery(resolvedPhoneQuery(sessionId, c.id)).catch(() => null)),
         );
-        if (selectedSessionRef.current !== sessionId) return null;
+        if (!isCurrent()) return null;
         const hit = batch.find((_, j) => phones[j]?.replace(/\D/g, '') === phone);
         if (hit) return hit.id;
       }
