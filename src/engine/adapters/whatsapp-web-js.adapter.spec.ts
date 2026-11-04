@@ -27,6 +27,7 @@ import {
 import { READY_RECONCILE_TIMEOUT_MS, READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS } from './wwebjs-reconcile';
 import { DEFAULT_PUPPETEER_ARGS, PINNED_BROWSER_LOCALE } from '../../config/configuration';
 import { type WwebjsCalls } from './wwebjs-calls';
+import * as patchStatus from './engine-patch-status';
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import * as fs from 'fs';
@@ -2964,6 +2965,9 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
   // an `.on` method, and the rest of its evaluate completes either way. The page read that settles
   // it is one line, so ready says it instead of staying quiet.
   it('warns at ready when the page carries no call hook', async () => {
+    // The probe only runs on a tree that carries the ready-sync patch; what the installed tree carries is not this
+    // test's concern.
+    const patches = jest.spyOn(patchStatus, 'unappliedPatches').mockReturnValue([]);
     const adapter = newAdapter();
     const logger = (adapter as unknown as { logger: { warn: jest.Mock } }).logger;
     const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
@@ -2989,6 +2993,7 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     expect(missing).toBeDefined();
     expect(missing?.[1]).toMatchObject({ sessionId: 'sess-1' });
     warnSpy.mockRestore();
+    patches.mockRestore();
   });
 
   it('stays quiet at ready when the call hook is installed', async () => {
