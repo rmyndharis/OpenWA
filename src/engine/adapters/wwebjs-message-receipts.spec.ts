@@ -111,6 +111,32 @@ describe('WwebjsMessaging.getMessageReceipts', () => {
     expect(getChatById).toHaveBeenCalledWith(GROUP);
   });
 
+  it('answers 404 for an own message that names no chat, even when the named chat is unknown too', async () => {
+    const id = `true_${OTHER}_NOTO`;
+    const message = { ...ownMessage(id, OTHER), to: undefined };
+    const { messaging } = makeMessaging({ [id]: message });
+
+    await expect(messaging.getMessageReceipts(GROUP, id)).rejects.toBeInstanceOf(MessageNotFoundError);
+    expect(message.getInfo).not.toHaveBeenCalled();
+  });
+
+  it('answers 404, not 403, for a received message that names no chat', async () => {
+    const id = `false_${OTHER}_NOFROM`;
+    const message = { ...ownMessage(id, '628000000000@c.us'), fromMe: false, from: undefined };
+    const { messaging } = makeMessaging({ [id]: message });
+
+    await expect(messaging.getMessageReceipts(GROUP, id)).rejects.toBeInstanceOf(MessageNotFoundError);
+  });
+
+  it('matches a chat named in another dialect of the same id without asking the page', async () => {
+    const chat = '628123456789@c.us';
+    const id = `true_${chat}_3EB0DIALECT_out`;
+    const { messaging, getChatById } = makeMessaging({ [id]: ownMessage(id, '628123456789:1@s.whatsapp.net') });
+
+    await expect(messaging.getMessageReceipts(chat, id)).resolves.toMatchObject({ deliveryRemaining: 2 });
+    expect(getChatById).not.toHaveBeenCalled();
+  });
+
   it('passes on a chat lookup that fails for another reason', async () => {
     const id = `true_${OTHER}_Z`;
     const failure = new Error('chat lookup failed');
@@ -129,13 +155,43 @@ describe('WwebjsMessaging.getMessageReceipts', () => {
     expect(getChatById).toHaveBeenCalledWith('628222222222@c.us');
   });
 
-  it('answers 404 with no page call for an id that is not a full serialized id', async () => {
+  it.each([
+    '3EB0ABCDEF',
+    `true_${GROUP}_A_B_C`,
+    'true_notawid_3EB0ABCDEF',
+    `maybe_${GROUP}_3EB0ABCDEF`,
+    `true_${GROUP}`,
+  ])('answers 404 with no page call for %s, which is not a full serialized id', async id => {
     const { messaging, getMessageById } = makeMessaging({});
 
-    await expect(messaging.getMessageReceipts(GROUP, '3EB0ABCDEF')).rejects.toBeInstanceOf(MessageNotFoundError);
-    await expect(messaging.getMessageReceipts(GROUP, `true_${GROUP}_A_B_C`)).rejects.toBeInstanceOf(
-      MessageNotFoundError,
-    );
+    await expect(messaging.getMessageReceipts(GROUP, id)).rejects.toBeInstanceOf(MessageNotFoundError);
+    expect(getMessageById).not.toHaveBeenCalled();
+  });
+
+  it('reads the id of an own 1:1 message, which ends in out', async () => {
+    const chat = '628123456789@c.us';
+    const id = `true_${chat}_3EB0ABCDEF_out`;
+    const { messaging, getMessageById } = makeMessaging({ [id]: ownMessage(id, chat) });
+
+    await expect(messaging.getMessageReceipts(chat, id)).resolves.toMatchObject({ deliveryRemaining: 2 });
+    expect(getMessageById).toHaveBeenCalledWith(id);
+  });
+
+  it('reads the id of a group message, which ends in the sender', async () => {
+    const id = `true_${GROUP}_3EB0ABCDEF_628111111111@lid`;
+    const { messaging } = makeMessaging({ [id]: ownMessage(id, GROUP) });
+
+    await expect(messaging.getMessageReceipts(GROUP, id)).resolves.toMatchObject({ readRemaining: 1 });
+  });
+
+  it('answers 409 before it looks at the id when the session is not ready', async () => {
+    const notReady = new Error('session is not ready');
+    const { messaging, ensureReady, getMessageById } = makeMessaging({});
+    ensureReady.mockImplementation(() => {
+      throw notReady;
+    });
+
+    await expect(messaging.getMessageReceipts(GROUP, '3EB0ABCDEF')).rejects.toBe(notReady);
     expect(getMessageById).not.toHaveBeenCalled();
   });
 
@@ -163,12 +219,23 @@ describe('WwebjsMessaging.getMessageReceipts', () => {
     await expect(messaging.getMessageReceipts(GROUP, id)).rejects.toBeInstanceOf(MessageNotFoundError);
   });
 
-  it('checks readiness again before reading through the message', async () => {
+  it('checks readiness again between the lookup and reading through the message', async () => {
     const id = `true_${GROUP}_READY`;
-    const { messaging, ensureReady } = makeMessaging({ [id]: ownMessage(id, GROUP) });
+    const message = ownMessage(id, GROUP);
+    const { messaging, ensureReady, getMessageById } = makeMessaging({ [id]: message });
+    const order: string[] = [];
+    ensureReady.mockImplementation(() => order.push('ensureReady'));
+    getMessageById.mockImplementation(() => {
+      order.push('getMessageById');
+      return Promise.resolve(message);
+    });
+    message.getInfo.mockImplementation(() => {
+      order.push('getInfo');
+      return Promise.resolve(INFO);
+    });
 
     await messaging.getMessageReceipts(GROUP, id);
-    expect(ensureReady).toHaveBeenCalledTimes(2);
+    expect(order).toEqual(['ensureReady', 'getMessageById', 'ensureReady', 'getInfo']);
   });
 
   it('answers a dead page with the 503 and reports the death', async () => {

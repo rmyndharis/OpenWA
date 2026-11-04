@@ -364,6 +364,13 @@ function ensureSendable(chatId: string, shape: 'reply' | 'location' | 'contact c
 }
 
 /**
+ * A full serialized message id: `<fromMe>_<chat>_<id>`, plus one more segment on some messages (the sender of
+ * a group message, or `out` on an own 1:1 message). Client.getMessageById parses the chat part in the page and
+ * throws an unnamed error (a 500) for anything else, so this is checked before the page is asked.
+ */
+const SERIALIZED_MESSAGE_ID = /^(?:true|false)_[^_@]+@[^_@]+_[^_]+(?:_[^_]+)?$/;
+
+/**
  * Messaging operations extracted from WhatsAppWebJsAdapter: the send paths (with the @c.us -> @lid
  * resolution cache), reactions, history, delete and edit. The adapter keeps the public methods as
  * thin forwarders and injects the shared host surface (./wwebjs-host) via closures, so the delegate
@@ -1029,10 +1036,9 @@ export class WwebjsMessaging {
    */
   async getMessageReceipts(chatId: string, messageId: string): Promise<MessageReceipts> {
     this.host.ensureReady();
-    // getMessageById throws an unnamed page error (a 500) for anything but a full serialized id, which is
-    // `<fromMe>_<chat>_<id>` with an optional `_<participant>`; no message has any other id.
-    const parts = messageId.split('_').length;
-    if (parts !== 3 && parts !== 4) throw new MessageNotFoundError(messageId, chatId);
+    // getMessageById throws an unnamed page error (a 500) for anything but a full serialized id, so any other
+    // shape is answered here, without a page call: no message has one.
+    if (!SERIALIZED_MESSAGE_ID.test(messageId)) throw new MessageNotFoundError(messageId, chatId);
     const info = await this.withPage('getMessageReceipts', async () => {
       const message = await this.client().getMessageById(messageId);
       if (!message || !(await this.isInChat(message, chatId))) {
@@ -1076,6 +1082,8 @@ export class WwebjsMessaging {
    */
   private async isInChat(message: Message, chatId: string): Promise<boolean> {
     const own = message.fromMe ? message.to : message.from;
+    // A message that names no chat belongs to none; without this, a missing chat on both sides would compare equal.
+    if (!own) return false;
     if (toNeutralJid(own) === toNeutralJid(chatId)) return true;
     const chat = await this.client()
       .getChatById(chatId)
