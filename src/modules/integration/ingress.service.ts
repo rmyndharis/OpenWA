@@ -11,6 +11,8 @@ import type { IngressAdmission } from './ingress-instance-limit';
 import { parseBodyLimitBytes } from '../../config/inflight-body-budget';
 import { resolveBodyLimit } from '../../config/bootstrap-security';
 import { createLogger } from '../../common/services/logger.service';
+import { incrementIngressDedupBodyMismatches } from '../../common/metrics/ingress-metrics';
+import type { IngressEventKey } from './ingress-event.service';
 
 export interface IngressRequest {
   pluginId: string;
@@ -45,6 +47,7 @@ export interface IngressDeps {
   instances: { resolve(pluginId: string, instanceId: string): Promise<ResolvedInstance | null> };
   manifestRoute: (pluginId: string, route: string) => IngressRouteDescriptor | undefined;
   events: {
+    getPayloadHash(key: IngressEventKey): Promise<string | null>;
     recordOrSkip(input: {
       instanceId: string;
       pluginId: string;
@@ -231,7 +234,7 @@ export class IngressService {
     // Signature headers are re-derivable, auth material is not — redact before the first write.
     // A shared-secret route carries the instance secret itself in its declared header, and an hmac
     // route's declared header carries a signature that is only useful to re-send the same body.
-    const payload = {
+    const payload: IngressJobData['payload'] = {
       // Every authenticating scheme has passed by here; a `none` route authenticates nothing, and no scheme covers
       // a query that stands in for the body. Recorded now because a plugin update can change the scheme before a
       // queued or replayed delivery runs.
@@ -259,7 +262,9 @@ export class IngressService {
     });
     const ack = admission ? { ...rendered, headers: { ...rendered.headers, ...admission.headers } } : rendered;
 
-    const isNew = await this.deps.events.recordOrSkip({
+    let storedDeliveryId = deliveryId;
+    const payloadHash = createHash('sha256').update(req.rawBody).digest('hex');
+    const input = {
       instanceId: req.instanceId,
       pluginId: req.pluginId,
       providerDeliveryId: deliveryId,
@@ -267,10 +272,34 @@ export class IngressService {
       // The method rides with the row so a reconciler replay reaches the handler as this attempt does.
       payload: { ...payload, method: req.method },
       // The slim content fingerprint kept after the payload is retired on dispatch (see the entity).
-      payloadHash: createHash('sha256').update(req.rawBody).digest('hex'),
+      payloadHash,
       sessionId: instance.sessionScope,
-    });
-    if (!isNew) return ack; // already persisted/acked; a retry gets the route's ack, not enqueued again
+    };
+    if (!(await this.deps.events.recordOrSkip(input))) {
+      const storedHash = await this.deps.events.getPayloadHash({
+        pluginId: req.pluginId,
+        instanceId: req.instanceId,
+        providerDeliveryId: deliveryId,
+      });
+      if (storedHash === null || storedHash === payloadHash) return ack;
+      incrementIngressDedupBodyMismatches();
+      this.deps.log?.('ingress_dedup_body_mismatch', {
+        pluginId: req.pluginId,
+        instanceId: req.instanceId,
+        deliveryId,
+      });
+      if (route.dedupBodyMismatchAsNew !== true) return ack;
+      storedDeliveryId = `${deliveryId}:${payloadHash}`;
+      payload.providerDeliveryId = deliveryId;
+      if (
+        !(await this.deps.events.recordOrSkip({
+          ...input,
+          providerDeliveryId: storedDeliveryId,
+          payload: { ...payload, method: req.method },
+        }))
+      )
+        return ack;
+    }
     // Persisted and acked: dispatching it now would run the plugin inline where there is no worker to run it in.
     // The row stays 'pending', which is where a crash here would leave it too, and the reconciler dispatches it.
     if (this.deps.deferDispatch?.(req.pluginId)) return ack;
@@ -283,7 +312,7 @@ export class IngressService {
       instanceId: req.instanceId,
       route: req.route,
       method: req.method,
-      deliveryId,
+      deliveryId: storedDeliveryId,
       sessionId: instance.sessionScope ?? undefined,
       providerConversationId,
       payload,
@@ -296,7 +325,7 @@ export class IngressService {
       // .catch() is a defensive guard: enqueue() never rejects without a signal (it swallows inline failures
       // and the factory wrapper writes a DLQ row on 'failed'), but a future regression must not become an unhandled
       // rejection that crashes the process on the ingress hot path.
-      void this.deps.enqueue(jobData, deliveryId).catch(err => {
+      void this.deps.enqueue(jobData, storedDeliveryId).catch(err => {
         this.deps.log?.('ingress_enqueue_unhandled', {
           pluginId: req.pluginId,
           instanceId: req.instanceId,
@@ -305,7 +334,7 @@ export class IngressService {
         });
       });
     } else {
-      await this.deps.enqueue(jobData, deliveryId);
+      await this.deps.enqueue(jobData, storedDeliveryId);
     }
     return ack;
   }

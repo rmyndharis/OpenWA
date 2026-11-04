@@ -69,6 +69,7 @@ describe('Integration SDK v1 golden contract — Chatwoot message_created', () =
       instances: { resolve: resolveInstance },
       manifestRoute,
       events: {
+        getPayloadHash: () => Promise.resolve(null),
         recordOrSkip: () => {
           enqueued.push('recorded');
           return Promise.resolve(true);
@@ -108,7 +109,10 @@ describe('Integration SDK v1 golden contract — Chatwoot message_created', () =
     const deps: IngressDeps = {
       instances: { resolve: resolveInstance },
       manifestRoute,
-      events: { recordOrSkip: () => Promise.resolve(true) },
+      events: {
+        getPayloadHash: () => Promise.resolve(null),
+        recordOrSkip: () => Promise.resolve(true),
+      },
       enqueue: (_data, jobId) => {
         dispatched.push(jobId);
         return Promise.resolve();
@@ -141,7 +145,10 @@ describe('Integration SDK v1 golden contract — Chatwoot message_created', () =
     const deps: IngressDeps = {
       instances: { resolve: resolveInstance },
       manifestRoute,
-      events: { recordOrSkip: () => Promise.resolve(true) },
+      events: {
+        getPayloadHash: () => Promise.resolve(null),
+        recordOrSkip: () => Promise.resolve(true),
+      },
       enqueue: (_data, jobId) => {
         dispatched.push(jobId);
         return Promise.resolve();

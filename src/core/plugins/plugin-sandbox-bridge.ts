@@ -278,7 +278,7 @@ export class PluginSandboxBridge {
       body: d.payload.body,
       rawBody: d.payload.rawBody,
       verified,
-      deliveryId: d.deliveryId,
+      deliveryId: d.payload.providerDeliveryId ?? d.deliveryId,
       sessionId: d.sessionId,
       config,
       timeoutMs: INGRESS_DISPATCH_TIMEOUT_MS,

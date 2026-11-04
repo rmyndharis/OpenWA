@@ -62,7 +62,7 @@ function job(
 }
 
 /** The fields of the worker payload these specs assert on. */
-type WebhookCall = { config?: Record<string, unknown>; verified?: boolean; sessionId?: string };
+type WebhookCall = { config?: Record<string, unknown>; verified?: boolean; sessionId?: string; deliveryId?: string };
 
 /** Builds a bridge whose dispatch path is real; only the worker host and the instance store are fakes. */
 function makeBridge(opts: {
@@ -118,6 +118,17 @@ function makeBridge(opts: {
 }
 
 describe('ingress dispatch resolves config per INSTANCE, not per session scope', () => {
+  it('passes the provider id to the handler when the stored delivery uses a different key', async () => {
+    const { bridge, calls } = makeBridge({ rows: [instanceRow('acct-a', {}, SHARED_SCOPE)] });
+    const data = job('acct-a');
+    Object.assign(data.payload, { providerDeliveryId: 'provider-17' });
+
+    await bridge.dispatchWebhookForInstance(data);
+
+    expect(calls[0].deliveryId).toBe('provider-17');
+    expect(data.deliveryId).toBe('delivery-acct-a');
+  });
+
   it('hands each instance its own credentials when two instances share one session scope', async () => {
     const a = instanceRow('acct-a', { apiToken: 'token-A' }, SHARED_SCOPE);
     const b = instanceRow('acct-b', { apiToken: 'token-B' }, SHARED_SCOPE);

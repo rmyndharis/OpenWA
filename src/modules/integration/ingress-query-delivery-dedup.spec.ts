@@ -45,7 +45,7 @@ describe('ingress deliveries carried in the query string', () => {
         maxBodyBytes: 4096,
         signature: { scheme: 'shared-secret', header: 'x-api-key' },
       }),
-      events: { recordOrSkip: input => events.recordOrSkip(input) },
+      events,
       enqueue,
       now: () => 1_700_000_000_000,
     });

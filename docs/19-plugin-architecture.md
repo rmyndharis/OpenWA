@@ -330,6 +330,8 @@ claims a route the manifest already declared under `ingress`: the host owns the 
 [27 — Writing a Search-Provider Plugin](./27-plugin-search-providers.md). Hook handlers use the host
 `HookContext` / `HookResult` shape (see §19.5), not a `{ continue, modified }` shape.
 
+Ingress routes may set `dedupBodyMismatchAsNew: true` only for providers whose retries preserve body bytes. The default keeps header-keyed retries suppressed even when the body changes; all such mismatches are logged and counted. With the option enabled, a different body gets a separate storage and queue key while the handler keeps the provider delivery id. See [25.6](25-integration-fabric.md#256-security-model) for the retry and idempotency contract.
+
 ### Capability facade
 
 A plugin reaches WhatsApp, the engine, and the network **only** through these namespaces. Each call is

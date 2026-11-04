@@ -294,6 +294,8 @@ export interface PluginIngressRoute {
    * on hmac-sha256 and standard-webhooks a query-borne delivery reaches the handler unverified.
    */
   dedupOn?: 'header' | 'body';
+  /** Treat different bytes under one delivery id as new. Enable only for byte-identical provider retries. */
+  dedupBodyMismatchAsNew?: boolean;
   /** Optional synchronous-response contract (host-side preflight + ack). Additive; absent = today's
    *  default 202 fast-ack, byte-identical. Validated by validateIngressManifest. */
   response?: IngressResponseContract;
@@ -427,6 +429,9 @@ export function validateIngressManifest(manifest: PluginManifest, allowUnsignedI
       throw new Error(
         `Plugin ${manifest.id}: route '${r.route}' dedupOn must be 'header' or 'body' (got '${String(r.dedupOn)}')`,
       );
+    }
+    if (r.dedupBodyMismatchAsNew !== undefined && typeof r.dedupBodyMismatchAsNew !== 'boolean') {
+      throw new Error(`Plugin ${manifest.id}: route '${r.route}' dedupBodyMismatchAsNew must be a boolean`);
     }
     if (r.response) {
       const ackStatus = r.response.ack?.status;

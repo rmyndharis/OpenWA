@@ -88,7 +88,10 @@ if (process.env.QUEUE_ENABLED === 'true') {
           instances: { resolve: (pluginId, instanceId) => instances.resolve(pluginId, instanceId) },
           manifestRoute: (pluginId, route): IngressRouteDescriptor | undefined =>
             loader.getPlugin(pluginId)?.manifest.ingress?.find(r => r.route === route),
-          events: { recordOrSkip: input => events.recordOrSkip(input) },
+          events: {
+            recordOrSkip: input => events.recordOrSkip(input),
+            getPayloadHash: key => events.getPayloadHash(key),
+          },
           // O(1) in-memory liveness probe for the `session-alive` preflight: a Map read + a field read.
           // MUST stay cheap — never call engine.initialize() here (that is the slow/blocking path bounded
           // separately by the #667/#696 init-timeout). Undefined = no live engine (stopped/deleted).

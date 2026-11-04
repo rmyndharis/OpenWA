@@ -41,6 +41,8 @@ export interface IngressJobData {
     query: Record<string, string>;
     body: string;
     rawBody: string;
+    // Original provider id when deliveryId is a body-specific storage key.
+    providerDeliveryId?: string;
     // The host's verdict when it accepted the request; see IngressEvent.payload.
     admission?: { verified: boolean };
   };
