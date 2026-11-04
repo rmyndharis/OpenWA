@@ -729,8 +729,9 @@ An accepted stop on an expired or missing foreign lease clears that claim in the
 Attempt an engine-native unlink of this companion device, then tear the session down locally.
 
 `stop` disconnects while keeping the stored credentials, and `delete` additionally purges the
-on-disk auth directories and the session row, but neither tells WhatsApp anything: the device stays
-listed under the account holder's **Linked Devices** on the phone until they remove it by hand.
+on-disk auth directories (a symlinked one is only unlinked, see `DELETE /api/sessions/:sessionId`) and
+the session row, but neither tells WhatsApp anything: the device stays listed under the account
+holder's **Linked Devices** on the phone until they remove it by hand.
 `logout` attempts the engine-native unlink operation itself.
 
 A `200` means the engine-native unlink operation **and** the required local credential cleanup both
@@ -1316,6 +1317,8 @@ Delete a session.
 The delete holds its claim while it runs. Each destructive batch and the final transaction lock the session row and check its owner in that transaction. If another node takes over an expired claim, the old delete answers `409` before its next removal; earlier committed batches remain removed. That refusal preserves the newer owner's intent and engine. Hooks run outside these transactions.
 
 The delete first removes the session's messages, webhook outbox rows and webhook delivery-failure records in batches (on SQLite up to 2000 rows, each sized to about 150 ms; 500 rows on PostgreSQL) that are not atomic with the rest: a failure part-way (a database error, a timeout, a restart), while the delete still owns its claim, leaves the session in place with fewer rows and stopped, as `POST /stop` leaves it, and repeating the delete finishes it. It then removes, in one transaction, the session's message batches, chat states, received statuses, webhooks, templates, stored Baileys messages, automation rules, integration dead-letter rows and send idempotency claims together with the session itself, then purges its on-disk auth data. It keeps the audit log, the LID mappings, and the integration conversation mappings (so a re-paired session keeps its provider conversations); ingress dedup rows age out on their own after `INGRESS_DEDUP_RETENTION_DAYS` (default 7).
+
+An auth directory that is a symbolic link (a profile relocated onto another volume) is removed as a link only: what it points to stays in place, with any WhatsApp login stored there, and a warning in the log names it (`action=engine_purge_link`). Remove that directory by hand to destroy the login.
 
 **Errors:** `400` the session id is not a UUID · `401` missing/invalid key · `403` key not scoped to this session, or key role below OPERATOR · `404` session not found · `409` credential teardown for the same session name still in flight (retryable; body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; on a `409` the row is **not** deleted and no hook/auth-purge runs — retry after cleanup settles), or, on a multi-node deployment, another node currently holds this session's live engine (no `code`; nothing is deleted; send the delete to the owning node), or ownership changed during removal (earlier batches may already be removed) · `503` the session could not be claimed for the delete because the database did not answer (nothing is deleted; retry), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed; retry)
 

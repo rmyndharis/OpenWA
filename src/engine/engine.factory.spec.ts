@@ -395,6 +395,96 @@ describe('EngineFactory', () => {
       await expect(factory.purgeSessionData('never-linked')).resolves.toBeUndefined();
     });
 
+    // A profile relocated onto another volume is a symlink. The purge removes the link and never follows it,
+    // so the WhatsApp login stays at the target, and the operator has to be told that instead of "purged".
+    describe('with an auth directory that is a symlink', () => {
+      type Logged = Record<'log' | 'warn', (message: string, meta?: Record<string, unknown>) => void>;
+      const spiesOn = (factory: EngineFactory) => {
+        const logger = (factory as unknown as { logger: Logged }).logger;
+        return { log: jest.spyOn(logger, 'log'), warn: jest.spyOn(logger, 'warn') };
+      };
+      const purged = (log: ReturnType<typeof spiesOn>['log']): unknown[] =>
+        log.mock.calls.filter(([message]) => message === 'Purged session auth directory').map(([, meta]) => meta?.dir);
+      const volume = () => path.join(tmpRoot, 'other-volume', SESSION_ID);
+      const withLogin = (target: string): void => {
+        fs.mkdirSync(target, { recursive: true });
+        fs.writeFileSync(path.join(target, 'creds.json'), '{}');
+      };
+      const linkWarning = (dir: string, target: string): unknown =>
+        expect.objectContaining({ action: 'engine_purge_link', sessionId: SESSION_ID, dir, target });
+
+      it('removes the link, keeps the login at its target and says so, while a real directory is purged as before', async () => {
+        const { factory, wwjsDir, baileysDir } = buildBothDirFactory('baileys');
+        withLogin(volume());
+        fs.mkdirSync(path.dirname(baileysDir), { recursive: true });
+        fs.symlinkSync(volume(), baileysDir);
+        fs.mkdirSync(wwjsDir, { recursive: true });
+        const { log, warn } = spiesOn(factory);
+
+        await factory.purgeSessionData(SESSION_ID);
+
+        expect(() => fs.lstatSync(baileysDir)).toThrow(/ENOENT/);
+        expect(fs.existsSync(path.join(volume(), 'creds.json'))).toBe(true);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(expect.any(String), linkWarning(baileysDir, volume()));
+        expect(purged(log)).toEqual([wwjsDir]);
+        expect(fs.existsSync(wwjsDir)).toBe(false);
+      });
+
+      it('names the absolute target of a link written relative to its own directory', async () => {
+        const { factory, baileysDir } = buildBothDirFactory('baileys');
+        withLogin(volume());
+        fs.mkdirSync(path.dirname(baileysDir), { recursive: true });
+        fs.symlinkSync(path.join('..', 'other-volume', SESSION_ID), baileysDir);
+        const { warn } = spiesOn(factory);
+
+        await factory.purgeSessionData(SESSION_ID);
+
+        expect(warn).toHaveBeenCalledWith(expect.any(String), linkWarning(baileysDir, volume()));
+        expect(fs.existsSync(path.join(volume(), 'creds.json'))).toBe(true);
+      });
+
+      it('removes a link whose target is gone, without failing', async () => {
+        const { factory, wwjsDir } = buildBothDirFactory('baileys');
+        fs.mkdirSync(path.dirname(wwjsDir), { recursive: true });
+        fs.symlinkSync(volume(), wwjsDir);
+        const { warn } = spiesOn(factory);
+
+        await expect(factory.purgeSessionData(SESSION_ID)).resolves.toBeUndefined();
+
+        expect(() => fs.lstatSync(wwjsDir)).toThrow(/ENOENT/);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(expect.any(String), linkWarning(wwjsDir, volume()));
+      });
+
+      it('says so for a legacy name-keyed directory that is a link', async () => {
+        const { factory } = buildBothDirFactory('baileys');
+        const legacy = baileysAuthDir(path.join(tmpRoot, 'baileys'), 'alice');
+        withLogin(volume());
+        fs.mkdirSync(path.dirname(legacy), { recursive: true });
+        fs.symlinkSync(volume(), legacy);
+        const { warn } = spiesOn(factory);
+
+        await factory.purgeSessionData(SESSION_ID, 'alice');
+
+        expect(() => fs.lstatSync(legacy)).toThrow(/ENOENT/);
+        expect(warn).toHaveBeenCalledWith(expect.any(String), linkWarning(legacy, volume()));
+        expect(fs.existsSync(path.join(volume(), 'creds.json'))).toBe(true);
+      });
+
+      it('logs no warning when only one engine has a directory, and none when neither does', async () => {
+        const { factory, baileysDir } = buildBothDirFactory('baileys');
+        const { warn } = spiesOn(factory);
+        await factory.purgeSessionData('never-linked');
+        fs.mkdirSync(baileysDir, { recursive: true });
+
+        await factory.purgeSessionData(SESSION_ID);
+
+        expect(warn).not.toHaveBeenCalled();
+        expect(fs.existsSync(baileysDir)).toBe(false);
+      });
+    });
+
     // The boot migration keeps a legacy name-keyed directory it could not rename (an open profile, or
     // a conflict with an id-keyed one). Delete has to take it too, or a complete WhatsApp login stays
     // on the volume, and in every backup, after the session is gone.
