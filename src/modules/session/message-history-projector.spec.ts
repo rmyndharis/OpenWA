@@ -64,6 +64,47 @@ describe('persistHistoryMessages revokes', () => {
     expect(cleared.map(m => m.id)).toEqual(['W1']);
   });
 
+  it.each([false, true])('retimes a tombstone only while its engine stays live (retired=%s)', async retired => {
+    await stored('628111@c.us');
+    await repo.update({ sessionId: 's1', waMessageId: 'W1' }, { type: 'revoked', body: '' });
+    const before = await repo.findOneByOrFail({ sessionId: 's1', waMessageId: 'W1' });
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => (entered = resolve));
+    let answer!: (phone: string) => void;
+    const phone = new Promise<string>(resolve => (answer = resolve));
+    const lookup = jest.fn(() => {
+      entered();
+      return phone;
+    });
+    let live = true;
+    const notify = jest.fn();
+    const pending = persistHistoryMessages(
+      repo,
+      undefined,
+      's1',
+      [{ ...tombstone('484848@lid'), type: 'text', body: 'earlier original' }],
+      logger,
+      () => live,
+      notify,
+      lookup,
+    );
+    try {
+      await waiting;
+      live = !retired;
+      answer('628111');
+      const cleared = await pending;
+      expect(cleared.map(message => message.id)).toEqual(retired ? [] : ['W1']);
+      const after = await repo.findOneByOrFail({ sessionId: 's1', waMessageId: 'W1' });
+      expect(after.timestamp).toBe(retired ? before.timestamp : 5);
+      expect(after.createdAt).toEqual(retired ? before.createdAt : new Date(5_000));
+      expect(after).toMatchObject({ type: 'revoked', body: '' });
+      expect(notify).not.toHaveBeenCalled();
+    } finally {
+      answer('628111');
+      await pending;
+    }
+  });
+
   it('leaves a row of another chat alone', async () => {
     await stored('120363000000000001@g.us');
 

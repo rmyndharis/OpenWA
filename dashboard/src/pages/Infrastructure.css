@@ -12,7 +12,7 @@
 
 .infrastructure-page .infra-sections {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1.5rem;
   width: 100%;
 }
@@ -103,8 +103,19 @@
   background: rgba(37, 211, 102, 0.05);
 }
 
+/* Hidden but focusable: display: none would take the radio out of the tab order, and the arrow keys
+   that change the choice with it. */
 .infrastructure-page .radio-option input {
-  display: none;
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.infrastructure-page .radio-option:has(input:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .infrastructure-page .radio-option span {
@@ -125,7 +136,7 @@
 
 .infrastructure-page .watermark-icon {
   position: absolute;
-  right: -15px;
+  inset-inline-end: -15px;
   bottom: -15px;
   width: 100px;
   height: 100px;
@@ -182,20 +193,19 @@
   font-size: 0.9375rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-white);
+  background-color: var(--bg-white);
   transition: border-color 0.2s;
 }
 
 .infrastructure-page .form-group input:focus,
 .infrastructure-page .form-group select:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
 }
 
 .infrastructure-page .form-group small {
   font-size: 0.75rem;
   color: var(--text-muted);
-  opacity: 0.85;
 }
 
 /* Toggle */
@@ -222,7 +232,6 @@
   font-size: 0.75rem;
   font-weight: 400;
   color: var(--text-muted); /* Slate 500 */
-  opacity: 0.85;
 }
 
 .infrastructure-page .toggle-switch {
@@ -270,6 +279,11 @@
   transform: translateX(22px);
 }
 
+.infrastructure-page .toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 /* Queue Stats */
 .infrastructure-page .queue-stats {
   margin-top: 1.5rem;
@@ -286,7 +300,7 @@
 
 .infrastructure-page .stats-row {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, max-content));
   gap: 1rem;
   margin-bottom: 1rem;
 }
@@ -306,6 +320,7 @@
 
 .infrastructure-page .stat-values {
   display: flex;
+  flex-wrap: wrap;
   gap: 1.5rem;
 }
 
@@ -385,11 +400,15 @@
 }
 
 /* Responsive */
-@media (max-width: 900px) {
+/* Two columns of cards need 1035px of viewport with the sidebar open (1190px in German, whose labels are
+   wider); below that they stack. */
+@media (max-width: 1200px) {
   .infrastructure-page .infra-sections {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
+}
 
+@media (max-width: 900px) {
   .infrastructure-page {
     padding: 1rem;
   }
@@ -413,7 +432,7 @@
   }
 
   .infrastructure-page .header-left {
-    flex: 1;
+    flex: 1 1 auto;
     min-width: 0;
   }
 
@@ -513,6 +532,8 @@
   margin: 0 0 1rem;
   font-size: 0.8125rem;
   color: var(--warning-text);
+  /* A long variable name (DATABASE_SSL_REJECT_UNAUTHORIZED) breaks instead of running past a narrow card. */
+  overflow-wrap: anywhere;
 }
 .infrastructure-page .env-pin-note svg {
   flex-shrink: 0;
@@ -521,7 +542,7 @@
 .infrastructure-page .migration-warning {
   display: flex;
   gap: 0.6rem;
-  text-align: left;
+  text-align: start;
   margin: 0 0 1.5rem;
   padding: 0.85rem 1rem;
   border-radius: 8px;
@@ -558,6 +579,7 @@
 }
 .infrastructure-page .data-migration-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 .infrastructure-page .data-migration-actions .btn-sm,
@@ -666,9 +688,23 @@
   line-height: 1.5;
 }
 
-/* Data backup / restore */
+/* Data backup / restore. Import data is a label around its file input, hidden from sight but focusable: display: none
+   would take the chooser out of the tab order. The label shows the keyboard focus. */
 .infrastructure-page .hidden-file-input {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.infrastructure-page label:has(> .hidden-file-input:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* Restart / migration progress modal */
@@ -690,6 +726,10 @@
   font-size: 1rem;
   color: var(--text-secondary);
   margin-bottom: 1.5rem;
+}
+
+.infrastructure-page .restart-stop-name {
+  white-space: nowrap;
 }
 
 .infrastructure-page .restart-actions {

@@ -4,6 +4,7 @@ import {
   Post,
   Body,
   BadRequestException,
+  ConflictException,
   HttpCode,
   HttpStatus,
   OnApplicationBootstrap,
@@ -20,6 +21,7 @@ import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorat
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { isPathWithin } from '../../common/utils/path-safety';
 import { StorageService } from '../../common/storage/storage.service';
+import { StorageWalkRefusedError } from '../../common/storage/storage-local-files';
 import { createLogger } from '../../common/services/logger.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -30,6 +32,12 @@ import { randomUUID } from 'crypto';
 
 const S3_UNAVAILABLE_DESCRIPTION =
   'STORAGE_TYPE is s3 but the bucket is unreachable or its credentials are missing; nothing was read or written.';
+
+const WALK_REFUSED_DESCRIPTION =
+  'The local storage directory cannot be enumerated completely, so the answer would silently leave files out: ' +
+  'it holds a symbolic link, a directory the app cannot read, or one nested too deep. `message` names the path ' +
+  'relative to the storage root and the cause. Replace a link with a bind mount or fix the permissions, then ' +
+  'retry; nothing was written.';
 
 @ApiTags('infrastructure')
 @Controller('infra')
@@ -112,6 +120,15 @@ export class InfraStorageController implements OnApplicationBootstrap {
   // ============================================================================
 
   /**
+   * A store the walk refuses to enumerate completely is a state the operator can fix, so the caller is told what and
+   * where instead of a bare 500. Any other failure stays an internal error.
+   */
+  private static refusalAsConflict(error: unknown): never {
+    if (error instanceof StorageWalkRefusedError) throw new ConflictException(error.message);
+    throw error;
+  }
+
+  /**
    * With STORAGE_TYPE=s3 and the bucket unusable (credentials missing, or unreachable since boot),
    * every StorageService operation quietly uses the local fallback directory. A count, export or
    * import run in that state reports on the wrong store: an import lands on local disk while answering
@@ -130,6 +147,7 @@ export class InfraStorageController implements OnApplicationBootstrap {
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get file count in current storage' })
   @ApiResponse({ status: 200, description: 'File count and size', type: StorageFileCountResponseDto })
+  @ApiResponse({ status: 409, description: WALK_REFUSED_DESCRIPTION })
   @ApiResponse({ status: 503, description: S3_UNAVAILABLE_DESCRIPTION })
   async getStorageFileCount(): Promise<{
     storageType: string;
@@ -138,7 +156,9 @@ export class InfraStorageController implements OnApplicationBootstrap {
     sizeMB: string;
   }> {
     await this.assertStorageBackendReady();
-    const { count, sizeBytes } = await this.storageService.getFileCount();
+    const { count, sizeBytes } = await this.storageService
+      .getFileCount()
+      .catch((error: unknown) => InfraStorageController.refusalAsConflict(error));
     return {
       storageType: this.storageService.getCurrentStorageType(),
       count,
@@ -158,12 +178,12 @@ export class InfraStorageController implements OnApplicationBootstrap {
       'POST /api/infra/storage/import.',
     type: StorageExportResponseDto,
   })
+  @ApiResponse({ status: 409, description: WALK_REFUSED_DESCRIPTION })
   @ApiResponse({ status: 503, description: S3_UNAVAILABLE_DESCRIPTION })
   async exportStorage(): Promise<{ message: string; download: string }> {
     await this.assertStorageBackendReady();
     // Note: In production, this would return a StreamableFile
     // For simplicity, we'll save to a temp file and return the path
-    const stream = await this.storageService.createExportStream();
     // Keep the export INSIDE data/ (under data/exports/): the import handler only accepts paths under
     // data/, and the documented backend-migration flow re-imports this file AFTER a container restart,
     // so it must live on the persistent volume — the OS temp dir is wiped on restart. The original
@@ -175,31 +195,41 @@ export class InfraStorageController implements OnApplicationBootstrap {
     }
     const exportPath = path.join(exportDir, `storage-export-${Date.now()}-${randomUUID()}.tar.gz`);
 
-    const writeStream = fs.createWriteStream(exportPath);
-    stream.pipe(writeStream);
-
+    // Created only once the destination can be prepared: the archive starts reading files at once, and one
+    // nothing consumes would hold its open file and buffered bytes until the process exits.
+    const stream = await this.storageService
+      .createExportStream()
+      .catch((error: unknown) => InfraStorageController.refusalAsConflict(error));
+    let writeStream: fs.WriteStream | undefined;
     try {
+      const sink = (writeStream = fs.createWriteStream(exportPath));
       await new Promise<void>((resolve, reject) => {
-        writeStream.on('finish', resolve);
+        sink.on('finish', resolve);
         // The archive is filled while it is written: destroying the source stops the export from
         // opening further files once the sink has failed.
-        writeStream.on('error', (err: Error) => {
+        sink.on('error', (err: Error) => {
           stream.destroy();
           reject(err);
         });
-        // pipe() does NOT forward source errors: an archiver/gzip failure surfaces as an 'error' event on
+        // pipe() does NOT forward source errors: a tar/gzip failure surfaces as an 'error' event on
         // the source stream, which without a listener crashes the process. Fail the request instead and
         // tear down the sink so its fd isn't held open waiting for a 'finish' that never comes.
         stream.on('error', (err: Error) => {
-          writeStream.destroy();
+          sink.destroy();
           reject(err);
         });
+        stream.pipe(sink);
       });
     } catch (error) {
       // The TTL sweep below only covers a finished archive; a failed one would otherwise stay on the
       // data volume until a restart a day later. Wait for the sink to close so the unlink cannot race
       // an open that is still pending.
-      if (!writeStream.closed) await new Promise<void>(resolve => writeStream.once('close', () => resolve()));
+      stream.destroy();
+      if (writeStream) {
+        const sink = writeStream;
+        sink.destroy();
+        if (!sink.closed) await new Promise<void>(resolve => sink.once('close', () => resolve()));
+      }
       await fs.promises.unlink(exportPath).catch(() => undefined);
       throw error;
     }

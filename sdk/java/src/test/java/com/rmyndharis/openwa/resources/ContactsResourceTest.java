@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.rmyndharis.openwa.ClientConfig;
 import com.rmyndharis.openwa.OpenWAClient;
 import com.rmyndharis.openwa.http.HttpMethod;
+import com.rmyndharis.openwa.model.ContactLidResponse;
 import com.rmyndharis.openwa.model.UpsertContactRequest;
 import com.rmyndharis.openwa.model.ListContactsQuery;
 import com.rmyndharis.openwa.model.ProfilePicturesResponse;
@@ -78,6 +79,19 @@ class ContactsResourceTest {
         client.contacts.phone("s", "a@lid");
         assertEquals("http://h/api/sessions/s/contacts/a@lid/phone", tx.lastRequest().url());
         assertEquals(HttpMethod.GET, tx.lastRequest().method());
+    }
+
+    @Test
+    void lidHitsPathAndDecodesNullAndPresentLids() {
+        tx.respond(200, "{\"number\":\"628123\",\"lid\":null}");
+        ContactLidResponse none = client.contacts.lid("s", "628123");
+        assertEquals("http://h/api/sessions/s/contacts/628123/lid", tx.lastRequest().url());
+        assertEquals(HttpMethod.GET, tx.lastRequest().method());
+        assertEquals("628123", none.number());
+        assertNull(none.lid());
+
+        tx.respond(200, "{\"number\":\"628123\",\"lid\":\"12345@lid\"}");
+        assertEquals("12345@lid", client.contacts.lid("s", "628123").lid());
     }
 
     @Test

@@ -5,6 +5,7 @@ import static com.rmyndharis.openwa.http.Http.encodeSegment;
 import com.rmyndharis.openwa.OpenWAClient;
 import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.model.CheckNumberResponse;
+import com.rmyndharis.openwa.model.ContactLidResponse;
 import com.rmyndharis.openwa.model.ContactPhoneResponse;
 import com.rmyndharis.openwa.model.ContactRecord;
 import com.rmyndharis.openwa.model.ListContactsQuery;
@@ -65,7 +66,7 @@ public final class ContactsResource {
 
     /**
      * Batch-resolve profile picture URLs for up to 50 contacts in one request.
-     * Returns a map of contact id → URL (null when a lookup fails).
+     * Returns a map of contact id → URL (null when a lookup fails). An id skipped after a lookup timed out is absent from the map; ask for it again.
      */
     public ProfilePicturesResponse profilePictures(String sessionId, List<String> ids) {
         return client.request(
@@ -84,6 +85,21 @@ public final class ContactsResource {
             null,
             null,
             ContactPhoneResponse.class);
+    }
+
+    /**
+     * Look up the {@code @lid} WhatsApp holds for a phone number, without sending a message. {@code lid} is
+     * {@code null} when WhatsApp holds none, which an unregistered number also answers. The lookup can query
+     * WhatsApp (Baileys on every call, whatsapp-web.js when the page holds no LID), so bulk lookups put the
+     * linked account at risk. Requires an OPERATOR-level key.
+     */
+    public ContactLidResponse lid(String sessionId, String number) {
+        return client.request(
+            HttpMethod.GET,
+            "/api/sessions/" + encodeSegment(sessionId) + "/contacts/" + encodeSegment(number) + "/lid",
+            null,
+            null,
+            ContactLidResponse.class);
     }
 
     /** Block a contact. Requires an OPERATOR-level key. */

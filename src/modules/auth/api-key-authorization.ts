@@ -19,11 +19,15 @@ export function normalizeScopeList(list: string[] | null | undefined): string[] 
   return cleaned.length > 0 ? cleaned : null;
 }
 
-/** An `expiresAt` in milliseconds, or null when it is unset or unparseable (a Date from the driver, a string from a snapshot). */
+/**
+ * An `expiresAt` in milliseconds (a Date from the driver, a string from a key a socket carries), or null when it is unset.
+ * An unparseable value is 0, the epoch: validateApiKey refuses such a key as expired, so it must not read as
+ * one that never expires.
+ */
 export function apiKeyExpiryTime(value: Date | string | null | undefined): number | null {
   if (!value) return null;
   const time = value instanceof Date ? value.getTime() : new Date(value).getTime();
-  return Number.isFinite(time) ? time : null;
+  return Number.isFinite(time) ? time : 0;
 }
 
 /** The columns that decide what a key may do. Everything else on the row is descriptive or advisory. */

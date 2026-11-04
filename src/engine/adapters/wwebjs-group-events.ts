@@ -1,7 +1,7 @@
 import { type Client, type GroupNotification } from 'whatsapp-web.js';
 import { type EngineEventCallbacks, GroupEvent } from '../interfaces/whatsapp-engine.interface';
 import { type createLogger } from '../../common/services/logger.service';
-import { SerializedWid } from '../types/whatsapp-web-js.types';
+import { SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 
 /**
  * Interpret the on/off value a group settings notification carries in `body` ('on'/'true' → true,
@@ -48,7 +48,7 @@ export function wwebjsGroupUpdateChanges(notification: GroupNotification): NonNu
  * A GroupNotification's `recipientIds` are assigned straight through from the wire
  * (`this.recipientIds = data.recipients`), outside upstream's id normalization — so on a WA Web
  * build that renamed `_serialized` to `$1` (#747) an entry can arrive as a raw id object instead
- * of a string. Coerce both shapes to the neutral (already @c.us/@g.us) string form; entries that
+ * of a string. Coerce both shapes to a string; entries that
  * resolve to nothing are dropped rather than forwarded as "undefined".
  */
 export function wwebjsGroupRecipientIds(notification: GroupNotification): string[] {
@@ -58,7 +58,7 @@ export function wwebjsGroupRecipientIds(notification: GroupNotification): string
     .map(entry => {
       if (typeof entry === 'string') return entry;
       const wid = entry as SerializedWid | undefined;
-      return wid?._serialized ?? wid?.$1 ?? '';
+      return readWid(wid) ?? '';
     })
     .filter(id => id.length > 0);
 }
@@ -85,8 +85,8 @@ export function registerWwebjsGroupEvents(client: Client, host: WwebjsGroupEvent
 
 /**
  * Map a whatsapp-web.js GroupNotification (`group_join` / `group_leave` / `group_update`) to the
- * neutral GroupEvent and forward it. wwebjs ids are already in the neutral dialect (@c.us/@g.us),
- * so no jid translation is needed here. The try/catch mirrors message_edit: a malformed
+ * neutral GroupEvent and forward it. The actor and participant ids are passed on as WhatsApp Web holds them,
+ * which on a LID-addressed group is `<lid>@lid` (docs/29), so no jid translation is done here. The try/catch mirrors message_edit: a malformed
  * notification is logged and dropped, never thrown back into the client's emitter.
  */
 function handleGroupNotification(

@@ -36,8 +36,8 @@ const render = (...setArgs) =>
   });
 
 /** Render with `valuesYaml` as a values file (`-f -`), which parses numbers unlike `--set`. */
-const renderValues = valuesYaml =>
-  execFileSync('docker', ['run', '-i', '--rm', '-v', `${CHARTS}:/charts:ro`, HELM_IMAGE, 'template', 'ci', '/charts/openwa', '-f', '-'], {
+const renderValues = (valuesYaml, release = 'ci') =>
+  execFileSync('docker', ['run', '-i', '--rm', '-v', `${CHARTS}:/charts:ro`, HELM_IMAGE, 'template', release, '/charts/openwa', '-f', '-'], {
     encoding: 'utf8',
     input: valuesYaml,
     maxBuffer: 1 << 24,
@@ -231,6 +231,30 @@ const check = (id, ok, detail) => results.push({ id, ok, detail });
     Object.keys(selector).length === 0
       ? `${nameOf(monitor) ?? 'ServiceMonitor'}: empty selector — it would match every Service in the namespace`
       : `${matched.length} Service(s) match the selector on port '${port}': ${matched.join(', ') || '(none)'}`,
+  );
+}
+
+// The ServiceMonitor's bearer token must name a key its Secret holds, or the Prometheus Operator cannot read the
+// token and no metrics arrive. The chart's own Secret stores each secretEnv entry under its variable name, which
+// the default key `token` is not, so the setup values.yaml documents is rendered and its key looked up there.
+{
+  const values = readFileSync(`${CHARTS}/openwa/values.yaml`, 'utf8');
+  const setup = /^# {3}serviceMonitor:\n(?:# {3}.*\n)+/m.exec(values)?.[0] ?? '';
+  const documented = setup.replace(/^# {3}/gm, '');
+  const out = renderValues(`${documented}secretEnv:\n  METRICS_TOKEN: a-long-random-token\n`, 'openwa');
+  const ref = mapAt(byKind(out, 'ServiceMonitor')[0] ?? '', ['bearerTokenSecret']) ?? {};
+  const secret = byKind(out, 'Secret').find(doc => nameOf(doc) === ref.name);
+  const keys = mapAt(secret ?? '', ['stringData']) ?? {};
+  check(
+    'servicemonitor-token-key-exists',
+    Boolean(setup) && Boolean(secret) && ref.key in keys,
+    !setup
+      ? 'values.yaml documents no serviceMonitor setup to scrape with'
+      : !secret
+        ? `the documented bearerTokenSecret names ${ref.name ?? 'no Secret'}, which the chart does not render`
+        : ref.key in keys
+          ? `the documented setup reads the token from ${ref.name}, key ${ref.key}`
+          : `the documented key ${ref.key} is not in Secret ${ref.name}, which holds ${Object.keys(keys).join(', ')}`,
   );
 }
 

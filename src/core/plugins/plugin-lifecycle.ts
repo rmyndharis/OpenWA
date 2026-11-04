@@ -2,13 +2,14 @@ import { ConfigService } from '@nestjs/config';
 import { createLogger } from '../../common/services/logger.service';
 import { HookManager } from '../hooks';
 import { IPlugin, PluginInstance, PluginManifest, PluginStatus, PluginType } from './plugin.interfaces';
-import { PluginStorageService } from './plugin-storage.service';
+import { PluginStorageService, type RegistryWriteOptions } from './plugin-storage.service';
 import { PluginHostServices } from './plugin-host-services';
 import { PluginCapabilityContext } from './plugin-capability-context';
 import { PluginSandboxBridge } from './plugin-sandbox-bridge';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { unregisterPluginSearchProvider } from './search-provider-registration.util';
 import { resolvePluginMainPath } from './plugin-paths';
+import { assertNotUninstalling } from './plugin-uninstaller';
 
 /**
  * The runtime half of the plugin loader: everything that happens to a plugin AFTER the boot scan has
@@ -27,6 +28,8 @@ export class PluginLifecycle {
   private readonly enabling = new Set<string>();
   /** In-flight disables by plugin id, so a concurrent disable joins the running teardown. */
   private readonly disabling = new Map<string, Promise<void>>();
+  /** The env-derived config each built-in was registered with, under the operator's stored keys. */
+  private readonly builtInBase = new Map<string, Record<string, unknown>>();
 
   constructor(
     // The LOADER's logger, deliberately — lifecycle lines carry the PluginLoaderService tag, and
@@ -214,21 +217,30 @@ export class PluginLifecycle {
     });
   }
 
-  updatePluginConfig(pluginId: string, config: Record<string, unknown>): void {
+  updatePluginConfig(pluginId: string, config: Record<string, unknown>, opts?: RegistryWriteOptions): void {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) {
       throw new Error(`Plugin ${pluginId} not found`);
     }
-
-    plugin.config = { ...plugin.config, ...config };
+    assertNotUninstalling(pluginId, plugin);
 
     // Persist only the operator's keys on top of what was persisted before, not the effective merge:
     // a built-in's effective config carries its env-derived defaults, and storing those would freeze
-    // them over later .env changes (see registerBuiltInPlugin).
-    this.pluginStorage.setPluginConfig(pluginId, {
-      ...(this.pluginStorage.getPluginConfig(pluginId) ?? {}),
-      ...config,
-    });
+    // them over later .env changes (see registerBuiltInPlugin). Persisted first: a write that must be stored
+    // and cannot be throws here and leaves the running config as it was.
+    // On a built-in a top-level null removes the stored key, so the key goes back to its env-derived value; a
+    // stored null would outrank .env on every boot. An extension plugin stores the null as sent.
+    const base = this.builtInBase.get(pluginId) ?? {};
+    const cleared = this.builtInBase.has(pluginId) ? Object.keys(config).filter(key => config[key] === null) : [];
+    const stored = { ...(this.pluginStorage.getPluginConfig(pluginId) ?? {}), ...config };
+    for (const key of cleared) delete stored[key];
+    this.pluginStorage.setPluginConfig(pluginId, stored, opts);
+    const next = { ...plugin.config, ...config };
+    for (const key of cleared) {
+      if (Object.hasOwn(base, key)) next[key] = base[key];
+      else delete next[key];
+    }
+    plugin.config = next;
 
     // Notify the running plugin of the config change (fire and forget). A sandboxed plugin's
     // onConfigChange lives in the worker (plugin.instance is null), so route it through the live worker
@@ -254,17 +266,18 @@ export class PluginLifecycle {
    * an explicit list scopes it to those sessions, `[]` deactivates it everywhere. Takes effect on the
    * next hook event (the gate reads plugin.activeSessions live) and survives a restart.
    */
-  setPluginSessions(pluginId: string, sessions: string[]): PluginInstance {
+  setPluginSessions(pluginId: string, sessions: string[], opts?: RegistryWriteOptions): PluginInstance {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) {
       throw new Error(`Plugin ${pluginId} not found`);
     }
+    assertNotUninstalling(pluginId, plugin);
     if (plugin.manifest.sessionScoped === false) {
       throw new Error(`Plugin ${pluginId} is global (not session-scoped) and cannot be activated per session`);
     }
 
+    this.pluginStorage.setPluginSessions(pluginId, sessions, opts);
     plugin.activeSessions = sessions;
-    this.pluginStorage.setPluginSessions(pluginId, sessions);
 
     this.logger.log(`Plugin active sessions updated: ${pluginId}`, {
       pluginId,
@@ -281,11 +294,17 @@ export class PluginLifecycle {
    * persisted across restart. An empty override removes it (the session falls back to the base).
    * Global plugins have no per-session config.
    */
-  setPluginSessionConfig(pluginId: string, sessionId: string, config: Record<string, unknown>): PluginInstance {
+  setPluginSessionConfig(
+    pluginId: string,
+    sessionId: string,
+    config: Record<string, unknown>,
+    opts?: RegistryWriteOptions,
+  ): PluginInstance {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) {
       throw new Error(`Plugin ${pluginId} not found`);
     }
+    assertNotUninstalling(pluginId, plugin);
     if (plugin.manifest.sessionScoped === false) {
       throw new Error(`Plugin ${pluginId} is global (not session-scoped) and has no per-session config`);
     }
@@ -296,8 +315,8 @@ export class PluginLifecycle {
     } else {
       delete next[sessionId];
     }
+    this.pluginStorage.setPluginSessionConfig(pluginId, next, opts);
     plugin.sessionConfig = next;
-    this.pluginStorage.setPluginSessionConfig(pluginId, next);
 
     this.logger.debug(`Plugin session config updated: ${pluginId}`, {
       pluginId,
@@ -340,6 +359,8 @@ export class PluginLifecycle {
     // override too (PUT /api/plugins/:id/config), except the auth-dir bases, which EngineFactory
     // passes to every createEngine call from the env config.
     const effectiveConfig = { ...config, ...(this.pluginStorage.getPluginConfig(manifest.id) ?? {}) };
+    // Kept so a stored key the operator removes can fall back to it (updatePluginConfig).
+    this.builtInBase.set(manifest.id, { ...config });
 
     const pluginInstance: PluginInstance = {
       manifest,

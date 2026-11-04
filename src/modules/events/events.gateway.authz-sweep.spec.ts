@@ -190,6 +190,22 @@ describe('EventsGateway API-key authorization sweep', () => {
     expect(later.disconnect).not.toHaveBeenCalled();
   });
 
+  it('evicts a socket when its stored expiry becomes invalid', async () => {
+    const { apiKey, rawKey } = await service.createApiKey({ name: 'invalid expiry' });
+    const sock = await connect(rawKey);
+
+    await repo.query('UPDATE api_keys SET expiresAt = ? WHERE id = ?', ['not-a-date', apiKey.id]);
+    const current = await repo.findOneByOrFail({ id: apiKey.id });
+    expect(current.expiresAt).toBeInstanceOf(Date);
+    expect(Number.isFinite(current.expiresAt!.getTime())).toBe(false);
+    await expect(service.validateApiKey(rawKey, CLIENT_IP)).rejects.toThrow('API key has expired');
+
+    await sweep();
+
+    expect(sock.disconnect).toHaveBeenCalledWith(true);
+    expect(evictionMessage(sock)).toBe('API key has expired');
+  });
+
   it('evicts on the snapshot expiry when the api_keys table cannot be read', async () => {
     const { rawKey } = await service.createApiKey({
       name: 'expiring key',

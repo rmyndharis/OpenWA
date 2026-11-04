@@ -43,6 +43,12 @@ describe('resolveListWindow', () => {
     expect(resolveListWindow(50, 10)).toEqual({ limit: 50, offset: 10 });
   });
 
+  it('caps an offset past the largest safe integer, which a driver would refuse as an OFFSET', () => {
+    expect(resolveListWindow(10, 2 ** 63)).toEqual({ limit: 10, offset: Number.MAX_SAFE_INTEGER });
+    expect(resolveListWindow(10, 1e21)).toEqual({ limit: 10, offset: Number.MAX_SAFE_INTEGER });
+    expect(resolveListWindow(10, Number.MAX_SAFE_INTEGER)).toEqual({ limit: 10, offset: Number.MAX_SAFE_INTEGER });
+  });
+
   it('truncates fractional limit/offset toward zero', () => {
     expect(resolveListWindow(10.9, 4.7)).toEqual({ limit: 10, offset: 4 });
   });

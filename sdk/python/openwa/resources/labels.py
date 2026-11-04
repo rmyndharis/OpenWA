@@ -21,9 +21,11 @@ class LabelsResource:
         self._http = http
 
     def list(self, session_id: str) -> List[LabelRecord]:
+        """List all labels available in the business account. whatsapp-web.js only; Baileys answers 501."""
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/labels")
 
     def get(self, session_id: str, label_id: str) -> LabelRecord:
+        """Get a single label by id. whatsapp-web.js only; Baileys answers 501."""
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/labels/{quote_segment(label_id)}")
 
     def chats(self, session_id: str, label_id: str) -> List[ChatSummary]:
@@ -55,6 +57,7 @@ class LabelsResource:
         )
 
     def for_chat(self, session_id: str, chat_id: str) -> List[LabelRecord]:
+        """Get the labels currently applied to a chat. whatsapp-web.js only; Baileys answers 501."""
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/labels/chat/{quote_segment(chat_id)}")
 
     def add_to_chat(self, session_id: str, chat_id: str, body: AddLabelRequest) -> SuccessResult:

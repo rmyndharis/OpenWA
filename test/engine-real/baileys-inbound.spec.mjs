@@ -22,6 +22,7 @@ const require = createRequire(import.meta.url);
 const lib = await import('@whiskeysockets/baileys');
 const { BaileysEvents } = require('../../dist/engine/adapters/baileys-events.js');
 const { ConcurrencyLimiter } = require('../../dist/common/utils/concurrency-limiter.js');
+const { baileysMessageText, extractBaileysBody } = require('../../dist/engine/adapters/baileys-message-mapper.js');
 
 const SELF = '6280000000000@s.whatsapp.net';
 const PEER = '6281111111111@s.whatsapp.net';
@@ -33,8 +34,10 @@ const silent = { log() {}, debug() {}, verbose() {}, warn() {}, error() {} };
  * Feed one message through the upsert handler and resolve with whichever callback it reaches first.
  * A message that reaches none resolves as 'none' once the handler has had time to settle.
  */
-function deliver(object) {
-  const message = lib.proto.WebMessageInfo.fromObject({ messageTimestamp: 1_700_000_000, ...object });
+function deliver(object, { wire = false } = {}) {
+  let message = lib.proto.WebMessageInfo.fromObject({ messageTimestamp: 1_700_000_000, ...object });
+  // Encoded and decoded again, the message is in the form the socket hands over after reading the bytes.
+  if (wire) message = lib.proto.WebMessageInfo.decode(lib.proto.WebMessageInfo.encode(message).finish());
   return new Promise(resolve => {
     const to = kind => payload => resolve({ kind, payload });
     const noop = () => undefined;
@@ -187,6 +190,55 @@ test('a delete for everyone reaches the revoked callback', async () => {
   assert.equal(payload.revokedId, 'TARGET3');
 });
 
+// pollCreationMessageV4 wraps a whole message that the library's normalizeMessageContent does not open, and
+// pollCreationMessageV5 adds quiz fields. Both come from the proto schema; no live capture of either exists.
+const POLL = {
+  name: 'Lunch?',
+  options: [{ optionName: 'Rice' }, { optionName: 'Noodles' }],
+  selectableOptionsCount: 1,
+};
+for (const [label, message] of [
+  ['pollCreationMessage', { pollCreationMessage: POLL }],
+  ['pollCreationMessageV2', { pollCreationMessageV2: POLL }],
+  ['pollCreationMessageV3', { pollCreationMessageV3: POLL }],
+  ['pollCreationMessageV4', { pollCreationMessageV4: { message: { pollCreationMessage: POLL } } }],
+  [
+    'pollCreationMessageV5',
+    {
+      pollCreationMessageV5: {
+        ...POLL,
+        pollType: lib.proto.Message.PollType.QUIZ,
+        correctAnswer: { optionName: 'Rice' },
+      },
+    },
+  ],
+]) {
+  test(`a poll under ${label}, read from its wire bytes, is a poll with its question and options`, async () => {
+    const { kind, payload } = await deliver(inbound(`P-${label}`, message), { wire: true });
+    assert.equal(kind, 'message');
+    assert.equal(payload.type, 'poll');
+    assert.equal(payload.body, 'Lunch?');
+    assert.deepEqual(payload.poll, { name: 'Lunch?', options: ['Rice', 'Noodles'], allowMultipleAnswers: false });
+  });
+}
+
+test('a poll vote does not reach onMessage', async () => {
+  // deliver's settle timer is unref'd, so hold the event loop open until it fires.
+  const hold = setTimeout(() => undefined, 3000);
+  const { kind } = await deliver(
+    inbound('P-vote', {
+      pollUpdateMessage: {
+        pollCreationMessageKey: { id: 'POLL1', remoteJid: PEER, fromMe: true },
+        vote: { encPayload: Buffer.alloc(16, 1), encIv: Buffer.alloc(12, 2) },
+        senderTimestampMs: 1_700_000_000_000,
+      },
+    }),
+    { wire: true },
+  );
+  clearTimeout(hold);
+  assert.equal(kind, 'none');
+});
+
 test('a group message from an @lid participant names its author and flags the lid sender', async () => {
   const { payload } = await deliver(
     inbound('A13', { conversation: 'hi group' }, { remoteJid: GROUP, participant: LID }),
@@ -196,3 +248,30 @@ test('a group message from an @lid participant names its author and flags the li
   assert.equal(payload.author, LID);
   assert.equal(payload.isLidSender, true);
 });
+
+// The chat preview reads a message's text without the library at hand, so it opens the envelopes itself; it must
+// open them as the library's normalizeMessageContent does, or a wrapped message previews blank again.
+for (const [label, message] of [
+  ['a disappearing-chat text', { ephemeralMessage: { message: { extendedTextMessage: { text: 'gone soon' } } } }],
+  ['a captioned photo', { imageMessage: { caption: 'the receipt', mimetype: 'image/jpeg' } }],
+  [
+    'a captioned document',
+    {
+      documentWithCaptionMessage: {
+        message: { documentMessage: { caption: 'the report', mimetype: 'application/pdf' } },
+      },
+    },
+  ],
+  ['a view-once video', { viewOnceMessageV2: { message: { videoMessage: { caption: 'look once' } } } }],
+  [
+    'a view-once photo in a disappearing chat',
+    { ephemeralMessage: { message: { viewOnceMessage: { message: { imageMessage: { caption: 'twice wrapped' } } } } } },
+  ],
+]) {
+  test(`the preview text of ${label}, read from its wire bytes, is the body the library unwraps`, () => {
+    const decoded = lib.proto.Message.decode(lib.proto.Message.encode(lib.proto.Message.fromObject(message)).finish());
+    const expected = extractBaileysBody(lib.normalizeMessageContent(decoded));
+    assert.notEqual(expected, '');
+    assert.equal(baileysMessageText(decoded), expected);
+  });
+}

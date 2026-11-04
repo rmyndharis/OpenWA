@@ -1,4 +1,4 @@
-import { MoreThan, Repository } from 'typeorm';
+import { IsNull, MoreThan, Repository } from 'typeorm';
 import { isUniqueViolation } from '../../../common/utils/db-errors';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { WebhookDeliveryFailure } from '../entities/webhook-delivery-failure.entity';
@@ -19,6 +19,12 @@ export interface WebhookDeliveryFailureInput {
    * row keeps its outbox row pending, which already holds the same data for the reconciler.
    */
   payload?: Record<string, unknown> | null;
+  /**
+   * WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS, passed with `payload`. A terminal row recorded without event data (while
+   * retention was off) takes it on a repeat while the row is inside that window; past it, the prune clears event
+   * data and none is put back.
+   */
+  payloadRetentionHours?: number;
 }
 
 /** Minimal logger shape — both WebhookProcessor and WebhookService pass their `createLogger` instance. */
@@ -86,6 +92,19 @@ export async function recordWebhookDeliveryFailure(
       },
     );
     if (!updated.affected) return null;
+    // The caller closes its replay copy after this record, so this is the event data's last chance to be kept.
+    if (input.payload && input.payloadRetentionHours) {
+      await repo.update(
+        {
+          webhookId: input.webhookId,
+          idempotencyKey: input.idempotencyKey,
+          attempts: MoreThan(0),
+          payload: IsNull(),
+          createdAt: MoreThan(new Date(Date.now() - input.payloadRetentionHours * 60 * 60 * 1000)),
+        },
+        { payload: input.payload } as QueryDeepPartialEntity<WebhookDeliveryFailure>,
+      );
+    }
     await clearDeliveryFailureRows(repo, logger, input.webhookId, input.idempotencyKey, true);
     return false;
   };

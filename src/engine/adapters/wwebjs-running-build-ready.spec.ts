@@ -43,7 +43,6 @@ describe('the running-build probe at READY', () => {
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
       config: { sessionId: 'sess', sessionDataPath: './data/sessions' },
       getCallbacks: () => ({ onReady }),
-      emitState: jest.fn(),
       scheduleReadyReconcile: jest.fn(),
       clearReadyReconcile: jest.fn(),
       startOnboardingWatcher: jest.fn(),

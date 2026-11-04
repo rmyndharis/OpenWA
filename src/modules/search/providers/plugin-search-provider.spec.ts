@@ -29,6 +29,26 @@ describe('PluginSearchProvider', () => {
     expect(dispatchSearch).toHaveBeenCalledWith({ query: { q: 'hi' }, timeoutMs: 7000 });
   });
 
+  it('keeps the host-expanded id lists out of the query a plugin receives', async () => {
+    const dispatchSearch = jest
+      .fn()
+      .mockResolvedValue({ ok: true, results: { hits: [], total: 0, tookMs: 1, provider: 'plugin:p' } });
+    const p = new PluginSearchProvider('p', 'P', fakeTransport({ dispatchSearch }), 1000);
+
+    await p.search({
+      q: 'hi',
+      chatId: '628123@c.us',
+      chatIdAliases: ['628123@c.us', '999@lid'],
+      from: '628111@c.us',
+      fromAliases: ['628111@c.us'],
+    });
+
+    expect(dispatchSearch).toHaveBeenCalledWith({
+      query: { q: 'hi', chatId: '628123@c.us', from: '628111@c.us' },
+      timeoutMs: 1000,
+    });
+  });
+
   it('search throws a 503 ServiceUnavailableException carrying the cause on ok:false', async () => {
     const transport = fakeTransport({
       dispatchSearch: jest.fn().mockResolvedValue({ ok: false, error: 'backend down' }),
@@ -170,6 +190,20 @@ describe('PluginSearchProvider', () => {
     expect(res.tookMs).toBe(12);
     expect(res.total).toBe(3);
     expect(res.hits[0].timestamp).toBe(1700000000);
+  });
+
+  it.each([
+    ['unscoped', undefined],
+    ['scoped', ['s1']],
+  ])('returns at most the requested limit when the plugin answers with more (%s)', async (_label, sessionIds) => {
+    const hits = Array.from({ length: 5000 }, (_, i) => mkHit({ messageId: `m${i}`, sessionId: 's1' }));
+    const results: SearchResults = { hits, total: 5000, tookMs: 1, provider: 'plugin:p' };
+    const dispatchSearch = jest.fn().mockResolvedValue({ ok: true, results });
+    const p = new PluginSearchProvider('p', 'P', fakeTransport({ dispatchSearch }), 1000);
+
+    const res = await p.search({ q: 'hi', limit: 10, sessionIds });
+    expect(res.hits.map(h => h.messageId)).toEqual(hits.slice(0, 10).map(h => h.messageId));
+    expect(res.total).toBe(5000);
   });
 
   describe('result shape validation (untrusted wire payload)', () => {

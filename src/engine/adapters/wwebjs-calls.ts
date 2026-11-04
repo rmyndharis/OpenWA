@@ -22,9 +22,7 @@ export class WwebjsCalls {
    *  covers the ringing window with margin without pinning dead calls for long. */
   private static readonly LIVE_CALL_TTL_MS = 2 * 60_000;
 
-  /** Expiry time of each ringing call, by call id. Public so the adapter's `liveCalls` alias keeps
-   *  working (the spec reads `adapter.liveCalls` through a cast) and lifecycle teardown can clear it
-   *  when the client goes away. */
+  /** Expiry time of each ringing call, by call id. Cleared when the client goes away (clearLiveCalls). */
   readonly liveCalls = new Map<string, number>();
 
   constructor(private readonly host: WwebjsCallsHost) {}

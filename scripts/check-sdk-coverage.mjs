@@ -26,12 +26,15 @@
  * safe direction here. A gate that fails on a route the SDK does have is noise, and a noisy gate
  * gets switched off; the defect being hunted leaves no literal anywhere, so generosity cannot hide
  * it. Four rounds of narrowing false positives produced the current rules — see harvestFile.
+ * Except through a wildcard: a builder whose last segment is a variable reaches only the names its
+ * callers pass, which FAMILY_CALLS reads.
  *
  * Run locally: `npm run check:sdk-coverage`.
  */
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isUnexposedPath, unexposedResources } from './check-contract-shapes.mjs';
 
 // fileURLToPath, not URL.pathname: the latter stays percent-encoded, so a checkout under a path
 // containing a space resolves to a directory that does not exist and every read here fails with
@@ -109,8 +112,8 @@ function harvestFile(source, baseValue, families = new Set()) {
     if (!path.startsWith('/api/')) continue;
     const shape = normalize(path);
     found.add(shape); // (b)
-    // Only a chain whose FINAL term was a variable stands in for its concrete siblings — that is a
-    // real one-builder family. A wildcard synthesised by (c) is an artefact and must not.
+    // Only a chain whose FINAL term was a variable is a real one-builder family, whose siblings
+    // FAMILY_CALLS may then reach. A wildcard synthesised by (c) is an artefact and must not.
     if (shape.endsWith('/*') && !/^(?:"|`)/.test(m[0].split('+').pop().trim())) families.add(shape);
   }
 
@@ -168,53 +171,39 @@ const SDKS = [
 ];
 
 /**
- * The resources sdk/README.md declares deliberately unexposed, read from the README rather than
- * restated here: a hand-copied second list is the thing this whole line of work keeps finding.
- */
-function excludedResources() {
-  const readme = readFileSync(join(root, 'sdk/README.md'), 'utf8');
-  const start = readme.indexOf('Deliberately **not** exposed');
-  const end = readme.indexOf('Everything else the gateway publishes', start);
-  if (start < 0 || end < 0) {
-    throw new Error('sdk/README.md: could not find the "Deliberately not exposed" paragraph — the gate cannot derive its exclusion list.');
-  }
-  const names = [...readme.slice(start, end).matchAll(/`([^`]+)`/g)].map((m) => m[1].split('/')[0].trim());
-  if (names.length < 8) throw new Error(`sdk/README.md: parsed only ${names.length} excluded resources, expected the full list.`);
-  return new Set(names);
-}
-
-// The resource a path belongs to: the segment after `/api/`, or after a session id.
-const resourceOf = (path) =>
-  /^\/api\/sessions\/\*\/([^/]+)/.exec(path)?.[1] ?? /^\/api\/([^/*]+)/.exec(path)?.[1] ?? '';
-
-/**
- * A harvested path whose final segment is a wildcard MAY cover its concrete siblings: the client
- * reaches that family through one builder with the last segment as a variable (`send-${type}`).
- * The forward gate makes the same concession explicitly.
+ * A harvested path whose final segment is a wildcard is a family: one builder with the last segment
+ * as a variable (`send-${type}`). When the contract publishes a route OF THAT SHAPE, the wildcard is
+ * that route's path parameter (`…/contacts/${contactId}`) and covers nothing but it, which `exact`
+ * already holds. Otherwise the wildcard is a route NAME, and it covers only the names the client's
+ * callers pass to that builder, harvested by the call patterns below. The wildcard itself never
+ * stands in for a sibling: it did, and then a client that dropped `messages/react`, or a new
+ * `messages/<name>` route no client built, passed for every client.
  *
- * But only when the wildcard is a route NAME. A client that builds `…/contacts/${contactId}` also
- * produces `…/contacts/*`, and reading that as a family let it stand in for every concrete sibling
- * — `contacts/blocked` among them — so removing a route from a client entirely still passed. The
- * two cases are told apart by the contract itself: if it publishes a route OF THAT SHAPE, the
- * wildcard is that route's path parameter and covers nothing but it (which `exact` already does).
- * `…/messages/*` is published by no route, so a wildcard there can only be a verb.
+ * A name family missing here fails closed: its routes are reported, naming the builder to add.
  */
 const isRouteNameFamily = (family) => !contractShapes.has(family);
-const covers = (built, path) => {
-  if (built.exact.has(path)) return true;
-  const family = path.replace(/\/[^/]+$/, '/*');
-  return isRouteNameFamily(family) && built.families.has(family);
+const FAMILY_CALLS = {
+  '/api/sessions/*/messages/*': {
+    javascript: /\.sendMedia\(\s*\w+\s*,\s*['"`]([\w-]+)['"`]/g,
+    python: /\._send_media\(\s*\w+\s*,\s*["']([\w-]+)["']/g,
+    php: /->sendMedia\(\s*\$\w+\s*,\s*["']([\w-]+)["']/g,
+    java: /\bsendMedia\(\s*\w+\s*,\s*"([\w-]+)"/g,
+    // Go's send(ctx, id, "<name>") helper is read by harvestFile's helper-argument rule (c) instead.
+  },
+  '/api/sessions/*/groups/*/membership-requests/*': {
+    go: /\.membershipRequestAction\(\s*ctx\s*,\s*\w+\s*,\s*\w+\s*,\s*"([\w-]+)"/g,
+  },
 };
+const covers = (built, path) => built.exact.has(path);
 
-const excluded = excludedResources();
+// Read the way the shape gate reads it (entries as written, a parenthetical ignored, `auth/api-keys` a path
+// prefix): cutting every entry to its first segment made all of /api/auth unexposed, key validation included.
+const excluded = unexposedResources(readFileSync(join(root, 'sdk/README.md'), 'utf8'));
 const contract = [...new Set(Object.keys(JSON.parse(readFileSync(join(root, 'openapi.json'), 'utf8')).paths).map(normalize))];
 /** Every shape the contract publishes, including the excluded resources — a wildcard is explained by
  *  a by-id route whether or not the SDKs are asked to expose it. */
 const contractShapes = new Set(contract);
-const inScope = contract.filter((p) => {
-  const resource = resourceOf(p);
-  return !excluded.has(resource) && !excluded.has(resource.replace(/-rules$/, ''));
-});
+const inScope = contract.filter((p) => !isUnexposedPath(p, excluded));
 
 const errors = [];
 const built = {};
@@ -230,6 +219,17 @@ for (const sdk of SDKS) {
         return { exact, families };
       })();
 
+  // A name family reaches the routes its builder's callers name, and only while the client still builds it.
+  for (const family of [...built[sdk.name].families].filter(isRouteNameFamily)) {
+    const call = FAMILY_CALLS[family]?.[sdk.name];
+    if (!call) continue;
+    for (const file of walk(dir, sdk.exts).filter((f) => !f.endsWith('_test.go'))) {
+      for (const m of strip(readFileSync(file, 'utf8')).matchAll(call)) {
+        built[sdk.name].exact.add(family.replace(/\*$/, m[1]));
+      }
+    }
+  }
+
   // Non-vacuity, PER SDK. A scan that stopped matching yields an empty set, and an empty set makes
   // every "is this route covered" question answer no — loudly — but a harvest that collapsed to a
   // handful would instead report most of the contract as missing and read as a catastrophe rather
@@ -243,6 +243,16 @@ if (!errors.length) {
   for (const path of inScope.sort()) {
     const missing = SDKS.map((s) => s.name).filter((name) => !covers(built[name], path));
     if (missing.length) errors.push(`${path} — published by the gateway, built by no method in: ${missing.join(', ')}`);
+  }
+  for (const sdk of SDKS) {
+    const unread = [...built[sdk.name].families].filter((f) => isRouteNameFamily(f) && !FAMILY_CALLS[f]?.[sdk.name]);
+    for (const family of unread) {
+      if (inScope.some((p) => !covers(built[sdk.name], p) && p.replace(/\/[^/]+$/, '/*') === family)) {
+        errors.push(
+          `${sdk.name} builds ${family} from a variable: if it serves a route above, add its calls to FAMILY_CALLS`,
+        );
+      }
+    }
   }
 }
 

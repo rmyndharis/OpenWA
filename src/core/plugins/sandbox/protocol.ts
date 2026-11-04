@@ -51,8 +51,10 @@ export type HostToWorkerMessage =
   // Dispatch an inbound webhook to the worker for a route it subscribed to (webhook-subscribe).
   // `body`/`rawBody` are buffered host-side to a string, like PluginNetResponse.body. `verified`
   // reflects whether the host authenticated the delivery via the route's signature scheme; it is
-  // false for scheme:none. PluginIngressRoute.verify:'self' is reserved and does not trigger a second
-  // worker-side verification pass. The worker replies with webhook-result.
+  // false for scheme:none, and on hmac-sha256 and standard-webhooks for an empty body with a query
+  // string. No scheme signs the query or the method, so neither is authenticated even when it is true.
+  // PluginIngressRoute.verify:'self' is reserved and does not trigger a second worker-side verification
+  // pass. The worker replies with webhook-result.
   | {
       kind: 'webhook';
       id: number;

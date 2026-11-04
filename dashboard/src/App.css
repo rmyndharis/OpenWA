@@ -2,10 +2,15 @@
   --primary: #25d366;
   /* The brand green as FOREGROUND is 1.98:1 on white, far under the 4.5:1 AA needs for text.
      It stays the fill colour; anything rendering it as text or an icon uses --primary-text, the same
-     hue darkened until it clears 4.5:1 on all three light backgrounds it lands on: 4.95:1 on white,
-     4.73:1 on --bg-light, and 4.53:1 on --primary-soft, which is the tightest of the three and the
-     one the active sidebar item uses. */
-  --primary-text: #17813e;
+     hue darkened until it clears 4.5:1 on the light backgrounds it lands on: 5.28:1 on white, 5.04:1 on
+     --bg-light, and 4.82:1 on --primary-soft (4.63:1 over --bg-light), the tint the active sidebar item
+     uses. On the heaviest green tint a badge paints (18 percent over white) it measures 4.61:1. */
+  --primary-text: #167c3b;
+  /* The keyboard focus ring. WCAG 2.2 SC 1.4.11 asks 3:1 of a focus indicator; the brand fill measures 1.98:1 on white
+     and 1.74:1 on --primary-soft over --bg-light. --primary-text clears it on every surface a ring is drawn on: 5.28:1
+     on white, 5.04:1 on --bg-light and 4.63:1 on --primary-soft over --bg-light. In the dark theme it is the brand
+     green itself, 7.38:1 on --bg-white and 5.15:1 on --primary-soft over it. */
+  --focus-ring: var(--primary-text);
   --primary-hover: #1da851;
   --primary-soft: rgba(37, 211, 102, 0.12);
   --bg-light: #f8fafc;
@@ -13,18 +18,19 @@
   --bg-card: #ffffff;
   --text-primary: #0f172a; /* Slate 900 */
   --text-secondary: #475569; /* Slate 600 */
-  --text-muted: #64748b; /* Slate 500; 4.76:1 on white (AA) */
+  --text-muted: #64748b; /* Slate 500; 4.76:1 on white, 4.55:1 on --bg-light, 4.35:1 on --primary-soft */
   --border: #e2e8f0; /* Slate 200 */
   --error: #ef4444;
   --success: #22c55e;
   --warning: #f59e0b;
   /* Status colours as FOREGROUND fail AA on light: error 3.76:1, success 2.28:1, warning 2.15:1.
-     They stay the fill/border colours; text and icons use these darkened twins. Each clears 4.5:1
-     against the darkest surface it actually lands on, which is not white but the 10-20% tint of its
-     own hue that the badges and callouts paint behind it. */
-  --error-text: #c63838;
-  --success-text: #157c3b;
-  --warning-text: #986207;
+     They stay the fill/border colours; text and icons use these darkened twins. Each clears 4.5:1 on
+     white and on the heaviest tint of its own hue that a badge paints over white: error-text 4.84:1 on the
+     15 percent red of the Failed pill (4.62:1 where a badge sits on the 4 percent red of its result card), success-text 4.58:1 on an 18 percent green and warning-text 4.57:1 on
+     the 22 percent amber of Action required. A heavier tint needs a darker twin. */
+  --error-text: #b93232;
+  --success-text: #157b3b;
+  --warning-text: #935f06;
   --info: #2563eb; /* Blue 600 — info/permission/log badges + qr-ready pill */
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
@@ -46,6 +52,9 @@
   --text-muted: #94a3b8; /* Slate 400; 5.71:1 on Slate 800 (AA) */
   --border: #334155; /* Slate 700 */
   --info: #60a5fa; /* Blue 400 — lighter so it reads over the dark translucent-blue tints */
+  /* The read tick on the dark outgoing bubble (#005c4b), where --info is 3.14:1: Sky 300 is 4.78:1, the 4.5:1 the glyph
+     is held to. The delivered tick keeps the bubble's text colour (#e9edef), so the two stay apart by hue. */
+  --read-tick: #7dd3fc;
   /* On the dark surfaces success and warning already clear AA (6.42:1 and 6.81:1), so they
      keep their base value; error is 3.89:1 on Slate 800 and is lightened instead, to a value that still
      clears 4.65:1 on the darkest error tint behind it (20 percent over Slate 800). */
@@ -82,6 +91,7 @@
     --text-muted: #94a3b8;
     --border: #334155;
     --info: #60a5fa;
+    --read-tick: #7dd3fc;
     /* On the dark surfaces success and warning already clear AA (6.42:1 and 6.81:1), so they
        keep their base value; error is 3.89:1 on Slate 800 and is lightened instead, to a value that still
        clears 4.65:1 on the darkest error tint behind it (20 percent over Slate 800). */
@@ -89,7 +99,7 @@
     --success-text: var(--success);
     --warning-text: var(--warning);
     --primary-soft: color-mix(in srgb, var(--primary) 18%, transparent);
-    /* Must be restated here, not inherited: the light value (#17813e) measures 2.96:1 on Slate 800
+    /* Must be restated here, not inherited: the light value (#167c3b) measures 2.77:1 on Slate 800
        and would fail worse than the brand green it replaced. On dark the brand green is 7.38:1. */
     --primary-text: var(--primary);
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
@@ -121,9 +131,18 @@ input,
 select,
 textarea {
   font-family: inherit;
-  background: var(--bg-white);
+  /* background-color, not the shorthand: the shorthand would reset the chevron index.css draws on select. */
+  background-color: var(--bg-white);
   color: var(--text-primary);
   border-color: var(--border);
+}
+
+/* The browser's placeholder grey (#757575) is 4.4:1 on --bg-light and 3.17:1 on the dark card; --text-muted
+   clears 4.5:1 on all four input surfaces in both themes. Firefox dims a placeholder unless opacity is set. */
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
 }
 
 a {

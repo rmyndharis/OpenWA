@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronDown } from 'lucide-react';
 import './CustomSelect.css';
 
@@ -15,6 +16,7 @@ interface CustomSelectProps {
 }
 
 export function CustomSelect({ value, onChange, options, ariaLabel }: CustomSelectProps) {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -140,7 +142,10 @@ export function CustomSelect({ value, onChange, options, ariaLabel }: CustomSele
         onClick={toggle}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
-        aria-label={ariaLabel}
+        // What the control sets, then the value it shows: a name of the purpose alone would hide the shown value.
+        aria-label={
+          ariaLabel && selectedLabel ? t('common.joinedName', { first: ariaLabel, second: selectedLabel }) : ariaLabel
+        }
       >
         <span className="custom-select-label">{selectedLabel}</span>
         <ChevronDown size={16} className={`custom-select-chevron ${isOpen ? 'open' : ''}`} />

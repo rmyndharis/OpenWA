@@ -190,4 +190,80 @@ describe('IntegrationModule queue wiring (QUEUE_ENABLED conditional)', () => {
       await moduleRef.close();
     }
   });
+
+  // The ingress door treats a delivery for a plugin the boot restore has not finished with differently. Both
+  // decisions are dependencies of the pure pipeline, so only the real graph can show they are connected.
+  it('hands IngressService the restore state of the real plugin loader', async () => {
+    const { moduleRef } = await compileIntegrationModule('false');
+    try {
+      /* eslint-disable @typescript-eslint/no-require-imports */
+      const { IngressService } = require('./ingress.service') as typeof import('./ingress.service');
+      const { PluginLoaderService } =
+        require('../../core/plugins/plugin-loader.service') as typeof import('../../core/plugins/plugin-loader.service');
+      /* eslint-enable @typescript-eslint/no-require-imports */
+      const ingress = moduleRef.get(IngressService, { strict: false });
+      const loader = moduleRef.get(PluginLoaderService, { strict: false });
+      const { restorePending } = (ingress as unknown as { deps: { restorePending?: (id: string) => boolean } }).deps;
+
+      expect(restorePending?.('adapter')).toBe(false);
+      (loader as unknown as { restorePending: Set<string> }).restorePending.add('adapter');
+      expect(restorePending?.('adapter')).toBe(true);
+      expect(restorePending?.('other')).toBe(false);
+    } finally {
+      await moduleRef.close();
+    }
+  });
+
+  describe('deferring the dispatch of a persisted delivery for a plugin that is still restoring', () => {
+    const ORIGINAL_INTERVAL = process.env.INGRESS_RECONCILE_INTERVAL_MS;
+    afterEach(() => {
+      if (ORIGINAL_INTERVAL === undefined) delete process.env.INGRESS_RECONCILE_INTERVAL_MS;
+      else process.env.INGRESS_RECONCILE_INTERVAL_MS = ORIGINAL_INTERVAL;
+    });
+
+    /** The deferDispatch dependency of the real IngressService, with `adapter` marked as restoring. */
+    async function deferDispatchFor(queueEnabled: 'true' | 'false') {
+      const { moduleRef } = await compileIntegrationModule(queueEnabled);
+      /* eslint-disable @typescript-eslint/no-require-imports */
+      const { IngressService } = require('./ingress.service') as typeof import('./ingress.service');
+      const { PluginLoaderService } =
+        require('../../core/plugins/plugin-loader.service') as typeof import('../../core/plugins/plugin-loader.service');
+      /* eslint-enable @typescript-eslint/no-require-imports */
+      const ingress = moduleRef.get(IngressService, { strict: false });
+      const loader = moduleRef.get(PluginLoaderService, { strict: false });
+      (loader as unknown as { restorePending: Set<string> }).restorePending.add('adapter');
+      const { deferDispatch } = (ingress as unknown as { deps: { deferDispatch?: (id: string) => boolean } }).deps;
+      return { moduleRef, deferDispatch: deferDispatch as (id: string) => boolean };
+    }
+
+    it('waits for the reconciler when the queue is off and the plugin is restoring', async () => {
+      delete process.env.INGRESS_RECONCILE_INTERVAL_MS;
+      const { moduleRef, deferDispatch } = await deferDispatchFor('false');
+      try {
+        expect(deferDispatch('adapter')).toBe(true);
+        expect(deferDispatch('other')).toBe(false);
+      } finally {
+        await moduleRef.close();
+      }
+    });
+
+    it('does not wait when a queue takes the job, which the processor holds', async () => {
+      const { moduleRef, deferDispatch } = await deferDispatchFor('true');
+      try {
+        expect(deferDispatch('adapter')).toBe(false);
+      } finally {
+        await moduleRef.close();
+      }
+    });
+
+    it('does not wait when the reconciler is off, since nothing would ever replay the row', async () => {
+      process.env.INGRESS_RECONCILE_INTERVAL_MS = '0';
+      const { moduleRef, deferDispatch } = await deferDispatchFor('false');
+      try {
+        expect(deferDispatch('adapter')).toBe(false);
+      } finally {
+        await moduleRef.close();
+      }
+    });
+  });
 });

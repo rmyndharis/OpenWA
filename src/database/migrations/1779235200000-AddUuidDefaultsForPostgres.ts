@@ -1,4 +1,5 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
+import { assertPgcryptoOnSearchPath } from '../pgcrypto-search-path';
 
 /**
  * Adds `gen_random_uuid()::varchar` DEFAULT to every `id` column on Postgres.
@@ -59,6 +60,7 @@ export class AddUuidDefaultsForPostgres1779235200000 implements MigrationInterfa
           );
         }
       }
+      await assertPgcryptoOnSearchPath(queryRunner, versionNum);
     }
 
     // By this point gen_random_uuid() resolves (core on 13+, pgcrypto ensured on <= 12), so the DEFAULT

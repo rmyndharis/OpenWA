@@ -15,7 +15,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 const PRUNE_BATCH_SIZE = 500;
 
-/** Statements per run, so one run deletes at most MAX_BATCHES_PER_RUN * PRUNE_BATCH_SIZE rows. */
+/** Statements per run and table, so one run deletes at most MAX_BATCHES_PER_RUN * PRUNE_BATCH_SIZE rows of each. */
 const MAX_BATCHES_PER_RUN = 200;
 
 /**
@@ -90,7 +90,8 @@ export class MessageRetentionService implements OnModuleInit, OnModuleDestroy {
               { action: 'messages_pruned', messages, batches },
             );
           }
-          if (messages >= MAX_BATCHES_PER_RUN * PRUNE_BATCH_SIZE && !this.stopped) {
+          const cap = MAX_BATCHES_PER_RUN * PRUNE_BATCH_SIZE;
+          if ((messages >= cap || batches >= cap) && !this.stopped) {
             this.logger.warn('Message retention hit its per-run cap; expired rows remain, running again shortly', {
               action: 'messages_prune_capped',
             });
@@ -133,11 +134,20 @@ export class MessageRetentionService implements OnModuleInit, OnModuleDestroy {
         messages += rows.length;
         if (rows.length < PRUNE_BATCH_SIZE) break;
       }
-      const { affected } = await this.batches.delete({
-        status: In(TERMINAL_BATCH_STATUSES),
-        createdAt: LessThan(cutoff),
-      });
-      return { messages, batches: affected ?? 0 };
+      // Finished batches go in the same short statements: one DELETE over a backlog held the writer as long.
+      let batches = 0;
+      for (let i = 0; i < MAX_BATCHES_PER_RUN; i++) {
+        const rows = await this.batches.find({
+          select: { id: true },
+          where: { status: In(TERMINAL_BATCH_STATUSES), createdAt: LessThan(cutoff) },
+          take: PRUNE_BATCH_SIZE,
+        });
+        if (rows.length === 0) break;
+        await this.batches.delete({ id: In(rows.map(row => row.id)) });
+        batches += rows.length;
+        if (rows.length < PRUNE_BATCH_SIZE) break;
+      }
+      return { messages, batches };
     } finally {
       this.running = false;
     }

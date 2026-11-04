@@ -10,14 +10,14 @@ func (s *LabelsService) base(sessionID string) string {
 	return "/api/sessions/" + pathEscape(sessionID) + "/labels"
 }
 
-// List returns all labels.
+// List returns all labels. whatsapp-web.js only; Baileys answers 501.
 func (s *LabelsService) List(ctx context.Context, sessionID string) ([]LabelRecord, error) {
 	var out []LabelRecord
 	err := s.client.do(ctx, "GET", s.base(sessionID), nil, nil, &out)
 	return out, err
 }
 
-// Get returns a single label.
+// Get returns a single label. whatsapp-web.js only; Baileys answers 501.
 func (s *LabelsService) Get(ctx context.Context, sessionID, labelID string) (*LabelRecord, error) {
 	var out LabelRecord
 	err := s.client.do(ctx, "GET", s.base(sessionID)+"/"+pathEscape(labelID), nil, nil, &out)
@@ -62,7 +62,7 @@ func (s *LabelsService) Delete(ctx context.Context, sessionID, labelID string) (
 	return &out, nil
 }
 
-// ForChat returns the labels applied to a chat.
+// ForChat returns the labels applied to a chat. whatsapp-web.js only; Baileys answers 501.
 func (s *LabelsService) ForChat(ctx context.Context, sessionID, chatID string) ([]LabelRecord, error) {
 	var out []LabelRecord
 	err := s.client.do(ctx, "GET", s.base(sessionID)+"/chat/"+pathEscape(chatID), nil, nil, &out)

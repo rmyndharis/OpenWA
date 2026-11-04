@@ -1,5 +1,3 @@
-// archiver v8 is ESM-only (pulled in transitively via @Global StorageModule); stub for ts-jest CJS.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
 // Stub the heavy Baileys lib: the boot gate only verifies registration/enable, never a socket connect.
 jest.mock('@whiskeysockets/baileys', () => ({
   __esModule: true,
@@ -38,11 +36,7 @@ describe('Baileys engine boot (e2e)', () => {
 
   afterAll(async () => {
     process.env.ENGINE_TYPE = prevEngine;
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('selects baileys as the current engine', () => {

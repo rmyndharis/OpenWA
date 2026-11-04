@@ -4,10 +4,18 @@ import { AddIntegrationUuidDefaults1782300000000 } from './migrations/1782300000
 
 const TABLES = ['conversation_mappings', 'integration_delivery_failures'];
 
-function makeQueryRunner(type: string, existingTables: Set<string>, versionNum = 150000, extInstalled = false) {
+function makeQueryRunner(
+  type: string,
+  existingTables: Set<string>,
+  versionNum = 150000,
+  extInstalled = false,
+  extSchema?: string, // a schema pgcrypto sits in that the connection's search_path does not reach
+) {
   const query = jest.fn((sql: string) => {
     const s = String(sql);
     if (/server_version_num/i.test(s)) return Promise.resolve([{ num: versionNum }]);
+    if (/to_regprocedure/i.test(s)) return Promise.resolve([{ missing: extSchema !== undefined }]);
+    if (/pg_namespace/i.test(s)) return Promise.resolve([{ schema: extSchema, path: 'app, public' }]);
     if (/pg_extension/i.test(s)) return Promise.resolve(extInstalled ? [{ ok: 1 }] : []);
     return Promise.resolve(undefined);
   });
@@ -45,6 +53,12 @@ describe('AddIntegrationUuidDefaults migration', () => {
     const qr = makeQueryRunner('postgres', new Set(TABLES), 120000, /* extInstalled */ false);
     await migration.up(qr as never);
     expect(sqlOf(qr).some(s => /CREATE EXTENSION IF NOT EXISTS pgcrypto/i.test(s))).toBe(true);
+  });
+
+  it('on PG <= 12 refuses a pgcrypto off the search_path, naming its schema, before any DEFAULT', async () => {
+    const qr = makeQueryRunner('postgres', new Set(TABLES), 120000, true, 'extensions');
+    await expect(migration.up(qr as never)).rejects.toThrow(/schema "extensions".*search_path \(app, public\)/);
+    expect(sqlOf(qr).some(s => /SET DEFAULT gen_random_uuid/i.test(s))).toBe(false);
   });
 
   it('skips a table that does not exist (partial schema)', async () => {

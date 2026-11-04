@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SearchController } from './search.controller';
 import { SearchService } from './search.service';
@@ -18,6 +18,10 @@ import { PLUGIN_SEARCH_REGISTRY_PORT } from '../../core/plugins/plugin-host-port
  * The module is imported by AppModule only when `SEARCH_ENABLED !== 'false'`. Plugin providers
  * register themselves through the same registry; in `auto` mode the most recently registered plugin
  * supersedes builtin (no health gating).
+ *
+ * Global and exporting SearchService so the agent-tool registry (MessageSearch) can inject it as an
+ * optional dependency: importing this module there would load search even when SEARCH_ENABLED=false
+ * asks for it to be absent.
  */
 export function bootstrapSearchProviders(
   registry: SearchProviderRegistry,
@@ -37,6 +41,7 @@ export function bootstrapSearchProviders(
   return registry;
 }
 
+@Global()
 @Module({
   imports: [ConfigModule],
   controllers: [SearchController],
@@ -55,5 +60,6 @@ export function bootstrapSearchProviders(
     // An alias, not a factory, so lifecycle hooks are not dispatched twice on the same instance.
     { provide: PLUGIN_SEARCH_REGISTRY_PORT, useExisting: SearchProviderRegistry },
   ],
+  exports: [SearchService],
 })
 export class SearchModule {}

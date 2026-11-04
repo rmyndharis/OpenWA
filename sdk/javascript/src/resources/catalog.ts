@@ -23,7 +23,10 @@ import type {
 export class CatalogResource {
   constructor(private readonly client: OpenWAClient) {}
 
-  /** Get the business catalog info, or `null` when the account has no catalog. */
+  /**
+   * Get the business catalog info, or `null` when the account has no catalog.
+   * **Baileys only**: whatsapp-web.js answers 501.
+   */
   info(sessionId: string): Promise<CatalogInfo | null> {
     return this.client.request<CatalogInfo | null>({
       method: 'GET',
@@ -31,7 +34,10 @@ export class CatalogResource {
     });
   }
 
-  /** List catalog products. Returns a `{ products, pagination }` page. */
+  /**
+   * List catalog products. Returns a `{ products, pagination }` page.
+   * **Baileys only**: whatsapp-web.js answers 501.
+   */
   products(sessionId: string, query?: CatalogProductsQuery): Promise<PaginatedProducts> {
     return this.client.request<PaginatedProducts>({
       method: 'GET',
@@ -40,7 +46,10 @@ export class CatalogResource {
     });
   }
 
-  /** Get a single product by id, or `null` when no product in the catalog carries that id. */
+  /**
+   * Get a single product by id, or `null` when no product in the catalog carries that id.
+   * **Baileys only**: whatsapp-web.js answers 501.
+   */
   product(sessionId: string, productId: string): Promise<CatalogProduct | null> {
     return this.client.request<CatalogProduct | null>({
       method: 'GET',
@@ -48,7 +57,10 @@ export class CatalogResource {
     });
   }
 
-  /** Send a product message. Requires an OPERATOR-level key. Shares the messages path. */
+  /**
+   * Send a product message. Requires an OPERATOR-level key. Shares the messages path.
+   * **Baileys only**: whatsapp-web.js answers 501.
+   */
   sendProduct(sessionId: string, body: SendProductRequest): Promise<ProductMessageResponse> {
     return this.client.request<ProductMessageResponse>({
       method: 'POST',

@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsNotEmpty } from 'class-validator';
+import { ToStrictString } from '../../../common/utils/strict-boolean';
 
 /**
  * Body for POST /infra/storage/import. A class (not an inline object literal) so the global
@@ -8,6 +9,7 @@ import { IsString, IsNotEmpty } from 'class-validator';
  */
 export class ImportStorageDto {
   @ApiProperty({ description: 'Path to the tar.gz file to import (must be inside the data directory)' })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   filePath!: string;

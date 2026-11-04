@@ -49,7 +49,7 @@ function parseWebhookSecret(secret: string): string | undefined {
  * header/contentTemplate/encoding/prefix/timestampHeader are ignored. The
  * signature header may carry multiple space-separated `v1,` candidates (key rotation); any match passes.
  * Pure and total: never throws. Ported from supabase-otp-hook/verify.ts; idiomatic changes: reuse the
- * existing safeEqualStr (identical to the reference's safeEqual) and the lowercasing `header()` helper
+ * existing constantTimeEqual (identical to the reference's safeEqual) and the lowercasing `header()` helper
  * (the reference lowercases separately — OpenWA already delivers lowercased keys).
  */
 function verifyStandardWebhooks(spec: IngressSignatureSpec, input: VerifyInput): { ok: boolean; reason?: string } {
@@ -82,9 +82,29 @@ function verifyStandardWebhooks(spec: IngressSignatureSpec, input: VerifyInput):
     const comma = candidate.indexOf(',');
     if (comma < 0) continue;
     if (candidate.slice(0, comma) !== 'v1') continue;
-    if (safeEqualStr(candidate.slice(comma + 1), expected)) return { ok: true };
+    if (constantTimeEqual(candidate.slice(comma + 1), expected)) return { ok: true };
   }
   return { ok: false, reason: 'webhook-signature mismatch' };
+}
+
+/**
+ * Whether a delivery that passed verifyIngressSignature reaches the plugin as `verified`. No scheme signs the
+ * query string or the method: hmac-sha256 and standard-webhooks sign the body (with a timestamp or id), so for
+ * an empty body carrying its content in the query one captured signature vouches for any query. shared-secret
+ * authenticates the caller rather than the content, and none authenticates nothing.
+ */
+export function ingressDeliveryVerified(
+  scheme: IngressSignatureSpec['scheme'],
+  rawBody: string,
+  query: Record<string, string>,
+): boolean {
+  if (scheme === 'none') return false;
+  return scheme === 'shared-secret' || !isQueryBorne(rawBody, query);
+}
+
+/** Whether a delivery carries its content in the query string of an empty body. */
+export function isQueryBorne(rawBody: string, query: Record<string, string> | undefined): boolean {
+  return rawBody === '' && Object.keys(query ?? {}).length > 0;
 }
 
 /**
@@ -121,7 +141,7 @@ export function verifyIngressSignature(
   if (!provided) return { ok: false, reason: 'missing signature header' };
 
   if (spec.scheme === 'shared-secret') {
-    return safeEqualStr(provided, input.secret) ? { ok: true } : { ok: false, reason: 'shared-secret mismatch' };
+    return constantTimeEqual(provided, input.secret) ? { ok: true } : { ok: false, reason: 'shared-secret mismatch' };
   }
 
   // hmac-sha256. Substitute the template tokens in a SINGLE pass with a function replacer: a string
@@ -140,14 +160,5 @@ export function verifyIngressSignature(
     .update(signedContent)
     .digest(spec.encoding ?? 'hex');
   const expected = (spec.prefix ?? '') + digest;
-  return safeEqualStr(provided, expected) ? { ok: true } : { ok: false, reason: 'hmac mismatch' };
-}
-
-/**
- * Constant-time string equality that does not leak the expected value's length.
- * Kept as a named export for the ingress call sites; delegates to the shared helper so the metrics
- * token compare and the ingress signature compares stay in lockstep.
- */
-export function safeEqualStr(a: string, b: string): boolean {
-  return constantTimeEqual(a, b);
+  return constantTimeEqual(provided, expected) ? { ok: true } : { ok: false, reason: 'hmac mismatch' };
 }

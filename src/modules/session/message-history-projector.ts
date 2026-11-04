@@ -3,11 +3,12 @@ import { Repository, In, Raw } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { buildMessageMetadata, REVOKED_ROW_PATCH } from './message-row.mapper';
-import { provablyDifferent } from './message-mutation-guard';
+import { mutationTargetsForeignRowPersisted } from './message-mutation-guard';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { LoggerService } from '../../common/services/logger.service';
 import { resolveMessageRetentionCutoff } from '../message/message-retention.service';
+import { captureSessionWrites } from '../../common/utils/session-write-scope';
 
 /**
  * Persist pre-connection history without live dispatch. Stored revocations also notify plugin indexes
@@ -21,6 +22,7 @@ export async function persistHistoryMessages(
   logger: LoggerService,
   isLive: () => boolean,
   notifyRevoked?: (row: Message) => void,
+  resolveLid?: (jid: string) => Promise<string | null>,
 ): Promise<IncomingMessage[]> {
   const cleared: IncomingMessage[] = [];
   const storeEphemeralMessages = resolveFeatureFlags(configService).storeEphemeralMessages;
@@ -52,7 +54,7 @@ export async function persistHistoryMessages(
     const chunkIds = ids.slice(i, i + CHUNK);
     const existing = await messageRepository.find({
       where: { sessionId: id, waMessageId: In(chunkIds) },
-      select: { waMessageId: true, type: true, chatId: true },
+      select: { waMessageId: true, type: true, chatId: true, direction: true, author: true },
     });
     // A delete() can retire the engine while a large batch works through its chunks; its transaction
     // has then already cleared this session's messages, and a row inserted after it (no FK) would
@@ -102,24 +104,39 @@ export async function persistHistoryMessages(
       // Insert-or-ignore: a live onMessage insert can land between the `seen` SELECT above and this
       // write, colliding on UNIQUE(sessionId, waMessageId). orIgnore skips the collision instead of
       // throwing and aborting the whole batch (history is best-effort, persist-never-dispatch).
-      await messageRepository
-        .createQueryBuilder()
-        .insert()
-        .values(rows as unknown as QueryDeepPartialEntity<Message>[])
-        .orIgnore()
-        .execute();
+      // In the session's write scope, so a delete drains this insert instead of racing the row it adds.
+      const writes = captureSessionWrites(messageRepository.manager?.connection ?? messageRepository, id);
+      await writes
+        .write(() =>
+          messageRepository
+            .createQueryBuilder()
+            .insert()
+            .values(rows as unknown as QueryDeepPartialEntity<Message>[])
+            .orIgnore()
+            .execute(),
+        )
+        .finally(() => writes.close());
       inserted += rows.length;
     }
     // Insert the tombstone before clearing an existing row: concurrent content inserts then either
     // lose the unique-key race or are cleared here, and a later chunk cannot resurrect the payload.
     // The row keeps the chat id as its writer gave it (a REST send stores the caller's own dialect), so
     // the tombstone is matched on the chat it names, not on the string.
-    const storedChats = new Map(existing.map(r => [r.waMessageId, r.chatId]));
+    const storedChats = new Map(existing.map(r => [r.waMessageId, r]));
     for (const messageId of chunkIds) {
       const m = byId.get(messageId)!;
       if (m.type !== 'revoked') continue;
-      const storedChat = storedChats.get(messageId) ?? m.chatId;
-      if (provablyDifferent(storedChat, m.chatId)) continue;
+      const stored = storedChats.get(messageId);
+      const storedChat = stored?.chatId ?? m.chatId;
+      if (
+        stored &&
+        (await mutationTargetsForeignRowPersisted(
+          stored,
+          { kind: 'revoke', chatId: m.chatId, fromMe: m.fromMe },
+          resolveLid,
+        ))
+      )
+        continue;
       if (!isLive()) break;
       await messageRepository.update(
         {
@@ -141,9 +158,18 @@ export async function persistHistoryMessages(
         const m = byId.get(row.waMessageId)!;
         if (!isLive()) break;
         const direction = m.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING;
-        if (provablyDifferent(row.chatId, m.chatId) || row.direction !== direction || !Number.isFinite(m.timestamp)) {
+        if (
+          (await mutationTargetsForeignRowPersisted(
+            row,
+            { kind: 'revoke', chatId: m.chatId, fromMe: m.fromMe },
+            resolveLid,
+          )) ||
+          row.direction !== direction ||
+          !Number.isFinite(m.timestamp)
+        ) {
           continue;
         }
+        if (!isLive()) break;
         if (row.timestamp == null || row.timestamp > m.timestamp) {
           const result = await messageRepository.update(
             {

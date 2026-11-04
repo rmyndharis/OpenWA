@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 import type { IncomingHttpHeaders } from 'http';
 import { ApiKey } from './entities/api-key.entity';
 import { hashApiKey } from './api-key-hash';
-import { bearerToken } from '../../common/security/bearer-token';
+import { presentedApiKey } from '../../common/security/bearer-token';
 import { ipMatches } from '../../common/utils/ip';
 import { createLogger } from '../../common/services/logger.service';
 
@@ -81,8 +81,7 @@ export class ActiveKeyIndex implements OnApplicationBootstrap, OnModuleDestroy {
    * a Bearer token, trimmed.
    */
   recognise(headers: IncomingHttpHeaders, clientIp: string): string | undefined {
-    const header = headers['x-api-key'];
-    const raw = (typeof header === 'string' && header ? header : bearerToken(headers.authorization))?.trim();
+    const raw = presentedApiKey(headers)?.trim();
     if (!raw) return undefined;
     const keyHash = hashApiKey(raw, process.env.API_KEY_PEPPER);
     const key = this.keys.get(keyHash);

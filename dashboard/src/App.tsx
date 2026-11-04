@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { Layout } from './components/Layout';
 import { ToastProvider } from './components/Toast';
+import { NumberCheckProvider } from './components/NumberCheckProvider';
 import { useRole } from './hooks/useRole';
 import { RoleProvider } from './components/RoleProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -21,6 +22,7 @@ const Templates = lazy(() => import('./pages/Templates').then(m => ({ default: m
 const Logs = lazy(() => import('./pages/Logs').then(m => ({ default: m.Logs })));
 const ApiKeys = lazy(() => import('./pages/ApiKeys').then(m => ({ default: m.ApiKeys })));
 const MessageTester = lazy(() => import('./pages/MessageTester').then(m => ({ default: m.MessageTester })));
+const NumberChecker = lazy(() => import('./pages/NumberChecker').then(m => ({ default: m.NumberChecker })));
 const Infrastructure = lazy(() => import('./pages/Infrastructure').then(m => ({ default: m.Infrastructure })));
 const Plugins = lazy(() => import('./pages/Plugins'));
 
@@ -115,25 +117,29 @@ function AppContent() {
 
   return (
     <ToastProvider>
-      <BrowserRouter>
-        <Suspense fallback={loadingFallback}>
-          <Routes>
-            <Route path="/" element={<Layout onLogout={handleLogout} userRole={role} />}>
-              <Route index element={<Dashboard />} />
-              <Route path="sessions" element={<Sessions />} />
-              <Route path="chats" element={<Chats />} />
-              <Route path="webhooks" element={<Webhooks />} />
-              <Route path="templates" element={<Templates />} />
-              {role === 'admin' && !scoped && <Route path="api-keys" element={<ApiKeys />} />}
-              {role === 'admin' && <Route path="logs" element={<Logs />} />}
-              <Route path="message-tester" element={<MessageTester />} />
-              {role === 'admin' && !scoped && <Route path="infrastructure" element={<Infrastructure />} />}
-              {role === 'admin' && !scoped && <Route path="plugins" element={<Plugins />} />}
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Route>
-          </Routes>
-        </Suspense>
-      </BrowserRouter>
+      {/* Above the routes, so a bulk Number Checker run survives leaving its page; a logout unmounts it. */}
+      <NumberCheckProvider>
+        <BrowserRouter>
+          <Suspense fallback={loadingFallback}>
+            <Routes>
+              <Route path="/" element={<Layout onLogout={handleLogout} userRole={role} />}>
+                <Route index element={<Dashboard />} />
+                <Route path="sessions" element={<Sessions />} />
+                <Route path="chats" element={<Chats />} />
+                <Route path="number-checker" element={<NumberChecker />} />
+                <Route path="webhooks" element={<Webhooks />} />
+                <Route path="templates" element={<Templates />} />
+                {role === 'admin' && !scoped && <Route path="api-keys" element={<ApiKeys />} />}
+                {role === 'admin' && <Route path="logs" element={<Logs />} />}
+                <Route path="message-tester" element={<MessageTester />} />
+                {role === 'admin' && !scoped && <Route path="infrastructure" element={<Infrastructure />} />}
+                {role === 'admin' && !scoped && <Route path="plugins" element={<Plugins />} />}
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Route>
+            </Routes>
+          </Suspense>
+        </BrowserRouter>
+      </NumberCheckProvider>
     </ToastProvider>
   );
 }

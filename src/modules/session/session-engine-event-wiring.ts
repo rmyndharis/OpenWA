@@ -44,9 +44,10 @@ export interface SessionEngineWiringHost {
   /** Liveness gate: true only while `engine` is still the live engine registered for `id`. */
   isLiveEngine(id: string, engine: IWhatsAppEngine): boolean;
   /**
-   * True while an operator-initiated teardown (stop/logout/forceKill) is retiring exactly this
-   * engine instance. Its DISCONNECTED is that teardown's own, reported before the eviction; the verb
-   * announces the settled one once the engine is gone.
+   * True while an operator-initiated teardown (stop/logout/forceKill), or a start or reconnect retiring
+   * the engine it just launched, is tearing down exactly this engine instance. Its DISCONNECTED is that
+   * teardown's own, reported before the eviction; the verb writes and announces the settled one once the
+   * engine is gone.
    */
   isOperatorTeardown(id: string, engine: IWhatsAppEngine): boolean;
   /**
@@ -56,6 +57,8 @@ export interface SessionEngineWiringHost {
    */
   ownsSession(id: string): boolean;
   handleEngineReady(id: string, engine: IWhatsAppEngine, phone: string, pushName: string): void;
+  /** The account's push name learned after ready: stored on the row, announced nowhere. */
+  handleEnginePushName(id: string, engine: IWhatsAppEngine, pushName: string): void;
   /**
    * Refuse a ready link whose account differs from the one this session is bound to: tear the wrong
    * account's engine down (logout wipes its credentials), land the session in FAILED, and record why.
@@ -127,7 +130,9 @@ export class SessionEngineEventWiring {
    * A QR from a previously-linked engine means the stored credentials are gone
    * or no longer accepted, and when that happened while the engine was down nothing else in the
    * log says so, hence the warning below. One-shot per engine start: a lifecycle reconnect builds a
-   * new table from the row, which still carries the phone, and warns again.
+   * new table from the row, which still carries the phone after a transient drop, and warns again.
+   * After a terminal unlink the reconnect starts with no phone (the unlink cleared the binding and
+   * logged its own warning), so it neither warns nor refuses the number that scans next.
    */
   buildCallbacks(
     id: string,
@@ -233,6 +238,7 @@ export class SessionEngineEventWiring {
         }
         host.handleEngineReady(id, engine, phone, pushName);
       },
+      onPushNameChanged: (pushName): void => host.handleEnginePushName(id, engine, pushName),
       // PostgreSQL only: holds each inbound message from arrival until its row is written.
       ...(host.messages.holdsInbound
         ? { admitInbound: arrival => host.messages.admitInbound(id, engine, arrival) }
@@ -248,6 +254,7 @@ export class SessionEngineEventWiring {
       onMessageCreate: (message, ticket): void => host.messages.handleOwnSendEcho(id, engine, message, ticket),
       onMessageAck: (messageId, status, chatId): void =>
         host.messages.handleMessageAck(id, engine, messageId, status, chatId),
+      onMessageReceipt: (event): void => host.messages.handleMessageReceipt(id, engine, event),
       onMessageRevoked: (message, actor): void => host.messages.handleMessageRevoked(id, engine, message, actor),
       onMessageReaction: (event): void => {
         if (!host.isLiveEngine(id, engine)) return;
@@ -294,6 +301,25 @@ export class SessionEngineEventWiring {
         const payload = { sessionId: id, ...event };
         host.eventsGateway.emitEventResponse(id, payload);
         void host.webhookService.dispatch(id, 'event.response', payload);
+      },
+      onPollVote: (event): void => {
+        if (!host.isLiveEngine(id, engine)) return;
+        if (!event.pollMessageId) {
+          this.logger.warn('Ignoring poll vote without a poll message id', {
+            sessionId: id,
+            action: 'poll_vote_ignored',
+          });
+          return;
+        }
+        this.logger.debug(`Poll vote: ${event.selectedOptions.length} option(s) on ${event.pollMessageId}`, {
+          sessionId: id,
+          chatId: event.chatId,
+          pollMessageId: event.pollMessageId,
+          action: 'poll_vote',
+        });
+        const payload = { sessionId: id, ...event };
+        host.eventsGateway.emitPollVote(id, payload);
+        void host.webhookService.dispatch(id, 'poll.vote', payload);
       },
       onGroupEvent: (event): void => {
         if (!host.isLiveEngine(id, engine)) return;
@@ -387,7 +413,8 @@ export class SessionEngineEventWiring {
         // here it would tell every consumer the session is down while GET /sessions still reports
         // the engine as loaded, and the verb's own write after the eviction is dropped as a
         // duplicate, so the settled view would never be announced at all. Skipped for the exact
-        // instance being torn down; stop/logout/forceKill each write DISCONNECTED afterwards.
+        // instance being torn down; stop/logout/forceKill each write DISCONNECTED afterwards, and a
+        // retired start or reconnect writes it only on a row that is still this node's or unowned.
         if (newStatus === SessionStatus.DISCONNECTED && host.isOperatorTeardown(id, engine)) return;
         // A FAILED reported inside a service-level reconnect's init window is parked with onError.
         const persist = (): void => persistStatus(newStatus);

@@ -1,5 +1,8 @@
 import { IsString, IsNotEmpty, ValidateIf } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsMediaUrl } from '../../../common/media/media-url';
+import { stripBase64DataUri } from '../../message/media-cap.util';
+import { ToStrictString } from '../../../common/utils/strict-boolean';
 
 /**
  * Media to convert, in the same url-or-base64 shape every other media endpoint accepts.
@@ -14,8 +17,10 @@ export class ConvertMediaDto {
     example: 'https://example.com/note.m4a',
   })
   @ValidateIf((dto: ConvertMediaDto) => dto.base64 === undefined || dto.url !== undefined)
+  @ToStrictString()
   @IsString()
-  @IsNotEmpty()
+  // Same rule as every send DTO: base64 wins when it holds data, so a url next to it is not fetched.
+  @IsMediaUrl<ConvertMediaDto>({ ignoreWhen: o => !!stripBase64DataUri(o.base64) })
   url?: string;
 
   @ApiPropertyOptional({
@@ -23,6 +28,7 @@ export class ConvertMediaDto {
     example: 'SUQzBAAAAAAA...',
   })
   @ValidateIf((dto: ConvertMediaDto) => dto.url === undefined || dto.base64 !== undefined)
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   base64?: string;

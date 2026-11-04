@@ -26,10 +26,10 @@ const ADAPTER_DIR = join(__dirname, 'adapters');
 const DOC = join(__dirname, '..', '..', 'docs', '29-engine-capability-matrix.md');
 type Engine = 'baileys' | 'wwjs';
 
-/** What the adapters actually call a library handle: `this.sock()`, `this.sock!`, `getSocket()`, or a local. */
+/** Library handles include `this.sock()`, `this.sock!`, `getSocket()`, and a captured `socket` local. */
 const HANDLE: Record<Engine, RegExp> = {
   wwjs: /^(?:client|.*Client)$/i,
-  baileys: /^(?:sock|.*Sock|getSocket)$/i,
+  baileys: /^(?:sock|socket|.*Sock|getSocket)$/i,
 };
 
 interface MethodFacts {
@@ -179,6 +179,21 @@ function inventoryRows(engine: Engine): { symbol: string; listed: string[] }[] {
 }
 
 describe('docs/29 §29.5 inventory — the interface methods a row names can reach its symbol', () => {
+  it.each([
+    ['socket', true],
+    ['this.sock!', true],
+    ['this.sock(socket)', true],
+    ['getSocket()', true],
+    ['this.addChatLabel()', false],
+    ['store', false],
+    ['socketStore', false],
+  ])('classifies the Baileys handle %s', (expression, expected) => {
+    const source = ts.createSourceFile('sample.ts', `${expression};`, ts.ScriptTarget.ES2022, true);
+    const statement = source.statements[0] as ts.ExpressionStatement;
+    expect(isHandle(statement.expression, 'baileys')).toBe(expected);
+    expect(isHandle(statement.expression, 'wwjs')).toBe(false);
+  });
+
   it.each<Engine>(['baileys', 'wwjs'])('the AST walk found the %s adapter methods', engine => {
     // Without this the reachability sets are empty and every assertion below passes vacuously.
     expect(GRAPHS[engine].size).toBeGreaterThan(150);

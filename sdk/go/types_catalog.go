@@ -2,13 +2,13 @@ package openwa
 
 import "net/url"
 
-// CatalogInfo describes a business catalog.
+// CatalogInfo describes a business catalog. ProductCount counts at most the first 51 products on Baileys.
 type CatalogInfo struct {
 	ID           string  `json:"id"`
 	Name         string  `json:"name"`
 	Description  *string `json:"description,omitempty"`
-	ProductCount int     `json:"productCount,omitempty"`
-	URL          string  `json:"url,omitempty"`
+	ProductCount int     `json:"productCount"`
+	URL          string  `json:"url"`
 }
 
 // CatalogProductsQuery paginates the catalog products list.
@@ -35,8 +35,8 @@ type CatalogProduct struct {
 	Currency       string   `json:"currency,omitempty"`
 	PriceFormatted string   `json:"priceFormatted,omitempty"`
 	ImageURL       *string  `json:"imageUrl,omitempty"`
-	URL            string   `json:"url,omitempty"`
-	IsAvailable    bool     `json:"isAvailable,omitempty"`
+	URL            string   `json:"url"`
+	IsAvailable    bool     `json:"isAvailable"`
 	RetailerID     string   `json:"retailerId,omitempty"`
 }
 

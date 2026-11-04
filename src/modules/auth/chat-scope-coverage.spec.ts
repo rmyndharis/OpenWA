@@ -98,6 +98,42 @@ export const MUST_STAY_MARKED: ReadonlyArray<readonly [string, string, string]> 
   ['group.controller.ts', 'findOne', 'fenced'],
   ['group.controller.ts', 'getSettings', 'fenced'],
   ['group.controller.ts', 'updateSettings', 'fenced'],
+  // Message sends, actions and the reads of one chat. A lost mark answers 403 on the key's OWN chat, so
+  // a refusal-only check never sees it.
+  ['message.controller.ts', 'sendText', 'fenced'],
+  ['message.controller.ts', 'sendTemplate', 'fenced'],
+  ['message.controller.ts', 'sendImage', 'fenced'],
+  ['message.controller.ts', 'sendVideo', 'fenced'],
+  ['message.controller.ts', 'sendAudio', 'fenced'],
+  ['message.controller.ts', 'sendDocument', 'fenced'],
+  ['message.controller.ts', 'sendLocation', 'fenced'],
+  ['message.controller.ts', 'sendContact', 'fenced'],
+  ['message.controller.ts', 'sendSticker', 'fenced'],
+  ['message.controller.ts', 'sendPoll', 'fenced'],
+  ['message.controller.ts', 'reply', 'fenced'],
+  ['message.controller.ts', 'clickButton', 'fenced'],
+  ['message.controller.ts', 'forward', 'fenced'],
+  ['message.controller.ts', 'sendBulk', 'fenced'],
+  ['message.controller.ts', 'react', 'fenced'],
+  ['message.controller.ts', 'edit', 'fenced'],
+  ['message.controller.ts', 'deleteMessage', 'fenced'],
+  ['message.controller.ts', 'pinMessage', 'fenced'],
+  ['message.controller.ts', 'unpinMessage', 'fenced'],
+  ['message.controller.ts', 'starMessage', 'fenced'],
+  ['message.controller.ts', 'votePoll', 'fenced'],
+  ['message.controller.ts', 'getReactions', 'fenced'],
+  ['message.controller.ts', 'getChatMedia', 'fenced'],
+  // Chat actions and the presence of one chat.
+  ['session.controller.ts', 'markChatRead', 'fenced'],
+  ['session.controller.ts', 'markChatUnread', 'fenced'],
+  ['session.controller.ts', 'archiveChat', 'fenced'],
+  ['session.controller.ts', 'muteChat', 'fenced'],
+  ['session.controller.ts', 'pinChat', 'fenced'],
+  ['session.controller.ts', 'deleteChat', 'fenced'],
+  ['session.controller.ts', 'sendChatState', 'fenced'],
+  ['session.controller.ts', 'clearChatMessages', 'fenced'],
+  ['session.controller.ts', 'subscribeToPresence', 'fenced'],
+  ['session.controller.ts', 'getPresence', 'fenced'],
 ];
 
 const REQUIRED_GUARD_FIELD = new RegExp(`\\b(?:${GUARD_BODY_CHAT_FIELDS.join('|')})!\\s*:`);
@@ -380,7 +416,8 @@ describe('a chat-restricted key can only reach a handler fenced to its allowedCh
         offenders.push(`${posixPath} :: ${fileName} :: ${violation}`);
       }
     }
-    expect(marked).toBeGreaterThan(30);
+    // 61 when written: a lost mark closes a route to every chat-restricted key, so the count may only grow.
+    expect(marked).toBeGreaterThanOrEqual(61);
     expect(offenders).toEqual([]);
     // Every declared grant is used, and every used grant is declared.
     expect([...seenGrants].sort()).toEqual(AGNOSTIC_GRANTS.map(([f, h]) => `${f} :: ${h}`).sort());

@@ -1,3 +1,6 @@
+import { BadRequestException } from '@nestjs/common';
+import { SEARCH_CONTAINS_RANKED_LENGTH } from './search.constants';
+
 /**
  * What the built-in index (SQLite FTS5, unicode61) makes of a query, as an upper bound on its words. A
  * run of letters or digits is one word. ASCII punctuation separates. Any other character outside ASCII
@@ -48,6 +51,58 @@ function wordsOf(word: string): number {
   }
   close(false);
   return words;
+}
+
+/**
+ * Folds text the way the match=contains indexes compare it: accents dropped (NFD, then every combining
+ * mark removed, as remove_diacritics and unaccent do for Latin text), recomposed (NFC: NFD splits a
+ * Hangul syllable into conjoining jamo, which are letters, so `서울` would count five characters where
+ * the database sees two) and case lowered. Used to compare terms and to place highlights, never to
+ * build SQL, which leaves folding to the database.
+ */
+export function foldSearchText(text: string): string {
+  return text.normalize('NFD').replace(/\p{M}/gu, '').normalize('NFC').toLowerCase();
+}
+
+/**
+ * foldSearchText for the application's own comparisons, the score and the highlight, with final sigma
+ * read as sigma: lowercasing a whole body turns a word-final `Σ` into `ς`, and one character alone into
+ * `σ`, so a match the score counted got no highlight. The terms sent to the database are not affected.
+ */
+export function foldForMatching(text: string): string {
+  return foldSearchText(text).replace(/ς/g, 'σ');
+}
+
+/**
+ * The part of a body the score and the highlight read: its first SEARCH_CONTAINS_RANKED_LENGTH UTF-16 units,
+ * one fewer when the last of them is the first half of a surrogate pair.
+ */
+export function containsRankedText(body: string): string {
+  if (body.length <= SEARCH_CONTAINS_RANKED_LENGTH) return body;
+  const last = body.charCodeAt(SEARCH_CONTAINS_RANKED_LENGTH - 1);
+  const splitsPair = last >= 0xd800 && last <= 0xdbff;
+  return body.slice(0, SEARCH_CONTAINS_RANKED_LENGTH - (splitsPair ? 1 : 0));
+}
+
+/**
+ * A match=contains query refused for its terms (none long enough for a trigram index, or more characters
+ * than SEARCH_CONTAINS_TERMS_MAX_LENGTH), which a word search can still answer: the MessageSearch tool
+ * runs one instead when the agent did not ask for contains.
+ */
+export class ContainsTermsRefusedError extends BadRequestException {}
+
+/**
+ * The whitespace-separated terms of a match=contains query, each kept as written, with a term that
+ * folds to one already seen dropped (`Café cafe` is one term): it would add nothing to an AND but
+ * one more predicate per matching row.
+ */
+export function containsTerms(q: string): string[] {
+  const terms = new Map<string, string>();
+  for (const term of q.trim().split(/\s+/)) {
+    const folded = foldSearchText(term);
+    if (folded && !terms.has(folded)) terms.set(folded, term);
+  }
+  return [...terms.values()];
 }
 
 /**

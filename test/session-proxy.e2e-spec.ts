@@ -1,6 +1,3 @@
-// archiver v8 is ESM-only (pulled in transitively via @Global StorageModule); stub for ts-jest CJS.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import http from 'http';
 import { AddressInfo } from 'net';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -62,11 +59,7 @@ describe('Session request forwarding (e2e)', () => {
     if (prevNodeId === undefined) delete process.env.NODE_ID;
     else process.env.NODE_ID = prevNodeId;
     await new Promise<void>(resolve => owner.close(() => resolve()));
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   const seedOwnedElsewhere = async (): Promise<Session> =>

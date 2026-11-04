@@ -15,6 +15,39 @@
 // surrounding whitespace — so existing single-brace bulk content renders bit-for-bit as before.
 const PLACEHOLDER_PATTERN = /\{\{\s*([\w.-]+)\s*\}\}|\{(\w+)\}/g;
 
+/** The variable names a template mentions, in order of appearance, read with the syntax the renderer substitutes. */
+export function templateVariableNames(body: string): string[] {
+  return Array.from(body.matchAll(PLACEHOLDER_PATTERN), match => match[1] ?? match[2]);
+}
+
+/** A template that cannot be rendered for a reason the caller can report, such as a value with no text form. */
+export class TemplateRenderError extends Error {}
+
+/**
+ * The text a placeholder is replaced with, or undefined when it stays literal (key absent or null). A value
+ * is turned into text once per render, kept in `seen`: a request may carry an array or object as a variable,
+ * and converting a large one for every repeat of its placeholder would cost its size times the repeats.
+ */
+function substitution(
+  vars: Record<string, string>,
+  key: string | undefined,
+  seen: Map<string, string | undefined>,
+): string | undefined {
+  if (key === undefined) return undefined;
+  if (seen.has(key)) return seen.get(key);
+  let text: string | undefined;
+  if (Object.prototype.hasOwnProperty.call(vars, key) && vars[key] != null) {
+    try {
+      text = String(vars[key]);
+    } catch {
+      // An object without a usable toString, such as `{ toString: 1 }` or a null-prototype object.
+      throw new TemplateRenderError(`Variable '${key}' cannot be rendered as text`);
+    }
+  }
+  seen.set(key, text);
+  return text;
+}
+
 /**
  * Render a template body by replacing `{{key}}` (canonical) or `{key}` (legacy) placeholders with
  * `vars[key]`.
@@ -23,18 +56,40 @@ const PLACEHOLDER_PATTERN = /\{\{\s*([\w.-]+)\s*\}\}|\{(\w+)\}/g;
  * @param vars Map of placeholder keys to substitution values.
  * @returns The rendered text with known placeholders substituted and unknown placeholders left
  *          literal.
+ * @throws TemplateRenderError when a value has no text form.
  */
 export function renderTemplate(body: string, vars: Record<string, string> = {}): string {
-  if (!body) {
+  if (!body || !body.includes('{')) {
     return body;
   }
 
-  return body.replace(PLACEHOLDER_PATTERN, (match, doubleKey: string | undefined, singleKey: string | undefined) => {
-    const key = doubleKey ?? singleKey;
-    if (key !== undefined && Object.prototype.hasOwnProperty.call(vars, key) && vars[key] != null) {
-      return String(vars[key]);
-    }
-    // Leave unmatched placeholders literal so missing variables stay visible.
-    return match;
-  });
+  // Unmatched placeholders stay literal so missing variables stay visible.
+  const seen = new Map<string, string | undefined>();
+  return body.replace(
+    PLACEHOLDER_PATTERN,
+    (match, doubleKey: string | undefined, singleKey: string | undefined) =>
+      substitution(vars, doubleKey ?? singleKey, seen) ?? match,
+  );
+}
+
+/**
+ * The exact length of `renderTemplate(body, vars)`, computed without building the result.
+ *
+ * One placeholder repeated through a small body multiplies a large value (1365 `{a}` fit in a 4 KiB body,
+ * and one 393 KB value then renders to half a gigabyte), so a caller with a size limit measures first and
+ * refuses an oversized render instead of allocating it and checking afterwards.
+ *
+ * @throws TemplateRenderError when a value has no text form.
+ */
+export function renderedLength(body: string, vars: Record<string, string> = {}): number {
+  if (!body || !body.includes('{')) {
+    return body ? body.length : 0;
+  }
+  let length = body.length;
+  const seen = new Map<string, string | undefined>();
+  for (const match of body.matchAll(PLACEHOLDER_PATTERN)) {
+    const text = substitution(vars, match[1] ?? match[2], seen);
+    if (text !== undefined) length += text.length - match[0].length;
+  }
+  return length;
 }

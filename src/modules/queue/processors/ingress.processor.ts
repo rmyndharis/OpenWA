@@ -1,10 +1,10 @@
 import { Optional } from '@nestjs/common';
 import { InjectQueue, OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
-import { Job, Queue } from 'bullmq';
+import { DelayedError, Job, Queue, RATE_LIMIT_ERROR } from 'bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { QUEUE_NAMES } from '../queue-names';
-import { workerConnectionOptions, ingressWorkerConcurrency } from '../redis-connection';
+import { workerConnectionOptions, ingressWorkerConcurrency, producerReady } from '../redis-connection';
 import { closeWorkerIfStarted, MAX_WORKER_CLOSE_WAIT_MS, startedWorker } from './close-worker';
 import { IntegrationDeliveryFailure } from '../../integration/entities/integration-delivery-failure.entity';
 import { IngressEvent } from '../../integration/entities/ingress-event.entity';
@@ -13,7 +13,7 @@ import { HookManager } from '../../../core/hooks';
 import { createLogger } from '../../../common/services/logger.service';
 import { ShutdownService } from '../../../common/services/shutdown.service';
 import { KeyedAsyncLock, orderingKeyFor } from '../../integration/ordering-lock';
-import { requeuedJobIds } from '../../integration/ingress-enqueue.service';
+import { requeuedJobIds, resolveIngressJobOptions } from '../../integration/ingress-enqueue.service';
 
 // BullMQ's failedReason for a job that stalled more than maxStalledCount (see WebhookProcessor).
 const STALL_EXHAUSTION_MESSAGE = 'job stalled more than allowable limit';
@@ -36,7 +36,14 @@ export interface IngressJobData {
   // pointer. Undefined when the route declares no pointer — the per-conversation ordering lock then
   // serializes per instance instead (see orderingKeyFor in ../../integration/ordering-lock).
   providerConversationId?: string;
-  payload: { headers: Record<string, string>; query: Record<string, string>; body: string; rawBody: string };
+  payload: {
+    headers: Record<string, string>;
+    query: Record<string, string>;
+    body: string;
+    rawBody: string;
+    // The host's verdict when it accepted the request; see IngressEvent.payload.
+    admission?: { verified: boolean };
+  };
 }
 
 // The KeyedAsyncLock wrapping dispatch below guarantees no two dispatches for the SAME conversation
@@ -96,8 +103,23 @@ export class IngressProcessor extends WorkerHost {
     await closeWorkerIfStarted(this, MAX_WORKER_CLOSE_WAIT_MS);
   }
 
-  async process(job: Job<IngressJobData>): Promise<void> {
+  async process(job: Job<IngressJobData>, token?: string): Promise<void> {
     const d = job.data;
+    if (this.loader.isRestorePending(d.pluginId)) {
+      // The plugin's worker does not exist until the boot restore reaches it, and a restore can outlast the
+      // whole retry budget. Before the try below on purpose: this is not an attempt, so it must never be
+      // logged as a failure or file a dead-letter row. moveToDelayed does not spend one of the job's attempts.
+      // Every held job is delayed to the next multiple of the retry delay (at least a second: a job delayed to
+      // "now" is promoted straight back and would spin), so they all wake together and BullMQ promotes them in the
+      // order they were delayed. A fixed delay from "now" would give two deliveries of one conversation, a fraction of
+      // a period apart, polls a fraction of a period apart, and a restore ending between them lets the later through
+      // first. The delay carries no jitter for the same reason. Jobs of one wake that the worker reaches after
+      // the restore ends still pass those it held again before, and BullMQ's delayed score has 4096 insertion
+      // ranks per millisecond: past them the jobs of one wake come back ordered by id.
+      const delay = Math.max(1000, resolveIngressJobOptions().backoff.delay);
+      await job.moveToDelayed((Math.floor(Date.now() / delay) + 1) * delay, token);
+      throw new DelayedError();
+    }
     try {
       await this.lock.run(orderingKeyFor(d), () => this.loader.dispatchWebhookForInstance(d));
     } catch (err) {
@@ -116,6 +138,12 @@ export class IngressProcessor extends WorkerHost {
 
       if (isFinalAttempt) await this.deadLetterOrRequeue(job, job.attemptsMade + 1, errorMessage);
 
+      // BullMQ reads an error with exactly this text as a rate limit, moves the job back to wait without
+      // counting the attempt and runs it again: here a hot loop that never reaches the final attempt, or on
+      // it writes a dead letter on every run. A handler may relay such text from elsewhere.
+      if (errorMessage === RATE_LIMIT_ERROR) {
+        throw new Error(`Ingress dispatch failed: ${errorMessage}`, { cause: err });
+      }
       // Re-throw to trigger BullMQ's exponential backoff / retry.
       throw err;
     }
@@ -168,7 +196,9 @@ export class IngressProcessor extends WorkerHost {
    */
   @OnWorkerEvent('failed')
   async onWorkerFailed(job: Job<IngressJobData> | undefined, error: Error): Promise<void> {
-    if (!job || error.message !== STALL_EXHAUSTION_MESSAGE) return;
+    // The sentinel text alone is not proof: a failed attempt whose error reads the same is retried and is not
+    // this. BullMQ marks a job it fails for stalling by storing the reason as its deferred failure.
+    if (!job || job.deferredFailure !== STALL_EXHAUSTION_MESSAGE || error.message !== STALL_EXHAUSTION_MESSAGE) return;
     const d = job.data;
     this.logger.error('Ingress job failed after stalling beyond the recovery limit', error.message, {
       pluginId: d.pluginId,
@@ -201,6 +231,9 @@ export class IngressProcessor extends WorkerHost {
       try {
         const [first, second] = requeuedJobIds(String(job.id).replace(REQUEUED_JOB_ID, ''));
         const jobId = String(job.id) === first ? second : first;
+        // The producer queue holds its calls until its first connect, which the worker's own connection does not
+        // wait for; bounded, so the recovery gives up instead of waiting on a Redis that never answered it.
+        await producerReady(this.ingressQueue);
         await this.ingressQueue.remove(jobId);
         await this.ingressQueue.add(job.name, d, {
           jobId,

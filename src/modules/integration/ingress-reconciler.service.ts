@@ -166,6 +166,10 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       // that cannot be read is kept out of the next batches for a while, so a batch full of them cannot starve
       // the rows behind.
       const unreadable = this.unreadableRows(now);
+      // A plugin the boot restore has not reached has no worker to take a replay, and the loop below skips its
+      // rows, so they are left out here too: a batch's worth of them would otherwise be handed back by every
+      // pass until the restore ends, with no other plugin's stranded delivery replayed in the meantime.
+      const restoring = this.loader.restorePendingIds();
       const query = this.events
         .createQueryBuilder('e')
         .select('e.id')
@@ -179,6 +183,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
         .andWhere('e.createdAt < :cutoff', { cutoff })
         .andWhere('e.payload IS NOT NULL');
       if (unreadable.length) query.andWhere('e.id NOT IN (:...unreadable)', { unreadable });
+      if (restoring.length) query.andWhere('e.pluginId NOT IN (:...restoring)', { restoring });
       const batch = await query.orderBy('e.createdAt', 'ASC').limit(opts.batchSize).getMany();
       for (const { id } of batch) {
         if (this.stop.signal.aborted) break;
@@ -234,6 +239,13 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
               deliveryId: row.providerDeliveryId,
               action: 'ingress_reconcile_instance_ineligible',
             });
+            stats.skipped++;
+            continue;
+          }
+          // The door answers a plugin the boot restore has not reached with a 503, because no worker can take
+          // the delivery yet. A replay is that delivery arriving later: it would only spend an attempt of the
+          // row's budget on the same refusal, so the row waits, untouched, for a pass after the restore.
+          if (this.loader.isRestorePending(row.pluginId)) {
             stats.skipped++;
             continue;
           }

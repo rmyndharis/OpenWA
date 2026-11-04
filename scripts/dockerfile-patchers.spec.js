@@ -21,20 +21,16 @@ const dockerfile = fs.readFileSync(path.join(ROOT, 'Dockerfile'), 'utf8');
 // The production stage's instructions, comment lines dropped and continuation lines joined. Searching
 // the whole file let a RUN line, a comment or the builder stage stand in for the instruction a test
 // names, so a patcher dropped from the production COPY still passed.
-const production = dockerfile
-  .slice(dockerfile.search(/^FROM .* AS production$/m))
-  .split('\n')
-  .filter(line => !line.trimStart().startsWith('#'))
-  .join('\n')
-  .replace(/\\\n/g, ' ')
-  .split('\n');
+const productionOf = text =>
+  text
+    .slice(text.search(/^FROM .* AS production$/m))
+    .split('\n')
+    .filter(line => !line.trimStart().startsWith('#'))
+    .join('\n')
+    .replace(/\\\n/g, ' ')
+    .split('\n');
+const production = productionOf(dockerfile);
 const copied = production.filter(line => line.startsWith('COPY ')).flatMap(line => line.trim().split(/\s+/));
-// Every RUN instruction's words, single-spaced and padded, so a name only matches as a whole word.
-const run = ` ${production
-  .filter(line => line.startsWith('RUN '))
-  .join(' ')
-  .split(/\s+/)
-  .join(' ')} `;
 
 const patchers = fs
   .readdirSync(__dirname)
@@ -44,7 +40,10 @@ const patchers = fs
 test('the fixture finds the patchers and the production stage at all', () => {
   // Guard the guard: an empty list would make every assertion below vacuously pass.
   assert.ok(patchers.length >= 5, `expected several patchers, found ${patchers.length}`);
-  assert.ok(copied.length > 0 && run.trim().length > 0, 'no COPY or RUN instruction found in the production stage');
+  assert.ok(
+    copied.length > 0 && production.some(line => line.startsWith('RUN ')),
+    'no COPY or RUN instruction found in the production stage',
+  );
 });
 
 test('every patcher is COPIED into the production stage', () => {
@@ -52,11 +51,70 @@ test('every patcher is COPIED into the production stage', () => {
   assert.deepEqual(missing, [], `not copied into the image: ${missing.join(', ')}`);
 });
 
+test('every sibling module a patcher requires is COPIED into the production stage', () => {
+  // A patcher that needs ./atomic-write.js fails with MODULE_NOT_FOUND in the image build when only the
+  // patcher itself was copied. Derive the modules from the patchers' own require calls.
+  const needed = new Set(
+    patchers.flatMap(p =>
+      [...fs.readFileSync(path.join(__dirname, p), 'utf8').matchAll(/require\('\.\/([\w-]+)(?:\.js)?'\)/g)].map(
+        match => `scripts/${match[1]}.js`,
+      ),
+    ),
+  );
+  assert.ok(needed.has('scripts/atomic-write.js'), 'the fixture did not find the shared write helper');
+  const missing = [...needed].filter(file => !copied.includes(file));
+  assert.deepEqual(missing, [], `required by a patcher but not copied into the image: ${missing.join(', ')}`);
+});
+
+/**
+ * Why a patcher would not fail the image build. Each must be its own `node scripts/<p>` command, with no
+ * arguments, in the RUN that starts with `npm ci --omit=dev`, and that RUN must chain with `&&` alone: after a `;`
+ * or an `||` anywhere in it, a later command's exit status replaces a failing patcher's.
+ */
+function fatalRunProblems(text) {
+  const install = productionOf(text).find(line => /^RUN npm ci --omit=dev\b/.test(line));
+  if (!install) return ['the production stage has no RUN starting with `npm ci --omit=dev`'];
+  const commands = install
+    .slice('RUN '.length)
+    .split('&&')
+    .map(command => command.trim().split(/\s+/).join(' '));
+  const problems = patchers.filter(p => !commands.includes(`node scripts/${p}`)).map(p => `${p} is not run fatally`);
+  if (/;|\|\|/.test(install)) problems.push('the install RUN chains with `;` or `||`');
+  return problems;
+}
+
 test('every patcher is RUN fatally after npm ci', () => {
   // The postinstall hook runs them --best-effort; the explicit run is the real gate, so a shape
   // change fails the image build instead of shipping unpatched.
-  const missing = patchers.filter(p => !run.includes(` node scripts/${p} `));
-  assert.deepEqual(missing, [], `never run in the image build: ${missing.join(', ')}`);
+  assert.deepEqual(fatalRunProblems(dockerfile), []);
+});
+
+test('a patcher run in a way that cannot fail the image build is reported', () => {
+  const edit = (from, to) => {
+    assert.ok(dockerfile.includes(from), `the Dockerfile no longer contains ${JSON.stringify(from)}: move this anchor`);
+    return dockerfile.replace(from, to);
+  };
+  assert.deepEqual(
+    fatalRunProblems(
+      edit('&& node scripts/patch-wwebjs-status.js \\', '&& node scripts/patch-wwebjs-status.js --best-effort \\'),
+    ),
+    ['patch-wwebjs-status.js is not run fatally'],
+  );
+  assert.deepEqual(
+    fatalRunProblems(
+      edit('&& node scripts/patch-wwebjs-media-id.js \\', '; node scripts/patch-wwebjs-media-id.js || true \\'),
+    ),
+    [
+      // The `;` also joins the patcher before it into one command, whose failure it masks the same way.
+      'patch-wwebjs-group-description.js is not run fatally',
+      'patch-wwebjs-media-id.js is not run fatally',
+      'the install RUN chains with `;` or `||`',
+    ],
+  );
+  // Every patcher keeps its own command here, but a trailing `|| true` masks a failure anywhere before it.
+  assert.deepEqual(fatalRunProblems(edit('&& npm cache clean --force', '&& npm cache clean --force || true')), [
+    'the install RUN chains with `;` or `||`',
+  ]);
 });
 
 test('every patcher is also wired into postinstall', () => {

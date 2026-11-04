@@ -269,6 +269,16 @@ test('English backup hint says which credentials the export leaves out and which
   );
 });
 
+test("English '*' event description names the one event the wildcard leaves out", () => {
+  const all = i18n.t('webhooks.eventDescriptions.all', { lng: 'en' });
+  assert.match(
+    all,
+    /except message\.receipt/,
+    `the '*' description does not say it leaves out message.receipt: "${all}"`,
+  );
+  assert.ok(!/^all events$/i.test(all), `the '*' description claims every event: "${all}"`);
+});
+
 test('English start teardown-pending copy is a retryable warning, not an error', () => {
   const title = i18n.t('sessions.start.teardownPendingTitle', { lng: 'en' });
   const body = i18n.t('sessions.start.teardownPending', { lng: 'en' });
@@ -414,6 +424,23 @@ test('the webhook filter chat-kind field is translated in every locale', () => {
 test('the Templates nav item reads the same as the page it opens in every locale', () => {
   for (const lng of LOCALE_IDS) {
     assert.equal(i18n.t('nav.templates', { lng }), i18n.t('templates.title', { lng }), `${lng} nav.templates`);
+  }
+});
+
+// A confirm dialog sets its action beside Cancel, so a label that does not mean Cancel must not read as that
+// locale's Cancel: two buttons reading Cancel leave nothing to tell the one that acts from the one that backs out.
+test("no label reads as its locale's Cancel unless it means Cancel", () => {
+  const leaves = (node: unknown, path = ''): [string, unknown][] =>
+    node && typeof node === 'object'
+      ? Object.entries(node).flatMap(([key, value]) => leaves(value, path ? `${path}.${key}` : key))
+      : [[path, node]];
+  const english = new Map(leaves(resources.en.translation));
+  for (const lng of LOCALE_IDS) {
+    const cancel = i18n.t('common.cancel', { lng });
+    const lookalikes = leaves(resources[lng].translation)
+      .filter(([key, value]) => value === cancel && english.get(key) !== english.get('common.cancel'))
+      .map(([key]) => key);
+    assert.deepEqual(lookalikes, [], `${lng} labels that read as its Cancel`);
   }
 });
 

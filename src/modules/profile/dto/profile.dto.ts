@@ -2,9 +2,11 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, MaxLength, IsOptional, Matches } from 'class-validator';
 import { IsMediaUrl } from '../../../common/media/media-url';
 import { stripBase64DataUri } from '../../message/media-cap.util';
+import { ToStrictString } from '../../../common/utils/strict-boolean';
 
 export class SetProfileNameDto {
   @ApiProperty({ description: 'New display name (WhatsApp limit: 25 characters)', maxLength: 25 })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(25)
@@ -16,6 +18,7 @@ export class SetProfileStatusDto {
     description: 'New about/status text (may be empty to clear it; WhatsApp limit: 139 characters)',
     maxLength: 139,
   })
+  @ToStrictString()
   @IsString()
   @MaxLength(139)
   status!: string;
@@ -40,6 +43,7 @@ export class SetProfilePictureDto {
     description: 'Base64 encoded image data',
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   base64?: string;
 
@@ -48,6 +52,7 @@ export class SetProfilePictureDto {
     example: 'image/jpeg',
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   // A profile picture is an image by definition — fail non-image mimetypes fast (400) instead of
   // letting the engine reject (or worse, accept) an arbitrary payload.

@@ -40,7 +40,7 @@ type ParticipantResult struct {
 // per-participant outcome in Results, so Success alone hides a member that was rejected.
 type ParticipantsResult struct {
 	Success bool                `json:"success"`
-	Message string              `json:"message,omitempty"`
+	Message string              `json:"message"`
 	Results []ParticipantResult `json:"results"`
 }
 

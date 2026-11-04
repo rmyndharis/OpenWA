@@ -1,6 +1,3 @@
-// archiver v8 is ESM-only (pulled in transitively via @Global StorageModule); stub for ts-jest CJS.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -16,21 +13,36 @@ import { Message, MessageDirection } from './../src/modules/message/entities/mes
 import { SearchProviderRegistry } from './../src/modules/search/search-provider.registry';
 import { PluginSearchProvider } from './../src/modules/search/providers/plugin-search-provider';
 import type { SearchHit, SearchResults } from './../src/modules/search/search.types';
+import { EngineRegistry } from './../src/engine/engine-registry.service';
+import type { IWhatsAppEngine } from './../src/engine/interfaces/whatsapp-engine.interface';
 
 /**
  * End-to-end proof of the chat fence through the real HTTP stack (guard + reflector metadata + DI +
  * routing), which the unit specs mock away: a key restricted to one chat is refused on routes with no
  * chat dimension and on any other chat, and admitted where its chat is named or the list is filtered.
- * No engine runs here, so an admitted request is asserted only as "not refused by the fence".
+ * No engine runs for the main session, so an admitted request there is asserted only as "not refused by
+ * the fence". The list routes read a stub engine on a second session, so what they return is asserted.
  */
 describe('Chat-restricted API keys (e2e)', () => {
   const ALLOWED = '111@c.us';
   const OTHER = '222@c.us';
   let app: INestApplication<App>;
   let sessionId: string;
+  let listSessionId: string; // carries listEngine
   let chatKey: string; // OPERATOR, allowedChats: [ALLOWED]
   let openKey: string; // OPERATOR, unrestricted
   let groupKey: string;
+
+  // Every list a filtered route reads holds one chat inside the querying key's allowlist and one outside.
+  const listEngine = {
+    getChats: jest.fn().mockResolvedValue([{ id: ALLOWED }, { id: OTHER }]),
+    getContacts: jest.fn().mockResolvedValue([{ id: ALLOWED }, { id: OTHER }]),
+    getChatsByLabel: jest.fn().mockResolvedValue([{ id: ALLOWED }, { id: OTHER }]),
+    getGroups: jest.fn().mockResolvedValue([
+      { id: '111@g.us', name: 'allowed' },
+      { id: '222@g.us', name: 'other' },
+    ]),
+  };
 
   const get = (path: string, key: string) => request(app.getHttpServer()).get(path).set('X-API-Key', key);
 
@@ -42,6 +54,8 @@ describe('Chat-restricted API keys (e2e)', () => {
 
     const sessionRepo: Repository<Session> = app.get(getRepositoryToken(Session, 'data'));
     sessionId = (await sessionRepo.save(sessionRepo.create({ name: `e2e-chat-scope-${Date.now()}` }))).id;
+    listSessionId = (await sessionRepo.save(sessionRepo.create({ name: `e2e-chat-scope-lists-${Date.now()}` }))).id;
+    app.get(EngineRegistry).set(listSessionId, listEngine as unknown as IWhatsAppEngine);
 
     const authService = app.get(AuthService);
     chatKey = (await authService.createApiKey({ name: 'e2e-chat', role: ApiKeyRole.OPERATOR, allowedChats: [ALLOWED] }))
@@ -67,11 +81,7 @@ describe('Chat-restricted API keys (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('refuses a route with no chat dimension, which an unrestricted key reaches', async () => {
@@ -95,6 +105,42 @@ describe('Chat-restricted API keys (e2e)', () => {
     expect((await get(`/api/sessions/${sessionId}/contacts/${ALLOWED}`, chatKey)).status).not.toBe(403);
   });
 
+  // Default deny answers 403 on the key's OWN chat as well when a mark is lost, and a refusal on another
+  // chat is a 403 either way, so the cases above cannot tell a marked route from an unmarked one. Each row
+  // shows both halves: the allowed chat gets past the fence, and another chat is refused by the chat
+  // check (not the blanket refusal), which also shows the route exists and the fence reads that field.
+  const admitsAllowedAndRefusesOther = async (route: string, body: (chatId: string) => object) => {
+    const send = (chatId: string) =>
+      request(app.getHttpServer())
+        .post(`/api/sessions/${sessionId}/${route}`)
+        .set('X-API-Key', chatKey)
+        .send(body(chatId));
+
+    expect((await send(ALLOWED)).status).not.toBe(403);
+
+    const refused = await send(OTHER).expect(403);
+    expect((refused.body as { message: string }).message).toBe('API key not authorized for this chat');
+  };
+
+  it.each<[string, (chatId: string) => object]>([
+    ['messages/send-text', chatId => ({ chatId, text: 'hi' })],
+    ['messages/reply', chatId => ({ chatId, quotedMessageId: 'wamid.quoted', text: 'hi' })],
+    ['messages/send-bulk', chatId => ({ messages: [{ chatId, text: 'hi' }] })],
+    ['messages/react', chatId => ({ chatId, messageId: 'wamid.target', emoji: 'ok' })],
+    ['chats/read', chatId => ({ chatId })],
+    ['chats/mute', chatId => ({ chatId, muteUntil: 1_800_000_000_000 })],
+  ])('POST %s admits the allowed chat and refuses another', admitsAllowedAndRefusesOther);
+
+  // Forward names two chats and the fence reads both. With one chat in both fields, a guard that stopped
+  // reading either field would still pass, so each row varies one field and keeps the allowed chat in the
+  // other: a chat outside the allowlist as the source, and as the destination.
+  it.each<[string, (chatId: string) => object]>([
+    ['fromChatId', chatId => ({ fromChatId: chatId, toChatId: ALLOWED, messageId: 'wamid.source' })],
+    ['toChatId', chatId => ({ fromChatId: ALLOWED, toChatId: chatId, messageId: 'wamid.source' })],
+  ])('POST messages/forward admits the allowed chat and refuses another in %s', (_field, body) =>
+    admitsAllowedAndRefusesOther('messages/forward', body),
+  );
+
   it('reads stored messages only for a chat it names', async () => {
     const path = `/api/sessions/${sessionId}/messages`;
     const missing = await get(path, chatKey).expect(403);
@@ -106,9 +152,25 @@ describe('Chat-restricted API keys (e2e)', () => {
     await get(path, openKey).expect(200);
   });
 
-  it.each(['chats', 'groups', 'contacts', 'labels/1/chats'])('admits the filtered list route %s', async route => {
-    expect((await get(`/api/sessions/${sessionId}/${route}`, chatKey)).status).not.toBe(403);
-  });
+  // A list route admits a restricted key because its handler filters the engine's list down to the key's
+  // chats, and the key reaches that filter only through @CurrentApiKey(). A handler that lost it filters
+  // with no key, which reads as unrestricted, and lists every chat of the session.
+  it.each<[string, () => string, string, string]>([
+    ['chats', () => chatKey, ALLOWED, OTHER],
+    ['contacts', () => chatKey, ALLOWED, OTHER],
+    ['labels/1/chats', () => chatKey, ALLOWED, OTHER],
+    ['groups', () => groupKey, '111@g.us', '222@g.us'],
+  ])(
+    'GET %s lists only the allowed chat to a restricted key, and both to an open key',
+    async (route, key, allowed, other) => {
+      const listed = async (apiKey: string) =>
+        ((await get(`/api/sessions/${listSessionId}/${route}`, apiKey).expect(200)).body as Array<{ id: string }>).map(
+          item => item.id,
+        );
+      expect(await listed(key())).toEqual([allowed]);
+      expect(await listed(openKey)).toEqual([allowed, other]);
+    },
+  );
 
   it('admits search for a restricted key and fences its optional ?chatId=', async () => {
     const outside = await get(`/api/search?q=hi&chatId=${OTHER}`, chatKey).expect(403);

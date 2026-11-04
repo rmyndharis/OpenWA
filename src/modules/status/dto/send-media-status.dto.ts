@@ -6,6 +6,7 @@ import {
   ArrayMaxSize,
   IsDefined,
   IsNotEmpty,
+  IsObject,
   Matches,
   MaxLength,
   ValidateIf,
@@ -14,6 +15,7 @@ import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsMediaUrl } from '../../../common/media/media-url';
 import { stripBase64DataUri } from '../../message/media-cap.util';
+import { ToStrictArray, ToStrictString } from '../../../common/utils/strict-boolean';
 
 class StatusMediaInput {
   @ApiPropertyOptional({
@@ -21,24 +23,31 @@ class StatusMediaInput {
     example: 'https://example.com/banner.jpg',
   })
   @ValidateIf((media: StatusMediaInput) => media.base64 === undefined || media.url !== undefined)
+  @ToStrictString()
   @IsString()
-  @IsNotEmpty()
   // base64 wins when both are sent, so a url next to it is not fetched and not checked; a base64 that is
   // only a data-URI prefix strips to nothing, and then the url is what gets sent.
   @IsMediaUrl<StatusMediaInput>({ ignoreWhen: media => !!stripBase64DataUri(media.base64) })
   url?: string;
 
   @ApiPropertyOptional({
-    description: 'Base64-encoded media. Requires mimetype.',
+    description: 'Base64-encoded media.',
     example: '/9j/4AAQSkZJRg...',
   })
   @ValidateIf((media: StatusMediaInput) => media.url === undefined || media.base64 !== undefined)
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   base64?: string;
 
-  @ApiPropertyOptional({ description: 'MIME type. Required when sending base64.', example: 'image/jpeg' })
+  @ApiPropertyOptional({
+    description:
+      "MIME type. Optional: when omitted, the endpoint's default applies (image/jpeg, video/mp4, or " +
+      'audio/ogg; codecs=opus for a voice note).',
+    example: 'image/jpeg',
+  })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   mimetype?: string;
 }
@@ -46,12 +55,14 @@ class StatusMediaInput {
 export class SendImageStatusDto {
   @ApiProperty({ description: 'Image source (URL or base64).', type: StatusMediaInput })
   @IsDefined()
+  @IsObject()
   @ValidateNested()
   @Type(() => StatusMediaInput)
   image!: StatusMediaInput;
 
   @ApiPropertyOptional({ description: 'Optional caption.', example: 'New drop!', maxLength: 1024 })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(1024)
   caption?: string;
@@ -67,6 +78,7 @@ export class SendImageStatusDto {
     maxItems: 256,
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(256)
   @IsString({ each: true })
@@ -77,12 +89,14 @@ export class SendImageStatusDto {
 export class SendVideoStatusDto {
   @ApiProperty({ description: 'Video source (URL or base64).', type: StatusMediaInput })
   @IsDefined()
+  @IsObject()
   @ValidateNested()
   @Type(() => StatusMediaInput)
   video!: StatusMediaInput;
 
   @ApiPropertyOptional({ description: 'Optional caption.', example: 'Demo', maxLength: 1024 })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(1024)
   caption?: string;
@@ -98,6 +112,7 @@ export class SendVideoStatusDto {
     maxItems: 256,
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(256)
   @IsString({ each: true })
@@ -117,6 +132,7 @@ export class SendVoiceStatusDto {
     type: StatusMediaInput,
   })
   @IsDefined()
+  @IsObject()
   @ValidateNested()
   @Type(() => StatusMediaInput)
   audio!: StatusMediaInput;
@@ -128,6 +144,7 @@ export class SendVoiceStatusDto {
     example: '#25D366',
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @Matches(/^#[0-9A-Fa-f]{6}$/, { message: 'backgroundColor must be a hex color (e.g., #25D366)' })
   backgroundColor?: string;
@@ -143,6 +160,7 @@ export class SendVoiceStatusDto {
     maxItems: 256,
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(256)
   @IsString({ each: true })

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { createLogger } from '../../common/services/logger.service';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { types } from 'node:util';
 import { HookEvent, HookHandler, HookContext, HookRegistration } from './hook.interfaces';
 
 /**
@@ -29,13 +30,16 @@ export class HookManager {
   // (e.g. a message:sending handler that sends) is short-circuited instead of recursing.
   // NOTE: the context does not span the async engine `message_create` echo, so this guards
   // synchronous re-entry only (the async message:sent echo loop is documented, deferred).
-  private readonly inFlightEvents = new AsyncLocalStorage<Set<HookEvent>>();
+  // Each scope is the event set of one execute()/runInFlight() call. It is emptied when that call settles,
+  // because the store also reaches every timer and detached promise the call's handlers start.
+  private readonly inFlightEvents = new AsyncLocalStorage<ReadonlyArray<Set<HookEvent>>>();
+  private nextHookId = 0;
 
   /**
    * Register a hook handler
    */
   register(pluginId: string, event: HookEvent, handler: HookHandler, priority = 100): string {
-    const id = `${pluginId}:${event}:${Date.now()}`;
+    const id = `${pluginId}:${event}:${this.nextHookId++}`;
     const registration: HookRegistration = {
       id,
       pluginId,
@@ -117,17 +121,14 @@ export class HookManager {
    * Returns: { continue: boolean, data: T }
    */
   async execute<T>(event: HookEvent, data: T, options: HookExecuteOptions<T>): Promise<{ continue: boolean; data: T }> {
-    const inFlight = this.inFlightEvents.getStore();
-    if (inFlight?.has(event)) {
+    if (this.isInFlight(event)) {
       this.logger.warn(
         `Hook re-entrancy blocked: ${event} re-fired by a handler of the same event (source: ${options.source})`,
       );
       return { continue: true, data };
     }
 
-    const nextInFlight = new Set<HookEvent>(inFlight);
-    nextInFlight.add(event);
-    return this.inFlightEvents.run(nextInFlight, () => this.runHandlers(event, data, options));
+    return this.runInFlight([event], () => this.runHandlers(event, data, options));
   }
 
   /**
@@ -137,25 +138,45 @@ export class HookManager {
    * returns to the host on a fresh async context, where `getStore()` is empty. Wrapping that
    * round-trip in this method re-establishes the in-flight set so a capability that re-fires the same
    * in-flight event is short-circuited exactly as an in-process handler would be.
+   * The events stay in flight until `fn` settles (a native Promise) or returns; work it leaves running
+   * afterwards is no longer treated as re-entrant.
    */
   runInFlight<T>(events: Iterable<HookEvent>, fn: () => T): T {
-    const merged = new Set<HookEvent>(this.inFlightEvents.getStore());
-    for (const event of events) merged.add(event);
-    return this.inFlightEvents.run(merged, fn);
+    const scope = new Set(events);
+    const scopes = [...(this.inFlightEvents.getStore() ?? []).filter(parent => parent.size > 0), scope];
+    return this.inFlightEvents.run(scopes, () => {
+      let result: T;
+      try {
+        result = fn();
+      } catch (error) {
+        scope.clear();
+        throw error;
+      }
+      if (types.isPromise(result)) {
+        void Promise.prototype.then.call(
+          result,
+          () => scope.clear(),
+          () => scope.clear(),
+        );
+      } else {
+        scope.clear();
+      }
+      return result;
+    });
   }
 
   /** True if `event` is already in-flight on the active async context (an ancestor handler is running
    *  it). Lets a caller wrap a capability in {@link runInFlight} ONLY for genuine re-entrancy, instead
    *  of unconditionally seeding the event and suppressing it for unrelated observers on a top-level call. */
   isInFlight(event: HookEvent): boolean {
-    return this.inFlightEvents.getStore()?.has(event) ?? false;
+    return this.inFlightEvents.getStore()?.some(scope => scope.has(event)) ?? false;
   }
 
   /** Every event in flight on the active async context, for a caller that must carry the chain across a
    *  boundary AsyncLocalStorage does not span (the sandbox worker IPC) and re-establish it with
    *  {@link runInFlight} on the way back. */
   currentInFlight(): HookEvent[] {
-    return [...(this.inFlightEvents.getStore() ?? [])];
+    return [...new Set((this.inFlightEvents.getStore() ?? []).flatMap(scope => [...scope]))];
   }
 
   private async runHandlers<T>(

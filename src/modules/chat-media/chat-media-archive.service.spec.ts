@@ -4,8 +4,6 @@ import * as path from 'path';
 import { DataSource, IsNull, Not, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 
-jest.mock('archiver', () => ({ default: jest.fn() }));
-
 import { StorageService } from '../../common/storage/storage.service';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { ChatMediaArchiveService, CHAT_MEDIA_PREFIX } from './chat-media-archive.service';
@@ -191,7 +189,15 @@ describe('ChatMediaArchiveService', () => {
         { assertSendAllowed: () => Promise.resolve(), recordSendSuccess: () => undefined } as never,
         fakeConfigService({ 'features.simulateTyping': false }),
       );
-      jest.spyOn(repository, 'update').mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+      const update = repository.update.bind(repository);
+      let mergeFailed = false;
+      jest.spyOn(repository, 'update').mockImplementation((where, patch) => {
+        if (!mergeFailed && patch.metadata && typeof where === 'object' && where !== null && 'waMessageId' in where) {
+          mergeFailed = true;
+          return Promise.reject(new Error('SQLITE_BUSY'));
+        }
+        return update(where, patch);
+      });
       const media = { mimetype: 'image/png', data: PNG.toString('base64') };
       if (mode === 'bulk') {
         await sender.saveOutgoingMessage('sess-1', {
@@ -204,6 +210,7 @@ describe('ChatMediaArchiveService', () => {
       } else {
         await sender.sendImage('sess-1', { chatId: row.chatId, base64: media.data, mimetype: media.mimetype });
       }
+      expect(mergeFailed).toBe(true);
       const retained = await repository.findOneByOrFail({ sessionId: 'sess-1', waMessageId: IsNull() });
       expect(retained.status).toBe(MessageStatus.SENT);
       expect(retained.metadata.media).toEqual(media);
@@ -910,6 +917,32 @@ describe('ChatMediaArchiveService', () => {
         svc.onModuleDestroy();
         releaseDelete();
         [del, sweep, select].forEach(spy => spy.mockRestore());
+        jest.useRealTimers();
+      }
+    });
+
+    it('skips an orphan sweep tick while the previous sweep is still running', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+      const svc = build({ 'chatMedia.orphanSweepIntervalMs': 60_000 });
+      let release: () => void = () => undefined;
+      const sweep = jest
+        .spyOn(svc, 'sweepOrphanedMedia')
+        .mockImplementationOnce(() => new Promise<number>(resolve => (release = () => resolve(0))))
+        .mockResolvedValue(0);
+      const purge = jest.spyOn(svc, 'purgeExpired').mockResolvedValue(0);
+      try {
+        svc.onModuleInit();
+        await jest.advanceTimersByTimeAsync(60_000);
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(sweep).toHaveBeenCalledTimes(1);
+
+        release();
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(sweep).toHaveBeenCalledTimes(2);
+      } finally {
+        svc.onModuleDestroy();
+        release();
+        [sweep, purge].forEach(spy => spy.mockRestore());
         jest.useRealTimers();
       }
     });

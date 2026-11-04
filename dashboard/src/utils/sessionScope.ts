@@ -1,3 +1,5 @@
+import { normalizePhoneText } from './phone.ts';
+
 /**
  * Operator and viewer (reader) API keys may be limited to an explicit session
  * allowlist. An empty or missing list means the key can reach every session,
@@ -64,10 +66,15 @@ export function parseScopeList(text: string): string[] {
 /**
  * The chat allow-list in the form the gateway stores it (normalizeChatAllowList): a bare phone number
  * becomes `<digits>@c.us`. The gateway refuses a list with repeats before it normalizes, and compares
- * stored entries in this form, so both the request and the no-op check use it.
+ * stored entries in this form, so both the request and the no-op check use it. The gateway takes ASCII
+ * digits only, so a number typed in the digits of another script is folded first, as elsewhere in the dashboard.
  */
 export function normalizeChatScope(text: string): string[] {
-  return [...new Set(parseScopeList(text).map(entry => (/^\d{5,}$/.test(entry) ? `${entry}@c.us` : entry)))];
+  return [
+    ...new Set(
+      parseScopeList(normalizePhoneText(text)).map(entry => (/^\d{5,}$/.test(entry) ? `${entry}@c.us` : entry)),
+    ),
+  ];
 }
 
 /** The most chats a key may list: the gateway answers a longer list with 400 (ALLOWED_CHATS_MAX). */
@@ -99,7 +106,7 @@ function isIpOrCidr(entry: string): boolean {
 function isChatId(entry: string): boolean {
   if (/^\d{5,}$/.test(entry)) return true;
   const at = entry.lastIndexOf('@');
-  if (at === -1) return false;
+  if (at === -1 || entry.indexOf('@') !== at) return false;
   const user = entry.slice(0, at).split(':')[0];
   const domain = entry.slice(at + 1).toLowerCase();
   if (domain === 'g.us') return /^\d+(?:-\d+)?$/.test(user);

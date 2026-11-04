@@ -80,15 +80,21 @@ button {
   transition: border-color 0.25s;
 }
 /* Visible keyboard focus — cross-browser and keyboard-only, so the ring guides Tab navigation
-   without flashing on every mouse click. */
+   without flashing on every mouse click. Every ring is drawn in --focus-ring (App.css, which has the contrast). */
 button:focus-visible,
 a:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--primary, #25d366);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 button:focus:not(:focus-visible) {
   outline: none;
+}
+
+/* Icons keep their size: an svg that is a flex item would otherwise shrink when its row runs short of room
+   (a larger browser text size left some sidebar entries and Dashboard tiles with a sliver or no icon). */
+svg {
+  flex-shrink: 0;
 }
 
 html {
@@ -113,6 +119,9 @@ select {
   -moz-appearance: none;
   width: 100%;
   padding: 0.75rem 2.5rem 0.75rem 1rem;
+  /* The chevron below sits in the end padding; a page rule with its own padding must not take that
+     room back, or a long value runs under the arrow. */
+  padding-inline-end: 2.5rem !important;
   font-size: 0.9375rem;
   font-family: inherit;
   color: var(--text-primary);
@@ -133,7 +142,7 @@ select:hover {
 
 select:focus {
   outline: none;
-  border-color: var(--primary, #25d366);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
@@ -248,7 +257,7 @@ select:disabled {
 
 .modal-body input:focus {
   outline: none;
-  border-color: var(--primary, #25d366);
+  border-color: var(--focus-ring);
   background: var(--bg-white, #fff);
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
@@ -266,6 +275,15 @@ select:disabled {
   background: none;
   box-shadow: none;
   flex: none;
+}
+
+/* The text field focus rules here and on the pages are written for `input` and also reach a native checkbox or radio:
+   they switch its outline off and draw a border it does not show, so a focused one showed nothing (in a dialog, on
+   the Message Tester). The ring comes back for keyboard focus. A switch draws its ring on the slider instead. */
+input[type='checkbox']:not(.toggle-switch input):focus-visible,
+input[type='radio']:not(.toggle-switch input):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .modal-footer {
@@ -403,6 +421,19 @@ select:disabled {
   animation: spin 1s linear infinite;
 }
 
+/* For a user who asked the OS to reduce motion: every animation and transition runs once, instantly. The
+   spinners are left alone, since without them a wait shows no sign of progress. */
+@media (prefers-reduced-motion: reduce) {
+  *:not(.animate-spin, .spin-slow),
+  *:not(.animate-spin, .spin-slow)::before,
+  *:not(.animate-spin, .spin-slow)::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Code element styling */
 code {
   background: var(--bg-light, #f1f5f9);
@@ -434,6 +465,20 @@ code {
 [dir='rtl'] select {
   padding: 0.75rem 1rem 0.75rem 2.5rem;
   background-position: left 0.75rem center;
+}
+
+/* Glyphs that point along the reading direction flip with it, and so does the chat page's contact panel toggle,
+   whose panel opens on the inline end. The sidebar's panel icons are swapped in Layout.tsx instead, so they are not
+   listed here. */
+[dir='rtl'] .lucide-arrow-left,
+[dir='rtl'] .lucide-arrow-right,
+[dir='rtl'] .lucide-corner-up-left,
+[dir='rtl'] .lucide-corner-up-right,
+[dir='rtl'] .lucide-log-in,
+[dir='rtl'] .lucide-log-out,
+[dir='rtl'] .lucide-panel-right,
+[dir='rtl'] .lucide-send {
+  transform: scaleX(-1);
 }
 
 /* Inputs in modals: text aligns naturally */

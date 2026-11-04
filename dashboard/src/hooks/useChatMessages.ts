@@ -56,17 +56,21 @@ export function flattenMessagePages(data: MessagesData): ChatMessageView[] {
  * in it (so a media-heavy page 0 can't grow the cache unbounded), and `select` caps the flattened,
  * correctly-ordered thread again for what actually renders — the two bounds cover the cache and the
  * viewport respectively, and neither alone would cover both.
+ *
+ * `historySupported` is false for an engine that answers 501 to the history read (Baileys): the request is
+ * never sent, so every chat opened there does not log a failed call in the browser console.
  */
 export function useChatMessages(
   sessionId: string,
   chatId: string | null,
+  historySupported = true,
 ): UseInfiniteQueryResult<ChatMessageView[], Error> {
   const queryClient = useQueryClient();
   const query = useInfiniteQuery<MessagePage, Error, ChatMessageView[], MessagesQueryKey, number>({
     queryKey: messagesQueryKey(sessionId, chatId ?? ''),
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
-      const wantsHistory = pageParam === 0;
+      const wantsHistory = pageParam === 0 && historySupported;
       const [dbRes, historyRes] = await Promise.allSettled([
         sessionApi.getChatMessages(sessionId, chatId!, MESSAGE_PAGE_SIZE, pageParam),
         wantsHistory ? sessionApi.getChatHistory(sessionId, chatId!, 100, false) : Promise.resolve([]),

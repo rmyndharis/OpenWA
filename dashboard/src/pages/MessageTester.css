@@ -59,7 +59,7 @@
   font-size: 0.9375rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-white);
+  background-color: var(--bg-white);
   transition: border-color 0.2s;
 }
 
@@ -67,7 +67,7 @@
 .message-tester .form-group select:focus,
 .message-tester .form-group textarea:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
 }
 
 .message-tester .form-group textarea {
@@ -102,12 +102,12 @@
 }
 
 .message-tester .toggle-group button:first-child {
-  border-right: 1px solid var(--border);
+  border-inline-end: 1px solid var(--border);
 }
 
 .message-tester .toggle-group button.active {
   background: var(--primary);
-  color: white;
+  color: #0f172a;
 }
 
 .message-tester .send-btn {
@@ -119,7 +119,7 @@
   padding: 0.875rem 1.5rem;
   font-size: 1rem;
   font-weight: 600;
-  color: white;
+  color: #0f172a;
   background: var(--primary);
   border: none;
   border-radius: var(--radius);
@@ -479,7 +479,7 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  color: var(--error);
+  color: var(--error-text);
   text-align: end;
 }
 
@@ -511,7 +511,7 @@
 .message-tester .batch-badge.pending,
 .message-tester .batch-badge.processing {
   background: rgba(59, 130, 246, 0.12);
-  color: #3b82f6;
+  color: var(--info);
 }
 
 .message-tester .batch-badge.completed {

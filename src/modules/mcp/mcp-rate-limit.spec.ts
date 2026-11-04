@@ -89,6 +89,24 @@ describe('readIpRateLimitConfig', () => {
   });
 });
 
+describe('rate limit config from the process environment', () => {
+  const keys = ['MCP_RATE_LIMIT_MAX', 'MCP_IP_RATE_LIMIT_MAX'] as const;
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  afterEach(() => {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  it('reads process.env when called without an environment', () => {
+    process.env.MCP_RATE_LIMIT_MAX = '7';
+    process.env.MCP_IP_RATE_LIMIT_MAX = '9';
+    expect(readRateLimitConfig().max).toBe(7);
+    expect(readIpRateLimitConfig().max).toBe(9);
+  });
+});
+
 describe('KeyRateLimiter', () => {
   it('allows up to max per window, then throws 429', () => {
     let now = 1_000;
@@ -99,6 +117,23 @@ describe('KeyRateLimiter', () => {
     now = 2_500; // window passed
     expect(() => rl.check('k')).not.toThrow();
   });
+
+  it('defaults to 60 calls per key per 60 s window on the default clock', () => {
+    jest.useFakeTimers();
+    try {
+      const rl = new KeyRateLimiter();
+      for (let i = 0; i < 60; i++) rl.check('k');
+      expect(() => rl.check('k')).toThrow(/rate limit/i);
+      expect(() => rl.check('other')).not.toThrow();
+      jest.advanceTimersByTime(59_999);
+      expect(() => rl.check('k')).toThrow(/rate limit/i);
+      jest.advanceTimersByTime(1);
+      expect(() => rl.check('k')).not.toThrow();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('buckets per key', () => {
     const rl = new KeyRateLimiter(1, 1000, () => 0);
     rl.check('a');
@@ -137,7 +172,7 @@ describe('KeyRateLimiter', () => {
     // The underlying hits Map should hold exactly 1 entry per key (only the fresh hit),
     // confirming expired entries are deleted rather than accumulating.
     // Access the private field via casting to verify the Map state.
-    const map = (rl as unknown as { hits: Map<string, number[]> }).hits;
+    const map = (rl as unknown as { window: { hits: Map<string, number[]> } }).window.hits;
 
     expect(map.size).toBe(1000);
 
@@ -155,7 +190,7 @@ describe('KeyRateLimiter', () => {
     rl.check('a'); // touch a; b is now least recently used
     rl.check('d');
 
-    const map = (rl as unknown as { hits: Map<string, number[]> }).hits;
+    const map = (rl as unknown as { window: { hits: Map<string, number[]> } }).window.hits;
     expect([...map.keys()]).toEqual(['c', 'a', 'd']);
   });
 

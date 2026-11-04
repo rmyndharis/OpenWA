@@ -19,7 +19,7 @@ describe('BaileysPlugin.createEngine (opaque config)', () => {
       logger: { log: jest.fn() },
     } as unknown as PluginContext);
 
-    plugin.createEngine({ sessionId: 'sess-1', dbSessionId: 'db-1', proxyUrl: 'http://p', proxyType: 'http' });
+    plugin.createEngine({ sessionId: 'sess-1', dbSessionId: 'db-1', proxyUrl: 'http://p' });
 
     expect(BaileysAdapter).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -27,7 +27,6 @@ describe('BaileysPlugin.createEngine (opaque config)', () => {
         dbSessionId: 'db-1',
         authDir: '/data/baileys',
         proxyUrl: 'http://p',
-        proxyType: 'http',
       }),
     );
   });

@@ -41,8 +41,8 @@ This workflow expects the standard OpenWA webhook payload for the `message.recei
 {
   "event": "message.received",
   "timestamp": "2024-01-15T10:30:00Z",
-  "sessionId": "default",
-  "idempotencyKey": "msg_default_3EB0F5A2B4C..._f1e2d3c4-b5a6-7890-1234-567890abcdef",
+  "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
+  "idempotencyKey": "msg_8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a_3EB0F5A2B4C..._f1e2d3c4-b5a6-7890-1234-567890abcdef",
   "deliveryId": "dlv_0f8c1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b",
   "data": {
     "id": "3EB0F5A2B4C...",

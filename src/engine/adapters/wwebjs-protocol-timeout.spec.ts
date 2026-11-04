@@ -1,5 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
-import { Callback } from 'puppeteer-core/lib/cjs/puppeteer/common/CallbackRegistry.js';
+import { execFile } from 'node:child_process';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { Client } from 'whatsapp-web.js';
 import configuration, { MAX_TIMER_MS } from '../../config/configuration';
 import { validateEnv } from '../../config/env.validation';
@@ -25,13 +27,20 @@ import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
  * method name, with no `Protocol error (...)` prefix for the death pattern to match.
  */
 const puppeteerProtocolTimeoutMessage = async (): Promise<string> => {
-  const callback = new Callback(1, 'Runtime.callFunctionOn', 1);
-  try {
-    await callback.promise;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
-  throw new Error('puppeteer-core did not reject on an expired protocolTimeout');
+  // Load the ESM dependency in Node, outside Jest's CommonJS module loader.
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import { Callback } from 'puppeteer-core/internal/common/CallbackRegistry.js';
+       const callback = new Callback(1, 'Runtime.callFunctionOn', 1);
+       try { await callback.promise; throw new Error('protocolTimeout did not expire'); }
+       catch (error) { console.log(error.message); }`,
+    ],
+    { cwd: join(__dirname, '../../..'), encoding: 'utf8', timeout: 10_000 },
+  );
+  return stdout.trim();
 };
 
 /**

@@ -7,7 +7,7 @@ import {
   MARK_READ_MESSAGE_ID_MESSAGE,
   MARK_READ_MESSAGE_ID_PATTERN,
 } from '../../../modules/session/dto/mark-chat-read.dto';
-import { chatIdSchema } from '../chat-id-schema';
+import { chatIdSchema, chatJidSchema } from '../chat-id-schema';
 import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
 import { paginate } from '../../../common/utils/paginate';
 
@@ -55,7 +55,11 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
         if (!chatScope?.isRestricted(apiKey)) {
           return session.getChats(input.sessionId, { limit: input.limit, offset: input.offset });
         }
-        const visible = await chatScope.filter(apiKey, await session.listChats(input.sessionId), chat => chat.id);
+        const visible = await chatScope.filter(
+          apiKey,
+          await session.listChats(input.sessionId, input.offset),
+          chat => chat.id,
+        );
         return paginate(visible, input.limit, input.offset);
       },
     }),
@@ -79,7 +83,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
-        chatId: chatIdSchema.describe('Chat JID (e.g. 1234567890@c.us)'),
+        chatId: chatJidSchema.describe('Chat JID (e.g. 1234567890@c.us)'),
       }),
       handler: input => session.subscribeToPresence(input.sessionId, input.chatId).then(() => ({ success: true })),
     }),
@@ -107,7 +111,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
-        chatId: chatIdSchema.describe('Chat JID (e.g. 1234567890@c.us)'),
+        chatId: chatJidSchema.describe('Chat JID (e.g. 1234567890@c.us)'),
         messageIds: z
           // The element rule comes from the DTO rather than being restated here: the REST body
           // rejects a whitespace-only id, and this path reaches the engine without the DTO at all.
@@ -117,7 +121,8 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
           .optional()
           .describe(
             'Specific message IDs to acknowledge. Baileys acknowledges individual messages, so without ' +
-              'this only the newest received message still held in memory gets a receipt.',
+              'this only the newest received message gets a receipt: the one held in memory, else the ' +
+              'newest received one the gateway stored.',
           ),
       }),
       handler: input =>
@@ -132,7 +137,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
-        chatId: chatIdSchema.describe('Chat JID (e.g. 1234567890@c.us)'),
+        chatId: chatJidSchema.describe('Chat JID (e.g. 1234567890@c.us)'),
       }),
       handler: input => session.markUnread(input.sessionId, input.chatId).then(success => ({ success })),
     }),
@@ -145,7 +150,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
-        chatId: chatIdSchema.describe('Chat JID (e.g. 1234567890@c.us)'),
+        chatId: chatJidSchema.describe('Chat JID (e.g. 1234567890@c.us)'),
         state: z
           .enum(['typing', 'recording', 'paused'])
           .describe("'typing' or 'recording' shows the indicator; 'paused' clears it"),

@@ -29,6 +29,23 @@ export function queueConnectionOptions(): RedisConnectionOptions & {
 }
 
 /**
+ * Redis key prefix of the BullMQ queues, handed to every Queue and Worker through the shared module
+ * options. Unset keeps BullMQ's own `bull`, so jobs queued by an earlier version are still found after
+ * an upgrade. A queue is named only by this prefix and its name, so two deployments on one Redis must
+ * each set their own: otherwise one's workers take the other's webhook jobs, find no such webhook in
+ * their own database and complete them without delivering. Replicas of one deployment share a value.
+ */
+export function queuePrefix(): string | undefined {
+  return process.env.QUEUE_PREFIX?.trim() || undefined;
+}
+
+/** `BullModule.forRootAsync` options: the producer connection, plus the prefix when one is set. */
+export function queueRootOptions(): { connection: ReturnType<typeof queueConnectionOptions>; prefix?: string } {
+  const prefix = queuePrefix();
+  return { connection: queueConnectionOptions(), ...(prefix ? { prefix } : {}) };
+}
+
+/**
  * How long producerReady waits for a producer queue's first connect: REDIS_CONNECT_TIMEOUT_MS, or the
  * default when it is 0 (see producerReady), capped at MAX_TIMER_MS. Above that a Node timer fires after
  * 1 ms, which would bypass a healthy Redis at boot. Node truncates ioredis's socket connect timeout to

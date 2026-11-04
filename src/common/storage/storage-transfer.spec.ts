@@ -3,47 +3,6 @@ import { PassThrough, Readable } from 'stream';
 import * as tar from 'tar-stream';
 import { createGzip } from 'zlib';
 
-// archiver v8 is ESM-only and ts-jest cannot load it here. This stand-in keeps the parts of its
-// TarArchive contract the export relies on: a stream entry with a known size is piped straight into
-// the tar pack (without one it is collected first), 'entry' fires once the entry is written, and an
-// entry failure is emitted as 'error'. The real archiver runs in test/storage-export-streaming.e2e-spec.ts.
-jest.mock('archiver', () => {
-  /* eslint-disable @typescript-eslint/no-require-imports */
-  const { EventEmitter } = require('events') as typeof import('events');
-  const tar = require('tar-stream') as typeof import('tar-stream');
-  const { createGzip } = require('zlib') as typeof import('zlib');
-  /* eslint-enable @typescript-eslint/no-require-imports */
-  class TarArchive extends EventEmitter {
-    private readonly pack = tar.pack();
-    private readonly gzip = createGzip();
-    constructor() {
-      super();
-      this.pack.pipe(this.gzip);
-    }
-    pipe(destination: NodeJS.WritableStream): NodeJS.WritableStream {
-      return this.gzip.pipe(destination);
-    }
-    append(source: Readable, data: { name: string; stats?: { size: number } }): void {
-      const done = (err?: Error | null): void => void (err ? this.emit('error', err) : this.emit('entry', data));
-      if (data.stats) {
-        source.pipe(this.pack.entry({ name: data.name, size: data.stats.size }, done));
-        return;
-      }
-      const chunks: Buffer[] = [];
-      source.on('data', (chunk: Buffer) => chunks.push(chunk));
-      source.on('end', () => this.pack.entry({ name: data.name }, Buffer.concat(chunks), done));
-    }
-    finalize(): Promise<void> {
-      this.pack.finalize();
-      return Promise.resolve();
-    }
-    abort(): void {
-      this.pack.destroy();
-    }
-  }
-  return { TarArchive };
-});
-
 import {
   createExportStream,
   DEFAULT_IMPORT_MAX_BYTES,
@@ -182,6 +141,28 @@ describe('createExportStream streams one file at a time', () => {
     expect(imported.get(files[1])?.equals(contentFor(files[1]))).toBe(true);
   });
 
+  // A key is an opaque name. A backslash, a doubled slash or a leading `word:` belongs to it, and an archive that
+  // rewrites any of them restores the file under a different key.
+  it.each([true, false])(
+    'writes every key under exactly the name it is stored by (size reported: %s)',
+    async withSize => {
+      const names = [
+        'media/back\\slash.bin',
+        'media/dir//double.bin',
+        '628123:4@s.whatsapp.net/c.jpg',
+        'status:x/y.bin',
+      ];
+      const { openFile } = trackingOpener({}, withSize);
+      const logger = makeLogger();
+      const output = await createExportStream(() => Promise.resolve(names), openFile, logger as never);
+
+      const imported = await importAll(output, logger);
+
+      expect([...imported.keys()]).toEqual(names);
+      expect(imported.get(names[0])?.equals(contentFor(names[0]))).toBe(true);
+    },
+  );
+
   it('fails the output with a read error part-way through a file and stops opening files', async () => {
     const { stats, openFile } = trackingOpener({ 'media/file-b.bin': 'read' });
     const output = await createExportStream(() => Promise.resolve(files), openFile, makeLogger() as never);
@@ -208,6 +189,61 @@ describe('createExportStream streams one file at a time', () => {
 
     expect(stats.open).toBe(0);
     expect(stats.opened).toBe(openedBefore);
+  });
+});
+
+describe('createExportStream releases the archive streams', () => {
+  // The tar and gzip streams hold whatever the consumer had not read yet, and zlib a native handle. Destroying
+  // the output has to release them at once, not leave them to the garbage collector. Nothing else fails when it
+  // does not: the export stops opening files either way, so only the two streams themselves can show it.
+  it('destroys the tar and gzip streams when the consumer destroys the output mid-entry', async () => {
+    const realZlib = jest.requireActual<typeof import('zlib')>('zlib');
+    const realCreateGzip = realZlib.createGzip;
+    const readOnlyExport = { configurable: true, enumerable: true, writable: false };
+    const gzips: Array<{ destroyed: boolean }> = [];
+    // createGzip is a read-only export. jest.spyOn cannot wrap it, and the failed attempt makes the suite fail
+    // when the mocks are restored, so the export is replaced by hand for the length of the test.
+    Object.defineProperty(realZlib, 'createGzip', {
+      ...readOnlyExport,
+      value: (...args: Parameters<typeof realCreateGzip>) => {
+        const gzip = realCreateGzip(...args);
+        gzips.push(gzip);
+        return gzip;
+      },
+    });
+    const pack = jest.spyOn(jest.requireActual<typeof tar>('tar-stream'), 'pack');
+    try {
+      let reading = false;
+      // An entry that never ends, so the export is parked inside it when the consumer goes away.
+      const stuck = new Readable({
+        read() {
+          reading = true;
+        },
+      });
+      const output = await createExportStream(
+        () => Promise.resolve(['media/stuck.bin']),
+        () => Promise.resolve({ stream: stuck, size: FILE_BYTES }),
+        makeLogger() as never,
+      );
+      for (let waited = 0; !reading && waited < 1000; waited += 10) await settle(10);
+      expect(reading).toBe(true);
+      expect(pack).toHaveBeenCalledTimes(1);
+      expect(gzips).toHaveLength(1);
+      const tarPack = pack.mock.results[0].value as { destroyed: boolean };
+      const gzip = gzips[0];
+      expect(tarPack.destroyed).toBe(false);
+      expect(gzip.destroyed).toBe(false);
+
+      output.destroy();
+      // Destroying a stream finishes on a later tick; a missing teardown shows here as a stream still open.
+      for (let waited = 0; !(tarPack.destroyed && gzip.destroyed) && waited < 1000; waited += 10) await settle(10);
+
+      expect(tarPack.destroyed).toBe(true);
+      expect(gzip.destroyed).toBe(true);
+    } finally {
+      pack.mockRestore();
+      Object.defineProperty(realZlib, 'createGzip', { ...readOnlyExport, value: realCreateGzip });
+    }
   });
 });
 
@@ -412,6 +448,49 @@ describe('createExportStream and the entry-count limit this deployment lowered',
     }
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('above the import limit of 2'));
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Raise STORAGE_IMPORT_MAX_ENTRIES'));
+  });
+});
+
+// A backend that does not report a length (ExportFileSource.size is optional) still exports a file the
+// destination may refuse, so the warning is worked out from the bytes actually read.
+describe('createExportStream warns about import limits for files of unreported size', () => {
+  const exportWithLimits = async (limits: Record<string, string>, sizes: number[]) => {
+    const previous = Object.fromEntries(Object.keys(limits).map(key => [key, process.env[key]]));
+    Object.assign(process.env, limits);
+    const logger = makeLogger();
+    try {
+      const names = sizes.map((_, index) => `media/unknown-${index}.bin`);
+      const output = await createExportStream(
+        () => Promise.resolve(names),
+        name => Promise.resolve({ stream: Readable.from([Buffer.alloc(sizes[names.indexOf(name)], 0x61)]) }),
+        logger as never,
+      );
+      await new Promise<void>(resolve => output.on('end', resolve).resume());
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+    return logger;
+  };
+
+  it('warns when one file is above the per-entry limit', async () => {
+    const logger = await exportWithLimits({ STORAGE_IMPORT_MAX_BYTES: '5' }, [6]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Raise STORAGE_IMPORT_MAX_BYTES'));
+  });
+
+  it('warns when the files together are above the total limit', async () => {
+    const logger = await exportWithLimits({ STORAGE_IMPORT_MAX_TOTAL_BYTES: '5' }, [3, 3]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Raise STORAGE_IMPORT_MAX_TOTAL_BYTES'));
+  });
+
+  it('stays quiet at exactly the limits', async () => {
+    const logger = await exportWithLimits(
+      { STORAGE_IMPORT_MAX_BYTES: '3', STORAGE_IMPORT_MAX_TOTAL_BYTES: '6' },
+      [3, 3],
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
 

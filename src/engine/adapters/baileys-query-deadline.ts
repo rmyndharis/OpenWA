@@ -1,3 +1,5 @@
+import { HttpException } from '@nestjs/common';
+import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 
 /**
@@ -7,8 +9,9 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
  * throwing (Socket/socket.js: "Catch timeout and return undefined instead of throwing"). Callers
  * downstream of that split two ways:
  *
- *  - those that can still tell the cases apart from the value — `onWhatsApp` resolves `undefined`
- *    where a real answer is an array — and those check the value directly instead of using this;
+ *  - those that can still tell the cases apart from the value (`onWhatsApp` resolves `undefined` where
+ *    a real answer is an array, an invite-code read an absent code). They check the value, and are
+ *    bounded here all the same: Baileys' 60 s is past this budget and `session.proxyTimeoutMs`;
  *  - those that cannot, because the library discards the result. Every group and profile WRITE is
  *    in this second group: `groupLeave`, `groupUpdateSubject`, `groupSettingUpdate` and their
  *    siblings all `await groupQuery(...)` and return void, so the call resolves identically whether
@@ -35,11 +38,51 @@ export async function withQueryDeadline<T>(work: Promise<T>, timeoutMs: number, 
         timer.unref?.();
       }),
     ]);
+  } catch (error) {
+    // The connection closed under the call: a query still waiting rejects with the bare WebSocket close code
+    // (Baileys hands the `close` event's argument to reject), and a write on a socket that is no longer open
+    // throws Baileys' Boom('Connection Closed', 428), which carries no data. Neither has a WA code a caller can
+    // classify, so both would reach the client as a 500. A WhatsApp answer carries its code or GraphQL error as data.
+    const boom = error as { isBoom?: unknown; data?: unknown; output?: { statusCode?: unknown } } | null;
+    if (typeof error === 'number' || (boom?.isBoom === true && boom.output?.statusCode === 428 && !boom.data)) {
+      throw new EngineTransportError(
+        `The connection to WhatsApp closed${typeof error === 'number' ? ` (code ${error})` : ''} before it answered`,
+      );
+    }
+    throw error;
   } finally {
     // clearTimeout tolerates undefined, so no guard — a guard here would be a branch no test can
     // reach, since the race always assigns the timer before it can settle.
     clearTimeout(timer);
   }
+}
+
+/**
+ * Run a lookup that asks WhatsApp about someone and keep every failure to ASK a 503.
+ *
+ * `onWhatsApp` and `executeUSyncQuery` reject with a raw Boom when WhatsApp answers the query with an error
+ * node (`data` is the WA code, see assertNodeErrorFree) and when the connection closes mid-query. Neither is a
+ * verdict about the number, and left alone both reach Nest as a 500 where the lookup routes promise a retryable
+ * 503. A 429 keeps its own class so a paced caller can tell a throttled request from a dead link. Wrap only the
+ * awaited network call: a bug in building the query should still surface as the bug it is. An HttpException
+ * (the deadline above, a not-ready engine) is already classified and passes through.
+ */
+export async function guardLookup<T>(work: Promise<T>, operation: string): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    if (error instanceof HttpException) throw error;
+    const code = (error as { data?: unknown } | null | undefined)?.data;
+    if (code === 429) throw new EngineThrottledError(`${operation} was rate-limited by WhatsApp (code 429)`);
+    throw new EngineTransportError(
+      `${operation} could not be answered by WhatsApp${typeof code === 'number' ? ` (code ${code})` : ''}`,
+    );
+  }
+}
+
+/** {@link withQueryDeadline} for a write whose confirmation the library discards; the error names the operation. */
+export function confirmedWrite<T>(work: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+  return withQueryDeadline(work, timeoutMs, `WhatsApp did not confirm ${operation} in time`);
 }
 
 /**

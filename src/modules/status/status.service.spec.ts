@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
+import { Readable } from 'stream';
 import { StatusService } from './status.service';
 import { StatusController } from './status.controller';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -30,7 +31,9 @@ describe('StatusService media validation and selection', () => {
   const passThrough = (_event: string, data: unknown) => Promise.resolve({ continue: true, data });
   const hookManager = { execute: jest.fn(passThrough) };
   const store = { list: jest.fn(), listByContact: jest.fn(), getMedia: jest.fn() };
-  const storageService = { getFile: jest.fn() };
+  const storageService = { openFile: jest.fn() };
+  /** What StorageService.openFile resolves with: the file as a stream, and its size. */
+  const opened = (bytes: Buffer) => ({ stream: Readable.from([bytes]), size: bytes.length });
   const pacing = {
     assertSendAllowed: jest.fn().mockResolvedValue(undefined),
     recordSendFailure: jest.fn(),
@@ -124,21 +127,22 @@ describe('StatusService media validation and selection', () => {
       await expect(service.getStatusMedia('sess', 'w1')).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('returns the media bytes and mimetype', async () => {
+    it('returns the opened file and its mimetype', async () => {
       store.getMedia.mockResolvedValue({ path: 'statuses/sess/x.jpg', mimetype: 'image/jpeg' });
-      storageService.getFile.mockResolvedValue(Buffer.from('x'));
+      storageService.openFile.mockResolvedValue(opened(Buffer.from('x')));
 
       const media = await service.getStatusMedia('sess', 'w1');
 
-      expect(media).toEqual({ buffer: Buffer.from('x'), mimetype: 'image/jpeg' });
+      expect(media).toMatchObject({ size: 1, mimetype: 'image/jpeg' });
+      expect(Buffer.concat(await media.stream.toArray())).toEqual(Buffer.from('x'));
       expect(store.getMedia).toHaveBeenCalledWith('sess', 'w1');
-      expect(storageService.getFile).toHaveBeenCalledWith('statuses/sess/x.jpg');
+      expect(storageService.openFile).toHaveBeenCalledWith('statuses/sess/x.jpg');
     });
 
-    it('maps an ENOENT from the file read to NotFoundException (purge raced the request), not a 500', async () => {
+    it('maps an ENOENT from the file open to NotFoundException (purge raced the request), not a 500', async () => {
       store.getMedia.mockResolvedValue({ path: 'statuses/sess/gone.jpg', mimetype: 'image/jpeg' });
       const enoent = Object.assign(new Error('no such file or directory'), { code: 'ENOENT' });
-      storageService.getFile.mockRejectedValue(enoent);
+      storageService.openFile.mockRejectedValue(enoent);
 
       await expect(service.getStatusMedia('sess', 'w1')).rejects.toBeInstanceOf(NotFoundException);
     });
@@ -148,14 +152,14 @@ describe('StatusService media validation and selection', () => {
       // rules make the row-outlived-file race most likely exactly there.
       store.getMedia.mockResolvedValue({ path: 'statuses/sess/gone.jpg', mimetype: 'image/jpeg' });
       const noSuchKey = Object.assign(new Error('The specified key does not exist.'), { name: 'NoSuchKey' });
-      storageService.getFile.mockRejectedValue(noSuchKey);
+      storageService.openFile.mockRejectedValue(noSuchKey);
 
       await expect(service.getStatusMedia('sess', 'w1')).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('rethrows non-missing-object storage errors unchanged', async () => {
       store.getMedia.mockResolvedValue({ path: 'statuses/sess/x.jpg', mimetype: 'image/jpeg' });
-      storageService.getFile.mockRejectedValue(new Error('S3 unavailable'));
+      storageService.openFile.mockRejectedValue(new Error('S3 unavailable'));
 
       await expect(service.getStatusMedia('sess', 'w1')).rejects.toThrow('S3 unavailable');
     });
@@ -164,7 +168,7 @@ describe('StatusService media validation and selection', () => {
       // The stored mimetype comes from the sender's message metadata — never trust it as a
       // Content-Type or the endpoint could serve active content (e.g. text/html) on the API origin.
       store.getMedia.mockResolvedValue({ path: 'statuses/sess/x.bin', mimetype: 'text/html' });
-      storageService.getFile.mockResolvedValue(Buffer.from('<script>'));
+      storageService.openFile.mockResolvedValue(opened(Buffer.from('<script>')));
 
       const media = await service.getStatusMedia('sess', 'w1');
 
@@ -176,7 +180,7 @@ describe('StatusService media validation and selection', () => {
       // status served with its declared Content-Type is stored-XSS material on the API origin.
       // The chat-media path already excludes it; this closes the same hole for status media.
       store.getMedia.mockResolvedValue({ path: 'statuses/sess/x.svg', mimetype: 'image/svg+xml' });
-      storageService.getFile.mockResolvedValue(Buffer.from('<svg/>'));
+      storageService.openFile.mockResolvedValue(opened(Buffer.from('<svg/>')));
 
       const media = await service.getStatusMedia('sess', 'w1');
 
@@ -198,7 +202,7 @@ describe('StatusService media validation and selection', () => {
         // trailing OWS; a browser strips both and renders `image/svg+xml` — the exclusion must match
         // what the browser will see, not the exact byte string.
         store.getMedia.mockResolvedValue({ path: 'statuses/sess/x.svg', mimetype });
-        storageService.getFile.mockResolvedValue(Buffer.from('<svg/>'));
+        storageService.openFile.mockResolvedValue(opened(Buffer.from('<svg/>')));
 
         const media = await service.getStatusMedia('sess', 'w1');
 
@@ -212,7 +216,7 @@ describe('StatusService media validation and selection', () => {
       'serves the comma-joined form %s as inert octet-stream',
       async mimetype => {
         store.getMedia.mockResolvedValue({ path: 'statuses/sess/x', mimetype });
-        storageService.getFile.mockResolvedValue(Buffer.from('x'));
+        storageService.openFile.mockResolvedValue(opened(Buffer.from('x')));
 
         const media = await service.getStatusMedia('sess', 'w1');
 
@@ -224,7 +228,7 @@ describe('StatusService media validation and selection', () => {
       // The exclusion is scoped to SVG: a perfectly ordinary `image/jpeg` with a charset parameter
       // (or any other image/video/audio type) must not be dragged down to octet-stream by it.
       store.getMedia.mockResolvedValue({ path: 'statuses/sess/x.jpg', mimetype: 'image/jpeg;charset=ISO-8859-1' });
-      storageService.getFile.mockResolvedValue(Buffer.from('x'));
+      storageService.openFile.mockResolvedValue(opened(Buffer.from('x')));
 
       const media = await service.getStatusMedia('sess', 'w1');
 
@@ -238,7 +242,7 @@ describe('StatusService media validation and selection', () => {
       ['image/png;x=1,text/html', 'image/png'],
     ])('serves a stored %s as %s', async (stored, served) => {
       store.getMedia.mockResolvedValue({ path: 'statuses/sess/x', mimetype: stored });
-      storageService.getFile.mockResolvedValue(Buffer.from('x'));
+      storageService.openFile.mockResolvedValue(opened(Buffer.from('x')));
 
       const media = await service.getStatusMedia('sess', 'w1');
 

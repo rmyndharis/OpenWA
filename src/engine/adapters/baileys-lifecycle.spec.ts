@@ -55,6 +55,7 @@ describe('BaileysLifecycle unlink cleanup', () => {
     } as unknown as BaileysLifecycleHost;
     const sock = {
       user: { id: '628999:1@s.whatsapp.net' },
+      authState: { creds: { me: { id: '628999:1@s.whatsapp.net' }, account: {} } },
       query: jest.fn().mockResolvedValue({ tag: 'iq' }),
       generateMessageTag: () => 'tag-1',
       end: jest.fn(),
@@ -198,6 +199,7 @@ describe('BaileysLifecycle proxy fetch dispatcher', () => {
     const engine = new BaileysLifecycle(host);
     engine.sock = {
       user: { id: '628999:1@s.whatsapp.net' },
+      authState: { creds: { me: { id: '628999:1@s.whatsapp.net' }, account: {} } },
       query: jest.fn().mockResolvedValue({ tag: 'iq' }),
       generateMessageTag: () => 'tag-1',
       end: jest.fn(),
@@ -262,6 +264,26 @@ describe('BaileysLifecycle proxy fetch dispatcher', () => {
         releaseAuth?.({ state: { creds: {}, keys: {} }, saveCreds: jest.fn() } as unknown as AuthState);
       return { engine, resolve, authRequested, loadAuth };
     }
+
+    // Opening the auth state creates the session's directory, which a deleted session no longer has.
+    it('does not open the auth state when the session stops while the library loads', async () => {
+      const engine = lifecycle();
+      engine.sock = null;
+      let finishLibrary: (lib: typeof BaileysLib) => void = () => undefined;
+      jest.spyOn(engine, 'loadLib').mockReturnValueOnce(
+        new Promise<typeof BaileysLib>(resolve => {
+          finishLibrary = resolve;
+        }),
+      );
+      jest.mocked(useAtomicMultiFileAuthState).mockClear();
+      const init = engine.initialize();
+      await engine.destroy();
+      finishLibrary(BaileysLib);
+      await init;
+
+      expect(useAtomicMultiFileAuthState).not.toHaveBeenCalled();
+      expect(engine.sock).toBeNull();
+    });
 
     // The teardown closed the only dispatcher there was; a lookup after it would build one nothing
     // closes and send a stopped session's requests through its proxy.

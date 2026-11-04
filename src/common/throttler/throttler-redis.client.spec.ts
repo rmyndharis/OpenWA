@@ -2,6 +2,7 @@ import {
   buildThrottlerRedisOptions,
   createThrottlerRedisClient,
   THROTTLER_REDIS_COMMAND_TIMEOUT_MS,
+  THROTTLER_REDIS_SOCKET_TIMEOUT_MS,
 } from './throttler-redis.client';
 
 const KEYS = ['REDIS_HOST', 'REDIS_PORT', 'REDIS_USERNAME', 'REDIS_PASSWORD', 'REDIS_CONNECT_TIMEOUT_MS', 'REDIS_TLS'];
@@ -53,6 +54,12 @@ describe('buildThrottlerRedisOptions', () => {
     expect(options.autoResendUnfulfilledCommands).toBe(false);
     // Every command is deadline-bounded, so a dropped in-flight call cannot hang the request.
     expect(options.commandTimeout).toBe(THROTTLER_REDIS_COMMAND_TIMEOUT_MS);
+    // A peer that stays connected but stops answering never errors its socket, so the commandTimeout
+    // above alone costs every guarded request one full timeout per throttler tier. The socket timeout
+    // destroys that socket so the offline-queue-off rejection makes the following requests fail open at once,
+    // and it has to fire before the first command's own deadline or the next tier is written first.
+    expect(options.socketTimeout).toBe(THROTTLER_REDIS_SOCKET_TIMEOUT_MS);
+    expect(THROTTLER_REDIS_SOCKET_TIMEOUT_MS).toBeLessThan(THROTTLER_REDIS_COMMAND_TIMEOUT_MS);
     // No queue-based retry flushing — per-command latency is bounded by commandTimeout alone.
     expect(options.maxRetriesPerRequest).toBeNull();
   });
@@ -66,6 +73,7 @@ describe('createThrottlerRedisClient', () => {
       expect(client.options.enableOfflineQueue).toBe(false);
       expect(client.options.autoResendUnfulfilledCommands).toBe(false);
       expect(client.options.commandTimeout).toBe(THROTTLER_REDIS_COMMAND_TIMEOUT_MS);
+      expect(client.options.socketTimeout).toBe(THROTTLER_REDIS_SOCKET_TIMEOUT_MS);
       expect(client.options.maxRetriesPerRequest).toBeNull();
       expect(client.options.host).toBe('127.0.0.1');
     } finally {

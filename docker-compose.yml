@@ -4,7 +4,9 @@
 services:
   # ===== CORE: Docker Socket Proxy (sole container with /var/run/docker.sock access) =====
   docker-proxy:
-    image: tecnativa/docker-socket-proxy:v0.5.0
+    # Pinned by release tag and digest: this container holds the Docker socket, so a re-pushed tag
+    # must not change what runs here.
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     container_name: openwa-docker-proxy
     restart: unless-stopped
     # Only on the isolated internal network, reachable solely by openwa-api (including any
@@ -16,7 +18,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       # Minimal set that keeps DockerService (src/modules/docker/docker.service.ts) working:
-      # PING (health), INFO (getSystemInfo), CONTAINERS (list/inspect/create/start/stop),
+      # PING (health), CONTAINERS (list/inspect/create/start/stop),
       # IMAGES (pull), VOLUMES (createVolume). POST is the proxy's single all-or-nothing
       # method gate for non-GET requests (haproxy.cfg: `deny unless METH_GET || env(POST)`).
       # Two consequences of the pinned proxy config, accepted and documented in SECURITY.md:
@@ -34,7 +36,6 @@ services:
       CONTAINERS: 1
       IMAGES: 1
       VOLUMES: 1
-      INFO: 1
       PING: 1
       POST: 1
       # Everything else is denied by default (AUTH, SECRETS, NETWORKS, PLUGINS, SWARM, TASKS, SERVICES, CONFIGS, NODES, DISTRIBUTIONS)
@@ -258,6 +259,7 @@ services:
       - SIMULATE_TYPING=${SIMULATE_TYPING:-}
       - MCP_ENABLED=${MCP_ENABLED:-}
       - SEARCH_ENABLED=${SEARCH_ENABLED:-}
+      - SEARCH_CONTAINS_ENABLED=${SEARCH_CONTAINS_ENABLED:-}
       - SERVE_DASHBOARD=${SERVE_DASHBOARD:-}
       - CACHE_ENABLED=${CACHE_ENABLED:-}
       - DATABASE_LOGGING=${DATABASE_LOGGING:-}
@@ -349,6 +351,7 @@ services:
       - REDIS_CONNECT_TIMEOUT_MS=${REDIS_CONNECT_TIMEOUT_MS:-}
       - REDIS_TLS=${REDIS_TLS:-}
       - REDIS_CACHE_DB=${REDIS_CACHE_DB:-}
+      - QUEUE_PREFIX=${QUEUE_PREFIX:-}
       # Engine / session tuning.
       - MAX_CONCURRENT_SESSIONS=${MAX_CONCURRENT_SESSIONS:-}
       - BAILEYS_AUTH_DIR=${BAILEYS_AUTH_DIR:-}
@@ -357,6 +360,7 @@ services:
       - BAILEYS_MESSAGE_STORE_LIMIT=${BAILEYS_MESSAGE_STORE_LIMIT:-}
       - BAILEYS_SESSION_STORE_MAX_ENTRIES=${BAILEYS_SESSION_STORE_MAX_ENTRIES:-}
       - BAILEYS_CHAT_STATE_CACHE_MAX=${BAILEYS_CHAT_STATE_CACHE_MAX:-}
+      - BAILEYS_GROUP_METADATA_CACHE_TTL_MS=${BAILEYS_GROUP_METADATA_CACHE_TTL_MS:-}
       - WWEBJS_ONBOARDING_CONTINUE_LABELS=${WWEBJS_ONBOARDING_CONTINUE_LABELS:-}
       # Default matches the image's ENV (Dockerfile); a blank forward would shadow it and make
       # puppeteer fall back to a bundled Chromium the image does not ship. compose-parity.spec.ts
@@ -371,7 +375,6 @@ services:
       - STATUS_MEDIA_MAX_BYTES=${STATUS_MEDIA_MAX_BYTES:-}
       - STATUS_ORPHAN_SWEEP_INTERVAL_MS=${STATUS_ORPHAN_SWEEP_INTERVAL_MS:-}
       - STATUS_ORPHAN_GRACE_MS=${STATUS_ORPHAN_GRACE_MS:-}
-      - STORAGE_LIST_MAX_FILES=${STORAGE_LIST_MAX_FILES:-}
       - STORAGE_IMPORT_MAX_BYTES=${STORAGE_IMPORT_MAX_BYTES:-}
       - STORAGE_IMPORT_MAX_ENTRIES=${STORAGE_IMPORT_MAX_ENTRIES:-}
       - STORAGE_IMPORT_MAX_TOTAL_BYTES=${STORAGE_IMPORT_MAX_TOTAL_BYTES:-}

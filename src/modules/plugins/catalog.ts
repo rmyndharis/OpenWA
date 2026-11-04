@@ -21,6 +21,49 @@ export interface CatalogEntry {
   [key: string]: unknown;
 }
 
+const OPTIONAL_STRING_FIELDS = [
+  'type',
+  'status',
+  'description',
+  'author',
+  'license',
+  'minOpenWAVersion',
+  'testedOpenWAVersion',
+  'releasedAt',
+  'repoUrl',
+  'homepage',
+  'download',
+] as const;
+
+/**
+ * Whether `value` has the shape of {@link CatalogEntry}: non-empty string id, name and version, string
+ * optional fields, and a string-array `keywords`; a null optional field counts as absent, as a hand-written
+ * catalog often has it. Extra fields are tolerated. The dashboard lists and
+ * searches these fields as text, so a value of another type would break the page that renders them.
+ */
+export function isCatalogEntry(value: unknown): value is CatalogEntry {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  const text = (field: unknown): boolean => typeof field === 'string' && field !== '';
+  return (
+    text(entry.id) &&
+    text(entry.name) &&
+    text(entry.version) &&
+    OPTIONAL_STRING_FIELDS.every(key => entry[key] == null || typeof entry[key] === 'string') &&
+    (entry.keywords == null ||
+      (Array.isArray(entry.keywords) && entry.keywords.every(word => typeof word === 'string')))
+  );
+}
+
+/** The entry without the optional fields a catalog left null, so none is answered as null where a string is declared. */
+function withoutNulls(entry: CatalogEntry): CatalogEntry {
+  const out: CatalogEntry = { ...entry };
+  for (const key of [...OPTIONAL_STRING_FIELDS, 'keywords'] as const) {
+    if (out[key] === null) delete out[key];
+  }
+  return out;
+}
+
 /** A catalog entry annotated with this instance's install state. */
 export interface CatalogPlugin extends CatalogEntry {
   installed: boolean;
@@ -59,7 +102,7 @@ export function annotateCatalog(
     const installedVersion = byId.get(entry.id) ?? null;
     const cmp = installedVersion === null ? 0 : compareSemver(entry.version, installedVersion);
     return {
-      ...entry,
+      ...withoutNulls(entry),
       installed: installedVersion !== null,
       installedVersion,
       updateAvailable:

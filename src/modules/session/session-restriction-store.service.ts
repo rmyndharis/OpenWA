@@ -27,16 +27,7 @@ export class SessionRestrictionStore {
     // The mirrored gauge is refreshed on every mutation, but an expiry is not a mutation: a timelock
     // that lapses on its own left the gauge claiming a session was restricted while get/size/attachTo
     // all reported it was not. Registering the recount makes the gauge read what the API would say.
-    registerRestrictedSessionRecount(() => this.countInForce());
-  }
-
-  /** How many stored restrictions are still in force right now. */
-  private countInForce(): number {
-    let inForce = 0;
-    for (const sessionId of this.restrictions.keys()) {
-      if (this.inForce(sessionId)) inForce++;
-    }
-    return inForce;
+    registerRestrictedSessionRecount(() => this.size());
   }
 
   /**
@@ -67,7 +58,7 @@ export class SessionRestrictionStore {
    * read says it is not.
    */
   private publishCount(): void {
-    setRestrictedSessionCount(this.countInForce());
+    setRestrictedSessionCount(this.size());
   }
 
   /** The restriction in force, if any. `attachTo` is the projection; this is the raw read. */

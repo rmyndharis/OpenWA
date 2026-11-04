@@ -6,8 +6,10 @@ import { contactApi, sessionApi } from '../../services/api';
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import { Modal } from '../Modal';
-import { MEDIA_UPLOAD_MAX_BYTES } from './ChatComposer';
+import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
 import { captionLength } from '../../utils/bulkMedia';
+import { matches } from '../../utils/chatFilters';
+import { statusFontsFor } from '../../utils/statusFonts';
 
 // Mirrors @ArrayMaxSize(256) on the send-status DTOs — the picker caps selection client-side so the
 // user can't build a list the backend is guaranteed to reject.
@@ -64,10 +66,9 @@ function StatusComposeModal({ sessionId, onClose, onPosted }: Props) {
     retry: false,
   });
   const composeContacts = composeContactsQuery.data ?? [];
-  const composeRecipientSearchLower = composeRecipientSearch.toLowerCase();
   const filteredComposeContacts = composeContacts.filter(c =>
     // Match against every identity field — a named contact must still be findable by number/JID.
-    [c.name, c.pushName, c.number, c.id].some(v => v?.toLowerCase().includes(composeRecipientSearchLower)),
+    matches(composeRecipientSearch, c.name, c.pushName, c.number, c.id),
   );
 
   const resetComposeForm = useCallback(() => {
@@ -196,12 +197,18 @@ function StatusComposeModal({ sessionId, onClose, onPosted }: Props) {
       }
     >
       <div className="compose-type-toggle">
-        <button type="button" className={composeType === 'text' ? 'active' : ''} onClick={() => setComposeType('text')}>
+        <button
+          type="button"
+          className={composeType === 'text' ? 'active' : ''}
+          aria-pressed={composeType === 'text'}
+          onClick={() => setComposeType('text')}
+        >
           {t('chats.status.composeText')}
         </button>
         <button
           type="button"
           className={composeType === 'image' ? 'active' : ''}
+          aria-pressed={composeType === 'image'}
           onClick={() => setComposeType('image')}
         >
           {t('chats.status.composeImage')}
@@ -237,11 +244,10 @@ function StatusComposeModal({ sessionId, onClose, onPosted }: Props) {
               <label htmlFor="scm-3">{t('chats.status.font')}</label>
               <select id="scm-3" value={composeFont} onChange={e => setComposeFont(e.target.value)}>
                 <option value="">{t('chats.status.fontDefault')}</option>
-                {/* The WhatsApp status font enum: 6 is the bold system face; 3–5 don't exist on
-                    the wire and the backend rejects them. */}
-                {[0, 1, 2, 6, 7, 8, 9, 10].map(f => (
-                  <option key={f} value={f}>
-                    {f}
+                {/* The WhatsApp status font enum; 3 to 5 don't exist on the wire and the backend rejects them. */}
+                {statusFontsFor(engineType).map(f => (
+                  <option key={f.id} value={f.id}>
+                    {t(f.labelKey)}
                   </option>
                 ))}
               </select>

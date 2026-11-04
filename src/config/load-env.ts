@@ -1,12 +1,12 @@
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
-import { createLogger } from '../common/services/logger.service';
+import { applyLogLevelFromEnv, createLogger, logFormatFromEnv } from '../common/services/logger.service';
 import { writeSecretFile } from '../common/utils/secret-file';
 import { clearBlankEnv, recordOsEnvKeys, recordPinnedEnvKeys, BLANK_SHADOWED_ENV_KEYS } from './env-precedence';
 
-// LoggerService reads its format and level per write and nothing at import, so it is safe to use
-// before the env files below are merged in.
+// LoggerService reads its format per write, and the loader writes its own lines only once both env
+// files are merged and LOG_LEVEL is applied, so those lines follow what the files configure.
 const logger = createLogger('Bootstrap');
 
 /**
@@ -26,6 +26,27 @@ const logger = createLogger('Bootstrap');
  * body would run too late: ES imports are hoisted and the whole module graph evaluates before the body.
  */
 export function loadEnvironment(): void {
+  const lines: Array<{ level: 'log' | 'warn'; message: string }> = [];
+  try {
+    mergeEnvironment(lines);
+  } finally {
+    // In a finally: a first-run write that fails (a read-only data directory) still reports the lines
+    // that led up to it before the error propagates.
+    applyLogLevelFromEnv();
+    // Reported, not refused: a misspelt format still logs, only not in the format that was asked for.
+    const requestedFormat = process.env.LOG_FORMAT?.trim();
+    const writtenFormat: string = logFormatFromEnv();
+    if (requestedFormat && requestedFormat.toLowerCase() !== writtenFormat) {
+      lines.push({
+        level: 'warn',
+        message: `LOG_FORMAT=${JSON.stringify(requestedFormat)} is not json or pretty; writing ${writtenFormat}, the NODE_ENV default`,
+      });
+    }
+    for (const { level, message } of lines) logger[level](message);
+  }
+}
+
+function mergeEnvironment(lines: Array<{ level: 'log' | 'warn'; message: string }>): void {
   const generatedEnvPath = path.resolve(process.cwd(), 'data', '.env.generated');
   const userEnvPath = path.resolve(process.cwd(), '.env');
 
@@ -61,7 +82,7 @@ export function loadEnvironment(): void {
 
   // 2. User-managed .env (does not override real process env)
   if (fs.existsSync(userEnvPath)) {
-    logger.log(`Loading .env from: ${userEnvPath}`);
+    lines.push({ level: 'log', message: `Loading .env from: ${userEnvPath}` });
     dotenv.config({ path: userEnvPath, override: false, quiet: true });
   }
 
@@ -73,20 +94,22 @@ export function loadEnvironment(): void {
 
   // 3. Dashboard-saved config (does not override .env or process env)
   if (fs.existsSync(generatedEnvPath)) {
-    logger.log(`Loading saved configuration from: ${generatedEnvPath}`);
+    lines.push({ level: 'log', message: `Loading saved configuration from: ${generatedEnvPath}` });
     const { parsed = {} } = dotenv.config({ path: generatedEnvPath, override: false, quiet: true });
     // Compose forwards DATABASE_SSL*, and templates older than 0.18 set DATABASE_SSL=false in .env, so
     // a stale line can outrank TLS turned on in the dashboard. The override stands; the log names it.
     for (const key of ['DATABASE_SSL', 'DATABASE_SSL_REJECT_UNAUTHORIZED']) {
       if (parsed[key] !== undefined && process.env[key] !== parsed[key]) {
-        logger.warn(
-          `${key}=${process.env[key]} from the environment or .env overrides ${key}=${parsed[key]} ` +
+        lines.push({
+          level: 'warn',
+          message:
+            `${key}=${process.env[key]} from the environment or .env overrides ${key}=${parsed[key]} ` +
             'saved in data/.env.generated (Dashboard > Infrastructure)',
-        );
+        });
       }
     }
   } else {
-    logger.log('First run detected, creating default configuration...');
+    lines.push({ level: 'log', message: 'First run detected, creating default configuration...' });
     // Create minimal .env.generated with sensible defaults
     const minimalConfig = `# OpenWA Configuration
 # Generated automatically on first run
@@ -109,8 +132,8 @@ STORAGE_LOCAL_PATH=./data/media
 
 # Docker Profiles: none (minimal setup)
 `;
-    writeSecretFile(generatedEnvPath, minimalConfig);
-    logger.log(`Created default configuration at: ${generatedEnvPath}`);
+    writeSecretFile(generatedEnvPath, minimalConfig, message => lines.push({ level: 'warn', message }));
+    lines.push({ level: 'log', message: `Created default configuration at: ${generatedEnvPath}` });
     dotenv.config({ path: generatedEnvPath, override: false, quiet: true });
   }
 }

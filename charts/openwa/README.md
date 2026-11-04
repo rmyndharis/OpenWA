@@ -38,8 +38,9 @@ Service targetPort are pinned to it) — service.port changes the Service port.
 
 The kubelet startup probe allows `startupProbe.periodSeconds` x (`startupProbe.failureThreshold` - 1)
 seconds for a boot, 295 by default. The first boot after an upgrade can build indexes on a large
-`messages` table before the port opens: raise `startupProbe.failureThreshold`, or run the migrations
-first ([docs/14-migration-guide.md](../../docs/14-migration-guide.md), section 14.5).
+`messages` table and convert its legacy message types before the port opens: raise
+`startupProbe.failureThreshold`, or run the migrations first
+([docs/14-migration-guide.md](../../docs/14-migration-guide.md), section 14.5).
 
 Upgrade with `helm upgrade openwa ./charts/openwa --reset-then-reuse-values` (Helm 3.14 or later), or with
 `-f values.yaml`. Plain `--reuse-values` renders the new templates with the old release's defaults, which

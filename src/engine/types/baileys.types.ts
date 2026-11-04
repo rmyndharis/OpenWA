@@ -46,7 +46,6 @@ export interface BaileysAdapterConfig {
   dbSessionId: string;
   authDir: string;
   proxyUrl?: string;
-  proxyType?: 'http' | 'https' | 'socks4' | 'socks5';
   /** Persisted store for reply/forward/react/delete. Provided by the plugin; the four ops require it. */
   messageStore?: BaileysMessageStore;
   /** Persisted, cross-session lid->phone resolution table. Backs lid resolution beyond the in-memory map. */

@@ -10,6 +10,7 @@ import type { OpenWAClient } from '../client.js';
 import type {
   UpsertContactRequest,
   CheckNumberResponse,
+  ContactLidResponse,
   ContactPhoneResponse,
   ContactRecord,
   ProfilePictureResponse,
@@ -75,6 +76,19 @@ export class ContactsResource {
     return this.client.request<ContactPhoneResponse>({
       method: 'GET',
       path: `/api/sessions/${encodeSegment(sessionId)}/contacts/${encodeSegment(contactId)}/phone`,
+    });
+  }
+
+  /**
+   * Look up the `@lid` WhatsApp holds for a phone number, without sending a message. `lid` is `null` when WhatsApp
+   * holds none, which an unregistered number also answers. The lookup can query WhatsApp (Baileys on every call,
+   * whatsapp-web.js when the page holds no LID), so bulk lookups put the linked account at risk. Requires an
+   * OPERATOR-level key.
+   */
+  lid(sessionId: string, number: string): Promise<ContactLidResponse> {
+    return this.client.request<ContactLidResponse>({
+      method: 'GET',
+      path: `/api/sessions/${encodeSegment(sessionId)}/contacts/${encodeSegment(number)}/lid`,
     });
   }
 

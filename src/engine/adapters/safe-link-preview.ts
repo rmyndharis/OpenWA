@@ -142,7 +142,8 @@ async function readCapped(response: Response, maxBytes: number): Promise<string>
   for (;;) {
     const chunk = await reader.read();
     if (chunk.done) break;
-    const value: Uint8Array = chunk.value;
+    // The chunk that reaches the cap may run past it: only the bytes up to the cap are kept.
+    const value: Uint8Array = chunk.value.subarray(0, Math.max(0, maxBytes - read));
     read += value.byteLength;
     out += decoder.decode(value, { stream: true });
     if (read >= maxBytes) {

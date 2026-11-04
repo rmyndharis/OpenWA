@@ -40,19 +40,33 @@ export const queryKeys = {
 
 // ── Session Queries ───────────────────────────────────────────────────
 
-export function useSessionsQuery() {
+// `refetchInterval` is for a page that shows live session state with no socket of its own; the pages that read the list
+// only to pick a session leave it out. A stale query refetches only on mount, focus or an invalidation. The poll stops
+// while its last read was refused (403): a route that refuses the key (one restricted to selected chats is refused
+// both reads) would otherwise be refused, and audited as a failed authentication, every interval. A read that
+// succeeds again, on focus or mount, starts it again. Any other failure (a proxy 502 while the gateway restarts, a
+// timeout) keeps the poll going, so the page does not stay stale with no error shown.
+const pollWhileReadable = (interval?: number) =>
+  interval === undefined
+    ? undefined
+    : (query: { state: { error: (Error & { status?: number }) | null } }) =>
+        query.state.error?.status === 403 ? false : interval;
+
+export function useSessionsQuery(refetchInterval?: number) {
   return useQuery({
     queryKey: queryKeys.sessions,
     queryFn: sessionApi.list,
     staleTime: 30_000,
+    refetchInterval: pollWhileReadable(refetchInterval),
   });
 }
 
-export function useSessionStatsQuery() {
+export function useSessionStatsQuery(refetchInterval?: number) {
   return useQuery({
     queryKey: queryKeys.sessionStats,
     queryFn: sessionApi.getStats,
     staleTime: 30_000,
+    refetchInterval: pollWhileReadable(refetchInterval),
   });
 }
 
@@ -68,7 +82,7 @@ export function useSessionGroupsQuery(sessionId: string, enabled: boolean) {
 export function useSessionChatsQuery(sessionId: string, enabled: boolean) {
   return useQuery({
     queryKey: queryKeys.sessionChats(sessionId),
-    queryFn: () => sessionApi.getChats(sessionId),
+    queryFn: ({ signal }) => sessionApi.getChats(sessionId, signal),
     enabled: enabled && !!sessionId,
     staleTime: 60_000,
   });

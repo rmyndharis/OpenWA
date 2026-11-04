@@ -1,10 +1,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { DataSource, DeepPartial, Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
-
-jest.mock('archiver', () => ({ default: jest.fn() }));
 
 import { StorageService } from '../../common/storage/storage.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
@@ -81,6 +79,73 @@ describe('StatusStoreService (ingest / list / getMedia)', () => {
     expect(created).toBe(false);
     const stored = (await repository.find({ where: { sessionId: 'sess-race' } })).map(row => row.waStatusId).sort();
     expect(stored).toEqual(['dup', 'other']);
+  });
+
+  // Left open, the scope an ingest captures for itself keeps its session's write state from ever being released.
+  it('closes the scope it captures for itself, for a new status and for one already stored', async () => {
+    const closes: jest.SpyInstance[] = [];
+    const capture = service.captureWrites.bind(service);
+    const spy = jest.spyOn(service, 'captureWrites').mockImplementation(sessionId => {
+      const scope = capture(sessionId);
+      closes.push(jest.spyOn(scope, 'close'));
+      return scope;
+    });
+    const status = {
+      waStatusId: 'scope-close',
+      contactJid: '628111@c.us',
+      type: 'text' as const,
+      caption: 'hi',
+      postedAt: Date.now(),
+    };
+    try {
+      expect((await service.ingest('sess-scope', status)).created).toBe(true);
+      expect((await service.ingest('sess-scope', status)).created).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(closes).toHaveLength(2);
+    for (const close of closes) expect(close).toHaveBeenCalled();
+  });
+
+  it('does not publish media or recreate a row removed while storage is pending', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const put = storageService.putFile.bind(storageService);
+    let key = '';
+    const spy = jest.spyOn(storageService, 'putFile').mockImplementationOnce(async (file, bytes) => {
+      key = file;
+      await put(file, bytes);
+      entered();
+      await gate;
+    });
+    const pending = service.ingest('removed-status', {
+      waStatusId: 'pending-media',
+      contactJid: '628111@c.us',
+      type: 'image',
+      postedAt: Date.now(),
+      media: { mimetype: 'image/png', data: 'dGlueQ==', sizeBytes: 4 },
+    });
+    try {
+      await ready;
+      await repository.delete({ sessionId: 'removed-status' });
+    } finally {
+      release();
+    }
+    const result = await pending;
+    spy.mockRestore();
+    expect(result.created).toBe(false);
+    expect(result.row.mediaOmitted).toBe(true);
+    expect(result.row.mediaPath).toBeUndefined();
+    expect(await repository.countBy({ sessionId: 'removed-status' })).toBe(0);
+    expect(await service.getMedia('removed-status', 'pending-media')).toBeNull();
+    await expect(storageService.getFile(key)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('ingest writes a text row with expiresAt = postedAt + 24h, flagged as created', async () => {
@@ -305,13 +370,7 @@ describe('StatusStoreService (ingest / list / getMedia)', () => {
     // The in-memory row returned here is exactly what dispatchStatusReceived sends. Every other
     // omission path sets omitReason, so leaving it unset made a real media loss indistinguishable
     // from an unexplained omission — and nothing retries it.
-    const saveSpy = jest.spyOn(repository, 'save');
-    let calls = 0;
-    saveSpy.mockImplementation((row: DeepPartial<StatusUpdate>) => {
-      calls += 1;
-      if (calls === 2) return Promise.reject(new Error('db blip')); // the post-write update
-      return Promise.resolve(row as DeepPartial<StatusUpdate> & StatusUpdate);
-    });
+    const updateSpy = jest.spyOn(repository, 'update').mockRejectedValueOnce(new Error('db blip'));
     try {
       const { row } = await service.ingest('sess', {
         waStatusId: 'w-row-fail',
@@ -324,7 +383,7 @@ describe('StatusStoreService (ingest / list / getMedia)', () => {
       expect(row.omitReason).toBe('write_failed');
       expect(row.mediaPath).toBeFalsy();
     } finally {
-      saveSpy.mockRestore();
+      updateSpy.mockRestore();
     }
   });
 
@@ -572,8 +631,8 @@ describe('StatusStoreService contact identity (read-time lid resolution)', () =>
     expect(ids).toEqual(['own-lid', 'own-phone']);
   });
 
-  it('listByContact forward-resolves a lid the store only holds in its table, not its cache', async () => {
-    const table = [{ lid: '111', phone: '628111' }];
+  it.each([true, false])('listByContact checks table origin with an empty cache (reported=%s)', async isReported => {
+    const table = [{ lid: '111', phone: '628111', isReported }];
     const store = new LidMappingStoreService({
       find: () => Promise.resolve([]),
       findOne: ({ where }: { where: { lid: string } }) => Promise.resolve(table.find(r => r.lid === where.lid) ?? null),
@@ -582,7 +641,7 @@ describe('StatusStoreService contact identity (read-time lid resolution)', () =>
     await svc.ingest('sess', { waStatusId: 'l6', contactJid: '628111@c.us', type: 'text', postedAt: Date.now() });
 
     const out = await svc.listByContact('sess', '111@lid');
-    expect(out).toHaveLength(1);
+    expect(out).toHaveLength(isReported ? 1 : 0);
   });
 
   it('never resolves phone-shaped JIDs through the lid map (digit-collision guard)', async () => {
@@ -882,22 +941,13 @@ describe('StatusStoreService.sweepOrphanedMedia', () => {
     expect(fs.existsSync(path.join(baseDir, 'media', 'statuses', 'sess', 'orphan.jpg'))).toBe(false);
   });
 
-  it('enumerates past the listFiles() cap so orphans beyond it are still reaped', async () => {
-    // listFiles() truncates at STORAGE_LIST_MAX_FILES (a per-call DoS guard, not a completeness
-    // contract); the sweep reconciles against the FULL store, so it streams iterateFiles() instead.
-    process.env.STORAGE_LIST_MAX_FILES = '5';
-    try {
-      for (let i = 0; i < 8; i++) writeFile(`statuses/sess/orphan-${i}.jpg`, 'orphan');
-      // The capped call the sweep used to make would see only 5 of the 8 orphans.
-      expect((await storageService.listFiles()).filter(f => f.startsWith('statuses/'))).toHaveLength(5);
+  it('reaps every orphan under its prefix, not just the first few', async () => {
+    for (let i = 0; i < 8; i++) writeFile(`statuses/sess/orphan-${i}.jpg`, 'orphan');
 
-      const t0 = Date.now();
-      expect(await service.sweepOrphanedMedia(t0)).toBe(0); // first sighting starts the grace clock
-      expect(await service.sweepOrphanedMedia(t0 + 61 * 60 * 1000)).toBe(8); // all 8, not the capped 5
-      expect(fs.readdirSync(path.join(baseDir, 'media', 'statuses', 'sess'))).toHaveLength(0);
-    } finally {
-      delete process.env.STORAGE_LIST_MAX_FILES;
-    }
+    const t0 = Date.now();
+    expect(await service.sweepOrphanedMedia(t0)).toBe(0); // first sighting starts the grace clock
+    expect(await service.sweepOrphanedMedia(t0 + 61 * 60 * 1000)).toBe(8);
+    expect(fs.readdirSync(path.join(baseDir, 'media', 'statuses', 'sess'))).toHaveLength(0);
   });
 });
 
@@ -958,7 +1008,38 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
     }
   });
 
-  it('runs the orphan sweep once at startup and on its own (slower) cadence, cleared on destroy', () => {
+  it('skips an orphan sweep tick while the previous sweep is still running', async () => {
+    const { repo, storage } = mockDeps();
+    const service = new StatusStoreService(
+      repo,
+      storage,
+      fakeConfigService({ 'status.orphanSweepIntervalMs': 60_000 }),
+    );
+
+    jest.useFakeTimers();
+    let release: () => void = () => undefined;
+    jest.spyOn(service, 'purgeExpired').mockResolvedValue(0);
+    const sweepSpy = jest
+      .spyOn(service, 'sweepOrphanedMedia')
+      .mockImplementationOnce(() => new Promise<number>(resolve => (release = () => resolve(0))))
+      .mockResolvedValue(0);
+    try {
+      service.onModuleInit();
+      await jest.advanceTimersByTimeAsync(60_000);
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(sweepSpy).toHaveBeenCalledTimes(1);
+
+      release();
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(sweepSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      service.onModuleDestroy();
+      release();
+      jest.useRealTimers();
+    }
+  });
+
+  it('runs the orphan sweep once at startup and on its own (slower) cadence, cleared on destroy', async () => {
     const { repo, storage } = mockDeps();
     const service = new StatusStoreService(repo, storage, fakeConfigService());
 
@@ -970,21 +1051,21 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
 
       // The TTL purge fires every 15 min; the orphan sweep only on its own 1h interval.
       sweepSpy.mockClear();
-      jest.advanceTimersByTime(15 * 60 * 1000);
+      await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
       expect(sweepSpy).not.toHaveBeenCalled();
-      jest.advanceTimersByTime(45 * 60 * 1000);
+      await jest.advanceTimersByTimeAsync(45 * 60 * 1000);
       expect(sweepSpy).toHaveBeenCalledTimes(1);
 
       service.onModuleDestroy();
       sweepSpy.mockClear();
-      jest.advanceTimersByTime(60 * 60 * 1000);
+      await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
       expect(sweepSpy).not.toHaveBeenCalled();
     } finally {
       jest.useRealTimers();
     }
   });
 
-  it('honors a configured status.orphanSweepIntervalMs override', () => {
+  it('honors a configured status.orphanSweepIntervalMs override', async () => {
     const { repo, storage } = mockDeps();
     const service = new StatusStoreService(
       repo,
@@ -997,7 +1078,7 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
       const sweepSpy = jest.spyOn(service, 'sweepOrphanedMedia').mockResolvedValue(0);
       service.onModuleInit();
       sweepSpy.mockClear();
-      jest.advanceTimersByTime(5 * 60 * 1000);
+      await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
       expect(sweepSpy).toHaveBeenCalledTimes(1);
       service.onModuleDestroy();
     } finally {

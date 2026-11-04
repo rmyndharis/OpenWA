@@ -125,10 +125,17 @@ jobs:
         # the Dockerfile uses: this npm runs while the job can mint a publish credential, so it must
         # not float to whatever version is current when the tag is pushed.
         run: |
-          npm install -g npm@12.1.0
+          npm install -g npm@12.2.1
+          npm_bundle_dir="$(npm root --global)/npm/node_modules"
+          node -e "if (require(process.argv[1]).version !== '6.29.0') throw new Error('Recheck npm Undici replacement');" "$npm_bundle_dir/undici/package.json"
+          npm_http_patch_dir=$(mktemp -d)
+          npm install --prefix "$npm_http_patch_dir" --no-save --package-lock=false --ignore-scripts --no-audit --fund=false undici@6.29.1
+          rm -rf "$npm_bundle_dir/undici"
+          mv "$npm_http_patch_dir/node_modules/undici" "$npm_bundle_dir/undici"
+          rm -rf "$npm_http_patch_dir"
           npm --version
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: js-sdk-package
           path: package/

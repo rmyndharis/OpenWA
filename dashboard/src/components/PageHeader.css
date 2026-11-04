@@ -55,7 +55,7 @@
 /* Mobile Responsive: stack as title -> subtitle -> actions */
 @media (max-width: 768px) {
   .page-header {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       'title'
       'subtitle'
@@ -69,6 +69,7 @@
 
   .page-header__actions {
     justify-self: stretch;
+    flex-wrap: wrap;
     margin-top: 0.25rem;
   }
 
@@ -81,7 +82,7 @@
   .page-header__actions > button,
   .page-header__actions > .btn-primary,
   .page-header__actions > .btn-secondary {
-    width: 100%;
+    flex: 1 1 0;
     justify-content: center;
   }
 }

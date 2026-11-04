@@ -10,13 +10,16 @@ interface RunnerOpts {
   versionNum?: number; // server_version_num, e.g. 150000 (PG 15) or 120000 (PG 12)
   extInstalled?: boolean; // is pgcrypto already present in pg_extension?
   createExtensionThrows?: boolean; // does CREATE EXTENSION fail (unprivileged role)?
+  extSchema?: string; // a schema pgcrypto sits in that the connection's search_path does not reach
 }
 
 function makeQueryRunner(type: string, existingTables: Set<string>, opts: RunnerOpts = {}) {
-  const { versionNum = 150000, extInstalled = false, createExtensionThrows = false } = opts;
+  const { versionNum = 150000, extInstalled = false, createExtensionThrows = false, extSchema } = opts;
   const query = jest.fn((sql: string) => {
     const s = String(sql);
     if (/server_version_num/i.test(s)) return Promise.resolve([{ num: versionNum }]);
+    if (/to_regprocedure/i.test(s)) return Promise.resolve([{ missing: extSchema !== undefined }]);
+    if (/pg_namespace/i.test(s)) return Promise.resolve([{ schema: extSchema, path: '"$user", public' }]);
     if (/pg_extension/i.test(s)) return Promise.resolve(extInstalled ? [{ ok: 1 }] : []);
     if (/CREATE EXTENSION/i.test(s) && createExtensionThrows) {
       return Promise.reject(new Error('permission denied to create extension "pgcrypto"'));
@@ -87,6 +90,19 @@ describe('AddUuidDefaultsForPostgres migration', () => {
     await expect(migration.up(qr as unknown as QueryRunner)).rejects.toThrow(/pgcrypto/i);
     // Aborted before any ALTER — no half-applied default.
     expect(sqlOf(qr).some(q => /gen_random_uuid/i.test(q))).toBe(false);
+  });
+
+  it('on PG <= 12 with pgcrypto in a schema off the search_path, names that schema and sets no DEFAULT', async () => {
+    const qr = makeQueryRunner('postgres', new Set(ALL_TABLES), {
+      versionNum: 120000,
+      extInstalled: true,
+      extSchema: 'extensions',
+    });
+    await expect(migration.up(qr as unknown as QueryRunner)).rejects.toThrow(
+      /schema "extensions".*ALTER EXTENSION pgcrypto SET SCHEMA public/,
+    );
+    expect(sqlOf(qr).some(q => /CREATE EXTENSION/i.test(q))).toBe(false);
+    expect(sqlOf(qr).some(q => /SET DEFAULT gen_random_uuid/i.test(q))).toBe(false);
   });
 
   it('skips tables that do not exist', async () => {

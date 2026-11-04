@@ -29,9 +29,10 @@ public record WebhookDeliveryFailure(
     /** ISO timestamp of when the failure was recorded. */
     String createdAt,
     /**
-     * True when the row still holds the event data and can be replayed with {@code
-     * redriveDeliveryFailures}: a terminal row (attempts &gt; 0) recorded while the gateway's
-     * WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS is above 0, until that window passes.
+     * True when the row still holds the event data and its webhook still exists in the same session: a
+     * terminal row (attempts &gt; 0) recorded while the gateway's WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS
+     * is above 0, until that window passes. {@code redriveDeliveryFailures} replays it while that webhook
+     * is active and subscribed to the event.
      */
     boolean replayable) {
     /** Preserve construction by clients compiled against the response before replay support. */

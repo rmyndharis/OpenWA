@@ -1,11 +1,15 @@
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { Message } from '../message/entities/message.entity';
+import { updateMessageMetadata } from '../message/message-metadata';
 import { StorageService } from '../../common/storage/storage.service';
 import { sweepOrphanedFiles } from '../../common/storage/orphan-sweep';
+import { startGuardedInterval } from '../../common/utils/guarded-interval';
+import { extFromMimetype } from '../../common/media/mime-ext';
 import { createLogger } from '../../common/services/logger.service';
 
 /** Storage key prefix owned by the chat-media archive; the media bucket is shared with statuses. */
@@ -28,18 +32,10 @@ const PURGE_MAX_BATCHES_PER_RUN = 200;
 /** Archive keys reconciled per orphan-sweep query — bounds peak memory independently of store size. */
 const SWEEP_CHUNK_SIZE = 500;
 
-/** Subtypes whose registered mimetype name differs from the conventional file extension. */
-const MIME_SUBTYPE_EXT_OVERRIDES: Record<string, string> = { jpeg: 'jpg', quicktime: 'mov' };
-
-/** File extension to store a blob under, derived from its mimetype; 'bin' when unrecognized. */
-function extFromMimetype(mimetype: string): string {
-  const subtype = mimetype.split('/')[1]?.split(';')[0]?.trim().toLowerCase();
-  if (!subtype || !/^[a-z0-9]+$/.test(subtype)) return 'bin';
-  return MIME_SUBTYPE_EXT_OVERRIDES[subtype] ?? subtype;
-}
-
 /** `metadata.media.data` holding a remote URL (a URL-based send) rather than base64 bytes. */
 const MEDIA_URL_POINTER = /^https?:\/\//i;
+/** Largest stored metadata the purge checks for an archived marker in bulk; a larger one is checked on its own. */
+const ARCHIVED_MARKER_MAX_METADATA_BYTES = 64 * 1024;
 
 /** The inline media shape carried on a persisted row's `metadata.media`. */
 interface InlineMedia {
@@ -70,14 +66,14 @@ interface InlineMedia {
 @Injectable()
 export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('ChatMediaArchiveService');
-  private purgeTimer?: ReturnType<typeof setInterval>;
-  private orphanSweepTimer?: ReturnType<typeof setInterval>;
+  /** Stops the retention purge and the orphan sweep; set while the service is running. */
+  private stopMaintenance: Array<() => void> = [];
   /** First sweep sighting (epoch ms) of each unreferenced archive file, for the grace window. */
   private readonly orphanFirstSeenAt = new Map<string, number>();
   /** Last row id the retention purge walked past; the next run resumes after it. */
   private purgeCursor?: string;
-  /** A purge is still running, so the next tick is skipped rather than stacked on top of it. */
-  private purging = false;
+  /** Set on module destroy: the schedule stops, and a purge already running stops at its next check. */
+  private stopping = false;
 
   constructor(
     @InjectRepository(Message, 'data')
@@ -96,34 +92,33 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
-    const runPurge = (): void => {
-      if (this.purging) return;
-      this.purging = true;
-      this.purgeExpired(Date.now())
-        .catch(err => this.logger.error('Chat media purge failed', err instanceof Error ? err.stack : String(err)))
-        .finally(() => (this.purging = false));
-    };
-    runPurge(); // sweep once at startup
-    this.purgeTimer = setInterval(runPurge, PURGE_INTERVAL_MS);
-    this.purgeTimer.unref?.();
-
-    const runOrphanSweep = (): void => {
-      this.sweepOrphanedMedia(Date.now()).catch(err =>
-        this.logger.error('Chat media orphan sweep failed', err instanceof Error ? err.stack : String(err)),
-      );
-    };
-    runOrphanSweep(); // the first pass only records first-seen; nothing is deleted before the grace window
+    const failed = (what: string) => (err: unknown) =>
+      this.logger.error(`${what} failed`, err instanceof Error ? err.stack : String(err));
     const sweepIntervalMs = this.configService.get<number>(
       'chatMedia.orphanSweepIntervalMs',
       DEFAULT_ORPHAN_SWEEP_INTERVAL_MS,
     );
-    this.orphanSweepTimer = setInterval(runOrphanSweep, sweepIntervalMs);
-    this.orphanSweepTimer.unref?.();
+    this.stopMaintenance = [
+      // Once at startup, then on a timer; a pass that outlasts its interval is not stacked on.
+      startGuardedInterval(() => this.purgeExpired(Date.now()), PURGE_INTERVAL_MS, failed('Chat media purge')),
+      // The first pass only records first-seen; nothing is deleted before the grace window.
+      startGuardedInterval(
+        () => this.sweepOrphanedMedia(Date.now()),
+        sweepIntervalMs,
+        failed('Chat media orphan sweep'),
+      ),
+    ];
   }
 
   onModuleDestroy(): void {
-    if (this.purgeTimer) clearInterval(this.purgeTimer);
-    if (this.orphanSweepTimer) clearInterval(this.orphanSweepTimer);
+    this.stopping = true;
+    for (const stop of this.stopMaintenance) stop();
+    this.stopMaintenance = [];
+  }
+
+  /** The gateway is stopping or the data source has closed: a purge in flight keeps its remaining rows. */
+  private get closed(): boolean {
+    return this.stopping || this.repository.manager?.connection?.isInitialized === false;
   }
 
   /**
@@ -317,12 +312,18 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
         this.purgeCursor = after;
         break;
       }
-      // Rows whose delete failed keep their columns; they are retried once the walk wraps around.
-      await this.repository.update(clearableIds, {
-        mediaPath: null as unknown as undefined,
-        mediaMimetype: null as unknown as undefined,
-      });
-      cleared += clearableIds.length;
+      // Rows whose delete failed keep their columns; they are retried once the walk wraps around. So does a row
+      // whose archived marker could not be dropped, which the next run then retries with the file already gone.
+      const markerKept = await this.dropArchivedMarkers(clearableIds);
+      const clearedIds = clearableIds.filter(id => !markerKept.has(id));
+      if (clearedIds.length > 0) {
+        await this.repository.update(clearedIds, {
+          mediaPath: null as unknown as undefined,
+          mediaMimetype: null as unknown as undefined,
+        });
+      }
+      cleared += clearedIds.length;
+      if (this.closed) break;
 
       // A short batch means the backlog is drained and the next run starts over from the lowest id;
       // a run that hits the batch cap resumes where it stopped.
@@ -332,6 +333,67 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
 
     if (cleared > 0) this.logger.log(`Chat media retention purge cleared ${cleared} file(s)`);
     return cleared;
+  }
+
+  /**
+   * Under MESSAGE_INLINE_MEDIA=archive a row also points at its file through `metadata.media.archived`, which a
+   * client reads as "the bytes are behind the media route". Drop it once the file is gone, through the same
+   * compare-and-set every metadata writer uses, so a reaction written meanwhile survives. An archive-only row holds
+   * no base64, but a long quoted text or many reactions can still take its metadata past the size checked in bulk,
+   * and nothing caps it: reactions accumulate per sender and a quoted body is whatever the sender sent. A row over
+   * that size is usually an inline copy of the default mode, which never carries the marker. The bulk statement
+   * reads only its size, through OCTET_LENGTH, which SQLite answers from the record header (testing the value
+   * itself there made SQLite load it whole). It is then looked up on its own in the database instead of being read
+   * and rewritten by the compare-and-set. That lookup scans the row's whole metadata, once per expired row, and
+   * better-sqlite3 answers it without a turn of the event loop, so the loop gets one before each lookup rather than
+   * being held for the batch. A shutdown that lands in one of those turns stops the loop and leaves the remaining
+   * rows for the next run. Returns the ids whose marker is still there.
+   */
+  private async dropArchivedMarkers(ids: string[]): Promise<Set<string>> {
+    const marker = '%"archived":true%';
+    const candidates = await this.repository
+      .createQueryBuilder('m')
+      .select('m.id', 'id')
+      .addSelect('OCTET_LENGTH(m.metadata)', 'bytes')
+      .where('m.id IN (:...ids)', { ids })
+      .andWhere(
+        'CASE WHEN OCTET_LENGTH(m.metadata) <= :maxBytes THEN m.metadata LIKE :marker ' +
+          'ELSE OCTET_LENGTH(m.metadata) IS NOT NULL END',
+        { maxBytes: ARCHIVED_MARKER_MAX_METADATA_BYTES, marker },
+      )
+      .getRawMany<{ id: string; bytes: number | string }>();
+    const kept = new Set<string>();
+    for (const [index, { id, bytes }] of candidates.entries()) {
+      const large = Number(bytes) > ARCHIVED_MARKER_MAX_METADATA_BYTES;
+      if (large) await yieldToEventLoop();
+      if (this.closed) {
+        for (const rest of candidates.slice(index)) kept.add(rest.id);
+        break;
+      }
+      try {
+        if (large) {
+          const marked = await this.repository
+            .createQueryBuilder('m')
+            .where('m.id = :id', { id })
+            .andWhere('m.metadata LIKE :marker', { marker })
+            .getExists();
+          if (!marked) continue;
+        }
+        await updateMessageMetadata(this.repository, { id }, metadata => {
+          const media = metadata.media as Record<string, unknown> | undefined;
+          if (!media || !('archived' in media)) return metadata;
+          const { archived: _archived, ...rest } = media;
+          void _archived;
+          return { ...metadata, media: rest };
+        });
+      } catch (error) {
+        kept.add(id);
+        this.logger.warn(`Failed to drop the archived marker of message ${id}; keeping its row for the next sweep`, {
+          error: String(error),
+        });
+      }
+    }
+    return kept;
   }
 
   /**

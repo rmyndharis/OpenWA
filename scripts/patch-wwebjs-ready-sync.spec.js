@@ -96,6 +96,7 @@ test('CLI: unrecognised tree exits 1 bare and 0 under --best-effort', () => {
   fs.mkdirSync(path.join(root, 'scripts'));
   const script = path.join(root, 'scripts', 'patch-wwebjs-ready-sync.js');
   fs.copyFileSync(path.join(__dirname, 'patch-wwebjs-ready-sync.js'), script);
+  fs.copyFileSync(path.join(__dirname, 'atomic-write.js'), path.join(path.dirname(script), 'atomic-write.js'));
   const clientDir = path.join(root, 'node_modules', 'whatsapp-web.js', 'src');
   fs.mkdirSync(clientDir, { recursive: true });
   fs.writeFileSync(path.join(clientDir, 'Client.js'), 'class Client {}\n');
@@ -128,4 +129,16 @@ test('replacements carry the contract the adapter relies on', () => {
     2,
     'level-check fires the same handler the edge fires',
   );
+});
+
+test('applies to a copy of the installed whatsapp-web.js, or finds it applied there already', () => {
+  // The fixtures above are built from this patcher's own find strings, so they pass just the same once the
+  // library stops containing them. A copy of the installed file does not.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwjs-ready-installed-'));
+  const file = path.join('src', 'Client.js');
+  fs.mkdirSync(path.join(dir, path.dirname(file)), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js', file), path.join(dir, file));
+  applyReadySyncPatch(dir);
+  assert.equal(isApplied(dir), true);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

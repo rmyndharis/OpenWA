@@ -40,8 +40,8 @@ timeline
                  : Bundled Traefik removed
                  : Bring-your-own reverse proxy
 
-    section v0.5.0-v0.24.x - Incremental Releases (Released)
-        Jun-Sep 2026 : Integration Fabric provisioning
+    section v0.5.0-v0.27.x - Incremental Releases (Released)
+        Jun-Oct 2026 : Integration Fabric provisioning
                      : Java & Go SDKs
                      : Live message edits
                      : Chat kind discriminator & status store
@@ -82,7 +82,7 @@ timeline
 | v0.10.x | Chat `kind` discriminator, 24-hour status store, Docker Hub dual-publish                             | ✅ Released |
 | v0.11.0 | SDK poll / profile-picture / status-media coverage, security & reliability hardening                 | ✅ Released |
 | v0.12.x | Session/engine decomposition (`EngineRegistry`), plugin lifecycle and configuration-precedence fixes | ✅ Released |
-| v0.13+  | Incremental releases through v0.24.x; see `CHANGELOG.md`                                             | ✅ Released |
+| v0.13+  | Incremental releases through v0.27.x; see `CHANGELOG.md`                                             | ✅ Released |
 | v1.0.0  | Enterprise Ready (K8s Operator, multi-tenant)                                                        | 📋 Planned  |
 
 > SDK / docs-site / observability features are delivered **incrementally** as they're additive — they no
@@ -529,10 +529,10 @@ flowchart LR
         V020[v0.2.0 - i18n, Real-time Chats,<br/>Webhook Delivery-state & Hardening]
     end
 
-    subgraph v0.x["✅ Released (v0.3-v0.24.x)"]
+    subgraph v0.x["✅ Released (v0.3-v0.27.x)"]
         V030[v0.3.0 - Engine Pluggability<br/>Baileys engine + plugin layer]
         V040[v0.4.0 - Single-Port Deployment<br/>Dashboard on API port, no bundled Traefik]
-        V011[v0.5.0-v0.24.x - Incremental releases<br/>see the CHANGELOG]
+        V011[v0.5.0-v0.27.x - Incremental releases<br/>see the CHANGELOG]
     end
 
     subgraph v1.x["v1.x Series - Enterprise"]
@@ -657,13 +657,24 @@ PR, and pushing the tag from `main` hands everything else to `.github/workflows/
 - Pick the version per [15.2](#152-version-numbering). Pre-1.0, a release whose `[Unreleased]`
   section has **any** breaking entry or an **Upgrade notes** heading is a MINOR; patch releases
   carry neither.
+- The amd64 image's Chrome for Testing pin (`chrome@<version>` in the `Dockerfile`) is the current
+  Stable in `last-known-good-versions.json`. Nothing else refreshes it and no image scan sees it, so
+  bump it on `main` first, as the comment above that install describes.
+- Name the version wherever the text was written before it was known, in a docs commit on `main` ahead of
+  the release commit: every `next` in the Release column of the Known Upgrade Hazards table in
+  `docs/14-migration-guide.md`, one for each hazard the release added, and every clause that says
+  "after OpenWA <last>", "the release after <last>" or "newer than <last>", such as line 3 of
+  `sdk/README.md`, `docs/18-sdk-design.md` and the SDK READMEs, which becomes "<version> or later".
+  `npm run test:docs` fails on a `next` row once `[Unreleased]` is empty, so a release commit that
+  skips this fails its own CI.
 
 ### The release commit
 
-Five files change on a patch. A MINOR changes six: `SECURITY.md` names the supported minor in its
+Five files change on a patch. A MINOR changes seven: `SECURITY.md` names the supported minor in its
 prose, its table row and its `< X.Y` lower bound, and `npm run check:versions` fails without it — a
-gate that runs on the pushed tag, so omitting it means deleting the tag and cutting again. Nothing
-else belongs in this commit.
+gate that runs on the pushed tag, so omitting it means deleting the tag and cutting again. This roadmap's
+released range (`v0.<minor>.x`, in four places) moves to the new minor, or `npm run test:docs` fails.
+Nothing else belongs in this commit.
 
 ```bash
 npm version --no-git-tag-version <version>   # package.json + package-lock.json
@@ -714,9 +725,9 @@ cd dashboard && npm run lint && npm run format:check && npm run typecheck && npm
 Docker), and `docker` waits on `test-postgres`. Run those locally when the release touches their files.
 
 ```bash
-# SECURITY.md only on a MINOR; the chart's own `version:` bumps a patch alongside `appVersion`.
+# SECURITY.md and docs/15 only on a MINOR; the chart's own `version:` bumps a patch alongside `appVersion`.
 git switch -c chore/release-<version>
-git add package.json package-lock.json openapi.json CHANGELOG.md charts/openwa/Chart.yaml SECURITY.md
+git add package.json package-lock.json openapi.json CHANGELOG.md charts/openwa/Chart.yaml SECURITY.md docs/15-project-roadmap.md
 git commit -m "chore(release): v<version>"
 git push origin chore/release-<version>   # open the PR to main and merge it once CI is green
 
@@ -727,6 +738,10 @@ git push origin v<version>
 
 The tag must be annotated and `v`-prefixed; `release.yml` triggers on `v*` and refuses to proceed if
 the tag string and `package.json` disagree.
+
+Release runs share one concurrency group, which holds the running release and at most one pending run.
+A tag pushed while one release runs and another waits cancels the waiting one, so push the next tag
+only once the previous run has started, and re-run any release run marked cancelled.
 
 ### What the tag automates
 
@@ -739,8 +754,11 @@ flowchart TB
     T --> D
     D --> E[boot-smoke: run the image on amd64 + arm64]
     D --> F[image-scan: Trivy, CRITICAL/HIGH, fixable only]
+    D --> R[release-tags: drop X.Y and latest when a newer release holds them]
     E --> G[promote: apply X.Y.Z, X.Y, latest to GHCR + Docker Hub]
     F --> G
+    R --> G
+    R --> I
     G --> H[verify-published: resolve every ref anonymously]
     H --> I[GitHub Release, notes from the CHANGELOG section]
 ```
@@ -753,6 +771,14 @@ GitHub Release is gated on all of it.
 
 A tag with any `-` suffix (for example `-rc.1`, `-beta.1`, `-alpha.1`) is a prerelease: it skips the
 mutable `X.Y` and `latest` channels and is flagged prerelease on GitHub.
+
+For a stable tag, `release-tags` reads which release `X.Y` and `latest` serve on each registry and leaves
+a channel alone when it already serves a newer one, so releasing a patch to an older line or re-running an
+old tag never moves a channel backwards; the exact `X.Y.Z` tag is still applied. A channel it cannot read
+fails the release rather than counting as absent; only the registry's own "manifest unknown" answer does.
+`verify-published` then expects only the tags `release-tags` selected. `release-tags` also decides whether
+the GitHub Release is marked Latest: only when this release took every `latest` channel, never for a
+prerelease or a patch to an older line.
 
 ### When a gate fails
 

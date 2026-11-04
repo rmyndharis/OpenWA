@@ -51,6 +51,23 @@ for (const variant of ['unknown', 'partial', 'duplicate'])
     assert.equal(isApplied(dir), false);
     assert.equal(fs.readFileSync(path.join(dir, 'lib/Socket/socket.js'), 'utf8'), qr);
   });
+test('a run cut short after socket.js says to reinstall rather than to re-evaluate upstream', t => {
+  // The files are replaced socket.js first, so a rename that fails on messages-recv.js leaves exactly this tree,
+  // and only a reinstall of Baileys brings back the pristine pair. The reverse mix stays an unknown shape above.
+  const dir = fixture(t);
+  const socket = path.join(dir, 'lib/Socket/socket.js');
+  fs.writeFileSync(socket, fs.readFileSync(socket, 'utf8').replace(QR_FIND, QR_REPLACE));
+  const before = fs.readFileSync(socket, 'utf8');
+  assert.throws(
+    () => applyPairingPatch(dir),
+    error =>
+      error.partial === true &&
+      /cut short[\s\S]*lib\/Socket\/socket\.js[\s\S]*Reinstall @whiskeysockets\/baileys/.test(error.message) &&
+      !/Re-evaluate upstream/.test(error.message),
+  );
+  assert.equal(isApplied(dir), false);
+  assert.equal(fs.readFileSync(socket, 'utf8'), before);
+});
 test('missing dependency fails the prepared build instead of reporting a patch', t => {
   const dir = fixture(t);
   fs.rmSync(path.join(dir, 'lib/Socket/messages-recv.js'));
@@ -66,12 +83,24 @@ test('best-effort skips unknown shapes but refuses partial patches', t => {
   fs.writeFileSync(file, ACK_REPLACE);
   assert.equal(run(dir, true), 1);
 });
-test('best-effort still fails if a validated patch cannot finish writing', t => {
+test('best-effort skips and changes nothing when a validated patch cannot be written', t => {
   const dir = fixture(t);
   const write = fs.writeFileSync;
   t.mock.method(fs, 'writeFileSync', (file, data) => {
-    if (file.endsWith('messages-recv.js')) throw new Error('write failed');
+    if (file.includes('messages-recv.js')) throw new Error('write failed');
     return write(file, data);
+  });
+  assert.equal(run(dir, true), 0);
+  assert.equal(run(dir, false), 1);
+  assert.equal(isApplied(dir), false);
+  assert.ok(fs.readFileSync(path.join(dir, 'lib/Socket/socket.js'), 'utf8').includes(QR_FIND));
+});
+test('best-effort still fails if only part of a validated patch was written', t => {
+  const dir = fixture(t);
+  const rename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (to.endsWith('messages-recv.js')) throw new Error('rename failed');
+    return rename(from, to);
   });
   assert.equal(run(dir, true), 1);
   assert.equal(isApplied(dir), false);

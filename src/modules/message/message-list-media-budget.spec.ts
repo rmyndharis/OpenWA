@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { DataSource, FindManyOptions, Repository } from 'typeorm';
+import { DataSource, Repository, SelectQueryBuilder } from 'typeorm';
 import { BadRequestException } from '@nestjs/common';
 import { MessageService, spendInlineMediaBudget } from './message.service';
 import { Message, MessageDirection } from './entities/message.entity';
@@ -127,7 +127,7 @@ describe('message list reads inline media within the budget', () => {
     const budget = 4 * MiB;
     process.env.MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES = String(budget);
     await seed(Array.from({ length: 10 }, (_, i) => ({ id: `m${i}`, metadata: media(payload(3 * MiB)) })));
-    const find = jest.spyOn(repository, 'find');
+    const find = jest.spyOn(SelectQueryBuilder.prototype, 'getMany');
 
     const { messages } = await service.getMessages(SESSION, { limit: 100 });
 
@@ -143,7 +143,7 @@ describe('message list reads inline media within the budget', () => {
 
   it('reads a page of plain text in one query', async () => {
     await seed(Array.from({ length: 20 }, (_, i) => ({ id: `t${i}`, metadata: null })));
-    const find = jest.spyOn(repository, 'find');
+    const find = jest.spyOn(SelectQueryBuilder.prototype, 'getMany');
 
     const { messages, total } = await service.getMessages(SESSION, { limit: 5, offset: 5 });
 
@@ -180,14 +180,95 @@ describe('message list reads inline media within the budget', () => {
       { id: 'keep', metadata: null },
       { id: 'gone', metadata: null },
     ]);
-    const find = repository.find.bind(repository);
-    jest.spyOn(repository, 'find').mockImplementation(async (options?: FindManyOptions<Message>) => {
+    const getMany = Object.getOwnPropertyDescriptor(SelectQueryBuilder.prototype, 'getMany')!
+      .value as SelectQueryBuilder<Message>['getMany'];
+    jest.spyOn(SelectQueryBuilder.prototype, 'getMany').mockImplementationOnce(async function (
+      this: SelectQueryBuilder<Message>,
+    ) {
       await repository.delete({ id: 'gone' });
-      return find(options);
+      return getMany.call(this);
     });
 
     const { messages } = await service.getMessages(SESSION);
 
     expect(messages.map(m => m.id)).toEqual(['keep']);
+  });
+  it('still serves the picked page when the cursor row is deleted before its rows are read', async () => {
+    await seed(Array.from({ length: 5 }, (_, i) => ({ id: `c${i}`, metadata: null })));
+    const getMany = Object.getOwnPropertyDescriptor(SelectQueryBuilder.prototype, 'getMany')!
+      .value as SelectQueryBuilder<Message>['getMany'];
+    jest.spyOn(SelectQueryBuilder.prototype, 'getMany').mockImplementationOnce(async function (
+      this: SelectQueryBuilder<Message>,
+    ) {
+      await repository.delete({ id: 'c4' });
+      return getMany.call(this);
+    });
+
+    const { messages, total } = await service.getMessages(SESSION, { after: 'c4' });
+
+    expect(total).toBe(5);
+    expect(messages.map(m => m.id)).toEqual(['c3', 'c2', 'c1', 'c0']);
+  });
+
+  it.each([
+    ['chat', { chatId: 'other@g.us' }],
+    ['sender', { from: 'other@c.us' }],
+    ['direction', { direction: MessageDirection.OUTGOING }],
+    ['type', { type: 'document' }],
+    ['time', { timestamp: 2000 }],
+    ['session', { sessionId: 'other' }],
+  ] as const)('omits a row whose %s changed after page selection', async (_field, patch) => {
+    await seed(['old', 'middle', 'new'].map(id => ({ id, metadata: null, chatId: '100@g.us' })));
+    await repository.update({ sessionId: SESSION }, { type: 'image', timestamp: 1000 });
+    const getMany = Object.getOwnPropertyDescriptor(SelectQueryBuilder.prototype, 'getMany')!
+      .value as SelectQueryBuilder<Message>['getMany'];
+    jest.spyOn(SelectQueryBuilder.prototype, 'getMany').mockImplementationOnce(async function (
+      this: SelectQueryBuilder<Message>,
+    ) {
+      await repository.update({ id: 'middle' }, patch);
+      return getMany.call(this);
+    });
+    const { messages, total } = await service.getMessages(SESSION, {
+      chatId: '100@g.us',
+      from: 'peer@c.us',
+      direction: MessageDirection.INCOMING,
+      type: 'image',
+      since: 1000000,
+      until: 1001000,
+    });
+    expect(total).toBe(3);
+    expect(messages.map(message => message.id)).toEqual(['new', 'old']);
+  });
+
+  it('rechecks the sender author alternative when loading selected rows', async () => {
+    await seed([{ id: 'authored', metadata: null, chatId: '100@g.us' }]);
+    await repository.update({ id: 'authored' }, { from: '100@g.us', author: 'peer@c.us' });
+    const getMany = Object.getOwnPropertyDescriptor(SelectQueryBuilder.prototype, 'getMany')!
+      .value as SelectQueryBuilder<Message>['getMany'];
+    jest.spyOn(SelectQueryBuilder.prototype, 'getMany').mockImplementationOnce(async function (
+      this: SelectQueryBuilder<Message>,
+    ) {
+      await repository.update({ id: 'authored' }, { author: 'other@c.us' });
+      return getMany.call(this);
+    });
+    const page = await service.getMessages(SESSION, { from: 'peer@c.us' });
+    expect(page.total).toBe(1);
+    expect(page.messages).toEqual([]);
+  });
+
+  it('rechecks an exact message reference when loading selected rows', async () => {
+    await seed([{ id: 'referenced', metadata: null }]);
+    await repository.update({ id: 'referenced' }, { waMessageId: 'selected-reference' });
+    const getMany = Object.getOwnPropertyDescriptor(SelectQueryBuilder.prototype, 'getMany')!
+      .value as SelectQueryBuilder<Message>['getMany'];
+    jest.spyOn(SelectQueryBuilder.prototype, 'getMany').mockImplementationOnce(async function (
+      this: SelectQueryBuilder<Message>,
+    ) {
+      await repository.update({ id: 'referenced' }, { waMessageId: 'replacement-reference' });
+      return getMany.call(this);
+    });
+    const page = await service.getMessages(SESSION, { messageId: 'selected-reference' });
+    expect(page.total).toBe(1);
+    expect(page.messages).toEqual([]);
   });
 });

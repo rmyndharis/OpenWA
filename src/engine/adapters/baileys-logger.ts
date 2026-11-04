@@ -1,3 +1,4 @@
+import { redactSecrets, type RedactOptions } from '../../common/services/logger.service';
 import { BaileysLogger } from '../types/baileys.types';
 
 /** Fully silent logger so Baileys does not spam stdout; diagnostics flow via connection.update. */
@@ -19,29 +20,20 @@ export function createSilentLogger(): BaileysLogger {
 const SECRET_KEYS: ReadonlySet<string> = new Set(['password', 'secret', 'token', 'apikey', 'api_key', 'authorization']);
 
 /**
- * Replace credential-valued keys before a library record is serialised.
+ * How a library record is redacted before it is serialised.
  *
  * Baileys hands this logger whatever object the failure carried, and a `socks` connect error carries
  * the whole proxy config, password included, as its only enumerable property. At debug level that
  * went to stdout verbatim, which on a shipped deployment means the proxy password in the container
- * log. Bounded depth: these records nest a couple of levels at most, and a logger must not walk an
- * arbitrary graph on the wire path. An Error's message and stack are not enumerable, so they are copied
- * explicitly: they are what an operator raised the log level to see.
+ * log. An Error's message and stack are not enumerable, so they are copied explicitly: they are what
+ * an operator raised the log level to see. The copy is bounded in the entries and characters it takes, and below
+ * the fifth level in the objects too (see redactSecrets), because a logger must not walk an arbitrary graph on the
+ * wire path.
  */
-function redactSecrets(value: unknown, depth = 0): unknown {
-  if (depth > 4 || value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map(v => redactSecrets(v, depth + 1));
-  if (value instanceof Error) {
-    const own = redactSecrets({ ...value }, depth) as Record<string, unknown>;
-    return { name: value.name, message: value.message, stack: value.stack, ...own };
-  }
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).map(([k, v]) => [
-      k,
-      SECRET_KEYS.has(k.toLowerCase()) ? '[redacted]' : redactSecrets(v, depth + 1),
-    ]),
-  );
-}
+const REDACTION: RedactOptions = {
+  isSecretKey: key => SECRET_KEYS.has(key.toLowerCase()),
+  marker: '[redacted]',
+};
 
 const BAILEYS_LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error'];
 
@@ -64,13 +56,24 @@ export function createBaileysLogger(): BaileysLogger {
       if (BAILEYS_LOG_LEVELS.indexOf(lvl) < threshold) {
         return;
       }
-      const rec =
-        typeof obj === 'string'
-          ? { msg: obj }
-          : { ...(redactSecrets(obj) as Record<string, unknown>), ...(msg ? { msg } : {}) };
-      process.stdout.write(
-        JSON.stringify({ ts: new Date().toISOString(), level: lvl, context: 'baileys-wire', ...rec }) + '\n',
-      );
+      const head = { ts: new Date().toISOString(), level: lvl, context: 'baileys-wire' };
+      let line: string;
+      try {
+        // An array over the length limit comes back as the marker text: one field, not a record to spread.
+        const copy = typeof obj === 'string' ? undefined : redactSecrets(obj, REDACTION);
+        const rec =
+          typeof obj === 'string'
+            ? { msg: obj }
+            : {
+                ...(typeof copy === 'string' ? { metadata: copy } : (copy as Record<string, unknown>)),
+                ...(msg ? { msg } : {}),
+              };
+        line = JSON.stringify({ ...head, ...rec });
+      } catch {
+        // A getter or proxy trap in the record threw. This runs inside Baileys and must not throw: write the message alone.
+        line = JSON.stringify({ ...head, ...(msg ? { msg } : {}), metadata: '[Unreadable]' });
+      }
+      process.stdout.write(line + '\n');
     };
   const logger: BaileysLogger = {
     level: configured,

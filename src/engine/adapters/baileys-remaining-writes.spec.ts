@@ -24,7 +24,10 @@ function contacts(sock: Record<string, jest.Mock>, budgetMs: number): BaileysCon
     resolvePhone: () => null,
     listChats: () => [],
     lastMessage: () => LAST,
+    chatDeletedAt: () => null,
     toEngineJid: (j: string) => j,
+    chatJid: (j: string) => j,
+    lidOf: () => null,
   } as unknown as BaileysContactsHost;
   return new BaileysContacts(host, budgetMs);
 }

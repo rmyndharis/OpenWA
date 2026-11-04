@@ -426,9 +426,6 @@ describe('resolveReconnectConfig', () => {
 
 ```typescript
 // test/app.e2e-spec.ts
-// archiver is ESM-only and AppModule pulls it in; stub it so ts-jest (CommonJS) can load the graph.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -922,10 +919,9 @@ const sessions = await sessionRepo
 ### Caching Strategy
 
 Memoize a hot, expensive read in-process with a TTL, as `StatsService` does for its aggregate
-responses (`STATS_CACHE_TTL_MS`, default 30000; `0` disables the memo). `CacheService` is an optional,
-fail-open Redis layer: when Redis is disabled or down every read returns `null` and every write is a
-no-op, so never make a request path depend on it. No request path reads from it today (see
-[3.13.3 Cache Service](./03-system-architecture.md#3133-cache-service)).
+responses (`STATS_CACHE_TTL_MS`, default 30000; `0` disables the memo). Each finished computation also drops the entries that have expired, including those of deleted sessions nobody asks for again. `CacheService` is an optional
+Redis client that stores no values and only answers `isAvailable()` for the infra status probe, so no
+request path reads from it (see [3.13.3 Cache Service](./03-system-architecture.md#3133-cache-service)).
 
 ### Async Operations
 
@@ -1025,15 +1021,20 @@ timeouts.
 **Solution:**
 
 ```bash
-# Check migration status
+# Check migration status: the failed migration is still listed as pending
 npm run migration:show
-
-# Revert last migration
-npm run migration:revert
-
-# Regenerate migration
-npm run migration:generate --name=FixMigration
 ```
+
+A failed migration is not recorded: the run executes in one transaction on SQLite and PostgreSQL, so
+the failure rolls back that migration and the rest of the same run, and there is nothing to revert.
+Do not run `migration:revert` for it: that runs the `down()` of the newest migration that succeeded,
+a downgrade step ([14.6](./14-migration-guide.md#146-rollback-procedures)) that can delete data.
+Fix the failing migration by hand so it skips what already exists, as the idempotent migrations
+in `src/database/migrations/` do, and run `npm run migration:run` again. Do not regenerate it with
+`migration:generate`: on PostgreSQL the command stops before it writes anything (the generated
+`messages.body_ts` column sends TypeORM to a `typeorm_metadata` table no migration creates), and on
+SQLite it writes the known table-rebuild drift pinned in `migration-drift.spec.ts`, in SQLite DDL
+that the PostgreSQL boot would then run.
 
 ### TypeScript/NestJS Issues
 

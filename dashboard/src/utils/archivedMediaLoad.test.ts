@@ -68,35 +68,39 @@ test('loads that gave up their turn leave no gap for the loads behind them', asy
   assert.ok(Date.now() - t0 < 300);
 });
 
-test('a throttled load is retried and then resolves', async () => {
-  let calls = 0;
-  const value = await loadArchivedMedia(
-    new AbortController().signal,
-    async () => {
-      calls += 1;
-      if (calls === 1) throw status(429);
-      return 'bytes';
-    },
-    5,
-  );
-  assert.equal(value, 'bytes');
-  assert.equal(calls, 2);
-});
-
-test('any other failure is not retried', async () => {
-  let calls = 0;
-  await assert.rejects(
-    loadArchivedMedia(
+// 429: the per-IP throttle. 503: on S3 the gateway refuses a download at once while 50 are open.
+for (const code of [429, 503]) {
+  test(`a load refused once with ${code} is retried and then resolves`, async () => {
+    let calls = 0;
+    const outcome = await loadArchivedMedia(
       new AbortController().signal,
       async () => {
         calls += 1;
-        throw status(404);
+        if (calls === 1) throw status(code);
+        return 'bytes';
       },
       5,
-    ),
-  );
-  assert.equal(calls, 1);
-});
+    ).catch((e: { status?: number }) => `refused ${e.status}`);
+    assert.equal(`${outcome} after ${calls} call(s)`, 'bytes after 2 call(s)');
+  });
+}
+
+for (const code of [404, 500]) {
+  test(`a load failing with ${code} is not retried`, async () => {
+    let calls = 0;
+    await assert.rejects(
+      loadArchivedMedia(
+        new AbortController().signal,
+        async () => {
+          calls += 1;
+          throw status(code);
+        },
+        5,
+      ),
+    );
+    assert.equal(calls, 1);
+  });
+}
 
 test('a load whose signal is already aborted rejects without starting', async () => {
   const controller = new AbortController();

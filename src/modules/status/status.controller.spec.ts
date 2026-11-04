@@ -1,4 +1,5 @@
 import { StreamableFile } from '@nestjs/common';
+import { Readable } from 'stream';
 import { RESPONSE_PASSTHROUGH_METADATA } from '@nestjs/common/constants';
 import { StatusController } from './status.controller';
 import type { StatusService } from './status.service';
@@ -11,7 +12,10 @@ import type { Response } from 'express';
  * as active content here. The header was held by nothing — deleting the line passed every suite.
  */
 describe('StatusController — stored status media download', () => {
-  const getStatusMedia = jest.fn().mockResolvedValue({ buffer: Buffer.from('GIF89a'), mimetype: 'image/gif' });
+  // A fresh stream per call: the service hands over an opened file, which can be read once.
+  const getStatusMedia = jest.fn(() =>
+    Promise.resolve({ stream: Readable.from([Buffer.from('GIF89a')]), size: 6, mimetype: 'image/gif' }),
+  );
   const controller = new StatusController({ getStatusMedia } as unknown as StatusService);
 
   // Express merges the object form of `res.set` into the header bag; accumulating mirrors that
@@ -43,6 +47,7 @@ describe('StatusController — stored status media download', () => {
     const body = await controller.getStatusMedia('session-1', 'falsestatus@status', res);
 
     expect(body).toBeInstanceOf(StreamableFile);
-    expect(body.getStream().read()).toEqual(Buffer.from('GIF89a'));
+    expect(body.getHeaders().length).toBe(6);
+    expect(Buffer.concat(await body.getStream().toArray())).toEqual(Buffer.from('GIF89a'));
   });
 });

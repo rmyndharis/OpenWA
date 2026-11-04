@@ -35,6 +35,10 @@
  * block and 189 back to 188 on unblock, twice in a row, with the in-page blocklist collection
  * confirming the LID entry. Before the patch both calls answered `500`.
  *
+ * Unblock then reads the blocklist once more and unblocks, once each, the entries the same person still
+ * holds under another id (a phone-keyed block from before the migration beside the LID one), which the
+ * blocklist read lists under the same id. This part is not verified live: no session held both entries.
+ *
  * The transform is exact and self-disabling: an unknown shape fails the build instead of silently
  * shipping without the fix, matching the sibling patchers.
  */
@@ -42,6 +46,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const CONTACT_PATH = path.join('src', 'structures', 'Contact.js');
@@ -87,6 +92,30 @@ const replaceFor = (call) => `            const req = (name) => {
                 .require('WAWebBlockContactAction')
                 .${call};`;
 
+/**
+ * Unblock only, after the action call. A contact blocked under its phone id before the LID migration
+ * and under its LID after it holds two blocklist entries, which the blocklist read lists as one id, so
+ * unblocking the chat-owning entry can leave the other one listed. Every other entry of the same person,
+ * taken from one read of the blocklist after that call, is unblocked once; nothing is retried. An entry
+ * WhatsApp refuses to unblock stays listed, as before, and does not fail an unblock that already went out.
+ */
+const UNBLOCK_REST = `
+            const serial = (id) => (id ? String(id._serialized || id.$1 || id) : null);
+            const person = new Set([serial(contact.id), serial(lid), serial(target.id)].filter(Boolean));
+            const collections = req('WAWebCollections');
+            const entries = collections && collections.Blocklist ? collections.Blocklist.getModelsArray() : [];
+            const others = new Set(
+                entries.map((entry) => serial(entry.id)).filter((id) => person.has(id) && id !== serial(target.id)),
+            );
+            for (const id of others) {
+                try {
+                    const other = await collections.Contact.find(id);
+                    await window.require('WAWebBlockContactAction').unblockContact(other);
+                } catch (error) {
+                    // Left listed, as before this cleanup existed; the chat-owning entry is unblocked already.
+                }
+            }`;
+
 const GROUPS = [
   {
     name: 'block',
@@ -96,20 +125,40 @@ const GROUPS = [
   {
     name: 'unblock',
     find: findFor('unblockContact(resolved)'),
-    replace: replaceFor('unblockContact(target)'),
+    replace: replaceFor('unblockContact(target)') + UNBLOCK_REST,
   },
 ];
+
+/** The unblock body an earlier version of this patcher left behind. */
+const LEGACY_UNBLOCK_REPLACE = replaceFor('unblockContact(target)');
+
+/**
+ * Rewind a tree whose unblock body the earlier version patched to the pristine shape, so the apply path
+ * sees either the pristine shape or the current one, never a third state it would have to refuse. The
+ * current body starts with the earlier one, so a tree that already carries it is left as it is.
+ */
+function normalizeLegacy(source) {
+  const unblock = GROUPS.find((group) => group.name === 'unblock');
+  if (source.includes(unblock.replace)) return source;
+  return source.split(LEGACY_UNBLOCK_REPLACE).join(unblock.find);
+}
+
+function occurrences(source, needle) {
+  return source.split(needle).length - 1;
+}
 
 /**
  * Both groups' stand-down branch as one predicate, for the startup guard
  * (engine-patch-status.ts). A half-patched tree is a reachable, supported state here, and it reads
- * as NOT applied: whichever half is missing still answers an opaque 500 on every id.
+ * as NOT applied: whichever half is missing still answers an opaque 500 on every id. A tree carrying
+ * the earlier unblock body reads as not applied too: block and unblock work there, but an entry the
+ * person holds under the other id survives the unblock.
  * Unreadable reads as applied, since a tree we cannot inspect is not evidence of a broken one.
  */
 function isApplied(wwjsDir = DEFAULT_WWJS) {
   try {
     const source = fs.readFileSync(path.join(wwjsDir, CONTACT_PATH), 'utf8');
-    return GROUPS.every((group) => source.includes(group.replace));
+    return GROUPS.every((group) => occurrences(source, group.replace) === 1 && occurrences(source, group.find) === 0);
   } catch {
     return true;
   }
@@ -120,16 +169,20 @@ function applyBlockPatches({ wwjsDir = DEFAULT_WWJS } = {}) {
   if (!fs.existsSync(contactFile)) {
     throw new Error(`whatsapp-web.js Contact.js not found at ${contactFile}`);
   }
-  let source = fs.readFileSync(contactFile, 'utf8');
+  let source = normalizeLegacy(fs.readFileSync(contactFile, 'utf8'));
   const applied = [];
   const skipped = [];
 
   for (const group of GROUPS) {
-    if (source.includes(group.replace)) {
+    const found = occurrences(source, group.find);
+    const patched = occurrences(source, group.replace);
+    if (found === 0 && patched === 1) {
       skipped.push(group.name);
       continue;
     }
-    if (!source.includes(group.find)) {
+    // Exactly one body to patch and none patched, as the sibling patchers demand: a second copy, or one beside
+    // its own replacement, would leave a body on the removed helper while every later run reads as patched.
+    if (found !== 1 || patched !== 0) {
       throw new Error(`unexpected ${group.name}() shape in ${CONTACT_PATH}: refusing to patch blind`);
     }
     source = source.replace(group.find, group.replace);
@@ -137,7 +190,7 @@ function applyBlockPatches({ wwjsDir = DEFAULT_WWJS } = {}) {
   }
 
   if (applied.length > 0) {
-    fs.writeFileSync(contactFile, source);
+    writeFileAtomic(contactFile, source);
   }
   return { applied, skipped };
 }
@@ -163,4 +216,13 @@ function run() {
 
 if (require.main === module) run();
 
-module.exports = { applyBlockPatches, isApplied, GROUPS, findFor, replaceFor, CONTACT_PATH };
+module.exports = {
+  applyBlockPatches,
+  isApplied,
+  GROUPS,
+  findFor,
+  replaceFor,
+  CONTACT_PATH,
+  LEGACY_UNBLOCK_REPLACE,
+  normalizeLegacy,
+};

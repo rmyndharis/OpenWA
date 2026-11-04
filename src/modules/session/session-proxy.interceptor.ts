@@ -9,7 +9,6 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
-import { isUUID } from 'class-validator';
 import { Repository } from 'typeorm';
 import { Observable, of } from 'rxjs';
 import type { Request, Response } from 'express';
@@ -116,8 +115,9 @@ export function forwardTarget(originalUrl: string, ownerNodeUrl: string): string
  * Deliberate decisions:
  * - A LAPSED owner does not forward: the session is adoptable, and the local node handling the
  *   request (a POST /start claims it here) is the takeover semantic, not an error.
- * - A live owner WITHOUT a nodeUrl cannot be reached; the request proceeds locally and the
- *   engine-level "held by another node" conflict answers it — precise, if unrouteable.
+ * - A live owner WITHOUT a nodeUrl cannot be reached; the request proceeds locally. Start, stop and
+ *   delete answer 409 "running on another node"; logout, force-kill and every engine route answer
+ *   their own 400 for a session not started here (docs/13 lists the answers).
  * - One hop only: a forwarded request is never forwarded again (FORWARDED_HEADER). The marker is
  *   client-settable, so it is verified rather than trusted: a marked request that still lands on a
  *   live non-owner — forged, or ownership moved mid-flight — is refused with a retryable 409
@@ -146,17 +146,10 @@ export class SessionProxyInterceptor implements NestInterceptor {
     const request = context.switchToHttp().getRequest<Request>();
 
     const sessionId = this.sessionIdOf(context, request);
-    if (!sessionId) return next.handle();
-    // A malformed id cannot name a routed session, so there is nothing to route and the lookup below
-    // would be a wasted query — skip it and let the request take its normal 404.
-    //
-    // NOT because the query would throw: `sessions.id` is `varchar` on BOTH dialects (see the
-    // PostgreSQL branch of 1770108659848-AddMessageStatus, and the `gen_random_uuid()::varchar`
-    // default a uuid column could not take), so a non-UUID id simply matches nothing. An earlier
-    // version of this comment claimed Postgres would raise a 500 here; it would not, and reasoning
-    // from that claim leads to conclusions about the 105 unvalidated `@Param('sessionId')` routes
-    // that do not hold.
-    if (!isUUID(sessionId)) return next.handle();
+    // An import keeps any safe key as a session id, so a non-UUID id can name a routed session. `sessions.id`
+    // is varchar on both dialects, so such an id is looked up like any other; only a NUL byte would make
+    // PostgreSQL fail the query, and no id carries one.
+    if (!sessionId || sessionId.includes('\0')) return next.handle();
 
     const owner = await this.sessions.findOne({
       where: { id: sessionId },

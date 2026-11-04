@@ -23,7 +23,11 @@ export function contactTools(contact: ContactService): AnyToolDescriptor[] {
         if (!chatScope?.isRestricted(apiKey)) {
           return contact.getContacts(input.sessionId, { limit: input.limit, offset: input.offset });
         }
-        const visible = await chatScope.filter(apiKey, await contact.listContacts(input.sessionId), item => item.id);
+        const visible = await chatScope.filter(
+          apiKey,
+          await contact.listContacts(input.sessionId, input.offset),
+          item => item.id,
+        );
         return paginate(visible, input.limit, input.offset);
       },
     }),

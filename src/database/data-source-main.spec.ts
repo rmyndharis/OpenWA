@@ -1,5 +1,8 @@
 import mainDataSource from './data-source-main';
 
+// Keep the checkout's own .env and data/.env.generated out: the CLI data sources load them on import.
+jest.mock('./load-cli-env', () => ({ loadCliEnv: jest.fn() }));
+
 // The app runs the MAIN connection (auth/audit) as a separate always-SQLite connection. The
 // default data-source.ts CLI only manages the DATA connection's migrations, so this standalone
 // DataSource exists so the CLI can run/generate the main-owned migrations too.

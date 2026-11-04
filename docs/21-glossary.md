@@ -91,6 +91,7 @@ A system-emitted occurrence, for example:
 
 - `message.received`: New incoming message
 - `message.ack`: Message status changed
+- `message.receipt`: One recipient received, read or played a group or status message the account sent
 - `session.status`: Session status changed
 - `session.qr`: New QR code generated
 

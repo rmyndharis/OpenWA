@@ -7,10 +7,10 @@ import {
   StatusPostOptions,
   StatusResult,
 } from '../interfaces/whatsapp-engine.interface';
-import { SerializedWid } from '../types/whatsapp-web-js.types';
+import { SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { toMessageMedia } from './wwebjs-messaging';
-import { type WwebjsEngineHost, withPage, reportPageDeath } from './wwebjs-host';
+import { type WwebjsEngineHost, requireClient, withPage, reportPageDeath } from './wwebjs-host';
 
 /**
  * The status-post counterpart of `toMessageResult`, but its absent-message case is *narrower* than a
@@ -40,7 +40,7 @@ export function toStatusResult(msg: Message | undefined): StatusResult {
   const id = msg.id as unknown as SerializedWid | undefined;
   const ts = msg.timestamp ? new Date(msg.timestamp * 1000) : new Date();
   return {
-    statusId: id?._serialized ?? id?.$1 ?? '',
+    statusId: readWid(id) ?? '',
     timestamp: ts,
     expiresAt: new Date(ts.getTime() + 24 * 3_600_000),
   };
@@ -54,9 +54,9 @@ export function toStatusResult(msg: Message | undefined): StatusResult {
 export class WwebjsStatus {
   constructor(private readonly host: WwebjsEngineHost) {}
 
-  /** Post-ensureReady client handle. */
+  /** Post-ensureReady client handle; see {@link requireClient} for a teardown that lands in between. */
   private client(): Client {
-    return this.host.getClient();
+    return requireClient(this.host);
   }
 
   /** See {@link withPage} for what a dead page answers here. */
@@ -117,7 +117,7 @@ export class WwebjsStatus {
         statuses.push({
           // `deleteStatus` takes this id as its revoke handle, so losing it to the rename makes a
           // listed status unactionable (#747). The contact id above is a Wid and is unaffected.
-          id: ((msg.id as unknown as SerializedWid)?._serialized ?? (msg.id as unknown as SerializedWid)?.$1) || '',
+          id: readWid(msg.id) || '',
           contact: contactSummary,
           type:
             msg.type === MessageTypes.IMAGE

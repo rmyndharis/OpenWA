@@ -12,5 +12,5 @@ const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'Webhooks
 test('the hidden toggle checkbox shows keyboard focus on its slider', () => {
   const rule = /\.webhooks-page \.toggle-switch input:focus-visible \+ \.toggle-slider\s*\{([^}]*)\}/.exec(css);
   assert.ok(rule, 'no focus-visible style for the toggle slider');
-  assert.match(rule[1], /outline:\s*2px solid var\(--primary\)/);
+  assert.match(rule[1], /outline:\s*2px solid var\(--focus-ring\)/);
 });

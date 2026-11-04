@@ -1,0 +1,620 @@
+.number-checker {
+  padding: 2rem;
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+.number-checker .page-header {
+  margin-bottom: 2rem;
+}
+
+/* A long title and the badge beside it (de, es, tr) take two rows on a narrow screen instead of running past it. */
+.number-checker .page-header__title-group {
+  flex-wrap: wrap;
+}
+
+.number-checker .nc-alert {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-radius: var(--radius);
+  margin-bottom: 1.5rem;
+  font-size: 0.9375rem;
+}
+
+.number-checker .nc-alert.info {
+  background: var(--primary-soft);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.number-checker .nc-alert.warning {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: var(--warning-text);
+}
+
+.number-checker .nc-alert-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.number-checker .nc-alert-content {
+  flex: 1;
+}
+
+.number-checker .nc-alert-action {
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  background: var(--primary);
+  color: #0f172a;
+  border: none;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-decoration: none;
+}
+
+.number-checker .nc-alert-action:hover {
+  background: var(--primary-hover);
+}
+
+.number-checker /* Tabs */
+.nc-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.5rem;
+}
+
+.number-checker .nc-tab {
+  padding: 0.75rem 1.5rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.2s ease;
+}
+
+.number-checker .nc-tab:hover {
+  color: var(--text-primary);
+}
+
+.number-checker .nc-tab.active {
+  color: var(--primary-text);
+  border-bottom-color: var(--primary);
+}
+
+.number-checker /* Main Grid */
+.nc-grid {
+  display: grid;
+  /* minmax(0, ...) lets a track shrink below its content, which a plain 1fr never does. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.5rem;
+}
+
+@media (max-width: 900px) {
+  .number-checker .nc-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.number-checker .nc-card {
+  background: var(--bg-white);
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border);
+}
+
+.number-checker .nc-card-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.number-checker .nc-form-group {
+  margin-bottom: 1.25rem;
+}
+
+.number-checker .nc-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.number-checker .nc-input-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+/* The wide input would squeeze the button until a CJK label breaks between its characters. */
+.number-checker .nc-input-row .nc-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Wide enough to show a whole number; on a narrow card the button wraps below it. */
+.number-checker .nc-input-row .nc-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.number-checker .nc-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  font-size: 0.9375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background-color: var(--bg-white);
+  color: var(--text-primary);
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+  box-sizing: border-box;
+}
+
+.number-checker .nc-input:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.number-checker .nc-textarea {
+  width: 100%;
+  min-height: 140px;
+  padding: 0.75rem 1rem;
+  font-size: 0.9375rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-white);
+  color: var(--text-primary);
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.number-checker .nc-textarea:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.number-checker .nc-hint {
+  display: block;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin-top: 0.375rem;
+}
+
+.number-checker .nc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+
+.number-checker .nc-btn-primary {
+  background: var(--primary);
+  color: #0f172a;
+}
+
+.number-checker .nc-btn-primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.number-checker .nc-btn-secondary {
+  background: var(--bg-light);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.number-checker .nc-btn-secondary:hover:not(:disabled) {
+  background: var(--border);
+}
+
+.number-checker .nc-btn-danger {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--error-text);
+}
+
+.number-checker .nc-btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.number-checker .nc-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.number-checker /* Result Card */
+.nc-result-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3.5rem 1rem;
+  color: var(--text-muted);
+  text-align: center;
+  gap: 0.75rem;
+}
+
+.number-checker .nc-result-card {
+  padding: 1.25rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-light);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.number-checker .nc-result-card.success {
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(34, 197, 94, 0.04);
+}
+
+.number-checker .nc-result-card.not-found {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.04);
+}
+
+.number-checker .nc-result-top {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.number-checker .nc-avatar {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--border);
+  background: var(--bg-white);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.number-checker .nc-avatar-fallback {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.number-checker .nc-result-header-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.number-checker .nc-result-phone {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.number-checker .nc-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 20px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.number-checker .nc-status-badge.registered {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success-text);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.number-checker .nc-status-badge.unregistered {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--error-text);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.number-checker .nc-status-badge.error {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning-text);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.number-checker .nc-details-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+  background: var(--bg-white);
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.number-checker .nc-detail-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+.number-checker .nc-detail-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.number-checker .nc-detail-value {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-family: monospace;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.number-checker .nc-copy-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+}
+
+.number-checker .nc-copy-btn:hover {
+  background: var(--bg-light);
+  color: var(--text-primary);
+}
+
+.number-checker .nc-result-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.number-checker /* History */
+.nc-history-card {
+  margin-top: 1.5rem;
+  background: var(--bg-white);
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border);
+}
+
+/* A table wider than a narrow card scrolls inside it; the page clips anything that sticks out. */
+.number-checker .nc-table-wrap {
+  overflow-x: auto;
+}
+
+.number-checker .nc-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  margin-top: 0.75rem;
+}
+
+.number-checker .nc-history-table th {
+  text-align: start;
+  padding: 0.75rem 1rem;
+  background: var(--bg-light);
+  color: var(--text-secondary);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.number-checker .nc-history-table td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.number-checker .nc-history-table tr:last-child td {
+  border-bottom: none;
+}
+
+.number-checker /* Batch Stats */
+.nc-batch-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.number-checker .nc-stat-box {
+  background: var(--bg-light);
+  border-radius: 8px;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--border);
+  text-align: center;
+}
+
+.number-checker .nc-stat-number {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.number-checker .nc-stat-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-top: 0.25rem;
+}
+
+.number-checker .nc-progress-bar-container {
+  width: 100%;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 1rem 0;
+}
+
+.number-checker .nc-progress-bar {
+  height: 100%;
+  background: var(--primary);
+  transition: width 0.3s ease;
+}
+
+.number-checker .nc-filter-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.number-checker .nc-filter-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.number-checker .nc-filter-btn {
+  padding: 0.375rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-white);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.number-checker .nc-filter-btn.active {
+  background: var(--primary);
+  color: #0f172a;
+  border-color: var(--primary);
+}
+
+.number-checker /* Number Formatting Rules & Previews */
+.nc-checkbox-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.625rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.number-checker .nc-checkbox {
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.number-checker .nc-checkbox-label {
+  font-size: 0.84rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.number-checker .nc-format-preview {
+  margin-top: 0.6rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.number-checker .nc-format-pill {
+  display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 9999px;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.number-checker .nc-format-pill.highlight {
+  background: rgba(37, 211, 102, 0.12);
+  border-color: rgba(37, 211, 102, 0.35);
+  color: var(--primary-text);
+  font-weight: 600;
+}
+
+.number-checker .nc-batch-parse-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8125rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: var(--radius);
+  background: rgba(37, 211, 102, 0.08);
+  border: 1px solid rgba(37, 211, 102, 0.25);
+  color: var(--text-primary);
+  margin-top: 0.5rem;
+}
+
+.number-checker .nc-badge-sub {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.number-checker .nc-batch-limit {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--error-text);
+}

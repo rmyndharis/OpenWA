@@ -98,6 +98,8 @@ function restoreValue(
   // as-is. Without this, a composite secret (object/array) would recurse and its masked children
   // would clobber the stored secret instead of restoring it.
   if (field.secret) {
+    // The removal of a secret that is a list element; restoreObject takes a property sent as null first.
+    if (incoming === null) return { keep: false };
     if (incoming === SECRET_SENTINEL || !isMeaningful(incoming)) {
       return isMeaningful(existing) ? { keep: true, value: existing } : { keep: false };
     }
@@ -194,10 +196,21 @@ function restoreObject(
   incoming: Record<string, unknown>,
   existing: Record<string, unknown> | undefined,
   properties: Record<string, PluginConfigField>,
+  mergedOverStored = false,
 ): Record<string, unknown> {
   const out = { ...incoming };
   for (const [key, field] of Object.entries(properties)) {
     if (!(key in out)) continue;
+    // An explicit null is how a stored secret is removed: every other empty form (the mask, an empty
+    // string, an absent key) keeps it, so a client that echoes a blank for a secret it does not hold
+    // leaves the stored one alone. The key is dropped, which removes the secret wherever the result
+    // replaces what was stored (a nested object, a row of a list, a per-session slice, an instance
+    // config). Only a top-level key of a result that is merged OVER the stored config stays as the null,
+    // since an omitted key would leave the stored value in place.
+    if (field.secret && out[key] === null) {
+      if (!mergedOverStored || !isMeaningful(existing?.[key])) delete out[key];
+      continue;
+    }
     const r = restoreValue(out[key], existing?.[key], field);
     if (r.keep) out[key] = r.value;
     else delete out[key];
@@ -208,12 +221,16 @@ function restoreObject(
 /**
  * On write (PUT /plugins/:id/config), the dashboard sends the whole config back — including masked
  * secrets at any depth. Treat a sentinel/empty secret as "keep existing": restore the stored value,
- * or drop the key when there's nothing stored. A genuinely-new value is stored as provided.
+ * or drop the key when there's nothing stored. A genuinely-new value is stored as provided, and an
+ * explicit `null` removes the stored secret. `mergedOverStored` is for a caller that merges the result
+ * over the stored config instead of replacing it: a top-level secret removed with `null` then stays in
+ * the result as `null`, so the merge does not put the stored value back.
  */
 export function restoreSecretConfig(
   incoming: Record<string, unknown>,
   existing: Record<string, unknown> | undefined,
   schema?: PluginConfigSchema,
+  options: { mergedOverStored?: boolean } = {},
 ): Record<string, unknown> {
   // Symmetric fail-closed restore for the schemaless case: redactSecretConfig masks EVERY value to the
   // sentinel, so on write treat any sentinel value as "keep existing" (restore the stored value, or drop
@@ -229,5 +246,5 @@ export function restoreSecretConfig(
     }
     return out;
   }
-  return restoreObject(incoming, existing, schema.properties);
+  return restoreObject(incoming, existing, schema.properties, options.mergedOverStored);
 }

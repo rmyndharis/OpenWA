@@ -183,7 +183,7 @@ export class MessagesResource {
     });
   }
 
-  /** Get the message history for a chat (read live from WhatsApp). */
+  /** Get the message history for a chat (read live from WhatsApp). **whatsapp-web.js only**: Baileys answers 501. */
   history(sessionId: string, chatId: string, query?: MessageHistoryQuery): Promise<ChatHistoryMessage[]> {
     return this.client.request<ChatHistoryMessage[]>({
       method: 'GET',
@@ -192,7 +192,7 @@ export class MessagesResource {
     });
   }
 
-  /** Get reactions for a specific message. */
+  /** Get reactions for a specific message. **whatsapp-web.js only**: Baileys answers 501. */
   reactions(sessionId: string, chatId: string, messageId: string): Promise<ReactionRecord[]> {
     return this.client.request<ReactionRecord[]>({
       method: 'GET',

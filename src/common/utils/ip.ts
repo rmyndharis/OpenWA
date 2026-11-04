@@ -117,10 +117,15 @@ export function isIpOrCidrEntry(entry: string): boolean {
  * never matches a peer, so the proxy it was meant to name is treated as a direct client.
  */
 export function invalidTrustedProxies(raw: string | undefined): string[] {
+  return parseTrustedProxies(raw).filter(entry => !isIpOrCidrEntry(entry));
+}
+
+/** The comma-separated TRUSTED_PROXIES value as a list of entries; blanks are dropped. */
+export function parseTrustedProxies(raw: string | undefined): string[] {
   return (raw || '')
     .split(',')
     .map(entry => entry.trim())
-    .filter(entry => entry && !isIpOrCidrEntry(entry));
+    .filter(Boolean);
 }
 
 /**

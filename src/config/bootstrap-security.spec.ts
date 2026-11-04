@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   resolveCorsPolicy,
   isSwaggerEnabled,
@@ -302,6 +304,74 @@ describe('assertNoDefaultSecretsInProduction', () => {
     ).not.toThrow();
   });
 
+  // The same aliases the rest of the app resolves to the bundled container: its network alias or its
+  // container name, in any letter case, with or without the trailing dot of an absolute DNS name.
+  it.each(['Postgres', 'postgres.', 'openwa-postgres', ' OPENWA-POSTGRES. '])(
+    'exempts the built-in Postgres default for the bundled host %s',
+    databaseHost => {
+      const env = {
+        nodeEnv: 'production',
+        databaseType: 'postgres',
+        databasePassword: 'openwa',
+        postgresBuiltIn: 'true',
+        databaseHost,
+      };
+      expect(() => assertNoDefaultSecretsInProduction(env)).not.toThrow();
+      expect(() => assertNoDefaultSecretsInProduction({ ...env, postgresBuiltIn: 'false' })).toThrow(
+        /DATABASE_PASSWORD/,
+      );
+    },
+  );
+
+  it.each(['http://minio.:9000', 'http://openwa-minio:9000', 'https://OPENWA-MINIO.:9000'])(
+    'exempts the built-in MinIO defaults for the bundled endpoint %s',
+    s3Endpoint => {
+      const env = {
+        nodeEnv: 'production',
+        storageType: 's3',
+        s3AccessKey: 'minioadmin',
+        s3SecretKey: 'minioadmin',
+        minioBuiltIn: 'true',
+        s3Endpoint,
+      };
+      expect(() => assertNoDefaultSecretsInProduction(env)).not.toThrow();
+      expect(() => assertNoDefaultSecretsInProduction({ ...env, minioBuiltIn: 'false' })).toThrow(
+        /S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY/,
+      );
+    },
+  );
+
+  it.each(['postgres.example.invalid', 'evil-postgres', 'openwa-postgres-evil'])(
+    'still refuses the default Postgres password for the external host %s',
+    databaseHost => {
+      expect(() =>
+        assertNoDefaultSecretsInProduction({
+          nodeEnv: 'production',
+          databaseType: 'postgres',
+          databasePassword: 'openwa',
+          postgresBuiltIn: 'true',
+          databaseHost,
+        }),
+      ).toThrow(/DATABASE_PASSWORD/);
+    },
+  );
+
+  it.each(['http://minio.example.invalid:9000', 'http://evil-minio:9000', 'http://openwa-minio-evil:9000'])(
+    'still refuses the default S3 credentials for the external endpoint %s',
+    s3Endpoint => {
+      expect(() =>
+        assertNoDefaultSecretsInProduction({
+          nodeEnv: 'production',
+          storageType: 's3',
+          s3AccessKey: 'minioadmin',
+          s3SecretKey: 'minioadmin',
+          minioBuiltIn: 'true',
+          s3Endpoint,
+        }),
+      ).toThrow(/S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY/);
+    },
+  );
+
   it('refuses prod with default MinIO/S3 credentials', () => {
     expect(() =>
       assertNoDefaultSecretsInProduction({
@@ -383,6 +453,30 @@ describe('assertNoDefaultSecretsInProduction', () => {
     expect(() =>
       assertNoDefaultSecretsInProduction({ nodeEnv: 'production', redisPassword: 'a-strong-unique-redis-secret' }),
     ).not.toThrow();
+  });
+
+  // The scrape endpoint is public and this token is its only credential, so the value .env.example ships
+  // (a copy-paste away from production) and the known weak values must not boot. There is no length floor:
+  // a short token that is not a known default keeps booting.
+  it('refuses the METRICS_TOKEN that .env.example ships, and known weak values, in production', () => {
+    const example = readFileSync(join(__dirname, '..', '..', '.env.example'), 'utf8');
+    const shipped = /^#?\s*METRICS_TOKEN=(.+)$/m.exec(example)?.[1];
+    expect(shipped).toBeTruthy();
+    for (const metricsToken of [shipped, ` ${shipped?.toUpperCase()} `, 'change-me', 'test', 'Secret']) {
+      expect(() => assertNoDefaultSecretsInProduction({ nodeEnv: 'production', metricsToken })).toThrow(
+        /METRICS_TOKEN/,
+      );
+    }
+  });
+
+  it('allows an unset, blank or non-default METRICS_TOKEN in production, and checks none outside it', () => {
+    // Unset or blank leaves the endpoint disabled, so there is no credential to be weak.
+    for (const metricsToken of [undefined, '', '   ', 'prom-scrape', 'k'.repeat(40)]) {
+      expect(() => assertNoDefaultSecretsInProduction({ nodeEnv: 'production', metricsToken })).not.toThrow();
+    }
+    for (const nodeEnv of ['development', 'test', undefined]) {
+      expect(() => assertNoDefaultSecretsInProduction({ nodeEnv, metricsToken: 'test' })).not.toThrow();
+    }
   });
 
   it('allows the default sqlite + local-storage prod setup (no secrets needed)', () => {

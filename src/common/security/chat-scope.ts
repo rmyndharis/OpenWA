@@ -55,25 +55,10 @@ export function normalizeChatAllowList(list: string[] | null | undefined): strin
   return qualified.length > 0 ? qualified : null;
 }
 
-/** The stored address forms of one allowlist entry. No directory: literal dialects only. */
-function literalForms(entry: string): string[] {
-  const parsed = parseWaId(entry);
-  switch (parsed.kind) {
-    case 'user':
-      return [`${parsed.userPart}@c.us`, `${parsed.userPart}@s.whatsapp.net`];
-    case 'lid':
-      return [`${parsed.userPart}@lid`];
-    case 'group':
-      return [`${parsed.userPart}@g.us`];
-    default:
-      return [];
-  }
-}
-
 /**
- * The stored address forms of an incoming chat id. A user id has two dialects; a lid and a group
- * each have one; a status/channel/broadcast/unknown id has none and so never matches a contact
- * entry (it is not a chattable contact).
+ * The stored address forms of a chat id or an allowlist entry. No directory: literal dialects only.
+ * A user id has two dialects; a lid and a group each have one; a status/channel/broadcast/unknown id
+ * has none and so never matches a contact entry (it is not a chattable contact).
  */
 function addressForms(chatId: string): string[] {
   const parsed = parseWaId(chatId);
@@ -94,7 +79,7 @@ export function buildChatScope(allowedChats: string[] | null | undefined): ChatS
   if (!isChatScopeRestricted(allowedChats)) return null;
   const allowed = new Set<string>();
   for (const entry of normalizeChatAllowList(allowedChats) ?? []) {
-    for (const form of literalForms(entry)) allowed.add(form);
+    for (const form of addressForms(entry)) allowed.add(form);
   }
   return { allowed };
 }

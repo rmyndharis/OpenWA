@@ -51,7 +51,7 @@ else
   # The same launch options the engine uses by default (configuration.ts): the image's
   # PUPPETEER_EXECUTABLE_PATH and the default PUPPETEER_ARGS.
   docker run --rm "$@" "$IMAGE" node -e "
-  require('whatsapp-web.js');
+  const { Client } = require('whatsapp-web.js');
   require('puppeteer')
     .launch({
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
@@ -60,7 +60,9 @@ else
     })
     .then(async browser => {
       console.log('PASS: browser launched: ' + (await browser.version()));
-      await browser.close();
+      await Client.prototype.destroy.call({ pupBrowser: browser, authStrategy: { destroy: async () => {} } });
+      if (browser.connected) throw new Error('whatsapp-web.js destroy left the browser connected');
+      console.log('PASS: whatsapp-web.js destroy closed the browser');
     })
     .catch(error => { console.error('FAIL:', error); process.exit(1); });
   "

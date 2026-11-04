@@ -1,7 +1,7 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsBoolean, IsIn, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
-import { ToStrictBoolean, ToStrictNumber } from '../../../common/utils/strict-boolean';
+import { IsBoolean, IsIn, IsNumber, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 
 /**
  * Body for PUT /infra/config (saveConfig). Every section is optional: an absent section leaves the
@@ -16,9 +16,15 @@ import { ToStrictBoolean, ToStrictNumber } from '../../../common/utils/strict-bo
  * are accepted; any other spelling is rejected 400.
  */
 export class DatabaseConfigDto {
-  @ApiProperty({ enum: ['sqlite', 'postgres'] })
+  @ApiPropertyOptional({
+    enum: ['sqlite', 'postgres'],
+    description:
+      'Absent keeps the stored selection, which the rest of the section then applies to. While the environment pins ' +
+      'another selection than the stored one, a section without it writes nothing.',
+  })
+  @IsOptional()
   @IsIn(['sqlite', 'postgres'])
-  type!: 'sqlite' | 'postgres';
+  type?: 'sqlite' | 'postgres';
 
   @ApiPropertyOptional()
   @ToStrictBoolean()
@@ -28,31 +34,37 @@ export class DatabaseConfigDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   host?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   port?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   username?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   password?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   database?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   schema?: string;
 
@@ -90,16 +102,19 @@ export class RedisConfigDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   host?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   port?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   password?: string;
 }
@@ -113,9 +128,15 @@ export class QueueConfigDto {
 }
 
 export class StorageConfigDto {
-  @ApiProperty({ enum: ['local', 's3'] })
+  @ApiPropertyOptional({
+    enum: ['local', 's3'],
+    description:
+      'Absent keeps the stored selection, which the rest of the section then applies to. While the environment pins ' +
+      'another selection than the stored one, a section without it writes nothing.',
+  })
+  @IsOptional()
   @IsIn(['local', 's3'])
-  type!: 'local' | 's3';
+  type?: 'local' | 's3';
 
   @ApiPropertyOptional()
   @ToStrictBoolean()
@@ -125,31 +146,37 @@ export class StorageConfigDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   localPath?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   s3Bucket?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   s3Region?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   s3AccessKey?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   s3SecretKey?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   s3Endpoint?: string;
 }
@@ -157,6 +184,7 @@ export class StorageConfigDto {
 export class EngineConfigDto {
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   type?: string;
 
@@ -168,11 +196,13 @@ export class EngineConfigDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   sessionDataPath?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   browserArgs?: string;
 }
@@ -180,30 +210,35 @@ export class EngineConfigDto {
 export class SaveConfigDto {
   @ApiPropertyOptional({ type: () => DatabaseConfigDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => DatabaseConfigDto)
   database?: DatabaseConfigDto;
 
   @ApiPropertyOptional({ type: () => RedisConfigDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => RedisConfigDto)
   redis?: RedisConfigDto;
 
   @ApiPropertyOptional({ type: () => QueueConfigDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => QueueConfigDto)
   queue?: QueueConfigDto;
 
   @ApiPropertyOptional({ type: () => StorageConfigDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => StorageConfigDto)
   storage?: StorageConfigDto;
 
   @ApiPropertyOptional({ type: () => EngineConfigDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => EngineConfigDto)
   engine?: EngineConfigDto;

@@ -26,9 +26,12 @@ export function emptyForField(field: PluginConfigField): unknown {
 }
 
 /** Coerce a text-input value to the field's type. A cleared number becomes undefined (so the key is
- *  omitted) rather than '' — the inverse of {@link emptyForField} for number fields. */
+ *  omitted) rather than '' — the inverse of {@link emptyForField} for number fields. A cleared secret
+ *  does too: the gateway keeps a stored secret for an empty string, so the save sends null for it
+ *  ({@link fillClearedFields}), the one value that removes it. */
 export function coerceFieldInput(field: PluginConfigField, raw: string): unknown {
   if (field.type === 'number') return raw === '' ? undefined : Number(raw);
+  if (field.secret && raw === '') return undefined;
   return raw;
 }
 

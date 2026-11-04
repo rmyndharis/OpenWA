@@ -301,7 +301,10 @@ public final class MessagesResource {
             SuccessResult.class);
     }
 
-    /** Get the message history for a chat (read live from WhatsApp). */
+    /**
+     * Get the message history for a chat (read live from WhatsApp). whatsapp-web.js only; Baileys
+     * answers {@code 501}.
+     */
     public List<ChatHistoryMessage> history(String sessionId, String chatId, MessageHistoryQuery query) {
         return client.requestList(
             HttpMethod.GET,
@@ -329,7 +332,7 @@ public final class MessagesResource {
             null);
     }
 
-    /** Get reactions for a specific message. */
+    /** Get reactions for a specific message. whatsapp-web.js only; Baileys answers {@code 501}. */
     public List<ReactionRecord> reactions(String sessionId, String chatId, String messageId) {
         return client.requestList(
             HttpMethod.GET,

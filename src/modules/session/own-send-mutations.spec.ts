@@ -94,9 +94,10 @@ describe('an own-send echo losing its first insert to the REST writer', () => {
       if (change === 'reaction') expect(row.metadata?.reactions).toEqual({ peer: 'ok' });
       if (change === 'ack') expect(row.status).toBe(MessageStatus.READ);
       expect(await repo.count()).toBe(1);
-      // Only the revoke updates the persisted projection; losing the insert does not publish a second copy.
+      // A revoke and an edit change what the stored row holds, so they hand it over again; losing the insert
+      // itself does not publish a second copy.
       expect(hooks.execute.mock.calls.filter(([event]) => event === 'message:persisted')).toHaveLength(
-        persistedBeforeEcho + (change === 'revoke' ? 1 : 0),
+        persistedBeforeEcho + (change === 'revoke' || change === 'edit' ? 1 : 0),
       );
     } finally {
       await jest.advanceTimersByTimeAsync(ACK_RECONCILE_DELAY_MS);

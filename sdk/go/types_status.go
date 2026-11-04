@@ -13,7 +13,7 @@ type StatusContact struct {
 type StatusRecord struct {
 	ID              string        `json:"id"`
 	Contact         StatusContact `json:"contact"`
-	Type            string        `json:"type,omitempty"`
+	Type            string        `json:"type"`
 	Caption         string        `json:"caption,omitempty"`
 	MediaURL        string        `json:"mediaUrl,omitempty"`
 	BackgroundColor string        `json:"backgroundColor,omitempty"`
@@ -47,18 +47,39 @@ type StatusMedia struct {
 	ContentType string
 }
 
-// StatusFont is a WhatsApp status font family.
+// StatusFont is a WhatsApp status font family: the wire value of the protocol's
+// ExtendedTextMessage.FontType, and the constants carry the protocol's names for the ids. 3 to 5 are not
+// part of the enum and the gateway rejects them. whatsapp-web.js honors only 0 to 7 and posts 8, 9 and 10
+// in the default font.
 type StatusFont int
 
 const (
-	StatusFontDefault       StatusFont = 0
-	StatusFontSerif         StatusFont = 1
-	StatusFontNorican       StatusFont = 2
-	StatusFontBold          StatusFont = 6
-	StatusFontOswald        StatusFont = 7
-	StatusFontDamion        StatusFont = 8
-	StatusFontMorningbreeze StatusFont = 9
-	StatusFontBryndan       StatusFont = 10
+	StatusFontDefault              StatusFont = 0  // SYSTEM
+	StatusFontSystemText           StatusFont = 1  // SYSTEM_TEXT
+	StatusFontFBScript             StatusFont = 2  // FB_SCRIPT
+	StatusFontBold                 StatusFont = 6  // SYSTEM_BOLD
+	StatusFontMorningBreezeRegular StatusFont = 7  // MORNINGBREEZE_REGULAR
+	StatusFontCalistogaRegular     StatusFont = 8  // CALISTOGA_REGULAR
+	StatusFontExo2ExtraBold        StatusFont = 9  // EXO2_EXTRABOLD
+	StatusFontCourierPrimeBold     StatusFont = 10 // COURIERPRIME_BOLD
+)
+
+// The names below came with the first release of these constants. They do not match the protocol's names
+// for the same ids (7 is MORNINGBREEZE_REGULAR there, not Oswald; 9 is EXO2_EXTRABOLD, not Morning Breeze),
+// so they are kept only for code that already uses them. Each carries the wire value it always had.
+const (
+	// Deprecated: use StatusFontSystemText.
+	StatusFontSerif StatusFont = StatusFontSystemText
+	// Deprecated: use StatusFontFBScript.
+	StatusFontNorican StatusFont = StatusFontFBScript
+	// Deprecated: use StatusFontMorningBreezeRegular.
+	StatusFontOswald StatusFont = StatusFontMorningBreezeRegular
+	// Deprecated: use StatusFontCalistogaRegular.
+	StatusFontDamion StatusFont = StatusFontCalistogaRegular
+	// Deprecated: use StatusFontExo2ExtraBold.
+	StatusFontMorningbreeze StatusFont = StatusFontExo2ExtraBold
+	// Deprecated: use StatusFontCourierPrimeBold.
+	StatusFontBryndan StatusFont = StatusFontCourierPrimeBold
 )
 
 // SendTextStatusRequest posts a text status. Recipients is required on the Baileys

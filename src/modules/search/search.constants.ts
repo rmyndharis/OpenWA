@@ -1,4 +1,5 @@
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
+import type { SearchMatch } from './search.types';
 
 /**
  * Host-side /search pagination bounds. Applied in SearchService BEFORE delegating to any provider,
@@ -29,3 +30,43 @@ export const SEARCH_QUERY_MAX_LENGTH = 1000;
  * provider collapses repeats.
  */
 export const SEARCH_TERMS_MAX = 32;
+
+/** Every accepted `match` value, for the DTO, the OpenAPI enum and the MCP tool schema alike. */
+export const SEARCH_MATCH_MODES = ['word', 'contains'] as const satisfies readonly SearchMatch[];
+
+/**
+ * Shortest term a match=contains search can look up in a trigram index: a trigram is three characters,
+ * so a shorter term has none (SQLite's trigram table returns nothing for it, pg_trgm scans every row).
+ * A query needs at least one term this long, counted in letters and digits in a row on Postgres, whose
+ * pg_trgm takes trigrams from nothing else; shorter ones only narrow what it found.
+ */
+export const SEARCH_CONTAINS_MIN_TERM_LENGTH = 3;
+
+/**
+ * Most characters the terms of a match=contains query may hold together, counted after folding and
+ * without the spaces between them. The trigram index checks every trigram of a term on every message
+ * that holds all of them, and on SQLite synchronously: a query of `the` repeated, on 200k messages of
+ * which 40% hold `the`, `het` and `eth`, took about 100 ms at 64 characters whether written as one term
+ * or as several, and 2.8 s at 1000. A longer query answers 400; match=word runs it.
+ */
+export const SEARCH_CONTAINS_TERMS_MAX_LENGTH = 64;
+
+/**
+ * How many candidates a match=contains search ranks: the most recently stored matches, fetched from
+ * the index in recency order so the database stops once it holds this many, then ranked in the
+ * application. With SEARCH_CONTAINS_RANKED_LENGTH it bounds the ranking work of one search (ranking
+ * every match in SQL took about 100 ms on SQLite and 1.6 s on Postgres for 200k matches) and is
+ * therefore also the most `total` can report in this mode. Fixed rather than env-driven, like
+ * SEARCH_OFFSET_MAX.
+ */
+export const SEARCH_CONTAINS_WINDOW = 1000;
+
+/**
+ * How much of each candidate's body a match=contains search ranks and highlights, in UTF-16 units: the number
+ * MESSAGE_TEXT_MAX_LENGTH caps a sent text at, though that cap counts an emoji as one character where this cut
+ * counts two, so an emoji-heavy API text can run past it. A received message is stored whole and can be far
+ * longer: over a window of 64 KB messages, folding and scanning whole bodies blocked the event loop for about
+ * 2.8 s per search, reading this much of each about 240 ms. A message whose terms appear only past this
+ * point still matches: it scores 0 and its snippet starts at the beginning, without `<mark>`.
+ */
+export const SEARCH_CONTAINS_RANKED_LENGTH = 4096;

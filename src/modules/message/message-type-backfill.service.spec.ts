@@ -1,37 +1,65 @@
-import { In, Repository } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { Repository } from 'typeorm';
 import { MessageTypeBackfillService } from './message-type-backfill.service';
 import { Message } from './entities/message.entity';
 
 describe('MessageTypeBackfillService', () => {
-  const makeService = (update: jest.Mock) => {
-    const repo = { update } as unknown as Repository<Message>;
-    return new MessageTypeBackfillService(repo);
+  const makeService = (
+    opts: { synchronize?: boolean; query?: jest.Mock<Promise<void>, [string]>; hasTable?: boolean } = {},
+  ) => {
+    const query = opts.query ?? jest.fn<Promise<void>, [string]>().mockResolvedValue(undefined);
+    const runner = {
+      hasTable: jest.fn().mockResolvedValue(opts.hasTable ?? true),
+      query,
+      release: jest.fn().mockResolvedValue(undefined),
+    };
+    const repo = { manager: { connection: { createQueryRunner: () => runner } } } as unknown as Repository<Message>;
+    const config = {
+      get: (key: string, fallback: unknown) => (key === 'dataDatabase.synchronize' ? opts.synchronize : fallback),
+    } as unknown as ConfigService;
+    return { service: new MessageTypeBackfillService(repo, config), runner, query };
   };
 
-  it('rewrites each legacy wwebjs token to the neutral MessageType on bootstrap', async () => {
-    const update = jest.fn().mockResolvedValue({ affected: 1 });
-    await makeService(update).onApplicationBootstrap();
+  it('converts the legacy wwebjs tokens with one statement under DATABASE_SYNCHRONIZE=true', async () => {
+    const { service, runner, query } = makeService({ synchronize: true });
+    await service.onApplicationBootstrap();
 
-    expect(update).toHaveBeenCalledTimes(4);
-    expect(update).toHaveBeenCalledWith({ type: 'chat' }, { type: 'text' });
-    // A tapped button, list row or template button: text, as mapWwebjsMessageType now reports them.
-    expect(update).toHaveBeenCalledWith(
-      { type: In(['buttons_response', 'list_response', 'template_button_reply']) },
-      { type: 'text' },
-    );
-    expect(update).toHaveBeenCalledWith({ type: 'ptt' }, { type: 'voice' });
-    // vcard + multi_vcard collapse to contact via an IN clause
-    expect(update).toHaveBeenCalledWith({ type: In(['vcard', 'multi_vcard']) }, { type: 'contact' });
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql] = query.mock.calls[0];
+    expect(sql).toContain(`WHEN 'chat' THEN 'text'`);
+    expect(sql).toContain(`WHEN 'ptt' THEN 'voice'`);
+    expect(sql).toContain(`WHEN 'multi_vcard' THEN 'contact'`);
+    expect(runner.release).toHaveBeenCalledTimes(1);
   });
 
-  it('is a no-op-safe write (idempotent): affected:0 on already-neutral rows does not throw', async () => {
-    const update = jest.fn().mockResolvedValue({ affected: 0 });
-    await expect(makeService(update).onApplicationBootstrap()).resolves.toBeUndefined();
-    expect(update).toHaveBeenCalledTimes(4);
+  it.each([false, undefined])(
+    'leaves a migration-managed database to the migration (synchronize: %s)',
+    async synchronize => {
+      const { service, runner, query } = makeService({ synchronize });
+      await service.onApplicationBootstrap();
+
+      expect(query).not.toHaveBeenCalled();
+      expect(runner.release).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does nothing when the config is not injected', async () => {
+    const query = jest.fn();
+    const repo = {
+      manager: { connection: { createQueryRunner: () => ({ query }) } },
+    } as unknown as Repository<Message>;
+
+    await expect(new MessageTypeBackfillService(repo).onApplicationBootstrap()).resolves.toBeUndefined();
+    expect(query).not.toHaveBeenCalled();
   });
 
-  it('does not crash boot if the backfill query fails', async () => {
-    const update = jest.fn().mockRejectedValue(new Error('db down'));
-    await expect(makeService(update).onApplicationBootstrap()).resolves.toBeUndefined();
+  it('does not crash boot if the backfill query fails, and still releases the runner', async () => {
+    const { service, runner } = makeService({
+      synchronize: true,
+      query: jest.fn().mockRejectedValue(new Error('db down')),
+    });
+
+    await expect(service.onApplicationBootstrap()).resolves.toBeUndefined();
+    expect(runner.release).toHaveBeenCalledTimes(1);
   });
 });

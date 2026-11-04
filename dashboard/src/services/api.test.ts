@@ -219,6 +219,35 @@ test('archived media forwards cancellation through fetch and the response body',
   await assert.rejects(bytes, { name: 'AbortError' });
 });
 
+test('a refused media download carries the Retry-After seconds it was sent, and none without the header', async () => {
+  const refuse = (headers: Record<string, string>) => {
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ statusCode: 503, message: 'Too many media downloads are in progress' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json', ...headers },
+        }),
+      )) as typeof fetch;
+  };
+  refuse({ 'Retry-After': '3' });
+  await assert.rejects(
+    sessionApi.getMessageMediaBlob('s1', '100@c.us', 'WA1'),
+    (err: Error & { status?: number; retryAfterSeconds?: number }) => {
+      assert.equal(err.status, 503);
+      assert.equal(err.retryAfterSeconds, 3);
+      return true;
+    },
+  );
+  refuse({});
+  await assert.rejects(
+    sessionApi.getMessageMediaBlob('s1', '100@c.us', 'WA1'),
+    (err: Error & { retryAfterSeconds?: number }) => {
+      assert.equal('retryAfterSeconds' in err, false);
+      return true;
+    },
+  );
+});
+
 test('the contact list walks past the 1000 contacts one response carries', async () => {
   const { contactApi } = await import('./api.ts');
   const requested: string[] = [];
@@ -276,3 +305,100 @@ test('the contact list rejects instead of returning a partial list when a later 
     (err: Error & { status?: number }) => err.status === 429 && err.message === 'Too Many Requests',
   );
 });
+
+function chatResponse(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+for (const size of [1001, 2000, 11001]) {
+  test(`the chat list loads all ${size} conversations in bounded pages`, async () => {
+    const offsets: number[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      const offset = Number(url.searchParams.get('offset'));
+      assert.equal(url.searchParams.get('limit'), '1000');
+      offsets.push(offset);
+      return chatResponse(
+        Array.from({ length: Math.min(1000, size - offset) }, (_, i) => ({ id: `chat-${offset + i}` })),
+      );
+    }) as typeof fetch;
+    const chats = await sessionApi.getChats('s1');
+    assert.equal(chats.length, size);
+    assert.equal(chats.at(-1)?.id, `chat-${size - 1}`);
+    assert.deepEqual(
+      offsets,
+      Array.from({ length: Math.floor(size / 1000) + 1 }, (_, i) => i * 1000),
+    );
+  });
+}
+
+test('chat pagination preserves first-seen order and deduplicates moving rows', async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const offset = Number(new URL(String(input), 'http://localhost').searchParams.get('offset'));
+    return chatResponse(
+      offset === 0
+        ? Array.from({ length: 1000 }, (_, i) => ({ id: `chat-${i}` }))
+        : [{ id: 'chat-999' }, { id: 'tail' }],
+    );
+  }) as typeof fetch;
+  const chats = await sessionApi.getChats('s1');
+  assert.equal(chats.length, 1001);
+  assert.equal(chats[999].id, 'chat-999');
+  assert.equal(chats[1000].id, 'tail');
+});
+
+for (const status of [500, 429]) {
+  test(`chat pagination rejects a later ${status} without returning a partial list`, async () => {
+    let attempts = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const offset = Number(new URL(String(input), 'http://localhost').searchParams.get('offset'));
+      if (offset === 0) return chatResponse(Array.from({ length: 1000 }, (_, i) => ({ id: `chat-${i}` })));
+      attempts++;
+      return chatResponse({ message: 'Later page failed' }, status);
+    }) as typeof fetch;
+    await assert.rejects(sessionApi.getChats('s1'), (err: Error & { status?: number }) => err.status === status);
+    assert.equal(attempts, status === 429 ? 3 : 1);
+  });
+}
+
+test('the chat list request carries the caller signal, so an abort cuts a request that never answers', async () => {
+  const controller = new AbortController();
+  let seen: AbortSignal | null | undefined;
+  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+    seen = init?.signal;
+    // A half-open connection: the request answers only when its signal aborts it.
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+    });
+  }) as typeof fetch;
+
+  const result = sessionApi.getChats('s1', controller.signal);
+  await new Promise(resolve => setImmediate(resolve));
+  // Asserted before waiting on the result, which would never settle without the signal.
+  assert.ok(seen, 'the request carried no signal');
+  controller.abort();
+  assert.equal(seen.aborted, true, 'the signal of the request did not follow the caller');
+  await assert.rejects(result, { name: 'AbortError' });
+});
+
+for (const change of ['replace key', 'sign out', 'abort'] as const) {
+  test(`chat pagination stops before the next page after ${change}`, async () => {
+    let release!: (response: Response) => void;
+    let requests = 0;
+    const pending = new Promise<Response>(resolve => {
+      release = resolve;
+    });
+    const controller = new AbortController();
+    globalThis.fetch = (async () => {
+      requests++;
+      return pending;
+    }) as typeof fetch;
+    const result = sessionApi.getChats('s1', controller.signal);
+    if (change === 'replace key') sessionStorage.setItem('openwa_api_key', 'next-key');
+    if (change === 'sign out') sessionStorage.removeItem('openwa_api_key');
+    if (change === 'abort') controller.abort();
+    release(chatResponse(Array.from({ length: 1000 }, (_, i) => ({ id: `chat-${i}` }))));
+    await assert.rejects(result, change === 'abort' ? { name: 'AbortError' } : /Signed out/);
+    assert.equal(requests, 1);
+  });
+}

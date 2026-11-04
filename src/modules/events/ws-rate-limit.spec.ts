@@ -166,4 +166,45 @@ describe('SlidingWindowLimiter.refund', () => {
     limiter.refund('never-seen');
     expect(limiter.allow('never-seen')).toBe(true);
   });
+
+  it.each([false, true])('keeps newer failures charged after an old success is refunded (pruned: %s)', pruned => {
+    let now = 0;
+    const limiter = new SlidingWindowLimiter(2, 1000, () => now);
+    const success = {};
+    expect(limiter.allow('ip', success)).toBe(true);
+    now = pruned ? 1001 : 500;
+    expect(limiter.allow('ip', {})).toBe(true);
+    limiter.refund('ip', success);
+    now = pruned ? 1002 : 1001;
+    expect(limiter.allow('ip')).toBe(true);
+    expect(limiter.allow('ip')).toBe(false);
+  });
+
+  it('distinguishes reservations from the same clock tick and refunds each only once', () => {
+    const limiter = new SlidingWindowLimiter(2, 1000, () => 0);
+    const first = {};
+    const second = {};
+    expect(limiter.allow('ip', first)).toBe(true);
+    expect(limiter.allow('ip', second)).toBe(true);
+    limiter.refund('ip', first);
+    limiter.refund('ip', first);
+    expect(limiter.allow('ip')).toBe(true);
+    expect(limiter.allow('ip')).toBe(false);
+    limiter.refund('ip', second);
+    expect(limiter.allow('ip')).toBe(true);
+  });
+
+  it('does not refund another subject or an admission that was refused', () => {
+    const limiter = new SlidingWindowLimiter(1, 1000, () => 0);
+    const admitted = {};
+    const other = {};
+    const denied = {};
+    expect(limiter.allow('a', admitted)).toBe(true);
+    expect(limiter.allow('b', other)).toBe(true);
+    expect(limiter.allow('a', denied)).toBe(false);
+    limiter.refund('a', other);
+    limiter.refund('a', denied);
+    expect(limiter.allow('a')).toBe(false);
+    expect(limiter.allow('b')).toBe(false);
+  });
 });

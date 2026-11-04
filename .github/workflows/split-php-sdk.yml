@@ -32,6 +32,7 @@ concurrency:
 jobs:
   test:
     name: PHP SDK tests
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -47,6 +48,7 @@ jobs:
 
   split:
     name: Mirror sdk/php -> rmyndharis/openwa-php
+    if: github.ref == 'refs/heads/main'
     # Never mirror an untested (red) SDK to Packagist dev-main.
     needs: [test]
     runs-on: ubuntu-latest
@@ -68,6 +70,13 @@ jobs:
           fi
           git config user.name "rmyndharis"
           git config user.email "yudhi@rmyndharis.com"
+          # An unrelated main commit schedules no replacement run under the SDK path filter.
+          # Compare SDK content, retaining the tested HEAD for the split and the push.
+          git fetch --no-tags origin refs/heads/main
+          if [ "$(git rev-parse HEAD:sdk/php)" != "$(git rev-parse FETCH_HEAD:sdk/php)" ]; then
+            echo "::notice::Source main has different PHP content; leaving the mirror to its tested run"
+            exit 0
+          fi
           SPLIT_SHA="$(git subtree split --prefix=sdk/php HEAD)"
           echo "Split SHA: $SPLIT_SHA"
           # Hooks off: nothing in this job runs project code, so none are expected, and none may run with the

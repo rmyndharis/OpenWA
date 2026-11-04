@@ -83,7 +83,9 @@ public class OpenWAApiError extends OpenWAError {
 
     /**
      * Seconds to wait before retrying: the body's {@code retryAfterSeconds} when present, else the
-     * {@code Retry-After} header (seconds or an HTTP date), else {@code null}.
+     * {@code Retry-After} header (seconds or an HTTP date), else {@code null}. A body value beyond the
+     * range of a {@code long} reads as {@code Long.MAX_VALUE}; a header of more than 18 digits, or a
+     * date too far ahead to convert, reads as {@code null}, the same as an unreadable one: no hint.
      */
     public Long retryAfterSeconds() {
         return retryAfterSeconds;
@@ -113,7 +115,7 @@ public class OpenWAApiError extends OpenWAError {
         try {
             Instant at = ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant();
             return Math.max(0L, (long) Math.ceil((at.toEpochMilli() - System.currentTimeMillis()) / 1000.0));
-        } catch (DateTimeParseException e) {
+        } catch (DateTimeParseException | ArithmeticException e) {
             return null;
         }
     }

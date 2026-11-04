@@ -1,4 +1,4 @@
-import { BadRequestException, HttpException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, HttpException, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
 import { GroupService } from './group.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -48,6 +48,8 @@ describe('GroupService', () => {
       ["the account's own 1:1 jid", '628123456789@c.us'],
       ['a lid', '99887766@lid'],
       ['a channel', '120363000000000000@newsletter'],
+      ['a 1:1 jid with a group domain appended', '628123456789@c.us@g.us'],
+      ['a device jid with a group domain appended', '628123456789:5@c.us@g.us'],
     ])('refuses %s', (_label, id) => {
       const e = engine();
       const svc = makeService(e);
@@ -75,6 +77,112 @@ describe('GroupService', () => {
 
       expect(e.deleteGroupPicture).toHaveBeenCalledWith('123456789-987654321@g.us');
       expect(e.getProfilePicture).toHaveBeenCalledWith('123456789-987654321@g.us');
+    });
+  });
+
+  // Baileys relays the label as a message to whatever jid it is handed, so a 1:1 id would put a group
+  // protocol message in a person's chat.
+  describe('setGroupMemberLabel', () => {
+    it.each([
+      ['a 1:1 jid', '628123456789@c.us'],
+      ['a lid', '99887766@lid'],
+      ['a channel', '120363000000000000@newsletter'],
+      // Baileys reads the domain after the first `@`, so a second one is refused wherever it sits.
+      ['a 1:1 jid with a group domain appended', '628123456789@c.us@g.us'],
+      ['a protocol-dialect jid with a group domain appended', '628123456789@s.whatsapp.net@g.us'],
+      ['a device jid with a group domain appended', '628123456789:5@c.us@g.us'],
+    ])('refuses %s before it reaches the engine', (_label, id) => {
+      const setGroupMemberLabel = jest.fn().mockResolvedValue(undefined);
+      const svc = makeService({ setGroupMemberLabel });
+
+      expect(() => svc.setGroupMemberLabel('s1', id, 'Site A')).toThrow(BadRequestException);
+      expect(setGroupMemberLabel).not.toHaveBeenCalled();
+    });
+
+    it('forwards a group id and the label, an empty one included', async () => {
+      const setGroupMemberLabel = jest.fn().mockResolvedValue(undefined);
+      const svc = makeService({ setGroupMemberLabel });
+
+      await svc.setGroupMemberLabel('s1', '120363000000000001@g.us', 'Site A Management');
+      await svc.setGroupMemberLabel('s1', '120363000000000001@g.us', '');
+
+      expect(setGroupMemberLabel).toHaveBeenNthCalledWith(1, '120363000000000001@g.us', 'Site A Management');
+      expect(setGroupMemberLabel).toHaveBeenNthCalledWith(2, '120363000000000001@g.us', '');
+    });
+
+    it.each(['120363000000000001@G.US', ' 120363000000000001@g.us ', '120363000000000001:5@g.us'])(
+      'hands the engine the group id %j in the form Baileys relays to a group',
+      async id => {
+        const setGroupMemberLabel = jest.fn().mockResolvedValue(undefined);
+        const svc = makeService({ setGroupMemberLabel });
+
+        await svc.setGroupMemberLabel('s1', id, 'Site A');
+
+        expect(setGroupMemberLabel).toHaveBeenCalledWith('120363000000000001@g.us', 'Site A');
+      },
+    );
+
+    it('lets the whatsapp-web.js 501 through', async () => {
+      const svc = makeService({
+        setGroupMemberLabel: jest.fn().mockRejectedValue(new EngineNotSupportedError('setGroupMemberLabel')),
+      });
+
+      await expect(svc.setGroupMemberLabel('s1', '120363000000000001@g.us', 'Site A')).rejects.toBeInstanceOf(
+        EngineNotSupportedError,
+      );
+    });
+  });
+
+  // The service is the only enforcer of these body rules: SetGroupPictureDto.mimetype is optional, and a
+  // plugin send or a hook rewrite reaches the service without the DTO's url check.
+  describe('setGroupPicture checks its media body', () => {
+    const GROUP = '123456789-987654321@g.us';
+    const origCap = process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+    afterEach(() => {
+      if (origCap === undefined) delete process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+      else process.env.MEDIA_DOWNLOAD_MAX_BYTES = origCap;
+    });
+
+    it.each([
+      ['neither url nor base64', {}, 'Either url or base64 must be provided'],
+      ['base64 without a mimetype', { base64: 'QUJD' }, 'mimetype is required when using base64 data'],
+      [
+        'a url that is not an absolute http(s) URL',
+        { url: 'ftp://example.com/g.jpg' },
+        'url must be an absolute http(s) URL',
+      ],
+    ])('refuses %s with 400 and never reaches the engine', (_label, dto, message) => {
+      const setGroupPicture = jest.fn();
+      const svc = makeService({ setGroupPicture });
+
+      expect(() => svc.setGroupPicture('s1', GROUP, dto)).toThrow(BadRequestException);
+      expect(() => svc.setGroupPicture('s1', GROUP, dto)).toThrow(message);
+      expect(setGroupPicture).not.toHaveBeenCalled();
+    });
+
+    it('refuses base64 over MEDIA_DOWNLOAD_MAX_BYTES with 413', () => {
+      process.env.MEDIA_DOWNLOAD_MAX_BYTES = '1024';
+      const setGroupPicture = jest.fn();
+      const dto = { base64: Buffer.alloc(1025).toString('base64'), mimetype: 'image/jpeg' };
+
+      expect(() => makeService({ setGroupPicture }).setGroupPicture('s1', GROUP, dto)).toThrow(
+        PayloadTooLargeException,
+      );
+      expect(setGroupPicture).not.toHaveBeenCalled();
+    });
+
+    it('types a url body image/jpeg and keeps the mimetype a base64 body names', async () => {
+      const setGroupPicture = jest.fn().mockResolvedValue(undefined);
+      const svc = makeService({ setGroupPicture });
+
+      await svc.setGroupPicture('s1', GROUP, { url: 'https://example.com/g.jpg' });
+      await svc.setGroupPicture('s1', GROUP, { base64: 'QUJD', mimetype: 'image/png' });
+
+      expect(setGroupPicture).toHaveBeenNthCalledWith(1, GROUP, {
+        mimetype: 'image/jpeg',
+        data: 'https://example.com/g.jpg',
+      });
+      expect(setGroupPicture).toHaveBeenNthCalledWith(2, GROUP, { mimetype: 'image/png', data: 'QUJD' });
     });
   });
 
@@ -349,6 +457,23 @@ describe('GroupService', () => {
       expect((error as HttpException).message).toContain('ephemeralSeconds');
       // The patch stops at the failure: locked is never attempted.
       expect(engine.setGroupInfoAdminsOnly).not.toHaveBeenCalled();
+    });
+
+    // The SDKs tell a caller that a throttle 503 applied nothing except on this route, where it can
+    // follow a field that was applied and the message lists that field.
+    it('answers a throttle on a later field with 503 and the fields already applied', async () => {
+      const engine = {
+        setGroupEphemeral: jest.fn().mockResolvedValue(undefined),
+        setGroupMessagesAdminsOnly: jest
+          .fn()
+          .mockRejectedValue(new EngineThrottledError('Updating the group was rate-limited by WhatsApp (code 429)')),
+      };
+      const error = await makeService(engine)
+        .updateGroupSettings('s1', 'g1', { announce: true, ephemeralSeconds: 86400 })
+        .catch((e: unknown) => e);
+      expect((error as HttpException).getStatus()).toBe(503);
+      expect((error as HttpException).message).toContain('(code 429)');
+      expect((error as HttpException).message).toContain('already applied: ephemeralSeconds');
     });
 
     it('propagates a first-field failure unchanged (nothing applied → no partial state to report)', async () => {

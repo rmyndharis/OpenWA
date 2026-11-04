@@ -1,6 +1,3 @@
-// archiver v8 is ESM-only (pulled in transitively via @Global StorageModule); stub for ts-jest CJS.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -65,11 +62,7 @@ describe('Group invite-code role gate (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore TypeORM multi-datasource teardown quirk */
-    }
+    await app?.close();
   });
 
   beforeEach(() => jest.clearAllMocks());

@@ -25,7 +25,6 @@ function makeLifecycle(): WwebjsLifecycle {
     config: { sessionId: 'sess', sessionDataPath: './data' },
     clearReadyReconcile: jest.fn(),
     startOnboardingWatcher: jest.fn(),
-    emitState: jest.fn(),
     getCallbacks: () => ({}),
   } as unknown as WwebjsLifecycleHost;
   const lc = new WwebjsLifecycle(host);

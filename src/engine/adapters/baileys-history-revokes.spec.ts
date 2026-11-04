@@ -84,7 +84,7 @@ describe('Baileys history revokes', () => {
           normalizeMessageContent: (m: unknown) => m,
           getContentType: (m: object) => Object.keys(m)[0],
           extractMessageContent: (m: unknown) => m,
-          proto: { Message: { ProtocolMessage: { Type: { REVOKE: 0 } } } },
+          proto: { Message: { ProtocolMessage: { Type: { REVOKE: 0, MESSAGE_EDIT: 14 } } } },
           downloadMediaMessage: () =>
             new Promise(resolve => {
               releaseMedia = () =>
@@ -295,6 +295,47 @@ describe('Baileys history revokes', () => {
     expect((await raw.getMessage('s1', 'M1'))?.message).toBeNull();
   });
 
+  // The key inside a revoke is written by the revoker's client from its own side: a contact names this
+  // account's chat and marks its own message fromMe.
+  describe('a revoke in a later chunk, keyed as the revoker wrote it', () => {
+    const GROUP = '1@g.us';
+    const MEMBER = '628333@s.whatsapp.net';
+    const memberRevoke = () =>
+      revoke({ id: 'M1', remoteJid: GROUP, fromMe: true }, { remoteJid: GROUP, fromMe: false, participant: MEMBER });
+
+    it('clears the contact message it names in a 1:1 chat', async () => {
+      await capture([target()]);
+      await capture([revoke({ id: 'M1', remoteJid: SELF, fromMe: true }, { remoteJid: CHAT, fromMe: false })]);
+      expect(await cleared()).toMatchObject({ direction: MessageDirection.INCOMING });
+      expect(previews.listChats().find(chat => chat.id === '628111@c.us')).toMatchObject({
+        lastMessage: '',
+        lastMessageType: 'revoked',
+      });
+    });
+
+    it('writes nothing for a group revoke whose target neither the chunk nor the store holds', async () => {
+      await capture([memberRevoke()]);
+      expect(await repo.count()).toBe(0);
+
+      const posted = target({ key: { id: 'M1', remoteJid: GROUP, fromMe: false, participant: MEMBER } });
+      await capture([posted]);
+      await capture([memberRevoke()]);
+      expect(await repo.findOneByOrFail({ waMessageId: 'M1' })).toMatchObject({
+        direction: MessageDirection.INCOMING,
+        body: 'withdrawn secret',
+      });
+    });
+
+    it('clears a group message the store holds, keeping its direction', async () => {
+      const posted = target({ key: { id: 'M1', remoteJid: GROUP, fromMe: false, participant: MEMBER } });
+      await raw.put('s1', posted);
+      await capture([posted]);
+      await capture([memberRevoke()]);
+      expect(await cleared()).toMatchObject({ direction: MessageDirection.INCOMING });
+      expect((await raw.getMessage('s1', 'M1'))?.message).toBeNull();
+    });
+  });
+
   it('does not write history tombstones after the session is retired', async () => {
     isLive = false;
     await capture([revoke()]);
@@ -316,6 +357,128 @@ describe('Baileys history revokes', () => {
     expect(await applying).toBeUndefined();
     spy.mockRestore();
     expect((await raw.getMessage('s1', 'M1'))?.message).toEqual(target().message);
+  });
+
+  it('keeps distinct raw LIDs separate even when both keys carry the same phone', async () => {
+    const original = target({ key: { id: 'M1', remoteJid: '111@lid', remoteJidAlt: CHAT, fromMe: false } });
+    await raw.put('s1', original);
+    const applying = events.applyHistoryRevoke(original.key, {
+      remoteJid: '222@lid',
+      remoteJidAlt: CHAT,
+      fromMe: false,
+    });
+    expect(await applying).toBeUndefined();
+    expect((await raw.getMessage('s1', 'M1'))?.message).toEqual(original.message);
+  });
+
+  it('does not apply a history revoke whose directory lookup outlives unlinking', async () => {
+    await raw.put('s1', target());
+    let release!: (phone: string) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    (events as unknown as { host: BaileysEventsHost }).host.findPersistedLidPhone = () => {
+      entered();
+      return new Promise(resolve => {
+        release = resolve;
+      });
+    };
+    const applying = events.applyHistoryRevoke(target().key, { remoteJid: '111@lid', fromMe: false });
+    await started;
+    events.fenceStoredWrites();
+    release('628111');
+    expect(await applying).toBeUndefined();
+    expect((await raw.getMessage('s1', 'M1'))?.message).toEqual(target().message);
+  });
+
+  it.each([
+    ['edit', 'preview'],
+    ['edit', 'stored'],
+    ['revoke', 'preview'],
+    ['revoke', 'stored'],
+  ] as const)('does not resume a live %s after its %s lookup outlives reset', async (kind, phase) => {
+    await raw.put('s1', target());
+    previews.upsertChats([{ id: CHAT }]);
+    previews.recordMessage(target());
+    let release!: (phone: string) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    const host = (events as unknown as { host: BaileysEventsHost }).host;
+    const phone = new Promise<string>(resolve => {
+      release = resolve;
+    });
+    let reads = 0;
+    host.findPersistedLidPhone = () => {
+      reads++;
+      if (reads !== (phase === 'preview' ? 1 : 2)) return Promise.resolve('628111');
+      entered();
+      return phone;
+    };
+    host.getOnMessageEdited = () => liveFanout;
+    const change =
+      kind === 'revoke'
+        ? revoke(target().key, { remoteJid: '111@lid' })
+        : {
+            key: { id: 'EDIT', remoteJid: '111@lid', fromMe: false },
+            message: {
+              protocolMessage: { type: 14, key: { id: 'M1' }, editedMessage: { conversation: 'old connection edit' } },
+            },
+            messageTimestamp: 1700000100,
+          };
+    events.handleMessagesUpsert({ type: 'notify', messages: [change] });
+    await started;
+    const jobs = [
+      ...(events as unknown as { inboundInFlight: Map<string, { done: Promise<void> }> }).inboundInFlight.values(),
+    ].map(job => job.done);
+    events.fenceStoredWrites();
+    await raw.clearSession('s1');
+    const current = target({ message: { conversation: 'current connection body' } });
+    await raw.put('s1', current);
+    previews = new BaileysSessionStore(undefined, 's1');
+    previews.upsertChats([{ id: CHAT }]);
+    previews.recordMessage(current);
+    release('628111');
+    await Promise.all(jobs);
+    for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));
+    expect((await raw.getMessage('s1', 'M1'))?.message).toEqual(current.message);
+    expect(previews.listChats().find(chat => chat.id === '628111@c.us')?.lastMessage).toBe('current connection body');
+    expect(liveFanout).not.toHaveBeenCalled();
+  });
+
+  it('does not bridge a history preview after its directory lookup outlives reset', async () => {
+    let generation = 0;
+    let release!: (phone: string) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    const host = (history as unknown as { host: BaileysHistoryHost & { getStoredWriteGeneration?: () => number } })
+      .host;
+    host.getStoredWriteGeneration = () => generation;
+    const phone = new Promise<string>(resolve => {
+      release = resolve;
+    });
+    host.findPersistedLidPhone = () => {
+      entered();
+      return phone;
+    };
+    onHistory.mockImplementationOnce((messages: IncomingMessage[]) =>
+      Promise.resolve(messages.map(message => ({ ...message, type: 'revoked', body: '' }))),
+    );
+    const capturing = history.captureHistoryMessages([
+      target({ key: { id: 'M1', remoteJid: '111@lid', fromMe: false } }),
+    ]);
+    await started;
+    generation++;
+    previews = new BaileysSessionStore(undefined, 's1');
+    previews.upsertChats([{ id: CHAT }]);
+    previews.recordMessage(target({ message: { conversation: 'current connection body' } }));
+    release('628111');
+    await capturing;
+    expect(previews.listChats().find(chat => chat.id === '628111@c.us')?.lastMessage).toBe('current connection body');
   });
 
   it('clears old content with retention enabled without inserting old content again', async () => {

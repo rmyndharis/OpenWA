@@ -3,6 +3,7 @@ import { BadRequestException } from '@nestjs/common';
 import sharp from 'sharp';
 import { BaileysMessaging, MAX_STICKER_FRAMES, blockSvgDecoding, type BaileysMessagingHost } from './baileys-messaging';
 import { createLogger } from '../../common/services/logger.service';
+import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
 
 /**
  * Baileys stamps the sticker mimetype unconditionally: `prepareWAMessageMedia` applies
@@ -158,6 +159,8 @@ describe('BaileysMessaging.sendStickerMessage — what reaches the socket must r
       await expect(send).rejects.toThrow(`has ${MAX_STICKER_FRAMES + 1} frames; at most ${MAX_STICKER_FRAMES}`);
       expect(convert).not.toHaveBeenCalled();
       expect(sock.sendMessage).not.toHaveBeenCalled();
+      // Refused before anything reached WhatsApp, so a keyed send frees its Idempotency-Key.
+      expect(provesNothingSent(await send.catch((error: unknown) => error))).toBe(true);
     } finally {
       convert.mockRestore();
     }

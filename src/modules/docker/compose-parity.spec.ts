@@ -111,9 +111,9 @@ async function capture(profile: string, Service: typeof DockerService = DockerSe
 describe('DockerService managed specs ↔ docker-compose.yml parity', () => {
   const compose = yaml.load(readFileSync(join(__dirname, '../../../docker-compose.yml'), 'utf8')) as ComposeFile;
 
-  // getContainerSpec reads the S3 credential env vars at call time; scrub them so the
+  // getContainerSpec reads the credential env vars at call time; scrub them so the
   // default-fallback assertions don't depend on the developer's shell.
-  const S3_VARS = ['S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_ACCESS_KEY', 'S3_SECRET_KEY'];
+  const S3_VARS = ['S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_ACCESS_KEY', 'S3_SECRET_KEY', 'DATABASE_PASSWORD'];
   let savedEnv: Record<string, string | undefined> = {};
   beforeEach(() => {
     savedEnv = {};
@@ -211,7 +211,7 @@ describe('DockerService managed specs ↔ docker-compose.yml parity', () => {
     expect(cfg.HostConfig.PidsLimit).toBeUndefined();
   });
 
-  it('postgres: provisions the fixed built-in credentials; compose defaults agree on user/db only', async () => {
+  it('postgres: provisions the default built-in credentials; compose defaults agree on user/db only', async () => {
     const cfg = await capture('postgres');
     expect(cfg.Env).toEqual(['POSTGRES_USER=openwa', 'POSTGRES_PASSWORD=openwa', 'POSTGRES_DB=openwa']);
     const env = compose.services.postgres.environment!;
@@ -222,6 +222,39 @@ describe('DockerService managed specs ↔ docker-compose.yml parity', () => {
     expect(env.POSTGRES_USER).toBe('${DATABASE_USERNAME:-openwa}');
     expect(env.POSTGRES_DB).toBe('${DATABASE_NAME:-openwa}');
     expect(env.POSTGRES_PASSWORD).toBe('${DATABASE_PASSWORD:-}');
+  });
+
+  it('postgres: initializes the role with the password the app will dial with', async () => {
+    process.env.DATABASE_PASSWORD = 'S3cure-pw-9';
+    const cfg = await capture('postgres');
+    expect(cfg.Env).toEqual(['POSTGRES_USER=openwa', 'POSTGRES_PASSWORD=S3cure-pw-9', 'POSTGRES_DB=openwa']);
+  });
+
+  it('postgres: provisions the password the next boot reads, not the one this process booted with', async () => {
+    // A password saved from the dashboard reached process.env from data/.env.generated at boot; a later
+    // save has rewritten the file, and the restart that creates the container runs in this old process.
+    // Fresh modules: the precedence snapshot is global.
+    const dir = mkdtempSync(join(tmpdir(), 'openwa-pg-'));
+    mkdirSync(join(dir, 'data'));
+    writeFileSync(join(dir, 'data', '.env.generated'), 'DATABASE_PASSWORD=S3cure-pw-9\n');
+    const cwd = jest.spyOn(process, 'cwd').mockReturnValue(dir);
+    try {
+      let FreshDockerService: typeof DockerService = DockerService;
+      jest.isolateModules(() => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const precedence = require('../../config/env-precedence') as typeof import('../../config/env-precedence');
+        precedence.recordOsEnvKeys({});
+        precedence.recordPinnedEnvKeys({});
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        FreshDockerService = (require('./docker.service') as typeof import('./docker.service')).DockerService;
+      });
+      process.env.DATABASE_PASSWORD = 'old-boot-password';
+      const cfg = await capture('postgres', FreshDockerService);
+      expect(cfg.Env).toEqual(['POSTGRES_USER=openwa', 'POSTGRES_PASSWORD=S3cure-pw-9', 'POSTGRES_DB=openwa']);
+    } finally {
+      cwd.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('postgres: healthcheck resolves to the same pg_isready command as compose', async () => {
@@ -382,11 +415,8 @@ describe('DockerService managed specs ↔ docker-compose.yml parity', () => {
       ...readFileSync(join(__dirname, '../../../Dockerfile'), 'utf8').matchAll(/^ENV (PUPPETEER_\w+)=/gm),
     ].map(match => match[1]);
     expect(names.length).toBeGreaterThan(0);
-    // A file path, not require.resolve: jest maps `puppeteer` to a mock.
-    const config = readFileSync(
-      join(__dirname, '../../../node_modules/puppeteer/lib/cjs/puppeteer/getConfiguration.js'),
-      'utf8',
-    );
+    // Resolve the exported internal path without loading Puppeteer's ESM entry point.
+    const config = readFileSync(require.resolve('puppeteer/internal/getConfiguration.js'), 'utf8');
     expect(names.filter(name => !config.includes(`'${name}'`))).toEqual([]);
   });
 

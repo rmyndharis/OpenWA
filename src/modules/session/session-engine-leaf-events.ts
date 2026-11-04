@@ -59,6 +59,7 @@ export class SessionEngineLeafEvents {
    * `(sessionId, waStatusId)`, so this can never double-count a status onMessage already ingested.
    */
   async seedStatuses(sessionId: string, engine: IWhatsAppEngine): Promise<void> {
+    const lifetime = this.statusStore.captureWrites(sessionId);
     try {
       // Read the status-broadcast chat's own recent messages rather than getContactStatuses(): on
       // whatsapp-web.js the latter reads the StatusV3 collection, which loads asynchronously and is
@@ -93,6 +94,9 @@ export class SessionEngineLeafEvents {
         return resolved;
       };
       for (const msg of messages) {
+        // Outside the per-item try: a deleted session ends the backfill, where every later item would
+        // only read the store and fail the same way.
+        lifetime.assertCurrent();
         try {
           // Mirrors the live path's own-send drop: the broadcast chat's history also contains the
           // account's OWN active statuses, which must not come back as if a contact had posted them.
@@ -108,7 +112,7 @@ export class SessionEngineLeafEvents {
             status.contactName = poster.name;
             status.contactPushName = poster.pushName;
           }
-          await this.statusStore.ingest(sessionId, status);
+          await this.statusStore.ingest(sessionId, status, lifetime);
         } catch (itemErr) {
           // One bad item must not abort the whole backfill.
           this.logger.warn('Status seed item skipped', {
@@ -122,6 +126,8 @@ export class SessionEngineLeafEvents {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      lifetime.close();
     }
   }
 

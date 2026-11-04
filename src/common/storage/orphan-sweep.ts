@@ -10,9 +10,8 @@ import { StorageService } from './storage.service';
  * restart simply restarts the grace clock (fails safe) and a file mid-write is never reaped. The map
  * is pruned to the keys still orphaned at the end of the pass, so it cannot grow unbounded.
  *
- * Files are enumerated with iterateFiles(), NOT listFiles(): listFiles() truncates at
- * STORAGE_LIST_MAX_FILES (a per-call DoS guard, not a completeness contract), which would strand
- * every orphan past the cap.
+ * Files are streamed from iterateFiles() under the sweep's prefix, so an orphan is found however
+ * large the store is.
  *
  * Returns the number of files deleted. The summary log stays with the caller (each sweep reports in
  * its own wording); a failed delete is reported through `onDeleteFailed` and retried on a later pass.
@@ -73,7 +72,8 @@ export async function sweepOrphanedFiles(options: {
     chunk = [];
   };
 
-  for await (const file of storage.iterateFiles(prefix)) {
+  // A directory the walk cannot read is left alone: this pass deletes only files it was shown.
+  for await (const file of storage.iterateFiles(prefix, { skipUnreadable: true })) {
     if (!file.startsWith(prefix)) continue;
     chunk.push(file);
     if (options.chunkSize !== undefined && chunk.length >= options.chunkSize) await flush();

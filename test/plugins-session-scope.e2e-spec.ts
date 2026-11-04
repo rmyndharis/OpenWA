@@ -1,6 +1,3 @@
-// archiver v8 is ESM-only (pulled in transitively via @Global StorageModule); stub for ts-jest CJS.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -46,11 +43,7 @@ describe('Plugin routes reject session-scoped keys (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   describe('fenced routes', () => {
@@ -118,12 +111,14 @@ describe('Plugin routes reject session-scoped keys (e2e)', () => {
    * carries @RequireUnscopedKey (see fenced routes above).
    */
   describe('deliberate carve-outs stay reachable for a scoped key', () => {
-    it('does not 403 a scoped ADMIN on PUT /api/plugins/:id/config/:sessionId for an in-scope session', async () => {
+    it('lets a scoped ADMIN reach the PUT /api/plugins/:id/config/:sessionId handler for an in-scope session', async () => {
       const res = await request(app.getHttpServer())
         .put(`/api/plugins/any-plugin/config/${sessA}`)
         .set('X-API-Key', scopedKey)
-        .send({ config: {} });
-      expect(res.status).not.toBe(403);
+        .send({ config: {} })
+        .expect(404);
+      // The handler's own answer: a route that is gone also answers 404, and a refused body 400.
+      expect((res.body as { message: string }).message).toBe('Plugin any-plugin not found');
     });
   });
 

@@ -36,8 +36,8 @@ Every page — and most shared components — ships its own stylesheet colocated
 component (see §17.4 for the handful that carry no stylesheet of their own). Icons come from
 `lucide-react`; charts from `recharts`; i18n from `react-i18next`.
 Client state is **TanStack Query** for most server data (see `src/hooks/queries.ts`; §17.5 names the
-pages that keep their own copy) plus two small React
-Context providers (`RoleProvider`, `ToastProvider`); theme mode is a provider-less `useTheme` hook
+pages that keep their own copy) plus three small React
+Context providers (`RoleProvider`, `ToastProvider`, `NumberCheckProvider`); theme mode is a provider-less `useTheme` hook
 backed by `localStorage` — there is no Zustand store.
 
 ### Design Principles
@@ -56,7 +56,7 @@ backed by `localStorage` — there is no Zustand store.
    fill colours for buttons, borders and tints, and `--primary-text`, `--error-text`, `--success-text`
    and `--warning-text` are darkened twins for anything rendered as text or an icon. As foregrounds
    the originals measure 1.98:1, 3.76:1, 2.28:1 and 2.15:1 on white. Each twin is set from the
-   darkest surface it actually lands on, which is the 10 to 20 percent tint of its own hue that the
+   darkest surface it actually lands on, which is the 10 to 22 percent tint of its own hue that the
    badges and callouts paint behind it, not white. Dark restates primary, success and warning as the
    originals, which are 6:1 or better on the dark surfaces, and lightens error to `#f77b7b`, which
    clears 4.65:1 on the 20 percent error tint over Slate 800, because the original measures 3.89:1
@@ -79,6 +79,7 @@ flowchart TB
         HOME[Dashboard /]
         SESSIONS[Sessions /sessions]
         CHATS[Chats /chats]
+        NUMBERS[Number Checker /number-checker]
         WEBHOOKS[Webhooks /webhooks]
         TEMPLATES[Templates /templates]
         TESTER[Message Tester /message-tester]
@@ -108,9 +109,14 @@ mounted for any admin key.
 ```
 /                  → Dashboard (overview + charts)
 /sessions          → Sessions (create / start / stop / QR / delete)
-/chats             → Chats (Chats / Channels / Status tabs; chat list + message thread live via
-                     WebSocket; thread pages older history in on scroll-up; read-only channel
-                     feed on whatsapp-web.js)
+/chats             → Chats (full height, no page header; session switcher listing every session;
+                     Chats / Channels / Status tabs, quick filters and an Archived view on Chats;
+                     chat list + message thread live via WebSocket; thread pages older history in
+                     on scroll-up; per-chat menu (pin, mute, archive, mark unread, block, leave
+                     group, clear, delete) [operator]; contact info
+                     panel and group info dialog; new chat / new group [operator]; read-only
+                     channel feed on whatsapp-web.js)
+/number-checker    → Number Checker (single and bulk check of whether numbers are on WhatsApp) [operator]
 /webhooks          → Webhooks (per-session webhook endpoints)
 /templates         → Message Templates
 /message-tester    → Message Tester (ad-hoc send-* + check-number)
@@ -123,7 +129,9 @@ mounted for any admin key.
 
 > There is **no Settings page** and no `/sessions/:id`, `/sessions/:id/chat`, or `/webhooks/:id`
 > route. Theme (light/dark/system) is a one-click toggle in the sidebar footer (`Layout.tsx`),
-> persisted client-side by the `useTheme` hook.
+> persisted client-side by the `useTheme` hook. The button that collapses the sidebar to its icon rail
+> sits in the sidebar header, beside the logo, and under the logo once collapsed; its panel icon is
+> mirrored for right-to-left languages.
 
 ## 17.3 Wireframes
 
@@ -386,40 +394,46 @@ mounted for any admin key.
 ### Bespoke components
 
 The UI is built from a small set of project-specific components under `dashboard/src/components/`,
-most with a colocated CSS file. Six top-level components ship none: `ErrorBoundary` styles inline
+most with a colocated CSS file. Seven top-level components ship none: `ErrorBoundary` styles inline
 via `style={{...}}`, `GithubIcon` carries no styling beyond `fill="currentColor"`, `Modal` reuses the
 global `.modal-*` rules from `index.css`, `GroupPicker` and `SessionScopePicker` are styled by the
-one page that uses each (`pages/MessageTester.css`, `pages/ApiKeys.css`), and `RoleProvider` renders
-no DOM. Nothing under `chats/` ships its own stylesheet either: those components take their classes
-from `pages/Chats.css`, and `MediaLightbox` adds the `yet-another-react-lightbox` vendor CSS. There
-is no design-system package to pull from.
+one page that uses each (`pages/MessageTester.css`, `pages/ApiKeys.css`), and `RoleProvider` and
+`NumberCheckProvider` render no DOM. Nothing under `chats/` ships its own stylesheet either: those
+components take their classes from `pages/Chats.css`, and `MediaLightbox` adds the
+`yet-another-react-lightbox` vendor CSS. There is no design-system package to pull from.
 
-| Component                    | File                                | Responsibility                                                                                                               |
-| ---------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `Layout`                     | `components/Layout.tsx`             | App shell: collapsible sidebar nav, mobile drawer, language menu, light/dark/system theme toggle, logout, live version badge |
-| `ToastProvider` / `useToast` | `components/Toast.tsx`              | Context-based toast notifications (success/error/warning/info) with de-dup keys                                              |
-| `PageHeader`                 | `components/PageHeader.tsx`         | Shared page title / subtitle / badge / actions header                                                                        |
-| `Modal`                      | `components/Modal.tsx`              | Accessible dialog (`role="dialog"`, Escape/overlay close, focus trap + restore); uses the global `.modal-*` styles           |
-| `CustomSelect`               | `components/CustomSelect.tsx`       | Keyboard-navigable select replacement (type-ahead, arrow keys) used by Sessions / Logs / Login                               |
-| `DashboardCharts`            | `components/DashboardCharts.tsx`    | `recharts`-based message-volume / activity charts on the Dashboard                                                           |
-| `FilterBuilder`              | `components/FilterBuilder.tsx`      | Visual condition builder for webhook event filters                                                                           |
-| `GlobalSearch`               | `components/GlobalSearch.tsx`       | Debounced message-search box in the Chats header, with all-sessions / current-session scope                                  |
-| `PluginInstances`            | `components/PluginInstances.tsx`    | Per-plugin instance list: create / edit / delete and secret regeneration                                                     |
-| `ErrorBoundary`              | `components/ErrorBoundary.tsx`      | Top-level React error boundary wrapping the whole app                                                                        |
-| `GithubIcon`                 | `components/GithubIcon.tsx`         | Inline brand SVG                                                                                                             |
-| `GroupPicker`                | `components/GroupPicker.tsx`        | Searchable multi-select of a session's groups, used by the Message Tester's multi-group send                                 |
-| `SessionScopePicker`         | `components/SessionScopePicker.tsx` | Per-key session scope checklist on the API Keys page                                                                         |
-| `RoleProvider`               | `components/RoleProvider.tsx`       | Context holding the logged-in key's role, read with `useRole` (`canWrite` gates write actions)                               |
+| Component                    | File                                 | Responsibility                                                                                                                         |
+| ---------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `Layout`                     | `components/Layout.tsx`              | App shell: collapsible sidebar nav, mobile drawer, language menu, light/dark/system theme toggle, logout, live version badge           |
+| `ToastProvider` / `useToast` | `components/Toast.tsx`               | Context-based toast notifications (success/error/warning/info) with de-dup keys                                                        |
+| `PageHeader`                 | `components/PageHeader.tsx`          | Shared page title / subtitle / badge / actions header                                                                                  |
+| `Modal`                      | `components/Modal.tsx`               | Accessible dialog (`role="dialog"`, Escape/overlay close, focus trap + restore); uses the global `.modal-*` styles                     |
+| `CustomSelect`               | `components/CustomSelect.tsx`        | Keyboard-navigable select replacement (type-ahead, arrow keys) used by Sessions / Logs / Login                                         |
+| `DashboardCharts`            | `components/DashboardCharts.tsx`     | `recharts`-based message-volume / activity charts on the Dashboard                                                                     |
+| `FilterBuilder`              | `components/FilterBuilder.tsx`       | Visual condition builder for webhook event filters                                                                                     |
+| `GlobalSearch`               | `components/GlobalSearch.tsx`        | Debounced message search behind a toggle in the Chats sidebar header, with all-sessions / current-session scope                        |
+| `PluginInstances`            | `components/PluginInstances.tsx`     | Per-plugin instance list: create / edit / delete and secret regeneration                                                               |
+| `ErrorBoundary`              | `components/ErrorBoundary.tsx`       | Top-level React error boundary wrapping the whole app                                                                                  |
+| `GithubIcon`                 | `components/GithubIcon.tsx`          | Inline brand SVG                                                                                                                       |
+| `GroupPicker`                | `components/GroupPicker.tsx`         | Searchable multi-select of a session's groups, used by the Message Tester's multi-group send                                           |
+| `SessionScopePicker`         | `components/SessionScopePicker.tsx`  | Per-key session scope checklist on the API Keys page                                                                                   |
+| `RoleProvider`               | `components/RoleProvider.tsx`        | Context holding the logged-in key's role, read with `useRole` (`canWrite` gates write actions)                                         |
+| `NumberCheckProvider`        | `components/NumberCheckProvider.tsx` | Holds the Number Checker's bulk run and its rows above the routes, so leaving the page does not stop a run; read with `useNumberCheck` |
 
 Chat-specific pieces live one level down in `components/chats/`: `MessageBody` (WhatsApp text
-formatting + link detection), `ChatThread` (bubble list, including inbound Baileys prompt buttons
-that call `POST /sessions/:id/messages/click-button`), and `MediaLightbox` (the media viewer, built
-on `yet-another-react-lightbox`). The rest of the room is split the same way: `ChatSidebar`,
-`ChatComposer`, `ChatAvatar`, `KindIcon`, `StatusComposeModal` and `StatusMedia`. Prompt choices
-arrive on live `message.received` as top-level `buttons` and are also stored in message
-`metadata.buttons` so a reload can re-render them. Clicking still requires the prompt to be in the
-engine store; an evicted prompt 404s. A read-only key sees the choices disabled and gets no reply,
-react or delete actions, the same as the disabled composer.
+formatting + link detection), `ChatThread` (bubble list with day separators, including inbound
+Baileys prompt buttons that call `POST /sessions/:id/messages/click-button`), and `MediaLightbox`
+(the media viewer, built on `yet-another-react-lightbox`). The rest of the room is split the same
+way: `ChatSidebar`, `SessionPicker` (the session switcher in the sidebar header), `NewChatPanel`
+(new chat, and new group on Baileys), `ChatRowMenu` (a chat row's actions; `chatActionItems` lists
+them for the row and for the room's menu alike), `GroupInfoDialog` (a group's name, picture,
+description and participants), `ChatDialogs` (mute and save-contact dialogs), `ChatComposer`,
+`ChatAvatar`, `KindIcon`, `StatusComposeModal` and `StatusMedia`. Prompt choices arrive on live
+`message.received` as top-level `buttons` and are also stored in message `metadata.buttons` so a
+reload can re-render them. Clicking still requires the prompt to be in the engine store; an evicted
+prompt 404s. A read-only key sees the choices disabled and gets no reply, react or delete actions,
+the same as the disabled composer, no message search, no New chat button, and of a chat's actions
+only its contact or group info.
 
 The message thread is paged. `useChatMessages` is a `useInfiniteQuery` whose cursor is the number
 of DB rows fetched so far, not the length of the rendered list — the thread also carries engine
@@ -466,9 +480,10 @@ library — those visuals are composed directly with `div`s and the page's own C
 ## 17.5 State Management
 
 There is **no Zustand store** (and no global client-state library). Most server data is owned by
-**TanStack Query** (`@tanstack/react-query`); the only other shared state lives in the two React
+**TanStack Query** (`@tanstack/react-query`); the only other shared state lives in the three React
 Context providers in the app — `RoleProvider` (the authenticated key's role, read through the
-`useRole` hook) and `ToastProvider` (transient notifications). Theme mode is deliberately _not_ a
+`useRole` hook), `ToastProvider` (transient notifications) and `NumberCheckProvider` (the Number
+Checker's bulk run and its rows, which outlive the page). Theme mode is deliberately _not_ a
 context: `useTheme` is a plain hook that persists to `localStorage` and writes one attribute on
 `<html>` (see §17.7).
 
@@ -478,9 +493,12 @@ Three pages keep a server list in local state instead of the query cache:
   own row writes and socket pushes, so an older answer never overwrites a newer row. After each read
   it applies, it invalidates the `['sessions']` key prefix so the Dashboard and per-session views
   refetch.
-- **Chats** (`Chats.tsx`) reads the ready sessions directly on mount, and again when a search hit
-  names a session that list lacks, and keeps the chat list in local state that socket pushes, sends
-  and marking a chat read update.
+- **Chats** (`Chats.tsx`) reads the sessions directly on mount, and again when a search hit names a
+  session that list lacks. The session switcher lists all of them, but only a ready one can be
+  selected; it follows `session.status` pushes through the same live session feed the Sessions page
+  joins (`utils/sessionFeedSubscription`), so a session that connects or drops changes in place. The
+  page keeps the chat list in local state that socket pushes, sends, marking a chat read and the chat
+  actions (pin, mute, archive, rename) update.
 - **Plugins** (`Plugins.tsx`) keeps the catalog in local state. It prefetches it silently on mount
   so installed cards can show an update chip, fetches it again when the Catalog tab opens with an
   empty list, and reloads it after any install, update or uninstall.
@@ -557,15 +575,19 @@ export function useStopSessionMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => sessionApi.stop(id),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
+    // A failed stop can still have changed the session, so the list is re-read either way.
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sessions });
+    },
   });
 }
 ```
 
 > **There is no `useSessionQr` hook and no 30 s `refetchInterval`.** The Sessions page fetches the
 > current QR imperatively via `sessionApi.getQR()`, and `useSessionPairing` re-reads it with
-> `GET /sessions/:id/qr` every 5 s for as long as the QR modal is open; fresh codes are also pushed
-> over the WebSocket (`session.qr` events, see §17.6).
+> `GET /sessions/:id/qr` every 5 s while the QR modal is open and the session is `qr_ready`; in any
+> other state the poll sends no request, and the modal stays open through `authenticating`. The first
+> code and fresh ones are pushed over the WebSocket (`session.qr` events, see §17.6).
 
 ## 17.6 WebSocket Integration
 
@@ -668,8 +690,8 @@ that toggles one attribute on `<html>` and lets the CSS do the rest. The value i
 - **Mode** — `light | dark | system`. `system` removes `data-theme` so a `prefers-color-scheme`
   media query in the global CSS takes over; otherwise `data-theme="light|dark"` is set explicitly.
 
-The sidebar footer button cycles light → dark → system, its label naming the mode a click
-selects; there is no
+The sidebar footer button cycles light → dark → system; its accessible name starts with the mode it
+shows and then names the mode a click selects ("System, Switch to Light"); there is no
 picker popover and no `ThemeProvider` context wrapper — it's a hook consumed directly where needed.
 An earlier accent-palette picker (seven palettes via `data-palette`) was removed for
 maintainability; the legacy `openwa_palette` storage key and the attribute are cleaned up on load.
@@ -694,7 +716,10 @@ export function useTheme() {
 
 The actual colors live in `src/App.css` as variables keyed off `[data-theme]` —
 e.g. `:root { --bg-light: #f8fafc; } [data-theme='dark'] { --bg-light: #0f172a; }` — so
-switching mode is a single attribute write with no re-render of the tree.
+switching mode is a single attribute write with no re-render of the tree. The Chats page adds its
+own chat palette (bubbles, wallpaper, avatar tones) as variables scoped to the page in
+`pages/Chats.css`, keyed off the same `data-theme` attribute and `prefers-color-scheme`, so it
+follows the mode too.
 
 ## 17.8 Build & Deployment
 
@@ -758,9 +783,10 @@ How it fits together:
 - `npm run build:all` builds the API (`dist/`) **and** the dashboard (`dashboard/dist/`). The root
   `Dockerfile` does this in its builder stage and copies `dashboard/dist` into the runtime image.
 - `ServeStaticModule` is registered conditionally in `src/app.module.ts`: it only activates when
-  `dashboard/dist/index.html` exists, serves it with SPA fallback, and `exclude`s `/api` and
-  `/socket.io` so those keep returning real API/WebSocket responses. Opt out with
-  `SERVE_DASHBOARD=false`.
+  `dashboard/dist/index.html` exists and serves the built assets. Its own SPA fallback is off:
+  `configure-app.ts` answers the dashboard documents, with the per-response CSP nonce, for GET paths
+  outside `/api`, `/socket.io`, `/mcp` and `/assets`, so those keep returning real API/WebSocket
+  responses and the body parsers' own 413 and 400. Opt out with `SERVE_DASHBOARD=false`.
 - Run it directly with `npm run prod` (build + serve) or `node dist/main` against a prebuilt image.
 
 In development the build is absent, so serve-static stays inert and the Vite dev server (port

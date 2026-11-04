@@ -78,6 +78,9 @@ export function parseWaId(jid: string): ParsedWaId {
   }
   const domain = lower.slice(at + 1);
   const [local, device] = lower.slice(0, at).split(':');
+  if (lower.indexOf('@') !== at || !local) {
+    return { kind: 'unknown', userPart: '', raw };
+  }
   const kind: WaIdKind = DOMAIN_KINDS.get(domain) ?? 'unknown';
   return { kind, userPart: local, device, raw };
 }

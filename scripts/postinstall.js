@@ -1,7 +1,7 @@
 /**
  * Post-install hook (npm `postinstall`).
  *
- * Thirteen conditional steps, each skipped when its target is absent so the hook is a no-op where the
+ * Fourteen conditional steps, each skipped when its target is absent so the hook is a no-op where the
  * piece is missing (the Docker builder stage copies package*.json long before any source):
  *
  *   1. `npm ci` inside dashboard/ when dashboard/ exists — the dashboard carries its own lockfile and
@@ -30,8 +30,7 @@
  *   9. `node scripts/patch-wwebjs-media-id.js --best-effort` when present, stripping the media
  *      model's private id from the outgoing message so media sends work again, gated the same way.
  *  10. `node scripts/patch-wwebjs-send-error.js --best-effort` when present, making a failed send
- *      report what the page threw instead of `t: t`, gated the same way. It runs after the other
- *      two Client.js patchers (steps 2 and 5), so theirs still meet the tree they were written for.
+ *      report what the page threw instead of `t: t`, gated the same way.
  *  11. `node scripts/patch-baileys-appstate.js --best-effort` when present, the app-state resync
  *      bound, gated the same way.
  *  12. `node scripts/patch-baileys-newsletter-create.js --best-effort` when present, the
@@ -40,6 +39,8 @@
  *
  *  13. `node scripts/patch-baileys-pairing.js --best-effort` when present, preserving pre-login
  *      notification ACKs and refreshing pairing credentials. A partial patch remains fatal.
+ *  14. `node scripts/patch-wwebjs-puppeteer.js` when present. Browser teardown must use the
+ *      connected getter required by Puppeteer 25; an unknown source shape aborts the install.
  *
  * Structured like scripts/patch-wwebjs-201832.js: pure planning + injectable spawn, so the spec
  * (scripts/postinstall.spec.js, node:test) exercises every branch without a real npm run.
@@ -190,6 +191,15 @@ function planSteps(root, env = process.env) {
       name: 'Baileys pairing refresh (scripts/patch-baileys-pairing.js --best-effort)',
       command: process.execPath,
       args: [baileysPairingPatcher, '--best-effort'],
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
+    });
+  }
+  const puppeteerPatcher = path.join(root, 'scripts', 'patch-wwebjs-puppeteer.js');
+  if (fs.existsSync(puppeteerPatcher)) {
+    steps.push({
+      name: 'whatsapp-web.js Puppeteer compatibility (scripts/patch-wwebjs-puppeteer.js)',
+      command: process.execPath,
+      args: [puppeteerPatcher],
       options: { stdio: 'inherit', cwd: root, env: cleanEnv },
     });
   }

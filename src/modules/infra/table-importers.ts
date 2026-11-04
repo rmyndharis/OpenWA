@@ -70,6 +70,24 @@ function decodeJsonColumn(value: unknown): unknown {
   }
 }
 
+// A restore writes JSON text as it finds it, and TypeORM parses a simple-json column on every entity read of the row,
+// so text that does not parse makes each read throw (one session's config failed GET /sessions for every session).
+// Not applied to the event payloads, whose readers set such a row aside, nor to messages.metadata, which the export
+// carries verbatim, so an instance holding one could not restore its own backup.
+function invalidJsonWarning(label: string, id: string, row: object, columns: readonly string[]): string | null {
+  const invalid = columns.find(column => {
+    const value = (row as Record<string, unknown>)[column];
+    if (typeof value !== 'string') return false;
+    try {
+      JSON.parse(value);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  return invalid === undefined ? null : `Skipped ${label} ${id}: ${invalid} is not valid JSON`;
+}
+
 // The entity columns that drop U+0000 do it in a TypeORM transformer, which raw SQL never runs. An
 // older SQLite backup may still hold one, and PostgreSQL refuses it in a bound parameter, failing the
 // whole restore. Apply the same drop here, to those same free-text columns and to the template and
@@ -149,7 +167,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       if (!isSafeSessionName(session.id)) {
         return `Skipped session ${JSON.stringify(session.id)}: unsafe id`;
       }
-      if (isSafeSessionName(session.name)) return null;
+      if (isSafeSessionName(session.name)) return invalidJsonWarning('session', session.id, session, ['config']);
       return `Skipped session ${session.id}: unsafe name ${JSON.stringify(session.name)}`;
     },
     map: (session: SessionRow) => [
@@ -165,9 +183,14 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       session.lastActiveAt,
       session.createdAt,
       session.updatedAt,
-      // 'stopped' is the only value the column holds. A backup written before the column existed,
-      // or an unknown value, restores as NULL: eligible for auto-start and takeover, as before.
-      session.desiredState === 'stopped' ? 'stopped' : null,
+      // A failed delete's 'deleting' restores as 'stopped': no delete runs for the restored row. A
+      // backup written before the column existed, or an unknown value, restores as NULL: eligible for
+      // auto-start and takeover, as before.
+      session.desiredState === 'stopped' ||
+      session.desiredState === 'deleting' ||
+      session.desiredState === 'deleting-stopped'
+        ? 'stopped'
+        : null,
     ],
   }),
 
@@ -188,7 +211,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
         return `Skipped webhook ${webhook.id}: events is not a list of event names`;
       }
       const filterErrors = collectFilterErrors(decodeJsonColumn(webhook.filters));
-      if (filterErrors.length === 0) return null;
+      if (filterErrors.length === 0) return invalidJsonWarning('webhook', webhook.id, webhook, ['headers']);
       return `Skipped webhook ${webhook.id}: invalid filters (${filterErrors.join('; ')})`;
     },
     map: (webhook: WebhookRow) => [
@@ -253,6 +276,8 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
     sql: `INSERT INTO message_batches (id, batch_id, session_id, status, messages, options, progress, results, current_index, created_at, updated_at, started_at, completed_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     id: (batch: MessageBatchRow) => batch.id,
+    skip: (batch: MessageBatchRow) =>
+      invalidJsonWarning('message batch', batch.id, batch, ['messages', 'options', 'progress', 'results']),
     map: (batch: MessageBatchRow) => [
       batch.id,
       batch.batch_id,
@@ -322,16 +347,22 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
   defineTableImporter({
     key: 'lidMappings',
     label: 'lid mapping',
-    sql: `INSERT INTO lid_mappings (lid, phone, "sessionId", "updatedAt") VALUES ($1, $2, $3, $4)`,
+    sql: `INSERT INTO lid_mappings (lid, phone, "sessionId", "updatedAt", "isReported") VALUES ($1, $2, $3, $4, $5)`,
     id: (lm: LidMappingRow) => lm.lid,
-    map: (lm: LidMappingRow) => [lm.lid, lm.phone ?? null, lm.sessionId ?? null, lm.updatedAt],
+    map: (lm: LidMappingRow) => [
+      lm.lid,
+      lm.phone ?? null,
+      lm.sessionId ?? null,
+      lm.updatedAt,
+      lm.isReported === true || lm.isReported === 1,
+    ],
   }),
 
   // Import chat states (optional; not a FK, restored as a standalone per-session cache table)
   defineTableImporter({
     key: 'chatStates',
     label: 'chat state',
-    sql: `INSERT INTO chat_states ("sessionId", "chatId", "muteEndTime", archived, pinned, observed, "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    sql: `INSERT INTO chat_states ("sessionId", "chatId", "muteEndTime", archived, pinned, observed, "deletedAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     id: (cs: ChatStateRow) => `${cs.sessionId}/${cs.chatId}`,
     map: (cs: ChatStateRow) => [
       cs.sessionId,
@@ -340,6 +371,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       cs.archived,
       cs.pinned,
       cs.observed ?? null,
+      cs.deletedAt ?? null,
       cs.updatedAt,
     ],
   }),
@@ -351,6 +383,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
     sql: `INSERT INTO plugin_instances (id, "pluginId", "instanceId", "sessionScope", secret, "verifyToken", config, enabled, "createdAt", "updatedAt")
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     id: (pi: PluginInstanceRow) => pi.id,
+    skip: (pi: PluginInstanceRow) => invalidJsonWarning('plugin instance', pi.id, pi, ['config']),
     map: (pi: PluginInstanceRow) => [
       pi.id,
       pi.pluginId,
@@ -372,6 +405,7 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
     sql: `INSERT INTO conversation_mappings (id, "sessionId", "chatId", "pluginId", "instanceId", "providerConversationId", "handoverState", metadata, "updatedAt")
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     id: (cm: ConversationMappingRow) => cm.id,
+    skip: (cm: ConversationMappingRow) => invalidJsonWarning('conversation mapping', cm.id, cm, ['metadata']),
     map: (cm: ConversationMappingRow) => [
       cm.id,
       cm.sessionId,

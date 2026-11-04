@@ -35,8 +35,8 @@ export interface RegisterPluginSearchProviderDeps {
  */
 export function registerPluginSearchProvider(deps: RegisterPluginSearchProviderDeps): void {
   if (!deps.hasPermission) {
-    // Bounded without a latch: WorkerSearchRegistry posts `search-provider-register` only on the
-    // plugin's FIRST ctx.registerSearchProvider call, so this is at most one line per enable.
+    // At most one line per enable: the bridge's registrar takes one declaration per worker, whatever
+    // the worker posts.
     deps.warn(`Sandboxed plugin ${deps.pluginId} declared a search provider without 'search:provide'; ignoring`, {
       pluginId: deps.pluginId,
       action: 'sandbox_search_provider_denied',

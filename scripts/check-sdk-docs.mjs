@@ -111,8 +111,11 @@ export function harvestShipped(dir = RESOURCE_DIR) {
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/^\s*\/\/.*$/gm, '');
     const body = source.slice(source.indexOf('export class'));
+    // A method may be `async`, or an arrow function assigned to a property (`remove = (id) =>`): each ships.
     const methods = [
-      ...body.matchAll(/^ {2}(?!constructor\b|private\b|readonly\b|static\b)([a-zA-Z][A-Za-z0-9]*)\s*[(<]/gm),
+      ...body.matchAll(
+        /^ {2}(?!constructor\b|private\b|readonly\b|static\b)(?:async\s+)?([a-zA-Z][A-Za-z0-9]*)\s*(?:[(<]|=\s*(?:async\s*)?(?:[(<]|[A-Za-z_]\w*\s*=>))/gm,
+      ),
     ];
     shipped.set(file.replace(/\.ts$/, ''), [...new Set(methods.map(m => m[1]))]);
   }

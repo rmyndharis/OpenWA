@@ -11,9 +11,8 @@ export type AckResult = { status: number; body?: string; headers?: Record<string
 /**
  * Renders the synchronous ack for an inbound route, computed entirely host-side. `spec` is the route's
  * `response.ack` (undefined → the default 202 'accepted'). The body may interpolate `{rawBody}`,
- * `{timestamp}`, `{id}` from the VERIFIED request. Uses split/join (never String.replace with a string
- * pattern, which would interpret `$&`/`$1` in provider-controlled bytes). Total: never throws — on any
- * unexpected input it falls back to the declared literal.
+ * `{timestamp}`, `{id}` from the VERIFIED request. Substitutes only original template tokens, with
+ * inserted values kept literal. Total: never throws; unexpected input falls back to the declared literal.
  */
 export function renderAck(spec: IngressResponseContract['ack'] | undefined, ctx: AckRenderCtx): AckResult {
   if (!spec) return { status: 202, body: 'accepted' };
@@ -98,12 +97,5 @@ export function ackContentType(headers: Record<string, string> | undefined): str
 }
 
 function substitute(template: string, ctx: AckRenderCtx): string {
-  // split/join avoids `$`-interpretation that String.replace applies to the replacement string.
-  return template
-    .split('{rawBody}')
-    .join(ctx.rawBody)
-    .split('{timestamp}')
-    .join(ctx.timestamp)
-    .split('{id}')
-    .join(ctx.id);
+  return template.replace(/\{(rawBody|timestamp|id)\}/g, (_, key: keyof AckRenderCtx) => ctx[key]);
 }

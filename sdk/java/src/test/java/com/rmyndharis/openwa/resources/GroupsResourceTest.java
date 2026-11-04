@@ -111,6 +111,15 @@ class GroupsResourceTest {
     }
 
     @Test
+    void setMemberLabelSendsBody() {
+        tx.respond(200, "{\"success\":true}");
+        client.groups.setMemberLabel("s", "g@g.us", "Site A");
+        assertEquals("http://h/api/sessions/s/groups/g@g.us/member-label", tx.lastRequest().url());
+        assertEquals(HttpMethod.PUT, tx.lastRequest().method());
+        assertTrue(tx.lastRequest().body().contains("\"label\":\"Site A\""));
+    }
+
+    @Test
     void joinGroupHitsJoinPath() {
         tx.respond(200, "{\"success\":true,\"groupId\":\"g@g.us\"}");
         client.groups.joinGroup("s", "AbCdEfGhIjKl");

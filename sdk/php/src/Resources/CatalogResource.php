@@ -25,6 +25,7 @@ class CatalogResource
 
     /**
      * The catalog summary, or null when the account has no catalog collection to describe.
+     * Baileys only; whatsapp-web.js answers 501.
      *
      * @return array<string,mixed>|null
      */
@@ -37,6 +38,7 @@ class CatalogResource
      * List catalog products (paginated). Returns a page shaped
      * {products: list, pagination: {page, limit, total, totalPages}} — iterate over the `products`
      * field, not the result itself. Consistent with the JavaScript, Python, and Java SDKs.
+     * Baileys only; whatsapp-web.js answers 501.
      *
      * @param array<string,mixed> $query  e.g. ['page' => 1, 'limit' => 20].
      * @return array{products: array<int,array<string,mixed>>, pagination: array<string,mixed>}
@@ -49,6 +51,7 @@ class CatalogResource
 
     /**
      * One catalog product, or null when no product in the catalog carries that id.
+     * Baileys only; whatsapp-web.js answers 501.
      *
      * @return array<string,mixed>|null
      */
@@ -59,6 +62,7 @@ class CatalogResource
 
     /**
      * Send a product message. Requires an OPERATOR-level key. Shares the messages path.
+     * Baileys only; whatsapp-web.js answers 501.
      *
      * @param array<string,mixed> $body  chatId + productId required; body optional.
      * @return array<string,mixed>

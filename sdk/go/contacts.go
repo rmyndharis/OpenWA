@@ -54,7 +54,7 @@ func (s *ContactsService) ProfilePicture(ctx context.Context, sessionID, contact
 
 // ProfilePictures batch-resolves profile picture URLs for up to 50 contacts
 // in one request. The result maps each requested id to its URL (nil when the
-// lookup failed).
+// lookup failed). An id skipped after a lookup timed out is absent from the map; ask for it again.
 func (s *ContactsService) ProfilePictures(ctx context.Context, sessionID string, ids []string) (*ProfilePicturesResponse, error) {
 	var out ProfilePicturesResponse
 	q := url.Values{"ids": []string{strings.Join(ids, ",")}}
@@ -69,6 +69,19 @@ func (s *ContactsService) ProfilePictures(ctx context.Context, sessionID string,
 func (s *ContactsService) Phone(ctx context.Context, sessionID, contactID string) (*ContactPhoneResponse, error) {
 	var out ContactPhoneResponse
 	err := s.client.do(ctx, "GET", s.base(sessionID)+"/"+pathEscape(contactID)+"/phone", nil, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Lid looks up the @lid WhatsApp holds for a phone number, without sending a message. Lid is nil when
+// WhatsApp holds none, which an unregistered number also answers. The lookup can query WhatsApp (Baileys
+// on every call, whatsapp-web.js when the page holds no LID), so bulk lookups put the linked account at
+// risk. Requires an OPERATOR-level key.
+func (s *ContactsService) Lid(ctx context.Context, sessionID, number string) (*ContactLidResponse, error) {
+	var out ContactLidResponse
+	err := s.client.do(ctx, "GET", s.base(sessionID)+"/"+pathEscape(number)+"/lid", nil, nil, &out)
 	if err != nil {
 		return nil, err
 	}

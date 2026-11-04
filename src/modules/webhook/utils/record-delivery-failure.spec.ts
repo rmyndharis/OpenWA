@@ -72,6 +72,35 @@ describe('webhook failure persistence', () => {
     expect(row.payload).toBeNull();
   });
 
+  // Recorded while payload retention was off, the row holds no event data; a later failure of the same delivery
+  // carries it once retention is on, and the pending outbox copy is closed after that record.
+  it('hands a later failure its event data to a terminal row recorded without it', async () => {
+    await recordWebhookDeliveryFailure(repo, logger, input);
+    await recordWebhookDeliveryFailure(repo, logger, {
+      ...input,
+      attempts: 1,
+      payload: { body: 'kept' },
+      payloadRetentionHours: 24,
+    });
+    const row = await repo.findOneOrFail({
+      where: { idempotencyKey: 'key' },
+      select: { id: true, attempts: true, payload: true },
+    });
+    expect(row).toMatchObject({ attempts: 4, payload: { body: 'kept' } });
+  });
+
+  it('hands no event data to a terminal row past the retention window', async () => {
+    await recordWebhookDeliveryFailure(repo, logger, input);
+    await repo.update({ idempotencyKey: 'key' }, { createdAt: new Date(Date.now() - 25 * 3600000) });
+    await recordWebhookDeliveryFailure(repo, logger, {
+      ...input,
+      payload: { body: 'private' },
+      payloadRetentionHours: 24,
+    });
+    const row = await repo.findOneOrFail({ where: { idempotencyKey: 'key' }, select: { id: true, payload: true } });
+    expect(row.payload).toBeNull();
+  });
+
   it('converges simultaneous recorders from two connections on one terminal identity', async () => {
     const results = await Promise.all([
       recordWebhookDeliveryFailure(repo, logger, input),

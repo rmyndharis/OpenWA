@@ -14,18 +14,23 @@ import { createProxyAgent } from './../src/engine/adapters/baileys-lifecycle';
  * Each abandoned attempt must release its proxy socket, or every reconnect leaves one more open.
  */
 describe('Baileys proxy agent (e2e)', () => {
-  const silentProxy = async (): Promise<{ server: net.Server; accepted: Promise<net.Socket> }> => {
+  const proxy = async (
+    onConnection: (socket: net.Socket) => void,
+  ): Promise<{ server: net.Server; accepted: Promise<net.Socket> }> => {
     let onAccepted!: (socket: net.Socket) => void;
     const accepted = new Promise<net.Socket>(resolve => (onAccepted = resolve));
     const server = net.createServer(socket => {
       // Reading is what lets the server see the client's FIN.
       socket.resume();
       socket.on('error', () => undefined);
+      onConnection(socket);
       onAccepted(socket);
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     return { server, accepted };
   };
+
+  const silentProxy = (): ReturnType<typeof proxy> => proxy(() => undefined);
 
   const closedWithin = (socket: net.Socket, ms: number): Promise<boolean> =>
     new Promise(resolve => {
@@ -36,25 +41,55 @@ describe('Baileys proxy agent (e2e)', () => {
       });
     });
 
-  it.each<[string, number, (req: http.ClientRequest) => void]>([
+  // An https:// proxy is a TLS connection of its own, so a silent one stalls in the handshake rather
+  // than in the CONNECT reply; the abort has to reach that socket too.
+  it.each<[string, 'http' | 'https', number, (req: http.ClientRequest) => void]>([
     // What ws does when Baileys ends a socket still in its handshake; the deadline is out of reach.
-    ['aborted', 60_000, req => req.abort()],
+    ['aborted', 'http', 60_000, req => req.abort()],
     // Destroyed before it has a socket, which emits nothing: the CONNECT deadline closes it instead.
-    ['destroyed', 300, req => req.destroy()],
-  ])('closes the proxy socket when a request still waiting on CONNECT is %s', async (_label, deadlineMs, stop) => {
-    const { server, accepted } = await silentProxy();
+    ['destroyed', 'http', 300, req => req.destroy()],
+    ['aborted', 'https', 60_000, req => req.abort()],
+    ['destroyed', 'https', 300, req => req.destroy()],
+  ])(
+    'closes the proxy socket when a request still waiting on CONNECT is %s (%s proxy)',
+    async (_label, scheme, deadlineMs, stop) => {
+      const { server, accepted } = await silentProxy();
+      const req = https.request({
+        host: '127.0.0.1',
+        port: 443,
+        agent: createProxyAgent(`${scheme}://127.0.0.1:${(server.address() as AddressInfo).port}`, deadlineMs),
+      });
+      req.on('error', () => undefined);
+      req.end();
+      const socket = await accepted;
+      try {
+        stop(req);
+        expect(await closedWithin(socket, 1000)).toBe(true);
+      } finally {
+        socket.destroy();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    },
+  );
+
+  it('leaves a tunnel alone once the proxy has answered CONNECT in time', async () => {
+    const { server, accepted } = await proxy(socket => {
+      socket.once('data', () => socket.write('HTTP/1.1 200 Connection Established\r\n\r\n'));
+    });
     const req = https.request({
       host: '127.0.0.1',
       port: 443,
-      agent: createProxyAgent(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, deadlineMs),
+      agent: createProxyAgent(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, 100),
     });
     req.on('error', () => undefined);
     req.end();
     const socket = await accepted;
     try {
-      stop(req);
-      expect(await closedWithin(socket, 1000)).toBe(true);
+      // The handshake that follows through the tunnel goes unanswered, so this socket stays open for
+      // as long as nothing closes it; the connect deadline is long past by the time the window ends.
+      expect(await closedWithin(socket, 500)).toBe(false);
     } finally {
+      req.destroy();
       socket.destroy();
       await new Promise<void>(resolve => server.close(() => resolve()));
     }

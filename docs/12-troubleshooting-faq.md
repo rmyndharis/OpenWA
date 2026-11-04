@@ -267,8 +267,8 @@ QR string and the pairing-code request straight through to those libraries. Ther
 fix, and nothing on the client side changes the outcome: switching engine, using a pairing code instead
 of a QR, or presenting a different client identity (`BAILEYS_BROWSER_NAME` or otherwise) all end at the
 same gate. Re-registering the number as a different account type has also been tried by the community
-and did not hold; the block returned on its own within days. Tracked in
-[#560](https://github.com/rmyndharis/OpenWA/issues/560) and upstream in
+and did not hold; the block returned on its own within days. Background in
+[#560](https://github.com/rmyndharis/OpenWA/issues/560), upstream work in
 [WhiskeySockets/Baileys#2672](https://github.com/WhiskeySockets/Baileys/issues/2672); the only durable
 change will come from the engine libraries implementing the step.
 
@@ -501,7 +501,7 @@ custom container that drops the `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` setup or th
 
 **Cause D — Debian 12 OS Chromium SIGTRAP in non-root Pods.**
 If `Code: null` happens on Kubernetes, and the host kernel logs or `dmesg` shows `Trace/breakpoint trap (core dumped)` with exit code 133, the underlying Debian 12 OS `chromium` package has crashed due to strict non-root or seccomp constraints (even with `--no-zygote` or `Unconfined` seccomp).
-_Fix:_ On amd64, do not use the `chromium` package from Debian's `apt` — it SIGTRAPs under strict non-root/seccomp. Instead, download Chrome for Testing via Puppeteer during the Docker build (`./node_modules/.bin/puppeteer browsers install 'chrome@153.0.8010.36'`) and point `PUPPETEER_EXECUTABLE_PATH` to it. (arm64 keeps Debian's `chromium`, which ships a native arm64 binary, by choice: Chrome for Testing publishes linux-arm64 builds only from 153, and the image has not moved arm64 to one.) The official `Dockerfile` implements this mixed approach.
+_Fix:_ On amd64, do not use the `chromium` package from Debian's `apt` — it SIGTRAPs under strict non-root/seccomp. Instead, download Chrome for Testing via Puppeteer during the Docker build (`./node_modules/.bin/puppeteer browsers install 'chrome@156.0.8078.80'`) and point `PUPPETEER_EXECUTABLE_PATH` to it. (arm64 keeps Debian's `chromium`, which ships a native arm64 binary, by choice: Chrome for Testing publishes linux-arm64 builds only from 153, and the image has not moved arm64 to one.) The official `Dockerfile` implements this mixed approach.
 
 **Quick triage:** run `docker stats openwa-api`, click **Start**, and watch which resource spikes toward its
 limit the instant before the failure — that tells you A vs B. If neither moves and you see the crashpad
@@ -530,14 +530,14 @@ reads like a Puppeteer bug and gives no hint that the profile is the cause — t
 advisory when it detects this error, and the session's `lastError` (the message the dashboard shows on
 the session card) carries a short form of it, so the pointer survives without reading the container log.
 
-**Rolling back to an older browser** does not raise this error. An older Chrome silently deletes the
-IndexedDB of a profile a newer Chrome has opened, and that is where whatsapp-web.js keeps the WhatsApp
-login: every previously linked session starts at a QR code instead of reconnecting, the log names no
-cause (0.23.3 and 0.23.4 log only a generic `relink_required` warning), and upgrading again does not bring
-the pairing back. On amd64 this follows a rollback from 0.23.5 or later (Chrome for Testing 153) to 0.23.4
-or earlier (146); on arm64, a rollback to an image built with an older Debian chromium major. Restoring
-`sessions/` from a backup taken before the first start on the newer image keeps the pairing (see the
-upgrade runbook's rollback in docs/11); without one, scan a new QR.
+**Rolling back to an older browser** does not raise this error. An older Chrome silently deletes the IndexedDB
+of a profile a newer Chrome has opened, and that is where whatsapp-web.js keeps the WhatsApp login: every
+previously linked session starts at a QR code instead of reconnecting, the log names no cause (0.23.3 and
+0.23.4 log only a generic `relink_required` warning), and upgrading again does not bring the pairing back. On
+amd64 this follows a rollback from 0.26.0 (Chrome for Testing 156) to 0.25.0 or earlier, and
+from 0.23.5 or later to 0.23.4 or earlier (146); on arm64, a rollback to an image built with an older Debian
+chromium major. Restoring `sessions/` from a backup taken before the first start on the newer image keeps the
+pairing (see the upgrade runbook's rollback in docs/11); without one, scan a new QR.
 
 **Fix:** delete the affected session's profile dir and start the session again to scan a new QR. The
 profile cannot be salvaged — clearing only the cache subdirs (`Cache`, `GPUCache`, `Code Cache`, …) is
@@ -748,8 +748,8 @@ that reads a message id fails. Source installs only; the Docker image always app
 **Solution:**
 
 ```bash
-# Is the backport missing? Works on every platform, including Windows without grep.
-node -e "console.log(require('fs').readFileSync('node_modules/whatsapp-web.js/src/structures/Base.js','utf8').includes('_normalizeId')?'PATCHED':'NOT PATCHED')"
+# Is the backport missing, or only partly applied? Works on every platform, including Windows without grep.
+node -e "const s=require('./scripts/patch-wwebjs-201832.js').missingSites();const m=require('fs').readFileSync('node_modules/whatsapp-web.js/src/structures/Message.js','utf8');console.log(s.length?'PARTIAL: '+s.join(', '):m.includes('_normalizeId(')?'PATCHED':'NOT PATCHED')"
 
 # Apply it, then restart
 node scripts/patch-wwebjs-201832.js
@@ -774,12 +774,12 @@ rm -rf node_modules/whatsapp-web.js && npm ci
   block/unblock refusing every id, a status media send that never arrives, a group description that
   cannot be set, an app-state resync that never settles
 
-**Cause:** OpenWA applies twelve exact source transforms to its engine libraries at install time
+**Cause:** OpenWA applies thirteen exact source transforms to its engine libraries at install time
 (docs/29 §29.3). The Docker image runs them without `--best-effort`, so a source shape a patcher
-cannot recognise fails the image build. A source install runs them through `scripts/postinstall.js`
-with `--best-effort`, where a patcher that cannot apply prints one line into a long `npm install`
-transcript and the install still succeeds. The usual causes are `npm install --ignore-scripts` and
-an upstream release whose shape a patcher no longer recognises. Each engine now checks its own
+cannot recognise fails the image build. Source installs run the Puppeteer compatibility transform
+without best-effort too, because browser teardown depends on it. The other transforms use
+`--best-effort`, where a refusal prints one line into the install transcript and installation continues.
+The usual causes are `npm install --ignore-scripts` and an upstream release whose shape a patcher no longer recognises. Each engine now checks its own
 patches as it starts and names the ones that did not land, so the report arrives on the machine that
 is actually affected rather than in an install log nobody kept.
 
@@ -795,7 +795,9 @@ node scripts/patch-wwebjs-group-description.js
 
 If a patcher answers with an unsupported-shape error instead of applying, the installed library has
 moved and the transform needs re-evaluating against it. Reinstalling will not help; open an issue
-quoting the message it printed.
+quoting the message it printed. The one exception is `patch-baileys-pairing.js` saying the backport
+was cut short: an interrupted install left it half applied, and reinstalling `@whiskeysockets/baileys`
+(`rm -rf node_modules/@whiskeysockets/baileys && npm ci`) is the fix.
 
 > `patch-wwebjs-201832.js` is not in that list. It carries its own startup check and its own entry
 > above, because a partially applied backport needs different advice than one that never ran.
@@ -1083,7 +1085,7 @@ DATABASE_IDLE_TIMEOUT_MS=30000        # idle client eviction (default 30000)
 DATABASE_CONNECTION_TIMEOUT_MS=10000  # wait for a free connection (default 10000)
 DATABASE_STATEMENT_TIMEOUT_MS=30000   # server-side per-query cap (default 30000)
 
-# Redis caching (per-key TTLs are fixed in code — there is no cache TTL env var)
+# Redis (the cache connection only answers the infra status probe — there is no cache TTL env var)
 # REDIS_ENABLED=true
 # REDIS_HOST=localhost
 # REDIS_PORT=6379
@@ -1149,9 +1151,6 @@ npm run migration:show
 # Run all pending migrations
 npm run migration:run
 
-# Rollback last migration
-npm run migration:revert
-
 # Inside the released image, which has no ts-node, use the :prod variants against dist/
 docker compose run --rm openwa-api npm run migration:show:prod
 docker compose run --rm openwa-api npm run migration:run:prod
@@ -1161,6 +1160,8 @@ docker compose run --rm openwa-api npm run migration:run:prod
 npm run migration:run:main
 npm run migration:run:main:prod   # inside the released image
 ```
+
+A failed migration is not recorded: the run executes in one transaction, so the failure rolls back that migration and the rest of the same run, and `migration:show` still lists them as pending. Fix what made it fail and run the migrations again; do not run `migration:revert` for it, which runs the `down()` of the newest migration that succeeded, a downgrade step ([14.6](./14-migration-guide.md#146-rollback-procedures)) that can delete data.
 
 **PostgreSQL crash-loop on boot after upgrade** — if logs show `column "id" is of type uuid but default expression is of type character varying` or `foreign key constraint ... cannot be implemented ... incompatible types: character varying and uuid`, the deployment was previously bootstrapped with `DATABASE_SYNCHRONIZE=true` (native `uuid` columns vs the migrations' `varchar`). A guard migration converts the columns automatically on the next boot; for large `messages` tables, run the migration against the stopped app (`npm run migration:run` from a source checkout, `npm run migration:run:prod` in the image) during a maintenance window. See [14.5 / 14.9 — PostgreSQL crash-loop after upgrading a `DATABASE_SYNCHRONIZE=true` deployment](./14-migration-guide.md). `DATABASE_SYNCHRONIZE=true` is unsupported on PostgreSQL for production.
 
@@ -1455,6 +1456,7 @@ available_events:
   - message.received # New incoming message
   - message.sent # Message sent
   - message.ack # Message status update (sent, delivered, read)
+  - message.receipt # One recipient received/read/played a group or status message you sent (Baileys only; not included in "*", must be listed explicitly)
   - message.failed # Receipt resolved to failed
   - message.revoked # Message deleted
   - message.reaction # Reaction added, changed, or removed
@@ -1472,6 +1474,7 @@ available_events:
   - session.restriction # WhatsApp restricted the account, or lifted it (payload: sessionId, active, kind, code, expiresAt)
   - presence.update # A subscribed chat's presence changed (Baileys only; the subscribe route answers 501 on whatsapp-web.js; payload: sessionId, chatId, participants, groupOnlineCount)
   - event.response # A guest answered a WhatsApp event invitation (Baileys only; payload: sessionId, eventMessageId, chatId, responderId, response, responseMessageId, timestamp)
+  - poll.vote # A voter selected or cleared options on a poll (whatsapp-web.js only; payload: sessionId, pollMessageId, chatId, voterId, selectedOptions, pollName, timestamp, timestampMs)
   - call.accepted # A ringing call was answered (Baileys only; payload: sessionId, callId, from, outcome, isVideo, isGroup, timestamp)
   - call.rejected # A ringing call was declined (Baileys only)
   - call.missed # A ringing call was never picked up (Baileys only)
@@ -1516,18 +1519,21 @@ A media message also carries `media: { mimetype, filename?, data?, omitted?, siz
 
 ### HTTP Error Codes
 
-| Code | Meaning             | Common Cause                                                                                                                  | Solution                                                                                         |
-| ---- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| 400  | Bad Request         | Invalid parameters, or the session is not started                                                                             | Check request body/params; start the session                                                     |
-| 401  | Unauthorized        | Missing/invalid API key                                                                                                       | Add X-API-Key header                                                                             |
-| 403  | Forbidden           | Insufficient permissions                                                                                                      | Check API key permissions                                                                        |
-| 404  | Not Found           | Invalid session/endpoint                                                                                                      | Verify session exists                                                                            |
-| 409  | Conflict            | Session name already exists, the session is not ready (retryable), or an idempotent send is in progress or of unknown outcome | Use a different session name, wait for `ready`, or follow the `code` (docs/06, idempotent sends) |
-| 422  | Unprocessable       | An `Idempotency-Key` reused with another route or body                                                                        | Use a new key for a different send                                                               |
-| 413  | Payload Too Large   | File too large                                                                                                                | Reduce file size                                                                                 |
-| 429  | Too Many Requests   | Rate limited                                                                                                                  | Reduce request rate                                                                              |
-| 500  | Internal Error      | Server error                                                                                                                  | Check logs                                                                                       |
-| 503  | Service Unavailable | The engine transport died during a read, or a media fetch through the session proxy failed                                    | Retry; restart the session if it persists                                                        |
+| Code | Meaning             | Common Cause                                                                                                                                                                                                                        | Solution                                                                                                                                |
+| ---- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | Bad Request         | Invalid parameters, or the session is not started                                                                                                                                                                                   | Check request body/params; start the session                                                                                            |
+| 401  | Unauthorized        | Missing/invalid API key                                                                                                                                                                                                             | Add X-API-Key header                                                                                                                    |
+| 403  | Forbidden           | Insufficient permissions                                                                                                                                                                                                            | Check API key permissions                                                                                                               |
+| 404  | Not Found           | Invalid session/endpoint                                                                                                                                                                                                            | Verify session exists                                                                                                                   |
+| 409  | Conflict            | Session name already exists, the session is not ready (retryable), or an idempotent send is in progress or of unknown outcome                                                                                                       | Use a different session name, wait for `ready`, or follow the `code` (docs/06, idempotent sends)                                        |
+| 422  | Unprocessable       | An `Idempotency-Key` reused with another route or body                                                                                                                                                                              | Use a new key for a different send                                                                                                      |
+| 413  | Payload Too Large   | File too large                                                                                                                                                                                                                      | Reduce file size                                                                                                                        |
+| 429  | Too Many Requests   | Rate limited                                                                                                                                                                                                                        | Reduce request rate                                                                                                                     |
+| 500  | Internal Error      | Server error                                                                                                                                                                                                                        | Check logs                                                                                                                              |
+| 501  | Not Implemented     | The active engine cannot do it (docs/29), or search has no active provider, or no ready index for the requested `match`                                                                                                             | Use the engine that supports it (docs/29); for search, see docs/26                                                                      |
+| 502  | Bad Gateway         | A stop, logout or force-kill stopped the session locally but did not complete, a search plugin returned invalid results, or (multi-node) a request forwarded to its session's node failed; that one may have been carried out there | Follow the `code` (docs/06): retry the stop or logout; for search, check the plugin; for a forwarded request, check before repeating it |
+| 503  | Service Unavailable | WhatsApp did not answer or rate-limited it, the engine connection died, a proxied fetch failed, or S3 is unreachable or busy                                                                                                        | Retry after a pause (`Retry-After` when sent); a write may have applied, so check first                                                 |
+| 504  | Gateway Timeout     | `POST .../start`: the engine did not finish starting within its timeout; or (multi-node) a request forwarded to its session's node got no answer in time and may have been carried out there                                        | Check network access to WhatsApp and the host's resources, then start again; for a forwarded request, check before repeating it         |
 
 ### Error Body Shape
 

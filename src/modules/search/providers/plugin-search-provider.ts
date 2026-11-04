@@ -1,4 +1,5 @@
 import { BadGatewayException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
+import { SEARCH_DEFAULT_LIMIT } from '../search.constants';
 import type { SearchProvider, SearchQuery, SearchResults, SearchHealth } from '../search.types';
 
 /**
@@ -86,7 +87,12 @@ export class PluginSearchProvider implements SearchProvider {
       // Filtering an already paginated plugin response cannot enforce scoped offsets or counts.
       throw new ForbiddenException('Chat-restricted search requires the built-in search provider');
     }
-    const reply = await this.transport.dispatchSearch({ query, timeoutMs: this.timeoutMs });
+    // The expanded id lists are the built-in provider's business; a plugin keeps the query shape it was
+    // written against (`chatId` and `from` as the caller sent them).
+    const pluginQuery: SearchQuery = { ...query };
+    delete pluginQuery.chatIdAliases;
+    delete pluginQuery.fromAliases;
+    const reply = await this.transport.dispatchSearch({ query: pluginQuery, timeoutMs: this.timeoutMs });
     if (!reply.ok) throw new ServiceUnavailableException(reply.error);
     // The result shape is untrusted wire data: reject an invalid payload with an honest 502 (bad
     // upstream) instead of fabricating a 200 — or crashing the re-filter below into a 500.
@@ -101,14 +107,16 @@ export class PluginSearchProvider implements SearchProvider {
       tookMs: Math.round(reply.results.tookMs),
       hits: reply.results.hits.map(h => ({ ...h, timestamp: Math.trunc(h.timestamp) })),
     };
+    // A plugin can answer with more hits than were asked for; the caller gets the page it asked for.
+    const limit = query.limit ?? SEARCH_DEFAULT_LIMIT;
     // Keep the existing session defense: plugins must apply sessionIds before paging and counting.
     // Preserve total for compliant pages; discard it when an out-of-scope hit is returned.
     const sessionFilter = query.sessionIds?.length ? new Set(query.sessionIds) : null;
-    if (!sessionFilter) return results;
+    if (!sessionFilter) return { ...results, hits: results.hits.slice(0, limit) };
     const scoped = results.hits.filter(h => sessionFilter.has(h.sessionId));
     const leaked = results.hits.length - scoped.length;
     return {
-      hits: scoped,
+      hits: scoped.slice(0, limit),
       total: leaked > 0 ? scoped.length : results.total,
       tookMs: results.tookMs,
       provider: results.provider,

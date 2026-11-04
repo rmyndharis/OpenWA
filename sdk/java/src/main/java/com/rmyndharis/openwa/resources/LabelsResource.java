@@ -23,13 +23,16 @@ public final class LabelsResource {
         this.client = client;
     }
 
-    /** List all labels available in the business account. */
+    /**
+     * List all labels available in the business account. whatsapp-web.js only; Baileys answers
+     * {@code 501}.
+     */
     public List<LabelRecord> list(String sessionId) {
         return client.requestList(
             HttpMethod.GET, "/api/sessions/" + encodeSegment(sessionId) + "/labels", null, null, LabelRecord.class);
     }
 
-    /** Get a single label by id. */
+    /** Get a single label by id. whatsapp-web.js only; Baileys answers {@code 501}. */
     public LabelRecord get(String sessionId, String labelId) {
         return client.request(
             HttpMethod.GET,
@@ -80,7 +83,10 @@ public final class LabelsResource {
             SuccessResult.class);
     }
 
-    /** Get the labels currently applied to a chat. */
+    /**
+     * Get the labels currently applied to a chat. whatsapp-web.js only; Baileys answers
+     * {@code 501}.
+     */
     public List<LabelRecord> forChat(String sessionId, String chatId) {
         return client.requestList(
             HttpMethod.GET,
