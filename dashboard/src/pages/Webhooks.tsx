@@ -279,7 +279,9 @@ export function Webhooks() {
   // else with a bare "Bad Request" that names no field, and a URL stored before the scheme was required fails each edit.
   const urlError = (url: string): string | null => {
     if (!url.trim()) return null;
-    if (!isHttpMediaUrl(url)) return t('webhooks.urlInvalid');
+    if (/[\s<>]/.test(url) || !isHttpMediaUrl(url) || new URL(url).hostname.includes('_')) {
+      return t('webhooks.urlInvalid');
+    }
     const count = [...url].length;
     return count > 2048 ? t('common.fieldTooLong', { max: 2048, count }) : null;
   };
