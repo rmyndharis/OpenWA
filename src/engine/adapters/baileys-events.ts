@@ -2004,6 +2004,8 @@ export class BaileysEvents {
       .map(entry => this.toNeutralGroupParticipantId(entry))
       .filter((jid): jid is string => jid !== null);
     const groupId = this.host.toNeutralJid(event.id);
+    // Before anything that can throw: a roster read under way began before this change and does not show it.
+    this.groupAcks.membershipChanged(groupId);
     const payload: GroupEvent = {
       kind,
       groupId,

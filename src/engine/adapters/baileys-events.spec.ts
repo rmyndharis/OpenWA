@@ -883,6 +883,30 @@ describe('BaileysEvents group message acks', () => {
     expect(onMessageAck).not.toHaveBeenCalled();
   });
 
+  it('waits for a member who joins while the roster of the group is being read', async () => {
+    const answers: Array<(rows: string[][]) => void> = [];
+    const readGroupRoster = jest.fn(() => new Promise<string[][]>(resolve => answers.push(resolve)));
+    const { events, onMessageAck } = setup({ readGroupRoster });
+    const ownRow = ['999999999999999@lid', '6280000000000@s.whatsapp.net'];
+
+    events.handleMessageReceiptUpdate([delivered(alice)]);
+    events.handleGroupParticipantsUpdate({ id: group, action: 'add', participants: [{ id: bob }] });
+    events.handleMessageReceiptUpdate([
+      { key: { id: 'OUT2', remoteJid: group, fromMe: true }, receipt: { userJid: alice, receiptTimestamp: 1 } },
+    ]);
+    expect(readGroupRoster).toHaveBeenCalledTimes(2);
+
+    answers[0]([roster[0], ownRow]); // the read that began before Bob joined
+    await settle();
+    answers[1](roster);
+    await settle();
+    expect(onMessageAck).not.toHaveBeenCalled();
+
+    events.handleMessageReceiptUpdate([delivered(bob)]);
+    await settle();
+    expect(onMessageAck.mock.calls).toEqual([['OUT1', 'delivered', group]]);
+  });
+
   it("recognises this account's row by the phone number the session knows for its lid", async () => {
     // Credentials without `user.lid`, and a roster row for this account that lists only its lid
     const { events, onMessageAck } = setup({

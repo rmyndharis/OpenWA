@@ -389,6 +389,88 @@ describe('GroupAckAggregator', () => {
     });
   });
 
+  describe('members who join or leave while the roster is read', () => {
+    // A roster read that stays open until the test answers it, and the answers still owed.
+    const gated = () => {
+      const answers: Array<(roster: string[][] | null) => void> = [];
+      const read = () => new Promise<string[][] | null>(resolve => answers.push(resolve));
+      return { read, answers };
+    };
+    const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+    it('reads again for a message whose roster read began before a member joined, and for one that arrives after', async () => {
+      const { read, answers } = gated();
+      const { aggregator, readRoster, reports } = setup(read);
+      const first = aggregator.record(receipt(ALICE[0], 'delivered', 'M0'));
+      aggregator.membershipChanged(GROUP); // Bob joins while the read for M0 is out
+      const second = aggregator.record(receipt(ALICE[0], 'read', 'M1')); // M1 reaches Bob too
+      expect(readRoster).toHaveBeenCalledTimes(2);
+
+      answers[0]([ALICE]); // the answer to the read that began before Bob joined
+      await flush();
+      answers[1]([ALICE, BOB]);
+      await Promise.all([first, second]);
+      expect(readRoster).toHaveBeenCalledTimes(2);
+      expect(reports).toEqual([]);
+
+      await aggregator.record(receipt(BOB[0], 'delivered', 'M1'));
+      expect(reports).toEqual([['M1', 'delivered', GROUP]]);
+    });
+
+    it('applies a departure that happens before the first roster read ends', async () => {
+      const { read, answers } = gated();
+      const { aggregator, reports } = setup(read);
+      const first = aggregator.record(receipt(ALICE[0], 'read', 'M1'));
+      aggregator.membershipChanged(GROUP); // what the leave handler tells it, then it forgets the leaver
+      aggregator.forget(GROUP, [BOB[0]]); // no message is followed yet, so there is nothing to drop
+
+      answers[0]([ALICE, BOB]); // read before Bob left
+      await flush();
+      answers[1]([ALICE]);
+      await first;
+      expect(reports).toEqual([
+        ['M1', 'delivered', GROUP],
+        ['M1', 'read', GROUP],
+      ]);
+    });
+
+    it('gives up repeating a read when the members keep changing', async () => {
+      const { read, answers } = gated();
+      const { aggregator, readRoster } = setup(read);
+      const pending = aggregator.record(receipt(ALICE[0], 'read', 'M1'));
+      for (let n = 0; n < 5; n++) {
+        aggregator.membershipChanged(GROUP);
+        answers[n](ROSTER);
+        await flush();
+      }
+      await pending;
+      expect(readRoster).toHaveBeenCalledTimes(5);
+    });
+
+    it('lets neither the end nor the failure of a replaced read touch the read that replaced it', async () => {
+      const { read, answers } = gated();
+      const { aggregator, readRoster, reports } = setup(read);
+      const first = aggregator.record(receipt(ALICE[0], 'delivered', 'M0'));
+      aggregator.membershipChanged(GROUP);
+      const second = aggregator.record(receipt(ALICE[0], 'delivered', 'M1'));
+      expect(readRoster).toHaveBeenCalledTimes(2);
+
+      answers[0](null); // the replaced read fails
+      await flush();
+      // a message that starts now joins the read in progress, and the group is not held back as unreadable
+      const third = aggregator.record(receipt(ALICE[0], 'delivered', 'M2'));
+      expect(readRoster).toHaveBeenCalledTimes(2);
+      answers[1](ROSTER);
+      await Promise.all([first, second, third]);
+
+      const fourth = aggregator.record(receipt(ALICE[0], 'delivered', 'M3'));
+      expect(readRoster).toHaveBeenCalledTimes(3);
+      answers[2](ROSTER);
+      await fourth;
+      expect(reports).toEqual([]);
+    });
+  });
+
   it('ignores the receipts of a status post and of chats that are not groups', async () => {
     const { aggregator, reports, readRoster } = setup();
     await aggregator.record(receipt(ALICE[0], 'delivered', 'ST1', 'status@broadcast'));
@@ -486,6 +568,26 @@ describe('GroupAckAggregator', () => {
       advance(GROUP_ACK_FOLLOW_MS);
       await aggregator.record(receipt(CARA[0], 'delivered'));
       expect(readRoster).toHaveBeenCalledTimes(2);
+    });
+
+    it('remembers a finished message for the follow period after its latest receipt', async () => {
+      const { aggregator, reports, advance } = setup([ALICE]);
+      await aggregator.record(receipt(ALICE[0], 'read', 'M1'));
+      expect(reports).toEqual([
+        ['M1', 'delivered', GROUP],
+        ['M1', 'read', GROUP],
+      ]);
+
+      // a second device of the member keeps reporting, each time less than the period after the one before
+      advance(GROUP_ACK_FOLLOW_MS - 1000);
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M1'));
+      advance(GROUP_ACK_FOLLOW_MS - 1000);
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M1'));
+      expect(reports).toHaveLength(2);
+
+      advance(GROUP_ACK_FOLLOW_MS);
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M1'));
+      expect(reports).toHaveLength(3);
     });
   });
 });
