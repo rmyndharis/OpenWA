@@ -51,10 +51,10 @@ describe('Baileys listing seeded from the stored messages', () => {
     const lifecycle = new BaileysLifecycle(host);
     const resolver = (lifecycle as unknown as { versionResolver: { resolve: () => Promise<number[]> } })
       .versionResolver;
-    jest.spyOn(resolver, 'resolve').mockResolvedValue([2, 3000, 1]);
+    const resolveVersion = jest.spyOn(resolver, 'resolve').mockResolvedValue([2, 3000, 1]);
     /** A connect after the first, as the reconnect after a QR scan or a dropped socket runs it. */
     const reconnect = (): Promise<void> => (lifecycle as unknown as { connectInner(): Promise<void> }).connectInner();
-    return { lifecycle, logger, seedStoredPreviews, makeWASocket, reconnect };
+    return { lifecycle, logger, seedStoredPreviews, makeWASocket, resolveVersion, reconnect };
   }
 
   afterEach(() => {
@@ -68,11 +68,7 @@ describe('Baileys listing seeded from the stored messages', () => {
 
     await lifecycle.initialize();
 
-    expect(latestPerChat).toHaveBeenCalledWith(
-      'session-1',
-      ['628999@c.us', '628999@s.whatsapp.net', '628999', 'me'],
-      300,
-    );
+    expect(latestPerChat).toHaveBeenCalledWith('session-1', ['628999@c.us', '628999@s.whatsapp.net', '628999'], 300);
     expect(seedStoredPreviews).toHaveBeenCalledWith(rows);
     expect(seedStoredPreviews.mock.invocationCallOrder[0]).toBeLessThan(makeWASocket.mock.invocationCallOrder[0]);
     await lifecycle.destroy();
@@ -133,7 +129,7 @@ describe('Baileys listing seeded from the stored messages', () => {
   it('builds no socket for an engine torn down while the read was out', async () => {
     let answer!: (value: StoredChatPreview[]) => void;
     const latestPerChat = jest.fn(() => new Promise<StoredChatPreview[]>(resolve => (answer = resolve)));
-    const { lifecycle, makeWASocket } = engine(linked, { latestPerChat });
+    const { lifecycle, makeWASocket, resolveVersion } = engine(linked, { latestPerChat });
 
     const started = lifecycle.initialize();
     await new Promise(resolve => setImmediate(resolve));
@@ -142,7 +138,38 @@ describe('Baileys listing seeded from the stored messages', () => {
     answer(rows);
     await started;
 
+    // Resolving the version builds a fetch dispatcher that nothing would close.
+    expect(resolveVersion).not.toHaveBeenCalled();
     expect(makeWASocket).not.toHaveBeenCalled();
+  });
+
+  it('gives up a read that takes over ten seconds, opens the socket without it, and drops a late answer', async () => {
+    jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+    try {
+      let answer!: (value: StoredChatPreview[]) => void;
+      const latestPerChat = jest.fn(() => new Promise<StoredChatPreview[]>(resolve => (answer = resolve)));
+      const { lifecycle, logger, seedStoredPreviews, makeWASocket } = engine(linked, { latestPerChat });
+
+      const started = lifecycle.initialize();
+      await new Promise(resolve => setImmediate(resolve));
+      expect(latestPerChat).toHaveBeenCalledTimes(1);
+      await jest.advanceTimersByTimeAsync(9_999);
+      expect(makeWASocket).not.toHaveBeenCalled();
+      await jest.advanceTimersByTimeAsync(1);
+      await started;
+
+      expect(makeWASocket).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/Could not read the stored chats/), {
+        sessionId: 'session-1',
+        error: 'no answer within 10000 ms',
+      });
+      answer(rows);
+      await new Promise(resolve => setImmediate(resolve));
+      expect(seedStoredPreviews).not.toHaveBeenCalled();
+      await lifecycle.destroy();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('hands the rows to the session store the adapter lists from', () => {

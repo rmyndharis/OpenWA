@@ -332,10 +332,14 @@ export class BaileysSessionStore {
    * the same way (`contacts.update` brings `notify` with every message), so an unsaved contact is
    * listed by name rather than by its digits; upsertContacts leaves a group's posters out. A name saved
    * in the address book still wins over it.
+   *
+   * Oldest first: a chat stored under two spellings of one id (`@c.us` and `@s.whatsapp.net`) ends with
+   * the newer row, and a cap evicts the oldest chats' entries and names, not the newest.
    */
   seedStoredPreviews(rows: StoredChatPreview[]): void {
-    this.upsertContacts(rows.flatMap(r => (r.name ? [{ id: this.toEngineJid(r.chatId), notify: r.name }] : [])));
-    for (const r of rows) {
+    const oldestFirst = [...rows].sort((a, b) => a.timestamp - b.timestamp);
+    this.upsertContacts(oldestFirst.flatMap(r => (r.name ? [{ id: this.toEngineJid(r.chatId), notify: r.name }] : [])));
+    for (const r of oldestFirst) {
       const key = this.toEngineJid(r.chatId);
       const participant = r.author ? this.toEngineJid(r.author) : undefined;
       this.storedPreviews.set(key, {

@@ -31,10 +31,12 @@ export interface StoredChatPreview {
  */
 export interface StoredChatPreviewSource {
   /**
-   * The newest stored message of each of the session's chats, newest chat first, at most `limit` chats
-   * (0: all). Only rows of the account in `ownIds` count: the table outlives an unlink, so a session
-   * linked to another number still holds the rows of the one before. A row counts when the account's
-   * side of it (`to` of a received message, `from` of a sent one) is one of those spellings.
+   * The newest stored message of each of the session's chats, newest chat first, from the `limit` chats
+   * with the newest rows (0: all). Only rows of the account in `ownIds` count: the table outlives an
+   * unlink, so a session linked to another number still holds the rows of the one before. A row counts
+   * when the account's side of it (`to` of a received message, `from` of a sent one) is one of those
+   * spellings. The limit is applied before that check, to keep the scan on the index: a chat that holds
+   * only another account's rows, or rows without a WhatsApp id, uses a slot and lists nothing.
    */
   latestPerChat(sessionId: string, ownIds: string[], limit: number): Promise<StoredChatPreview[]>;
 }
@@ -54,13 +56,15 @@ export class StoredChatPreviewService implements StoredChatPreviewSource {
    * for 500k rows on SQLite against about 45 ms, and better-sqlite3 blocks the event loop meanwhile).
    *
    * A pending or failed send can have no WhatsApp id: it shows no chat and previews nothing, as live
-   * (the #1891 rule). Ties take the row stored last, the order the stored lookup of a chat write uses.
-   * The name comes from the newest received row of the chat, which need not be the newest row: a
-   * support chat usually ends with a reply.
+   * (the #1891 rule). Rows of one second take the one stored last, as the stored lookup of a chat write
+   * does; SQLite keeps `createdAt` to the second, so it breaks the tie by insertion order instead of by
+   * the random id. The name comes from the newest received row of the chat, which need not be the newest
+   * row: a support chat usually ends with a reply.
    */
   async latestPerChat(sessionId: string, ownIds: string[], limit: number): Promise<StoredChatPreview[]> {
     if (!ownIds.length) return [];
     const driver = this.repo.manager.connection.driver;
+    const lastStored = this.repo.manager.connection.options.type === 'postgres' ? 'w."id"' : 'w."rowid"';
     const table = this.repo.metadata.tablePath
       .split('.')
       .map(part => driver.escape(part))
@@ -84,7 +88,7 @@ export class StoredChatPreviewService implements StoredChatPreviewSource {
          WHERE w."sessionId" = :sessionId AND w."chatId" = c."chatId"
            AND w."timestamp" IS NOT NULL AND w."waMessageId" IS NOT NULL
            AND (CASE WHEN w."direction" = :incoming THEN w."to" ELSE w."from" END) IN (:...ownIds)
-         ORDER BY w."timestamp" DESC, w."createdAt" DESC, w."id" DESC
+         ORDER BY w."timestamp" DESC, w."createdAt" DESC, ${lastStored} DESC
          LIMIT 1
        )
        ORDER BY m."timestamp" DESC`,

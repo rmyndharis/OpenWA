@@ -31,6 +31,12 @@ import { SESSION_STORE_MAP_CAP_DEFAULT, type BaileysSessionStore } from './baile
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 import { chatKind, userPart } from '../identity/wa-id';
 
+/**
+ * How long a start waits for the stored chats. They serve the listing only, so a read that is slower than
+ * this (a very large table, a busy database) is given up rather than holding the session's start.
+ */
+const STORED_PREVIEWS_READ_TIMEOUT_MS = 10_000;
+
 /** Linked-device identity shown in WhatsApp (Settings → Linked Devices). The OS platform is
  * operator-configurable via BAILEYS_BROWSER_NAME; defaults to 'Ubuntu' because some accounts reject a
  * non-standard name on phone-number (pairing-code) linking. Only new pairings carry the name. */
@@ -1231,9 +1237,11 @@ export class BaileysLifecycle {
 
   /**
    * Seed the listing with the newest stored message of each chat of the account `phone`. The rows name
-   * the account in every spelling it was stored under: its JID in either dialect, the bare digits of an
-   * API send stored before 0.27.0, and the placeholder of a send made before the number was known. A
-   * failed read leaves the listing as it was before chats were seeded: it fills from live traffic.
+   * the account in every spelling it was stored under: its JID in either dialect, and the bare digits of
+   * an API send stored before 0.27.0. A send stored before the number was known names no account and does
+   * not count. A read that fails, or that takes longer than {@link STORED_PREVIEWS_READ_TIMEOUT_MS}, leaves
+   * the listing as it was before chats were seeded: it fills from live traffic, and a late answer is
+   * dropped, since the seed is only safe before the socket opens.
    */
   private async seedStoredPreviews(phone: string): Promise<void> {
     const source = this.host.config.storedChatPreviews;
@@ -1242,14 +1250,26 @@ export class BaileysLifecycle {
       process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES,
       SESSION_STORE_MAP_CAP_DEFAULT,
     );
+    let giveUp: ReturnType<typeof setTimeout> | undefined;
     try {
-      const own = [`${phone}@c.us`, `${phone}@s.whatsapp.net`, phone, 'me'];
-      this.host.seedStoredPreviews(await source.latestPerChat(this.host.config.dbSessionId, own, limit));
+      const own = [`${phone}@c.us`, `${phone}@s.whatsapp.net`, phone];
+      const rows = await Promise.race([
+        source.latestPerChat(this.host.config.dbSessionId, own, limit),
+        new Promise<never>((_, reject) => {
+          giveUp = setTimeout(
+            () => reject(new Error(`no answer within ${STORED_PREVIEWS_READ_TIMEOUT_MS} ms`)),
+            STORED_PREVIEWS_READ_TIMEOUT_MS,
+          );
+        }),
+      ]);
+      this.host.seedStoredPreviews(rows);
     } catch (err) {
       this.host.logger.warn('Could not read the stored chats; the chat list fills as messages arrive', {
         sessionId: this.host.config.sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      clearTimeout(giveUp);
     }
   }
 

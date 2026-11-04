@@ -8,7 +8,7 @@ import { StoredChatPreviewService, type StoredChatPreview } from './baileys-stor
 // timestamp reads back as a string and identifiers are case-sensitive.
 describe('StoredChatPreviewService', () => {
   const SESSION = 's1';
-  const OWN = ['628999@c.us', '628999@s.whatsapp.net', '628999', 'me'];
+  const OWN = ['628999@c.us', '628999@s.whatsapp.net', '628999'];
   const T = 1_762_000_000;
   let db: DataSource;
   let repository: Repository<Message>;
@@ -111,16 +111,19 @@ describe('StoredChatPreviewService', () => {
     await row({ chatId: '628111@c.us', body: 'to the old number', timestamp: T, to: '628000@c.us' });
     await row({ chatId: '628111@c.us', body: 'mine', timestamp: T - 5 });
     await row({ chatId: '628222@c.us', timestamp: T, direction: MessageDirection.OUTGOING, from: '628000@c.us' });
-    // A send an earlier version stored with the bare digits, and one made before the number was known.
+    // A send an earlier version stored with the bare digits.
     await row({ chatId: '628333@c.us', body: 'bare', direction: MessageDirection.OUTGOING, from: '628999' });
+    // A send made before the number was known names no account, whichever one it was made from.
     await row({ chatId: '628444@c.us', body: 'no number yet', direction: MessageDirection.OUTGOING, from: 'me' });
+    await row({ chatId: '628555@c.us', body: 'no number yet', direction: MessageDirection.OUTGOING, from: 'me' });
+    await row({ chatId: '628555@c.us', body: 'mine too', timestamp: T - 60 });
 
     const previews = await service.latestPerChat(SESSION, OWN, 0);
 
     expect(previews.map(p => [p.chatId, p.body]).sort()).toEqual([
       ['628111@c.us', 'mine'],
       ['628333@c.us', 'bare'],
-      ['628444@c.us', 'no number yet'],
+      ['628555@c.us', 'mine too'],
     ]);
   });
 
@@ -158,6 +161,15 @@ describe('StoredChatPreviewService', () => {
     expect(previews.map(p => p.chatId)).toEqual(['628333@c.us', '628222@c.us']);
   });
 
+  it('counts a chat of another account against the limit, which is applied before the account check', async () => {
+    await row({ chatId: '628111@c.us', timestamp: T - 30 });
+    await row({ chatId: '628222@c.us', timestamp: T - 20, to: '628000@c.us' });
+    await row({ chatId: '628333@c.us', timestamp: T - 10, to: '628000@c.us' });
+
+    await expect(service.latestPerChat(SESSION, OWN, 2)).resolves.toEqual([]);
+    expect((await service.latestPerChat(SESSION, OWN, 3)).map(p => p.chatId)).toEqual(['628111@c.us']);
+  });
+
   it('takes the row stored last of a second, and reads a deleted one as revoked with no text', async () => {
     await row({ chatId: '628111@c.us', body: 'first', timestamp: T });
     await row({ chatId: '628111@c.us', body: null as never, type: 'revoked', timestamp: T });
@@ -173,6 +185,26 @@ describe('StoredChatPreviewService', () => {
       },
     ]);
   });
+
+  // PostgreSQL keeps createdAt to the microsecond, so only SQLite has rows that tie on every column but the id.
+  (process.env.DATABASE_TYPE === 'postgres' ? it.skip : it)(
+    'takes the row inserted last of one second on SQLite, not the one with the larger id',
+    async () => {
+      const sameSecond = { timestamp: T, createdAt: new Date(Date.UTC(2026, 10, 2)) };
+      await row({ chatId: '628111@c.us', body: 'question', id: 'ffffffff-0000-4000-8000-000000000000', ...sameSecond });
+      await row({
+        chatId: '628111@c.us',
+        body: 'reply',
+        direction: MessageDirection.OUTGOING,
+        id: '00000000-0000-4000-8000-000000000000',
+        ...sameSecond,
+      });
+
+      const previews = await service.latestPerChat(SESSION, OWN, 0);
+
+      expect(previews.map(p => [p.body, p.fromMe])).toEqual([['reply', true]]);
+    },
+  );
 
   (process.env.DATABASE_TYPE === 'postgres' ? it.skip : it)(
     'reads the candidate chats from the session-chat-time index alone on SQLite',

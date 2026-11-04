@@ -1578,6 +1578,29 @@ describe('BaileysSessionStore', () => {
       expect(s.listChats().map(c => c.id)).toEqual(['628222@c.us']);
     });
 
+    it.each([
+      [
+        'newest first',
+        [
+          ['628111@s.whatsapp.net', 'reply', T],
+          ['628111@c.us', 'question', T - 100],
+        ],
+      ],
+      [
+        'oldest first',
+        [
+          ['628111@c.us', 'question', T - 100],
+          ['628111@s.whatsapp.net', 'reply', T],
+        ],
+      ],
+    ] as const)('keeps the newer row of a chat stored under two spellings of its id, %s', (_order, spelled) => {
+      const s = newStore();
+      s.seedStoredPreviews(
+        spelled.map(([chatId, body, timestamp], i) => stored({ chatId, id: `M${i}`, body, timestamp })),
+      );
+      expect(s.listChats().map(c => [c.id, c.lastMessage, c.timestamp])).toEqual([['628111@c.us', 'reply', T]]);
+    });
+
     it('keeps a contact stored under its phone and its lid as two rows, as the live listing does', () => {
       const s = newStore();
       s.addLidMappings([{ lid: LID, pn: PHONE }]);
@@ -1610,13 +1633,20 @@ describe('BaileysSessionStore', () => {
       expect(chat(s, '628111@c.us')?.name).toBe('Rina (VIP)');
     });
 
-    it('holds no more chats than BAILEYS_SESSION_STORE_MAX_ENTRIES', () => {
+    it('holds no more chats than BAILEYS_SESSION_STORE_MAX_ENTRIES, and gives up the oldest first', () => {
       const before = process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES;
       process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES = '2';
       try {
         const s = newStore();
-        s.seedStoredPreviews(['628111', '628222', '628333'].map(n => stored({ chatId: `${n}@c.us`, id: n })));
-        expect(s.listChats().map(c => c.id)).toEqual(['628222@c.us', '628333@c.us']);
+        s.seedStoredPreviews(
+          ['628333', '628222', '628111'].map((n, i) => stored({ chatId: `${n}@c.us`, id: n, timestamp: T - i * 10 })),
+        );
+        expect(
+          s
+            .listChats()
+            .map(c => c.id)
+            .sort(),
+        ).toEqual(['628222@c.us', '628333@c.us']);
       } finally {
         if (before === undefined) delete process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES;
         else process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES = before;
