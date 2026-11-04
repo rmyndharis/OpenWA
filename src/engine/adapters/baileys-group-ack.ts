@@ -9,13 +9,20 @@ export const GROUP_ACK_MAX_MESSAGES = 500;
 /**
  * Most member ids and member marks held across the followed messages. A message to a group of a thousand holds
  * thousands of them, so the message count alone would not bound the memory: past this budget the messages heard
- * from longest ago are dropped too, which keeps about a hundred messages of the largest groups.
+ * from longest ago are dropped too, which keeps about seventy messages of the largest groups.
  */
 export const GROUP_ACK_MAX_KEYS = 300_000;
-/** How long a message is followed: a member's phone can stay offline for days before it reports. */
+/** How long a message is followed after its last receipt: a member's phone can stay offline for days. */
 export const GROUP_ACK_FOLLOW_MS = 7 * 24 * 60 * 60 * 1000;
-/** After a roster read fails, the message is not read again for this long, so a burst of receipts makes one try. */
+/**
+ * After a group's roster could not be read, it is not read again for this long, for any of its messages, so a
+ * burst of receipts for a group the account has left makes one query, not one per message.
+ */
 export const GROUP_ACK_RETRY_MS = 30_000;
+/** Most receipts held back, across all messages, while the roster of their group cannot be read. */
+export const GROUP_ACK_MAX_HELD = 5_000;
+/** Most groups remembered as unreadable at once. */
+const MAX_UNREADABLE_GROUPS = 256;
 
 export interface GroupAckHost {
   /**
@@ -32,9 +39,11 @@ export interface GroupAckHost {
 
 interface Following {
   state: 'following';
+  messageId: string;
   chatId: string;
   /** The number of a member, by every identity key that names them. */
   members: Map<string, number>;
+  /** How many members are waited for. */
   size: number;
   delivered: Set<number>;
   read: Set<number>;
@@ -48,18 +57,22 @@ interface Finished {
   heardAt: number;
 }
 
-/** A message whose group roster could not be read, tried again after `retryAt`. */
-interface Unreadable {
-  state: 'unreadable';
-  retryAt: number;
-  heardAt: number;
-}
+type Entry = Following | Finished;
 
-type Entry = Following | Finished | Unreadable;
+/** What `follow` found for a message: the state to count its receipts in, or why there is none. */
+type Followed = Following | 'finished' | 'unreadable';
 
 /** What an entry can hold at most: the ids of its roster, plus a delivered and a read mark per member. */
 function weightOf(entry: Entry): number {
   return entry.state === 'following' ? entry.members.size + 2 * entry.size : 1;
+}
+
+/**
+ * A message is named by its chat and its id together: a receipt that carries an id of a message in another chat
+ * (a member of both can relay one) is not another receipt of that message.
+ */
+function entryKey(chatId: string, messageId: string): string {
+  return `${chatId}|${messageId}`;
 }
 
 /** `user:<phone>` or `lid:<lid>`: the device suffix and the dialect of the domain are folded away. */
@@ -75,39 +88,97 @@ function identityKey(jid: string): string | undefined {
  * one member can report the same status several times), and its 1:1 status update never fires for it, so
  * without this the message stays at `sent`.
  *
- * The members are the roster read at the first receipt, so a member added later is not waited for. A member
- * whose device never reports keeps the message at the lower status. The state is in memory and bounded: a
- * restart forgets the receipts of earlier messages, which then advance no further.
+ * The members are the roster read at the first receipt, less any member who leaves afterwards ({@link forget}):
+ * a member who joined after the send but before that first receipt is waited for although the message never
+ * reached them, and keeps the message at the lower status. So does a member whose device never reports. The
+ * receipts of a message whose roster cannot be read are held back (a bounded number) and counted once it can.
+ * The state is in memory and bounded: a restart forgets the receipts of earlier messages, so one that has not
+ * completed by then completes only if the rest of its receipts arrive afterwards.
  */
 export class GroupAckAggregator {
-  /** Followed messages, oldest first: a message that is heard from again moves to the end. */
+  /** Followed messages by chat and id, oldest first: a message that is heard from again moves to the end. */
   private readonly entries = new Map<string, Entry>();
-  /** Roster reads under way, so a burst of receipts for one message shares a single query. */
-  private readonly loading = new Map<string, Promise<Following | null>>();
+  /** Message loads under way, so a burst of receipts for one message shares a single load. */
+  private readonly loading = new Map<string, Promise<Followed>>();
+  /** Roster reads under way, one per group, so the messages of a group share a single query. */
+  private readonly reading = new Map<string, Promise<string[][] | null>>();
+  /** Groups whose roster could not be read, with the time they may be read again. */
+  private readonly unreadable = new Map<string, number>();
+  /** Receipts waiting for the roster of their group, by message, oldest message first. */
+  private readonly held = new Map<string, MessageReceiptEvent[]>();
+  private heldCount = 0;
   /** The sum of {@link weightOf} over the entries. */
   private weight = 0;
 
   constructor(
     private readonly host: GroupAckHost,
-    private readonly now: () => number = Date.now,
+    private readonly now: () => number = () => performance.now(),
     private readonly maxMessages: number = GROUP_ACK_MAX_MESSAGES,
     private readonly maxKeys: number = GROUP_ACK_MAX_KEYS,
+    private readonly maxHeld: number = GROUP_ACK_MAX_HELD,
   ) {}
 
   async record(event: MessageReceiptEvent): Promise<void> {
     if (chatKind(event.chatId) !== 'group') return;
-    const following = await this.follow(event.messageId, event.chatId);
-    if (!following) return;
+    const key = entryKey(event.chatId, event.messageId);
+    const followed = await this.follow(key, event);
+    if (followed === 'unreadable') {
+      this.hold(key, event);
+      return;
+    }
+    const waiting = this.release(key);
+    if (followed === 'finished') return;
+    for (const receipt of waiting) this.count(key, followed, receipt);
+    this.count(key, followed, event);
+  }
+
+  /**
+   * A member left the group: it is no longer waited for, which can complete the messages it was the last to
+   * hold up. `participants` holds every id form that names the members who left.
+   */
+  forget(chatId: string, participants: string[]): void {
+    for (const [key, entry] of [...this.entries]) {
+      // Settling one message can drop expired ones from the map, so an entry of the snapshot may be gone by now.
+      if (entry.state !== 'following' || entry.chatId !== chatId || this.entries.get(key) !== entry) continue;
+      const gone = new Set<number>();
+      for (const jid of participants) {
+        const member = this.memberOf(entry, jid);
+        if (member !== undefined) gone.add(member);
+      }
+      if (gone.size === 0) continue;
+      const before = weightOf(entry);
+      for (const [identity, member] of entry.members) {
+        if (gone.has(member)) entry.members.delete(identity);
+      }
+      for (const member of gone) {
+        entry.delivered.delete(member);
+        entry.read.delete(member);
+      }
+      entry.size -= gone.size;
+      this.weight += weightOf(entry) - before;
+      if (entry.size === 0) this.remember(key, { state: 'finished', heardAt: this.now() });
+      else this.settle(key, entry);
+    }
+  }
+
+  /** Counts one receipt for a followed message, and reports what it completes. */
+  private count(key: string, following: Following, event: MessageReceiptEvent): void {
+    if (following.reported === 2) return;
     const member = this.memberOf(following, event.participant);
     if (member === undefined) return;
     following.delivered.add(member);
     if (event.status !== 'delivered') following.read.add(member);
+    this.settle(key, following);
+  }
+
+  /** Reports the statuses a followed message has reached and not yet reported, `delivered` before `read`. */
+  private settle(key: string, following: Following): void {
     const reached = following.read.size === following.size ? 2 : following.delivered.size === following.size ? 1 : 0;
     while (following.reported < reached) {
       following.reported = following.reported === 0 ? 1 : 2;
-      this.report(event.messageId, following.reported === 1 ? 'delivered' : 'read', following.chatId);
+      this.report(following.messageId, following.reported === 1 ? 'delivered' : 'read', following.chatId);
     }
-    if (following.reported === 2) this.remember(event.messageId, { state: 'finished', heardAt: this.now() });
+    if (following.reported === 2) this.remember(key, { state: 'finished', heardAt: this.now() });
   }
 
   private report(messageId: string, status: GroupAckStatus, chatId: string): void {
@@ -122,56 +193,48 @@ export class GroupAckAggregator {
     }
   }
 
-  private follow(messageId: string, chatId: string): Promise<Following | null> {
+  private follow(key: string, event: MessageReceiptEvent): Promise<Followed> {
     const now = this.now();
-    const known = this.entries.get(messageId);
+    const known = this.entries.get(key);
     if (known && now - known.heardAt < GROUP_ACK_FOLLOW_MS) {
-      if (known.state === 'finished') return Promise.resolve(null);
-      if (known.state === 'following') {
-        known.heardAt = now;
-        this.entries.delete(messageId);
-        this.entries.set(messageId, known);
-        return Promise.resolve(known);
-      }
-      if (now < known.retryAt) return Promise.resolve(null);
+      if (known.state === 'finished') return Promise.resolve('finished');
+      known.heardAt = now;
+      this.entries.delete(key);
+      this.entries.set(key, known);
+      return Promise.resolve(known);
     }
-    const joined = this.loading.get(messageId);
+    const joined = this.loading.get(key);
     if (joined) return joined;
-    const pending = this.load(messageId, chatId, now).finally(() => this.loading.delete(messageId));
-    this.loading.set(messageId, pending);
+    const retryAt = this.unreadable.get(event.chatId);
+    if (retryAt !== undefined) {
+      if (now < retryAt) return Promise.resolve('unreadable');
+      this.unreadable.delete(event.chatId);
+    }
+    const pending = this.load(key, event, now).finally(() => this.loading.delete(key));
+    this.loading.set(key, pending);
     return pending;
   }
 
-  private async load(messageId: string, chatId: string, now: number): Promise<Following | null> {
-    let roster: string[][] | null = null;
-    try {
-      roster = await this.host.readRoster(chatId);
-    } catch (error) {
-      this.host.warn('Reading a group roster to follow the acks of its message failed', {
-        chatId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    if (!roster) {
-      this.remember(messageId, { state: 'unreadable', retryAt: now + GROUP_ACK_RETRY_MS, heardAt: now });
-      return null;
-    }
+  private async load(key: string, event: MessageReceiptEvent, now: number): Promise<Followed> {
+    const roster = await this.readRoster(event.chatId);
+    if (!roster) return 'unreadable';
     const members = new Map<string, number>();
     let size = 0;
     for (const forms of roster) {
-      const keys = forms.map(identityKey).filter((key): key is string => key !== undefined);
+      const keys = forms.map(identityKey).filter((identity): identity is string => identity !== undefined);
       if (keys.length === 0) continue;
-      const number = keys.map(key => members.get(key)).find(known => known !== undefined) ?? size++;
-      for (const key of keys) members.set(key, number);
+      const number = keys.map(identity => members.get(identity)).find(known => known !== undefined) ?? size++;
+      for (const identity of keys) members.set(identity, number);
     }
     if (size === 0) {
       // Nobody but this account is in the group: there is no one to wait for.
-      this.remember(messageId, { state: 'finished', heardAt: now });
-      return null;
+      this.remember(key, { state: 'finished', heardAt: now });
+      return 'finished';
     }
     const following: Following = {
       state: 'following',
-      chatId,
+      messageId: event.messageId,
+      chatId: event.chatId,
       members,
       size,
       delivered: new Set(),
@@ -179,38 +242,93 @@ export class GroupAckAggregator {
       reported: 0,
       heardAt: now,
     };
-    this.remember(messageId, following);
+    this.remember(key, following);
     return following;
+  }
+
+  /** The roster of a group, read once however many of its messages ask at the same time. */
+  private readRoster(chatId: string): Promise<string[][] | null> {
+    const joined = this.reading.get(chatId);
+    if (joined) return joined;
+    const pending = (async (): Promise<string[][] | null> => {
+      try {
+        return await this.host.readRoster(chatId);
+      } catch (error) {
+        this.host.warn('Reading a group roster to follow the acks of its messages failed', {
+          chatId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
+    })()
+      .then(roster => {
+        if (!roster) this.markUnreadable(chatId);
+        return roster;
+      })
+      .finally(() => this.reading.delete(chatId));
+    this.reading.set(chatId, pending);
+    return pending;
+  }
+
+  private markUnreadable(chatId: string): void {
+    this.unreadable.delete(chatId);
+    this.unreadable.set(chatId, this.now() + GROUP_ACK_RETRY_MS);
+    if (this.unreadable.size > MAX_UNREADABLE_GROUPS) {
+      const oldest = this.unreadable.keys().next().value;
+      if (oldest !== undefined) this.unreadable.delete(oldest);
+    }
+  }
+
+  /** Holds a receipt back until the roster of its group can be read; the oldest messages' receipts go first. */
+  private hold(key: string, event: MessageReceiptEvent): void {
+    const waiting = this.held.get(key);
+    if (waiting) waiting.push(event);
+    else this.held.set(key, [event]);
+    this.heldCount++;
+    while (this.heldCount > this.maxHeld) {
+      const oldest = this.held.keys().next().value;
+      if (oldest === undefined) break;
+      this.release(oldest);
+    }
+  }
+
+  /** Takes the receipts held back for a message. */
+  private release(key: string): MessageReceiptEvent[] {
+    const waiting = this.held.get(key);
+    if (!waiting) return [];
+    this.held.delete(key);
+    this.heldCount -= waiting.length;
+    return waiting;
   }
 
   /** The number of the member a receipt names, in whichever dialect the group addresses its members. */
   private memberOf(following: Following, participant: string): number | undefined {
-    const key = identityKey(participant);
-    if (!key) return undefined;
-    const direct = following.members.get(key);
+    const identity = identityKey(participant);
+    if (!identity) return undefined;
+    const direct = following.members.get(identity);
     if (direct !== undefined || parseWaId(participant).kind !== 'lid') return direct;
     const phone = this.host.resolvePhone?.(participant);
     return phone ? following.members.get(`user:${userPart(phone)}`) : undefined;
   }
 
   /** Keeps an entry as the newest, then drops the oldest ones that are expired or beyond a limit. */
-  private remember(messageId: string, entry: Entry): void {
-    this.drop(messageId);
-    this.entries.set(messageId, entry);
+  private remember(key: string, entry: Entry): void {
+    this.drop(key);
+    this.entries.set(key, entry);
     this.weight += weightOf(entry);
     const now = this.now();
     for (const [id, oldest] of this.entries) {
-      if (id === messageId) break;
+      if (id === key) break;
       const withinLimits = this.entries.size <= this.maxMessages && this.weight <= this.maxKeys;
       if (withinLimits && now - oldest.heardAt < GROUP_ACK_FOLLOW_MS) break;
       this.drop(id);
     }
   }
 
-  private drop(messageId: string): void {
-    const entry = this.entries.get(messageId);
+  private drop(key: string): void {
+    const entry = this.entries.get(key);
     if (!entry) return;
     this.weight -= weightOf(entry);
-    this.entries.delete(messageId);
+    this.entries.delete(key);
   }
 }
