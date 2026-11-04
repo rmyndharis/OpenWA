@@ -55,8 +55,8 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
     const sessionDataPath =
       (config.sessionDataPath as string | undefined) ?? engineConfig.sessionDataPath ?? './data/sessions';
     const headless = puppeteer.headless ?? true;
-    // No default here: the adapter owns the fallback flag list (DEFAULT_PUPPETEER_ARGS), so a persisted
-    // plugin config whose `puppeteer` object has no `args` still launches with the documented flags.
+    // The loader preserves environment arguments beneath stored overrides. If neither defines them,
+    // the adapter supplies DEFAULT_PUPPETEER_ARGS.
     const puppeteerArgs = puppeteer.args;
     const executablePath = puppeteer.executablePath;
     const protocolTimeoutMs = puppeteer.protocolTimeoutMs;
