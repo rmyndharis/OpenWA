@@ -336,6 +336,8 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
     // An ack is a receipt of a message the account sent. Only an explicit false is dropped: a build that
     // renamed the field (#747) can leave it unreadable, and dropping there strands real acks at SENT.
     if (msg.fromMe === false) return;
+    // The account's own notice was never handed over as a sent message, so its ack would point at nothing.
+    if (isNotice(msg)) return;
     // Map the whatsapp-web.js MessageAck integer to the neutral DeliveryStatus here, at the
     // adapter boundary, so no downstream consumer ever sees engine-specific ack codes. The chat is
     // derived as Message._getChatId derives it (the same direction flag the revoked handler uses),

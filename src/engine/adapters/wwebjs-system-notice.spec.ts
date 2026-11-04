@@ -8,7 +8,7 @@ import type { InboundTicket } from '../interfaces/whatsapp-engine.interface';
  * whatsapp-web.js raises `message` and `message_create` for every new model WhatsApp Web adds to a chat except group
  * notices and undecrypted placeholders, so when WhatsApp Web adds one of the bubbles it draws by itself (a changed
  * security code, the encryption notice, a business or broadcast notice) as a new message, it arrives like a message.
- * It carries nothing a person sent, so the session must neither store it nor announce it.
+ * It carries nothing a person sent, so the session must neither store it nor announce it, nor its acks.
  */
 
 const CHAT = '628111@c.us';
@@ -47,7 +47,12 @@ const model = (type: string, opts: { fromMe?: boolean; body?: string; data?: Rec
 function wired() {
   const client = new EventEmitter();
   const ticket: InboundTicket = { reserve: () => true, holdUntil: jest.fn(), drop: jest.fn(), revoked: false };
-  const callbacks = { admitInbound: jest.fn(() => ticket), onMessage: jest.fn(), onMessageCreate: jest.fn() };
+  const callbacks = {
+    admitInbound: jest.fn(() => ticket),
+    onMessage: jest.fn(),
+    onMessageCreate: jest.fn(),
+    onMessageAck: jest.fn(),
+  };
   const logger = { debug: jest.fn(), warn: jest.fn(), error: jest.fn() };
   const host = {
     logger,
@@ -91,6 +96,15 @@ describe('a whatsapp-web.js system notice', () => {
     expect(admitInbound).not.toHaveBeenCalled();
   });
 
+  // The account's own notice was never announced as a sent message, so an ack of it would point at nothing.
+  it.each(NOTICES)('of the account itself, type %s, has no ack announced', type => {
+    const { client, onMessageAck } = wired();
+
+    client.emit('message_ack', model(type, { fromMe: true }), 2);
+
+    expect(onMessageAck).not.toHaveBeenCalled();
+  });
+
   describe('on the wiring that drops system notices', () => {
     it('still delivers an ordinary received message with its ticket and its contact lookup', async () => {
       const { client, ticket, admitInbound, onMessage } = wired();
@@ -114,6 +128,16 @@ describe('a whatsapp-web.js system notice', () => {
 
       expect(admitInbound).toHaveBeenCalledTimes(1);
       expect(onMessageCreate).toHaveBeenCalledWith(expect.objectContaining({ type: 'text', body: 'hello' }), ticket);
+    });
+
+    it('still announces the ack of an ordinary message the account sent', () => {
+      const { client, onMessageAck } = wired();
+      const sent = model('chat', { fromMe: true, body: 'hello' });
+
+      client.emit('message_ack', sent, 2);
+
+      expect(onMessageAck).toHaveBeenCalledTimes(1);
+      expect(onMessageAck).toHaveBeenCalledWith(sent.id._serialized, 'delivered', CHAT);
     });
 
     // A call log is listed by the chat history, and a prompt can arrive with no text: neither is a notice.
