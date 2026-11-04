@@ -909,10 +909,8 @@ export class HealthController {
     if (this.shutdownService.isShuttingDown()) {
       throw new ServiceUnavailableException({ status: 'error', details: { shutdown: { status: 'draining' } } });
     }
-    const [main, data] = await Promise.all([
-      this.probeDatabase(this.mainDataSource),
-      this.probeDatabase(this.dataDataSource),
-    ]);
+    // Both SELECT 1 probes run in parallel; requests that arrive together share them and the verdict answers the next second.
+    const { main, data } = await this.probeDatabases();
     const details = { mainDatabase: { status: main }, dataDatabase: { status: data } };
     if (main === 'down' || data === 'down') {
       throw new ServiceUnavailableException({ status: 'error', details });
@@ -921,6 +919,8 @@ export class HealthController {
   }
 }
 ```
+
+The readiness route is public and exempt from the throttler, so a flood of callers must not become a flood of queries: requests that arrive while the two probes run share them, and their verdict answers the next second. The draining check is made on every request and is never served from a verdict.
 
 ### Prometheus Metrics Implementation
 

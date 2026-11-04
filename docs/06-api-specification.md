@@ -5443,7 +5443,7 @@ Readiness probe — verifies the `main` (auth/audit) and `data` TypeORM datasour
 }
 ```
 
-During shutdown the `details` instead read `{ "shutdown": { "status": "draining" } }`. Probes run in parallel via `Promise.all`. There is no `health/detailed` route.
+During shutdown the `details` instead read `{ "shutdown": { "status": "draining" } }`, and that check is made on every request. The two probes run in parallel; requests that arrive while they run share them, and their verdict (up or down) answers the requests of the next second, so a burst of callers costs each database one `SELECT 1` a second. There is no `health/detailed` route.
 
 #### GET /api/metrics
 
