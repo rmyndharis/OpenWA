@@ -11,12 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add `GET /api/sessions/{sessionId}/messages/{chatId}/{messageId}/receipts`, which lists who received, read and played a message the account sent on whatsapp-web.js (Baileys answers `501`), and `messages.receipts` in all five SDKs (#1748). Thanks @Purushotham-Prajapati-24, and @berodcdev for the request.
 
+### Changed
+
+- Log the page visibility, the H.264/AAC playback answer and the browser version when a whatsapp-web.js video send or video status post times out in WhatsApp Web's 20 second video load, and document how to read that timeout (#1902). Thanks @benjaminb10 for the report.
+
 ### Fixed
 
 - Install Trivy for the release and scheduled image scans from its GitHub release against a pinned SHA-256, since the action's own installer needs a host that no longer resolves.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
+
+### Documentation
+
+- The community integrations page lists `openwa-n8n-workflows`, an import-ready n8n workflow that answers `message.received` webhooks with a local AI model. Thanks @Abhishekrajpurohit.
 
 ### Dependencies
 

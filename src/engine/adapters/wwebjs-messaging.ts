@@ -37,6 +37,7 @@ import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.
 import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
 import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
 import { recoverGroupChatById } from './wwebjs-chats';
+import { noteVideoLoadTimeout } from './wwebjs-video-load-timeout';
 
 /**
  * Map a whatsapp-web.js MessageAck integer to the neutral DeliveryStatus.
@@ -718,7 +719,10 @@ export class WwebjsMessaging {
           ...this.quoteOptions(media.quotedMessageId),
         }),
       media.quotedMessageId,
-    );
+    ).catch((error: unknown) => {
+      noteVideoLoadTimeout(this.host, error, messageMedia.mimetype);
+      throw error;
+    });
 
     return toMessageResult(msg);
   }
