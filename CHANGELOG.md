@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add `GET /api/sessions/{sessionId}/messages/{chatId}/{messageId}/receipts`, which lists who received, read and played a message the account sent on whatsapp-web.js (Baileys answers `501`), and `messages.receipts` in all five SDKs (#1748). Thanks @Purushotham-Prajapati-24, and @berodcdev for the request.
+- Plugin ingress routes can set `dedupBodyMismatchAsNew` to treat a repeated delivery id with a different body as a new delivery; a mismatch is logged and counted in `openwa_ingress_dedup_body_mismatches_total` either way.
 
 ### Changed
 
@@ -22,11 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
+- Webhook and automation rule writes refuse more than 27 events and id filter values over 128 characters.
+- Stored webhook rows and backups past these limits are kept as they are; an edit that resends them is refused until they fit.
+- Integration redrive reads one payload at a time, and an exhausted webhook replay budget keeps the event data on the failure row.
 
 ### Documentation
 
 - The community integrations page lists `openwa-n8n-workflows`, an import-ready n8n workflow that answers `message.received` webhooks with a local AI model. Thanks @Abhishekrajpurohit.
 - The API reference says how to count the viewers of a Baileys status post from `message.receipt`, and that a status post reports no `delivered` or `read` ack.
+- Explain redirect and blocked-destination delivery errors in the n8n troubleshooting guide.
 
 ### Dependencies
 
