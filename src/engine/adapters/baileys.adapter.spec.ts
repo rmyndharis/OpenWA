@@ -10789,6 +10789,37 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
     expect(fakeStore.put).toHaveBeenCalledTimes(2);
   });
 
+  it('still takes a repeat delivery of an own message under the lid of its chat after the one under its number', async () => {
+    let release!: () => void;
+    baileys.downloadMediaMessage
+      .mockReturnValueOnce(
+        new Promise(resolve => {
+          release = () => resolve(streamOf(Buffer.from('JPEG')));
+        }),
+      )
+      .mockReturnValueOnce(Promise.resolve(streamOf(Buffer.from('JPEG'))));
+    const warn = jest.spyOn(loggerOf(await started()), 'warn').mockImplementation(() => undefined);
+    const delivery = (key: Record<string, unknown>) => ({
+      key: { fromMe: true, id: 'OWN_TWICE_REVERSED', ...key },
+      message: { imageMessage: { mimetype: 'image/jpeg', caption: 'typed on the phone' } },
+      messageTimestamp: 1700000099,
+    });
+    fakeSock.fire('messages.upsert', { type: 'notify', messages: [delivery({ remoteJid: PEER })] });
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [delivery({ remoteJid: '44556677@lid', remoteJidAlt: '628999@s.whatsapp.net' })],
+    });
+    for (let i = 0; i < 5; i++) await settle();
+    release();
+    for (let i = 0; i < 5; i++) await settle();
+
+    expect(warn).not.toHaveBeenCalledWith(
+      'Dropping a message that reuses the id of one still being processed',
+      expect.anything(),
+    );
+    expect(fakeStore.put).toHaveBeenCalledTimes(2);
+  });
+
   const ownStored = {
     key: { id: 'TARGET', remoteJid: PEER, fromMe: true },
     message: { conversation: 'as sent' },

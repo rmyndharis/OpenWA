@@ -1509,6 +1509,39 @@ describe('BaileysEvents event RSVPs (event.response)', () => {
       expect(onEventResponse).toHaveBeenCalledWith(expect.objectContaining({ chatId: '6282222222222@c.us' }));
     });
 
+    it("reports the account's own answer from a lid chat to a contact's event kept under the number", async () => {
+      const onEventResponse = jest.fn();
+      const events = new BaileysEvents(
+        makeHost({
+          getOnEventResponse: () => onEventResponse,
+          getStoredMessage: storedIn('6282222222222@s.whatsapp.net'),
+          toNeutralJid: jid => toNeutralJid(jid),
+        }),
+      );
+
+      events.handleMessagesUpdate([
+        {
+          key: { id: 'EVT1', remoteJid: '99887766@lid', fromMe: false },
+          update: {
+            eventResponses: [
+              rsvp({
+                // Typed on the phone: Baileys files the account's own number beside the chat's lid.
+                eventResponseMessageKey: {
+                  id: 'RSVP12',
+                  remoteJid: '99887766@lid',
+                  remoteJidAlt: '6280000000000@s.whatsapp.net',
+                  fromMe: true,
+                },
+              }),
+            ],
+          },
+        },
+      ] as never);
+      await flush();
+
+      expect(onEventResponse).toHaveBeenCalledTimes(1);
+    });
+
     it('drops an answer from a lid whose own phone number is not the chat of the event', async () => {
       const onEventResponse = jest.fn();
       const logger = createLogger('BaileysEventsSpec');
