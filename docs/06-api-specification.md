@@ -1502,6 +1502,49 @@ Returns a bare array of `MessageReaction`:
 
 **Errors:** `400` session not active · `401` missing/invalid API key · `404` message not found in the chat (whatsapp-web.js) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read (retryable)
 
+#### GET /api/sessions/:sessionId/messages/:chatId/:messageId/receipts
+
+Get who received, read and played a message this account sent, with the time of each. **whatsapp-web.js only**: Baileys answers `501`; its receipts arrive live as the opt-in `message.receipt` event and are not stored.
+
+The message is looked up by its full serialized id, exactly as the send routes return it (`true_<chatId>_<id>`, which carries one more segment on some messages: the sender of a group message, or `out` on an own 1:1 message), among every message WhatsApp Web holds, not only the 100 most recent of the chat; a message WhatsApp Web no longer holds answers `404`. It must belong to `chatId`: a message of another chat answers `404`. A 1:1 chat that WhatsApp Web keeps under the contact's `@lid` can be named by its `@c.us`; the reverse, naming the `@lid` of a chat whose messages are still stored under the `@c.us`, answers `404`. Participants are reported as WhatsApp Web lists them, so a group member can appear as `<lid>@lid`. `deliveryRemaining`, `readRemaining` and `playedRemaining` count the recipients that have not reached that state yet.
+
+**Auth:** API key
+
+**Path parameters**
+
+| Name      | Type   | Description                                       |
+| --------- | ------ | ------------------------------------------------- |
+| sessionId | string | Session ID                                        |
+| chatId    | string | Chat ID containing the message                    |
+| messageId | string | Full serialized ID of a message this account sent |
+
+**Response** `200`
+
+Returns a `MessageReceipts` object:
+
+```json
+{
+  "delivery": [
+    {
+      "participant": "628123456789@c.us",
+      "timestamp": 1719312050
+    }
+  ],
+  "deliveryRemaining": 0,
+  "read": [
+    {
+      "participant": "628123456789@c.us",
+      "timestamp": 1719312060
+    }
+  ],
+  "readRemaining": 0,
+  "played": [],
+  "playedRemaining": 0
+}
+```
+
+**Errors:** `400` session not active · `401` missing/invalid API key · `403` the message was received rather than sent by this account, or the key's `allowedChats` excludes the chat · `404` message not found in the chat · `409` conflict or engine not ready (retryable) · `500` engine error · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read (retryable)
+
 #### POST /api/sessions/:sessionId/messages/vote-poll
 
 Cast a vote on a poll.
@@ -7461,7 +7504,7 @@ These are the events OpenWA actually emits. A webhook is registered with an `eve
 | `call.accepted` / `call.rejected` / `call.missed` | A ringing call ended, whether answered, declined, or never picked up. **Baileys only**: whatsapp-web.js emits no call-outcome event                                                                                                   | `{ sessionId, callId, from, outcome, isVideo, isGroup, timestamp }`. `callId` matches the `call.received` that preceded it, so the pair can be correlated. The engines report _what_ happened, never _who_ did it: an accept can come from any linked device. An outcome is only sent for a call this session saw ring, and offline-replayed signalling for calls that ended while disconnected is dropped. WhatsApp's `terminate` is deliberately unmapped: it covers both a caller hanging up before answer and either side ending an answered call, with nothing to tell them apart                                                                                                          |
 | `status.received`                                 | A contact posts a status/story (opt-in — see below)                                                                                                                                                                                   | `{ sessionId, statusId, contact: { id, name?, pushName? }, type, caption?, hasMedia, mediaOmitted, omitReason?, postedAt, expiresAt }` — `statusId` is the store's `id` (usable with the status endpoints below); `postedAt`/`expiresAt` are epoch **milliseconds** (unlike the epoch-seconds convention for message timestamps), matching the `GET /status` store's own `Date`-backed fields                                                                                                                                                                                                                                                                                                   |
 
-> **`message.ack` on Baileys.** An own group message reaches `delivered` once every member other than this account has received it, and `read` once every member has read it (a played voice note counts as read), judged against the roster read at the first receipt (at a later one when that read fails), less any member who leaves the group afterwards, a leave during that read included. A member whose device never reports (a phone that stays offline, for instance) keeps the message at the lower status, and so does a member who joined between the send and that first receipt, who is waited for although the message never reached them, and a member who leaves while the gateway is disconnected, whose leave is not applied unless WhatsApp replays it. Receipts that arrive while the roster cannot be read are held back (up to 5000) and counted when a later receipt of the message finds it readable, so a failed read postpones `delivered` until then. A receipt whose id cannot be matched to a roster row, even through the session's lid mappings, is not counted. The receipts are followed in memory, up to 500 messages per session (fewer for very large groups), for 7 days after the last receipt of each; a restart, and a message that the limits dropped, forgets its receipts, so a later receipt starts it over and can report an ack again (webhooks and the stored status absorb the repeat; a socket client or a `message:ack` hook sees it). An own status post stays at `sent` unless the server rejects it, which still arrives as `failed`. Acks are reported only for messages the account sent: when the account reads a received message on its phone, no `message.ack` fires for it and its stored copy keeps its status.
+> **`message.ack` on Baileys.** An own group message reaches `delivered` once every member other than this account has received it, and `read` once every member has read it (a played voice note counts as read), judged against the roster read at the first receipt (at a later one when that read fails), less any member who leaves the group afterwards, a leave during that read included. A member whose device never reports (a phone that stays offline, for instance) keeps the message at the lower status, and so does a member who joined between the send and that first receipt, who is waited for although the message never reached them, and a member who leaves while the gateway is disconnected, whose leave is not applied unless WhatsApp replays it. Receipts that arrive while the roster cannot be read are held back (up to 5000) and counted when a later receipt of the message finds it readable, so a failed read postpones `delivered` until then. A receipt whose id cannot be matched to a roster row, even through the session's lid mappings, is not counted. The receipts are followed in memory, up to 500 messages per session (fewer for very large groups), for 7 days after the last receipt of each; a restart, and a message that the limits dropped, forgets its receipts, so a later receipt starts it over and can report an ack again (webhooks and the stored status absorb the repeat; a socket client or a `message:ack` hook sees it). Acks are reported only for messages the account sent: when the account reads a received message on its phone, no `message.ack` fires for it and its stored copy keeps its status. An own status post reports no `delivered` or `read` ack: it stays at `sent` unless the server rejects it, which still arrives as `failed`, and its receipts arrive one viewer at a time as `message.receipt` instead. To count the viewers of a status, subscribe to `message.receipt` by name and count the distinct `participant` values with `status` `read` for the status id under the chat `status@broadcast`. A viewer whose read receipts are off never appears in that count, and the per-webhook bound on `message.receipt` applies (see Delivery semantics).
 
 > **`status.received` is opt-in and carries no media blob.** `status.received` is only delivered to a webhook whose `events` list explicitly includes `"status.received"` (or `"*"`) — registering for other events does not implicitly subscribe you to it. The payload never embeds media bytes: when `hasMedia` is `true`, fetch the file separately via `GET /api/sessions/:sessionId/status/:statusId/media`. Your own posted statuses never trigger this event — only inbound stories from contacts (an own-send echo is dropped before ingest).
 

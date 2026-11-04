@@ -668,6 +668,22 @@ class ReactionRecord(TypedDict):
     senders: list[ReactionSender]
 
 
+class MessageReceiptParticipant(TypedDict):
+    participant: Jid
+    timestamp: int
+
+
+class MessageReceiptsResponse(TypedDict):
+    """Who received, read and played a message the account sent (whatsapp-web.js only)."""
+
+    delivery: list[MessageReceiptParticipant]
+    deliveryRemaining: NotRequired[int]
+    read: list[MessageReceiptParticipant]
+    readRemaining: NotRequired[int]
+    played: list[MessageReceiptParticipant]
+    playedRemaining: NotRequired[int]
+
+
 # ── Bulk ──────────────────────────────────────────────────────────
 
 

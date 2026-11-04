@@ -15,6 +15,7 @@ import com.rmyndharis.openwa.model.ForwardMessageRequest;
 import com.rmyndharis.openwa.model.ListMessagesQuery;
 import com.rmyndharis.openwa.model.MessageHistoryQuery;
 import com.rmyndharis.openwa.model.MessageListResponse;
+import com.rmyndharis.openwa.model.MessageReceiptsResponse;
 import com.rmyndharis.openwa.model.MessageResponse;
 import com.rmyndharis.openwa.model.PinMessageRequest;
 import com.rmyndharis.openwa.model.ReactMessageRequest;
@@ -345,6 +346,25 @@ public final class MessagesResource {
             null,
             null,
             ReactionRecord.class);
+    }
+
+    /**
+     * Get who received, read and played a message the account sent. whatsapp-web.js only; Baileys
+     * answers {@code 501}.
+     */
+    public MessageReceiptsResponse receipts(String sessionId, String chatId, String messageId) {
+        return client.request(
+            HttpMethod.GET,
+            "/api/sessions/"
+                + encodeSegment(sessionId)
+                + "/messages/"
+                + encodeSegment(chatId)
+                + "/"
+                + encodeSegment(messageId)
+                + "/receipts",
+            null,
+            null,
+            MessageReceiptsResponse.class);
     }
 
     /**

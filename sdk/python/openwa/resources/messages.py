@@ -25,6 +25,7 @@ from ..types import (
     ListMessagesQuery,
     MessageHistoryQuery,
     MessageListResponse,
+    MessageReceiptsResponse,
     MessageResponse,
     ReactionRecord,
     ReactMessageRequest,
@@ -120,6 +121,12 @@ class MessagesResource:
         """Get the reactions on a message. whatsapp-web.js only; Baileys answers 501."""
         return self._http.request(
             "GET", f"/api/sessions/{quote_segment(session_id)}/messages/{quote_segment(chat_id)}/{quote_segment(message_id)}/reactions"
+        )
+
+    def receipts(self, session_id: str, chat_id: str, message_id: str) -> MessageReceiptsResponse:
+        """Get who received, read and played a message the account sent. whatsapp-web.js only; Baileys answers 501."""
+        return self._http.request(
+            "GET", f"/api/sessions/{quote_segment(session_id)}/messages/{quote_segment(chat_id)}/{quote_segment(message_id)}/receipts"
         )
 
     def pin(self, session_id: str, body: PinMessageRequest) -> SuccessResult:

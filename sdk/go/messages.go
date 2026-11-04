@@ -142,6 +142,18 @@ func (s *MessagesService) Reactions(ctx context.Context, sessionID, chatID, mess
 	return out, err
 }
 
+// Receipts returns who received, read and played a message the account sent. whatsapp-web.js only;
+// Baileys answers 501.
+func (s *MessagesService) Receipts(ctx context.Context, sessionID, chatID, messageID string) (*MessageReceiptsResponse, error) {
+	var out MessageReceiptsResponse
+	path := s.base(sessionID) + "/" + pathEscape(chatID) + "/" + pathEscape(messageID) + "/receipts"
+	err := s.client.do(ctx, "GET", path, nil, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Pin pins a message in its chat for a bounded window.
 func (s *MessagesService) Pin(ctx context.Context, sessionID string, body PinMessageRequest) (*SuccessResult, error) {
 	var out SuccessResult

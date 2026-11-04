@@ -112,6 +112,8 @@ const MAPPINGS = {
     MarkChatRequest: 'MarkChatUnreadDto',
     SubscribePresenceRequest: 'SubscribePresenceDto',
     MessageListResponse: 'MessageListResponseDto',
+    MessageReceiptParticipant: 'MessageReceiptParticipantDto',
+    MessageReceiptsResponse: 'MessageReceiptsResponseDto',
     MessageRecord: 'MessageListItemDto',
     MessageResponse: 'MessageResponseDto',
     MuteChannelRequest: 'MuteChannelDto',
@@ -231,11 +233,11 @@ const MAPPINGS = {
  * not: a floor left below its mapping let that many pairs be dropped with nothing failing.
  */
 const MINIMUM_MAPPED = {
-  'sdk/javascript/src/types.ts': 121,
+  'sdk/javascript/src/types.ts': 123,
   'dashboard/src/services/api.ts': 22,
-  'sdk/python/openwa/types.py': 132,
-  'sdk/go': 133,
-  'sdk/java': 138,
+  'sdk/python/openwa/types.py': 134,
+  'sdk/go': 135,
+  'sdk/java': 140,
 };
 
 /** Known drift, deliberately not gated yet — each line is a to-adjudicate follow-up. */
@@ -375,6 +377,8 @@ const PYTHON_MAPPING = {
   MarkChatRequest: 'MarkChatUnreadDto',
   SubscribePresenceRequest: 'SubscribePresenceDto',
   MessageListResponse: 'MessageListResponseDto',
+  MessageReceiptParticipant: 'MessageReceiptParticipantDto',
+  MessageReceiptsResponse: 'MessageReceiptsResponseDto',
   MessageRecord: 'MessageListItemDto',
   MessageResponse: 'MessageResponseDto',
   MuteChannelRequest: 'MuteChannelDto',
@@ -510,6 +514,8 @@ const GO_MAPPING = {
   MarkChatRequest: 'MarkChatUnreadDto',
   SubscribePresenceRequest: 'SubscribePresenceDto',
   MessageListResponse: 'MessageListResponseDto',
+  MessageReceiptParticipant: 'MessageReceiptParticipantDto',
+  MessageReceiptsResponse: 'MessageReceiptsResponseDto',
   MessageRecord: 'MessageListItemDto',
   MessageResponse: 'MessageResponseDto',
   MuteChannelRequest: 'MuteChannelDto',
@@ -652,6 +658,8 @@ const JAVA_MAPPING = {
   MarkChatRequest: 'MarkChatUnreadDto',
   SubscribePresenceRequest: 'SubscribePresenceDto',
   MessageListResponse: 'MessageListResponseDto',
+  MessageReceiptParticipant: 'MessageReceiptParticipantDto',
+  MessageReceiptsResponse: 'MessageReceiptsResponseDto',
   MessageRecord: 'MessageListItemDto',
   MessageResponse: 'MessageResponseDto',
   MuteChannelRequest: 'MuteChannelDto',

@@ -3,7 +3,7 @@
 Three-way comparison of every capability: the **Baileys library** (`@whiskeysockets/baileys`
 7.0.0-rc14), the **whatsapp-web.js library** (1.34.7), and what **OpenWA actually exposes** through
 its adapter layer and REST API — including which "supported" cells only work because OpenWA patches
-the installed library. Coverage is total: all 115 `IWhatsAppEngine` methods (29.4), **all 152
+the installed library. Coverage is total: all 116 `IWhatsAppEngine` methods (29.4), **all 152
 Baileys + 81 whatsapp-web.js library methods** (29.5), all 34 + 31 library events (29.5.4), and all
 13 install-time patches (29.3). If it exists upstream or in OpenWA, it has a row here.
 
@@ -29,7 +29,7 @@ Statuses used in the tables:
 
 Two complementary views:
 
-- **29.4, the OpenWA contract view.** Rows are the 115 `IWhatsAppEngine` methods; use it to see
+- **29.4, the OpenWA contract view.** Rows are the 116 `IWhatsAppEngine` methods; use it to see
   what a REST caller gets per engine. Source of truth: `src/engine/engine-capability-matrix.ts`
   (per-cell `evidence` strings cite the exact library `file:symbol` inspected).
 - **29.5 — the full engine inventory.** Rows are **every method the installed libraries expose**,
@@ -41,14 +41,14 @@ Two complementary views:
 ## 29.2 Adapter architecture
 
 OpenWA never calls a WhatsApp library directly from a controller. Every session owns one engine
-instance behind the neutral `IWhatsAppEngine` interface (115 methods +
+instance behind the neutral `IWhatsAppEngine` interface (116 methods +
 `EngineEventCallbacks`), and all modules go through it:
 
 ```mermaid
 flowchart LR
     subgraph OpenWA["OpenWA"]
         API["REST API controllers"] --> SVC["Modules / services"]
-        SVC --> IF["IWhatsAppEngine - 115 methods"]
+        SVC --> IF["IWhatsAppEngine - 116 methods"]
         IF --> WA["WhatsAppWebJsAdapter"]
         IF --> BA["BaileysAdapter"]
         SVC --> STORE["OpenWA-side stores"]
@@ -221,7 +221,7 @@ opens `if (!channel) return false;` before its try, so its `false` conflates _ch
 _WhatsApp refused_, and the adapter answers 403 for both. That distinction is ours to make in our own
 adapter and involves no library change.
 
-## 29.4 Full capability matrix: the OpenWA contract view (115 methods)
+## 29.4 Full capability matrix: the OpenWA contract view (116 methods)
 
 Legend recap: **✅** supported · **✅🔧ⁿ** supported via OpenWA patch `🔧ⁿ` (29.3) ·
 **❌ gap** adapter-gap · **❌ lib** library-limitation. Column headers carry the engine-wide
@@ -285,6 +285,7 @@ is restarted.
 | `pinMessage`          | ✅                  | ✅               | ✅              |
 | `unpinMessage`        | ✅                  | ✅               | ✅              |
 | `getMessageReactions` | ❌ lib              | ✅               | ⚠️ wwjs only    |
+| `getMessageReceipts`  | ❌ lib              | ✅               | ⚠️ wwjs only    |
 | `votePoll`            | ❌ lib              | ✅               | ⚠️ wwjs only    |
 | `clickButton`         | ✅                  | ❌ lib           | ⚠️ Baileys only |
 
@@ -420,10 +421,10 @@ answers 501.
 | `rejectCall`          | ✅                  | ❌ lib           | ⚠️ baileys only |
 | `createCallLink`      | ✅                  | ✅               | ✅              |
 
-**Totals:** 115 methods → 230 adapter cells: **202 ✅, 28 ❌** (2 adapter-gaps, 26
-library-limitations, 0 uncertain) across 27 methods. From the REST caller's side: **90** methods
+**Totals:** 116 methods → 232 adapter cells: **203 ✅, 29 ❌** (2 adapter-gaps, 27
+library-limitations, 0 uncertain) across 28 methods. From the REST caller's side: **90** methods
 work on any engine (88 fully supported + 2 store-backed status reads), **15** are Baileys-only,
-**9** are wwjs-only (the 2 store-backed rows excluded); `sendCatalog`, unavailable on both engines,
+**10** are wwjs-only (the 2 store-backed rows excluded); `sendCatalog`, unavailable on both engines,
 is not exposed. Four of the 90 (`probeLiveness`, `getPhoneNumber`, `getPushName`, `checkNumberExists`) are ⚙️
 internal and have no route.
 
@@ -682,7 +683,7 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 
 | Library method                 | OpenWA exposure                                                                                                                                                                                                                                                          |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `getMessageById`               | ❌ **not exposed**                                                                                                                                                                                                                                                       |
+| `getMessageById`               | ✅ `getMessageReceipts`                                                                                                                                                                                                                                                  |
 | `getPinnedMessages`            | ❌ **not exposed**                                                                                                                                                                                                                                                       |
 | `getPollVotes`                 | ❌ **not exposed**                                                                                                                                                                                                                                                       |
 | `searchMessages`               | ❌ **not exposed**                                                                                                                                                                                                                                                       |
@@ -693,17 +694,17 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 
 **Chats** (9)
 
-| Library method   | OpenWA exposure                                                                                                                                                                                                                                                                                                                                                                          |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `archiveChat`    | ✅ `archiveChat`                                                                                                                                                                                                                                                                                                                                                                         |
-| `getChatById`    | ✅ `muteChannel`, `sendSeen`, `clearChatMessages`, `markUnread`, `deleteChat`, `sendChatState`, `getGroupInfo`, `addParticipants`, `leaveGroup`, `setGroupSubject`, `setGroupDescription`, `getGroupInviteCode`, `revokeGroupInviteCode`, `getChatLabels`, `replyToMessage`, `forwardMessage`, `reactToMessage`, `getMessageReactions`, `getChatHistory`, `deleteMessage`, `editMessage` |
-| `getChats`       | ⚙️ read via a direct page walk, not `Client.getChats`, for `getChats` and `getGroups`                                                                                                                                                                                                                                                                                                    |
-| `markChatUnread` | ❌ **not exposed**                                                                                                                                                                                                                                                                                                                                                                       |
-| `muteChat`       | ✅ `muteChat`                                                                                                                                                                                                                                                                                                                                                                            |
-| `pinChat`        | ✅ `pinChat`                                                                                                                                                                                                                                                                                                                                                                             |
-| `unarchiveChat`  | ✅ `archiveChat`                                                                                                                                                                                                                                                                                                                                                                         |
-| `unmuteChat`     | ✅ `muteChat`                                                                                                                                                                                                                                                                                                                                                                            |
-| `unpinChat`      | ✅ `pinChat`                                                                                                                                                                                                                                                                                                                                                                             |
+| Library method   | OpenWA exposure                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `archiveChat`    | ✅ `archiveChat`                                                                                                                                                                                                                                                                                                                                                                                               |
+| `getChatById`    | ✅ `muteChannel`, `sendSeen`, `clearChatMessages`, `markUnread`, `deleteChat`, `sendChatState`, `getGroupInfo`, `addParticipants`, `leaveGroup`, `setGroupSubject`, `setGroupDescription`, `getGroupInviteCode`, `revokeGroupInviteCode`, `getChatLabels`, `replyToMessage`, `forwardMessage`, `reactToMessage`, `getMessageReactions`, `getMessageReceipts`, `getChatHistory`, `deleteMessage`, `editMessage` |
+| `getChats`       | ⚙️ read via a direct page walk, not `Client.getChats`, for `getChats` and `getGroups`                                                                                                                                                                                                                                                                                                                          |
+| `markChatUnread` | ❌ **not exposed**                                                                                                                                                                                                                                                                                                                                                                                             |
+| `muteChat`       | ✅ `muteChat`                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `pinChat`        | ✅ `pinChat`                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `unarchiveChat`  | ✅ `archiveChat`                                                                                                                                                                                                                                                                                                                                                                                               |
+| `unmuteChat`     | ✅ `muteChat`                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `unpinChat`      | ✅ `pinChat`                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 **Groups** (7)
 
@@ -861,13 +862,13 @@ OpenWA consumes events by normalizing them into `EngineEventCallbacks`; anything
 | `group_leave`               | ✅           |     | `group_update`         | ✅                                                                              |
 | `group_membership_request`  | ✅           |     |                        |                                                                                 |
 
-## 29.6 The 28 not-available cells in detail
+## 29.6 The 29 not-available cells in detail
 
 Every ❌ in 29.4, with the exact library symbol inspected (full evidence strings:
 `engine-capability-matrix.ts`). All of these throw `EngineNotSupportedError` → HTTP 501 at the
 adapter boundary — none silently stubs.
 
-### 29.6.1 Baileys adapter (12 cells)
+### 29.6.1 Baileys adapter (13 cells)
 
 | Method                  | Cause | What's missing (evidence)                                                                                                                                                                                                                                                                                                                                |
 | ----------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -879,6 +880,7 @@ adapter boundary — none silently stubs.
 | `getChatsByLabel`       | lib   | Same; listing a label's chats needs an app-state cache fed by label-association sync events.                                                                                                                                                                                                                                                             |
 | `getChatHistory`        | lib   | Only `fetchMessageHistory(count, oldestKey, oldestTs)` (`Socket/business.d.ts:25`), which returns a sync-token _string_; messages arrive later via the `messaging-history.set` event. No synchronous per-chat `fetchMessages`.                                                                                                                           |
 | `getMessageReactions`   | lib   | No on-demand fetch; reactions exist only as event-augmented `WAMessage.reactions` via the `messages.reaction` event, and the adapter does not persist them into its store. Inbound reaction _events_ (`onMessageReaction`) work fine — only the read-back is unavailable.                                                                                |
+| `getMessageReceipts`    | lib   | No on-demand fetch; receipts exist only via `message-receipt.update` event, and the adapter does not persist them into its store. Inbound receipt _events_ (`onMessageReceipt`) work on Baileys — only the REST read-back is unavailable.                                                                                                                |
 | `getContactStatus`      | lib   | `fetchStatus` (`Socket/chats.d.ts:42`, via `USyncStatusProtocol`) returns the _about/profile text_ line, not 24h stories. Stories surface only as `status@broadcast` messages. REST reads are store-backed — see ‡ above.                                                                                                                                |
 | `getContactStatuses`    | lib   | Same as above.                                                                                                                                                                                                                                                                                                                                           |
 | `sendCatalog`           | lib   | `AnyMessageContent` (`Types/Message.d.ts:166-210`) has only `{product}` (single product); the catalog CRUD nodes (`Socket/business.js:294-362`) mutate the catalog, they don't send it.                                                                                                                                                                  |
@@ -935,6 +937,15 @@ adapter boundary — none silently stubs.
   `status@broadcast` or a broadcast list, and a poll or a sticker to `status@broadcast` or a
   broadcast list. `ensureSendable` (`wwebjs-messaging.ts`) refuses them before the library is
   called, so nothing is sent. The Baileys adapter refuses none of them.
+- **`sendVideoMessage` and `postVideoStatus` (wwjs) depend on the page loading the video.** Before
+  the upload, WhatsApp Web loads the file into a `<video>` element and throws its own bare
+  `TimeoutError` when that load neither finishes nor fails within 20 seconds, so the send answers
+  `500` `ENGINE_PAGE_ERROR` with `TimeoutError: TimeoutError`. A file the browser cannot decode fails
+  in under a second with a named error instead. On that timeout the adapter logs
+  `video_load_timeout` with the page's visibility, the browser's `canPlayType` answer for an H.264/AAC
+  MP4 and the browser version (`wwebjs-video-load-timeout.ts`). A hidden page reproduced the timeout
+  in a test; that has not been seen in OpenWA. How to read the line: 12.4 in
+  `docs/12-troubleshooting-faq.md`. Baileys runs no browser, so it has no such step.
 - **`sendStickerMessage` — what each engine converts.** Both engines guarantee the payload really is
   WebP, but they reach it differently and they do not accept the same inputs. whatsapp-web.js passes
   `sendMediaAsSticker: true`, and `Util.formatToWebpSticker` converts `image/*` **and** `video/*`
@@ -963,6 +974,13 @@ adapter boundary — none silently stubs.
   the same engine, and the list with it.
   The `sendMessage(status@broadcast, {delete})` revoke shape is _empirically unverified_: only posting
   was live-spiked. On wwjs it calls `revokeStatusMessage(statusId)` (own status only).
+- **Status post acks (baileys).** An own status post reports no aggregate `delivered` or `read`
+  `message.ack`: the tracker in `baileys-group-ack.ts` follows group messages only, and a status post
+  has no stored row. Baileys raises each viewer's receipt through `message-receipt.update`, which the
+  gateway forwards as `message.receipt` under the chat `status@broadcast`. The viewers of a status are
+  the distinct `participant` values with `status` `read` for its id; a viewer whose read receipts are
+  off never appears among them, and the per-webhook bound on `message.receipt` applies. whatsapp-web.js
+  broadcasts a status to the account's status-privacy audience, so there is no recipient list there.
 - **`getChats` after a restart (baileys).** Baileys keeps no chat list of its own, and WhatsApp
   skips history sync on every connect after the first link, so a new engine (a process restart, a
   session stop and start, or a reconnect the gateway runs itself, as for `deleteStatus` above) starts
@@ -1106,21 +1124,21 @@ adapter boundary — none silently stubs.
 Recomputed from `engine-capability-matrix.ts`, `upstream-surface.snapshot.json`, and a scan of the
 adapter sources — re-derive the same way when anything changes:
 
-- **115** interface methods → **230** adapter cells: **202 ✅** / **28 ❌** (2 adapter-gaps, 26
-  library-limitations, 0 uncertain), spanning **27** methods.
-- Of the 202 ✅ cells, **10 wwjs cells carry an explicit patch dependency** (4 × 🔧² status send,
+- **116** interface methods → **232** adapter cells: **203 ✅** / **29 ❌** (2 adapter-gaps, 27
+  library-limitations, 0 uncertain), spanning **28** methods.
+- Of the 203 ✅ cells, **10 wwjs cells carry an explicit patch dependency** (4 × 🔧² status send,
   1 × 🔧³ channel link preview, 1 × 🔧⁴ ready-sync, 3 × 🔧⁷ participant arity, 1 × 🔧⁹ group
   description) and one baileys cell
   does (1 × 🔧⁶ newsletter-create parse); the whole wwjs column additionally
   depends on 🔧¹, the whole Baileys column on 🔧⁵ — so every row rests on a patch on each side,
   even though no row carries a row-level mark on both.
 - REST caller's view: **90** engine-neutral (88 + 2 store-backed status reads), **15** Baileys-only,
-  **9** wwjs-only; `sendCatalog` (unavailable on both engines) is not exposed; four of the 90
+  **10** wwjs-only; `sendCatalog` (unavailable on both engines) is not exposed; four of the 90
   (`probeLiveness`, `getPhoneNumber`, `getPushName`, `checkNumberExists`) are ⚙️ internal and have no route.
 - Full engine inventory (29.5), split by the exposure legend rather than lumped: Baileys **152**
   socket methods — 50 wired into interface methods, 5 internal wiring, 29 plumbing, **68 ❌ not
-  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 41 wired,
-  4 internal wiring, 1 class plumbing, **35 ❌ not exposed** (27 real capabilities + 8
+  exposed** (incl. the whole 23-method community cluster); wwjs **81** Client methods — 42 wired,
+  4 internal wiring, 1 class plumbing, **34 ❌ not exposed** (26 real capabilities + 8
   session/transport settings that are not WhatsApp capabilities). The backlog is the ❌ rows minus
   those 8 settings; 🔩 plumbing is correctly never exposed.
 - Events: Baileys **34** (18 consumed / 16 dropped), wwjs **31** (18 consumed / 13 dropped).

@@ -30,8 +30,11 @@ describe('non-send message operations distinguish a dead page from an ordinary f
       op === name ? jest.fn().mockRejectedValue(reject) : jest.fn().mockResolvedValue(ok);
     const message = {
       id: { _serialized: MESSAGE_ID, id: 'ABCDEF' },
+      fromMe: true,
+      to: '628123@c.us',
       hasReaction: true,
       getReactions: on('getMessageReactions', []),
+      getInfo: on('getMessageReceipts', null),
       react: on('reactToMessage', undefined),
       delete: on('deleteMessage', undefined),
       edit: on('editMessage', { id: { _serialized: MESSAGE_ID }, timestamp: 1 }),
@@ -42,7 +45,10 @@ describe('non-send message operations distinguish a dead page from an ordinary f
       unstar: on('starMessage', undefined),
     };
     const chat = { isGroup: false, fetchMessages: on('getChatHistory', [message]) };
-    const client = { getChatById: jest.fn().mockResolvedValue(chat) };
+    const client = {
+      getChatById: jest.fn().mockResolvedValue(chat),
+      getMessageById: jest.fn().mockResolvedValue(message),
+    };
     const reportIfPageTransportError = jest.fn();
     const host = {
       ensureReady: jest.fn(),
@@ -59,6 +65,7 @@ describe('non-send message operations distinguish a dead page from an ordinary f
     ({
       getChatHistory: () => messaging.getChatHistory(CHAT, 10),
       getMessageReactions: () => messaging.getMessageReactions(CHAT, MESSAGE_ID),
+      getMessageReceipts: () => messaging.getMessageReceipts(CHAT, MESSAGE_ID),
       reactToMessage: () => messaging.reactToMessage(CHAT, MESSAGE_ID, '👍'),
       deleteMessage: () => messaging.deleteMessage(CHAT, MESSAGE_ID),
       editMessage: () => messaging.editMessage(CHAT, MESSAGE_ID, 'new body'),
@@ -71,6 +78,7 @@ describe('non-send message operations distinguish a dead page from an ordinary f
   const OPS = [
     'getChatHistory',
     'getMessageReactions',
+    'getMessageReceipts',
     'reactToMessage',
     'deleteMessage',
     'editMessage',

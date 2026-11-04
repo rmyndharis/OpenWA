@@ -54,6 +54,7 @@ func TestRouting(t *testing.T) {
 		{"Messages.EditMessage", func(c *Client) { c.Messages.EditMessage(ctx, "s1", EditMessageRequest{}) }, "POST", "/api/sessions/s1/messages/edit"},
 		{"Messages.History", func(c *Client) { c.Messages.History(ctx, "s1", "c1", nil) }, "GET", "/api/sessions/s1/messages/c1/history"},
 		{"Messages.Reactions", func(c *Client) { c.Messages.Reactions(ctx, "s1", "c1", "m1") }, "GET", "/api/sessions/s1/messages/c1/m1/reactions"},
+		{"Messages.Receipts", func(c *Client) { c.Messages.Receipts(ctx, "s1", "c1", "m1") }, "GET", "/api/sessions/s1/messages/c1/m1/receipts"},
 		{"Messages.SendBulk", func(c *Client) { c.Messages.SendBulk(ctx, "s1", SendBulkRequest{}) }, "POST", "/api/sessions/s1/messages/send-bulk"},
 		{"Messages.BatchStatus", func(c *Client) { c.Messages.BatchStatus(ctx, "s1", "b1") }, "GET", "/api/sessions/s1/messages/batch/b1"},
 		{"Messages.CancelBatch", func(c *Client) { c.Messages.CancelBatch(ctx, "s1", "b1") }, "POST", "/api/sessions/s1/messages/batch/b1/cancel"},

@@ -902,6 +902,51 @@ curl -X POST http://localhost:2785/api/sessions/{id}/messages/send-image \
   }'
 ```
 
+### Issue: `send-video` fails after about 20 seconds with `ENGINE_PAGE_ERROR` `TimeoutError: TimeoutError` (whatsapp-web.js)
+
+**Symptoms:**
+
+- `send-video`, or a video status post, answers `500` with `"code": "ENGINE_PAGE_ERROR"` and
+  `"message": "WhatsApp Web rejected the operation: TimeoutError: TimeoutError (build ...)"` about 20
+  seconds after the request
+- Text sends keep working
+
+**Cause:** Before it uploads a video, WhatsApp Web loads the file into a `<video>` element in the page
+to read its size and duration and to draw the thumbnail. When that element neither loads nor reports
+an error within 20 seconds, WhatsApp Web throws its own `TimeoutError` without a message, which is the
+text above. The 20 seconds belong to WhatsApp Web, not to a gateway setting, and the file is already
+inside the page at that point, so neither the upload nor `MEDIA_DOWNLOAD_MAX_BYTES` is involved.
+
+A file the browser cannot decode does not produce this error. In tests, an MP4 whose video track the
+browser had no decoder for failed in under a second with `MediaUnsupportedError`, and a container the
+browser could not open, or random bytes, failed in under a second with
+`InvalidMediaCheckRepairFailedType`. Both reach the caller as `ENGINE_PAGE_ERROR` with that name
+instead of `TimeoutError`.
+
+One trigger was reproduced in a test: with another tab in front, so that the WhatsApp Web page was
+hidden, a valid H.264/AAC MP4 failed after 20 seconds with exactly this error, while the same page
+prepared the same file as a document, and an image, in milliseconds. It has not been seen in OpenWA,
+which runs a single headless page in front.
+
+**Diagnosis:**
+
+1. Read the warning logged right after the failure, `WhatsApp Web timed out loading a video.` with
+   `action: video_load_timeout`:
+   - `pageVisibility` is the page's `document.visibilityState`; `hidden` matches the reproduced trigger.
+   - `h264Aac` is the browser's answer to `canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')`.
+     The published images answer `probably`; an empty answer means the browser does not claim to play
+     H.264/AAC MP4.
+   - `browser` is the version of the browser the session runs.
+2. Read the `Send failed in the engine (video)` warning, or for a status post
+   `WhatsApp Web threw during postMediaStatus`. Its `cause` holds what the page threw, including the
+   WhatsApp Web stack, which names the code that timed out.
+3. Compare the `build` in the error with the startup lines `Pinning WhatsApp Web version ...` and
+   `WhatsApp Web build ... is running on this session's page`.
+4. Send the same file with `send-document`. If that succeeds while `send-video` times out, the file and
+   the upload are fine and the video load in the page is what stalls.
+
+Include all four in a bug report.
+
 ### Issue: Webhook Not Receiving Messages
 
 **Symptoms:**
