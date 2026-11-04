@@ -3,6 +3,7 @@ import { BaileysEvents, type BaileysEventsHost } from './baileys-events';
 import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { inboundMediaConcurrency } from './inbound-media-cap';
+import { toNeutralJid } from '../identity/wa-id';
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 import type { Contact, EventResponseEvent, MessageReceiptEvent } from '../interfaces/whatsapp-engine.interface';
 
@@ -1478,6 +1479,73 @@ describe('BaileysEvents event RSVPs (event.response)', () => {
       await flush();
 
       expect(onEventResponse).toHaveBeenCalledWith(expect.objectContaining({ chatId: phone, responderId: phone }));
+    });
+
+    it("reports a guest's answer by phone number to the account's own event kept under the guest's lid", async () => {
+      const onEventResponse = jest.fn();
+      const events = new BaileysEvents(
+        makeHost({
+          getOnEventResponse: () => onEventResponse,
+          // Posted from the phone in a chat addressed by lid there: the account's own number sits beside the lid.
+          getStoredMessage: storedIn('99887766@lid', { fromMe: true, remoteJidAlt: '6280000000000@s.whatsapp.net' }),
+          toNeutralJid: jid => toNeutralJid(jid),
+        }),
+      );
+
+      events.handleMessagesUpdate([
+        {
+          key: { id: 'EVT1', remoteJid: '6280000000000@s.whatsapp.net', fromMe: false },
+          update: {
+            eventResponses: [
+              rsvp({
+                eventResponseMessageKey: { id: 'RSVP10', remoteJid: '6282222222222@s.whatsapp.net', fromMe: false },
+              }),
+            ],
+          },
+        },
+      ] as never);
+      await flush();
+
+      expect(onEventResponse).toHaveBeenCalledWith(expect.objectContaining({ chatId: '6282222222222@c.us' }));
+    });
+
+    it('drops an answer from a lid whose own phone number is not the chat of the event', async () => {
+      const onEventResponse = jest.fn();
+      const logger = createLogger('BaileysEventsSpec');
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+      const events = new BaileysEvents(
+        makeHost({
+          getOnEventResponse: () => onEventResponse,
+          getStoredMessage: storedIn('6282222222222@s.whatsapp.net', { fromMe: true }),
+          toNeutralJid: jid => toNeutralJid(jid),
+          logger,
+        }),
+      );
+
+      events.handleMessagesUpdate([
+        {
+          key: { id: 'EVT1', remoteJid: '6280000000000@s.whatsapp.net', fromMe: false },
+          update: {
+            eventResponses: [
+              rsvp({
+                eventResponseMessageKey: {
+                  id: 'RSVP11',
+                  remoteJid: '55443322@lid',
+                  remoteJidAlt: '6283333333333@s.whatsapp.net',
+                  fromMe: false,
+                },
+              }),
+            ],
+          },
+        },
+      ] as never);
+      await flush();
+
+      expect(onEventResponse).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        'Dropping an event response sent in a chat other than its event',
+        expect.objectContaining({ responseMessageId: 'RSVP11' }),
+      );
     });
   });
 

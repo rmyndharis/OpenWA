@@ -456,6 +456,40 @@ describe('BaileysAdapter lifecycle & status', () => {
     }
   });
 
+  it('refuses a retry from another phone number chat for a message received under a lid with its sender phone', async () => {
+    await newAdapter().initialize(noopCallbacks({}));
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const makeWASocket = jest.requireMock('@whiskeysockets/baileys').default as jest.Mock;
+    const [[{ getMessage }]] = makeWASocket.mock.calls as Array<
+      [{ getMessage: (key: { remoteJid?: string; id?: string }) => Promise<unknown> }]
+    >;
+    const content = { conversation: 'private' };
+    fakeStore.getMessage.mockResolvedValue({
+      key: { remoteJid: '44556677@lid', remoteJidAlt: '628444@s.whatsapp.net', fromMe: false, id: 'M2' },
+      message: content,
+    });
+
+    await expect(getMessage({ remoteJid: '628555@s.whatsapp.net', id: 'M2' })).resolves.toBeUndefined();
+    await expect(getMessage({ remoteJid: '628444@s.whatsapp.net', id: 'M2' })).resolves.toBe(content);
+  });
+
+  it("answers a retry by phone number for a phone-typed own message stored with the account's number beside the lid", async () => {
+    await newAdapter().initialize(noopCallbacks({}));
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const makeWASocket = jest.requireMock('@whiskeysockets/baileys').default as jest.Mock;
+    const [[{ getMessage }]] = makeWASocket.mock.calls as Array<
+      [{ getMessage: (key: { remoteJid?: string; id?: string }) => Promise<unknown> }]
+    >;
+    const content = { conversation: 'hi' };
+    // On the account's own key Baileys files the sender's other id, the account's own number, as remoteJidAlt.
+    fakeStore.getMessage.mockResolvedValue({
+      key: { remoteJid: '44556677@lid', remoteJidAlt: '628999@s.whatsapp.net', fromMe: true, id: 'M1' },
+      message: content,
+    });
+
+    await expect(getMessage({ remoteJid: '628444@s.whatsapp.net', id: 'M1' })).resolves.toBe(content);
+  });
+
   it("answers an RSVP's lookup of the account's own 1:1 event under the account's own jid", async () => {
     await newAdapter().initialize(noopCallbacks({}));
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -10712,6 +10746,38 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
     });
     fakeSock.fire('messages.upsert', { type: 'notify', messages: [delivery()] });
     fakeSock.fire('messages.upsert', { type: 'notify', messages: [delivery()] });
+    for (let i = 0; i < 5; i++) await settle();
+    release();
+    for (let i = 0; i < 5; i++) await settle();
+
+    expect(warn).not.toHaveBeenCalledWith(
+      'Dropping a message that reuses the id of one still being processed',
+      expect.anything(),
+    );
+    expect(fakeStore.put).toHaveBeenCalledTimes(2);
+  });
+
+  it('still takes a repeat delivery of an own message still downloading under the other id of its chat', async () => {
+    let release!: () => void;
+    baileys.downloadMediaMessage
+      .mockReturnValueOnce(
+        new Promise(resolve => {
+          release = () => resolve(streamOf(Buffer.from('JPEG')));
+        }),
+      )
+      .mockReturnValueOnce(Promise.resolve(streamOf(Buffer.from('JPEG'))));
+    const warn = jest.spyOn(loggerOf(await started()), 'warn').mockImplementation(() => undefined);
+    const delivery = (key: Record<string, unknown>) => ({
+      key: { fromMe: true, id: 'OWN_TWICE', ...key },
+      message: { imageMessage: { mimetype: 'image/jpeg', caption: 'typed on the phone' } },
+      messageTimestamp: 1700000099,
+    });
+    // Typed on the phone in a chat addressed by lid there: Baileys files the account's own number beside it.
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [delivery({ remoteJid: '44556677@lid', remoteJidAlt: '628999@s.whatsapp.net' })],
+    });
+    fakeSock.fire('messages.upsert', { type: 'notify', messages: [delivery({ remoteJid: PEER })] });
     for (let i = 0; i < 5; i++) await settle();
     release();
     for (let i = 0; i < 5; i++) await settle();
