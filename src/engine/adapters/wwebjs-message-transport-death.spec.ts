@@ -30,6 +30,8 @@ describe('non-send message operations distinguish a dead page from an ordinary f
       op === name ? jest.fn().mockRejectedValue(reject) : jest.fn().mockResolvedValue(ok);
     const message = {
       id: { _serialized: MESSAGE_ID, id: 'ABCDEF' },
+      fromMe: true,
+      to: '628123@c.us',
       hasReaction: true,
       getReactions: on('getMessageReactions', []),
       getInfo: on('getMessageReceipts', null),
@@ -43,7 +45,10 @@ describe('non-send message operations distinguish a dead page from an ordinary f
       unstar: on('starMessage', undefined),
     };
     const chat = { isGroup: false, fetchMessages: on('getChatHistory', [message]) };
-    const client = { getChatById: jest.fn().mockResolvedValue(chat) };
+    const client = {
+      getChatById: jest.fn().mockResolvedValue(chat),
+      getMessageById: jest.fn().mockResolvedValue(message),
+    };
     const reportIfPageTransportError = jest.fn();
     const host = {
       ensureReady: jest.fn(),

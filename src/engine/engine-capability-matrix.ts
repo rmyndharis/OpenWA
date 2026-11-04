@@ -236,7 +236,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'not-available', rootCause: 'library-limitation' },
     evidence:
-      'baileys no getReceipts/fetchReceipts on socket or store; receipts arrive only via message-receipt.update event; wwjs Message.getInfo (Message.js:758)',
+      'baileys no getReceipts/fetchReceipts on socket or store; receipts arrive only via message-receipt.update event; wwjs Client.getMessageById (Client.js:1814) resolves any message the page holds, then Message.getInfo (Message.js:760), which answers null for a received message',
   },
   getProduct: {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },

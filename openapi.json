@@ -6790,7 +6790,7 @@
             "name": "messageId",
             "required": true,
             "in": "path",
-            "description": "Message ID to get receipts for",
+            "description": "Full serialized ID of a message this account sent, as the send routes return it",
             "schema": {
               "type": "string"
             }
@@ -6828,7 +6828,7 @@
             }
           },
           "403": {
-            "description": "The API key's role, session or chat scope, or IP allow-list does not allow this operation",
+            "description": "The message was received, not sent by this account (only its own messages carry receipts), or the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6838,7 +6838,7 @@
             }
           },
           "404": {
-            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "description": "No such message in this chat: the id is not a full serialized message id, WhatsApp Web no longer holds the message, or the message belongs to another chat.",
             "content": {
               "application/json": {
                 "schema": {

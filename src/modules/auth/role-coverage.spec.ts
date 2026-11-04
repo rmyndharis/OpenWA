@@ -140,6 +140,7 @@ describe('role of every message and session route', () => {
     cancelBatch: ApiKeyRole.OPERATOR,
     getChatHistory: OPEN,
     getReactions: OPEN,
+    getReceipts: OPEN,
     getChatMedia: OPEN,
     deleteMessage: ApiKeyRole.OPERATOR,
     votePoll: ApiKeyRole.OPERATOR,

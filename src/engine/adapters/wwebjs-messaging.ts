@@ -1021,38 +1021,35 @@ export class WwebjsMessaging {
     return result;
   }
 
+  /**
+   * Who received, read and played a message this account sent. The message is resolved by its full id from
+   * everything WhatsApp Web holds, not from the 100-message window the writes search, so an older message
+   * still answers. The chat fence only checks `chatId`, so the message must sit in that chat: one from
+   * another chat is a 404, checked before the direction so the answer says nothing about that chat.
+   */
   async getMessageReceipts(chatId: string, messageId: string): Promise<MessageReceipts> {
     this.host.ensureReady();
+    // getMessageById throws an unnamed page error (a 500) for anything but a full serialized id, which is
+    // `<fromMe>_<chat>_<id>` with an optional `_<participant>`; no message has any other id.
+    const parts = messageId.split('_').length;
+    if (parts !== 3 && parts !== 4) throw new MessageNotFoundError(messageId, chatId);
     const info = await this.withPage('getMessageReceipts', async () => {
-      const chat = await this.client().getChatById(chatId);
-      if (!chat) {
+      const message = await this.client().getMessageById(messageId);
+      if (!message || !(await this.isInChat(message, chatId))) {
         throw new MessageNotFoundError(messageId, chatId);
       }
-      const messages = await chat.fetchMessages({ limit: 100 });
-      const message = messages.find(m => m.id._serialized === messageId);
-      if (!message) {
-        throw new MessageNotFoundError(messageId, chatId);
+      // getInfo answers null for a received message, which would read as nobody having seen it.
+      if (!message.fromMe) {
+        throw new EngineRefusedError(
+          `message ${messageId} was not sent by this account; only its own messages carry receipts`,
+        );
       }
-      const msgWithInfo = message as {
-        getInfo?: () => Promise<{
-          delivery?: Array<{ id: SerializedWid | string; t: number }>;
-          deliveryRemaining?: number;
-          read?: Array<{ id: SerializedWid | string; t: number }>;
-          readRemaining?: number;
-          played?: Array<{ id: SerializedWid | string; t: number }>;
-          playedRemaining?: number;
-        } | null>;
-      };
-      return msgWithInfo.getInfo ? msgWithInfo.getInfo() : null;
+      // getInfo reads through the page of the client that resolved the message: a teardown since is the 409.
+      this.host.ensureReady();
+      return message.getInfo();
     });
-
-    if (!info) {
-      return {
-        delivery: [],
-        read: [],
-        played: [],
-      };
-    }
+    // Past the checks above, getInfo answers null only for a message WhatsApp Web no longer holds.
+    if (!info) throw new MessageNotFoundError(messageId, chatId);
 
     const mapReceipts = (list?: Array<{ id: SerializedWid | string; t: number }>): MessageReceiptParticipant[] => {
       if (!Array.isArray(list)) return [];
@@ -1070,6 +1067,20 @@ export class WwebjsMessaging {
       played: mapReceipts(info.played),
       playedRemaining: typeof info.playedRemaining === 'number' ? info.playedRemaining : undefined,
     };
+  }
+
+  /**
+   * Whether a message sits in the named chat: `to` for one this account sent, else `from`, as
+   * buildIncomingMessageBase reads it. A 1:1 chat WhatsApp Web keeps under its `@lid` can be named by the
+   * contact's `@c.us`, so a name that differs is resolved through the chat WhatsApp Web opens for it.
+   */
+  private async isInChat(message: Message, chatId: string): Promise<boolean> {
+    const own = message.fromMe ? message.to : message.from;
+    if (toNeutralJid(own) === toNeutralJid(chatId)) return true;
+    const chat = await this.client()
+      .getChatById(chatId)
+      .catch(error => recoverGroupChatById(this.host, 'getMessageReceipts', chatId, error));
+    return chat?.id._serialized === own;
   }
 
   async getChatHistory(

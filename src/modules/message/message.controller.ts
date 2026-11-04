@@ -740,15 +740,29 @@ export class MessageController {
   @ApiOperation({ summary: 'Get delivery and read receipts for a specific message' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'chatId', description: 'Chat ID containing the message' })
-  @ApiParam({ name: 'messageId', description: 'Message ID to get receipts for' })
+  @ApiParam({
+    name: 'messageId',
+    description: 'Full serialized ID of a message this account sent, as the send routes return it',
+  })
   @ApiResponse({
     status: 200,
     description: 'Message delivery and read receipts with timestamps',
     type: MessageReceiptsResponseDto,
   })
   @ApiResponse({ status: 400, description: 'Session not active' })
+  @ApiResponse({
+    status: 403,
+    description:
+      'The message was received, not sent by this account (only its own messages carry receipts), or the ' +
+      "API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+  })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
+  @ApiResponse({
+    status: 404,
+    description:
+      'No such message in this chat: the id is not a full serialized message id, WhatsApp Web no longer ' +
+      'holds the message, or the message belongs to another chat.',
+  })
   @ApiResponse({ status: 501, description: ENGINE_NOT_SUPPORTED_501 })
   @ApiResponse({
     status: 503,
