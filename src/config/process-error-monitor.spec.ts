@@ -1,4 +1,9 @@
-import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './process-error-monitor';
+import { EventEmitter } from 'node:events';
+import {
+  ignoreLostOutput,
+  registerUncaughtExceptionMonitor,
+  registerUnhandledRejectionHandler,
+} from './process-error-monitor';
 import { getUnhandledRejections } from '../common/metrics/process-error-metrics';
 
 const EVENT = 'uncaughtExceptionMonitor';
@@ -148,5 +153,39 @@ describe('registerUnhandledRejectionHandler', () => {
     const { handler, errors } = register();
     expect(() => handler(Object.create(null))).not.toThrow();
     expect(errors).toEqual([['Unhandled promise rejection', '[object Object]']]);
+  });
+});
+
+describe('ignoreLostOutput', () => {
+  const failedWrite = (code?: string): Error => Object.assign(new Error(`write ${code}`), code ? { code } : {});
+
+  it.each(['EIO', 'EPIPE'])('drops a %s from a stream whose far end is gone', code => {
+    const stream = new EventEmitter();
+    ignoreLostOutput([stream]);
+
+    expect(() => stream.emit('error', failedWrite(code))).not.toThrow();
+  });
+
+  it.each([failedWrite('ENOSPC'), failedWrite()])('still throws any other stream error: %s', error => {
+    const stream = new EventEmitter();
+    ignoreLostOutput([stream]);
+
+    expect(() => stream.emit('error', error)).toThrow(error);
+  });
+
+  it('covers stdout and stderr by default', () => {
+    const streams = [process.stdout, process.stderr];
+    const before = streams.map(stream => stream.listeners('error'));
+    try {
+      ignoreLostOutput();
+
+      streams.forEach((stream, index) => expect(stream.listenerCount('error')).toBe(before[index].length + 1));
+    } finally {
+      streams.forEach((stream, index) => {
+        for (const listener of stream.listeners('error')) {
+          if (!before[index].includes(listener)) stream.removeListener('error', listener as (err: Error) => void);
+        }
+      });
+    }
   });
 });

@@ -15,7 +15,11 @@ import {
   dropUnexpressibleOperations,
   exemptPublicOperations,
 } from './config/swagger.config';
-import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './config/process-error-monitor';
+import {
+  ignoreLostOutput,
+  registerUncaughtExceptionMonitor,
+  registerUnhandledRejectionHandler,
+} from './config/process-error-monitor';
 import { runBootstrapOrExit } from './config/bootstrap-fatal';
 import { installStopSignalHandlers } from './config/stop-signals';
 import { s3EndpointError, validateEnv } from './config/env.validation';
@@ -203,8 +207,15 @@ async function bootstrap() {
   // lifecycle hook) and exits deterministically. A repeat SIGTERM or SIGINT one second or more after the
   // first forces an immediate exit (130); a repeat inside that second is the same stop request delivered
   // twice, which npm and the Nest CLI do, and a SIGHUP after the first signal is ignored (a closing
-  // terminal does not cut the teardown short). See stop-signals.ts.
-  installStopSignalHandlers({ shutdown: () => shutdownService.shutdown() });
+  // terminal does not cut the teardown short). See stop-signals.ts. A terminal that closed (SIGHUP) or a pipe
+  // that broke fails the next log write with EIO or EPIPE, and unhandled that ends the process at the first
+  // log line after the grace, before app.close() has run; the stop path ignores those errors.
+  installStopSignalHandlers({
+    shutdown: () => {
+      ignoreLostOutput();
+      shutdownService.shutdown();
+    },
+  });
 
   // Shared production/e2e prefix and DTO validation contract.
   applyGlobalValidation(app);

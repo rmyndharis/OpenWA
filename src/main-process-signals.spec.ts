@@ -32,7 +32,8 @@ const WATCHED = [
 ];
 
 // Runs inside the gateway before main.ts. Once /api/health/live answers, every process.on() of the boot has
-// happened, so it records the listener counts, and then loads the native library of a fault case.
+// happened, so it records the listener counts, and then loads the native library of a fault case. Once the
+// WRITE_MARKER file exists it writes a log line every 50 ms, the way the gateway's logger does.
 const PRELOAD = `
 const http = require('http');
 const fs = require('fs');
@@ -49,6 +50,12 @@ const timer = setInterval(() => {
   }).on('error', () => {});
 }, 100);
 timer.unref();
+if (process.env.WRITE_MARKER) {
+  const writer = setInterval(() => {
+    if (fs.existsSync(process.env.WRITE_MARKER)) console.log('a log line for an output that is gone');
+  }, 50);
+  writer.unref();
+}
 `;
 
 type Outcome = { code: number | null; signal: NodeJS.Signals | null };
@@ -212,6 +219,23 @@ describePosix('process signals on the running gateway', () => {
     return { child, port, cwd, listeners, exited, output: () => written };
   }
 
+  /** Sends SIGHUP and reports the readiness it answered first, then how the process ended. */
+  async function hangUp(gateway: Gateway) {
+    let ended = false;
+    void gateway.exited.then(() => (ended = true));
+
+    gateway.child.kill('SIGHUP');
+    let readiness: { status?: number; body: unknown } = { body: undefined };
+    for (let polls = 0; polls < 400 && !ended && readiness.status !== 503; polls++) {
+      readiness = await probe(gateway.port, '/api/health/ready');
+      if (readiness.status !== 503) await sleep(25);
+    }
+    const outcome = await within(gateway.exited, 30_000, 'still running' as const);
+
+    const body = readiness.body as { details?: { shutdown?: { status?: string } } } | undefined;
+    return { readiness: readiness.status, draining: body?.details?.shutdown?.status, outcome };
+  }
+
   describe('after boot', () => {
     let gateway: Gateway;
 
@@ -237,25 +261,40 @@ describePosix('process signals on the running gateway', () => {
     });
 
     it('drains on SIGHUP like on SIGTERM: readiness answers 503 first, then it exits 0', async () => {
-      let ended = false;
-      void gateway.exited.then(() => (ended = true));
-
-      gateway.child.kill('SIGHUP');
-      let readiness: { status?: number; body: unknown } = { body: undefined };
-      for (let polls = 0; polls < 400 && !ended && readiness.status !== 503; polls++) {
-        readiness = await probe(gateway.port, '/api/health/ready');
-        if (readiness.status !== 503) await sleep(25);
-      }
-      const outcome = await within(gateway.exited, 30_000, 'still running' as const);
-
-      const body = readiness.body as { details?: { shutdown?: { status?: string } } } | undefined;
-      expect({ readiness: readiness.status, draining: body?.details?.shutdown?.status, outcome }).toEqual({
+      expect(await hangUp(gateway)).toEqual({
         readiness: 503,
         draining: 'draining',
         outcome: { code: 0, signal: null },
       });
       expect(gateway.output()).toContain('Entering draining state');
     }, 60_000);
+  });
+
+  describe('with its log output gone', () => {
+    // A closed terminal or a dead parent fails the next log write with EIO or EPIPE. Unhandled, that ends the
+    // process at the first log line after the grace, so the teardown never runs and the exit status is 1.
+    it('still finishes the drain on SIGHUP and exits 0', async () => {
+      const gateway = await boot({ SHUTDOWN_DELAY_MS: '1500' });
+      gateway.child.stdout?.destroy();
+      gateway.child.stderr?.destroy();
+
+      expect(await hangUp(gateway)).toEqual({
+        readiness: 503,
+        draining: 'draining',
+        outcome: { code: 0, signal: null },
+      });
+    }, 120_000);
+
+    // Only the stop path absorbs those errors: a gateway that is not stopping still ends on a lost log sink.
+    it('still ends the process when the output goes away before any stop signal', async () => {
+      const marker = join(root, 'write-marker');
+      const gateway = await boot({ WRITE_MARKER: marker });
+      gateway.child.stdout?.destroy();
+      gateway.child.stderr?.destroy();
+      writeFileSync(marker, '');
+
+      expect(await within(gateway.exited, 30_000, 'still running' as const)).toEqual({ code: 1, signal: null });
+    }, 120_000);
   });
 
   describe('with the diagnostic report signal enabled', () => {

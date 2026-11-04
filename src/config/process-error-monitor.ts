@@ -115,3 +115,23 @@ export function registerUnhandledRejectionHandler(logger: RejectionLogger): void
     logger.error('Unhandled promise rejection', detail);
   });
 }
+
+/** The codes a write fails with once the far end of stdout or stderr is gone: a closed terminal, a closed pipe. */
+const LOST_OUTPUT_CODES = new Set(['EIO', 'EPIPE']);
+
+/**
+ * Keep a lost stdout or stderr from ending the process. After a terminal closes (the SIGHUP that starts a
+ * stop) or the pipe behind a log stream breaks, the next write fails with EIO or EPIPE and the stream emits
+ * 'error'. With no listener that is an uncaught exception, which ends the process at the first log line
+ * after the signal, before the teardown the signal started has run. Nothing can read those lines any
+ * more, so the error is dropped. Any other stream error is thrown again, as it is without a listener.
+ */
+export function ignoreLostOutput(
+  streams: Array<Pick<NodeJS.EventEmitter, 'on'>> = [process.stdout, process.stderr],
+): void {
+  for (const stream of streams) {
+    stream.on('error', (err: NodeJS.ErrnoException) => {
+      if (!err.code || !LOST_OUTPUT_CODES.has(err.code)) throw err;
+    });
+  }
+}
