@@ -32,8 +32,9 @@ const WATCHED = [
 ];
 
 // Runs inside the gateway before main.ts. Once /api/health/live answers, every process.on() of the boot has
-// happened, so it records the listener counts, and then loads the native library of a fault case. Once the
-// WRITE_MARKER file exists it writes a log line every 50 ms, the way the gateway's logger does.
+// happened, so it records the listener counts, and then loads the native library of a fault case or reads
+// past the end of a WebAssembly memory. Once the WRITE_MARKER file exists it writes a log line every 50 ms,
+// the way the gateway's logger does.
 const PRELOAD = `
 const http = require('http');
 const fs = require('fs');
@@ -47,6 +48,18 @@ const timer = setInterval(() => {
     fs.writeFileSync(process.env.LISTENERS_FILE + '.tmp', JSON.stringify(counts));
     fs.renameSync(process.env.LISTENERS_FILE + '.tmp', process.env.LISTENERS_FILE);
     if (process.env.FAULT_LIB) setTimeout(() => process.dlopen({ exports: {} }, process.env.FAULT_LIB), 50);
+    if (process.env.WASM_OUTCOME_FILE) setTimeout(() => {
+      // (module (memory 1) (func (export "f") (result i32) i32.const 100000 i32.load)): a read past the one page.
+      const bytes = Uint8Array.from([
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f, 0x03, 0x02, 0x01, 0x00,
+        0x05, 0x03, 0x01, 0x00, 0x01, 0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00, 0x0a, 0x0b, 0x01, 0x09, 0x00, 0x41, 0xa0,
+        0x8d, 0x06, 0x28, 0x02, 0x00, 0x0b,
+      ]);
+      const { f } = new WebAssembly.Instance(new WebAssembly.Module(bytes)).exports;
+      let outcome = 'no trap';
+      try { f(); } catch (error) { outcome = error.constructor.name; }
+      fs.writeFileSync(process.env.WASM_OUTCOME_FILE, outcome);
+    }, 50);
   }).on('error', () => {});
 }, 100);
 timer.unref();
@@ -327,6 +340,28 @@ describePosix('process signals on the running gateway', () => {
         stillRunning: true,
         outcome: { code: 0, signal: null },
       });
+    }, 120_000);
+  });
+
+  describe('a WebAssembly trap on the main thread', () => {
+    // The Baileys engine runs WebAssembly inside the gateway. V8 turns an out-of-bounds access into a catchable
+    // RuntimeError through its own SIGSEGV handler; a JavaScript listener on SIGSEGV or SIGBUS replaces that
+    // handler, and the access then faults again and again at full CPU with nothing in the log.
+    it('raises a catchable error in the running gateway instead of spinning it', async () => {
+      const outcomeFile = join(root, 'wasm-outcome');
+      const gateway = await boot({ WASM_OUTCOME_FILE: outcomeFile });
+
+      let outcome = 'the process hung';
+      for (let polls = 0; polls < 200; polls++) {
+        if (existsSync(outcomeFile)) {
+          outcome = readFileSync(outcomeFile, 'utf8');
+          break;
+        }
+        await sleep(50);
+      }
+      gateway.child.kill('SIGKILL');
+
+      expect(outcome).toBe('RuntimeError');
     }, 120_000);
   });
 
