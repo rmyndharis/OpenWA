@@ -6668,11 +6668,11 @@ describe('BaileysAdapter group events (group-participants.update / groups.update
   });
 
   it('retains a lid actor when the credentials cannot identify it as this account', async () => {
-    // Without `user.lid` every lid comparison answered false, so the group this session had just
-    // created was reported as a join of itself. The store's own lid mapping settles it instead.
+    // Identity is not derived from the session's lid mapping: without `user.lid` no lid is recognised as
+    // this account, so the group it created, named by lid alone, is reported as a join.
     fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' }; // no lid on the creds
     const { onGroupEvent } = await readyWithGroupEvents();
-    // The session learns its own lid from ordinary traffic, the same way every other mapping arrives.
+    // Even once the session has learned its own lid from ordinary traffic.
     fakeSock.fire('lid-mapping.update', { lid: '999000@lid', pn: '628999@s.whatsapp.net' });
 
     fakeSock.fire('groups.upsert', [createdGroup({ author: '999000@lid', owner: '999000@lid', authorPn: undefined })]);

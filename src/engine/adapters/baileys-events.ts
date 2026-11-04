@@ -483,8 +483,8 @@ export class BaileysEvents {
   /**
    * The members of a group other than this account, or null when the roster is unavailable. A row is this
    * account's when any of its ids is, or when a lid in it is one the session knows the account's phone number
-   * for (the lid fallback of {@link selfMatcher} resolves nothing in the adapter, and credentials without a
-   * `user.lid` leave a lid-only row with nothing else to be recognised by).
+   * for ({@link selfMatcher} matches a lid only against the credentials' own `user.lid`, so credentials without
+   * one leave a lid-only row with nothing else to be recognised by).
    */
   private async readMemberRoster(groupId: string): Promise<string[][] | null> {
     const roster = await this.host.readGroupRoster?.(groupId);
@@ -1905,7 +1905,10 @@ export class BaileysEvents {
 
   /**
    * Matches any jid of this account, in either dialect and from any of its devices (user parts are
-   * compared). Answers false for everything while the account's own id is unknown.
+   * compared). Answers false for everything while the account's own id is unknown. A lid matches only the
+   * credentials' own `user.lid`: identity is not derived from the session's lid mapping, so credentials
+   * without one match no lid, and a caller that must still recognise the account's lid checks the reported
+   * pairs itself (see readMemberRoster).
    */
   private selfMatcher(): (jid: string | null | undefined) => boolean {
     const selfJid = this.host.normalizedSelfJid();
@@ -1919,12 +1922,7 @@ export class BaileysEvents {
       if (!jid) return false;
       const { kind, userPart: user } = parseWaId(jid);
       if (kind === 'user') return user === phone;
-      if (kind !== 'lid') return false;
-      if (lidUser !== undefined) return user === lidUser;
-      // Creds carrying no `user.lid` leave nothing to compare a lid-addressed jid against, and every
-      // such comparison would answer false. Fall back to the session's own lid to phone mapping,
-      // which the store learns from the same traffic.
-      return userPart(this.host.toNeutralJid(jid)) === phone;
+      return kind === 'lid' && user === lidUser;
     };
   }
 
@@ -2069,8 +2067,8 @@ export class BaileysEvents {
     if (!selfJid) {
       return; // no own id to report as the joining participant
     }
-    // Without the lid fallback inside selfMatcher, a group this session created by a lid-addressed
-    // actor would be reported as a join of itself.
+    // With credentials that carry no `user.lid`, selfMatcher matches no lid, so a group this session
+    // created that names it by lid alone is reported as a join of itself.
     const isSelf = this.selfMatcher();
     for (const group of Array.isArray(groups) ? groups : []) {
       // Live, whatsapp-web.js emits no group.join when the session created the group, so that entry is
