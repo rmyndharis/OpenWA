@@ -3145,6 +3145,38 @@ describe('BaileysAdapter inbound fan-out', () => {
     });
   });
 
+  it('reports a group message as delivered through onMessageAck once every member has received it', async () => {
+    const group = '120363000000000001@g.us';
+    const onMessageAck = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessageAck });
+    // A lid-addressed group: the roster lists each member's lid with the phone number beside it.
+    fakeSock.groupMetadata.mockResolvedValue({
+      id: group,
+      subject: 'Team',
+      participants: [
+        { id: '111111111111111@lid', phoneNumber: '628222@s.whatsapp.net' },
+        { id: '222222222222222@lid', phoneNumber: '628333@s.whatsapp.net' },
+      ],
+    });
+    const delivered = (userJid: string) => ({
+      key: { id: 'OUT1', remoteJid: group, fromMe: true },
+      receipt: { userJid, receiptTimestamp: 1700000000 },
+    });
+    const settle = async (): Promise<void> => {
+      for (let hop = 0; hop < 3; hop++) await new Promise(resolve => setImmediate(resolve));
+    };
+
+    fakeSock.fire('message-receipt.update', [delivered('111111111111111@lid')]);
+    await settle();
+    expect(onMessageAck).not.toHaveBeenCalled();
+
+    fakeSock.fire('message-receipt.update', [delivered('222222222222222@lid'), delivered('222222222222222@lid')]);
+    await settle();
+    expect(onMessageAck.mock.calls).toEqual([['OUT1', 'delivered', group]]);
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(1);
+  });
+
   it('inbound image: downloads media and exposes base64 + caption as body', async () => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     const baileys = jest.requireMock('@whiskeysockets/baileys') as {
