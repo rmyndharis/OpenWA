@@ -1909,6 +1909,36 @@ export function Chats() {
     ? (groupedStatuses.find(g => g.contact.id === activeStatusContactId) ?? null)
     : null;
 
+  const chatPageRef = useRef<HTMLDivElement>(null);
+  const previousViewRef = useRef<{ id: string | null; newChat: boolean; sessionId: string } | null>(null);
+  const viewId = activeChat?.id ?? activeChannel?.id ?? activeStatusGroup?.contact.id ?? null;
+  useLayoutEffect(() => {
+    const previous = previousViewRef.current;
+    previousViewRef.current = { id: viewId, newChat: showNewChat, sessionId: selectedSessionId };
+    if (!previous || previous.sessionId !== selectedSessionId || showNewChat) return;
+    const closed = previous.newChat ? previous.id === viewId : previous.id !== null && viewId === null;
+    if (!closed) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    const sidebar = chatPageRef.current?.querySelector('.chats-sidebar');
+    const target = previous.newChat
+      ? sidebar?.querySelector<HTMLElement>('[data-new-chat]')
+      : Array.from(sidebar?.querySelectorAll<HTMLElement>('[data-chat-id]') ?? []).find(
+          row => row.dataset.chatId === previous.id,
+        );
+    if (!target) {
+      sidebar?.querySelector<HTMLInputElement>('.chat-search-input input')?.focus({ preventScroll: true });
+      return;
+    }
+    const list = target.closest('.chats-list');
+    const rowRect = target.getBoundingClientRect();
+    const listRect = list?.getBoundingClientRect();
+    const visible = !listRect || (rowRect.top >= listRect.top && rowRect.bottom <= listRect.bottom);
+    // Focusing a row that is off screen scrolls it to the middle of the list, so align it to the nearest edge first.
+    if (!visible) target.scrollIntoView({ block: 'nearest' });
+    target.focus({ preventScroll: visible });
+  }, [viewId, showNewChat, selectedSessionId]);
+
   // The pane heading truncates with an ellipsis, so the untruncated text has to reach the tooltip.
   const activeStatusTitle = activeStatusGroup
     ? (activeStatusGroup.contact.name ?? activeStatusGroup.contact.pushName ?? activeStatusGroup.contact.id)
@@ -1984,7 +2014,7 @@ export function Chats() {
   }, [lightbox, lightboxIndex, imageMessages]);
 
   return (
-    <div className="chats-page">
+    <div className="chats-page" ref={chatPageRef}>
       {/* The page header gave way to the full-height layout; its title stays for screen readers. */}
       <h1 className="visually-hidden">{t('nav.chats')}</h1>
       {/* Real-time connection permanently dropped — let the user re-establish it instead of
