@@ -370,9 +370,11 @@ function writePinnedHtml(cacheDir: string, version: string, html: string): void 
 }
 
 /**
- * The WhatsApp Web build sessions request as their pin, for the dashboard to display (#488). This is
- * what was asked for, not a read-back: a page can still run another build, which each session logs at
- * READY (./adapters/wwebjs-running-build). It is distinct from the whatsapp-web.js library version.
+ * The WhatsApp Web build the gateway resolves for sessions to pin, for the dashboard to display (#488).
+ * This is what is resolved, not what any one start did and not a read-back: a session whose pinned HTML
+ * cannot be loaded starts without a pin and logs `web_version_html_unavailable` (see localisePin), and a
+ * page can still run another build, which each session logs at READY (./adapters/wwebjs-running-build).
+ * It is distinct from the whatsapp-web.js library version.
  * `source`: `pinned` = operator-set exact version; `auto` = resolved from the wa-version registry;
  * `native` = whatsapp-web.js auto-select.
  */

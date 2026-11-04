@@ -8,6 +8,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   __resetWebVersionCache,
+  getEffectiveWebVersionInfo,
   PINNED_HTML_TIMEOUT_MS,
   pickSettledWebVersion,
   resolveCurrentWebVersion,
@@ -429,5 +430,57 @@ describe('resolveWebVersionPin with a cache directory', () => {
       webVersionCache: { type: 'remote' },
     });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The status reports the build the gateway resolves for sessions to pin, not the outcome of any one start: a
+ * session whose pinned HTML cannot be loaded starts unpinned and logs it, and the reading stays what was resolved.
+ * The infrastructure status and its documentation word it that way, and the dashboard shows the value as it is.
+ */
+describe('the build reported for sessions to pin', () => {
+  const ORIGINAL_ENV = process.env.WWEBJS_WEB_VERSION;
+  const BUILD = '2.3000.1047000000-alpha';
+  const HTML = `<!DOCTYPE html><html><head></head><body>${'x'.repeat(2048)}</body></html>`;
+  let dir: string;
+
+  const html = (ok: boolean) => ({ ok, status: ok ? 200 : 404, text: () => Promise.resolve(ok ? HTML : '') });
+  const registry = { ok: true, status: 200, json: () => Promise.resolve({ currentVersion: BUILD }) };
+  const host = (htmlOk: boolean) =>
+    jest.fn((url: string) => Promise.resolve(url === WA_VERSION_REGISTRY_URL ? registry : html(htmlOk)));
+
+  beforeEach(() => {
+    __resetWebVersionCache();
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-web-reported-'));
+  });
+  afterEach(() => {
+    __resetWebVersionCache();
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (ORIGINAL_ENV === undefined) delete process.env.WWEBJS_WEB_VERSION;
+    else process.env.WWEBJS_WEB_VERSION = ORIGINAL_ENV;
+  });
+
+  it('stays the resolved registry build while the pinned HTML cannot be loaded, and after it can', async () => {
+    delete process.env.WWEBJS_WEB_VERSION;
+
+    await expect(resolveWebVersionPin(host(false) as never, dir)).resolves.toBeUndefined();
+    expect(getEffectiveWebVersionInfo()).toEqual({ version: BUILD, source: 'auto' });
+
+    await expect(resolveWebVersionPin(host(true) as never, dir)).resolves.toMatchObject({ webVersion: BUILD });
+    expect(getEffectiveWebVersionInfo()).toEqual({ version: BUILD, source: 'auto' });
+  });
+
+  it('stays the operator-set build while its HTML cannot be loaded', async () => {
+    process.env.WWEBJS_WEB_VERSION = '2.3000.1047000001-alpha';
+
+    await expect(resolveWebVersionPin(host(false) as never, dir)).resolves.toBeUndefined();
+
+    expect(getEffectiveWebVersionInfo()).toEqual({ version: '2.3000.1047000001-alpha', source: 'pinned' });
+  });
+
+  it('reports no build when the first-party build is chosen', () => {
+    process.env.WWEBJS_WEB_VERSION = 'off';
+
+    expect(getEffectiveWebVersionInfo()).toEqual({ version: null, source: 'native' });
   });
 });

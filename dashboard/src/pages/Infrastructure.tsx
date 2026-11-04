@@ -655,8 +655,9 @@ export function Infrastructure() {
             ))}
           </div>
 
-          {/* The WhatsApp Web build sessions request as their pin, distinct from the library version above (#488).
-              A page can still run another build; each session logs the one it runs at ready. */}
+          {/* The WhatsApp Web build the gateway resolves for sessions to pin, distinct from the library version above
+              (#488). A session whose pinned page cannot be downloaded or written starts unpinned, and a page can
+              still run another build; each session logs the one it runs at ready. */}
           {infraStatus?.engine.webVersion !== undefined && (
             <p className="engine-web-version">
               {t('infrastructure.engine.webVersion')}:{' '}

@@ -191,8 +191,8 @@ export class InfraStatusController {
     const storageBucket = this.configService.get<string>('storage.s3.bucket');
 
     const engineType = this.configService.get<string>('engine.type', 'whatsapp-web.js');
-    // whatsapp-web.js only: surface the actual WhatsApp Web build (not the library version) so the
-    // dashboard shows which build is running. Trigger the auto-resolve so the panel is populated even
+    // whatsapp-web.js only: surface the WhatsApp Web build the gateway resolves for sessions to pin (not the
+    // library version, and not what a page runs). Trigger the auto-resolve so the panel is populated even
     // before a session starts; the result is cached, so this is a one-time fetch. (#488)
     let webVersion: string | null | undefined;
     let webVersionSource: 'pinned' | 'auto' | 'native' | undefined;
