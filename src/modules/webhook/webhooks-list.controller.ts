@@ -37,8 +37,13 @@ export class WebhooksListController {
     type: [WebhookDeliveryFailureDto],
   })
   @ApiQuery({ name: 'sessionId', required: false, description: 'Filter to a single session' })
-  @ApiQuery({ name: 'limit', required: false, description: 'Max records to return (1-1000, default 1000)' })
-  @ApiQuery({ name: 'offset', required: false, description: 'Number of records to skip (for paging)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: 'integer',
+    description: 'Max records to return (1-1000, default 1000)',
+  })
+  @ApiQuery({ name: 'offset', required: false, type: 'integer', description: 'Number of records to skip (for paging)' })
   async deliveryFailures(
     @CurrentApiKey() apiKey?: ApiKey,
     @Query('sessionId') sessionId?: string,
@@ -104,8 +109,18 @@ export class WebhooksListController {
     description: 'List of webhooks',
     type: [WebhookResponseDto],
   })
-  @ApiQuery({ name: 'limit', required: false, description: 'Max webhooks to return (1-1000, default 1000)' })
-  @ApiQuery({ name: 'offset', required: false, description: 'Number of webhooks to skip (for paging)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: 'integer',
+    description: 'Max webhooks to return (1-1000, default 1000)',
+  })
+  @ApiQuery({
+    name: 'offset',
+    required: false,
+    type: 'integer',
+    description: 'Number of webhooks to skip (for paging)',
+  })
   async findAll(
     @CurrentApiKey() apiKey?: ApiKey,
     @Query('limit') limit?: string,

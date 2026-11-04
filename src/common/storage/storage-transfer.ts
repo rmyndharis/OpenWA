@@ -1,7 +1,9 @@
 import * as tar from 'tar-stream';
 import { createGunzip, createGzip } from 'zlib';
 import { Readable, PassThrough, Transform, pipeline } from 'stream';
-import { LoggerService } from '../services/logger.service';
+import { ServiceUnavailableException, StreamableFile } from '@nestjs/common';
+import type { Response } from 'express';
+import { createLogger, LoggerService } from '../services/logger.service';
 import { positiveIntFromEnv } from '../utils/env-int';
 
 /** Per-entry buffer cap for an import (200 MiB — 4× the inbound media cap). Bounds a decompression bomb. */
@@ -38,6 +40,46 @@ export function isMissingObjectError(error: unknown): boolean {
 export interface ExportFileSource {
   stream: Readable;
   size?: number;
+}
+
+const storedFileLogger = createLogger('StoredFile');
+
+/** Seconds a download refused for a full pool is told to wait: a place frees as soon as any open download ends. */
+export const DOWNLOADS_BUSY_RETRY_AFTER_SECONDS = 1;
+
+/** A download refused at once because the S3 download pool is full. */
+export class DownloadsBusyException extends ServiceUnavailableException {
+  constructor() {
+    super('Too many media downloads are in progress; retry shortly');
+  }
+}
+
+/** For a download route's `.catch`: a refusal for a full pool goes out with a Retry-After. Every error is rethrown. */
+export function retryAfterWhenBusy(res: Response): (error: unknown) => never {
+  return error => {
+    if (error instanceof DownloadsBusyException) res.set('Retry-After', String(DOWNLOADS_BUSY_RETRY_AFTER_SECONDS));
+    throw error;
+  };
+}
+
+/**
+ * Answer a stored file as an attachment, streamed rather than read into memory first. Content-Length
+ * goes out only when the store reported a size. A read that fails before the first byte drops the
+ * media headers and answers the JSON 500 a failed whole-file read used to; one that fails after it
+ * cuts the connection, since the status line has gone out and a short body must not pass for the file.
+ */
+export function storedFileAttachment(res: Response, source: ExportFileSource, mimetype: string): StreamableFile {
+  res.set({ 'Content-Type': mimetype, 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'attachment' });
+  const file = new StreamableFile(source.stream, source.size === undefined ? {} : { length: source.size });
+  const cutConnection = file.errorHandler;
+  return file.setErrorHandler((error, response) => {
+    if (response.destroyed || response.headersSent) return cutConnection(error, response);
+    storedFileLogger.error('Reading a stored file failed before any of it was sent', String(error));
+    res.removeHeader('Content-Type');
+    res.removeHeader('Content-Disposition');
+    res.removeHeader('Content-Length');
+    res.status(500).json({ statusCode: 500, message: 'Internal server error' });
+  });
 }
 
 type TarPack = ReturnType<typeof tar.pack>;
@@ -97,7 +139,7 @@ export async function createExportStream(
   return output;
 }
 
-function enforceSize(file: string, size: number | undefined): Transform {
+function enforceSize(file: string, size: number | undefined, onRead: (bytes: number) => void): Transform {
   let seen = 0;
   const mismatch = (): Error => new Error(`Export failed: ${file} changed size while being read (expected ${size})`);
   return new Transform({
@@ -106,7 +148,9 @@ function enforceSize(file: string, size: number | undefined): Transform {
       callback(size !== undefined && seen > size ? mismatch() : null, chunk);
     },
     flush(callback) {
-      callback(size !== undefined && seen < size ? mismatch() : null);
+      if (size !== undefined && seen < size) return callback(mismatch());
+      onRead(seen);
+      callback();
     },
   });
 }
@@ -164,8 +208,6 @@ async function appendEntries(
       continue;
     }
     const { stream, size } = source;
-    exportedBytes += size ?? 0;
-    if ((size ?? 0) > largest.size) largest = { file, size: size ?? 0 };
     // The output closes early when the archive fails or the consumer goes away: stop reading files.
     // Checked synchronously before waiting, so a 'close' that already fired cannot be missed.
     if (output.destroyed) {
@@ -176,11 +218,19 @@ async function appendEntries(
     // its header. A file rewritten between open and read does that, so the length is checked here and
     // a mismatch fails the export like a read error, naming the file, before the sink sees the extra
     // byte or the early end. pipeline() also forwards a source error, which pipe() does not.
-    const entry = pipeline(stream, enforceSize(file, size), err => {
-      if (!err || output.destroyed) return;
-      logger.error(`Export failed reading file: ${file}`, String(err));
-      output.destroy(err);
-    });
+    // The import-limit warnings below count the bytes read, since a backend may not report a length.
+    const entry = pipeline(
+      stream,
+      enforceSize(file, size, bytes => {
+        exportedBytes += bytes;
+        if (bytes > largest.size) largest = { file, size: bytes };
+      }),
+      err => {
+        if (!err || output.destroyed) return;
+        logger.error(`Export failed reading file: ${file}`, String(err));
+        output.destroy(err);
+      },
+    );
     await new Promise<void>(resolve => {
       const done = (): void => {
         output.removeListener('close', done);

@@ -35,10 +35,14 @@ describe('feature-flags', () => {
       }
     });
 
-    it('parses simulateTypingMaxMs with Number()||5000 semantics (0/negative/non-numeric fall back)', () => {
+    it('reads simulateTypingMaxMs as a positive integer (0, negative and non-numeric values fall back to 5000)', () => {
       expect(computeFeatureFlags({ SIMULATE_TYPING_MAX_MS: '3000' }).simulateTypingMaxMs).toBe(3000);
-      // Critical: "0" must fall back to 5000 (Number('0')||5000), NOT stay 0 as parseInt would.
+      expect(computeFeatureFlags({ SIMULATE_TYPING_MAX_MS: '1' }).simulateTypingMaxMs).toBe(1);
+      // Critical: "0" must fall back to 5000, NOT stay 0 as parseInt would.
       expect(computeFeatureFlags({ SIMULATE_TYPING_MAX_MS: '0' }).simulateTypingMaxMs).toBe(5000);
+      // A negative cap would reach setTimeout and shrink the humanising pause to about 1 ms.
+      expect(computeFeatureFlags({ SIMULATE_TYPING_MAX_MS: '-1' }).simulateTypingMaxMs).toBe(5000);
+      expect(computeFeatureFlags({ SIMULATE_TYPING_MAX_MS: '-5' }).simulateTypingMaxMs).toBe(5000);
       expect(computeFeatureFlags({ SIMULATE_TYPING_MAX_MS: '' }).simulateTypingMaxMs).toBe(5000);
       expect(computeFeatureFlags({ SIMULATE_TYPING_MAX_MS: 'abc' }).simulateTypingMaxMs).toBe(5000);
       expect(computeFeatureFlags({ SIMULATE_TYPING_MAX_MS: undefined }).simulateTypingMaxMs).toBe(5000);

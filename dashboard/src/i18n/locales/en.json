@@ -38,6 +38,8 @@
     "optional": "optional",
     "fieldTooLong": "Limited to {{max}} characters ({{count}} now).",
     "language": "Language",
+    "changeLanguage": "Change language",
+    "joinedName": "{{first}}, {{second}}",
     "back": "Back",
     "next": "Next",
     "previous": "Previous",
@@ -171,6 +173,16 @@
       "backgroundColor": "Background color",
       "font": "Font",
       "fontDefault": "Default",
+      "fonts": {
+        "system": "System",
+        "systemText": "System text",
+        "script": "Script",
+        "bold": "Bold",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "or",
       "post": "Post",
       "posted": "Status posted",
@@ -193,7 +205,8 @@
       "delete": "Failed to delete message",
       "clickButton": "Failed to click button",
       "fileTooLarge": "File is too large (max 18 MB)",
-      "searchHitSessionNotReady": "The session of this message is not connected"
+      "searchHitSessionNotReady": "The session of this message is not connected",
+      "searchHitChatNotListed": "The chat of this message could not be found in the list"
     },
     "loadMessagesError": "Couldn't load messages. Check the server logs.",
     "messageStatus": {
@@ -203,6 +216,9 @@
       "read": "Read",
       "failed": "Failed"
     },
+    "today": "Today",
+    "switchSession": "Switch session",
+    "searchMessages": "Search messages",
     "clearSearch": "Clear search",
     "filters": {
       "label": "Filter chats",
@@ -213,11 +229,13 @@
       "unknown": "Unknown"
     },
     "noFilterResults": "No chats match this filter",
+    "contactInfo": "Contact info",
     "moreActions": "More actions",
     "copyChatId": "Copy chat ID",
     "chatIdCopied": "Chat ID copied",
     "copyFailed": "Could not copy to clipboard",
     "closeChat": "Close chat",
+    "phone": "Phone number",
     "chatId": "Chat ID",
     "newChat": {
       "title": "New chat",
@@ -242,6 +260,12 @@
       "created": "Group \"{{name}}\" created",
       "createFailed": "Could not create the group",
       "removeParticipant": "Remove {{name}}"
+    },
+    "sessionPicker": {
+      "searchPlaceholder": "Search sessions...",
+      "noMatch": "No session matches",
+      "addTitle": "Pair another number",
+      "addHint": "Create a session and link it with a QR code"
     },
     "group": {
       "info": "Group info",
@@ -578,6 +602,7 @@
     "session": "Session",
     "events": "Events",
     "noEvents": "Select at least one event.",
+    "urlInvalid": "Use a full http:// or https:// address, like https://example.com/webhook.",
     "available": "Available Events",
     "saveChanges": "Save Changes",
     "filters": {
@@ -588,6 +613,7 @@
       "badge_other": "{{count}} filters",
       "addCondition": "Add condition",
       "removeCondition": "Remove condition",
+      "removeValue": "Remove {{value}}",
       "caseSensitive": "Case sensitive",
       "contactPlaceholder": "Number or WhatsApp ID...",
       "textPlaceholder": "Text to match...",
@@ -637,6 +663,7 @@
       "updateFailed": "Failed to update webhook: {{message}}",
       "testOk": "Webhook test successful! Status: {{status}}",
       "testFailed": "Webhook test failed: {{message}}",
+      "testStatus": "the receiver answered HTTP {{status}}",
       "testError": "Failed to test webhook: {{message}}"
     },
     "actions": {
@@ -661,6 +688,7 @@
       "session.restriction": "When WhatsApp restricts the account or lifts a restriction",
       "presence.update": "When a subscribed chat comes online, types or goes offline",
       "event.response": "When a guest answers a WhatsApp event invitation (going, not going, maybe)",
+      "poll.vote": "When a voter selects or clears options on a poll (whatsapp-web.js)",
       "group.join": "When participants join or are added to a group",
       "group.leave": "When participants leave or are removed from a group",
       "group.update": "When a group's name, description or settings change",
@@ -670,7 +698,7 @@
       "call.rejected": "When a call is declined",
       "call.missed": "When a call goes unanswered",
       "status.received": "When a contact posts a status",
-      "all": "All events"
+      "all": "All events except message.receipt, which must be named explicitly"
     },
     "auth": {
       "title": "Delivery authentication",
@@ -757,6 +785,7 @@
     "modalTitle": "Create API Key",
     "createdTitle": "API Key Created",
     "createdHint": "Copy this key now. You won't be able to see it again.",
+    "copyKey": "Copy key",
     "namePlaceholder": "e.g., Production Key",
     "nameTooShort": "Use at least 3 characters.",
     "rolesTitle": "Roles Reference",
@@ -834,6 +863,7 @@
     "chats": {
       "label": "Chat access (optional)",
       "hint": "One chat per line: a group ID ending in @g.us, a contact ID ending in @c.us or @lid, or a phone number. Leave empty for every chat. A chat-restricted key can use only the routes open to chat-scoped keys; its events WebSocket and MCP access stay within these chats.",
+      "lidHint": "An @lid entry also admits the phone number currently mapped to it. If that number passes to someone else, this key can reach them: review the key when a contact changes number.",
       "invalid": "Not a chat ID or phone number: {{value}}",
       "tooMany": "Too many chats ({{count}}): a key may list at most {{max}}."
     },
@@ -971,6 +1001,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} sent",
     "groupSendCancelled": "{{count}}, cancelled",
     "groupSendStopped": "{{count}}, stopped after HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, stopped: the gateway did not answer",
     "response": {
       "timestamp": "Timestamp",
       "messageId": "Message ID",
@@ -981,6 +1012,7 @@
     },
     "sendFailed": "Failed to send message",
     "notOnWhatsApp": "This number is not registered on WhatsApp",
+    "tooLong": "More than {{max}} digits is not one phone number. Enter one number.",
     "batch": {
       "status": {
         "pending": "Pending",
@@ -1014,9 +1046,10 @@
     "single": {
       "title": "Check Single Account",
       "phoneLabel": "Phone Number",
-      "phonePlaceholder": "e.g. 919876543210 or 6281234567890 (with country code)",
+      "phonePlaceholder": "e.g. 919876543210 or 6281234567890",
       "check": "Check",
       "checking": "Checking...",
+      "tooLong": "More than {{max}} digits is not one phone number. Check one number at a time.",
       "autoPrefix": "Auto-prefix <strong>+91</strong> for 10-digit numbers (keep 12-digit numbers as-is)",
       "silent": "<strong>Completely Silent:</strong> This query queries WhatsApp's registration registry directly. The contact receives no notification, sound, or message.",
       "resultTitle": "Verification Result",
@@ -1045,7 +1078,7 @@
       "copy": "Copy",
       "copied": "Copied",
       "checkedAt": "Checked At",
-      "openTester": "Open in Message Tester"
+      "openTester": "Go to Message Tester"
     },
     "recent": {
       "title": "Recent Checks",
@@ -1079,9 +1112,11 @@
       "tenDigitAdded": "({{ten}} ten-digit → +91 added)",
       "tenDigitAddedPreserved": "({{ten}} ten-digit → +91 added, {{twelve}} twelve-digit preserved)",
       "tooMany": "Too many numbers: {{parsed}} parsed, at most {{max}} per run. Remove {{excess}} to start.",
+      "tooLong": "Left out, more than {{max}} digits (not one number): {{count}}. Put each number on its own line.",
       "start": "Start Batch Check",
       "stop": "Stop Checking",
       "export": "Export Results (CSV)",
+      "exportHint": "The file holds every digit. A spreadsheet may show long numbers as 9.19612E+11 or drop a leading zero; import the file and set the Phone Number column to Text to keep them unchanged.",
       "stoppedTitle": "Batch stopped",
       "checked": "Checked",
       "remaining": "Remaining",
@@ -1094,6 +1129,7 @@
       "reasonOther": "The gateway refused a lookup",
       "partial": "{{reason}} (HTTP {{status}}). Stopped at number {{attempted}} of {{total}}; {{count}} number was not sent. Try again later.",
       "partial_other": "{{reason}} (HTTP {{status}}). Stopped at number {{attempted}} of {{total}}; {{count}} numbers were not sent. Try again later.",
+      "noAnswer": "The gateway did not answer. Stopped at number {{attempted}} of {{total}}. Try again later.",
       "last": "{{reason}} (HTTP {{status}}). The last lookup failed. Try again later."
     },
     "toast": {
@@ -1192,7 +1228,10 @@
       "disabled": "Disabled"
     },
     "envPinNote": "Pinned by the environment variable {{name}} — this is the running value; dashboard changes won't apply until that variable is unset.",
+    "envPinFlagNote": "Pinned by the environment variable {{name}}: the built-in container still starts at every boot while it is set to true and this service is in use, even with this toggle off.",
     "pendingRestartNote": "Saved, but not applied yet — restart the server for this change to take effect.",
+    "pendingBuiltInNote": "Saved, but not applied yet: the server runs with an external service now, and a restart switches it to the built-in container.",
+    "pendingExternalNote": "Saved, but not applied yet: the server runs with the built-in container now, and a restart switches it to an external service.",
     "migration": {
       "title": "Heads up — this changes the data backend",
       "dbWarning": "The new database starts empty. Download a backup of your current data now (while still on the old database), then restore it after the restart.",
@@ -1218,6 +1257,7 @@
       "successTitle": "Server ready",
       "errorTitle": "Restart failed",
       "idleDesc": "Configuration has been saved to <code>.env.generated</code>.<br/>A server restart is required to apply the changes.",
+      "stopsContainers": "The restart also stops these built-in containers, which keep their data and are not deleted:",
       "later": "Restart Later",
       "now": "Restart Now",
       "restartingMsg": "Server restarting... {{count}}s",
@@ -1303,6 +1343,7 @@
       "installed": "Plugin installed",
       "installFailed": "Install failed",
       "uninstalled": "Plugin uninstalled",
+      "uninstalledWithWarning": "Plugin uninstalled, with a warning",
       "uninstallFailed": "Uninstall failed",
       "enableFailedTitle": "Enable failed",
       "disableFailedTitle": "Disable failed",

@@ -44,7 +44,7 @@ func (s *GroupsService) JoinInfo(ctx context.Context, sessionID, code string) (*
 	return &out, nil
 }
 
-// Create makes a new group. It answers the group SUMMARY, not the detail shape Get returns — there is
+// Create makes a new group. Baileys only; whatsapp-web.js answers 501. It answers the group SUMMARY, not the detail shape Get returns — there is
 // no participant list, description, owner or creation time on a create response.
 func (s *GroupsService) Create(ctx context.Context, sessionID string, body CreateGroupRequest) (*GroupSummary, error) {
 	var out GroupSummary
@@ -65,8 +65,8 @@ func (s *GroupsService) JoinGroup(ctx context.Context, sessionID string, body Jo
 	return &out, nil
 }
 
-// GetGroupSettings returns the group's announce / locked / ephemeral-timer
-// settings.
+// GetGroupSettings returns the group's announce / locked / ephemeral-timer /
+// member-add-mode settings.
 func (s *GroupsService) GetGroupSettings(ctx context.Context, sessionID, groupID string) (*GroupSettings, error) {
 	var out GroupSettings
 	err := s.client.do(ctx, "GET", s.base(sessionID)+"/"+pathEscape(groupID)+"/settings", nil, nil, &out)
@@ -135,6 +135,19 @@ func (s *GroupsService) SetDescription(ctx context.Context, sessionID, groupID, 
 	var out SuccessResult
 	body := map[string]string{"description": description}
 	err := s.client.do(ctx, "PUT", s.base(sessionID)+"/"+pathEscape(groupID)+"/description", nil, body, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetMemberLabel sets this account's member label in the group; an empty label clears it.
+// Baileys only: whatsapp-web.js answers 501. A 200 means the label message was handed to
+// WhatsApp; it cannot be read back.
+func (s *GroupsService) SetMemberLabel(ctx context.Context, sessionID, groupID, label string) (*SuccessResult, error) {
+	var out SuccessResult
+	body := map[string]string{"label": label}
+	err := s.client.do(ctx, "PUT", s.base(sessionID)+"/"+pathEscape(groupID)+"/member-label", nil, body, &out)
 	if err != nil {
 		return nil, err
 	}

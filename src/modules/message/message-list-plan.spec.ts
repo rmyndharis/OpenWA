@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { DataSource, Logger } from 'typeorm';
 import { MessageService } from './message.service';
-import { Message } from './entities/message.entity';
+import { Message, MessageDirection } from './entities/message.entity';
 import type { EngineRegistry } from '../../engine/engine-registry.service';
 import type { MessageProjector } from '../session/message-projector.service';
 import type { HookManager } from '../../core/hooks';
@@ -129,5 +129,78 @@ describe('message list query plans on SQLite', () => {
     expect(sizes[0].sql).toMatch(/OCTET_LENGTH\(/);
     expect(sizes[0].sql).not.toMatch(/(^|[^_])LENGTH\(/);
     expect(sizes[0].sql).not.toContain('ORDER BY');
+  });
+  /**
+   * The page rows are read by id, from about ten ids on SQLite prefers the session or chat index for that
+   * statement and visits every row of it (the same session of 300k rows took 20 ms a statement, against 0.05
+   * ms by key). Every read of the page's rows has to be a primary key lookup, whatever the list is filtered by.
+   */
+  describe('the reads of a page by id', () => {
+    const seedChat = async (): Promise<void> => {
+      const repo = ds.getRepository(Message);
+      await repo.save(
+        Array.from({ length: 120 }, (_, i) =>
+          repo.create({
+            sessionId: 's1',
+            chatId: '628123@c.us',
+            waMessageId: `w${i}`,
+            from: '628123@c.us',
+            to: 'y',
+            body: 'b',
+            type: 'text',
+            direction: MessageDirection.INCOMING,
+            timestamp: 1000 + i,
+          }),
+        ),
+      );
+      queries.length = 0;
+    };
+    const plansOfReadsById = async (): Promise<string[]> => {
+      const reads = queries.filter(q => /"message"\."id" IN/.test(q.sql) && !/^\s*SELECT\s+COUNT/i.test(q.sql));
+      const plans: string[] = [];
+      for (const read of reads) {
+        const rows = await ds.query<{ detail: string }[]>(`EXPLAIN QUERY PLAN ${read.sql}`, read.params);
+        plans.push(rows.map(r => r.detail).join(' | '));
+      }
+      return plans;
+    };
+
+    it.each([
+      ['an unfiltered list', {}],
+      ['one chat', { chatId: '628123@c.us' }],
+      [
+        'every filter',
+        {
+          chatId: '628123@c.us',
+          from: '628123@c.us',
+          direction: MessageDirection.INCOMING,
+          type: 'text',
+          since: 1000000,
+          until: 1200000,
+          orderBy: 'timestamp' as const,
+        },
+      ],
+    ])('looks %s up by primary key', async (_label, options) => {
+      await seedChat();
+
+      const { messages } = await service.getMessages('s1', { ...options, limit: 100, inlineMedia: false });
+
+      expect(messages).toHaveLength(100);
+      const plans = await plansOfReadsById();
+      expect(plans).toHaveLength(2);
+      for (const plan of plans) {
+        expect(plan).toBe('SEARCH message USING INDEX sqlite_autoindex_messages_1 (id=?)');
+      }
+    });
+
+    it('reads a page chunk without the list order', async () => {
+      await seedChat();
+
+      await service.getMessages('s1', { limit: 100, inlineMedia: false });
+
+      const chunk = queries.find(q => /"message"\."id" IN/.test(q.sql) && !/OCTET_LENGTH/.test(q.sql));
+      expect(chunk).toBeDefined();
+      expect(chunk!.sql).not.toContain('ORDER BY');
+    });
   });
 });

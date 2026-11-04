@@ -1,5 +1,6 @@
 import { resolve } from 'path';
 import { normalizeS3KeyPrefix } from '../common/storage/s3-key-prefix';
+import { namesBundledContainer } from '../modules/docker/bundled-host';
 import { resolveBodyLimit } from './bootstrap-security';
 import { parseBodyLimitBytes } from './inflight-body-budget';
 
@@ -57,6 +58,65 @@ export function postgresSchemaError(schema: string): string | null {
     return `POSTGRES_SCHEMA must not use the reserved "pg_" prefix (got ${JSON.stringify(schema)})`;
   }
   return null;
+}
+
+const REDIS_CONSUMER_FLAGS = ['REDIS_ENABLED', 'QUEUE_ENABLED', 'CACHE_ENABLED'];
+
+/** The one way to keep TLS or a named user: an external server, which the Infrastructure page selects too. */
+const EXTERNAL_REDIS_WAY_OUT =
+  'or use an external Redis (REDIS_BUILTIN=false with its REDIS_HOST, also on the Infrastructure page)';
+
+/** The bundled Redis is the one this deployment connects to: it is selected, in use, and named as the host. */
+function usesBundledRedis(config: EnvConfig): boolean {
+  const host = typeof config.REDIS_HOST === 'string' ? config.REDIS_HOST : undefined;
+  return (
+    REDIS_CONSUMER_FLAGS.some(key => config[key] === 'true') &&
+    config.REDIS_BUILTIN === 'true' &&
+    namesBundledContainer('redis', host)
+  );
+}
+
+/** The bundled Redis listens in plaintext; a TLS handshake against it fails on every connect. */
+export function builtinRedisTlsError(config: EnvConfig): string | null {
+  if (!usesBundledRedis(config) || config.REDIS_TLS !== 'true') return null;
+  return (
+    'REDIS_TLS=true cannot reach the built-in Redis container, which runs without TLS; set REDIS_TLS=false in the ' +
+    `environment, ./.env or data/.env.generated, ${EXTERNAL_REDIS_WAY_OUT}`
+  );
+}
+
+/** The bundled Redis has only its default user; ioredis authenticates as any other name and is refused. */
+export function builtinRedisUsernameError(config: EnvConfig): string | null {
+  const username = typeof config.REDIS_USERNAME === 'string' ? config.REDIS_USERNAME : undefined;
+  if (!usesBundledRedis(config) || !username || username === 'default') return null;
+  return (
+    'REDIS_USERNAME must be unset or default for the built-in Redis container; remove the named username in the ' +
+    `environment, ./.env or data/.env.generated, ${EXTERNAL_REDIS_WAY_OUT}`
+  );
+}
+
+/**
+ * The S3 client builds every request from S3_ENDPOINT. A value without a scheme (`minio:9000`) does not stop the
+ * client from being built: each call then fails as "Invalid URL" and media goes to the local fallback directory.
+ * That deployment runs today, so validateEnv leaves it alone and the boot reports this message at ERROR level; the
+ * Infrastructure save refuses it, so the page never stores one. Only checked while S3 is the selected storage, and
+ * the value is not echoed, as it may hold keys.
+ */
+export function s3EndpointError(config: EnvConfig): string | null {
+  const raw = config.S3_ENDPOINT;
+  const endpoint = typeof raw === 'string' ? raw.trim() : '';
+  if (!endpoint || config.STORAGE_TYPE !== 's3') return null;
+  let protocol: string | undefined;
+  try {
+    protocol = new URL(endpoint).protocol;
+  } catch {
+    protocol = undefined;
+  }
+  if (protocol === 'http:' || protocol === 'https:') return null;
+  return (
+    'S3_ENDPOINT must be an absolute http(s) URL such as "http://minio:9000"; set it in the environment, ./.env or ' +
+    'data/.env.generated, or on the Infrastructure page'
+  );
 }
 
 /**
@@ -165,14 +225,28 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     // POSTGRES_SCHEMA is optional (defaults to 'public' in configuration.ts). When set, validate it
     // is a legal, non-reserved Postgres identifier so a typo / injection-ish value fails fast at boot
     // rather than reaching CREATE TABLE "<schema>"."..." (or a search_path SET) at migration time.
-    // Lower case only: the search_path startup option is unquoted, so Postgres folds it to lower
-    // case, while TypeORM quotes the schema. A mixed-case name would split DDL and queries across
-    // two schemas. The raw value is checked, untrimmed: the app and the migration CLI both use it
-    // as set, so a padded (or whitespace-only) value must fail here as it fails in the CLI.
+    // Lower case only: the search_path the app sets with set_config on connect is unquoted, so Postgres
+    // folds it to lower case, while TypeORM quotes the schema. A mixed-case name would split DDL and
+    // queries across two schemas. The raw value is checked, untrimmed: the app and the migration CLI both
+    // use it as set, so a padded (or whitespace-only) value must fail here as it fails in the CLI.
     const pgSchema = config.POSTGRES_SCHEMA;
     const pgSchemaError = typeof pgSchema === 'string' && pgSchema !== '' ? postgresSchemaError(pgSchema) : null;
     if (pgSchemaError) {
       errors.push(pgSchemaError);
+    }
+    // The bundled PostgreSQL container runs without TLS (DockerService.getContainerSpec sets none up), so the built-in
+    // database with DATABASE_SSL=true retries its connection until the boot gives up, and the dashboard that could undo
+    // it stays down. Both flags are read raw, as configuration.ts and the boot guard compare them.
+    const dbHost = str('DATABASE_HOST');
+    if (
+      config.POSTGRES_BUILTIN === 'true' &&
+      config.DATABASE_SSL === 'true' &&
+      namesBundledContainer('postgres', dbHost)
+    ) {
+      errors.push(
+        `DATABASE_SSL=true cannot reach the built-in PostgreSQL container (POSTGRES_BUILTIN=true, DATABASE_HOST=${dbHost}), ` +
+          'which runs without TLS: set DATABASE_SSL=false where it is set (data/.env.generated, the project .env or the environment)',
+      );
     }
   } else {
     // SQLite (explicit or default): DATABASE_NAME is a file path for the 'data' connection. It must
@@ -198,6 +272,11 @@ export function validateEnv(config: EnvConfig): EnvConfig {
       );
     }
   }
+
+  const redisTlsError = builtinRedisTlsError(config);
+  if (redisTlsError) errors.push(redisTlsError);
+  const redisUsernameError = builtinRedisUsernameError(config);
+  if (redisUsernameError) errors.push(redisUsernameError);
 
   // Plain decimal digits only: these numeric knobs are read downstream with parseInt(raw, 10),
   // which silently truncates spellings Number() would accept (`1e6` → 1, `0x100` → 0) — the boot
@@ -597,6 +676,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'RESOLVE_LID_TO_PHONE',
     'SIMULATE_TYPING',
     'SEARCH_ENABLED',
+    'SEARCH_CONTAINS_ENABLED',
     // Read at boot by the throttler factory (app.module.ts) and CacheService with `=== 'true'`: a
     // typo like `ture` silently downgrades rate-limit storage + cache to per-process in-memory.
     'REDIS_ENABLED',
@@ -625,6 +705,8 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     // `=== 'true'`: a typo keeps the main connection on its migrations, so an operator who meant to
     // opt into synchronize for api_keys/audit_logs silently does not get it.
     'MAIN_DATABASE_SYNCHRONIZE',
+    // Same for the data connection: on SQLite a typo silently runs the migration chain instead.
+    'DATABASE_SYNCHRONIZE',
     // Read with `=== 'true'` by the plugin ingress gate: a typo turns an intentional
     // `ALLOW_UNSIGNED_INGRESS=true` back off, and a route the operator meant to open stops loading.
     'ALLOW_UNSIGNED_INGRESS',

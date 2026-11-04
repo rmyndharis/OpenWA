@@ -116,7 +116,7 @@ export class TokenBucketLimiter {
  * KeyRateLimiter wraps it for the HTTP side.
  */
 export class SlidingWindowLimiter {
-  private readonly hits = new Map<string, number[]>();
+  private readonly hits = new Map<string, { at: number; reservation?: object }[]>();
 
   constructor(
     private readonly max = DEFAULT_HANDSHAKE_MAX,
@@ -125,12 +125,15 @@ export class SlidingWindowLimiter {
     private readonly maxKeys = DEFAULT_MAX_KEYS,
   ) {}
 
-  /** Record one attempt for `subject`; returns false when it exceeds `max` inside the window. */
-  allow(subject: string): boolean {
+  /**
+   * Record one attempt for `subject`; returns false when it exceeds `max` inside the window. A caller that
+   * gives the attempt back after an await passes a `reservation` object to name it (see refund).
+   */
+  allow(subject: string, reservation?: object): boolean {
     const t = this.now();
-    const recent = (this.hits.get(subject) ?? []).filter(ts => t - ts < this.windowMs);
+    const recent = (this.hits.get(subject) ?? []).filter(hit => t - hit.at < this.windowMs);
     const allowed = recent.length < this.max;
-    if (allowed) recent.push(t);
+    if (allowed) recent.push({ at: t, reservation });
 
     this.hits.delete(subject);
     this.hits.set(subject, recent);
@@ -139,7 +142,9 @@ export class SlidingWindowLimiter {
   }
 
   /**
-   * Give back the most recent attempt recorded for `subject`.
+   * Give back the attempt recorded for `subject` under `reservation`, or the most recent one when none is given.
+   * A caller that awaits between allow and refund must pass its reservation: by then newer attempts, a failed
+   * handshake among them, are on the list, and the most recent one is not its own.
    *
    * The handshake window is consumed BEFORE authentication (that is the point — an unauthenticated
    * flood must not reach the DB key validation on every attempt), which also charges every
@@ -148,9 +153,14 @@ export class SlidingWindowLimiter {
    * Refunding a handshake that turned out to be authentic keeps the budget aimed at failures;
    * authenticated abuse is bounded separately by the per-key socket cap.
    */
-  refund(subject: string): void {
+  refund(subject: string, reservation?: object): void {
     const recent = this.hits.get(subject);
     if (!recent?.length) return;
-    recent.pop();
+    if (!reservation) {
+      recent.pop();
+      return;
+    }
+    const index = recent.findIndex(hit => hit.reservation === reservation);
+    if (index !== -1) recent.splice(index, 1);
   }
 }

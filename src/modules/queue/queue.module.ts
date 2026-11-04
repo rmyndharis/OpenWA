@@ -41,8 +41,9 @@ BullModule.queueClass = ShutdownSafeQueue;
     WebhookOutboxModule,
     // Required for WebhookProcessor/IngressProcessor to inject HookManager
     HooksModule,
-    // Required for IngressProcessor to inject PluginLoaderService (already @Global(), imported
-    // explicitly for clarity, matching HooksModule above).
+    // Required for IngressProcessor to inject PluginLoaderService (already @Global()). Imported ahead of
+    // BullModule so the loader's init hook, which marks the plugins being restored, runs before the
+    // workers start (see app.module.ts).
     PluginsModule,
     BullModule.forRootAsync({
       useFactory: queueRootOptions,

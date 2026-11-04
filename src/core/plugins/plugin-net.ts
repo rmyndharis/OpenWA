@@ -110,7 +110,8 @@ export async function performPluginFetch(
   // throws a RangeError, silently defeating the documented default + hard-cap clamp.
   const requested =
     typeof opts.timeoutMs === 'number' && Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : DEFAULT_TIMEOUT_MS;
-  const timeoutMs = Math.min(Math.max(requested, 1), MAX_TIMEOUT_MS);
+  // AbortSignal.timeout only takes an integer, so a fractional value is cut to one before the clamp.
+  const timeoutMs = Math.min(Math.max(Math.trunc(requested), 1), MAX_TIMEOUT_MS);
   // Reject-when-full BEFORE reserving a slot, so total concurrent host-side buffering stays bounded to
   // MAX_INFLIGHT_FETCHES × MAX_BODY_BYTES. Check + increment are synchronous (single event-loop turn),
   // so no interleaving can overshoot the cap; the slot is released in the finally below.

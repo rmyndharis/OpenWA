@@ -110,11 +110,43 @@ describe('LabelService label editing', () => {
 
   // Omitted fields must stay omitted rather than becoming undefined-valued keys. The service sends
   // only the fields the caller set, and the adapter forwards them unchanged; the write replaces the
-  // whole label.
+  // whole label. Compared with toStrictEqual: toHaveBeenCalledWith treats `name: undefined` as absent,
+  // which is the very shape this test exists to refuse.
   it('passes through only the fields the caller set', async () => {
     const upsertLabel = jest.fn().mockResolvedValue(undefined);
-    await makeService({ upsertLabel }).upsertLabel('s1', 'l1', { color: 3 });
-    expect(upsertLabel).toHaveBeenCalledWith({ id: 'l1', color: 3 });
+    const svc = makeService({ upsertLabel });
+    await svc.upsertLabel('s1', 'l1', { color: 3 });
+    await svc.upsertLabel('s1', 'l2', { name: 'VIP' });
+    expect((upsertLabel.mock.calls as unknown[][]).map(call => call[0])).toStrictEqual([
+      { id: 'l1', color: 3 },
+      { id: 'l2', name: 'VIP' },
+    ]);
+  });
+
+  // @IsOptional skips validation for null and class-transformer keeps it, so the DTO lets an explicit null
+  // through although the type says `string | undefined`. The service reads it as "not set".
+  type Body = { name?: string; color?: number };
+
+  it('refuses a body whose only fields are null, as it refuses an empty one', () => {
+    const upsertLabel = jest.fn();
+    const svc = makeService({ upsertLabel });
+    for (const body of [{ name: null }, { color: null }, { name: null, color: null }]) {
+      expect(() => svc.upsertLabel('s1', 'l1', body as unknown as Body)).toThrow(
+        'At least one of name or color must be provided',
+      );
+    }
+    expect(upsertLabel).not.toHaveBeenCalled();
+  });
+
+  it('drops a null field instead of forwarding it to the engine', async () => {
+    const upsertLabel = jest.fn().mockResolvedValue(undefined);
+    const svc = makeService({ upsertLabel });
+    await svc.upsertLabel('s1', 'l1', { name: null, color: 3 } as unknown as Body);
+    await svc.upsertLabel('s1', 'l2', { name: 'VIP', color: null } as unknown as Body);
+    expect((upsertLabel.mock.calls as unknown[][]).map(call => call[0])).toStrictEqual([
+      { id: 'l1', color: 3 },
+      { id: 'l2', name: 'VIP' },
+    ]);
   });
 
   it('delegates deleteLabel to the engine', async () => {

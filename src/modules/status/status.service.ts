@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import type { Readable } from 'stream';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { StorageService, isMissingObjectError } from '../../common/storage/storage.service';
@@ -89,19 +90,24 @@ export class StatusService {
     return this.store.listByContact(sessionId, contactId);
   }
 
-  async getStatusMedia(sessionId: string, statusId: string): Promise<{ buffer: Buffer; mimetype: string }> {
+  /** Opens the stored file as a stream, so a large video is never held in memory whole. */
+  async getStatusMedia(
+    sessionId: string,
+    statusId: string,
+  ): Promise<{ stream: Readable; size?: number; mimetype: string }> {
     const media = await this.store.getMedia(sessionId, statusId);
     if (!media) {
       throw new NotFoundException('Status media not found or expired');
     }
     try {
-      const buffer = await this.storageService.getFile(media.path);
+      // A missing or unreadable file rejects here, before anything is answered.
+      const { stream, size } = await this.storageService.openFile(media.path);
       // MIME types are case-insensitive, and a browser treats `image/SVG+XML` exactly as it treats
       // `image/svg+xml`: the check runs on the normalized essence, and that is what gets served.
       const essence = media.mimetype.split(';')[0].trim().toLowerCase();
       const mimetype =
         SAFE_STATUS_MIMETYPE.test(essence) && essence !== 'image/svg+xml' ? essence : 'application/octet-stream';
-      return { buffer, mimetype };
+      return { stream, size, mimetype };
     } catch (error) {
       // The row outlived its file: purgeExpired (or a concurrent delete) removed it between the
       // DB read and this read. That's "gone", not a server fault — surface a 404. The helper covers

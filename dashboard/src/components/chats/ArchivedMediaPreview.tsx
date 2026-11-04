@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'rea
 import { Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import MediaLightbox from './MediaLightbox';
+import { keepsSameKey } from '../../utils/authLifecycle';
 import { loadArchivedMedia } from '../../utils/archivedMediaLoad';
 
 export type ArchivedMediaKind = 'image' | 'video' | 'audio';
@@ -102,16 +103,20 @@ function ArchivedMediaPreview({
   useEffect(() => {
     if (state.phase !== 'loading') return undefined;
     let cancelled = false;
+    const sameKey = keepsSameKey();
     const controller = new AbortController();
-    loadArchivedMedia(controller.signal, () => loadRef.current(controller.signal))
+    loadArchivedMedia(controller.signal, () => {
+      if (!sameKey()) throw new DOMException('Aborted', 'AbortError');
+      return loadRef.current(controller.signal);
+    })
       .then(blob => {
-        if (cancelled) return;
+        if (cancelled || !sameKey()) return;
         const url = URL.createObjectURL(blob);
         urlRef.current = url;
         setState({ phase: 'ready', url });
       })
       .catch(() => {
-        if (!cancelled) setState({ phase: 'failed' });
+        if (!cancelled && sameKey()) setState({ phase: 'failed' });
       });
     return () => {
       cancelled = true;

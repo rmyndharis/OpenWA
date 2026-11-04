@@ -13,13 +13,17 @@ import {
   PinOff,
   ShieldCheck,
   Trash2,
+  User,
   UserPen,
 } from 'lucide-react';
 import type { Chat } from '../../services/api';
 
-/** What a chat can be asked to do from its row or its room. Every one but group info is an operator route. */
+/** What a chat can be asked to do from its row or its room. Every one but the info views is an operator route. */
 export interface ChatRowActions {
+  /** A 1:1 chat's menu is opening: what its entries read (the address book) is loaded from here, not at page load. */
+  onMenuOpen?: () => void;
   onGroupInfo: (chat: Chat) => void;
+  onContactInfo?: (chat: Chat) => void;
   onSaveContact?: (chat: Chat) => void;
   /** Whether the chat has a phone-based id the address book accepts; Save is offered disabled otherwise. */
   canSaveContact?: (chat: Chat) => boolean;
@@ -66,6 +70,7 @@ export function chatActionItems(chat: Chat, actions: ChatRowActions, t: (key: st
 
   if (group) add(actions.onGroupInfo, { key: 'info', icon: <Info size={18} />, label: t('chats.group.info') });
   if (direct) {
+    add(actions.onContactInfo, { key: 'contact', icon: <User size={18} />, label: t('chats.contactInfo') });
     const addressable = actions.canSaveContact?.(chat) ?? true;
     add(actions.onSaveContact, {
       key: 'save',

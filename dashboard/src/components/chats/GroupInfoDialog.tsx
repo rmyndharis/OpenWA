@@ -15,8 +15,9 @@ import {
 import { useProfilePicture } from '../../hooks/useProfilePicture';
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
-import { formatPhoneForDisplay } from '../../utils/formatPhone';
+import { formatPhoneForDisplay, isolateNumber } from '../../utils/formatPhone';
 import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
+import { normalizePhoneText } from '../../utils/phone';
 import ChatAvatar from './ChatAvatar';
 
 // The gateway's caps (CreateGroupDto / GroupDescriptionDto).
@@ -73,17 +74,18 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   const canEditInfo = canWrite && Boolean(info) && (isAdmin || info?.locked === false);
   const canManageMembers = canWrite && isAdmin;
 
-  // The form starts from the group as loaded, and again after a refresh.
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
+  // What the operator has typed. A field they have not touched shows the group as the server last returned it,
+  // so loading the group again (a member action, the window regaining focus) neither discards a draft nor
+  // leaves an untouched field stale. A save or a refresh drops the draft.
+  const [draft, setDraft] = useState<{ name?: string; description?: string }>({});
   const [newPicture, setNewPicture] = useState<{ base64: string; mimetype: string; preview: string } | null>(null);
   const [saving, setSaving] = useState(false);
-  useEffect(() => {
-    if (!info) return;
-    setName(info.name);
-    setDescription(info.description ?? '');
+  const name = draft.name ?? info?.name ?? '';
+  const description = draft.description ?? info?.description ?? '';
+  const dropDraft = () => {
+    setDraft({});
     setNewPicture(null);
-  }, [info]);
+  };
   // The preview is an object URL: released when replaced and when the dialog closes.
   useEffect(() => {
     if (!newPicture) return;
@@ -111,8 +113,8 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   const descriptionChanged = Boolean(info) && description !== (info?.description ?? '');
   const dirty = nameChanged || descriptionChanged || Boolean(newPicture);
 
-  // Each field is its own route, so each is saved on its own: a picture the engine refuses does not take
-  // a saved name down with it, and the toast names the step that failed.
+  // Each field is its own route, called in turn: name, description, picture. Those before a refusal stay saved,
+  // those after it are not tried, and the toast carries the gateway's text for the refusal.
   const save = async () => {
     if (!info || !dirty || !trimmedName || saving) return;
     setSaving(true);
@@ -129,6 +131,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
       }
       showSuccess(t('chats.group.saved'));
       await infoQuery.refetch();
+      dropDraft();
     } catch (err) {
       showError(t('chats.group.saveFailed'), errorText(err));
     } finally {
@@ -139,6 +142,10 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   // --- Participants ---
   const [pending, setPending] = useState<string | null>(null);
   const [newMember, setNewMember] = useState('');
+  // The gateway takes ASCII digits, whatever script the operator typed them in. 7-15 digits covers E.164: more is
+  // two numbers run together, refused as the new-chat panel refuses it.
+  const memberDigits = normalizePhoneText(newMember).replace(/\D/g, '').replace(/^00/, '');
+  const memberNumberValid = memberDigits.length >= 7 && memberDigits.length <= 15;
   // The gateway answers 200 for a membership write even when it refused some participants, and says
   // which in `results`. Returns whether every participant was accepted.
   const runMemberAction = async (key: string, action: () => Promise<GroupParticipantsAck>): Promise<boolean> => {
@@ -161,10 +168,10 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   // A number is checked first, as in the new-chat panel: the gateway resolves it to the id WhatsApp uses.
   const addMember = async () => {
     const added = await runMemberAction('add', async () => {
-      const digits = newMember.replace(/\D/g, '').replace(/^00/, '');
-      const check = await contactApi.checkNumber(session.id, digits);
+      const check = await contactApi.checkNumber(session.id, memberDigits);
       if (!check.exists || !check.whatsappId) {
-        throw new Error(t('chats.newChat.notOnWhatsApp', { number: formatPhoneForDisplay(digits) ?? `+${digits}` }));
+        const number = isolateNumber(formatPhoneForDisplay(memberDigits) ?? `+${memberDigits}`);
+        throw new Error(t('chats.newChat.notOnWhatsApp', { number }));
       }
       return sessionApi.addGroupParticipants(session.id, group.id, [check.whatsappId]);
     });
@@ -200,7 +207,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
       <button
         type="button"
         className="icon-btn"
-        onClick={() => void infoQuery.refetch()}
+        onClick={() => void infoQuery.refetch().then(dropDraft)}
         disabled={infoQuery.isFetching}
         title={t('common.refresh')}
         aria-label={t('common.refresh')}
@@ -262,7 +269,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
               type="text"
               value={name}
               maxLength={GROUP_NAME_MAX_LENGTH}
-              onChange={e => setName(e.target.value)}
+              onChange={e => setDraft(current => ({ ...current, name: e.target.value }))}
               disabled={!canEditInfo}
             />
           </label>
@@ -280,7 +287,13 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
                   <img src={newPicture.preview} alt="" />
                 </span>
               ) : (
-                <ChatAvatar pictureUrl={picture.data} kind="group" size="lg" onImageError={() => picture.refetch()} />
+                <ChatAvatar
+                  chatId={group.id}
+                  pictureUrl={picture.data}
+                  kind="group"
+                  size="lg"
+                  onImageError={() => picture.refetch()}
+                />
               )}
               <span>{canEditInfo ? t('chats.group.pictureHint') : t('chats.group.readOnlyHint')}</span>
             </button>
@@ -303,7 +316,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
               value={description}
               maxLength={GROUP_DESCRIPTION_MAX_LENGTH}
               placeholder={t('chats.group.descriptionPlaceholder')}
-              onChange={e => setDescription(e.target.value)}
+              onChange={e => setDraft(current => ({ ...current, description: e.target.value }))}
               disabled={!canEditInfo}
               rows={5}
             />
@@ -316,7 +329,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
               className="group-info-add"
               onSubmit={e => {
                 e.preventDefault();
-                if (newMember.replace(/\D/g, '').length >= 7) void addMember();
+                if (memberNumberValid) void addMember();
               }}
             >
               <input
@@ -326,11 +339,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
                 placeholder={t('chats.group.addPlaceholder')}
                 aria-label={t('chats.group.addPlaceholder')}
               />
-              <button
-                type="submit"
-                className="btn-primary"
-                disabled={newMember.replace(/\D/g, '').length < 7 || pending !== null}
-              >
+              <button type="submit" className="btn-primary" disabled={!memberNumberValid || pending !== null}>
                 {pending === 'add' ? <Loader2 className="animate-spin" size={16} /> : <UserPlus size={16} />}
                 {t('chats.group.add')}
               </button>
@@ -342,15 +351,19 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
           <ul className="group-info-list">
             {info.participants.map(p => {
               const own = isOwnAccount(p, session);
-              const label = own ? t('chats.you') : p.name || formatPhoneForDisplay(p.number) || p.number;
+              // Formatted from the id, not from `number`: a privacy id (@lid) has digits too, and they are no phone.
+              const phone = formatPhoneForDisplay(p.id);
+              const label = own ? t('chats.you') : p.name || phone || p.number;
+              // In a sentence (a button's label, the confirmation) a phone is isolated, as the typed number is.
+              const spoken = !own && !p.name && phone ? isolateNumber(phone) : label;
               return (
                 <li key={p.id}>
-                  <ChatAvatar kind="individual" />
+                  <ChatAvatar chatId={p.id} kind="individual" size="sm" />
                   <span className="group-info-member">
                     <bdi className="name">{label}</bdi>
-                    {p.name && (
+                    {p.name && phone && (
                       <bdi className="number" dir="ltr">
-                        {formatPhoneForDisplay(p.number) ?? p.number}
+                        {phone}
                       </bdi>
                     )}
                   </span>
@@ -372,7 +385,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
                           )
                         }
                         title={p.isAdmin ? t('chats.group.removeAdmin') : t('chats.group.makeAdmin')}
-                        aria-label={`${p.isAdmin ? t('chats.group.removeAdmin') : t('chats.group.makeAdmin')}: ${label}`}
+                        aria-label={`${p.isAdmin ? t('chats.group.removeAdmin') : t('chats.group.makeAdmin')}: ${spoken}`}
                       >
                         {p.isAdmin ? <ShieldOff size={16} /> : <ShieldCheck size={16} />}
                       </button>
@@ -381,13 +394,13 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
                         className="icon-btn small danger"
                         disabled={pending !== null}
                         onClick={() => {
-                          if (!window.confirm(t('chats.group.removeConfirm', { name: label }))) return;
+                          if (!window.confirm(t('chats.group.removeConfirm', { name: spoken }))) return;
                           void runMemberAction(p.id, () =>
                             sessionApi.removeGroupParticipants(session.id, group.id, [p.id]),
                           );
                         }}
                         title={t('chats.group.remove')}
-                        aria-label={`${t('chats.group.remove')}: ${label}`}
+                        aria-label={`${t('chats.group.remove')}: ${spoken}`}
                       >
                         {pending === p.id ? <Loader2 className="animate-spin" size={16} /> : <UserMinus size={16} />}
                       </button>

@@ -553,7 +553,17 @@ describe('a job that can mint a publish credential pins global npm installs and 
     { uses: 'actions/setup-node', with: { 'node-version': /^\d+$/ } },
     {
       name: 'Use an npm that supports trusted publishing',
-      run: [/^npm install -g npm@\d+\.\d+\.\d+$/, 'npm --version'],
+      run: [
+        /^npm install -g npm@\d+\.\d+\.\d+$/,
+        'npm_bundle_dir="$(npm root --global)/npm/node_modules"',
+        `node -e "if (require(process.argv[1]).version !== '6.29.0') throw new Error('Recheck npm Undici replacement');" "$npm_bundle_dir/undici/package.json"`,
+        'npm_http_patch_dir=$(mktemp -d)',
+        'npm install --prefix "$npm_http_patch_dir" --no-save --package-lock=false --ignore-scripts --no-audit --fund=false undici@6.29.1',
+        'rm -rf "$npm_bundle_dir/undici"',
+        'mv "$npm_http_patch_dir/node_modules/undici" "$npm_bundle_dir/undici"',
+        'rm -rf "$npm_http_patch_dir"',
+        'npm --version',
+      ],
     },
     { uses: 'actions/download-artifact', with: { name: 'js-sdk-package', path: 'package/' } },
     {
@@ -613,7 +623,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
       env: {
         REPO: '${{ github.repository }}',
         REF_NAME: '${{ github.ref_name }}',
-        TAGS: '${{ needs.docker.outputs.tags }}',
+        TAGS: '${{ needs.release-tags.outputs.tags }}',
         EXPECTED_DIGEST: '${{ needs.docker.outputs.digest }}',
       },
       // The echoed messages carry an em dash; a line is compared as written, so it is named here too.
@@ -669,7 +679,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
         jobKeys: ['name', 'runs-on', 'timeout-minutes', 'permissions', 'needs', 'steps'],
         permissions: { packages: 'write', 'id-token': 'write', attestations: 'write' },
         runsOn: 'ubuntu-latest',
-        needs: ['docker', 'boot-smoke', 'image-scan'],
+        needs: ['docker', 'boot-smoke', 'image-scan', 'release-tags'],
         timeout: 15,
         steps: IMAGE_PROMOTE,
         ...flatten(IMAGE_PROMOTE),
@@ -873,7 +883,12 @@ describe('a job that can mint a publish credential pins global npm installs and 
       oidcJobRuns('js-sdk-release.yml', executableLinesConservative).some(({ run }) => /^npm publish\b/m.test(run)),
     ).toBe(true);
     expect(outsideAllowList('js-sdk-release.yml')).toEqual([]);
-    expect(globalInstallsInOidcJobs('js-sdk-release.yml')).toEqual([{ job: 'publish', spec: 'npm@12.1.0' }]);
+    // The workflow says it installs the npm the image does; nothing else holds the two pins together.
+    const imageNpm = /^RUN npm install -g (npm@\d+\.\d+\.\d+) /m.exec(
+      fs.readFileSync(path.join(__dirname, '..', '..', 'Dockerfile'), 'utf8'),
+    )?.[1];
+    expect(imageNpm).toBeDefined();
+    expect(globalInstallsInOidcJobs('js-sdk-release.yml')).toEqual([{ job: 'publish', spec: imageNpm }]);
   });
 
   // Every workflow is read against its own list, so an id-token job anywhere that has none (a new
@@ -1202,7 +1217,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
       ...lookalikes,
       ...strayBlanks,
       ['a step', w => void steps(w).push({ run: SCRIPT }), [`promote: ${SCRIPT}`]],
-      ...placing('promote', ['docker', 'boot-smoke', 'image-scan']),
+      ...placing('promote', ['docker', 'boot-smoke', 'image-scan', 'release-tags']),
       ...commented('set -euo pipefail').map(([where, text]): [string, Edit, string[]] => [
         `an expression in a comment ${where}`,
         w => swap(tag(w), 'set -euo pipefail', text),
@@ -1442,6 +1457,21 @@ describe('a job that can mint a publish credential pins global npm installs and 
     const lastNpm = show(npmRun[npmRun.length - 1]);
     const publishLine = show(scriptOf(JS_PUBLISH, publish)[0]);
     expectOutsideTemplate('js-sdk-release.yml', [
+      ...(
+        [
+          ['a floating HTTP client pin', 4, 'undici@6.29.1', 'undici@latest'],
+          ['HTTP client install scripts enabled', 4, ' --ignore-scripts', ''],
+          ['removal outside the HTTP client package', 5, '"$npm_bundle_dir/undici"', '"$npm_bundle_dir"'],
+        ] as const
+      ).map(([label, index, from, to]): TemplateCase => {
+        const original = show(npmRun[index]);
+        const changed = original.replace(from, to);
+        return [
+          label,
+          w => swap(steps(w)[npm], original, changed),
+          [`publish step ${npm + 1} "${NPM}": run line ${index + 1}: ${changed}, expected ${original}`],
+        ];
+      }),
       [
         'the publish ahead of the npm it needs',
         exchange('publish', npm, publish),
@@ -2175,7 +2205,7 @@ describe('deployment docs describe what the entrypoint, probes and backup script
 describe('ci.yml moves the branch image tag only for the tested branch head', () => {
   type CiStep = Step & { if?: string; id?: string };
   type CiWorkflow = {
-    concurrency?: { group?: string; 'cancel-in-progress'?: boolean | string };
+    concurrency?: { group?: string; 'cancel-in-progress'?: boolean | string; queue?: string };
     jobs?: Record<string, { steps?: CiStep[] }>;
   };
   const ci = (): CiWorkflow => workflowOf('ci.yml');
@@ -2601,5 +2631,30 @@ describe.each([
     expect(holdsSecret({ env: { ALL: '${{ toJSON(secrets) }}' }, steps: [{ run: 'composer install' }] })).toBe(true);
     expect(holdsSecret({ steps: [{ run: 'x', env: { T: "${{ secrets['X'] }}" } }] })).toBe(true);
     expect(holdsSecret({ steps: [{ run: 'x', env: { T: '${{ secrets.GITHUB_TOKEN }}' } }] })).toBe(false);
+  });
+});
+
+/**
+ * release.yml serializes every tag run in one group, so two runs never interleave the channel reads and the
+ * re-points of X.Y and `latest`. GitHub keeps one pending run per group by default and cancels it when another
+ * is queued, so a third tag drops the waiting release; the workflow has to say that rather than promise a queue.
+ */
+describe('release.yml runs one release at a time and states its pending limit', () => {
+  type ReleaseWorkflow = {
+    concurrency?: { group?: string; 'cancel-in-progress'?: boolean | string; queue?: string };
+  };
+  const release = (): ReleaseWorkflow => workflowOf('release.yml') as ReleaseWorkflow;
+
+  it('uses one literal group and never cancels the running release', () => {
+    expect(release().concurrency?.group).toBe('release');
+    expect(release().concurrency?.['cancel-in-progress']).toBe(false);
+  });
+
+  it('names the one pending run the group holds, unless the group queues every run', () => {
+    if (release().concurrency?.queue === 'max') return;
+    const text = fs.readFileSync(path.join(workflowDir, 'release.yml'), 'utf8');
+    const header = text.slice(0, text.search(/^concurrency:/m));
+    expect(header).toMatch(/at most one pending run/);
+    expect(header).not.toMatch(/global queue/);
   });
 });

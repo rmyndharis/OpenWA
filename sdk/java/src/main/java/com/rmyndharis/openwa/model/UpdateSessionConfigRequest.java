@@ -34,7 +34,10 @@ public record UpdateSessionConfigRequest(
         private boolean clearMaxReconnectAttempts;
         private boolean clearReconnectBaseDelay;
 
-        /** Auto-reject incoming calls. */
+        /**
+         * Auto-reject incoming calls. Baileys only: whatsapp-web.js stores the flag but cannot reject a
+         * call, so calls keep ringing there.
+         */
         public Builder autoRejectCalls(Boolean v) {
             this.autoRejectCalls = v;
             return this;

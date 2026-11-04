@@ -140,3 +140,236 @@ test('a session that became ready closes the modal without a request', async () 
   assert.equal(outcome.pollCalls, 0);
   assert.equal(outcome.qrData, null);
 });
+
+interface QrReplyPlan {
+  path: string;
+  answer: Response | Promise<Response>;
+  method?: string;
+}
+
+function qrReply(code: string): Response {
+  return new Response(JSON.stringify({ qrCode: code, status: 'qr_ready' }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function pendingQrReply(): { promise: Promise<Response>; resolve: (reply: Response) => void } {
+  let resolve!: (reply: Response) => void;
+  const promise = new Promise<Response>(accept => {
+    resolve = accept;
+  });
+  return { promise, resolve };
+}
+
+function planQrReplies(...plans: QrReplyPlan[]): void {
+  mock.method(globalThis, 'fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+    const plan = plans.shift();
+    assert.ok(plan, `No response planned for ${String(input)}`);
+    assert.equal(new URL(String(input), 'http://localhost').pathname, plan.path);
+    assert.equal(init?.method ?? 'GET', plan.method ?? 'GET');
+    return Promise.resolve(plan.answer);
+  });
+}
+
+const settleQrReply = async () => {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  await new Promise<void>(resolve => setImmediate(resolve));
+};
+
+function renderQrVisit() {
+  mock.timers.enable({ apis: ['setInterval'] });
+  const sessions = [session, { ...session, id: 's2', name: 'second' }];
+  return rtl.renderHook(() =>
+    useSessionPairing({
+      sessions,
+      sessionsRef: { current: sessions },
+      reloadSessions: async () => sessions,
+    }),
+  );
+}
+
+test('a QR reply from an earlier visit cannot replace the reopened session code', async () => {
+  const old = pendingQrReply(),
+    current = pendingQrReply();
+  planQrReplies(
+    { path: '/api/sessions/s1/qr', answer: old.promise },
+    { path: '/api/sessions/s1/qr', answer: current.promise },
+  );
+  const { result } = renderQrVisit();
+  let first!: Promise<void>, second!: Promise<void>;
+  await rtl.act(async () => {
+    first = result.current.handleShowQR('s1');
+    await settleQrReply();
+  });
+  rtl.act(() => result.current.handleCloseQRModal());
+  await rtl.act(async () => {
+    second = result.current.handleShowQR('s1');
+    await settleQrReply();
+  });
+  await rtl.act(async () => {
+    current.resolve(qrReply('CURRENT'));
+    await second;
+  });
+  assert.equal(result.current.qrData?.qrCode, 'CURRENT');
+  await rtl.act(async () => {
+    old.resolve(qrReply('RETIRED'));
+    await first;
+  });
+  assert.equal(result.current.qrData?.qrCode, 'CURRENT');
+});
+
+test('a newer QR push is kept when an older GET answers', async () => {
+  const old = pendingQrReply();
+  planQrReplies({ path: '/api/sessions/s1/qr', answer: old.promise });
+  const { result } = renderQrVisit();
+  let opening!: Promise<void>;
+  await rtl.act(async () => {
+    opening = result.current.handleShowQR('s1');
+    await settleQrReply();
+  });
+  rtl.act(() => result.current.applyQrPush({ sessionId: 's1', qrCode: 'PUSH' }));
+  await rtl.act(async () => {
+    old.resolve(qrReply('GET'));
+    await opening;
+  });
+  assert.equal(result.current.qrData?.qrCode, 'PUSH');
+});
+
+for (const status of [200, 404]) {
+  test(`an earlier poll status ${status} cannot close a reopened session modal`, async () => {
+    const old = pendingQrReply();
+    const temporaryFailure = new Response(JSON.stringify({ message: 'Temporary failure' }), { status: 503 });
+    planQrReplies(
+      { path: '/api/sessions/s1/qr', answer: qrReply('FIRST') },
+      { path: '/api/sessions/s1/qr', answer: temporaryFailure },
+      { path: '/api/sessions/s1', answer: old.promise },
+      { path: '/api/sessions/s1/qr', answer: qrReply('REOPENED') },
+    );
+    const { result } = renderQrVisit();
+    await rtl.act(async () => {
+      await result.current.handleShowQR('s1');
+    });
+    await rtl.act(async () => {
+      mock.timers.tick(5000);
+      await settleQrReply();
+    });
+    rtl.act(() => result.current.handleCloseQRModal());
+    await rtl.act(async () => {
+      await result.current.handleShowQR('s1');
+    });
+    await rtl.act(async () => {
+      old.resolve(
+        new Response(JSON.stringify(status === 200 ? { ...session, status: 'failed' } : { message: 'Gone' }), {
+          status,
+        }),
+      );
+      await settleQrReply();
+    });
+    assert.equal(result.current.qrData?.qrCode, 'REOPENED');
+  });
+}
+
+for (const firstToAnswer of ['older', 'newer']) {
+  test(`concurrent QR reads keep the latest answer when ${firstToAnswer} resolves first`, async () => {
+    const older = pendingQrReply(),
+      newer = pendingQrReply();
+    planQrReplies(
+      { path: '/api/sessions/s1/qr', answer: older.promise },
+      { path: '/api/sessions/s1/qr', answer: newer.promise },
+    );
+    const { result } = renderQrVisit();
+    let opening!: Promise<void>;
+    await rtl.act(async () => {
+      opening = result.current.handleShowQR('s1');
+      await settleQrReply();
+    });
+    await rtl.act(async () => {
+      mock.timers.tick(5000);
+      await settleQrReply();
+    });
+    await rtl.act(async () => {
+      if (firstToAnswer === 'older') older.resolve(qrReply('OLDER'));
+      else newer.resolve(qrReply('NEWER'));
+      await settleQrReply();
+    });
+    await rtl.act(async () => {
+      if (firstToAnswer === 'older') newer.resolve(qrReply('NEWER'));
+      else older.resolve(qrReply('OLDER'));
+      await opening;
+      await settleQrReply();
+    });
+    assert.equal(result.current.qrData?.qrCode, 'NEWER');
+  });
+}
+
+test('an old QR read cannot change a modal opened for another session', async () => {
+  const old = pendingQrReply();
+  planQrReplies(
+    { path: '/api/sessions/s1/qr', answer: old.promise },
+    { path: '/api/sessions/s2/qr', answer: qrReply('SECOND') },
+  );
+  const { result } = renderQrVisit();
+  let first!: Promise<void>;
+  await rtl.act(async () => {
+    first = result.current.handleShowQR('s1');
+    await settleQrReply();
+  });
+  rtl.act(() => result.current.handleCloseQRModal());
+  await rtl.act(async () => {
+    await result.current.handleShowQR('s2');
+  });
+  await rtl.act(async () => {
+    old.resolve(qrReply('FIRST'));
+    await first;
+  });
+  assert.equal(result.current.qrData?.sessionId, 's2');
+  assert.equal(result.current.qrData?.qrCode, 'SECOND');
+});
+
+test('phone pairing keeps its visit generation when a QR push arrives', async () => {
+  const old = pendingQrReply(),
+    current = pendingQrReply();
+  planQrReplies(
+    { path: '/api/sessions/s1/qr', answer: qrReply('FIRST') },
+    { path: '/api/sessions/s1/pairing-code', method: 'POST', answer: old.promise },
+    { path: '/api/sessions/s1/qr', answer: qrReply('SECOND') },
+    { path: '/api/sessions/s1/pairing-code', method: 'POST', answer: current.promise },
+  );
+  const { result } = renderQrVisit();
+  await rtl.act(async () => {
+    await result.current.handleShowQR('s1');
+  });
+  rtl.act(() => {
+    result.current.selectPairingTab(true);
+    result.current.setPhoneNumber('15550000001');
+  });
+  let first!: Promise<void>, second!: Promise<void>;
+  await rtl.act(async () => {
+    first = result.current.handleGeneratePairingCode();
+    await settleQrReply();
+  });
+  rtl.act(() => result.current.handleCloseQRModal());
+  await rtl.act(async () => {
+    await result.current.handleShowQR('s1');
+  });
+  rtl.act(() => {
+    result.current.selectPairingTab(true);
+    result.current.setPhoneNumber('15550000002');
+  });
+  await rtl.act(async () => {
+    second = result.current.handleGeneratePairingCode();
+    await settleQrReply();
+  });
+  rtl.act(() => result.current.applyQrPush({ sessionId: 's1', qrCode: 'NEW-QR' }));
+  await rtl.act(async () => {
+    current.resolve(new Response(JSON.stringify({ pairingCode: 'NEW-PAIR', status: 'qr_ready' })));
+    await second;
+  });
+  await rtl.act(async () => {
+    old.resolve(new Response(JSON.stringify({ pairingCode: 'OLD-PAIR', status: 'qr_ready' })));
+    await first;
+  });
+  assert.equal(result.current.pairingCode, 'NEW-PAIR');
+  assert.equal(result.current.requestingPairing, false);
+});

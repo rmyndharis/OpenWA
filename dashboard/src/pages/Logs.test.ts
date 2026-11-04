@@ -61,6 +61,8 @@ let exportTotal: number | null = null;
 let exportThrottledFrom: number | null = null;
 // When set, the export walks a 300-row table that gains a newest row after its first page is read.
 let exportGrowsMidWalk = false;
+// When set, the export's page walk sees exactly these rows.
+let exportRows: AuditLog[] | null = null;
 // When set, the on-screen list reports this many rows in total, so the page has a pager.
 let listTotal: number | null = null;
 // When set, a request for the first on-screen page waits for it before answering.
@@ -94,11 +96,14 @@ function installFetchStub(): void {
       const shifted = [exportRow(-1), ...[...Array(300).keys()].map(exportRow)];
       return Promise.resolve(jsonResponse({ data: shifted.slice(offset), total: 301 }));
     }
+    if (exportRows && url.includes('limit=200')) {
+      return Promise.resolve(jsonResponse({ data: exportRows, total: exportRows.length }));
+    }
     if (listFailure && !url.includes('limit=200')) {
       return Promise.resolve(new Response(JSON.stringify({ message: 'Bad Gateway' }), { status: listFailure }));
     }
-    // The gateway holds no error rows, so the server-side severity filter matches nothing.
-    if (new URL(url, 'http://localhost').searchParams.get('severity') === 'error') {
+    // No row of this fixture is a warning, so the server-side severity filter for it matches nothing.
+    if (new URL(url, 'http://localhost').searchParams.get('severity') === 'warn') {
       return Promise.resolve(jsonResponse({ data: [], total: 0 }));
     }
     const reply = jsonResponse({ data: LOGS, total: listTotal ?? LOGS.length });
@@ -281,6 +286,27 @@ test('a row written while the export walks the pages is not exported twice', asy
   }
 });
 
+// Rows carry request paths and error messages a client chose, and a spreadsheet runs a cell that starts with = + - or @.
+test('an exported cell that starts like a formula is neutralized', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { downloads, restore } = recordDownloads();
+  exportRows = [
+    { ...LOG_FAILED_SEND, id: 'row-formula', path: '=HYPERLINK("https://example.test","x")', errorMessage: '+cmd' },
+  ];
+  try {
+    renderLogs();
+    await screen.findByText('infra.restart');
+    fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+    await waitFor(() => assert.equal(downloads.length, 1));
+    const csv = await downloads[0].text();
+    assert.ok(csv.includes(`"'=HYPERLINK(""https://example.test"",""x"")"`), csv);
+    assert.ok(csv.endsWith(",'+cmd"), csv);
+  } finally {
+    exportRows = null;
+    restore();
+  }
+});
+
 test('the table grid declares one column track per rendered cell', async () => {
   const container = renderLogs();
   await rtl.screen.findByText('infra.restart');
@@ -322,10 +348,21 @@ test('a severity filter that matches nothing says no logs exist, not that this p
   const { screen, fireEvent } = rtl;
   renderLogs();
   await screen.findByText('infra.restart');
-  fireEvent.click(screen.getByRole('button', { name: 'All Severities' }));
-  fireEvent.click(screen.getByRole('option', { name: 'Error' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Severity, All Severities' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Warning' }));
   await screen.findByText('No logs match these filters. Adjust the severity filter to widen the search.');
   assert.ok(screen.getByRole('heading', { name: 'No logs found' }));
+});
+
+// The gateway writes audit rows as info or warn only, failures included, so an Error filter could only ever show an
+// empty table, and an admin looking for failures would read it as nothing having failed.
+test('the severity filter offers only the severities the gateway writes', async () => {
+  const { screen, fireEvent } = rtl;
+  renderLogs();
+  await screen.findByText('infra.restart');
+  fireEvent.click(screen.getByRole('button', { name: 'Severity, All Severities' }));
+  const offered = screen.getAllByRole('option').map(option => option.textContent);
+  assert.deepEqual(offered, ['All Severities', 'Info', 'Warning']);
 });
 
 test('the severity badge shows the translated severity', async () => {
@@ -333,6 +370,18 @@ test('the severity badge shows the translated severity', async () => {
   await rtl.screen.findByText('infra.restart');
   const badges = [...container.querySelectorAll('.severity-badge')].map(badge => badge.textContent);
   assert.deepEqual(badges, ['Info', 'Error']);
+});
+
+// A row's message is the only place some actions name what happened, such as the number and ids of a
+// phone_second_lid_reported row, so it is shown with the action rather than only searched and exported.
+test('a row shows its message under its action, and a row without one shows none', async () => {
+  const container = renderLogs();
+  const message = await rtl.screen.findByText('SESSION_STOP_INCOMPLETE');
+  assert.equal(message.closest('.action')?.firstChild?.textContent, 'session.stop');
+  const nullRow = [...container.querySelectorAll('.logs-table .action')].find(cell =>
+    cell.textContent?.startsWith('infra.restart'),
+  );
+  assert.equal(nullRow?.textContent, 'infra.restart');
 });
 
 test('the search matches errorMessage as well as action, whatever the case', async () => {

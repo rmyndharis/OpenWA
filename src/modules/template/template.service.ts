@@ -98,18 +98,21 @@ export class TemplateService {
   async update(sessionId: string, id: string, dto: UpdateTemplateDto): Promise<Template> {
     const template = await this.findOne(sessionId, id);
 
-    if (dto.name !== undefined) template.name = dto.name;
-    if (dto.body !== undefined) template.body = dto.body;
-    if (dto.header !== undefined) template.header = dto.header;
-    if (dto.footer !== undefined) template.footer = dto.footer;
+    const patch: Partial<Pick<Template, 'name' | 'body' | 'header' | 'footer'>> = {};
+    if (dto.name !== undefined) patch.name = dto.name;
+    if (dto.body !== undefined) patch.body = dto.body;
+    if (dto.header !== undefined) patch.header = dto.header;
+    if (dto.footer !== undefined) patch.footer = dto.footer;
+    if (Object.keys(patch).length === 0) return template;
 
     try {
-      // No transaction of its own: on SQLite's single shared connection the rollback of the unique
-      // violation handled below would also discard what other callers wrote while it was open.
-      return await this.templateRepository.save(template, { transaction: false });
+      // Update only supplied fields, and never reinsert a concurrently deleted template.
+      const result = await this.templateRepository.update({ id, sessionId }, patch);
+      if (!result.affected) throw new NotFoundException(`Template with id '${id}' not found`);
+      return await this.findOne(sessionId, id);
     } catch (err) {
       if (isUniqueViolation(err)) {
-        throw new ConflictException(`A template named '${template.name}' already exists for this session`);
+        throw new ConflictException(`A template named '${dto.name ?? template.name}' already exists for this session`);
       }
       throw err;
     }

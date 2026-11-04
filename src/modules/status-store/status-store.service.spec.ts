@@ -81,6 +81,73 @@ describe('StatusStoreService (ingest / list / getMedia)', () => {
     expect(stored).toEqual(['dup', 'other']);
   });
 
+  // Left open, the scope an ingest captures for itself keeps its session's write state from ever being released.
+  it('closes the scope it captures for itself, for a new status and for one already stored', async () => {
+    const closes: jest.SpyInstance[] = [];
+    const capture = service.captureWrites.bind(service);
+    const spy = jest.spyOn(service, 'captureWrites').mockImplementation(sessionId => {
+      const scope = capture(sessionId);
+      closes.push(jest.spyOn(scope, 'close'));
+      return scope;
+    });
+    const status = {
+      waStatusId: 'scope-close',
+      contactJid: '628111@c.us',
+      type: 'text' as const,
+      caption: 'hi',
+      postedAt: Date.now(),
+    };
+    try {
+      expect((await service.ingest('sess-scope', status)).created).toBe(true);
+      expect((await service.ingest('sess-scope', status)).created).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(closes).toHaveLength(2);
+    for (const close of closes) expect(close).toHaveBeenCalled();
+  });
+
+  it('does not publish media or recreate a row removed while storage is pending', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const put = storageService.putFile.bind(storageService);
+    let key = '';
+    const spy = jest.spyOn(storageService, 'putFile').mockImplementationOnce(async (file, bytes) => {
+      key = file;
+      await put(file, bytes);
+      entered();
+      await gate;
+    });
+    const pending = service.ingest('removed-status', {
+      waStatusId: 'pending-media',
+      contactJid: '628111@c.us',
+      type: 'image',
+      postedAt: Date.now(),
+      media: { mimetype: 'image/png', data: 'dGlueQ==', sizeBytes: 4 },
+    });
+    try {
+      await ready;
+      await repository.delete({ sessionId: 'removed-status' });
+    } finally {
+      release();
+    }
+    const result = await pending;
+    spy.mockRestore();
+    expect(result.created).toBe(false);
+    expect(result.row.mediaOmitted).toBe(true);
+    expect(result.row.mediaPath).toBeUndefined();
+    expect(await repository.countBy({ sessionId: 'removed-status' })).toBe(0);
+    expect(await service.getMedia('removed-status', 'pending-media')).toBeNull();
+    await expect(storageService.getFile(key)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('ingest writes a text row with expiresAt = postedAt + 24h, flagged as created', async () => {
     const postedAt = Date.now();
     const { row, created } = await service.ingest('sess', {
@@ -564,8 +631,8 @@ describe('StatusStoreService contact identity (read-time lid resolution)', () =>
     expect(ids).toEqual(['own-lid', 'own-phone']);
   });
 
-  it('listByContact forward-resolves a lid the store only holds in its table, not its cache', async () => {
-    const table = [{ lid: '111', phone: '628111' }];
+  it.each([true, false])('listByContact checks table origin with an empty cache (reported=%s)', async isReported => {
+    const table = [{ lid: '111', phone: '628111', isReported }];
     const store = new LidMappingStoreService({
       find: () => Promise.resolve([]),
       findOne: ({ where }: { where: { lid: string } }) => Promise.resolve(table.find(r => r.lid === where.lid) ?? null),
@@ -574,7 +641,7 @@ describe('StatusStoreService contact identity (read-time lid resolution)', () =>
     await svc.ingest('sess', { waStatusId: 'l6', contactJid: '628111@c.us', type: 'text', postedAt: Date.now() });
 
     const out = await svc.listByContact('sess', '111@lid');
-    expect(out).toHaveLength(1);
+    expect(out).toHaveLength(isReported ? 1 : 0);
   });
 
   it('never resolves phone-shaped JIDs through the lid map (digit-collision guard)', async () => {

@@ -36,7 +36,14 @@ export class SearchHitDto {
   @ApiProperty({ description: 'Sender id.', example: '628123456789@c.us' })
   from!: string;
 
-  @ApiPropertyOptional({ description: 'Relevance score, when the provider reports one.', example: 0.87 })
+  @ApiPropertyOptional({
+    description:
+      'Relevance score, when the provider reports one. Hits come back most relevant first, while the direction of ' +
+      "the value is the backend's: the built-in match=word score is FTS5's bm25 rank on SQLite (negative, lower is " +
+      'more relevant) and ts_rank on PostgreSQL (higher is more relevant); a match=contains score is higher for a ' +
+      'better match on both.',
+    example: 0.87,
+  })
   score?: number;
 }
 

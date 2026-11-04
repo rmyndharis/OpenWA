@@ -1,6 +1,7 @@
 .global-search {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   width: 100%;
@@ -20,7 +21,7 @@
 
 .global-search-input:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 2px var(--primary-soft);
 }
 
@@ -68,16 +69,25 @@
   background: transparent;
   border: 0;
   border-bottom: 1px solid var(--border);
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   font: inherit;
   color: var(--text-primary);
 }
 
-.global-search-hit:hover,
-.global-search-hit:focus-visible {
+.global-search-hit:hover {
   background: var(--bg-light);
-  outline: none;
+}
+
+.global-search-hit:focus-visible {
+  background: var(--primary-soft);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* The brand tint under focus is darker than the hover fill, and the muted meta line is 4.35:1 on it. */
+.global-search-hit:focus-visible .global-search-hit-meta {
+  color: var(--text-secondary);
 }
 
 .global-search-hit:last-child {
@@ -102,7 +112,8 @@
 
 .global-search-hit-snippet mark {
   background: var(--warning);
-  color: inherit;
+  /* The amber is a light fill in both themes: inherited light text was 1.96:1 on it in dark. */
+  color: #0f172a;
   border-radius: 2px;
   padding: 0 1px;
 }

@@ -23,9 +23,14 @@ export type HookEvent =
   // Webhook lifecycle
   | 'webhook:before'
   | 'webhook:queued' // After webhook job added to queue (queue mode only)
-  | 'webhook:delivered' // After webhook successfully delivered (direct or queue)
-  | 'webhook:after' // After webhook attempt (direct mode only, deprecated for queue)
-  | 'webhook:error' // After webhook delivery failed (all retries exhausted)
+  // After a webhook POST succeeded: a queued job, the direct path, or the direct fallback after a failed queue add.
+  | 'webhook:delivered'
+  // Legacy: only after a successful direct or fallback POST, always with `success: true`; never from the queue.
+  | 'webhook:after'
+  // A dispatch that did not deliver: retries exhausted, a job that stalled out, a dispatch shed or refused before
+  // sending, or a failed queue add. Not always final: a failed queue add is followed by a direct fallback, and a
+  // shed dispatch stays in the outbox for a later replay (under a new deliveryId); either can end in webhook:delivered.
+  | 'webhook:error'
   // Ingress (inbound provider webhook -> plugin) lifecycle
   | 'ingress:error'; // After an ingress dispatch failed (all retries exhausted)
 

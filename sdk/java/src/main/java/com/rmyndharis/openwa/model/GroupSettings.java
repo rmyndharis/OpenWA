@@ -2,10 +2,11 @@ package com.rmyndharis.openwa.model;
 
 /**
  * Group settings — {@code announce} (only admins can send messages), {@code locked} (only admins
- * can edit group info) and {@code ephemeralSeconds} (disappearing-message timer). Every field is
- * optional: unset fields are omitted from the serialized body, so an update only touches the
- * settings that were set. Setting {@code ephemeralSeconds} returns HTTP 501 on the whatsapp-web.js
- * engine.
+ * can edit group info), {@code ephemeralSeconds} (disappearing-message timer) and
+ * {@code memberAddMode} ({@code "all"}: any member may add participants, {@code "admins"}: only
+ * admins). Every field is optional: unset fields are omitted from the serialized body, so an update
+ * only touches the settings that were set. Setting {@code ephemeralSeconds} returns HTTP 501 on the
+ * whatsapp-web.js engine.
  */
 public record GroupSettings(Boolean announce, Boolean locked, Integer ephemeralSeconds, String memberAddMode) {
     /**

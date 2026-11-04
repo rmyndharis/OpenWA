@@ -38,6 +38,8 @@
     "optional": "opcional",
     "fieldTooLong": "Limitado a {{max}} caracteres (ahora {{count}}).",
     "language": "Idioma",
+    "changeLanguage": "Cambiar idioma",
+    "joinedName": "{{first}}, {{second}}",
     "back": "Atrás",
     "next": "Siguiente",
     "previous": "Anterior",
@@ -175,6 +177,16 @@
       "backgroundColor": "Color de fondo",
       "font": "Fuente",
       "fontDefault": "Predeterminada",
+      "fonts": {
+        "system": "Sistema",
+        "systemText": "Texto del sistema",
+        "script": "Manuscrita",
+        "bold": "Negrita",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "o",
       "post": "Publicar",
       "posted": "Estado publicado",
@@ -198,7 +210,8 @@
       "delete": "Error al eliminar el mensaje",
       "clickButton": "Error al pulsar el botón",
       "fileTooLarge": "El archivo es demasiado grande (máx. 18 MB)",
-      "searchHitSessionNotReady": "La sesión de este mensaje no está conectada"
+      "searchHitSessionNotReady": "La sesión de este mensaje no está conectada",
+      "searchHitChatNotListed": "No se encontró el chat de este mensaje en la lista"
     },
     "loadMessagesError": "No se pudieron cargar los mensajes. Revisa los registros del servidor.",
     "messageStatus": {
@@ -208,6 +221,9 @@
       "read": "Leído",
       "failed": "Fallido"
     },
+    "today": "Hoy",
+    "switchSession": "Cambiar sesión",
+    "searchMessages": "Buscar mensajes",
     "clearSearch": "Borrar búsqueda",
     "filters": {
       "label": "Filtrar chats",
@@ -218,11 +234,13 @@
       "unknown": "Desconocidos"
     },
     "noFilterResults": "Ningún chat coincide con este filtro",
+    "contactInfo": "Info. del contacto",
     "moreActions": "Más acciones",
     "copyChatId": "Copiar ID del chat",
     "chatIdCopied": "ID del chat copiado",
     "copyFailed": "No se pudo copiar al portapapeles",
     "closeChat": "Cerrar chat",
+    "phone": "Número de teléfono",
     "chatId": "ID del chat",
     "newChat": {
       "title": "Nuevo chat",
@@ -247,6 +265,12 @@
       "created": "Grupo «{{name}}» creado",
       "createFailed": "No se pudo crear el grupo",
       "removeParticipant": "Quitar a {{name}}"
+    },
+    "sessionPicker": {
+      "searchPlaceholder": "Buscar sesiones...",
+      "noMatch": "Ninguna sesión coincide",
+      "addTitle": "Vincular otro número",
+      "addHint": "Crea una sesión y vincúlala con un código QR"
     },
     "group": {
       "info": "Info. del grupo",
@@ -583,6 +607,7 @@
     "session": "Sesión",
     "events": "Eventos",
     "noEvents": "Selecciona al menos un evento.",
+    "urlInvalid": "Usa una dirección completa con http:// o https://, por ejemplo https://example.com/webhook.",
     "available": "Eventos disponibles",
     "saveChanges": "Guardar cambios",
     "filters": {
@@ -594,6 +619,7 @@
       "badge_many": "{{count}} filtros",
       "addCondition": "Añadir condición",
       "removeCondition": "Eliminar condición",
+      "removeValue": "Quitar {{value}}",
       "caseSensitive": "Distinguir mayúsculas",
       "contactPlaceholder": "Número o ID de WhatsApp...",
       "textPlaceholder": "Texto a buscar...",
@@ -643,6 +669,7 @@
       "updateFailed": "Error al actualizar el webhook: {{message}}",
       "testOk": "Prueba de webhook exitosa. Estado: {{status}}",
       "testFailed": "Prueba de webhook fallida: {{message}}",
+      "testStatus": "el receptor respondió HTTP {{status}}",
       "testError": "Error al probar el webhook: {{message}}"
     },
     "actions": {
@@ -667,6 +694,7 @@
       "session.restriction": "Cuando WhatsApp restringe la cuenta o levanta una restricción",
       "presence.update": "Cuando un chat suscrito se conecta, escribe o se desconecta",
       "event.response": "Cuando un invitado responde a un evento de WhatsApp (asistirá, no asistirá, quizás)",
+      "poll.vote": "Cuando alguien marca o desmarca opciones de una encuesta (whatsapp-web.js)",
       "group.join": "Cuando participantes se unen a un grupo o son añadidos",
       "group.leave": "Cuando participantes salen de un grupo o son eliminados",
       "group.update": "Cuando cambian el nombre, la descripción o los ajustes de un grupo",
@@ -676,7 +704,7 @@
       "call.rejected": "Cuando se rechaza una llamada",
       "call.missed": "Cuando una llamada no se contesta",
       "status.received": "Cuando un contacto publica un estado",
-      "all": "Todos los eventos"
+      "all": "Todos los eventos excepto message.receipt, que debe indicarse de forma explícita"
     },
     "auth": {
       "title": "Autenticación de entrega",
@@ -713,6 +741,7 @@
     "modalTitle": "Crear clave API",
     "createdTitle": "Clave API creada",
     "createdHint": "Copia esta clave ahora. No podrás verla de nuevo.",
+    "copyKey": "Copiar clave",
     "namePlaceholder": "ej., Clave de producción",
     "nameTooShort": "Usa al menos 3 caracteres.",
     "rolesTitle": "Referencia de roles",
@@ -790,6 +819,7 @@
     "chats": {
       "label": "Acceso a chats (opcional)",
       "hint": "Un chat por línea: un ID de grupo que termina en @g.us, un ID de contacto que termina en @c.us o @lid, o un número de teléfono. Déjalo vacío para todos los chats. Una clave restringida a chats solo puede usar las rutas abiertas a ese tipo de clave; su acceso por el WebSocket de eventos y MCP se limita a esos chats.",
+      "lidHint": "Una entrada @lid también admite el número de teléfono que tiene asignado ahora. Si ese número pasa a otra persona, esta clave puede llegar a ella: revisa la clave cuando un contacto cambie de número.",
       "invalid": "No es un ID de chat ni un número de teléfono: {{value}}",
       "tooMany": "Demasiados chats ({{count}}): una clave puede listar como máximo {{max}}."
     },
@@ -927,6 +957,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} enviados",
     "groupSendCancelled": "{{count}}, cancelados",
     "groupSendStopped": "{{count}}, detenido tras HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, detenido: la puerta de enlace no respondió",
     "response": {
       "timestamp": "Fecha/Hora",
       "messageId": "ID de mensaje",
@@ -937,6 +968,7 @@
     },
     "sendFailed": "Error al enviar el mensaje",
     "notOnWhatsApp": "Este número no está registrado en WhatsApp",
+    "tooLong": "Más de {{max}} dígitos no es un solo número de teléfono. Introduce un solo número.",
     "batch": {
       "status": {
         "pending": "Pendiente",
@@ -1020,9 +1052,10 @@
     "single": {
       "title": "Verificar una cuenta",
       "phoneLabel": "Número de teléfono",
-      "phonePlaceholder": "ej., 919876543210 o 6281234567890 (con código de país)",
+      "phonePlaceholder": "ej., 919876543210 o 6281234567890",
       "check": "Verificar",
       "checking": "Verificando...",
+      "tooLong": "Más de {{max}} dígitos no es un solo número de teléfono. Comprueba un número cada vez.",
       "autoPrefix": "Añadir automáticamente el prefijo <strong>+91</strong> a los números de 10 dígitos (los de 12 dígitos se mantienen tal cual)",
       "silent": "<strong>Totalmente silencioso:</strong> esta consulta se hace directamente en el registro de cuentas de WhatsApp. El contacto no recibe ninguna notificación, sonido ni mensaje.",
       "resultTitle": "Resultado de la verificación",
@@ -1051,7 +1084,7 @@
       "copy": "Copiar",
       "copied": "Copiado",
       "checkedAt": "Hora de verificación",
-      "openTester": "Abrir en el probador de mensajes"
+      "openTester": "Ir al probador de mensajes"
     },
     "recent": {
       "title": "Verificaciones recientes",
@@ -1086,9 +1119,11 @@
       "tenDigitAdded": "({{ten}} de diez dígitos → +91 añadido)",
       "tenDigitAddedPreserved": "({{ten}} de diez dígitos → +91 añadido, {{twelve}} de doce dígitos sin cambios)",
       "tooMany": "Demasiados números: {{parsed}} detectados, como máximo {{max}} por lote. Quita {{excess}} para iniciar.",
+      "tooLong": "Omitidos, más de {{max}} dígitos (no es un solo número): {{count}}. Pon cada número en su propia línea.",
       "start": "Iniciar verificación por lotes",
       "stop": "Detener verificación",
       "export": "Exportar resultados (CSV)",
+      "exportHint": "El archivo contiene todos los dígitos. Una hoja de cálculo puede mostrar los números largos como 9.19612E+11 o quitar un cero inicial; importe el archivo y defina la columna Phone Number como Texto para conservarlos tal como están.",
       "stoppedTitle": "Lote detenido",
       "checked": "Verificados",
       "remaining": "Restantes",
@@ -1102,6 +1137,7 @@
       "partial": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} número no se envió. Inténtalo de nuevo más tarde.",
       "partial_other": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} números no se enviaron. Inténtalo de nuevo más tarde.",
       "partial_many": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} números no se enviaron. Inténtalo de nuevo más tarde.",
+      "noAnswer": "La puerta de enlace no respondió. La verificación se detuvo en el número {{attempted}} de {{total}}. Inténtalo de nuevo más tarde.",
       "last": "{{reason}} (HTTP {{status}}). Falló la última consulta. Inténtalo de nuevo más tarde."
     },
     "toast": {
@@ -1207,6 +1243,7 @@
       "successTitle": "✅ Servidor listo",
       "errorTitle": "❌ Error al reiniciar",
       "idleDesc": "La configuración se ha guardado en <code>.env.generated</code>.<br/>Es necesario reiniciar el servidor para aplicar los cambios.",
+      "stopsContainers": "El reinicio también detendrá estos contenedores integrados, que conservan sus datos y no se eliminan:",
       "later": "Reiniciar más tarde",
       "now": "Reiniciar ahora",
       "restartingMsg": "Reiniciando servidor... {{count}}s",
@@ -1221,7 +1258,10 @@
       "saveFailed": "Error al guardar"
     },
     "envPinNote": "Fijado por la variable de entorno {{name}}: este es el valor en ejecución; los cambios del panel no se aplicarán hasta que esa variable se elimine.",
+    "envPinFlagNote": "Fijado por la variable de entorno {{name}}: mientras valga true y este servicio esté en uso, el contenedor integrado se inicia en cada arranque del servidor, aunque este interruptor esté desactivado.",
     "pendingRestartNote": "Guardado, pero aún no aplicado: reinicia el servidor para que este cambio surta efecto.",
+    "pendingBuiltInNote": "Guardado, pero aún no aplicado: el servidor usa ahora un servicio externo y un reinicio lo cambiará al contenedor integrado.",
+    "pendingExternalNote": "Guardado, pero aún no aplicado: el servidor usa ahora el contenedor integrado y un reinicio lo cambiará a un servicio externo.",
     "migration": {
       "title": "Atención: esto cambia el backend de datos",
       "dbWarning": "La nueva base de datos comienza vacía. Descarga ahora una copia de seguridad de tus datos actuales (mientras sigues en la base de datos anterior) y luego restáurala después del reinicio.",
@@ -1312,6 +1352,7 @@
       "installed": "Plugin instalado",
       "installFailed": "Error en la instalación",
       "uninstalled": "Plugin desinstalado",
+      "uninstalledWithWarning": "Plugin desinstalado, con una advertencia",
       "uninstallFailed": "Error al desinstalar",
       "enableFailedTitle": "Error al activar",
       "disableFailedTitle": "Error al desactivar",

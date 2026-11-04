@@ -748,6 +748,39 @@ describe('ChatStateStoreService', () => {
       expect([...repo.rows.keys()]).toEqual([KEY('s', PHONE)]);
     });
 
+    it('resets the twin rows under a deletion mark, which outlives a restart', async () => {
+      const repo = makeRepo([
+        { sessionId: 's', chatId: LID, pinned: true, observed: 'pinned', updatedAt: new Date(1000) },
+      ]);
+      const svc = svcWith(repo);
+      await svc.fold('s', PHONE, [LID], { muteEndTime: null, archived: false, pinned: false, deletedAt: 5000 });
+      expect([...repo.rows.keys()]).toEqual([KEY('s', PHONE)]);
+      const restarted = svcWith(repo);
+      await restarted.reload();
+      expect(restarted.get('s', PHONE)).toMatchObject({ pinned: false, deletedAt: 5000 });
+    });
+
+    it('keeps the mark of an older twin row that a newer one never saw, on a read and a fold', async () => {
+      const marked = 'muteEndTime,archived,pinned,deletedAt';
+      const repo = makeRepo([
+        { sessionId: 's', chatId: PHONE, pinned: true, observed: 'pinned', updatedAt: new Date(2000) },
+        { sessionId: 's', chatId: LID, deletedAt: 5000, observed: marked, updatedAt: new Date(1000) },
+      ]);
+      const svc = svcWith(repo);
+      await svc.reload();
+      expect(mergeTwinStates([svc.get('s', PHONE)!, svc.get('s', LID)!])).toMatchObject({
+        pinned: true,
+        deletedAt: 5000,
+      });
+      await svc.fold('s', PHONE, [LID], { archived: true });
+      expect([...repo.rows.keys()]).toEqual([KEY('s', PHONE)]);
+      expect(repo.rows.get(KEY('s', PHONE))).toMatchObject({ pinned: true, archived: true, deletedAt: 5000 });
+    });
+
+    it('reads a row written before the mark was kept as having seen no deletion', () => {
+      expect(mergeTwinStates([{ muteEndTime: null, archived: true, pinned: false }])?.observed).toEqual(['archived']);
+    });
+
     it('neither a listing nor a later change brings back the older mute of a cached lid row', async () => {
       const repo = coldNewerPhone();
       const svc = svcWith(repo);
@@ -766,6 +799,106 @@ describe('ChatStateStoreService', () => {
       expect([...repo.rows.keys()]).toEqual([KEY('s', PHONE)]);
       expect(repo.rows.get(KEY('s', PHONE))).toMatchObject({ muteEndTime: NEW_END, archived: true });
       expect(store.listChats()[0]).toMatchObject({ muteExpiration: NEW_END, archived: true });
+    });
+
+    // Only Date is faked; the promises and setImmediate the store and the fake repo use still run.
+    const fakeDate = (now: number) =>
+      jest.useFakeTimers({
+        now,
+        doNotFake: [
+          'hrtime',
+          'nextTick',
+          'performance',
+          'queueMicrotask',
+          'requestAnimationFrame',
+          'cancelAnimationFrame',
+          'requestIdleCallback',
+          'cancelIdleCallback',
+          'setImmediate',
+          'clearImmediate',
+          'setInterval',
+          'clearInterval',
+          'setTimeout',
+          'clearTimeout',
+        ],
+      });
+
+    describe('two writes in one millisecond', () => {
+      // Date stands still.
+      beforeEach(() => fakeDate(10_000));
+      afterEach(() => jest.useRealTimers());
+
+      it('ranks a pin of the twin written after a fold of the chat as the newer row', async () => {
+        const repo = makeRepo([
+          { sessionId: 's', chatId: PHONE, pinned: false, observed: 'pinned', updatedAt: new Date(1000) },
+        ]);
+        const svc = svcWith(repo);
+        await svc.fold('s', PHONE, [LID], { muteEndTime: 5000 });
+        await svc.remember('s', LID, { pinned: true });
+        expect(mergeTwinStates([svc.get('s', PHONE)!, svc.get('s', LID)!])).toMatchObject({
+          muteEndTime: 5000,
+          pinned: true,
+        });
+        const at = (chatId: string) => repo.rows.get(KEY('s', chatId))!.updatedAt.getTime();
+        expect(at(LID)).toBeGreaterThan(at(PHONE));
+      });
+
+      it('ranks a write made after a failed read as newer than the write before it', async () => {
+        const repo = makeRepo();
+        const svc = svcWith(repo);
+        await svc.remember('s', PHONE, { pinned: false });
+        repo.findOne.mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+        await svc.remember('s', LID, { pinned: true });
+        await svc.reload();
+        expect(mergeTwinStates([svc.get('s', PHONE)!, svc.get('s', LID)!])).toMatchObject({ pinned: true });
+      });
+    });
+
+    describe('a clock that steps back', () => {
+      const T = 1_800_000_000_000;
+      afterEach(() => jest.useRealTimers());
+
+      it('keeps a lead of under a minute, so the later write still ranks newer', async () => {
+        const repo = makeRepo();
+        const svc = svcWith(repo);
+        fakeDate(T + 59_000);
+        await svc.remember('s', PHONE, { pinned: false });
+        jest.setSystemTime(T); // the stamp is now as far ahead as a burst of writes could have run it
+        await svc.remember('s', LID, { pinned: true });
+        expect(repo.rows.get(KEY('s', LID))!.updatedAt.getTime()).toBe(T + 59_001);
+        expect(mergeTwinStates([svc.get('s', PHONE)!, svc.get('s', LID)!])).toMatchObject({ pinned: true });
+      });
+
+      it.each([
+        ['61 s', 61_000],
+        ['5 min', 5 * 60_000],
+        ['59 min', 59 * 60_000],
+      ])('follows the clock again after it steps back %s', async (_step, lead) => {
+        const repo = makeRepo();
+        const svc = svcWith(repo);
+        fakeDate(T + lead);
+        await svc.remember('s', PHONE, { pinned: false });
+        jest.setSystemTime(T);
+        await svc.remember('s', LID, { pinned: true });
+        expect(repo.rows.get(KEY('s', LID))!.updatedAt.getTime()).toBe(T);
+      });
+
+      it('follows the clock again after it steps back hours, so a twin written after a restart ranks newer', async () => {
+        const repo = makeRepo();
+        fakeDate(T + 7 * 3_600_000); // booted with the clock seven hours ahead
+        const first = svcWith(repo);
+        await first.remember('s', PHONE, { pinned: true });
+        jest.setSystemTime(T + 60_000); // set right, a minute on
+        await first.remember('s', PHONE, { pinned: false });
+        expect(repo.rows.get(KEY('s', PHONE))!.updatedAt.getTime()).toBe(T + 60_000);
+        jest.setSystemTime(T + 11 * 60_000);
+        const restarted = svcWith(repo);
+        await restarted.reload();
+        await restarted.remember('s', LID, { pinned: true });
+        expect(mergeTwinStates([restarted.get('s', PHONE)!, restarted.get('s', LID)!])).toMatchObject({
+          pinned: true,
+        });
+      });
     });
   });
 

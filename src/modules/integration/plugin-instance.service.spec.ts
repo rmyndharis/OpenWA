@@ -1,4 +1,6 @@
+import { ServiceUnavailableException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { FOREIGN_TRANSACTION_WAIT_MS } from '../../common/utils/shared-connection';
 import { PluginInstance } from './entities/plugin-instance.entity';
 import { ConversationMapping } from './entities/conversation-mapping.entity';
 import { ConversationMappingService } from './conversation-mapping.service';
@@ -114,6 +116,64 @@ describe('PluginInstanceService', () => {
 
     expect(updated?.config).toEqual({ apiToken: 'real-token', accountId: 2 });
   });
+
+  it('update withholds the stored secret from a PATCH that points the host key at another origin', async () => {
+    const schema = {
+      type: 'object',
+      properties: { baseUrl: { type: 'string' }, apiToken: { type: 'string', secret: true } },
+    } as PluginConfigSchema;
+    const net = { allowConfigHosts: ['baseUrl'] };
+    await service.create('chatwoot', 'acct1', {
+      config: { baseUrl: 'https://tenant.example', apiToken: 'real-token' },
+    });
+
+    const same = await service.update(
+      'chatwoot',
+      'acct1',
+      { config: { baseUrl: 'https://tenant.example/x', apiToken: '***' } },
+      schema,
+      { net },
+    );
+    expect(same?.config).toEqual({ baseUrl: 'https://tenant.example/x', apiToken: 'real-token' });
+
+    const moved = await service.update(
+      'chatwoot',
+      'acct1',
+      { config: { baseUrl: 'https://attacker.example', apiToken: '***' } },
+      schema,
+      { net },
+    );
+    expect(moved?.config).toEqual({ baseUrl: 'https://attacker.example' });
+  });
+
+  it('update judges a row that names no host against the host beneath it', async () => {
+    const schema = {
+      type: 'object',
+      properties: { baseUrl: { type: 'string' }, apiToken: { type: 'string', secret: true } },
+    } as PluginConfigSchema;
+    const layer = { net: { allowConfigHosts: ['baseUrl'] }, beneath: { baseUrl: 'https://base.example' } };
+    await service.create('chatwoot', 'acct1', { config: { apiToken: 'real-token' } });
+
+    const same = await service.update(
+      'chatwoot',
+      'acct1',
+      { config: { baseUrl: 'https://base.example/', apiToken: '***' } },
+      schema,
+      layer,
+    );
+    expect(same?.config).toEqual({ baseUrl: 'https://base.example/', apiToken: 'real-token' });
+  });
+
+  // UpdateInstanceDto lets a null config through validation, and a null config clears the row.
+  it('update still clears the config for a null config on a plugin with host keys', async () => {
+    const schema = { type: 'object', properties: { baseUrl: { type: 'string' } } } as PluginConfigSchema;
+    await service.create('chatwoot', 'acct1', { config: { baseUrl: 'https://tenant.example' } });
+
+    const cleared = await service.update('chatwoot', 'acct1', { config: null as never }, schema, {
+      net: { allowConfigHosts: ['baseUrl'] },
+    });
+    expect(cleared?.config).toEqual({});
+  });
 });
 
 describe('PluginInstanceService provisioning', () => {
@@ -203,6 +263,90 @@ describe('PluginInstanceService provisioning', () => {
     expect(await service.remove('chatwoot', 'acct1')).toBe(true);
     expect(await service.resolve('chatwoot', 'acct1')).toBeNull();
     expect(await service.remove('chatwoot', 'acct1')).toBe(false);
+  });
+
+  // On SQLite every caller shares one connection. A transaction begun in the same turn of the event loop as the
+  // remove's would nest in it or hold it, so either could fail on the other's state or undo the other's writes.
+  describe('a remove beside another transaction begun in the same turn', () => {
+    const settle = (result: Promise<unknown>) => result.catch((error: unknown) => String(error));
+    const after = <T>(steps: number, start: () => Promise<T>) =>
+      (async () => {
+        for (let i = 0; i < steps; i += 1) await Promise.resolve();
+        return start();
+      })();
+    async function provision(instanceId: string) {
+      await service.create('chatwoot', instanceId, {});
+      const mappings = ds.getRepository(ConversationMapping);
+      await mappings.save(
+        mappings.create({
+          sessionId: 'sess-1',
+          chatId: `${instanceId}@c.us`,
+          pluginId: 'chatwoot',
+          instanceId,
+          providerConversationId: instanceId,
+          handoverState: 'human',
+        }),
+      );
+    }
+    const left = async (instanceId: string) => ({
+      rows: await ds.getRepository(PluginInstance).countBy({ instanceId }),
+      handover: (await ds.getRepository(ConversationMapping).findOneByOrFail({ instanceId })).handoverState,
+    });
+    const gone = { rows: 0, handover: 'bot' };
+
+    // A write that fails on the primary key and rolls its transaction back.
+    const failing = () =>
+      ds.transaction(manager => manager.query('INSERT INTO plugin_instances SELECT * FROM plugin_instances'));
+
+    it.each(['before', 'after'])('removes the instance when a transaction that fails begins %s it', async order => {
+      for (let steps = 0; steps <= 40; steps += 1) {
+        const instanceId = `acct-${steps}`;
+        await provision(instanceId);
+        const remove = () => service.remove('chatwoot', instanceId);
+        const [removed] =
+          order === 'after'
+            ? await Promise.all([settle(remove()), settle(after(steps, failing))])
+            : await Promise.all([settle(after(steps, remove)), settle(failing())]);
+        expect({ steps, removed, ...(await left(instanceId)) }).toEqual({ steps, removed: true, ...gone });
+      }
+    });
+
+    it('removes both instances of two removes', async () => {
+      for (let steps = 0; steps <= 40; steps += 1) {
+        await provision(`first-${steps}`);
+        await provision(`second-${steps}`);
+        const removed = await Promise.all([
+          settle(service.remove('chatwoot', `first-${steps}`)),
+          settle(after(steps, () => service.remove('chatwoot', `second-${steps}`))),
+        ]);
+        expect({ steps, removed, first: await left(`first-${steps}`), second: await left(`second-${steps}`) }).toEqual({
+          steps,
+          removed: [true, true],
+          first: gone,
+          second: gone,
+        });
+      }
+    });
+
+    it('refuses with 503 and removes nothing when a transaction beside it stays open', async () => {
+      await provision('held');
+      const other = ds.createQueryRunner();
+      await other.connect();
+      await other.startTransaction();
+      const start = Date.now();
+      let calls = 0;
+      const clock = jest.spyOn(Date, 'now').mockImplementation(() => start + FOREIGN_TRANSACTION_WAIT_MS * calls++);
+
+      try {
+        await expect(service.remove('chatwoot', 'held')).rejects.toThrow(ServiceUnavailableException);
+      } finally {
+        clock.mockRestore();
+      }
+      await other.commitTransaction();
+      await other.release();
+
+      expect(await left('held')).toEqual({ rows: 1, handover: 'human' });
+    });
   });
 
   it('update and regenerateSecret return the stored updatedAt, not the one read before the write', async () => {

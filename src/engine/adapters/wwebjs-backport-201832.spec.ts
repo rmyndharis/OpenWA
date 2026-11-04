@@ -100,6 +100,14 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     return copy;
   }
 
+  /** A PATH holding git and nothing else, the Windows shape: git.exe present, patch.exe absent. */
+  function gitOnlyPath(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwjs-gitonly-'));
+    tmpDirs.push(dir);
+    fs.symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), path.join(dir, 'git'));
+    return dir;
+  }
+
   afterAll(() => {
     for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -195,6 +203,93 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     );
 
     expect(() => applyBackport(dir)).toThrow(/PARTIALLY patched/);
+  });
+
+  /** The message applyBackport refuses `dir` with. */
+  function refusal(dir: string): string {
+    try {
+      applyBackport(dir);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    throw new Error('applyBackport did not refuse the tree');
+  }
+
+  // A failed run of this patcher on a drifted release patches the hunks it can and leaves a .rej for the rest: every
+  // later run reads Message.js as normalizing with a site missing before one that landed, but a reinstall is the way
+  // to see the real error, not a sign that the release fixed the ids itself.
+  it('says a leftover patch artifact comes from a failed run of this patcher, not from a release fix', () => {
+    const dir = copyWwjs();
+    applyBackport(dir);
+    const groupChat = path.join(dir, 'src', 'structures', 'GroupChat.js');
+    fs.writeFileSync(
+      groupChat,
+      fs.readFileSync(groupChat, 'utf8').replace('pWid._serialized || pWid.$1', 'pWid._serialized ?? pWid.$1'),
+    );
+    fs.writeFileSync(`${groupChat}.rej`, '*** rejected hunk ***');
+
+    const message = refusal(dir);
+    expect(message).toMatch(/failed here left[\s\S]*GroupChat\.js\.rej[\s\S]*Reinstall the dependency/);
+    expect(message).not.toMatch(/retire this backport/);
+  });
+
+  it('keeps the refusal of a half-patched tree a partial tree when the patch file cannot be read', () => {
+    const dir = copyWwjs();
+    const messageJs = path.join(dir, 'src', 'structures', 'Message.js');
+    const utilsJs = path.join(dir, 'src', 'util', 'Injected', 'Utils.js');
+    const pristine = [messageJs, utilsJs].map(file => fs.readFileSync(file, 'utf8'));
+    applyBackport(dir);
+    fs.writeFileSync(messageJs, pristine[0]);
+    fs.writeFileSync(utilsJs, pristine[1]);
+    fs.writeFileSync(
+      messageJs,
+      fs.readFileSync(messageJs, 'utf8').replace('this.id = data.id', 'this.id = Base._normalizeId(data.id)'),
+    );
+
+    let thrown: unknown;
+    try {
+      applyBackport(dir, path.join(dir, 'missing.patch'));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as Error).message).toMatch(/PARTIALLY patched/);
+    expect((thrown as { leftPartialTree?: boolean }).leftPartialTree).toBe(true);
+  });
+
+  // A run writes the files in the patch's order, so one cut short leaves the missing sites at the END of that
+  // order. A gap before a site that landed, or no site of ours at all, comes from a release (or an edit) that
+  // changed the ids its own way, which a reinstall brings straight back.
+  it('refuses a release that words one site its own way without calling it an interrupted run', () => {
+    const dir = copyWwjs();
+    applyBackport(dir);
+    const groupChat = path.join(dir, 'src', 'structures', 'GroupChat.js');
+    fs.writeFileSync(
+      groupChat,
+      fs.readFileSync(groupChat, 'utf8').replace('pWid._serialized || pWid.$1', 'pWid._serialized ?? pWid.$1'),
+    );
+
+    const message = refusal(dir);
+    expect(message).toMatch(/no interrupted run of this patcher leaves[\s\S]*GroupChat\.js[\s\S]*retire this backport/);
+    expect(message).not.toMatch(/Reinstall the dependency/);
+  });
+
+  it('refuses a release that reads $1 in Message.js its own way without listing Message.js as normalizing', () => {
+    const dir = copyWwjs();
+    const msgJs = path.join(dir, 'src', 'structures', 'Message.js');
+    fs.writeFileSync(
+      msgJs,
+      fs
+        .readFileSync(msgJs, 'utf8')
+        .replace(
+          'this.id = data.id;',
+          'this.id = data.id._serialized ? data.id : { ...data.id, _serialized: data.id.$1 };',
+        ),
+    );
+
+    const message = refusal(dir);
+    expect(message).toMatch(/none of this backport's sites[\s\S]*retire this backport/);
+    expect(message).not.toMatch(/Reinstall the dependency|normalizes ids but/);
   });
 
   it('fails with a curated version-skew error when Message.js is missing', () => {
@@ -336,6 +431,27 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
       });
     });
 
+    it('falls back to `git apply` when `patch` refuses its options without touching the tree', () => {
+      // BusyBox's patch applet takes none of `-d`, `-F0` or `--ignore-whitespace`: it prints its usage and
+      // exits 1, the status a rejected hunk gives, but leaves no .rej and changes nothing.
+      const dir = copyWwjs();
+      const bin = gitOnlyPath();
+      fs.writeFileSync(path.join(bin, 'patch'), '#!/bin/sh\necho "BusyBox v1.36.1 multi-call binary." >&2\nexit 1\n', {
+        mode: 0o755,
+      });
+
+      const res = spawnSync(process.execPath, [SCRIPT, '--best-effort', dir], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: bin },
+      });
+
+      expect(res.status).toBe(0);
+      expect(applyBackport(dir)).toEqual({
+        skipped: true,
+        reason: 'installed whatsapp-web.js already normalizes message ids',
+      });
+    });
+
     it('degrades when neither `patch` nor git is installed, leaving the tree pristine', () => {
       const dir = copyWwjs();
       // With no applier at all (a stripped container, a Baileys-only setup), nothing was written and a
@@ -353,17 +469,141 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
       expect(res.stderr).toMatch(/skipped/);
       expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Message.js'), 'utf8')).toContain('this.id = data.id');
     });
+
+    // A tree the install cannot write is refused by the applier before it touches a single file, so it
+    // is still pristine: the same unpatched-but-whole state the flag exists to accept, not a half-patched one.
+    it('degrades on a read-only tree, leaving it pristine', () => {
+      // Root ignores mode bits: the tree would stay writable and the case would prove nothing.
+      if (process.getuid?.() === 0) return;
+      const dir = copyWwjs();
+      execFileSync('chmod', ['-R', 'a-w', dir]);
+      try {
+        const res = spawnSync(process.execPath, [SCRIPT, '--best-effort', dir], { encoding: 'utf8' });
+
+        // Nothing was written, which is what makes degrading safe.
+        expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Base.js'), 'utf8')).not.toMatch(/_normalizeId/);
+        expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Message.js'), 'utf8')).toContain(
+          'this.id = data.id',
+        );
+        expect(res.stderr).toMatch(/skipped/);
+        expect(res.status).toBe(0);
+      } finally {
+        execFileSync('chmod', ['-R', 'u+w', dir]);
+      }
+    });
+
+    // Without the flag the same untouched tree is still an install that did not get its patch.
+    it('still fails a read-only tree in a strict run', () => {
+      if (process.getuid?.() === 0) return;
+      const dir = copyWwjs();
+      execFileSync('chmod', ['-R', 'a-w', dir]);
+      try {
+        const res = spawnSync(process.execPath, [SCRIPT, dir], { encoding: 'utf8' });
+
+        expect(res.stderr).toMatch(/`patch` failed/);
+        expect(res.status).toBe(1);
+      } finally {
+        execFileSync('chmod', ['-R', 'u+w', dir]);
+      }
+    });
+
+    // The same refusal one file later is not the pristine case: the applier wrote the files before the one it
+    // could not write, so the tree carries part of the backport and the flag must not wave it through.
+    it('still fails when the applier is refused part-way, after writing earlier files', () => {
+      if (process.getuid?.() === 0) return;
+      const dir = copyWwjs();
+      const injectedDir = path.join(dir, 'src', 'util', 'Injected');
+      execFileSync('chmod', ['-R', 'a-w', injectedDir]);
+      try {
+        const res = spawnSync(process.execPath, [SCRIPT, '--best-effort', dir], { encoding: 'utf8' });
+
+        expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Base.js'), 'utf8')).toMatch(/_normalizeId/);
+        // GNU patch stops with exit 2 here and Apple patch skips the file, so the refusal reads either way.
+        expect(res.stderr).not.toMatch(/skipped/);
+        expect(res.status).toBe(1);
+      } finally {
+        execFileSync('chmod', ['-R', 'u+w', injectedDir]);
+      }
+    });
+
+    // The same read-only cases on a host without `patch`, where the backport falls back to `git apply`.
+    describe('through the `git apply` fallback', () => {
+      const run = (dir: string, ...flags: string[]) =>
+        spawnSync(process.execPath, [SCRIPT, ...flags, dir], {
+          encoding: 'utf8',
+          env: { ...process.env, PATH: gitOnlyPath() },
+        });
+
+      it('degrades on a read-only tree, leaving it pristine', () => {
+        if (process.getuid?.() === 0) return;
+        const dir = copyWwjs();
+        execFileSync('chmod', ['-R', 'a-w', dir]);
+        try {
+          const res = run(dir, '--best-effort');
+
+          expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Base.js'), 'utf8')).not.toMatch(/_normalizeId/);
+          expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Message.js'), 'utf8')).toContain(
+            'this.id = data.id',
+          );
+          expect(res.stderr).toMatch(/git apply/);
+          expect(res.stderr).toMatch(/skipped/);
+          expect(res.status).toBe(0);
+        } finally {
+          execFileSync('chmod', ['-R', 'u+w', dir]);
+        }
+      });
+
+      it('still fails a read-only tree in a strict run', () => {
+        if (process.getuid?.() === 0) return;
+        const dir = copyWwjs();
+        execFileSync('chmod', ['-R', 'a-w', dir]);
+        try {
+          const res = run(dir);
+
+          expect(res.stderr).toMatch(/git apply/);
+          expect(res.status).toBe(1);
+        } finally {
+          execFileSync('chmod', ['-R', 'u+w', dir]);
+        }
+      });
+
+      it('still fails when git is refused part-way, after writing earlier files', () => {
+        if (process.getuid?.() === 0) return;
+        const dir = copyWwjs();
+        const injectedDir = path.join(dir, 'src', 'util', 'Injected');
+        execFileSync('chmod', ['-R', 'a-w', injectedDir]);
+        try {
+          const res = run(dir, '--best-effort');
+
+          expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Base.js'), 'utf8')).toMatch(/_normalizeId/);
+          expect(res.stderr).not.toMatch(/skipped/);
+          expect(res.status).toBe(1);
+        } finally {
+          execFileSync('chmod', ['-R', 'u+w', injectedDir]);
+        }
+      });
+
+      // git deletes the files it rewrites before writing any back, so a refusal at the first file can still leave the
+      // others gone. No marker landed, but the tree is not pristine, and the flag must not wave it through.
+      it('still fails when git is refused at its first file after deleting the others', () => {
+        if (process.getuid?.() === 0) return;
+        const dir = copyWwjs();
+        const srcDir = path.join(dir, 'src');
+        execFileSync('chmod', ['a-w', srcDir]);
+        try {
+          const res = run(dir, '--best-effort');
+
+          expect(fs.existsSync(path.join(srcDir, 'structures', 'Base.js'))).toBe(false);
+          expect(res.stderr).not.toMatch(/skipped/);
+          expect(res.status).toBe(1);
+        } finally {
+          execFileSync('chmod', ['u+w', srcDir]);
+        }
+      });
+    });
   });
 
   describe('a Windows checkout of the patch file', () => {
-    /** A PATH holding git and nothing else — the Windows shape: git.exe present, patch.exe absent. */
-    function gitOnlyPath(): string {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwjs-gitonly-'));
-      tmpDirs.push(dir);
-      fs.symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), path.join(dir, 'git'));
-      return dir;
-    }
-
     /**
      * A standalone copy of the patcher beside a patch file of our choosing. DEFAULT_PATCH is resolved
      * as the script's sibling, so this is exactly how the patcher sees a working tree — including one

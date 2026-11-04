@@ -415,11 +415,8 @@ describe('DockerService managed specs ↔ docker-compose.yml parity', () => {
       ...readFileSync(join(__dirname, '../../../Dockerfile'), 'utf8').matchAll(/^ENV (PUPPETEER_\w+)=/gm),
     ].map(match => match[1]);
     expect(names.length).toBeGreaterThan(0);
-    // A file path, not require.resolve: jest maps `puppeteer` to a mock.
-    const config = readFileSync(
-      join(__dirname, '../../../node_modules/puppeteer/lib/cjs/puppeteer/getConfiguration.js'),
-      'utf8',
-    );
+    // Resolve the exported internal path without loading Puppeteer's ESM entry point.
+    const config = readFileSync(require.resolve('puppeteer/internal/getConfiguration.js'), 'utf8');
     expect(names.filter(name => !config.includes(`'${name}'`))).toEqual([]);
   });
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from typing import Any, Mapping
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import httpx
 
@@ -45,6 +45,12 @@ def build_url(base_url: str, path: str, query: Mapping[str, Any] | None = None) 
     """
     if not path.startswith("/"):
         raise ValueError(f"OpenWA: path must begin with '/': {path!r}")
+    raw_path = path.split("?", 1)[0].split("#", 1)[0]
+    # Decoded before it is split: a proxy that decodes %2F before it resolves dot segments reads an id
+    # sent as "..%2Fx" as "../x" and sends the call to another route.
+    for seg in unquote(raw_path).replace("\\", "/").split("/"):
+        if seg in (".", ".."):
+            raise ValueError(f"OpenWA: path must not contain a dot path segment: {path!r}")
     url = f"{base_url.rstrip('/')}{path}"
     if not query:
         return url
@@ -165,6 +171,7 @@ class HttpExecutor:
         default_headers: Mapping[str, str] | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        self._base_url = base_url.rstrip("/")
         timeout = resolve_timeout(timeout)
         # Caller-supplied default headers are applied FIRST so the auth/JSON
         # headers below always win and can never be clobbered (mirrors the JS SDK).
@@ -174,7 +181,7 @@ class HttpExecutor:
         headers["Content-Type"] = "application/json"
         headers["X-API-Key"] = api_key
         client_kwargs: dict[str, Any] = {
-            "base_url": base_url.rstrip("/"),
+            "base_url": self._base_url,
             "headers": headers,
             "timeout": timeout,
             # Never auto-follow redirects: doing so would re-send the X-API-Key
@@ -244,15 +251,16 @@ class HttpExecutor:
             ):
                 raise ValueError("Idempotency-Key must contain 1-255 visible ASCII characters")
             headers = {"Idempotency-Key": idempotency_key}
-        url = build_url("", path, query)
+        url = build_url(self._base_url, path, query)
         try:
             res = self._client.request(method, url, json=body if body is not None else None, headers=headers)
         except httpx.TimeoutException as e:
             raise OpenWATimeoutError(self._timeout or 0) from e
         # Treat any non-2xx as an error, including 3xx: redirects are deliberately not followed
         # (so the API key is never re-sent to the target), which makes an unfollowed 3xx unusable
-        # rather than a success. Matches the JS transport's `!res.ok`.
-        if res.status_code >= 300:
+        # rather than a success. A final 1xx from a custom transport is no more usable. Matches the JS
+        # transport's `!res.ok`.
+        if not 200 <= res.status_code < 300:
             context = f"{method} {path}"
             raise OpenWAApiError.from_response(
                 res.status_code, res.text, context, headers=res.headers, reason=res.reason_phrase

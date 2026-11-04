@@ -62,6 +62,7 @@ import {
   PAIRING_NOT_READY_409,
   PAIRING_TRANSPORT_503,
   RECIPIENT_LOOKUP_503,
+  SESSION_NOT_STARTED_400,
 } from '../../common/openapi/engine-status-responses';
 
 @ApiTags('sessions')
@@ -101,6 +102,10 @@ export class SessionController {
   })
   @ApiResponse({ status: 400, description: 'Validation failed, or the body carries a field the DTO does not declare.' })
   @ApiResponse({ status: 409, description: 'Session name already exists' })
+  @ApiResponse({
+    status: 503,
+    description: 'On SQLite, another database transaction stayed open for 10 s; nothing was stored, so retry.',
+  })
   async create(@Body() dto: CreateSessionDto, @CurrentApiKey() apiKey?: ApiKey): Promise<SessionResponseDto> {
     // A session proxy carries the session's egress, including the gateway's fetches of caller-supplied
     // URLs, so choosing one is a deployment decision: ADMIN only, like PATCH :sessionId/proxy. The
@@ -123,8 +128,18 @@ export class SessionController {
     description: 'List of sessions',
     type: [SessionResponseDto],
   })
-  @ApiQuery({ name: 'limit', required: false, description: 'Max sessions to return (1-1000, default 1000)' })
-  @ApiQuery({ name: 'offset', required: false, description: 'Number of sessions to skip (for paging)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: 'integer',
+    description: 'Max sessions to return (1-1000, default 1000)',
+  })
+  @ApiQuery({
+    name: 'offset',
+    required: false,
+    type: 'integer',
+    description: 'Number of sessions to skip (for paging)',
+  })
   @ApiQuery({
     name: 'name',
     required: false,
@@ -277,10 +292,18 @@ export class SessionController {
   @ApiResponse({
     status: 409,
     description:
-      'A credential teardown for the same session name is still in flight (retryable — the body ' +
+      'A credential teardown for the same session name is still in flight (retryable: the body ' +
       "carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; wait for it to settle and retry), OR " +
       "another node currently holds this session's live engine and deleting it here would strip a " +
-      'session the owner is running. No destructive side effect runs before either refusal.',
+      'session the owner is running, OR ownership changes while deletion runs. The first two refusals ' +
+      'remove nothing. Ownership loss stops later deletion units; earlier batches may already be committed.',
+  })
+  @ApiResponse({
+    status: 503,
+    description:
+      'The session could not be claimed for the delete because the database did not answer (nothing is ' +
+      'deleted), or, on SQLite, another database transaction stayed open for 10 s before a delete ' +
+      'transaction (no further rows are removed). Retry the delete.',
   })
   async delete(@Param('sessionId', ParseUUIDPipe) id: string): Promise<void> {
     const session = await this.sessionService.findOne(id);
@@ -321,7 +344,7 @@ export class SessionController {
       'effect runs before this refusal. Also returned when another node currently holds this ' +
       "session's engine: only the owner may start it, and the claim is refused before any engine " +
       'is launched, so no second connection to the account is opened. Also returned, with no `code`, ' +
-      'when a stop, a force-kill that found a running engine to kill, or a data import (`stopOrphans`) ' +
+      'when a stop, a logout or force-kill that found a running engine, or a data import (`stopOrphans`) ' +
       'of this session began or finished while the start was waiting, or a delete of it was still ' +
       'running: the start yields and launches nothing. After a stop or force-kill, a new POST /start ' +
       'clears it and starts the session; after a delete, or an import that removed the session, the ' +
@@ -330,8 +353,9 @@ export class SessionController {
   @ApiResponse({
     status: 503,
     description:
-      "The gateway is shutting down, or the engine's browser or socket connection died during launch and " +
-      'the one automatic retry failed too; no engine is left running, so the start can be retried.',
+      'The gateway is shutting down, the session could not be claimed for this node (a database error; ' +
+      "nothing was launched), or the engine's browser or socket connection died during launch and the one " +
+      'automatic retry failed too (no engine is left running); the start can be retried.',
   })
   @ApiResponse({
     status: 504,
@@ -436,6 +460,14 @@ export class SessionController {
   })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
+    status: 409,
+    description:
+      'Baileys: the session has no linked WhatsApp device (it never linked, its pairing code was never ' +
+      'entered, or the phone removed the link), so there is nothing to unlink. It was stopped locally and ' +
+      '`phone` is cleared; no success audit is written. Start it to link a device, or delete it, instead of ' +
+      'retrying the logout.',
+  })
+  @ApiResponse({
     status: 502,
     description:
       'Session was stopped locally, but the logout operation is incomplete (no send, no ' +
@@ -511,14 +543,23 @@ export class SessionController {
       'On the whatsapp-web.js engine, only request a code for a number you are prepared to re-link. A request ' +
       'for a number that already has a linked session has been observed to end with WhatsApp revoking that ' +
       'device: the linked session logs out, its credentials are deleted and it falls back to `qr_ready`. ' +
-      'Nothing refuses such a request, because the guards check the session state and never the number. ' +
-      'Baileys was not affected in the same tests. Link by QR when a session of that number must stay up.',
+      'On that engine a number that is the stored phone of another session of this gateway (the Brazilian, ' +
+      'Mexican and Argentine mobile spellings of one number count as the same) is refused with `409` and WhatsApp ' +
+      'is not asked; the gateway cannot see a link made on another gateway or only on the phone. ' +
+      'Baileys was not affected in the same tests and accepts the request: its sessions are companion devices ' +
+      'and may share a number. Link by QR when a session of that number must stay up.',
   })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({ status: 201, description: 'Pairing code generated', type: PairingCodeResponseDto })
   @ApiResponse({ status: 400, description: 'Session not started or already authenticated' })
   @ApiResponse({ status: 404, description: 'Session not found' })
-  @ApiResponse({ status: 409, description: PAIRING_NOT_READY_409 })
+  @ApiResponse({
+    status: 409,
+    description:
+      PAIRING_NOT_READY_409 +
+      ' On whatsapp-web.js also answered, with nothing sent to WhatsApp, when the requested number is the stored ' +
+      'phone of another session of this gateway: delete that session, or log it out while it runs, first.',
+  })
   @ApiResponse({ status: 503, description: PAIRING_TRANSPORT_503 })
   async requestPairingCode(
     @Param('sessionId', ParseUUIDPipe) id: string,
@@ -538,7 +579,7 @@ export class SessionController {
     description: 'List of groups the session is a member of',
     type: [SessionGroupSummaryDto],
   })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 503,
@@ -549,8 +590,13 @@ export class SessionController {
       'request (code 429 or 408); retry after a pause.',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiQuery({ name: 'limit', required: false, description: 'Max groups to return (1–1000, default 1000)' })
-  @ApiQuery({ name: 'offset', required: false, description: 'Number of groups to skip (for paging)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: 'integer',
+    description: 'Max groups to return (1-1000, default 1000)',
+  })
+  @ApiQuery({ name: 'offset', required: false, type: 'integer', description: 'Number of groups to skip (for paging)' })
   async getGroups(
     @Param('sessionId', ParseUUIDPipe) id: string,
     @CurrentApiKey() apiKey?: ApiKey,
@@ -568,7 +614,7 @@ export class SessionController {
   @ApiOperation({ summary: 'Get active chats for a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({ status: 200, description: 'List of active chats (most recent first)', type: [ChatSummaryDto] })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({
@@ -578,8 +624,13 @@ export class SessionController {
       'protocol timeout, so nothing could be read. Deliberately not reported as an empty list: a page ' +
       'that went away says nothing about the chats.',
   })
-  @ApiQuery({ name: 'limit', required: false, description: 'Max chats to return (1–1000, default 1000)' })
-  @ApiQuery({ name: 'offset', required: false, description: 'Number of chats to skip (for paging)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: 'integer',
+    description: 'Max chats to return (1-1000, default 1000)',
+  })
+  @ApiQuery({ name: 'offset', required: false, type: 'integer', description: 'Number of chats to skip (for paging)' })
   async getChats(
     @Param('sessionId', ParseUUIDPipe) id: string,
     @CurrentApiKey() apiKey?: ApiKey,
@@ -589,8 +640,9 @@ export class SessionController {
     // This route is admitted to a chat-restricted key because it FILTERS to the key's chats rather
     // than naming one in the path. Filter BEFORE paginating: filtering the page instead would give a
     // restricted key a short or empty window while an allowed chat sat just past it.
-    const visible = await this.chatScope.filter(apiKey, await this.sessionService.listChats(id), chat => chat.id);
-    return paginate(visible, limit ? parseInt(limit, 10) : undefined, offset ? parseInt(offset, 10) : undefined);
+    const skip = offset ? parseInt(offset, 10) : undefined;
+    const visible = await this.chatScope.filter(apiKey, await this.sessionService.listChats(id, skip), chat => chat.id);
+    return paginate(visible, limit ? parseInt(limit, 10) : undefined, skip);
   }
 
   @ChatScoped('fenced')
@@ -603,13 +655,13 @@ export class SessionController {
     status: 200,
     description:
       'Returns `{ success }`. `false` means the engine declined to act: the Baileys engine sends the ' +
-      'read receipt against the newest message the chat received, so a chat it has received no ' +
-      "message in (one holding only the account's own sends included) is reported as declined " +
-      'rather than marked read. The whatsapp-web.js engine reads the chat from the page and needs no ' +
-      'local history.',
+      'read receipt against the newest message the chat received that it holds in memory, else the ' +
+      'newest received one the gateway stored, so a chat with neither (one holding only the ' +
+      "account's own sends included) is reported as declined rather than marked read. The " +
+      'whatsapp-web.js engine reads the chat from the page and needs no local history.',
     type: SessionActionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 503,
@@ -746,8 +798,16 @@ export class SessionController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Mark a chat as unread' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
-  @ApiResponse({ status: 200, description: 'Chat marked as unread successfully', type: SessionActionResponseDto })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Returns `{ success }`. `false` means the engine declined to act. The Baileys engine keys the mark ' +
+      "to the chat's newest message in memory, else the newest stored one, else sends it without one for a " +
+      'chat the session knows; an id it knows no chat for answers `false`, and so does an archived chat ' +
+      'with no known message, which the phone leaves unmarked without one.',
+    type: SessionActionResponseDto,
+  })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 503,
@@ -780,10 +840,11 @@ export class SessionController {
     status: 200,
     description:
       'Returns `{ success }`. `false` means the engine declined to act — an unknown chat, or on the ' +
-      'Baileys engine a chat with no known history, since the change is keyed to its last message.',
+      'Baileys engine a chat with no message in memory or stored, since the clear is keyed to its ' +
+      'last message.',
     type: SessionActionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 503,
@@ -809,11 +870,13 @@ export class SessionController {
   @ApiResponse({
     status: 200,
     description:
-      'Returns `{ success }`. `false` means the engine declined to act — on the Baileys engine a ' +
-      'chat with no known history cannot be archived, since the change is keyed to its last message.',
+      'Returns `{ success }`. `false` means the engine declined to act. The Baileys engine keys the ' +
+      "change to the chat's newest message in memory, else the newest stored one, else sends it " +
+      'without one, which WhatsApp applies as well, for a chat the session knows; an id it knows no ' +
+      'chat for answers `false`.',
     type: SessionActionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 503,
@@ -847,9 +910,9 @@ export class SessionController {
   @ApiResponse({
     status: 400,
     description:
-      'Session not ready, an invalid chatId / muteUntil, or a chatId the whatsapp-web.js engine ' +
-      'cannot resolve. The Baileys engine writes the mute without resolving the chat first and ' +
-      'answers `success: true` for a chat that does not exist.',
+      `${SESSION_NOT_STARTED_400} Also an invalid chatId / muteUntil, or a chatId the whatsapp-web.js engine ` +
+      'cannot resolve. The Baileys engine answers `success: true` for a chat it has never seen, and `400` for a ' +
+      'phone chatId held under a LID that neither the stored mapping nor a WhatsApp lookup pairs.',
   })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
@@ -884,10 +947,10 @@ export class SessionController {
   @ApiResponse({
     status: 400,
     description:
-      'Session not ready, or a chatId the session cannot resolve. An unknown chat is reported here ' +
+      `${SESSION_NOT_STARTED_400} Also a chatId the session cannot resolve. An unknown chat is reported here ` +
       'rather than as `success: false`, which on this route means only that the three-pin cap ' +
-      'refused a real chat. The Baileys engine cannot resolve chats ahead of the write and answers ' +
-      '`success: true` for an unknown chat.',
+      'refused a real chat. The Baileys engine answers `success: true` for a chat it has never seen, and `400` ' +
+      'for a phone chatId held under a LID that neither the stored mapping nor a WhatsApp lookup pairs.',
   })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
@@ -913,8 +976,15 @@ export class SessionController {
       'media, search entries) and emits `message:deleted` for each. Changes made on the phone are not mirrored.',
   })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
-  @ApiResponse({ status: 200, description: 'Chat deleted successfully', type: SessionActionResponseDto })
-  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Returns `{ success }`. `false` means the engine declined to act: an unknown chat, or on the ' +
+      'Baileys engine a chat with no message in memory or stored, since the delete is keyed to its ' +
+      'last message.',
+    type: SessionActionResponseDto,
+  })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 503,

@@ -1,4 +1,5 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
+import { assertPgcryptoOnSearchPath } from '../pgcrypto-search-path';
 
 /**
  * Normalizes a PostgreSQL schema previously bootstrapped with DATABASE_SYNCHRONIZE=true.
@@ -197,6 +198,7 @@ export class NormalizeSynchronizeUuidColumns1770200000000 implements MigrationIn
           );
         }
       }
+      await assertPgcryptoOnSearchPath(queryRunner, num);
     }
   }
 }

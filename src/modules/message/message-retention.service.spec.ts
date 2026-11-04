@@ -147,6 +147,45 @@ describe('MessageRetentionService against a real database', () => {
     expect(left).toEqual(['done-new', 'pending-old', 'processing-old']);
   });
 
+  // SQLite has one writer: a single DELETE over a large backlog of finished batches held it, and inbound
+  // message persistence waited behind it, for as long as that statement ran.
+  it('deletes a backlog of finished batches in short statements, like messages', async () => {
+    process.env.MESSAGE_RETENTION_DAYS = '30';
+    const rows = Array.from({ length: 501 }, (_, i) => ({
+      batchId: `done-${i}`,
+      sessionId: 's1',
+      status: BatchStatus.COMPLETED,
+      messages: [],
+      createdAt: daysAgo(40),
+    }));
+    for (let i = 0; i < rows.length; i += 200) await batches.insert(rows.slice(i, i + 200));
+    await addBatch('done-new', BatchStatus.COMPLETED, daysAgo(10));
+    const del = jest.spyOn(batches, 'delete');
+
+    expect((await service.prune(NOW)).batches).toBe(501);
+
+    expect((await batches.find()).map(b => b.batchId)).toEqual(['done-new']);
+    expect(del).toHaveBeenCalledTimes(2); // 500 + 1
+  });
+
+  it('runs again a minute later when finished batches hit the cap of a run', async () => {
+    process.env.MESSAGE_RETENTION_DAYS = '30';
+    jest.useFakeTimers();
+    try {
+      const prune = jest
+        .spyOn(service, 'prune')
+        .mockResolvedValueOnce({ messages: 0, batches: 100_000 })
+        .mockResolvedValue({ messages: 0, batches: 7 });
+
+      service.onModuleInit();
+      await jest.advanceTimersByTimeAsync(60_000);
+
+      expect(prune).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('removes pruned bodies from the built-in full-text index', async () => {
     process.env.MESSAGE_RETENTION_DAYS = '30';
     await new AddMessagesFts1782400000000().up(ds.createQueryRunner());

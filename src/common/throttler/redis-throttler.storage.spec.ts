@@ -1,5 +1,6 @@
 import { RedisThrottlerStorage, THROTTLER_REDIS_QUIT_TIMEOUT_MS } from './redis-throttler.storage';
 import type { Redis } from 'ioredis';
+import { LoggerService } from '../services/logger.service';
 
 type MockRedis = { eval: jest.Mock; on: jest.Mock; quit: jest.Mock; disconnect: jest.Mock };
 
@@ -70,6 +71,41 @@ describe('RedisThrottlerStorage', () => {
       new Promise<'slow'>(resolve => setTimeout(() => resolve('slow'), 100)),
     ]);
     expect(result).toEqual({ totalHits: 0, timeToExpire: 0, isBlocked: false, timeToBlockExpire: 0 });
+  });
+
+  it('warns once while Redis stays down, says when it answers again, and warns again on the next outage', async () => {
+    const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    const log = jest.spyOn(LoggerService.prototype, 'log').mockImplementation(() => undefined);
+    try {
+      const redis = makeRedis({ hits: 1, ttlMs: 1000 });
+      redis.eval.mockRejectedValue(new Error('ECONNREFUSED'));
+      const storage = new RedisThrottlerStorage(redis as unknown as Redis);
+      // Each guarded request checks three throttlers.
+      for (let i = 0; i < 100; i++) {
+        for (const name of ['short', 'medium', 'long']) {
+          expect(await storage.increment('k', 1000, 10, 60000, name)).toEqual({
+            totalHits: 0,
+            timeToExpire: 0,
+            isBlocked: false,
+            timeToBlockExpire: 0,
+          });
+        }
+      }
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      redis.eval.mockResolvedValue([1, 1000]);
+      await storage.increment('k', 1000, 10, 60000, 'short');
+      await storage.increment('k', 1000, 10, 60000, 'medium');
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0][0]).toContain('300');
+
+      redis.eval.mockRejectedValue(new Error('ECONNREFUSED'));
+      await storage.increment('k', 1000, 10, 60000, 'short');
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
+    }
   });
 
   it('attaches an error listener so connection failures surface as structured logs, never unhandled events', () => {

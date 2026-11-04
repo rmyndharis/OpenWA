@@ -357,7 +357,8 @@ describe('quoting a Baileys message the moment it is announced', () => {
       downloads[0]();
       await ticks();
 
-      expect(order).toEqual(['edited', 'received']);
+      // The edit is announced right after the message it changes, when the session holds it.
+      expect(order).toEqual(['received', 'edited']);
       expect(heard).toEqual(['fixed caption']);
       expect(writtenContents('TARGET')).toEqual([
         { imageMessage: { mimetype: 'image/jpeg', caption: 'fixed caption' } },
@@ -387,13 +388,8 @@ describe('quoting a Baileys message the moment it is announced', () => {
       expect(heard).toEqual(['fixed caption', 'fixed caption']);
     });
 
-    it('lets a consumer of the edit quote the edited text while a repeat of the original is stored', async () => {
-      let reply: Promise<unknown> | undefined;
-      const { events, messaging, sock } = build(() => undefined, {
-        edited: () => {
-          reply = messaging.replyToMessage(CHAT, 'TARGET', 'ok');
-        },
-      });
+    it('lets a quote carry the edited text while a repeat of the original is stored', async () => {
+      const { events, messaging, sock } = build(() => undefined);
       events.handleMessagesUpsert({ messages: [photo('TARGET')], type: 'notify' });
       await ticks();
       events.handleMessagesUpsert({ messages: [photo('TARGET')], type: 'notify' });
@@ -403,6 +399,7 @@ describe('quoting a Baileys message the moment it is announced', () => {
 
       events.handleMessagesUpsert({ messages: [edit()], type: 'notify' });
       await ticks();
+      const reply = messaging.replyToMessage(CHAT, 'TARGET', 'ok');
 
       await expect(reply).resolves.toMatchObject({ id: 'R1' });
       const [, , options] = sock.sendMessage.mock.calls[0] as [unknown, unknown, { quoted?: WAMessage }];

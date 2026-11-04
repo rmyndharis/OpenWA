@@ -27,6 +27,7 @@ describe('Bulk content lifetimes', () => {
   let engines: EngineRegistry;
   let bulk: BulkMessageService;
   let hooks: HookManager;
+  let pacing: SendPacingService;
 
   beforeEach(async () => {
     db = new DataSource({
@@ -38,7 +39,7 @@ describe('Bulk content lifetimes', () => {
     await db.initialize();
     engines = new EngineRegistry();
     hooks = new HookManager();
-    const pacing = new SendPacingService(db.getRepository(Message), db.getRepository(Session), new ConfigService({}));
+    pacing = new SendPacingService(db.getRepository(Message), db.getRepository(Session), new ConfigService({}));
     const sender = new MessageSendService(
       db.getRepository(Message),
       { findOne: (id: string) => db.getRepository(Session).findOneByOrFail({ id }) } as unknown as SessionService,
@@ -188,6 +189,97 @@ describe('Bulk content lifetimes', () => {
     await settled;
     expect(sends).toBe(0);
     expect(await db.getRepository(Message).count()).toBe(0);
+  });
+
+  // The engine was never asked, so the item is neither a delivery failure for plugins to hear about nor
+  // a failed count on a batch that is going away with its session; a single send aborted the same way
+  // fires no message:failed either.
+  it.each([false, true])(
+    'reports no failed item when its session is deleted during the sending hook (stopOnError=%s)',
+    async stopOnError => {
+      const session = await db.getRepository(Session).save({ name: 'original', config: {} });
+      const id = session.id;
+      const started = deferred();
+      const gate = deferred();
+      hooks.register('moderation', 'message:sending', async () => {
+        started.resolve();
+        await gate.promise;
+        return { continue: true };
+      });
+      const failures: unknown[] = [];
+      hooks.register('alerting', 'message:failed', context => {
+        failures.push(context.data);
+        return Promise.resolve({ continue: true });
+      });
+      const settle = jest.fn();
+      jest.spyOn(pacing, 'assertSendAllowed').mockResolvedValue(settle);
+      const send = jest.fn();
+      engines.set(id, { sendTextMessage: send } as unknown as IWhatsAppEngine);
+      const batch = await db.getRepository(MessageBatch).save({
+        batchId: 'deleted-in-hook',
+        sessionId: id,
+        status: BatchStatus.PENDING,
+        messages: [
+          { chatId: '10000000001@c.us', type: 'text', content: { text: 'first item' } },
+          { chatId: '10000000002@c.us', type: 'text', content: { text: 'second item' } },
+        ],
+        options: { delayBetweenMessages: 0, randomizeDelay: false, stopOnError },
+        progress: { total: 2, sent: 0, failed: 0, pending: 2, cancelled: 0 },
+        results: [],
+        currentIndex: 0,
+      });
+      const run = (
+        bulk as unknown as { processBatch(id: string, reserved: boolean, lifetime: SessionWriteScope): Promise<void> }
+      ).processBatch(batch.id, false, captureSessionWrites(db, id));
+      const settled = run.catch((error: unknown) => error);
+      await started.promise;
+      await removeSession(id);
+      gate.resolve();
+      expect(await settled).toMatchObject({ status: 404 });
+      expect(failures).toEqual([]);
+      expect(send).not.toHaveBeenCalled();
+      // The admission still goes back: nothing registers it with the retired scope.
+      expect(settle).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('still reports an item the engine refused while its session was being deleted', async () => {
+    const session = await db.getRepository(Session).save({ name: 'original', config: {} });
+    const id = session.id;
+    const started = deferred();
+    const refusal = deferred();
+    const failures: unknown[] = [];
+    hooks.register('alerting', 'message:failed', context => {
+      failures.push(context.data);
+      return Promise.resolve({ continue: true });
+    });
+    engines.set(id, {
+      sendTextMessage: async () => {
+        started.resolve();
+        await refusal.promise;
+        throw new Error('socket closed');
+      },
+    } as unknown as IWhatsAppEngine);
+    const batch = await db.getRepository(MessageBatch).save({
+      batchId: 'deleted-in-engine',
+      sessionId: id,
+      status: BatchStatus.PENDING,
+      messages: [{ chatId: '10000000001@c.us', type: 'text', content: { text: 'asked item' } }],
+      options: { delayBetweenMessages: 0, randomizeDelay: false, stopOnError: false },
+      progress: { total: 1, sent: 0, failed: 0, pending: 1, cancelled: 0 },
+      results: [],
+      currentIndex: 0,
+    });
+    const run = (
+      bulk as unknown as { processBatch(id: string, reserved: boolean, lifetime: SessionWriteScope): Promise<void> }
+    ).processBatch(batch.id, false, captureSessionWrites(db, id));
+    const settled = run.catch((error: unknown) => error);
+    await started.promise;
+    await removeSession(id);
+    refusal.resolve();
+    expect(await settled).toMatchObject({ status: 404 });
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ sessionId: id, type: 'text' });
   });
 
   it('drains an admitted initial batch save before deleting session content', async () => {

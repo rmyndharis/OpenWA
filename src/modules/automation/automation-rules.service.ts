@@ -6,7 +6,7 @@ import { Repository } from 'typeorm';
 import { createLogger } from '../../common/services/logger.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { chatKind } from '../../engine/identity/wa-id';
-import { evaluateFilters } from '../webhook/filters/filter-evaluator';
+import { evaluateFilters, prepareFilterLidResolver } from '../webhook/filters/filter-evaluator';
 import { PLUGIN_MESSAGE_PORT, type PluginMessagePort } from '../../core/plugins/plugin-host-ports';
 import { AutomationRule } from './entities/automation-rule.entity';
 import { Session } from '../session/entities/session.entity';
@@ -103,7 +103,9 @@ export class AutomationRulesService {
       cooldownSeconds: dto.cooldownSeconds ?? 60,
       enabled: dto.enabled ?? true,
     });
-    return this.ruleRepository.save(rule);
+    // No transaction of its own: on SQLite's single shared connection the rollback of a foreign key failure (the
+    // session deleted since the check above) would discard what other callers wrote while it was open.
+    return this.ruleRepository.save(rule, { transaction: false });
   }
 
   async findAll(sessionId: string): Promise<AutomationRule[]> {
@@ -179,9 +181,12 @@ export class AutomationRulesService {
     }
     if (rules.length === 0) return;
 
-    // Same lid->phone resolution the webhook filter match uses, so a phone-valued sender condition
-    // matches a lid-addressed sender identically in both places.
-    const resolveLid = (jid: string): string | null => this.lidMappingStore?.resolveLid(jid) ?? null;
+    const resolveLid = await prepareFilterLidResolver(
+      rules.map(rule => rule.conditions),
+      'message.received',
+      message,
+      this.lidMappingStore ? lids => this.lidMappingStore!.phonesForLidsPersisted(lids) : undefined,
+    );
 
     // Resolved the way the `kind` filter field resolves it, so the guard and a kind condition agree.
     const kind = typeof message.kind === 'string' && message.kind ? message.kind : chatKind(chatId);

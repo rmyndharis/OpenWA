@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useRef, type ChangeEvent } from 'react';
+import { Fragment, useState, useEffect, useMemo, useRef, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Send, CheckCircle, XCircle, Loader2, Upload, X, Plus, AlertCircle } from 'lucide-react';
 import {
@@ -30,6 +30,7 @@ import {
 import { PageHeader } from '../components/PageHeader';
 import { GroupPicker } from '../components/GroupPicker';
 import { groupLabel, isGatewayRefusal, planGroupSend } from '../utils/groupSelection';
+import { normalizePhoneText } from '../utils/phone';
 import { sendSequentially } from '../utils/sendSequentially';
 import { keepsSameKey } from '../utils/authLifecycle';
 import './MessageTester.css';
@@ -52,6 +53,7 @@ interface ApiResponse {
     failures: { id: string; name: string; error: string }[];
     notSent: number;
     stoppedBy?: 'abort' | 'refusal';
+    // The status that stopped the run; absent when a fetch got no answer at all.
     refusedWith?: number;
   };
 }
@@ -118,6 +120,20 @@ const fallbackMime: Record<(typeof messageTypes)[number], string> = {
 
 // Batch statuses that stop the progress polling (mirrors the backend BatchStatus enum).
 const TERMINAL_BATCH_STATUSES: readonly BatchStatus[] = ['completed', 'cancelled', 'failed'];
+
+// The digits of a typed number for the number check, or null past the longest phone number (E.164, 15 digits). A space
+// is number formatting, so two numbers pasted with one between them read as one run, which is no number to look up.
+// A leading 00 is the international exit code (no number starts with 0): dropped before measuring, as the Number
+// Checker drops it.
+const PHONE_DIGITS_MAX = 15;
+// Whether a recipient field names anything: a digit to look up, or an @ of a chat id. With neither, the number check
+// went out as GET .../contacts/check/, which the gateway routes to the contact read of the id "check".
+const namesRecipient = (text: string): boolean => /[0-9@]/.test(normalizePhoneText(text));
+const phoneDigits = (text: string): string | null => {
+  let digits = normalizePhoneText(text).replace(/[^0-9]/g, '');
+  if (digits.startsWith('00') && digits.length >= 12) digits = digits.slice(2);
+  return digits.length > PHONE_DIGITS_MAX ? null : digits;
+};
 
 export function MessageTester() {
   const { t } = useTranslation();
@@ -329,7 +345,7 @@ export function MessageTester() {
   };
 
   const isMediaMessageType = mediaMessageTypes.includes(messageType);
-  const bulkRecipientList = parseBulkRecipients(bulkRecipients);
+  const bulkRecipientList = useMemo(() => parseBulkRecipients(bulkRecipients), [bulkRecipients]);
   const pollOptionsFilled = pollOptions.map(o => o.trim()).filter(o => o.length > 0);
   const lat = parseFloat(latitude);
   const lng = parseFloat(longitude);
@@ -388,7 +404,7 @@ export function MessageTester() {
       pollOptionsFilled.length >= 2 &&
       pollOptionsFilled.every(option => captionLength(option) <= POLL_OPTION_MAX_LENGTH);
   } else if (messageType === 'forward') {
-    formValid = forwardTo.trim().length > 0 && forwardMessageId.trim().length > 0;
+    formValid = namesRecipient(forwardTo) && forwardMessageId.trim().length > 0;
   } else if (messageType === 'bulk') {
     formValid =
       (content.trim().length > 0 || bulkAttachment !== null) &&
@@ -402,6 +418,9 @@ export function MessageTester() {
       (delayMs === undefined || (!Number.isNaN(delayMs) && delayMs >= 1000 && delayMs <= 60000));
   }
 
+  // A personal recipient is only the default chat a forward is taken from, so a forward from a named chat uses none.
+  const recipientUnused = messageType === 'forward' && recipientType !== 'group' && forwardFrom.trim().length > 0;
+
   // A new send replaces the batch on screen, so it waits for an in-flight cancel: the cancel's answer
   // would otherwise be merged into the newer batch and stop its progress polling.
   const isSendDisabled =
@@ -410,7 +429,9 @@ export function MessageTester() {
     batchCancelling ||
     !session ||
     !formValid ||
-    (messageType !== 'bulk' && (recipientType === 'group' ? selectedGroups.length === 0 : !recipient));
+    (messageType !== 'bulk' &&
+      !recipientUnused &&
+      (recipientType === 'group' ? selectedGroups.length === 0 : !namesRecipient(recipient)));
 
   // Says why Send is held when a field runs past its bound, counted the way `formValid` counts it.
   const tooLongHint = (value: string, max: number) => {
@@ -483,7 +504,7 @@ export function MessageTester() {
 
   const handleSend = async () => {
     const targetId = recipientType === 'group' ? (selectedGroups[0] ?? '') : recipient;
-    if (!session || (messageType !== 'bulk' && !targetId)) return;
+    if (!session || (messageType !== 'bulk' && !targetId && !recipientUnused)) return;
     const generation = ++sendGenerationRef.current;
     const sameKey = keepsSameKey();
     const isCurrent = () => !unmountedRef.current && generation === sendGenerationRef.current && sameKey();
@@ -505,14 +526,22 @@ export function MessageTester() {
       // than hand-building an engine-specific JID here (#265) — also surfaces unregistered numbers.
       // Bulk carries its own recipient list, so the shared selector's target is not resolved there.
       let chatId = targetId;
-      if (messageType !== 'bulk' && recipientType !== 'group') {
-        const resolved = await contactApi.checkNumber(session, targetId.replace(/[^0-9]/g, ''));
+      // A chat id (anything with an @, such as a lid copied from Chats) goes out as it is, like a forward target: read
+      // as a number it loses its meaning, a lid's digits being no phone and a device suffix joining the phone's digits.
+      if (messageType !== 'bulk' && recipientType !== 'group' && targetId.includes('@')) {
+        chatId = targetId.trim();
+      } else if (messageType !== 'bulk' && recipientType !== 'group' && !recipientUnused) {
+        const digits = phoneDigits(targetId);
+        const resolved = digits === null ? null : await contactApi.checkNumber(session, digits);
         assertCurrent();
-        if (!resolved.exists || !resolved.whatsappId) {
+        if (!resolved?.exists || !resolved.whatsappId) {
           setResponse({
             success: false,
             timestamp: new Date().toISOString(),
-            error: t('messageTester.notOnWhatsApp'),
+            error:
+              digits === null
+                ? t('messageTester.tooLong', { max: PHONE_DIGITS_MAX })
+                : t('messageTester.notOnWhatsApp'),
           });
           return;
         }
@@ -588,7 +617,9 @@ export function MessageTester() {
             // through the same check-number flow as the main recipient.
             let toChatId = forwardTo.trim();
             if (!toChatId.includes('@')) {
-              const resolvedTo = await contactApi.checkNumber(session, toChatId.replace(/[^0-9]/g, ''));
+              const digits = phoneDigits(toChatId);
+              if (digits === null) throw new Error(t('messageTester.tooLong', { max: PHONE_DIGITS_MAX }));
+              const resolvedTo = await contactApi.checkNumber(session, digits);
               assertCurrent();
               if (!resolvedTo.exists || !resolvedTo.whatsappId) throw new Error(t('messageTester.notOnWhatsApp'));
               toChatId = resolvedTo.whatsappId;
@@ -811,7 +842,7 @@ export function MessageTester() {
                     <label htmlFor="mt-13">{t('messageTester.recipientPhone')}</label>
                     <input
                       id="mt-13"
-                      type="text"
+                      type="tel"
                       value={recipient}
                       onChange={e => setRecipient(e.target.value)}
                       placeholder="+62812345678"
@@ -970,7 +1001,7 @@ export function MessageTester() {
                   <label htmlFor="mt-7">{t('messageTester.contactNumber')}</label>
                   <input
                     id="mt-7"
-                    type="text"
+                    type="tel"
                     value={contactNumber}
                     onChange={e => setContactNumber(e.target.value)}
                     placeholder="+62812345678"
@@ -1049,6 +1080,7 @@ export function MessageTester() {
                   <input
                     id="mt-17"
                     type="text"
+                    dir="ltr"
                     value={forwardFrom}
                     onChange={e => setForwardFrom(e.target.value)}
                     placeholder={
@@ -1063,6 +1095,7 @@ export function MessageTester() {
                   <input
                     id="mt-9"
                     type="text"
+                    dir="ltr"
                     value={forwardTo}
                     onChange={e => setForwardTo(e.target.value)}
                     placeholder={t('messageTester.forwardToPlaceholder')}
@@ -1073,6 +1106,7 @@ export function MessageTester() {
                   <input
                     id="mt-10"
                     type="text"
+                    dir="ltr"
                     value={forwardMessageId}
                     onChange={e => setForwardMessageId(e.target.value)}
                   />
@@ -1108,6 +1142,7 @@ export function MessageTester() {
                   </div>
                   <textarea
                     id="mt-11"
+                    dir="ltr"
                     value={bulkRecipients}
                     onChange={e => setBulkRecipients(e.target.value)}
                     placeholder={t('messageTester.bulkRecipientsPlaceholder')}
@@ -1251,7 +1286,7 @@ export function MessageTester() {
                 {response.error && (
                   <div className="detail-row">
                     <span className="detail-label">{t('messageTester.response.error')}</span>
-                    <span className="detail-value" style={{ color: 'var(--error)' }}>
+                    <span className="detail-value" style={{ color: 'var(--error-text)' }}>
                       {response.error}
                     </span>
                   </div>
@@ -1284,10 +1319,12 @@ export function MessageTester() {
                     <span className="detail-label">{t('messageTester.response.notSent')}</span>
                     <span className="detail-value">
                       {response.groups.stoppedBy === 'refusal'
-                        ? t('messageTester.groupSendStopped', {
-                            count: response.groups.notSent,
-                            status: response.groups.refusedWith,
-                          })
+                        ? response.groups.refusedWith === undefined
+                          ? t('messageTester.groupSendStoppedNoAnswer', { count: response.groups.notSent })
+                          : t('messageTester.groupSendStopped', {
+                              count: response.groups.notSent,
+                              status: response.groups.refusedWith,
+                            })
                         : t('messageTester.groupSendCancelled', { count: response.groups.notSent })}
                     </span>
                   </div>

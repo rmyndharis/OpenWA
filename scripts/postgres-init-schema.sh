@@ -5,7 +5,8 @@
 # official postgres image runs it ONCE on first initialization (before any app migration).
 # It creates the configured POSTGRES_SCHEMA and sets the database default search_path so the
 # built-in container works zero-config with a custom schema — the app's TypeORM `schema` option
-# + `extra.options search_path` then resolve every table + the migration ledger into it.
+# + the search_path it sets with set_config on every new connection then resolve every table + the
+# migration ledger into it.
 #
 # No-op when POSTGRES_SCHEMA is empty or 'public' (the default): the public schema always
 # exists and the default search_path already includes it, so there is nothing to do.

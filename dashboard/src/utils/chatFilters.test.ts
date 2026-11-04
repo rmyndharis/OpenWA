@@ -7,6 +7,7 @@ import {
   filterChannels,
   groupStatusesByContact,
   isUnsavedContact,
+  matches,
   phoneContactId,
   savedContactKeySet,
 } from './chatFilters.ts';
@@ -177,4 +178,83 @@ test('status search matches name, pushName or id', () => {
     groupStatusesByContact(statuses, '628111').map(g => g.contact.id),
     ['628111@c.us'],
   );
+});
+
+// The search box matches a number against the ASCII digits of an id, so a number typed in the digits of another
+// script (Arabic-Indic, Persian, Devanagari, full-width) has to find the same chat.
+const native = (ascii: string, zero: number) => [...ascii].map(d => String.fromCharCode(zero + Number(d))).join('');
+
+for (const [script, zero] of [
+  ['ASCII', 0x30],
+  ['Arabic-Indic', 0x0660],
+  ['Persian', 0x06f0],
+  ['Devanagari', 0x0966],
+  ['full-width', 0xff10],
+] as const) {
+  test(`a number typed in ${script} digits finds the chat and the channel by its id`, () => {
+    const query = native('628123', zero);
+    assert.deepEqual(
+      filterChats([chat('628123456789@c.us', 'Ben'), chat('491701234567@c.us', 'Anna')], query).map(c => c.id),
+      ['628123456789@c.us'],
+    );
+    assert.deepEqual(
+      filterChannels(
+        [
+          { id: '628123456789@newsletter', name: 'News' },
+          { id: '491701234567@newsletter', name: 'Other' },
+        ],
+        query,
+      ).map(c => c.id),
+      ['628123456789@newsletter'],
+    );
+    assert.ok(matches(query, 'Ben', undefined, '628123456789'));
+    assert.ok(!matches(query, 'Anna', '491701234567'));
+  });
+}
+
+// The filters run over every row on every render of the Chats page. Folding the query once per row made a search in
+// native digits about nine times the cost of an ASCII one (13 ms against 1.3 ms per filter of 5000 chats).
+test('the query is folded once per search, not once per row', t => {
+  const rows = (count: number) => Array.from({ length: count }, (_, i) => chat(`62812${i}@c.us`, `Contact ${i}`));
+  const replace = t.mock.method(String.prototype, 'replace');
+  const folds = (count: number, query: string): number => {
+    replace.mock.resetCalls();
+    filterChats(rows(count), query);
+    filterChannels(
+      rows(count).map(c => ({ id: c.id, name: c.name! })),
+      query,
+    );
+    groupStatusesByContact(
+      rows(count).map(c => ({ contact: c, timestamp: '2026-01-01T00:00:00Z' })),
+      query,
+    );
+    return replace.mock.callCount();
+  };
+  assert.equal(folds(1000, native('6281', 0x0660)), folds(10, native('6282', 0x0660)));
+});
+
+// A fold kept from one query must never answer for the next, as the operator types and deletes.
+test('each query matches its own rows when the search changes back and forth', () => {
+  const chats = [chat('628123456789@c.us', 'Ben'), chat('155500001111@c.us', 'Anna')];
+  for (const [query, expected] of [
+    ['ben', ['Ben']],
+    [native('1555', 0x0660), ['Anna']],
+    [native('6281', 0x06f0), ['Ben']],
+    ['ann', ['Anna']],
+    ['ben', ['Ben']],
+  ] as const) {
+    assert.deepEqual(
+      filterChats(chats, query).map(c => c.name),
+      expected,
+      query,
+    );
+  }
+});
+
+test('a name typed with letters still matches as typed', () => {
+  assert.deepEqual(
+    filterChats([chat('1@c.us', 'Ben'), chat('2@c.us', 'Anna')], 'ANN').map(c => c.id),
+    ['2@c.us'],
+  );
+  assert.ok(!matches('xyz', 'Ben', '628123456789'));
 });

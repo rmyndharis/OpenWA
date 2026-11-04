@@ -106,11 +106,11 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  margin-left: 8px;
+  margin-inline-start: 8px;
   padding: 0.0625rem 0.4375rem;
   font-size: 0.6875rem;
   font-weight: 600;
-  color: var(--primary-text, #17813e);
+  color: var(--primary-text, #167c3b);
   background: color-mix(in srgb, var(--primary, #25d366) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--primary, #25d366) 35%, transparent);
   border-radius: 999px;
@@ -129,10 +129,12 @@
   min-width: 1.25rem;
   height: 1.25rem;
   padding: 0 0.3125rem;
-  margin-left: 6px;
+  margin-inline-start: 6px;
   font-size: 0.6875rem;
   font-weight: 700;
-  color: var(--primary-text, #17813e);
+  /* On the brand green Install button in both themes: dark text, as on .btn-primary. The brand-coloured text
+     this had was 2.49:1 on it in light and the same colour as the button in dark (invisible). */
+  color: #0f172a;
   background: color-mix(in srgb, var(--primary, #25d366) 18%, transparent);
   border-radius: 999px;
 }
@@ -265,7 +267,7 @@
 .plugins-page .btn-toggle.enable {
   background: var(--primary, #25d366);
   border: 1px solid var(--primary, #25d366);
-  color: #fff;
+  color: #0f172a;
 }
 
 .plugins-page .btn-toggle.enable:hover {
@@ -358,7 +360,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 0.9375rem;
-  background: var(--bg-light);
+  background-color: var(--bg-light);
   transition: all 0.2s;
   box-sizing: border-box;
 }
@@ -373,8 +375,8 @@
 .plugins-page .config-form .form-group select:focus,
 .plugins-page .config-form .form-group textarea:focus {
   outline: none;
-  border-color: var(--primary);
-  background: var(--bg-white);
+  border-color: var(--focus-ring);
+  background-color: var(--bg-white);
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
@@ -418,8 +420,8 @@
 .plugins-page .config-form .config-array-row-body {
   flex: 1;
   min-width: 0;
-  border-left: 2px solid var(--border);
-  padding-left: 0.75rem;
+  border-inline-start: 2px solid var(--border);
+  padding-inline-start: 0.75rem;
 }
 
 .plugins-page .config-form .config-array-remove {
@@ -570,6 +572,11 @@
   transform: translateX(22px);
 }
 
+.plugins-page .toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .plugins-page .no-config {
   text-align: center;
   padding: 2rem;
@@ -587,7 +594,7 @@
 .plugins-page .btn-update {
   padding: 0.75rem 1.5rem;
   background: #f59e0b;
-  color: white;
+  color: #0f172a;
   border: none;
   border-radius: 8px;
   font-size: 0.9375rem;
@@ -630,6 +637,10 @@
   flex: 0 0 280px;
   position: sticky;
   top: 1.5rem;
+  /* Pinned, so never taller than the window less its 1.5rem offset: a longer list scrolls inside the rail. */
+  max-height: calc(100vh - 3rem);
+  max-height: calc(100dvh - 3rem);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
@@ -809,7 +820,28 @@
   word-break: break-all;
 }
 
-@media (max-width: 860px) {
+/* Hidden from sight but focusable: the hidden attribute would take the chooser out of the tab order. The drop zone
+   around it shows the keyboard focus. */
+.plugins-page .install-drop input[type='file'] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.plugins-page .install-drop:has(input:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Beside the 280px rail the card grid keeps its 320px minimum track, which needs 948px of viewport with
+   the sidebar open; below that the rail stacks above the cards. */
+@media (max-width: 950px) {
   .plugins-page .plugins-layout {
     flex-direction: column;
   }
@@ -818,6 +850,8 @@
     flex-basis: auto;
     width: 100%;
     position: static;
+    max-height: none;
+    overflow-y: visible;
   }
 }
 
@@ -836,29 +870,58 @@
   border-radius: 10px;
 }
 
-/* When the tabs sit INSIDE the install modal header (between the title and the close button), drop
-   the standalone-row margins so they don't push the title up / leave a gap. Pin them to the true
-   horizontal center of the header with absolute positioning — justify-content:space-between only
-   centers them approximately because the title (left) and close button (right) have different widths,
-   leaving the pill visibly off-center. The header carries position:relative so this is self-contained. */
-.plugins-page .install-modal .modal-header .install-tabs {
-  margin: 0;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+/* The config dialog's strip is a direct child of the dialog card, which is 90% of the window. As one unbreakable row
+   it was wider than the card at 320px (15px past each edge in English, 17px in German, more in Spanish and Turkish)
+   and cut off its outer tabs. It now keeps a margin on each side and wraps its tabs onto a second row when their
+   labels do not fit in one. */
+.plugins-page .config-modal .modal-tabs {
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100% - 1rem);
 }
 
-/* Three-item header (title + tabs + close). Position:relative anchors the absolutely-centered pill;
-   flex-wrap keeps it from overflowing horizontally on a narrow viewport (mobile bottom-sheet width),
-   wrapping to a second row instead. */
+.plugins-page .config-modal .modal-tab {
+  flex: 1 1 auto;
+}
+
+/* Three-item header (title + tabs + close), drawn in the order of its markup so that keyboard focus runs the way the
+   eye reads. On a narrow viewport the title has a row of its own (flex-wrap on the header) and the tabs share the
+   next one with the close button, without the standalone-row margins that would push the title up or leave a gap. */
 .plugins-page .install-modal .modal-header {
-  position: relative;
   flex-wrap: wrap;
   row-gap: 0.75rem;
 }
 
+.plugins-page .install-modal .modal-header .install-tabs {
+  margin: 0;
+  flex: 1 1 0;
+}
+
+/* From 700px the header is three tracks: the middle one as wide as the tabs, the outer two sharing the rest
+   equally. That puts the tabs in the true horizontal center (justify-content:space-between only
+   approximates it, as the title and the close button differ in width) and cuts a long title inside its own
+   track, where absolute positioning let it run under the tabs. */
+@media (min-width: 700px) {
+  .plugins-page .install-modal .modal-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .plugins-page .install-modal .modal-header .install-tabs {
+    /* Out of the row height, so a tall pill (a label that wraps) does not grow the header, and centered in
+       the header's padding box (1.5rem above the row, 1rem below it) as the absolute positioning it
+       replaces had it: 0.25rem above the center of the row. */
+    margin-block: -3.25rem -2.75rem;
+  }
+
+  .plugins-page .install-modal .modal-header .btn-icon {
+    justify-self: end;
+  }
+}
+
 .plugins-page .install-modal .modal-header h2 {
+  flex: 1 1 100%;
   min-width: 0;
   /* Truncate an over-long title rather than collide with the tabs; the modal title is short by
      design ("Install a plugin"), so this only ever bites an unusually long translation. */
@@ -899,7 +962,7 @@
 .plugins-page .install-tab.active,
 .plugins-page .config-modal .modal-tab.active {
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
 }
 
 /* Keep the inactive tabs legible against the pill's light track and give them a hover affordance so
@@ -908,6 +971,27 @@
 .plugins-page .config-modal .modal-tab:not(.active):hover {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--text-primary);
+}
+
+/* On a phone the pill shares its row with the close button, which at 320px leaves less than two 128px tabs need, so
+   the pill and its tabs shrink and a long label wraps. */
+@media (max-width: 699.98px) {
+  .plugins-page .install-modal .modal-header .install-tabs {
+    min-width: 0;
+  }
+
+  .plugins-page .install-tab {
+    min-width: 0;
+    padding-inline: 0.6rem;
+  }
+}
+
+/* The card is 90% of the window. Up to 380px the regular tab padding leaves no room for the three labels of English,
+   German or Spanish in one row, so the padding is cut; wider, only a longer set (Turkish) wraps. */
+@media (max-width: 380px) {
+  .plugins-page .config-modal .modal-tab {
+    padding-inline: 0.35rem;
+  }
 }
 
 /* Sessions tab */
@@ -945,7 +1029,8 @@
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  margin: 0.25rem 0 0.75rem 1.5rem;
+  margin: 0.25rem 0 0.75rem;
+  margin-inline-start: 1.5rem;
   max-height: 180px;
   overflow-y: auto;
 }
@@ -960,7 +1045,8 @@
 }
 
 .plugins-page .sessions-empty {
-  margin: 0.25rem 0 0.75rem 1.5rem;
+  margin: 0.25rem 0 0.75rem;
+  margin-inline-start: 1.5rem;
   font-size: 0.8125rem;
   color: var(--text-muted);
 }
@@ -970,10 +1056,15 @@
   padding: 0.6rem 0.85rem;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg-light);
+  background-color: var(--bg-light);
   font-size: 0.9375rem;
   margin-bottom: 1rem;
   box-sizing: border-box;
+}
+
+/* The rule above out-weighs `select:focus` in index.css and repaints its border. */
+.plugins-page .sessions-select:focus {
+  border-color: var(--focus-ring);
 }
 
 .plugins-page .sessions-override-actions {
@@ -1019,7 +1110,7 @@
 }
 
 .plugins-page .catalog-search:focus-within {
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
@@ -1071,7 +1162,7 @@
 }
 
 .plugins-page .catalog-badge.update {
-  color: var(--primary-text, #17813e);
+  color: var(--primary-text, #167c3b);
 }
 
 .plugins-page .catalog-row-action {

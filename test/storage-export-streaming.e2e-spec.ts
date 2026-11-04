@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { Readable } from 'stream';
 import { ConfigService } from '@nestjs/config';
+import { StorageWalkRefusedError } from '../src/common/storage/storage-local-files';
 import { createExportStream, ExportFileSource, importFromStream } from '../src/common/storage/storage-transfer';
 import { StorageService } from '../src/common/storage/storage.service';
 
@@ -24,14 +25,31 @@ describe('Local storage export completeness', () => {
     fs.rmSync(localPath, { recursive: true, force: true });
   });
 
-  it.each(['EACCES', 'EIO'])('refuses an export and count when directory enumeration fails with %s', async code => {
+  // A permission failure is one the operator can fix, so it is refused with a typed error that names the cause and
+  // keeps the host's own error for the log.
+  it.each(['EACCES', 'EPERM'])('refuses an export and count when a directory is unreadable (%s)', async code => {
     await storage.putFile('nested/media.bin', Buffer.from('preserve this file'));
     const error = Object.assign(new Error(`Cannot enumerate storage: ${code}`), { code });
     jest.spyOn(fs.promises, 'readdir').mockRejectedValue(error);
 
+    const refusals = [
+      await storage.createExportStream().catch((e: unknown) => e),
+      await storage.getFileCount().catch((e: unknown) => e),
+    ];
+    for (const refusal of refusals) {
+      expect(refusal).toBeInstanceOf(StorageWalkRefusedError);
+      expect(refusal).toMatchObject({ message: `Storage directory cannot be read: . (${code})`, cause: error });
+    }
+    expect((await storage.getFile('nested/media.bin')).toString()).toBe('preserve this file');
+  });
+
+  it('refuses an export and count when enumeration fails with an error that is not a refusal, as it came', async () => {
+    await storage.putFile('nested/media.bin', Buffer.from('preserve this file'));
+    const error = Object.assign(new Error('Cannot enumerate storage: EIO'), { code: 'EIO' });
+    jest.spyOn(fs.promises, 'readdir').mockRejectedValue(error);
+
     await expect(storage.createExportStream()).rejects.toBe(error);
     await expect(storage.getFileCount()).rejects.toBe(error);
-    expect((await storage.getFile('nested/media.bin')).toString()).toBe('preserve this file');
   });
 
   it('refuses an export and count when an accepted key exceeds the traversal depth', async () => {
@@ -39,6 +57,7 @@ describe('Local storage export completeness', () => {
     await storage.putFile(key, Buffer.from('deep media'));
 
     expect((await storage.getFile(key)).toString()).toBe('deep media');
+    await expect(storage.createExportStream()).rejects.toBeInstanceOf(StorageWalkRefusedError);
     await expect(storage.createExportStream()).rejects.toThrow(/maximum traversal depth/);
     await expect(storage.getFileCount()).rejects.toThrow(/maximum traversal depth/);
   });
@@ -198,26 +217,20 @@ describe('Storage export streams one file at a time (e2e)', () => {
     ['longer', 2 * FILE_BYTES],
     ['shorter', FILE_BYTES / 2],
   ])('fails the output, without an uncaught exception, when a file reads %s than its size', async (_, length) => {
-    const uncaught: Error[] = [];
-    const onUncaught = (err: Error): void => void uncaught.push(err);
-    process.on('uncaughtException', onUncaught);
-    try {
-      const openFile = (name: string): Promise<ExportFileSource> =>
-        Promise.resolve({
-          stream: Readable.from([randomBytes(length)]),
-          size: name === 'media/file-b.bin' ? FILE_BYTES : length,
-        });
-      const output = await createExportStream(() => Promise.resolve(files), openFile, makeLogger() as never);
-
-      const error = await new Promise<Error>(resolve => {
-        output.on('error', resolve);
-        output.resume();
+    const openFile = (name: string): Promise<ExportFileSource> =>
+      Promise.resolve({
+        stream: Readable.from([randomBytes(length)]),
+        size: name === 'media/file-b.bin' ? FILE_BYTES : length,
       });
-      expect(error.message).toMatch(/media\/file-b\.bin/);
-      await new Promise(resolve => setTimeout(resolve, 100));
-      expect(uncaught).toEqual([]);
-    } finally {
-      process.removeListener('uncaughtException', onUncaught);
-    }
+    const output = await createExportStream(() => Promise.resolve(files), openFile, makeLogger() as never);
+
+    const error = await new Promise<Error>(resolve => {
+      output.on('error', resolve);
+      output.resume();
+    });
+    expect(error.message).toMatch(/media\/file-b\.bin/);
+    // Jest's own handler fails the run on an uncaught exception, which a process listener added here never
+    // sees (the test's `process` is a copy); the wait lets one land while this test is still running.
+    await new Promise(resolve => setTimeout(resolve, 100));
   });
 });

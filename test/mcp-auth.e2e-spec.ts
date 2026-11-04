@@ -88,11 +88,7 @@ describe('MCP server (e2e)', () => {
   }, 30_000);
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore TypeORM multi-datasource teardown quirk */
-    }
+    await app?.close();
   });
 
   // ---------------------------------------------------------------------------
@@ -206,7 +202,7 @@ describe('MCP server (e2e)', () => {
       const result = parseMcpResponse(res).result as { isError?: boolean; content: Array<{ text: string }> };
       expect(result.isError).not.toBe(true);
       expect(JSON.parse(result.content[0].text)).toEqual([{ id: '628123@c.us' }]);
-      expect(list).toHaveBeenCalledWith(scopedSession);
+      expect(list).toHaveBeenCalledWith(scopedSession, undefined);
     } finally {
       list.mockRestore();
     }

@@ -65,11 +65,11 @@ describe('block/unblock on an id WhatsApp cannot map between dialects', () => {
    * DisconnectReason.connectionClosed (428) and must stay a transport failure, or a dead socket
    * would be reported to the caller as a bad contact id.
    */
-  it('leaves a non-400 Boom alone', async () => {
+  it('answers a dropped connection as the transport failure it is, not a bad id', async () => {
     const updateBlockStatus = jest.fn().mockRejectedValue(new Boom('Connection Closed', { statusCode: 428 }));
     const rejection = contacts({ updateBlockStatus }).blockContact('628123456789@s.whatsapp.net');
     await expect(rejection).rejects.not.toBeInstanceOf(RecipientUnreachableError);
-    await expect(rejection).rejects.toThrow(/Connection Closed/);
+    await expect(rejection).rejects.toBeInstanceOf(EngineTransportError);
   });
 
   it('leaves the unconfirmed-write deadline alone', async () => {

@@ -9,6 +9,7 @@ import {
   Header,
   HttpCode,
   HttpStatus,
+  HttpException,
   UseInterceptors,
   UploadedFile,
 } from '@nestjs/common';
@@ -29,12 +30,16 @@ import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorat
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
+import { PluginUninstallIncompleteError } from '../../core/plugins/plugin-uninstaller';
 
 /** Max accepted upload size for a plugin package (compressed). */
 const MAX_PLUGIN_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 /** A lifecycle change to a plugin the boot restore has not finished with, which can outlast the boot wait. */
 const RESTORING_CONFLICT = 'The plugin is still being restored after startup; retry shortly';
+
+/** A config or session write that arrives while an uninstall of the same plugin is unloading it. */
+const UNINSTALLING_CONFLICT = 'The plugin is being uninstalled; nothing was changed';
 
 @ApiTags('plugins')
 @Controller('plugins')
@@ -178,6 +183,7 @@ export class PluginsController {
   @ApiResponse({ status: 200, description: 'Plugin configuration updated', type: PluginActionResponseDto })
   @ApiResponse({ status: 400, description: 'Validation failed, or the body carries a field the DTO does not declare.' })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
+  @ApiResponse({ status: 409, description: UNINSTALLING_CONFLICT })
   updateConfig(@Param('id') id: string, @Body() configDto: PluginConfigDto): { success: boolean; message: string } {
     const result = this.pluginsService.updateConfig(id, configDto.config);
     // The service answers a refused change with 200 and success false, so a row is written only for one applied.
@@ -214,6 +220,7 @@ export class PluginsController {
   @ApiResponse({ status: 200, description: 'Per-session plugin configuration updated', type: PluginActionResponseDto })
   @ApiResponse({ status: 400, description: 'Plugin is global (not session-scoped), or the body failed validation' })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
+  @ApiResponse({ status: 409, description: UNINSTALLING_CONFLICT })
   updateSessionConfig(
     @Param('id') id: string,
     @Param('sessionId') sessionId: string,
@@ -238,6 +245,8 @@ export class PluginsController {
       'A session-restricted key may not replace the full active set — full activation replacement requires an unrestricted key',
   })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
+  @ApiResponse({ status: 409, description: UNINSTALLING_CONFLICT })
+  @ApiResponse({ status: 500, description: 'The plugin registry could not be written; nothing was changed' })
   updateSessions(@Param('id') id: string, @Body() dto: PluginSessionsDto): PluginDto {
     // This is a full-replacement PUT (setPluginSessions overwrites the entire activeSessions array),
     // so a scoped key must never reach it: sending [] or its own session would delete every other
@@ -276,8 +285,16 @@ export class PluginsController {
   @ApiResponse({ status: 400, description: 'Cannot uninstall (e.g. built-in)' })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
   @ApiResponse({ status: 409, description: RESTORING_CONFLICT })
+  @ApiResponse({ status: 500, description: 'The plugin registry could not be written; nothing was removed' })
   async uninstall(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
-    const result = await this.pluginsService.uninstall(id);
+    const result = await this.pluginsService.uninstall(id).catch((error: unknown) => {
+      // A 400 raised after the entry was stored emptied has already erased the plugin's config and stopped it;
+      // a refusal (built-in, unwritable registry) changed nothing and leaves no row.
+      if (error instanceof HttpException && error.cause instanceof PluginUninstallIncompleteError) {
+        this.record(AuditAction.PLUGIN_UNINSTALLED, id, { partial: true, error: error.message });
+      }
+      throw error;
+    });
     this.record(AuditAction.PLUGIN_UNINSTALLED, id);
     return result;
   }

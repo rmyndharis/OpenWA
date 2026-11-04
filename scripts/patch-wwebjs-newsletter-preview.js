@@ -12,6 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const UTILS_PATH = path.join('src', 'util', 'Injected', 'Utils.js');
@@ -47,7 +48,7 @@ function applyBackport(wwjsDir = DEFAULT_WWJS) {
     );
   }
 
-  fs.writeFileSync(utilsFile, source.replace(LEGACY_CALL, CONTEXT_CALL));
+  writeFileAtomic(utilsFile, source.replace(LEGACY_CALL, CONTEXT_CALL));
   return { skipped: false, note: 'destination chat context added to link previews' };
 }
 

@@ -28,8 +28,14 @@ const MAX_OUTPUT_CHARS = 1024;
 const WAVEFORM_MAX_PCM_BYTES = 32 * 1024 * 1024;
 const WAVEFORM_TIMEOUT_MS = 30_000;
 const PCM_RATE = 8000;
+/** One frame decodes in well under a second; past this the video goes out without a preview. */
+const THUMBNAIL_TIMEOUT_MS = 10_000;
+/** A 32-pixel-wide JPEG is a few hundred bytes. */
+const THUMBNAIL_MAX_BYTES = 64 * 1024;
 /** Reads running at once. Each is a whole child process. */
 const reads = new ConcurrencyLimiter(2);
+/** Thumbnails running at once, apart from the reads: a voice note read that hangs must not hold a video send. */
+const thumbnails = new ConcurrencyLimiter(2);
 /** The directory holding node_modules, whether this file runs from src/ or from dist/. */
 const APP_ROOT = join(__dirname, '..', '..', '..');
 
@@ -166,4 +172,26 @@ export async function describeAudio(data: Buffer, ptt: boolean): Promise<AudioDe
     seconds: found.seconds ?? 0,
     ...(ptt ? { waveform: found.waveform ?? new Uint8Array(WAVEFORM_BARS).fill(FLAT_BAR) } : {}),
   };
+}
+
+/**
+ * The inline preview of an outgoing video: base64 of a 32-pixel-wide JPEG of its first frame, the image
+ * Baileys would make. Baileys makes it, whenever the content has none, by running ffmpeg through a shell on
+ * the caller's file with no protocol or format whitelist, no deadline and no bound on how many run at once:
+ * a stream description or a manifest sent as a video reaches the network from there. Made here through
+ * runFfmpeg instead, under a limiter of its own. Never rejects.
+ */
+export async function describeVideo(data: Buffer): Promise<{ jpegThumbnail: string }> {
+  const jpeg = await thumbnails
+    .run(() =>
+      runFfmpeg(data, 'bin', 'jpg', ['-frames:v', '1', '-vf', 'scale=32:-1', '-f', 'image2'], {
+        ffmpegPath: process.env.FFMPEG_PATH || 'ffmpeg',
+        timeoutMs: THUMBNAIL_TIMEOUT_MS,
+        maxOutputBytes: THUMBNAIL_MAX_BYTES,
+      }),
+    )
+    .catch(() => undefined);
+  // null, never undefined, when none could be made: Baileys makes its own for an undefined key, and leaves a
+  // null one off the message, as when its own read fails. Its type says string, hence the cast.
+  return { jpegThumbnail: (jpeg?.toString('base64') ?? null) as string };
 }

@@ -25,7 +25,7 @@ export interface ToolDescriptor<I = unknown> {
   /** The quote resolves within the authorized chat, as it does on the REST reply route. */
   chatQuotedAllowed?: boolean;
   /** Calls the service. Receives validated input + the resolved, scoped key. */
-  handler: (input: I, apiKey: ApiKey, chatScope?: ChatScopeService) => Promise<unknown>;
+  handler: (input: I, apiKey: ApiKey, chatScope?: ChatScopeService, signal?: AbortSignal) => Promise<unknown>;
 }
 
 /**
@@ -42,7 +42,7 @@ export interface ToolDescriptor<I = unknown> {
  */
 export type AnyToolDescriptor = Omit<ToolDescriptor, 'inputSchema' | 'handler'> & {
   inputSchema: z.ZodType;
-  handler: (input: never, apiKey: ApiKey, chatScope?: ChatScopeService) => Promise<unknown>;
+  handler: (input: never, apiKey: ApiKey, chatScope?: ChatScopeService, signal?: AbortSignal) => Promise<unknown>;
 };
 
 /**

@@ -1,6 +1,7 @@
 import { BaileysStatus, type BaileysStatusHost } from './baileys-status';
 import type { WASocket } from '@whiskeysockets/baileys';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
+import { BAILEYS_QUERY_BUDGET_MS } from './baileys-query-deadline';
 
 /**
  * A status post and a status revoke both go through `sock.sendMessage` directly rather than the
@@ -14,11 +15,15 @@ import { EngineRefusedError } from '../../common/errors/engine-refused.error';
  * `onMessageRevoked` whether or not it came from this session, so deleting your own status would
  * raise a `message.revoked` webhook for your own delete.
  */
-function makeStatus(sendMessage: jest.Mock): { status: BaileysStatus; remembered: Array<string | null | undefined> } {
+function makeStatus(
+  sendMessage: jest.Mock,
+  proxyUrl?: string,
+): { status: BaileysStatus; remembered: Array<string | null | undefined> } {
   // Records the argument verbatim, with no guard of its own: OwnSendRegistry.remember is what
   // ignores a nullish id (see baileys-own-sends.spec.ts), and a guard here would test the stub.
   const remembered: Array<string | null | undefined> = [];
   const host = {
+    sessionProxyUrl: () => proxyUrl,
     ensureReady: () => undefined,
     getSocket: () => ({ sendMessage }) as unknown as WASocket,
     toEngineJid: (jid: string) => jid,
@@ -99,5 +104,37 @@ describe('BaileysStatus addresses a status revoke to the status recipients', () 
       clock.mockRestore();
     }
     expect(sendMessage).toHaveBeenCalledTimes(1); // the post alone
+  });
+});
+
+describe('BaileysStatus media upload deadline', () => {
+  const image = { data: Buffer.from([0xff, 0xd8, 0xff]), mimetype: 'image/jpeg' };
+
+  // Baileys sets none, and a session proxy's agent has no idle timeout to end a stalled upload.
+  it('bounds the upload of a status posted through a session proxy', async () => {
+    const sendMessage = jest.fn().mockResolvedValue({ key: { id: 'STATUS-1' } });
+    const { status } = makeStatus(sendMessage, 'http://proxy.example:8080');
+
+    await status.postImageStatus(image, { recipients: ['628111@s.whatsapp.net'] });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'status@broadcast',
+      expect.anything(),
+      expect.objectContaining({ mediaUploadTimeoutMs: BAILEYS_QUERY_BUDGET_MS }),
+    );
+  });
+
+  // Node's global agent already ends a stalled upload after 5 s idle; a request timeout would replace it.
+  it('leaves a direct session to the idle timeout of the agent it uploads through', async () => {
+    const sendMessage = jest.fn().mockResolvedValue({ key: { id: 'STATUS-1' } });
+    const { status } = makeStatus(sendMessage);
+
+    await status.postImageStatus(image, { recipients: ['628111@s.whatsapp.net'] });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'status@broadcast',
+      expect.anything(),
+      expect.not.objectContaining({ mediaUploadTimeoutMs: expect.anything() as unknown }),
+    );
   });
 });

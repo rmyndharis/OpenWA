@@ -18,8 +18,17 @@ export interface SearchHealth {
   detail?: string;
 }
 
+/**
+ * How `q` matches a message body. `word` matches whole words (the built-in provider's original
+ * behavior); `contains` matches any substring of three or more characters, ignoring case and accents.
+ * A plugin provider receives the field and may treat it as its backend allows.
+ */
+export type SearchMatch = 'word' | 'contains';
+
 export interface SearchQuery {
   q: string;
+  /** Absent means `word`, so callers that predate the field keep their results. */
+  match?: SearchMatch;
   /** Scoped by SearchService from the caller's API-key allowedSessions (not user-supplied). */
   sessionIds?: string[];
   /** Host-set, lid-expanded chat scope: undefined is unrestricted, [] denies every chat. */

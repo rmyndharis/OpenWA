@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { Session } from './entities/session.entity';
 import { SessionService } from './session.service';
+import { EngineRegistry } from '../../engine/engine-registry.service';
 
 /**
  * PATCH /config merges into the stored blob. Two overlapping requests that each read the same blob
@@ -21,7 +22,7 @@ describe('SessionService.updateConfig under concurrent requests', () => {
       ds.getRepository(Session),
       unused, // messages
       ds,
-      unused, // engine registry
+      new EngineRegistry(),
       unused, // watchdog
       attach, // session errors
       attach, // session restrictions

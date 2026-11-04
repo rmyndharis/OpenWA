@@ -10,10 +10,20 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
  * other arm can never execute, which shows up as an uncoverable branch.
  */
 export class GroupParticipantDto {
-  @ApiProperty({ description: "Participant id in the engine's native format.", example: '628123456789@c.us' })
+  @ApiProperty({
+    description:
+      'Participant id in the neutral form both engines return: `<phone>@c.us`, or `<lid>@lid` when the phone ' +
+      'is not known.',
+    example: '628123456789@c.us',
+  })
   id!: string;
 
-  @ApiProperty({ description: 'MSISDN digits, without a leading + or separators.', example: '628123456789' })
+  @ApiProperty({
+    description:
+      'MSISDN digits, without a leading + or separators, for a `<phone>@c.us` participant. For a `<lid>@lid` ' +
+      "participant it carries the lid's digits on both engines, which are not a phone number.",
+    example: '628123456789',
+  })
   number!: string;
 
   @ApiPropertyOptional({ description: 'Display name, when the engine reports one.', example: 'Ada Lovelace' })
@@ -71,7 +81,12 @@ export class GroupInfoDto {
   @ApiPropertyOptional({ description: 'Group description.', example: 'Release coordination' })
   description?: string;
 
-  @ApiPropertyOptional({ description: "Owner id in the engine's native format.", example: '628123456789@c.us' })
+  @ApiPropertyOptional({
+    description:
+      'Owner id in the neutral form both engines return: `<phone>@c.us`, or `<lid>@lid` when the phone ' +
+      'is not known.',
+    example: '628123456789@c.us',
+  })
   owner?: string;
 
   @ApiPropertyOptional({ description: 'Unix SECONDS the group was created.', example: 1786000000 })
@@ -121,7 +136,12 @@ export class GroupJoinInfoDto {
   @ApiPropertyOptional({ description: 'Group description.', example: 'Release coordination' })
   description?: string;
 
-  @ApiPropertyOptional({ description: "Owner id in the engine's native format.", example: '628123456789@c.us' })
+  @ApiPropertyOptional({
+    description:
+      'Owner id in the neutral form both engines return: `<phone>@c.us`, or `<lid>@lid` when the phone ' +
+      'is not known.',
+    example: '628123456789@c.us',
+  })
   owner?: string;
 
   @ApiPropertyOptional({ description: 'Unix SECONDS the group was created.', example: 1786000000 })

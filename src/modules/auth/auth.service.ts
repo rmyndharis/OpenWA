@@ -63,15 +63,18 @@ export function resolveSeedApiKey(): string {
 /**
  * The line to print for the API key in the startup banner. The full raw key is shown ONLY when it was
  * just created (first run, when the operator needs to capture it once). On every subsequent boot the
- * key is masked to a short non-secret fingerprint, so the live admin key is not re-written to the log
+ * banner names only where the key is, so the live admin key is not re-written to the log
  * pipeline (Docker/Loki/CloudWatch) on each restart — it stays in `data/.api-key` (0600), or wherever
- * `BOOTSTRAP_KEY_FILE` points; the dashboard only ever shows a key's prefix. A placeholder
+ * `BOOTSTRAP_KEY_FILE` points; the dashboard only ever shows a key's prefix. A generated key keeps a
+ * short fingerprint, its fixed `owa_k1_` tag and one hex digit; an API_MASTER_KEY is taken verbatim, so
+ * any of its characters is part of the secret and none is printed. A placeholder
  * (e.g. "(check dashboard for keys)") is passed through unchanged.
  */
 export function bannerKeyLine(displayKey: string, isNewKey: boolean): string {
   if (isNewKey) return displayKey;
   if (displayKey.startsWith('(')) return displayKey;
-  return `${displayKey.slice(0, 8)}… (full key in ${bootstrapKeyFilePath()})`;
+  const fingerprint = displayKey.startsWith('owa_k1_') ? `${displayKey.slice(0, 8)}… ` : '';
+  return `${fingerprint}(full key in ${bootstrapKeyFilePath()})`;
 }
 
 @Injectable()
@@ -97,6 +100,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
 
       await this.seedApiKey(displayKey, 'Default Admin Key', ApiKeyRole.ADMIN);
       isNewKey = true;
+      this.keyIndex?.refreshSoon();
 
       // Save raw key to file for startup script to read (owner-only — it's the raw admin key).
       try {

@@ -15,7 +15,7 @@ import {
   PluginStatus,
   PluginType,
 } from './plugin.interfaces';
-import { PluginStorageService } from './plugin-storage.service';
+import { PluginStorageService, type RegistryWriteOptions } from './plugin-storage.service';
 import { PluginHostServices } from './plugin-host-services';
 import type { PluginConversationMappingPort } from './plugin-host-ports';
 import { PluginCapabilityContext } from './plugin-capability-context';
@@ -254,6 +254,9 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
 
   onModuleInit(): void {
     this.scanner.scanAtBoot();
+    // Marked now, though restored at bootstrap: the BullMQ workers start in between, and a queued ingress job
+    // they take for one of these plugins must be held (isRestorePending), not dispatched to a missing worker.
+    this.queueRestore();
   }
 
   /** Hand back the chats a plugin took over. A host without the conversation store has none to hand back. */
@@ -305,7 +308,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     }
   }
 
-  /** Plugins the boot restore has queued or is enabling, so a lifecycle change cannot interleave with it. */
+  /** Plugins the boot restore has queued (from module init on) or is enabling, so no lifecycle change interleaves. */
   private readonly restorePending = new Set<string>();
 
   /**
@@ -319,11 +322,22 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     return this.restorePending.has(id);
   }
 
+  /** The ids {@link isRestorePending} answers true for, for a caller that has to leave them out of a query. */
+  restorePendingIds(): string[] {
+    return [...this.restorePending];
+  }
+
+  /** Mark the plugins the operator had enabled as restoring, and return their ids in restore order. */
+  private queueRestore(): string[] {
+    const ids = this.getAllPlugins()
+      .filter(p => !p.builtIn && this.pluginStorage.getPluginEntry(p.manifest.id)?.enabledByOperator === true)
+      .map(p => p.manifest.id);
+    for (const id of ids) this.restorePending.add(id);
+    return ids;
+  }
+
   private async restorePlugins(): Promise<void> {
-    const restorable = this.getAllPlugins().filter(
-      p => !p.builtIn && this.pluginStorage.getPluginEntry(p.manifest.id)?.enabledByOperator === true,
-    );
-    for (const plugin of restorable) this.restorePending.add(plugin.manifest.id);
+    const restorable = this.queueRestore();
     try {
       for (let i = 0; i < restorable.length; i++) {
         if (this.shuttingDown || this.shutdownService?.isShuttingDown()) {
@@ -332,8 +346,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
           });
           return;
         }
-        const plugin = restorable[i];
-        const pluginId = plugin.manifest.id;
+        const pluginId = restorable[i];
         try {
           await this.enablePlugin(pluginId);
         } catch (error) {
@@ -480,20 +493,25 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     return this.pluginStorage.getPluginEntry(pluginId)?.builtIn ?? false;
   }
 
-  uninstallPlugin(pluginId: string): Promise<void> {
+  uninstallPlugin(pluginId: string): Promise<{ registryEntryKept: boolean }> {
     return this.uninstaller.uninstallPlugin(pluginId);
   }
 
-  updatePluginConfig(pluginId: string, config: Record<string, unknown>): void {
-    this.lifecycle.updatePluginConfig(pluginId, config);
+  updatePluginConfig(pluginId: string, config: Record<string, unknown>, opts?: RegistryWriteOptions): void {
+    this.lifecycle.updatePluginConfig(pluginId, config, opts);
   }
 
-  setPluginSessions(pluginId: string, sessions: string[]): PluginInstance {
-    return this.lifecycle.setPluginSessions(pluginId, sessions);
+  setPluginSessions(pluginId: string, sessions: string[], opts?: RegistryWriteOptions): PluginInstance {
+    return this.lifecycle.setPluginSessions(pluginId, sessions, opts);
   }
 
-  setPluginSessionConfig(pluginId: string, sessionId: string, config: Record<string, unknown>): PluginInstance {
-    return this.lifecycle.setPluginSessionConfig(pluginId, sessionId, config);
+  setPluginSessionConfig(
+    pluginId: string,
+    sessionId: string,
+    config: Record<string, unknown>,
+    opts?: RegistryWriteOptions,
+  ): PluginInstance {
+    return this.lifecycle.setPluginSessionConfig(pluginId, sessionId, config, opts);
   }
 
   /** Health across both tiers; the sandbox-routing implementation lives in PluginSandboxBridge. */

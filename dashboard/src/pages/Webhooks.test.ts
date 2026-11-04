@@ -1,6 +1,8 @@
 // Render test for the Webhooks page under the bare `node --test` runner, on the Templates.test.ts
-// harness. GET /webhooks is OPERATOR-only, so a viewer key always gets 403 there; a failed read must
-// say so instead of rendering the "no webhooks configured" empty state.
+// harness. GET /webhooks is OPERATOR-only: a viewer key is not sent it (the gateway records every refusal as a
+// failed authentication) and is shown the permission state, and a 403 or any other failed read must say so
+// instead of rendering the "no webhooks configured" empty state. The role defaults to operator, the lowest
+// one that can read the list.
 import '../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,6 +10,9 @@ import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 let webhooksStatus = 200;
+// What a 403 on the list says: by default the role refusal.
+let forbiddenMessage = 'Insufficient permissions. Required: operator';
+let webhookReads = 0;
 let webhookList: unknown[] = [];
 let sessionList: unknown[] = [];
 let createCalls = 0;
@@ -56,8 +61,9 @@ function installFetchStub(): void {
       );
     }
     if (path === '/api/webhooks') {
+      webhookReads++;
       if (webhooksStatus === 403) {
-        return Promise.resolve(jsonResponse({ message: 'Insufficient permissions. Required: operator' }, 403));
+        return Promise.resolve(jsonResponse({ message: forbiddenMessage }, 403));
       }
       if (webhooksStatus !== 200) return Promise.resolve(jsonResponse({ message: 'database offline' }, 500));
       return Promise.resolve(jsonResponse(webhookList));
@@ -76,7 +82,7 @@ before(async () => {
   const { installJsdomGlobals } = await import('../test-helpers/jsdom.ts');
   await installJsdomGlobals();
   installFetchStub();
-  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
   const { i18nReady } = await import('../i18n/index.ts');
   await i18nReady;
   rtl = await import('@testing-library/react');
@@ -99,7 +105,8 @@ afterEach(() => {
   deleteCalls = [];
   releaseRequests();
   heldRequests = Promise.resolve();
-  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  webhookReads = 0;
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
 });
 
 function renderWebhooks(): void {
@@ -113,11 +120,40 @@ function renderWebhooks(): void {
   );
 }
 
+// The key's role is what the page learned at sign-in; a 403 for a key it took for a writer is still a refusal.
 test('a 403 on the webhook list shows a permission state, not an empty list', async () => {
   webhooksStatus = 403;
   renderWebhooks();
   await rtl.screen.findByText('No access to webhooks');
   assert.ok(!rtl.screen.queryByText('No webhooks configured'), 'a refused read claimed there are no webhooks');
+});
+
+// The page knows the key's role allows webhooks, so a refusal it did not predict has another cause, such as a key
+// restricted to selected chats, which no webhook route admits. Role copy sent that operator looking for a role.
+test('a 403 for a key whose role allows webhooks gives the gateway reason, not role copy', async () => {
+  webhooksStatus = 403;
+  forbiddenMessage = 'API key is restricted to selected chats';
+  try {
+    renderWebhooks();
+    await rtl.screen.findByText('No access to webhooks');
+    rtl.screen.getByText('API key is restricted to selected chats');
+    assert.equal(rtl.screen.queryByText('Webhooks require an API key with the operator or admin role.') === null, true);
+  } finally {
+    forbiddenMessage = 'Insufficient permissions. Required: operator';
+  }
+});
+
+test('a viewer key is shown the permission state without a list request the gateway would refuse', async () => {
+  webhooksStatus = 200;
+  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  renderWebhooks();
+  await rtl.screen.findByText('No access to webhooks');
+  assert.ok(!rtl.screen.queryByText('No webhooks configured'), 'a read nobody sent claimed there are no webhooks');
+
+  // A retry or a window focus would send it again; give either the time to.
+  window.dispatchEvent(new window.Event('focus'));
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(webhookReads, 0, 'the viewer page asked the gateway for the webhook list');
 });
 
 test('any other failed read shows the error, not an empty list', async () => {
@@ -176,6 +212,65 @@ test('the filter badge popover names enum values in words, like the filter build
     // A contact field has no labels; its JIDs are shown as they are.
     'Sender is 628123@c.us',
   ]);
+});
+
+// The popover is fixed against the viewport and was placed at the badge's left edge and below its bottom edge, so a
+// badge near the right edge of a phone, or near the bottom of a short window, pushed it past the screen.
+test('the filter badge popover stays inside the viewport', async () => {
+  webhooksStatus = 200;
+  webhookList = [
+    {
+      id: 'w1',
+      sessionId: 'sess-1',
+      url: 'https://example.test/hook',
+      events: ['message.received'],
+      active: true,
+      filters: { conditions: [{ field: 'sender', operator: 'is', value: ['628123@c.us'] }] },
+    },
+  ];
+  const sizes = Object.getOwnPropertyDescriptors(window.HTMLElement.prototype);
+  const innerWidth = window.innerWidth;
+  const innerHeight = window.innerHeight;
+  // jsdom lays nothing out: the popover is 240 by 80 px, the window 390 by 700.
+  const size = (name: 'offsetWidth' | 'offsetHeight', value: number) =>
+    Object.defineProperty(window.HTMLElement.prototype, name, {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains('filter-popover') ? value : 0;
+      },
+    });
+  size('offsetWidth', 240);
+  size('offsetHeight', 80);
+  window.innerWidth = 390;
+  window.innerHeight = 700;
+  try {
+    renderWebhooks();
+    const badge = (await rtl.screen.findByText('1 filter')).closest('.filter-badge') as HTMLElement;
+    const placeBadge = (left: number, top: number) => {
+      badge.getBoundingClientRect = () =>
+        ({ left, right: left + 70, top, bottom: top + 20, width: 70, height: 20, x: left, y: top }) as DOMRect;
+      rtl.fireEvent.blur(badge);
+      rtl.fireEvent.focus(badge);
+      const popover = document.querySelector<HTMLElement>('.filter-popover')!;
+      return { left: popover.style.left, top: popover.style.top };
+    };
+    // Room on both sides: below the badge, at its left edge.
+    assert.deepEqual(placeBadge(100, 200), { left: '100px', top: '226px' });
+    // Near the right edge: moved left until it ends 8px short of the edge.
+    assert.deepEqual(placeBadge(350, 200), { left: '142px', top: '226px' });
+    // Near the left edge: kept 8px off it.
+    assert.deepEqual(placeBadge(2, 200), { left: '8px', top: '226px' });
+    // Near the bottom: above the badge, whose top is at 650.
+    assert.deepEqual(placeBadge(100, 650), { left: '100px', top: '564px' });
+  } finally {
+    window.innerWidth = innerWidth;
+    window.innerHeight = innerHeight;
+    for (const name of ['offsetWidth', 'offsetHeight'] as const) {
+      const original = sizes[name];
+      if (original) Object.defineProperty(window.HTMLElement.prototype, name, original);
+      else delete (window.HTMLElement.prototype as unknown as Record<string, unknown>)[name];
+    }
+  }
 });
 
 test('a second click on Create while the first create is in flight sends nothing', async () => {
@@ -251,6 +346,33 @@ test('Create stays disabled with a hint while no event is selected', async () =>
   assert.equal(create.disabled, false);
 });
 
+// The gateway takes an http(s) URL of at most 2048 characters. Anything else was sent, and a production gateway, which
+// hides validation detail, answered "Failed to create webhook: Bad Request", naming no field.
+const LONG_URL = `https://example.test/${'a'.repeat(2030)}`;
+for (const [url, hint] of [
+  ['example.com/hook', 'Use a full http:// or https:// address, like https://example.com/webhook.'],
+  ['localhost:3000/hook', 'Use a full http:// or https:// address, like https://example.com/webhook.'],
+  ['ftp://example.com/hook', 'Use a full http:// or https:// address, like https://example.com/webhook.'],
+  [LONG_URL, `Limited to 2048 characters (${LONG_URL.length} now).`],
+] as const) {
+  test(`Create holds a URL the gateway refuses, and says why (${url.slice(0, 24)})`, async () => {
+    const { screen, fireEvent } = rtl;
+    webhooksStatus = 200;
+    sessionList = [{ id: 'sess-1', name: 'Main', status: 'ready', createdAt: '2026-01-01T00:00:00.000Z' }];
+    window.sessionStorage.setItem('openwa_user_role', 'operator');
+    renderWebhooks();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Webhook' }));
+    const sessionSelect = screen.getByLabelText<HTMLSelectElement>('Session');
+    await rtl.findByText(sessionSelect, 'Main');
+    fireEvent.change(sessionSelect, { target: { value: 'sess-1' } });
+    fireEvent.change(screen.getByLabelText('URL'), { target: { value: url } });
+    const create = screen.getByRole<HTMLButtonElement>('button', { name: 'Create' });
+    assert.equal(create.disabled, true, 'Create was offered for a URL the gateway refuses');
+    screen.getByText(hint);
+  });
+}
+
 async function openEditModal(): Promise<HTMLButtonElement> {
   webhooksStatus = 200;
   webhookList = [
@@ -281,6 +403,18 @@ test('Save stays disabled with a hint while no event is selected', async () => {
   fireEvent.click(save);
   await new Promise(resolve => setTimeout(resolve, 50));
   assert.equal(updateCalls, 0);
+});
+
+// A URL stored before the gateway required a scheme is sent back on every save and refused with a bare "Bad Request",
+// so the edit says what is wrong with it instead of failing each time.
+test('Save holds a stored URL the gateway now refuses, and says why', async () => {
+  const { screen, fireEvent } = rtl;
+  const save = await openEditModal();
+  fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'example.com/hook' } });
+  assert.equal(save.disabled, true, 'Save was offered for a URL the gateway refuses');
+  screen.getByText('Use a full http:// or https:// address, like https://example.com/webhook.');
+  fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://example.com/hook' } });
+  assert.equal(save.disabled, false);
 });
 
 test('Save stays disabled while the URL is empty', async () => {

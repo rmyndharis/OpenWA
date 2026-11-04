@@ -16,7 +16,7 @@ import {
   ENGINE_REFUSED_403,
 } from '../../common/openapi/engine-status-responses';
 
-/** Delete, mute and unsubscribe refuse a non-channel id up front, before any channel lookup. */
+/** Delete, mute, unsubscribe, demote and transfer refuse a non-channel id up front, before any channel lookup. */
 const CHANNEL_ID_INVALID_404 =
   'The id is not a channel id (it does not end in `@newsletter`). Retrying the same id cannot succeed.';
 
@@ -80,7 +80,7 @@ export class ChannelController {
   @ApiQuery({
     name: 'limit',
     required: false,
-    type: Number,
+    type: 'integer',
     description: 'Max messages to return (default 50, max 100)',
   })
   @ApiResponse({ status: 200, description: 'List of channel messages', type: [ChannelMessageDto] })
@@ -218,6 +218,7 @@ export class ChannelController {
       'The whatsapp-web.js engine cannot perform this: the WhatsApp Web module its library method ' +
       'targets no longer exports the function. Use the Baileys engine.',
   })
+  @ApiResponse({ status: 404, description: CHANNEL_ID_INVALID_404 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async demoteAdmin(
     @Param('sessionId') sessionId: string,
@@ -263,6 +264,7 @@ export class ChannelController {
       'The whatsapp-web.js engine cannot perform this: its page function rejects every call locally ' +
       'against a subscriber list the page cannot repopulate. Use the Baileys engine.',
   })
+  @ApiResponse({ status: 404, description: CHANNEL_ID_INVALID_404 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async transferOwnership(
     @Param('sessionId') sessionId: string,

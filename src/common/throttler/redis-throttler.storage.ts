@@ -51,6 +51,9 @@ return {hits, ttl}
 export class RedisThrottlerStorage implements ThrottlerStorage, OnModuleDestroy {
   private readonly logger = createLogger('RedisThrottlerStorage');
 
+  /** Checks that failed open since Redis last answered: only the first one of an outage is logged. */
+  private failedOpen = 0;
+
   constructor(private readonly redis: Redis) {
     // An ioredis client with no 'error' listener reports every connection failure via an unstructured
     // console dump; log it through the structured logger instead. Never rethrow — the client keeps
@@ -97,6 +100,10 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnModuleDestroy 
         number,
         number,
       ];
+      if (this.failedOpen > 0) {
+        this.logger.log(`Redis throttler storage answered again after ${this.failedOpen} checks failed open`);
+        this.failedOpen = 0;
+      }
       const isBlocked = hits > limit;
       return {
         totalHits: hits,
@@ -105,9 +112,12 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnModuleDestroy 
         timeToBlockExpire: isBlocked ? Math.max(1, Math.ceil(ttlMs / 1000)) : 0,
       };
     } catch (error) {
-      this.logger.warn('Redis throttler storage failed; failing OPEN (allowing)', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // Every guarded request checks three throttlers, so a line per failure flooded the log for a whole outage.
+      if (this.failedOpen++ === 0) {
+        this.logger.warn('Redis throttler storage failed; failing OPEN (allowing) until it answers again', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       return { totalHits: 0, timeToExpire: 0, isBlocked: false, timeToBlockExpire: 0 };
     }
   }

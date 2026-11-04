@@ -18,11 +18,12 @@ import { Public, RequireRole, RequireUnscopedKey } from '../auth/decorators/auth
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { EngineFactory } from '../../engine/engine.factory';
 import { getEffectiveWebVersionInfo, resolveCurrentWebVersion } from '../../engine/wa-web-version';
-import { DockerService } from '../docker';
+import { DockerService, namesBundledContainer } from '../docker';
 import { CacheService } from '../../common/cache/cache.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { createLogger } from '../../common/services/logger.service';
 import { readGeneratedEnv } from './generated-env';
+import { effectiveBuiltInFlag } from './saved-builtin-mode';
 import { isEnvPinned } from '../../config/env-precedence';
 import { DEFAULT_PUPPETEER_ARGS } from '../../config/configuration';
 import { checkForUpdate, type UpdateCheck } from './update-check';
@@ -30,14 +31,24 @@ import { checkForUpdate, type UpdateCheck } from './update-check';
 interface InfraStatus {
   // `builtIn` reflects whether OpenWA's own bundled container is actually running and backing this
   // service (detected live from the labeled container), not merely the saved intent. Falls back to the
-  // saved flag when Docker is unavailable. (#488)
-  database: { connected: boolean; type: string; host: string; builtIn: boolean };
-  redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean };
+  // saved flag, the environment's first, when Docker is unavailable. (#488)
+  // `running` is whether a bundled container OpenWA created is up, whether or not the service uses it; false for
+  // one Docker Compose created, and absent when Docker is unavailable, since nothing can be seen or stopped then.
+  database: { connected: boolean; type: string; host: string; builtIn: boolean; running?: boolean };
+  redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean; running?: boolean };
   queue: {
     enabled: boolean;
     webhooks: { pending: number; completed: number; failed: number };
   };
-  storage: { type: 'local' | 's3'; path?: string; bucket?: string; builtIn: boolean; s3Available?: boolean };
+  storage: {
+    type: 'local' | 's3';
+    path?: string;
+    bucket?: string;
+    endpoint?: string;
+    builtIn: boolean;
+    running?: boolean;
+    s3Available?: boolean;
+  };
   engine: {
     type: string;
     headless: boolean;
@@ -56,15 +67,39 @@ interface InfraStatus {
 }
 
 /**
- * The keys behind the Infrastructure page's editable controls that a shipped compose file or an
- * operator variable is known to pin. docker-compose.dev.yml pins the local storage path and the three
- * whatsapp-web.js launch options with non-empty defaults. Only page controls are reported: naming
- * variables the page cannot edit would be noise.
+ * Every key a save from the Infrastructure page writes (PUT /infra/config), so the page can name each one a layer
+ * above the file pins: an unreported pin under an edited field reads as a change the next boot makes.
+ * docker-compose.dev.yml pins the local storage path and the three whatsapp-web.js launch options with non-empty
+ * defaults; the compose .env route pins the datastore settings. Only page controls are reported: naming variables
+ * the page cannot edit would be noise. A pinned host decides the Use Built-in mode of its service.
  */
 const DASHBOARD_PINNABLE_ENV_KEYS = [
   'DATABASE_TYPE',
+  'POSTGRES_BUILTIN',
+  'DATABASE_HOST',
+  'DATABASE_PORT',
+  'DATABASE_USERNAME',
+  'DATABASE_PASSWORD',
+  'DATABASE_NAME',
+  'DATABASE_POOL_SIZE',
+  'POSTGRES_SCHEMA',
+  'DATABASE_SSL',
+  'DATABASE_SSL_REJECT_UNAUTHORIZED',
   'REDIS_ENABLED',
+  'REDIS_BUILTIN',
+  'REDIS_TLS',
+  'REDIS_USERNAME',
+  'REDIS_HOST',
+  'REDIS_PORT',
+  'REDIS_PASSWORD',
+  'QUEUE_ENABLED',
   'STORAGE_TYPE',
+  'MINIO_BUILTIN',
+  'S3_ENDPOINT',
+  'S3_BUCKET',
+  'S3_REGION',
+  'S3_ACCESS_KEY_ID',
+  'S3_SECRET_ACCESS_KEY',
   'STORAGE_LOCAL_PATH',
   'ENGINE_TYPE',
   'PUPPETEER_HEADLESS',
@@ -181,16 +216,23 @@ export class InfraStatusController {
 
     // Built-in detection: prefer the actually-running bundled container as truth (so a stopped/missing
     // container, or a host-pinned external host, reads as NOT built-in), and require the app to be
-    // pointed at the bundled service. Fall back to the saved *_BUILTIN intent when Docker is
-    // unreachable (bare-npm / socket-less) so the toggles don't spuriously flip off. (#488)
+    // pointed at the bundled service either way. Fall back to the saved *_BUILTIN flag (the environment's first)
+    // when Docker is unreachable (bare-npm / socket-less) so the toggles don't spuriously flip off; a flag only
+    // decides whether the container starts at boot, so it counts beside the bundled host alone. (#488) The labelled
+    // container may be another instance's on the same daemon: it counts whenever this one's host is spelled like the
+    // bundled one (docs/13, Scaling Guidelines).
+    // `running` names a container OpenWA created beside this instance's own built-in flag only: the container names
+    // are fixed per daemon, so a second instance there sees the first one's containers, which are not its to stop.
     const s3Endpoint = this.configService.get<string>('storage.s3.endpoint');
     const running = this.dockerService.isDockerAvailable()
       ? await this.dockerService.getRunningBuiltinServices()
       : null;
     const savedBuiltin = this.readSavedBuiltinFlags();
-    const dbBuiltIn = running ? running.database && dbHost === 'postgres' : savedBuiltin.database;
-    const redisBuiltIn = running ? running.cache && redisHost === 'redis' : savedBuiltin.cache;
-    const storageBuiltIn = running ? running.storage && s3Endpoint === 'http://minio:9000' : savedBuiltin.storage;
+    const dbBuiltIn =
+      (running ? !!running.database : savedBuiltin.database) && namesBundledContainer('postgres', dbHost);
+    const redisBuiltIn = (running ? !!running.cache : savedBuiltin.cache) && namesBundledContainer('redis', redisHost);
+    const storageBuiltIn =
+      (running ? !!running.storage : savedBuiltin.storage) && namesBundledContainer('minio', s3Endpoint);
     // Re-probe (throttled) so a MinIO/S3 that came up after boot is reflected, not latched unreachable.
     const s3Available = storageType === 's3' ? await this.storageService.refreshS3Availability() : undefined;
 
@@ -212,13 +254,20 @@ export class InfraStatusController {
     }
 
     return {
-      database: { connected: dbConnected, type: dbType, host: dbHost, builtIn: dbBuiltIn },
+      database: {
+        connected: dbConnected,
+        type: dbType,
+        host: dbHost,
+        builtIn: dbBuiltIn,
+        ...(running ? { running: running.database === 'openwa' && savedBuiltin.database } : {}),
+      },
       redis: {
         enabled: redisEnabled,
         connected: redisConnected,
         host: redisHost,
         port: redisPort,
         builtIn: redisBuiltIn,
+        ...(running ? { running: running.cache === 'openwa' && savedBuiltin.cache } : {}),
       },
       queue: {
         enabled: queueEnabled,
@@ -228,7 +277,10 @@ export class InfraStatusController {
         type: storageType,
         path: storagePath,
         ...(storageType === 's3' && storageBucket ? { bucket: storageBucket } : {}),
+        // The endpoint this process dials: a bundled MinIO that is stopped still names it, an external store does not.
+        ...(storageType === 's3' && s3Endpoint ? { endpoint: s3Endpoint } : {}),
         builtIn: storageBuiltIn,
+        ...(running ? { running: running.storage === 'openwa' && savedBuiltin.storage } : {}),
         ...(storageType === 's3' ? { s3Available } : {}),
       },
       engine: {
@@ -242,14 +294,17 @@ export class InfraStatusController {
     };
   }
 
-  /** Saved built-in intent flags from data/.env.generated — the fallback when Docker isn't reachable. */
+  /**
+   * The saved built-in flags, the fallback when Docker isn't reachable: the environment's, else
+   * data/.env.generated's. A host name proves nothing without a container to see, so none counts here.
+   */
   private readSavedBuiltinFlags(): { database: boolean; cache: boolean; storage: boolean } {
     try {
       const saved = readGeneratedEnv();
       return {
-        database: saved.POSTGRES_BUILTIN === 'true',
-        cache: saved.REDIS_BUILTIN === 'true',
-        storage: saved.MINIO_BUILTIN === 'true',
+        database: effectiveBuiltInFlag('database', saved),
+        cache: effectiveBuiltInFlag('redis', saved),
+        storage: effectiveBuiltInFlag('storage', saved),
       };
     } catch {
       return { database: false, cache: false, storage: false };

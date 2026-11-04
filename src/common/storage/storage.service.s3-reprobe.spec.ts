@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { Readable } from 'stream';
+import { PassThrough, Readable } from 'stream';
 import { ConfigService } from '@nestjs/config';
 
 // Mock the AWS SDK so no real network call is made. Each test drives `mockSend`: HeadBucket probes
@@ -33,6 +33,8 @@ import {
   S3_PROBE_TIMEOUT_MS,
   StorageService,
 } from './storage.service';
+import { sweepOrphanedFiles } from './orphan-sweep';
+import * as transfer from './storage-transfer';
 
 const ENV_KEYS = [
   'S3_ENDPOINT',
@@ -292,7 +294,7 @@ describe('StorageService S3 re-probe and recovery', () => {
     expect(data.toString()).toBe('from-s3');
   });
 
-  it('openFile hands the S3 body through unread, with the object length as its size', async () => {
+  it('openFile streams the S3 body, with the object length as its size', async () => {
     const body = Readable.from([Buffer.from('from-s3')]);
     mockSend.mockImplementation((cmd: unknown) => {
       if (cmd instanceof GetObjectCommand) return Promise.resolve({ Body: body, ContentLength: 7 });
@@ -301,7 +303,11 @@ describe('StorageService S3 re-probe and recovery', () => {
     const svc = new StorageService(makeConfig());
     await flush();
 
-    await expect(svc.openFile('present.bin')).resolves.toEqual({ stream: body, size: 7 });
+    const { stream, size } = await svc.openFile('present.bin');
+    expect(size).toBe(7);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+    expect(Buffer.concat(chunks).toString()).toBe('from-s3');
   });
 
   it('openFile reads a missing S3 object through from the local fallback dir, and rejects when neither has it', async () => {
@@ -478,6 +484,100 @@ describe('StorageService S3 re-probe and recovery', () => {
     const result = await svc.getFileCount();
     expect(result.count).toBe(3);
     expect(result.sizeBytes).toBe(1000 + 10 + 500);
+  });
+
+  // The count is the pre-check an operator runs before the export, so it must promise exactly the files the
+  // archive will hold: not a console-made folder placeholder, and not a key the export cannot open.
+  it('getFileCount counts the files the export carries, not folder placeholders or unsafe keys', async () => {
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof ListObjectsV2Command) {
+        return Promise.resolve({
+          Contents: [
+            { Key: 'media/a.bin', Size: 1000 },
+            { Key: 'media/sess1/', Size: 0 },
+            { Key: 'media/sess1/b.bin', Size: 2000 },
+            { Key: 'media/empty.bin', Size: 0 },
+            { Key: 'media/../outside.bin', Size: 7 },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+    const svc = new StorageService(makeConfig());
+    warnSpyOf(svc);
+    await flush();
+    fs.writeFileSync(path.join(localPath, 'local-only.bin'), Buffer.alloc(500));
+    fs.writeFileSync(path.join(localPath, 'bad\u0001name.bin'), Buffer.alloc(9));
+    const exported = jest.spyOn(transfer, 'createExportStream').mockResolvedValue(new PassThrough());
+
+    const { count, sizeBytes } = await svc.getFileCount();
+    await svc.createExportStream();
+    const carried = await exported.mock.calls[0][0]();
+    exported.mockRestore();
+
+    expect(carried.sort()).toEqual(['empty.bin', 'local-only.bin', 'a.bin', 'sess1/b.bin'].sort());
+    expect(count).toBe(carried.length);
+    expect(sizeBytes).toBe(1000 + 2000 + 500);
+  });
+
+  // An S3 store is walked in two parts: the bucket, then the local fallback dir. A sweep only acts on the files it
+  // is shown, so a directory it cannot read or a link in that fallback dir has to be skipped there as well, or
+  // every pass aborts and reclaims nothing. The count and the export are the other way round and still refuse.
+  it('the orphan sweep of an S3 store skips what it cannot read in the local fallback dir, which the count and the export refuse', async () => {
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof ListObjectsV2Command) {
+        return Promise.resolve({ Contents: [{ Key: 'media/statuses/s3-only.bin', Size: 10 }] });
+      }
+      return Promise.resolve({});
+    });
+    const svc = new StorageService(makeConfig());
+    const warn = warnSpyOf(svc);
+    await flush();
+    for (const file of ['statuses/local/readable.bin', 'statuses/locked/hidden.bin', 'elsewhere/behind.bin']) {
+      fs.mkdirSync(path.dirname(path.join(localPath, file)), { recursive: true });
+      fs.writeFileSync(path.join(localPath, file), 'x');
+    }
+    fs.symlinkSync(path.join(localPath, 'elsewhere'), path.join(localPath, 'statuses', 'linked'));
+    // A mode-000 directory is still readable by root, so the failure is injected for the one path.
+    const readdir = fs.promises.readdir.bind(fs.promises) as (...args: unknown[]) => Promise<unknown>;
+    const readdirSpy = jest
+      .spyOn(fs.promises, 'readdir')
+      .mockImplementation(((target: fs.PathLike, ...rest: unknown[]) =>
+        String(target).endsWith(path.join('statuses', 'locked'))
+          ? Promise.reject(Object.assign(new Error('EACCES: permission denied, scandir'), { code: 'EACCES' }))
+          : readdir(target, ...rest)) as never);
+    try {
+      const deleteFile = jest.fn().mockResolvedValue(undefined);
+
+      const removed = await sweepOrphanedFiles({
+        storage: { iterateFiles: (prefix, options) => svc.iterateFiles(prefix, options), deleteFile },
+        prefix: 'statuses/',
+        graceMs: 0,
+        now: 1000,
+        firstSeenAt: new Map(),
+        referencedAmong: () => Promise.resolve(new Set<string | undefined>()),
+        onDeleteFailed: jest.fn(),
+      });
+
+      expect(removed).toBe(2);
+      expect(deleteFile.mock.calls.map(([file]: [string]) => file).sort()).toEqual([
+        'statuses/local/readable.bin',
+        'statuses/s3-only.bin',
+      ]);
+      const skipped = warn.mock.calls.map(([line]: [string]) => line).join('\n');
+      expect(skipped).toContain('"statuses/linked"');
+      expect(skipped).toContain('"statuses/locked"');
+      await expect(svc.getFileCount()).rejects.toThrow(/symbolic link.*statuses\/linked/);
+      // The export refuses the same store: an archive that silently lacked those files would lose them.
+      await expect(svc.createExportStream()).rejects.toThrow(/symbolic link.*statuses\/linked/);
+
+      // With the link gone, the unreadable directory alone is refused by both.
+      fs.unlinkSync(path.join(localPath, 'statuses', 'linked'));
+      await expect(svc.getFileCount()).rejects.toThrow(/cannot be read.*statuses\/locked/);
+      await expect(svc.createExportStream()).rejects.toThrow(/cannot be read.*statuses\/locked/);
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   it('iterateFiles paginates S3 and unions the local fallback dir (each key once)', async () => {

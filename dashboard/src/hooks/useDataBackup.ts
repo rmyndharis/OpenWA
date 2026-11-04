@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { shouldOfferStopOrphansRetry } from '../utils/importRefusal';
 import { keepsSameKey } from '../utils/authLifecycle';
 import { useTranslation } from 'react-i18next';
@@ -20,6 +20,14 @@ export function useDataBackup(): DataBackup {
   const { t } = useTranslation();
   const toast = useToast();
   const [migrating, setMigrating] = useState(false);
+  const importOwnerRef = useRef<object | null>(null);
+
+  useEffect(() => {
+    importOwnerRef.current = {};
+    return () => {
+      importOwnerRef.current = null;
+    };
+  }, []);
 
   // Download a JSON backup of all Data-DB tables. Called BEFORE a DB switch (while still on the old
   // database) so the data can be re-imported into the new one — switching otherwise starts empty (#488).
@@ -68,9 +76,17 @@ export function useDataBackup(): DataBackup {
   // retrying one with stopOrphans would run a second destructive replace the operator never asked
   // for. force=true is deliberately not offered (the api client does not even send it): it leaves
   // the engines running until a restart.
-  const runImport = async (tables: Record<string, unknown[]>, stopOrphans = false): Promise<void> => {
+  const runImport = async (
+    tables: Record<string, unknown[]>,
+    isCurrent: () => boolean,
+    sameKey: () => boolean,
+    stopOrphans = false,
+  ): Promise<void> => {
+    if (!isCurrent()) return;
     try {
       const res = await infraApi.importData(tables, stopOrphans ? { stopOrphans: true } : undefined);
+      // The replace has run: its outcome is reported wherever the operator is now, unless another key took over.
+      if (!sameKey()) return;
       if (res.imported) {
         // notices carry non-fatal operator messages (orphan teardown details); restartRequired
         // means a teardown failed and only a restart guarantees cleanup — surface both on success.
@@ -86,13 +102,21 @@ export function useDataBackup(): DataBackup {
         );
       }
     } catch (err) {
+      if (!sameKey()) return;
       const status = (err as { status?: number } | null)?.status;
       const code = (err as { code?: string } | null)?.code;
       if (shouldOfferStopOrphansRetry(status, code, stopOrphans) && err instanceof Error) {
         // The confirm doubles as the refusal display: OK retries with stopOrphans=true, Cancel
         // leaves the engines (and the current data) untouched. A 409 on the retry itself (an
         // engine started mid-import) falls through to the plain error toast — no confirm loop.
-        if (window.confirm(err.message)) await runImport(tables, true);
+        // Not put to an operator who has left the page: the refusal is reported and nothing is stopped.
+        if (!isCurrent()) {
+          toast.error(t('infrastructure.migration.importFailed'), err.message);
+          return;
+        }
+        const retry = window.confirm(err.message);
+        if (!isCurrent()) return;
+        if (retry) await runImport(tables, isCurrent, sameKey, true);
         else toast.error(t('infrastructure.migration.importFailed'), err.message);
         return;
       }
@@ -111,24 +135,35 @@ export function useDataBackup(): DataBackup {
   // Restore a previously-exported backup into the CURRENT database (use after switching + restart).
   // Import REPLACES all current data, so validate + confirm (showing the row count) before any call.
   const importBackup = async (file: File) => {
-    let parsed: { tables?: Record<string, unknown[]> };
-    try {
-      parsed = JSON.parse(await file.text()) as { tables?: Record<string, unknown[]> };
-    } catch {
-      toast.error(t('infrastructure.migration.importFailed'), t('infrastructure.migration.invalidFile'));
-      return;
-    }
-    if (!parsed?.tables || typeof parsed.tables !== 'object') {
-      toast.error(t('infrastructure.migration.importFailed'), t('infrastructure.migration.invalidFile'));
-      return;
-    }
-    const rows = Object.values(parsed.tables).reduce((n, a) => n + (Array.isArray(a) ? a.length : 0), 0);
-    if (!window.confirm(t('infrastructure.migration.importConfirm', { rows }))) return;
+    if (!sessionStorage.getItem('openwa_api_key') || importOwnerRef.current === null) return;
+    // A newer selection or an unmount retires what has not been sent yet, including a delayed refusal retry.
+    const owner = {};
+    importOwnerRef.current = owner;
+    const sameKey = keepsSameKey();
+    const isCurrent = () => importOwnerRef.current === owner && sameKey();
     setMigrating(true);
     try {
-      await runImport(parsed.tables);
+      let parsed: { tables?: Record<string, unknown[]> };
+      try {
+        const text = await file.text();
+        if (!isCurrent()) return;
+        parsed = JSON.parse(text) as { tables?: Record<string, unknown[]> };
+      } catch {
+        if (isCurrent()) {
+          toast.error(t('infrastructure.migration.importFailed'), t('infrastructure.migration.invalidFile'));
+        }
+        return;
+      }
+      if (!isCurrent()) return;
+      if (!parsed?.tables || typeof parsed.tables !== 'object') {
+        toast.error(t('infrastructure.migration.importFailed'), t('infrastructure.migration.invalidFile'));
+        return;
+      }
+      const rows = Object.values(parsed.tables).reduce((n, a) => n + (Array.isArray(a) ? a.length : 0), 0);
+      if (!window.confirm(t('infrastructure.migration.importConfirm', { rows })) || !isCurrent()) return;
+      await runImport(parsed.tables, isCurrent, sameKey);
     } finally {
-      setMigrating(false);
+      if (importOwnerRef.current === owner) setMigrating(false);
     }
   };
 

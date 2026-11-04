@@ -4,6 +4,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { applyGlobalValidation } from './../src/config/app-validation';
+import { configureApp } from './../src/configure-app';
 import { AuthService } from './../src/modules/auth/auth.service';
 import { ApiKeyRole } from './../src/modules/auth/entities/api-key.entity';
 import { renderHttpRequestMetrics, resetHttpRequestMetrics } from './../src/common/metrics/request-metrics';
@@ -28,14 +29,7 @@ describe('App smoke (e2e)', () => {
   });
 
   afterAll(async () => {
-    // app.close() can throw a "could not find DataSource" during TypeORM's shutdown hook because
-    // both connections are NAMED ('main'/'data') with no default DataSource — a teardown-only
-    // artifact, not an app bug (the smoke assertions above already validated a healthy boot).
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('GET /api/health is public and returns ok', () => {
@@ -73,6 +67,23 @@ describe('App smoke (e2e)', () => {
 
   it('GET /api/sessions without an API key is rejected (401)', () => {
     return request(app.getHttpServer()).get('/api/sessions').expect(401);
+  });
+
+  // A driver refuses an OFFSET of 2^63 or more, so a window that far out answered 500 instead of an
+  // empty page. Through the real controllers, query parsing and services, on the database the app booted.
+  it('GET the session and message lists answer an empty page for an offset past the largest safe integer', async () => {
+    const { rawKey } = await app.get(AuthService).createApiKey({ name: 'e2e-offset', role: ApiKeyRole.VIEWER });
+    const offset = '99999999999999999999';
+
+    const sessions = await request(app.getHttpServer()).get(`/api/sessions?offset=${offset}`).set('X-API-Key', rawKey);
+    expect(sessions.status).toBe(200);
+    expect(sessions.body).toEqual([]);
+
+    const messages = await request(app.getHttpServer())
+      .get(`/api/sessions/0a941dac-a965-45e7-b318-74ae8be134f0/messages?offset=${offset}`)
+      .set('X-API-Key', rawKey);
+    expect(messages.status).toBe(200);
+    expect(messages.body).toMatchObject({ messages: [], total: 0 });
   });
 
   it('GET an unknown route returns 404', () => {
@@ -122,7 +133,9 @@ describe('App RED metrics (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication();
+    // `bodyParser: false` matches main.ts: configureApp installs the only parsers, and the metrics boundary.
+    app = moduleFixture.createNestApplication({ bodyParser: false });
+    configureApp(app);
     applyGlobalValidation(app);
     await app.init();
 
@@ -135,11 +148,7 @@ describe('App RED metrics (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('records a guard-rejected request (401, no API key) with its real status and route', async () => {

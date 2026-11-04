@@ -48,7 +48,9 @@ class WebhooksResource
      *                                        `sessionId`, `event`, `url`, `attempts`, `lastError` and
      *                                        `createdAt`, plus nullable `idempotencyKey`, `deliveryId`
      *                                        and `lastStatusCode`, and `replayable` (true when the row
-     *                                        can be replayed with redriveDeliveryFailures)
+     *                                        still holds its event data and its webhook still exists;
+     *                                        redriveDeliveryFailures replays it while that webhook is
+     *                                        active and subscribed to the event)
      */
     public function deliveryFailures(array $query = [])
     {
@@ -94,10 +96,9 @@ class WebhooksResource
      */
     public function create(string $sessionId, array $body): array
     {
-        // headers is a map: an empty PHP array would serialize as a JSON list [] and be rejected by
-        // the gateway's object validation. Cast the empty map to stdClass so it encodes as {}.
-        if (isset($body['headers']) && $body['headers'] === []) {
-            $body['headers'] = new \stdClass();
+        // Preserve object-map shape without writing through caller-held references.
+        if (isset($body['headers']) && is_array($body['headers'])) {
+            $body = array_merge($body, ['headers' => (object) $body['headers']]);
         }
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks", [], $body);
     }
@@ -112,9 +113,8 @@ class WebhooksResource
      */
     public function update(string $sessionId, string $id, array $body): array
     {
-        // Same empty-map cast as create(): headers must encode as {} when empty.
-        if (isset($body['headers']) && $body['headers'] === []) {
-            $body['headers'] = new \stdClass();
+        if (isset($body['headers']) && is_array($body['headers'])) {
+            $body = array_merge($body, ['headers' => (object) $body['headers']]);
         }
         return $this->http->request('PUT', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks/{$this->http->encodeSegment($id)}", [], $body);
     }

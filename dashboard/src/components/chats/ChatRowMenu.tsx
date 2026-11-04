@@ -1,7 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown } from 'lucide-react';
 import type { Chat } from '../../services/api';
+import { chatTitle } from '../../utils/formatPhone';
+import { isComposingKey } from '../../utils/composition';
 import { chatActionItems, type ChatActionItem, type ChatRowActions } from './chatActionItems';
 
 /**
@@ -70,13 +72,36 @@ export function ChatActions({
  * button, and a control nested in one is unreachable to assistive technology. A disclosure of plain
  * buttons, not role="menu", which would promise roving focus and arrow keys.
  */
-function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions }) {
+function ChatRowMenu({
+  chat,
+  actions,
+  open,
+  onOpenChange,
+}: {
+  chat: Chat;
+  actions: ChatRowActions;
+  /** Owned by the list, which keeps one row menu open at a time and draws that row again as its actions change. */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const { t } = useTranslation();
   const items = chatActionItems(chat, actions, t);
-  const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  // A menu that leaves the page open (another tab, the new-chat panel, a filtered list) is closed, so the row does
+  // not come back with it open. Closing because another row opened is a no-op for the list, which names that row.
+  useEffect(() => {
+    if (!open) return;
+    return () => onOpenChange(false);
+  }, [open, onOpenChange]);
+  // A 1:1 chat's entries read the address book (Save or Rename), which is asked for once its menu is open. Asked from
+  // here, after the list has drawn the row again with the page's current actions, and again as they change.
+  const onMenuOpen = actions.onMenuOpen;
+  useEffect(() => {
+    if (open && chat.kind === 'individual') onMenuOpen?.();
+  }, [open, chat.kind, onMenuOpen]);
 
   // The popover is placed fixed against the viewport, so the scrolling chat list does not clip it: below
   // the chevron when it fits, above it otherwise, aligned to the chevron's end edge and kept on screen.
@@ -93,7 +118,9 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
     const top = fitsBelow ? anchor.bottom + gap : Math.max(margin, anchor.top - gap - height);
     const start = rtl ? anchor.left : anchor.right - width;
     const left = Math.min(Math.max(margin, start), window.innerWidth - width - margin);
-    Object.assign(popover.style, { position: 'fixed', top: `${top}px`, left: `${left}px`, insetInlineEnd: 'auto' });
+    // Physical edges: the stylesheet pins the end edge, and releasing it as inset-inline-end would release `left`
+    // in a right-to-left page, throwing the computed position away.
+    Object.assign(popover.style, { position: 'fixed', top: `${top}px`, left: `${left}px`, right: 'auto' });
   }, [open]);
 
   // Closes on a press outside and on Escape, which it takes in the capture phase so the page leaves the
@@ -101,29 +128,31 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
   useEffect(() => {
     if (!open) return;
     const onPress = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(event.target as Node)) onOpenChange(false);
     };
     const onEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return;
+      if (event.key !== 'Escape' || isComposingKey(event) || event.defaultPrevented) return;
       event.preventDefault();
-      setOpen(false);
+      onOpenChange(false);
       triggerRef.current?.focus();
     };
-    // A fixed popover would drift from its row, so a scroll of the list or a resize closes it.
-    const onMove = (event: Event) => {
-      if (!popoverRef.current?.contains(event.target as Node)) setOpen(false);
+    // A fixed popover would drift from its row, so a resize closes it, and so does a scroll of anything the row
+    // sits in. The scroll of another element (the open thread following a live message) does not move the row.
+    const onScroll = (event: Event) => {
+      if ((event.target as Node).contains(rootRef.current)) onOpenChange(false);
     };
+    const onResize = () => onOpenChange(false);
     document.addEventListener('mousedown', onPress);
     document.addEventListener('keydown', onEscape, true);
-    document.addEventListener('scroll', onMove, true);
-    window.addEventListener('resize', onMove);
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
     return () => {
       document.removeEventListener('mousedown', onPress);
       document.removeEventListener('keydown', onEscape, true);
-      document.removeEventListener('scroll', onMove, true);
-      window.removeEventListener('resize', onMove);
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
     };
-  }, [open]);
+  }, [open, onOpenChange]);
 
   // A row with nothing to offer (a read-only key on a 1:1 chat) gets no chevron at all.
   if (items.length === 0) return null;
@@ -134,9 +163,9 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
         ref={triggerRef}
         type="button"
         className="chat-row-menu-trigger"
-        onClick={() => setOpen(value => !value)}
+        onClick={() => onOpenChange(!open)}
         aria-expanded={open}
-        aria-label={t('chats.rowActions.actionsFor', { name: chat.name || chat.id.split('@')[0] })}
+        aria-label={t('chats.rowActions.actionsFor', { name: chatTitle(chat) })}
         title={t('chats.moreActions')}
       >
         <ChevronDown size={18} />
@@ -147,7 +176,12 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
             chat={chat}
             items={items}
             groupClassName="chat-row-menu-group"
-            onPicked={() => setOpen(false)}
+            onPicked={() => {
+              // Focus moves to the chevron, which stays: the picked entry is about to unmount, and a dialog it
+              // opens restores focus to whatever holds it then.
+              onOpenChange(false);
+              triggerRef.current?.focus();
+            }}
           />
         </div>
       )}

@@ -72,7 +72,8 @@ describe('SearchService', () => {
           chatId: '628123@c.us',
           chatIdAliases: ['628123@c.us', '628123@s.whatsapp.net', '999@lid'],
           from: '628555@c.us',
-          fromAliases: ['628555@c.us'],
+          // With the bare digits an earlier version stored as the account's own sender.
+          fromAliases: ['628555@c.us', '628555'],
         }),
       );
     });

@@ -1,12 +1,17 @@
 /**
- * rc14 backports of WhiskeySockets/Baileys #2749 and #2765, with one adaptation.
+ * rc14 backports of WhiskeySockets/Baileys #2749 and #2765, with four adaptations.
  * Pre-login notifications have no creds.me; ACKs must still be sent. When WA
  * retires unpaired registration material, rotate only its advertisement secret,
  * persist it through creds.update and re-render the current QR without spending
  * another ref. Registered/pairing-code sessions and malformed nodes stay intact.
- * Adaptation: once creds.me is set (a pairing code was requested, or the device
- * is registered) the QR timer stops. Upstream keeps it running, so there running
- * out of refs ends the socket with 'QR refs attempts ended'; here it never does.
+ * Adaptations:
+ * - once creds.me is set (a pairing code was requested, or the device is
+ *   registered) the QR timer stops. Upstream keeps it running, so there running
+ *   out of refs ends the socket with 'QR refs attempts ended'; here it never does.
+ * - a new pair-device flow clears the QR timer of the flow before it.
+ * - the secret is not rotated while the socket is closed.
+ * - the ACK takes #2749's bare creds.me?.id; #2765 instead refuses to ack a
+ *   message node before creds.me is set.
  * Sources: https://github.com/WhiskeySockets/Baileys/pull/2749 (3868667)
  *          https://github.com/WhiskeySockets/Baileys/pull/2765 (4f263f0)
  * Neither PR is merged. Retire after an upstream release includes both fixes.
@@ -15,6 +20,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { writeFilesAtomic } = require('./atomic-write');
 const DEFAULT_BAILEYS = path.join(__dirname, '..', 'node_modules', '@whiskeysockets', 'baileys');
 const QR_FIND = String.raw`    // QR gen
     ws.on('CB:iq,type:set,pair-device', async (stanza) => {
@@ -141,19 +147,24 @@ function applyPairingPatch(dir = DEFAULT_BAILEYS) {
   const items = classify(dir);
   if (items.every(item => item.state === 'applied')) return { skipped: true };
   if (!items.every(item => item.state === 'pristine')) {
+    // The files are replaced in GROUPS order, so a run cut short by a failed rename leaves the first ones patched
+    // and the rest pristine. Only a reinstall restores that tree; any other mix is a shape this backport does not know.
+    const patched = items.filter(item => item.state === 'applied').length;
+    const cutShort = patched > 0 && items.every((item, i) => item.state === (i < patched ? 'applied' : 'pristine'));
     const error = Error(
-      'Unknown or partially patched Baileys pairing shape; no files written. Re-evaluate upstream #2749/#2765.',
+      cutShort
+        ? `Baileys pairing backport cut short: ${GROUPS.slice(0, patched)
+            .map(([relative]) => relative)
+            .join(', ')} is patched and the rest is not, which only an interrupted run leaves; no files written. ` +
+            'Reinstall @whiskeysockets/baileys (`rm -rf node_modules/@whiskeysockets/baileys && npm ci`) and re-run.'
+        : 'Unknown or partially patched Baileys pairing shape; no files written. Re-evaluate upstream #2749/#2765.',
     );
-    error.partial = items.some(item => item.state === 'applied');
+    error.partial = patched > 0;
     throw error;
   }
-  try {
-    for (const item of items) fs.writeFileSync(item.file, item.source.replace(item.find, item.replace));
-  } catch (error) {
-    // A failed write may have left part of either file; best-effort cannot accept that tree.
-    error.partial = true;
-    throw error;
-  }
+  // Both files are staged before the first is replaced, so a failed write leaves the tree as it was. Only
+  // a rename that fails after the first one went through leaves half a patch, and is marked partial.
+  writeFilesAtomic(items.map(item => [item.file, item.source.replace(item.find, item.replace)]));
   return { skipped: false };
 }
 function run(dir = DEFAULT_BAILEYS, bestEffort = process.argv.includes('--best-effort')) {

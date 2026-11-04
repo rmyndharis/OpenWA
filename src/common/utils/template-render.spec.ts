@@ -1,4 +1,4 @@
-import { renderedLength, renderTemplate, TemplateRenderError } from './template-render';
+import { renderedLength, renderTemplate, TemplateRenderError, templateVariableNames } from './template-render';
 
 describe('renderTemplate', () => {
   describe('canonical double-brace {{name}}', () => {
@@ -89,11 +89,13 @@ describe('renderedLength', () => {
     expect(renderedLength(body, vars)).toBe(renderTemplate(body, vars).length);
   });
 
-  it('measures a huge expansion without building it', () => {
-    // 1365 single-brace placeholders fit in a 4 KiB body; one 393 KB value makes half a gigabyte.
+  it('measures an expansion too large to build without building it', () => {
+    // 1365 single-brace placeholders fit in a 4 KiB body; a 1 MB value makes 1.4 billion characters, more than a
+    // string can hold. A measure that built the text first would throw here instead of answering.
     const body = '{a}'.repeat(1365);
-    const vars = { a: 'x'.repeat(393_000) };
-    expect(renderedLength(body, vars)).toBe(1365 * 393_000);
+    const vars = { a: 'x'.repeat(1_000_000) };
+    expect(() => renderTemplate(body, vars)).toThrow(RangeError);
+    expect(renderedLength(body, vars)).toBe(1365 * 1_000_000);
   });
 });
 
@@ -115,5 +117,25 @@ describe('a variable that is not a string', () => {
     const { toString, value } = counting();
     expect(renderedLength('{{a}}-'.repeat(1000), { a: value })).toBe(11_000);
     expect(toString).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('templateVariableNames', () => {
+  it.each([
+    ['', []],
+    ['no placeholders', []],
+    ['Hi {{name}} and {name}', ['name', 'name']],
+    ['{{ first.name }}-{{order-id}}-{plain}', ['first.name', 'order-id', 'plain']],
+    ['{{}} { } {a b} {{a b}}', []],
+  ])('lists the variables of %p', (body, names) => {
+    expect(templateVariableNames(body)).toEqual(names);
+  });
+
+  it('names exactly the placeholders the renderer substitutes', () => {
+    const body = 'a {{x}} b {y} c {{ z.w }} d {{-}} e {not a var} f {{q}}{r}';
+    const names = templateVariableNames(body);
+    const vars = Object.fromEntries(names.map(name => [name, '#']));
+    // Every listed name is replaced, and nothing else is: the unlisted braces are left as written.
+    expect(renderTemplate(body, vars)).toBe('a # b # c # d # e {not a var} f ##');
   });
 });

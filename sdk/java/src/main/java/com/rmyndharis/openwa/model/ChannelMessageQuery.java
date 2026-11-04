@@ -9,7 +9,7 @@ public record ChannelMessageQuery(Integer limit) {
     public static final class Builder {
         private Integer limit;
 
-        /** Max messages to return (default 50). */
+        /** Max messages to return (default 50, max 100: a larger value is cut to 100). */
         public Builder limit(Integer v) {
             this.limit = v;
             return this;

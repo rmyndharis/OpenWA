@@ -3,6 +3,8 @@ import { ChannelService } from './channel.service';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { WwebjsChannels } from '../../engine/adapters/wwebjs-channels';
+import type { WwebjsEngineHost } from '../../engine/adapters/wwebjs-host';
 
 describe('ChannelService', () => {
   const makeService = (engine: Partial<IWhatsAppEngine> | undefined) => {
@@ -43,6 +45,24 @@ describe('ChannelService', () => {
     const getChannelMessages = jest.fn().mockResolvedValue([]);
     await makeService({ getChannelMessages }).getChannelMessages('s1', 'ch1', input);
     expect(getChannelMessages).toHaveBeenCalledWith('ch1', expected);
+  });
+
+  it('answers a created channel without a description when the body sent null', async () => {
+    const create = jest.fn().mockResolvedValue({ nid: { _serialized: '120363000@newsletter' }, title: 'News' });
+    const host = {
+      ensureReady: jest.fn(),
+      getClient: () => ({ createChannel: create }),
+      isPageTransportError: () => false,
+      reportIfPageTransportError: jest.fn(),
+      logger: { debug: jest.fn(), warn: jest.fn() },
+    } as unknown as WwebjsEngineHost;
+    const channels = new WwebjsChannels(host);
+    const svc = makeService({ createChannel: (name, description) => channels.createChannel(name, description) });
+
+    const created = await svc.createChannel('s1', 'News', null as unknown as string);
+
+    expect(create).toHaveBeenCalledWith('News', {});
+    expect(created).toEqual({ id: '120363000@newsletter', name: 'News' });
   });
 
   it('demoteChannelAdmin forwards the channel and user to the engine, dropping the sessionId', async () => {

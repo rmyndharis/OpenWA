@@ -1,4 +1,18 @@
-import { Controller, Get, Post, Put, Delete, Param, Body, Query, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Param,
+  Body,
+  Query,
+  Req,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { GroupService } from './group.service';
 import {
@@ -6,6 +20,7 @@ import {
   ParticipantsDto,
   GroupSubjectDto,
   GroupDescriptionDto,
+  GroupMemberLabelDto,
   JoinGroupDto,
   GroupSettingsDto,
   MembershipRequestActionDto,
@@ -69,6 +84,25 @@ const PACED_PARTICIPANT_400 =
 // EngineRegistry.require() answers 400 for a session with no engine; ENGINE_NOT_READY_409 covers only
 // an engine that exists but is not ready. The body variant is for routes that also validate a DTO.
 const BODY_OR_SESSION_400 = 'The body failed validation, or the session is not started (no engine is running for it).';
+
+/**
+ * Approve and reject act on EVERY pending request when `participants` is absent, so a body that was sent but
+ * never became the DTO must not pass for an absent one. The parsers read only application/json and
+ * application/x-www-form-urlencoded and leave the body of any other type unread (a `fetch` with a string body
+ * and no headers sends text/plain), and a bare `[]` carries no property for the whitelist to refuse. Both
+ * reach the handler as an empty object.
+ */
+function assertActionBodyRead(req: Request): void {
+  const hasBody = Number(req.headers['content-length'] ?? 0) > 0 || req.headers['transfer-encoding'] !== undefined;
+  if (hasBody && req.is(['application/json', 'application/x-www-form-urlencoded']) === false) {
+    throw new BadRequestException(
+      'The request body was not read: send it as application/json, or send no body to act on every request',
+    );
+  }
+  if (Array.isArray(req.body)) {
+    throw new BadRequestException('The body must be a JSON object such as {"participants": [...]}, not a list');
+  }
+}
 
 // NOTE: the session→groups LIST lives on the SessionController at GET /sessions/:sessionId/groups (it
 // registered first and owns the canonical narrow projection). A bare @Get() here would collide on
@@ -158,7 +192,7 @@ export class GroupController {
 
   @ChatScoped('fenced')
   @Get(':groupId/settings')
-  @ApiOperation({ summary: 'Get group settings (announce / locked / ephemeral timer)' })
+  @ApiOperation({ summary: 'Get group settings (announce / locked / ephemeral timer / member-add mode)' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiResponse({ status: 200, description: 'Group settings', type: GroupSettingsResponseDto })
@@ -180,12 +214,18 @@ export class GroupController {
   @ChatScoped('fenced')
   @Put(':groupId/settings')
   @RequireRole(ApiKeyRole.OPERATOR)
-  @ApiOperation({ summary: 'Update group settings (announce / locked / ephemeral timer)' })
+  @ApiOperation({ summary: 'Update group settings (announce / locked / ephemeral timer / member-add mode)' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: GroupSettingsDto })
   @ApiResponse({ status: 200, description: 'Group settings updated', type: GroupAckResponseDto })
-  @ApiResponse({ status: 400, description: 'No setting provided, or a value is not a boolean' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'No setting provided, an unknown body field, or an invalid value: `announce` and `locked` take a boolean, ' +
+      '`ephemeralSeconds` an integer of 0 or more, `memberAddMode` `all` or `admins`, and `null` is refused. ' +
+      'Also answered when the session is not started (no engine is running for it).',
+  })
   @ApiResponse({ status: 403, description: 'The engine refused the change (the account is not a group admin)' })
   @ApiResponse({ status: 404, description: 'Group not found' })
   @ApiResponse({ status: 501, description: 'The active engine does not support a requested setting' })
@@ -389,7 +429,9 @@ export class GroupController {
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
     @Body() dto: MembershipRequestActionDto,
+    @Req() req: Request,
   ) {
+    assertActionBodyRead(req);
     const results = await this.groupService.approveGroupMembershipRequests(sessionId, groupId, dto.participants);
     return { success: true, message: 'Membership requests approved', results };
   }
@@ -423,7 +465,9 @@ export class GroupController {
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
     @Body() dto: MembershipRequestActionDto,
+    @Req() req: Request,
   ) {
+    assertActionBodyRead(req);
     const results = await this.groupService.rejectGroupMembershipRequests(sessionId, groupId, dto.participants);
     return { success: true, message: 'Membership requests rejected', results };
   }
@@ -482,6 +526,60 @@ export class GroupController {
   ) {
     await this.groupService.setGroupDescription(sessionId, groupId, dto.description);
     return { success: true, message: 'Group description updated' };
+  }
+
+  @ChatScoped('fenced')
+  @Put(':groupId/member-label')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({
+    summary: "Set this account's member label in a group",
+    description:
+      "Sets the per-group label WhatsApp shows beside this account's name in the group; an empty string clears " +
+      'it. Baileys only: whatsapp-web.js has no member-label setter and answers 501.',
+  })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'groupId', description: 'Group ID' })
+  @ApiBody({ type: GroupMemberLabelDto })
+  @ApiResponse({
+    status: 200,
+    description:
+      'The label message was handed to WhatsApp. Baileys sends it to the group as a protocol message with no ' +
+      'per-request confirmation, and group metadata does not carry the label, so it cannot be read back.',
+    type: GroupAckResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'The body failed validation (`label` missing, not a string, or longer than 30 UTF-16 code units), the id ' +
+      'does not name a group, or the session is not started (no engine is running for it).',
+  })
+  @ApiResponse({
+    status: 403,
+    description:
+      'WhatsApp refused the group lookup the label message depends on, for example because the account is ' +
+      'no longer a member of the group',
+  })
+  @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({
+    status: 501,
+    description:
+      'Not supported by the active engine: whatsapp-web.js has no member-label setter, so this is Baileys-only.',
+  })
+  @ApiResponse({
+    status: 503,
+    description:
+      'WhatsApp did not answer within the request budget. The label may or may not have been sent; the ' +
+      'gateway stopped waiting for the send to finish.' +
+      THROTTLED_503,
+  })
+  async setMemberLabel(
+    @Param('sessionId') sessionId: string,
+    @Param('groupId') groupId: string,
+    @Body() dto: GroupMemberLabelDto,
+  ) {
+    await this.groupService.setGroupMemberLabel(sessionId, groupId, dto.label);
+    return { success: true, message: 'Group member label sent' };
   }
 
   @ChatScoped('fenced')

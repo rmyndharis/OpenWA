@@ -36,3 +36,26 @@ test('parseEditScope: a blank field resets a bound scope to all sessions', () =>
   assert.equal(parseEditScope('sess-a', ''), null);
   assert.equal(parseEditScope('*', ''), null);
 });
+
+for (const [label, secret, valid] of [
+  ['blank', '', true],
+  ['whitespace', '   ', true],
+  ['ASCII below minimum', 'x'.repeat(15), false],
+  ['ASCII minimum', 'x'.repeat(16), true],
+  ['ASCII maximum', 'x'.repeat(512), true],
+  ['ASCII over maximum', 'x'.repeat(513), false],
+  ['eight astral characters', '\u{1F600}'.repeat(8), false],
+  ['astral below minimum', '\u{1F600}'.repeat(15), false],
+  ['astral minimum', '\u{1F600}'.repeat(16), true],
+  ['astral maximum', '\u{1F600}'.repeat(512), true],
+  ['astral over maximum', '\u{1F600}'.repeat(513), false],
+  ['presentation below minimum', '\u2764\uFE0F'.repeat(15), false],
+  ['presentation minimum', '\u2764\uFE0F'.repeat(16), true],
+  ['presentation maximum', '\u2764\uFE0F'.repeat(512), true],
+  ['presentation over maximum', '\u2764\uFE0F'.repeat(513), false],
+  ['padded valid astral secret', `  ${'\u{1F600}'.repeat(16)}  `, true],
+] as const) {
+  test(`instance secret validation: ${label}`, () => {
+    assert.equal(isValidInstanceSecret(secret), valid);
+  });
+}

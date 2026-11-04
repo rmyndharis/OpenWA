@@ -61,13 +61,16 @@ func (s *ChatsService) Delete(ctx context.Context, sessionID string, body Delete
 }
 
 // Archive archives or unarchives a chat. A false Success means the engine
-// declined — on Baileys a chat with no known history cannot be archived.
+// declined — on Baileys an id the session knows no chat for. A known chat with
+// no message in memory or stored is archived without one.
 func (s *ChatsService) Archive(ctx context.Context, sessionID string, body ArchiveChatRequest) (*SuccessResult, error) {
 	return s.post(ctx, sessionID, "/archive", body)
 }
 
 // Pin pins a chat to the top of the list, or unpins it. A false Success means
-// WhatsApp declined — an account may pin only three chats at a time.
+// WhatsApp declined: an account may pin only three chats at a time. Only
+// whatsapp-web.js reports that refusal; Baileys cannot observe the cap and
+// always answers true.
 func (s *ChatsService) Pin(ctx context.Context, sessionID string, body PinChatRequest) (*SuccessResult, error) {
 	return s.post(ctx, sessionID, "/pin", body)
 }
@@ -84,7 +87,7 @@ func (s *ChatsService) Mute(ctx context.Context, sessionID string, body MuteChat
 
 // ClearMessages deletes every message in a chat, keeping the chat itself. A
 // false Success means the engine declined — an unknown chat, or on Baileys a
-// chat with no known history. On success the gateway also deletes its stored
+// chat with no message in memory or stored. On success the gateway also deletes its stored
 // copy of the chat's messages (rows, inline and archived media, search
 // entries); export the history first if you need it.
 func (s *ChatsService) ClearMessages(ctx context.Context, sessionID, chatID string) (*SuccessResult, error) {

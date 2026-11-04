@@ -192,6 +192,20 @@ describe('PluginSearchProvider', () => {
     expect(res.hits[0].timestamp).toBe(1700000000);
   });
 
+  it.each([
+    ['unscoped', undefined],
+    ['scoped', ['s1']],
+  ])('returns at most the requested limit when the plugin answers with more (%s)', async (_label, sessionIds) => {
+    const hits = Array.from({ length: 5000 }, (_, i) => mkHit({ messageId: `m${i}`, sessionId: 's1' }));
+    const results: SearchResults = { hits, total: 5000, tookMs: 1, provider: 'plugin:p' };
+    const dispatchSearch = jest.fn().mockResolvedValue({ ok: true, results });
+    const p = new PluginSearchProvider('p', 'P', fakeTransport({ dispatchSearch }), 1000);
+
+    const res = await p.search({ q: 'hi', limit: 10, sessionIds });
+    expect(res.hits.map(h => h.messageId)).toEqual(hits.slice(0, 10).map(h => h.messageId));
+    expect(res.total).toBe(5000);
+  });
+
   describe('result shape validation (untrusted wire payload)', () => {
     const providerReturning = (results: unknown): PluginSearchProvider =>
       new PluginSearchProvider(

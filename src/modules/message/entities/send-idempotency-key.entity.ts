@@ -9,7 +9,8 @@ import { DateTransformer } from '../../../common/transformers/date.transformer';
  *  - 'failed'    - the send failed in a way that does not say whether WhatsApp got the message (an
  *                  engine error or timeout). The key stays taken so a retry cannot send it twice.
  * A refusal before the engine call deletes the row, so the client may retry with the same key.
- * Engine-stage failures keep it taken regardless of HTTP status, including a disconnected socket's 409.
+ * Engine-stage failures keep it taken whatever their HTTP status, including a disconnected socket's 409,
+ * unless the engine proves that nothing was sent (see sendFailureProvesNothingSent), which deletes it too.
  */
 export type SendIdempotencyState = 'pending' | 'completed' | 'failed';
 

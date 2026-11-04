@@ -53,4 +53,10 @@ describe('AuditController filter validation', () => {
       undefined,
     );
   });
+
+  // Dropping the apiKeyId pass-through would make ?apiKeyId= silently return every key's rows.
+  it('passes the sessionId and apiKeyId filters through, and parses limit and offset as integers', async () => {
+    await controller.findAll(undefined, undefined, undefined, 's1', 'key-1', '25', '50');
+    expect(findAll).toHaveBeenCalledWith({ sessionId: 's1', apiKeyId: 'key-1', limit: 25, offset: 50 }, undefined);
+  });
 });

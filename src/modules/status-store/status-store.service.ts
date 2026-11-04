@@ -92,9 +92,9 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Insert a status row (idempotent on `(sessionId, waStatusId)`), persisting any attached media.
-   * `created` tells the caller whether this call actually inserted the row — false for a duplicate
-   * delivery or a lost insert race — so a once-per-status side effect (the status.received webhook)
-   * doesn't fire again for a status consumers already saw.
+   * `created` tells the caller whether this call actually inserted the row: false for a duplicate
+   * delivery, a lost insert race, or a row removed while its media was written, so a once-per-status
+   * side effect (the status.received webhook) doesn't fire again for a status consumers already saw.
    *
    * Row-first ordering: the row is saved BEFORE its media file is written. A crash mid-ingest then
    * leaves a consistent media-omitted row behind (the worst case is a missing attachment), never a
@@ -146,9 +146,8 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
         throw error;
       }
 
-      if (keepMedia) {
-        await this.attachMedia(saved, sessionId, s);
-      }
+      // A row removed while its media was being written (a purge, a session delete) was never stored.
+      if (keepMedia && !(await this.attachMedia(saved, sessionId, s))) return { row: saved, created: false };
       return { row: saved, created: true };
     } finally {
       if (!lifetime) scope.close();
@@ -193,11 +192,12 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
    * Write the media file for a row already saved in the omitted-for-now state, then point the row at
    * it. A failed write is recorded as omitReason 'write_failed' rather than thrown — a storage
    * hiccup must not lose the status itself. A failure of the follow-up row update leaves the file
-   * unreferenced; that is the reconciliation sweep's job, so it is logged and swallowed here.
+   * unreferenced; that is the reconciliation sweep's job, so it is logged and swallowed here. Returns
+   * false when the row no longer exists: the file is removed and nothing was published.
    */
-  private async attachMedia(row: StatusUpdate, sessionId: string, s: IncomingStatus): Promise<void> {
+  private async attachMedia(row: StatusUpdate, sessionId: string, s: IncomingStatus): Promise<boolean> {
     const media = s.media;
-    if (!media?.data) return;
+    if (!media?.data) return true;
 
     const key = `${STATUS_MEDIA_PREFIX}${sessionId}/${randomUUID()}.${extFromMimetype(media.mimetype)}`;
     try {
@@ -213,14 +213,14 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
           error: String(err),
         }),
       );
-      return;
+      return true;
     }
 
     row.mediaPath = key;
     row.mediaMimetype = media.mimetype;
     row.mediaOmitted = false;
     try {
-      await this.repository.update(
+      const result = await this.repository.update(
         { id: row.id, sessionId },
         {
           mediaPath: row.mediaPath,
@@ -228,6 +228,13 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
           mediaOmitted: false,
         },
       );
+      if (result.affected === 0) {
+        row.mediaPath = undefined;
+        row.mediaMimetype = undefined;
+        row.mediaOmitted = true;
+        await this.storageService.deleteFile(key).catch(() => undefined); // else the orphan sweep reaps it
+        return false;
+      }
     } catch (error) {
       // The file exists but the row cannot reference it — an orphan the reconciliation sweep reaps
       // after its grace window. The persisted row stays consistent (still omitted from the first
@@ -244,6 +251,7 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
       // omission — the media really is gone (nothing retries), so say so.
       row.omitReason = 'write_failed';
     }
+    return true;
   }
 
   // Reads exclude already-expired rows: WhatsApp hides a status the moment its 24h are up, but the

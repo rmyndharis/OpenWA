@@ -9,7 +9,8 @@ import {
 import { LoggerService } from '../../common/services/logger.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { In, IsNull } from 'typeorm';
+import { DataSource, In, IsNull, Repository } from 'typeorm';
+import { failUnfinishedSessionBatches } from './batch-media.util';
 import {
   BulkMessageService,
   resolveFinalBatchStatus,
@@ -71,7 +72,7 @@ describe('resolveMaxConcurrentBatches', () => {
 /** Regression lock: orphaned (restart-interrupted) PROCESSING batches are transitioned. */
 describe('BulkMessageService.onApplicationBootstrap', () => {
   let service: BulkMessageService;
-  let repo: { find: jest.Mock; save: jest.Mock; update: jest.Mock };
+  let repo: { find: jest.Mock; findOne: jest.Mock; save: jest.Mock; update: jest.Mock };
   const failedWrite = (id: string): [object, unknown] => [
     { id, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
     expect.objectContaining({ status: BatchStatus.FAILED }) as unknown,
@@ -80,6 +81,11 @@ describe('BulkMessageService.onApplicationBootstrap', () => {
   beforeEach(async () => {
     repo = {
       find: jest.fn().mockResolvedValue([]),
+      // A reaper scans ids, then reads each row whole: that read answers from the rows the scan was given.
+      findOne: jest.fn(async ({ where }: { where: { id: string } }) => {
+        const scanned = (await repo.find.mock.results.at(-1)?.value) as MessageBatch[] | undefined;
+        return scanned?.find(batch => batch.id === where.id) ?? null;
+      }),
       save: jest.fn().mockImplementation(b => Promise.resolve(b)),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
@@ -119,6 +125,7 @@ describe('BulkMessageService.onApplicationBootstrap', () => {
     await service.onApplicationBootstrap();
 
     expect(repo.find).toHaveBeenCalledWith({
+      select: { id: true, sessionId: true },
       where: { status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
     });
     expect(repo.update).toHaveBeenCalledWith(...failedWrite('b1'));
@@ -185,6 +192,7 @@ describe('BulkMessageService.onApplicationBootstrap', () => {
     const reaped = await service.reapProcessingBatches('sess-a', 'session adopted from a lapsed node');
 
     expect(repo.find).toHaveBeenCalledWith({
+      select: { id: true },
       where: { status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]), sessionId: 'sess-a' },
     });
     expect(reaped).toBe(1);
@@ -243,6 +251,7 @@ describe('BulkMessageService.onApplicationBootstrap', () => {
     await onAdoption.mock.calls[0][0]('sess-a');
 
     expect(repo.find).toHaveBeenCalledWith({
+      select: { id: true },
       where: { status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]), sessionId: 'sess-a' },
     });
     expect(repo.update).toHaveBeenCalledWith(...failedWrite('b-dead'));
@@ -317,6 +326,109 @@ describe('BulkMessageService.onApplicationBootstrap', () => {
       expect(repo.update).toHaveBeenCalledTimes(1);
       expect(repo.update).toHaveBeenCalledWith(...failedWrite('b2'));
     });
+  });
+});
+
+/**
+ * An unfinished batch still holds its media payloads (they are dropped on its terminal write), so a reaper
+ * that reads every unfinished row at once holds all of them together, a live peer's included: after a crash
+ * mid-run that can be more than the restart has room for.
+ */
+describe('reaping unfinished batches', () => {
+  const payload = 'QUJD'.repeat(256);
+  let db: DataSource;
+  let repository: Repository<MessageBatch>;
+  /** Per read, the batches it brought in with their stored messages. */
+  let reads: string[][];
+
+  beforeEach(async () => {
+    db = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [MessageBatch],
+      synchronize: true,
+    }).initialize();
+    repository = db.getRepository(MessageBatch);
+    reads = [];
+    const record = <T extends MessageBatch | MessageBatch[] | null>(rows: T): T => {
+      reads.push(([rows ?? []].flat() as MessageBatch[]).filter(row => row.messages).map(row => row.batchId));
+      return rows;
+    };
+    const find = repository.find.bind(repository);
+    const findOne = repository.findOne.bind(repository);
+    jest.spyOn(repository, 'find').mockImplementation(async options => record(await find(options)));
+    jest.spyOn(repository, 'findOne').mockImplementation(async options => record(await findOne(options)));
+  });
+
+  afterEach(() => db.destroy());
+
+  const store = (batchId: string, sessionId: string): Promise<MessageBatch> =>
+    repository.save({
+      batchId,
+      sessionId,
+      status: BatchStatus.PROCESSING,
+      messages: [{ chatId: '628111111111@c.us', type: 'image', content: { image: { base64: payload } } }],
+      options: { delayBetweenMessages: 1000, randomizeDelay: false, stopOnError: false },
+      progress: { total: 1, pending: 1, sent: 0, failed: 0, cancelled: 0 },
+      results: [],
+      currentIndex: 0,
+    } as Partial<MessageBatch>);
+
+  /** A process that may claim only `owned` sessions; every other one is held by a live peer. */
+  const reaper = (owned: string[]): BulkMessageService =>
+    new BulkMessageService(
+      repository,
+      new EngineRegistry(),
+      {} as never,
+      {} as never,
+      {} as never,
+      {
+        claimable: (ids: string[]) => Promise.resolve(ids.filter(id => owned.includes(id))),
+      } as never,
+    );
+
+  const stateOf = async (batchId: string): Promise<[BatchStatus, boolean]> => {
+    const row = await db.manager.findOneByOrFail(MessageBatch, { batchId });
+    return [row.status, JSON.stringify(row.messages).includes(payload)];
+  };
+
+  it('reads the batches it fails one at a time at boot, and never one a live peer holds', async () => {
+    await store('mine-1', 'my-session');
+    await store('mine-2', 'my-session');
+    await store('peers', 'peer-session');
+
+    await reaper(['my-session']).onApplicationBootstrap();
+
+    expect(reads.flat().sort()).toEqual(['mine-1', 'mine-2']);
+    expect(Math.max(...reads.map(read => read.length))).toBe(1);
+    expect(await stateOf('mine-1')).toEqual([BatchStatus.FAILED, false]);
+    expect(await stateOf('peers')).toEqual([BatchStatus.PROCESSING, true]);
+  });
+
+  it('reads the batches it fails one at a time on a takeover, and never one this process still runs', async () => {
+    const running = await store('running', 's1');
+    await store('dead-1', 's1');
+    await store('dead-2', 's1');
+    const bulk = reaper(['s1']);
+    (bulk as unknown as { processingBatches: Map<string, boolean> }).processingBatches.set(running.id, true);
+
+    expect(await bulk.reapProcessingBatches('s1', 'session taken from a lapsed node')).toBe(2);
+
+    expect(reads.flat().sort()).toEqual(['dead-1', 'dead-2']);
+    expect(Math.max(...reads.map(read => read.length))).toBe(1);
+    expect(await stateOf('dead-1')).toEqual([BatchStatus.FAILED, false]);
+    expect(await stateOf('running')).toEqual([BatchStatus.PROCESSING, true]);
+  });
+
+  it("reads a session's batches one at a time when it fails them all", async () => {
+    await store('one', 's1');
+    await store('two', 's1');
+
+    await failUnfinishedSessionBatches(db, 's1');
+
+    expect(reads.flat().sort()).toEqual(['one', 'two']);
+    expect(Math.max(...reads.map(read => read.length))).toBe(1);
+    expect(await stateOf('two')).toEqual([BatchStatus.FAILED, false]);
   });
 });
 
@@ -1391,6 +1503,35 @@ describe('BulkMessageService.processBatch', () => {
       expect.objectContaining({ type: 'voice' }),
       expect.anything(),
     );
+  });
+
+  // One voice note carries one type end to end, as on a single voice send: message:sending reads the item
+  // the gate is offered, message:failed the content that was attempted (after a gate rewrite).
+  it.each([
+    ['a ptt item as voice', { url: 'https://x/v', ptt: true }, undefined, ['voice', 'voice']],
+    ['a plain audio item as audio', { url: 'https://x/v' }, undefined, ['audio', 'audio']],
+    [
+      'a ptt item the gate rewrites to plain audio as voice, then audio',
+      { url: 'https://x/v', ptt: true },
+      { audio: { url: 'https://x/v', ptt: false } },
+      ['voice', 'audio'],
+    ],
+  ])('reports %s to message:sending and message:failed', async (_label, audio, rewrite, expected) => {
+    engine.sendAudioMessage = jest.fn().mockRejectedValue(new Error('boom'));
+    const batch = makeBatch(1);
+    batch.messages = [{ chatId: 'c0@c.us', type: 'audio', content: { audio } }];
+    repo.findOne.mockResolvedValue(batch);
+    if (rewrite) {
+      hookManager.execute.mockResolvedValueOnce({ continue: true, data: { input: { ...rewrite, chatId: 'c0@c.us' } } });
+    }
+
+    await runProcessBatch();
+
+    const typesOf = (event: string): string[] =>
+      hookManager.execute.mock.calls
+        .filter(([name]) => name === event)
+        .map(([, data]) => (data as { type: string }).type);
+    expect([...typesOf('message:sending'), ...typesOf('message:failed')]).toEqual(expected);
   });
 
   it('strips base64 media payloads from the stored batch once it completes (footprint)', async () => {

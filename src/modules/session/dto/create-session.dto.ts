@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsIn, IsObject, IsOptional, IsString, IsUrl, Matches, MaxLength, MinLength, Validate } from 'class-validator';
+import { ToStrictString } from '../../../common/utils/strict-boolean';
 import { MaxCodePoints } from '../../../common/validation/max-code-points';
 import { HasDecodableProxyCredentialsConstraint } from './has-decodable-proxy-credentials.validator';
 import { normaliseSessionConfig, RecognisedSessionConfigConstraint } from './recognised-session-config.validator';
@@ -12,6 +13,7 @@ export class CreateSessionDto {
     minLength: 3,
     maxLength: 50,
   })
+  @ToStrictString()
   @IsString()
   @MinLength(3)
   @MaxLength(50)
@@ -52,6 +54,7 @@ export class CreateSessionDto {
     maxLength: 255,
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxCodePoints(255)
   // Reject a malformed/non-proxy URL at the boundary (credentialed http://user:pass@host and

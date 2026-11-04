@@ -43,3 +43,10 @@ export class EnginePageError extends InternalServerErrorException {
     );
   }
 }
+
+/**
+ * The {@link EnginePageError} of a send WhatsApp Web refused with `No LID for user` whose recipient lookup then
+ * did not answer. Same status, body and unproven outcome, but the send breaker does not count it: one recipient
+ * the page could not look up says nothing about the account's standing.
+ */
+export class RecipientLookupUnansweredError extends EnginePageError {}

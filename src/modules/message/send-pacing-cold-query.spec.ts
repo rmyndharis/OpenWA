@@ -286,6 +286,11 @@ describe('group reachouts against a real database', () => {
     await expect(reachout('s1', ['a@c.us', 'a@c.us', 'a@c.us', 'b@c.us', 'b@c.us'])).resolves.toBeUndefined();
   });
 
+  // A bare number and its qualified form are the same contact: the engines qualify it themselves.
+  it('counts a bare number and its qualified form once', async () => {
+    await expect(reachout('s1', ['628111', '628111@c.us', '628222', '628222@c.us', 'c@c.us'])).resolves.toBeUndefined();
+  });
+
   // The two paths share one budget, so a day spent on direct messages leaves nothing for group adds.
   it("shares the day's budget with cold sends already made", async () => {
     await addMessage('dm-1@c.us', TODAY);

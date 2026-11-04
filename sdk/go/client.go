@@ -266,19 +266,25 @@ var idempotentSendSegments = map[string]bool{
 
 // isIdempotentSendPath reports whether path is /api/sessions/{id}/messages/{segment} for one of them.
 func isIdempotentSendPath(path string) bool {
+	if i := strings.IndexAny(path, "?#"); i >= 0 {
+		path = path[:i]
+	}
 	parts := strings.Split(path, "/")
 	return len(parts) == 6 && parts[1] == "api" && parts[2] == "sessions" && parts[4] == "messages" &&
 		idempotentSendSegments[parts[5]]
 }
 
 // doRaw performs the request and returns the response body and Content-Type.
-// Any non-2xx status (including an unfollowed 3xx) is an error.
+// Any non-2xx status (including an unfollowed 3xx or a final 1xx) is an error.
 //
 // A path segment that is "." or ".." is refused before sending: a proxy that
 // resolves dot segments would route the request to the parent resource. A
 // typed service path (rawPath false) also refuses an empty segment, which
 // means a required id was blank; a hand-written Do path may keep one.
 func (c *Client) doRaw(ctx context.Context, method, path string, query url.Values, body any, rawPath bool) ([]byte, string, error) {
+	// net/http sends the method as written and the gateway answers 400 to a lowercase one. The idempotency
+	// header and the retry policy compare the upper-case names as well.
+	method = strings.ToUpper(method)
 	if err := checkPathSegments(path, rawPath); err != nil {
 		return nil, "", err
 	}
@@ -293,18 +299,16 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 		reader = bytes.NewReader(b)
 	}
 
-	rawURL := c.baseURL + path
-	if len(query) > 0 {
-		sep := "?"
-		if strings.Contains(path, "?") {
-			sep = "&"
-		}
-		rawURL += sep + query.Encode()
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, reader)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
 	if err != nil {
 		return nil, "", fmt.Errorf("openwa: building request: %w", err)
+	}
+	// Merged into the parsed URL: appended to the string, the values would land inside a fragment.
+	if len(query) > 0 {
+		if req.URL.RawQuery != "" {
+			req.URL.RawQuery += "&"
+		}
+		req.URL.RawQuery += query.Encode()
 	}
 	// Read through the request: NewRequestWithContext has just refused a nil ctx, which ctx.Value would panic on.
 	if key, hasKey := req.Context().Value(idempotencyContextKey{}).(string); hasKey {
@@ -341,8 +345,8 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 		return nil, "", fmt.Errorf("openwa: reading response body: %w", err)
 	}
 
-	// Any non-2xx (including an unfollowed 3xx) is an error.
-	if resp.StatusCode >= 300 {
+	// Any non-2xx (including an unfollowed 3xx or a final 1xx) is an error.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", parseAPIError(resp.StatusCode, data, method+" "+path, resp.Header)
 	}
 	return data, resp.Header.Get("Content-Type"), nil
@@ -372,7 +376,8 @@ func isTimeout(err error) bool {
 // pathEscape percent-encodes a single path segment so a value containing "/",
 // "#", or "?" can't break out of its path position. WhatsApp-JID characters
 // that are already path-safe ("@", ":", "+") are kept readable. An empty, "."
-// or ".." id is left as is and refused by doRaw before anything is sent.
+// or ".." id, or one with a "." or ".." part between slashes, is refused by
+// doRaw before anything is sent.
 func pathEscape(segment string) string {
 	escaped := url.PathEscape(segment)
 	return jidRestorer.Replace(escaped)
@@ -382,10 +387,15 @@ var jidRestorer = strings.NewReplacer("%40", "@", "%3A", ":", "%2B", "+")
 
 var dotFolder = strings.NewReplacer("%2e", ".", "%2E", ".")
 
+// slashFolder reads an encoded slash or backslash as a separator, as a proxy that decodes the path
+// before it resolves dot segments does: such a proxy turns an id sent as "..%2Fx" into "../x".
+var slashFolder = strings.NewReplacer("%2f", "/", "%2F", "/", "%5c", "/", "%5C", "/", `\`, "/")
+
 // checkPathSegments refuses a path that does not begin with "/" (appended to the
 // base URL, "@host/x" would move the request and its API key to another host), a
-// "." or ".." segment (also written %2e), and an empty one unless allowEmpty. The
-// query and fragment are not path segments.
+// "." or ".." segment (also written %2e, or inside a segment after an encoded
+// slash), and an empty one unless allowEmpty. The query and fragment are not
+// path segments.
 func checkPathSegments(path string, allowEmpty bool) error {
 	if !strings.HasPrefix(path, "/") {
 		return fmt.Errorf("openwa: path must begin with \"/\": %q", path)
@@ -395,12 +405,15 @@ func checkPathSegments(path string, allowEmpty bool) error {
 		p = p[:i]
 	}
 	for _, seg := range strings.Split(p, "/")[1:] {
-		switch dotFolder.Replace(seg) {
-		case ".", "..":
-			return fmt.Errorf("openwa: dot path segment in %q", path)
-		case "":
+		if seg == "" {
 			if !allowEmpty {
 				return fmt.Errorf("openwa: empty path segment in %q", path)
+			}
+			continue
+		}
+		for _, part := range strings.Split(slashFolder.Replace(seg), "/") {
+			if dots := dotFolder.Replace(part); dots == "." || dots == ".." {
+				return fmt.Errorf("openwa: dot path segment in %q", path)
 			}
 		}
 	}

@@ -118,11 +118,20 @@ describe('KeyRateLimiter', () => {
     expect(() => rl.check('k')).not.toThrow();
   });
 
-  it('defaults to 60 calls per key per minute on the real clock', () => {
-    const rl = new KeyRateLimiter();
-    for (let i = 0; i < 60; i++) rl.check('k');
-    expect(() => rl.check('k')).toThrow(/rate limit/i);
-    expect(() => rl.check('other')).not.toThrow();
+  it('defaults to 60 calls per key per 60 s window on the default clock', () => {
+    jest.useFakeTimers();
+    try {
+      const rl = new KeyRateLimiter();
+      for (let i = 0; i < 60; i++) rl.check('k');
+      expect(() => rl.check('k')).toThrow(/rate limit/i);
+      expect(() => rl.check('other')).not.toThrow();
+      jest.advanceTimersByTime(59_999);
+      expect(() => rl.check('k')).toThrow(/rate limit/i);
+      jest.advanceTimersByTime(1);
+      expect(() => rl.check('k')).not.toThrow();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('buckets per key', () => {

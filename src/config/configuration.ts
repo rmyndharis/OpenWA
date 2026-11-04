@@ -129,10 +129,12 @@ export default () => ({
 
   // Global message search. Opt-out via SEARCH_ENABLED=false. Provider defaults to 'auto' (the
   // built-in DB full-text provider — Postgres tsvector/GIN, SQLite FTS5); 'none' disables the
-  // /search route + module at runtime while keeping the config namespace loaded.
+  // /search route + module at runtime while keeping the config namespace loaded. match=contains is
+  // opt-in (SEARCH_CONTAINS_ENABLED=true): its trigram index costs about three times the message text.
   search: {
     enabled: process.env.SEARCH_ENABLED !== 'false',
     provider: process.env.SEARCH_PROVIDER || 'auto',
+    containsEnabled: process.env.SEARCH_CONTAINS_ENABLED === 'true',
   },
 
   // Dashboard statistics. The /stats aggregates run GROUP BY scans over the whole messages

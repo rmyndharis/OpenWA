@@ -400,6 +400,20 @@ describe('StorageService.createExportStream enumerates the whole store', () => {
     expect(count).toBe(2); // the iterator's items are what was counted, not an unrelated walk
   });
 
+  it('counts only what the export carries: a folder placeholder and an unsafe key are left out', async () => {
+    const { service } = makeService();
+    jest.spyOn(service, 'iterateFiles').mockImplementation(async function* () {
+      yield await Promise.resolve('sess1/');
+      yield 'sess1/a.bin';
+      yield 'media/../x.bin';
+    });
+    jest.spyOn((service as unknown as { logger: { warn: () => void } }).logger, 'warn').mockImplementation(() => {});
+
+    const { count } = await service.getFileCount();
+
+    expect(count).toBe(1);
+  });
+
   /**
    * The size loop under the whole-store walk must not stat every file synchronously: on a large store
    * that holds the event loop for the whole walk, and health checks, webhooks and every in-flight
@@ -434,4 +448,70 @@ describe('StorageService.createExportStream enumerates the whole store', () => {
     expect(count).toBe(FILES); // the walk really did the work being measured
     expect(ticks).toBeGreaterThan(100);
   }, 30000);
+});
+
+describe('StorageService local store holding a symbolic link', () => {
+  let baseDir: string;
+  let localPath: string;
+  let service: StorageService;
+
+  beforeEach(() => {
+    ({ service, baseDir, localPath } = makeLocalService());
+    fs.mkdirSync(path.join(baseDir, 'bigdisk'), { recursive: true });
+    fs.writeFileSync(path.join(baseDir, 'bigdisk', 'archived.bin'), 'archived');
+    fs.mkdirSync(localPath, { recursive: true });
+    fs.writeFileSync(path.join(localPath, 'real.bin'), 'real');
+    fs.symlinkSync(path.join(baseDir, 'bigdisk'), path.join(localPath, 'chat-media'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  // The file count is the pre-check before the export that moves the store to another backend. Both must
+  // fail on a link rather than answer for a store that is missing the media behind it.
+  it('refuses a file count and an export, which would otherwise leave that media behind', async () => {
+    await expect(service.getFileCount()).rejects.toThrow(/symbolic link.*chat-media/);
+    await expect(service.createExportStream()).rejects.toThrow(/symbolic link.*chat-media/);
+  });
+
+  it('still serves the linked file and lets a sweep of the linked prefix list it', async () => {
+    expect((await service.getFile('chat-media/archived.bin')).toString()).toBe('archived');
+    const listed: string[] = [];
+    for await (const file of service.iterateFiles('chat-media/', { skipUnreadable: true })) listed.push(file);
+    expect(listed).toEqual(['chat-media/archived.bin']);
+  });
+});
+
+describe('StorageService local store on a volume whose lost+found it cannot read', () => {
+  let baseDir: string;
+  let service: StorageService;
+
+  beforeEach(() => {
+    let localPath: string;
+    ({ service, baseDir, localPath } = makeLocalService());
+    fs.mkdirSync(path.join(localPath, 'lost+found'), { recursive: true });
+    fs.writeFileSync(path.join(localPath, 'real.bin'), 'real');
+    // A mode-000 directory is still readable by root, so the failure is injected for that one path.
+    const readdir = fs.promises.readdir.bind(fs.promises) as (...args: unknown[]) => Promise<unknown>;
+    jest
+      .spyOn(fs.promises, 'readdir')
+      .mockImplementation(((target: fs.PathLike, ...rest: unknown[]) =>
+        String(target).endsWith('lost+found')
+          ? Promise.reject(Object.assign(new Error('EACCES: permission denied, scandir'), { code: 'EACCES' }))
+          : readdir(target, ...rest)) as never);
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  it('counts the media around it, as it did before directories were required to be readable', async () => {
+    expect(await service.getFileCount()).toEqual({ count: 1, sizeBytes: 4 });
+    const listed: string[] = [];
+    for await (const file of service.iterateFiles()) listed.push(file);
+    expect(listed).toEqual(['real.bin']);
+  });
 });

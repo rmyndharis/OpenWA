@@ -88,6 +88,14 @@ describe('performPluginFetch', () => {
     expect(sink.init?.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it.each([1.5, 0.4, 2500.9])('accepts a fractional timeoutMs of %s', async timeoutMs => {
+    // AbortSignal.timeout throws ERR_OUT_OF_RANGE for a non-integer, which failed the plugin's request.
+    const fetcher = fakeSafeFetch(cannedResponse('{}', {}), {});
+    await expect(
+      performPluginFetch('https://api.example.com/t', { timeoutMs }, { fetch: fetcher }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
   it('rejects a response whose declared content-length exceeds the cap', async () => {
     const sink: { init?: RequestInit } = {};
     const big = String(11 * 1024 * 1024);

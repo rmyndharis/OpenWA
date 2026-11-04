@@ -98,7 +98,7 @@ test('a failed fetch falls back to the download button instead of a broken previ
     }),
   );
   await rtl.waitFor(() => assert.ok(container.querySelector('button.message-media-omitted')));
-  assert.equal(container.querySelector('img'), null);
+  assert.equal(container.querySelectorAll('img').length, 0);
   assert.deepEqual(created, [], 'no object URL is made for a failed fetch');
 });
 

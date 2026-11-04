@@ -1,10 +1,11 @@
 import { type Client } from 'whatsapp-web.js';
 import { InternalServerErrorException } from '@nestjs/common';
 import { Contact } from '../interfaces/whatsapp-engine.interface';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { readWid, type SerializedWid } from '../types/whatsapp-web-js.types';
-import { type WwebjsEngineHost, withPage } from './wwebjs-host';
+import { type WwebjsEngineHost, rethrowIfNavigation, withPage } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
 
 /** The raw whatsapp-web.js contact element type, kept local so the wwebjs `Contact` type never leaks. */
@@ -89,6 +90,20 @@ export async function readLeanContacts(): Promise<LeanContactRead> {
 }
 
 /**
+ * Read IN-PAGE the LID WhatsApp Web already holds for a phone id, or null when it holds none. Local only:
+ * unlike `client.getContactLidAndPhone`, which runs an existence query for a phone whose LID the page does
+ * not know, this sends nothing to WhatsApp. Self-contained, since Puppeteer ships it to the page as source.
+ */
+export function readCurrentLid(phoneId: string): string | null {
+  type Wid = { _serialized?: string; $1?: string };
+  const w = window as unknown as {
+    require: (m: string) => { createWid: (id: string) => Wid; getCurrentLid: (wid: Wid) => Wid | null | undefined };
+  };
+  const lid = w.require('WAWebApiContact').getCurrentLid(w.require('WAWebWidFactory').createWid(phoneId));
+  return lid?._serialized || lid?.$1 || null;
+}
+
+/**
  * Contact operations extracted from WhatsAppWebJsAdapter. The adapter keeps the public methods as
  * thin forwarders and injects the shared host surface (./wwebjs-host) via closures, so the delegate
  * never touches lifecycle state directly.
@@ -99,6 +114,22 @@ export class WwebjsContacts {
   /** Post-ensureReady client handle. */
   private client(): Client {
     return this.host.getClient();
+  }
+
+  /**
+   * {@link withPage} for a lookup about someone else. A command that outran Puppeteer's protocol budget got no
+   * answer either way, and is no page death, so it is a 503 like the other contact reads give, not the raw
+   * timeout as a 500.
+   */
+  private async askPage<T>(context: string, op: () => Promise<T>): Promise<T> {
+    try {
+      return await withPage(this.host, context, op);
+    } catch (error) {
+      if (isProtocolTimeout(error)) {
+        throw new EngineTransportError(`WhatsApp Web did not answer the ${context} lookup in time`);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -166,6 +197,7 @@ export class WwebjsContacts {
       unreadable = read?.failed ?? 0;
       firstError = read?.firstError;
     } catch (error) {
+      rethrowIfNavigation(this.host, error);
       // A dead page surfaces here as a raw Puppeteer error; convert it to the documented transport
       // failure the way wwebjs-chats.ts does, so a transport death answers 503 instead of a bare 500.
       if (this.host.isPageTransportError(error)) {
@@ -222,6 +254,7 @@ export class WwebjsContacts {
       const contact = await this.client().getContactById(contactId);
       return this.toContact(contact);
     } catch (error) {
+      rethrowIfNavigation(this.host, error);
       // Unlike the avatar lookup, a throw here can legitimately mean the contact is absent:
       // `window.WWebJS.getContact` has no try/catch and reads `contact.isBusiness` straight off
       // `Contact.find`, so an unknown id throws a TypeError on null. Null (→ 404) stays the answer
@@ -247,7 +280,7 @@ export class WwebjsContacts {
    */
   async lookupNumberId(number: string): Promise<string | null> {
     this.host.ensureReady();
-    const numberId = await withPage(this.host, 'getNumberId', () => this.client().getNumberId(number));
+    const numberId = await this.askPage('getNumberId', () => this.client().getNumberId(number));
     // Read both property names: a WA Web build that renamed `_serialized` would otherwise make
     // every number look unregistered — and checkNumberExists below reports exactly that.
     return readWid(numberId) ?? null;
@@ -255,10 +288,25 @@ export class WwebjsContacts {
 
   async getNumberId(number: string): Promise<string | null> {
     const wid = await this.lookupNumberId(number);
-    // The contract is the neutral `<phone>@c.us`, which is what the Baileys engine answers. A migrated
-    // contact's lookup names its `@lid`, the engine's own scheme; the phone the caller supplied is the
-    // stable neutral id, and a send to it re-resolves to the lid.
-    return wid?.endsWith('@lid') ? `${userPart(number).replace(/\D/g, '')}@c.us` : wid;
+    if (!wid?.endsWith('@lid')) return wid;
+    // The contract is the neutral `<phone>@c.us` WhatsApp holds for the account, which is what the Baileys
+    // engine answers. It can differ from the digits typed (a Brazilian, Mexican or Argentine number with or
+    // without its extra digit). A migrated contact's lookup names its `@lid`, the engine's own scheme, so the
+    // phone is read back through it. When WhatsApp Web knows none, the typed number stands in, and a send to
+    // it re-resolves to the lid. That read runs a second existence query when the page holds no phone for the
+    // lid, so its failure answers the typed number too: the lookup above already settled that the number
+    // exists. A session or page that died meanwhile still answers 409 or 503, as every read does.
+    const typed = `${userPart(number).replace(/\D/g, '')}@c.us`;
+    try {
+      const phone = await withPage(this.host, 'getNumberId', () => this.resolveContactPhone(wid));
+      return phone ? `${phone}@c.us` : typed;
+    } catch (error) {
+      if (error instanceof EngineNotReadyError || error instanceof EngineTransportError) throw error;
+      this.host.logger.debug('Could not read the phone of a migrated number, answering the typed number', {
+        error: String(error),
+      });
+      return typed;
+    }
   }
 
   async checkNumberExists(number: string): Promise<boolean> {
@@ -267,6 +315,13 @@ export class WwebjsContacts {
 
   async resolveContactPhone(contactId: string): Promise<string | null> {
     this.host.ensureReady();
+    // Only a privacy id needs the page. A phone id already carries its number, as it does on Baileys, and handing
+    // it to getContactLidAndPhone would run an existence query for that number (the page asks WhatsApp when it
+    // holds no LID): the check `GET contacts/check/{number}` reserves for OPERATOR keys, run for any key through
+    // this route. Any other kind names no phone at all.
+    const parsed = parseWaId(contactId);
+    if (parsed.kind === 'user') return parsed.userPart.replace(/\D/g, '') || null;
+    if (parsed.kind !== 'lid') return null;
     // Queried one id at a time: the batch form is prone to "Evaluation failed" and rate-limiting
     // (whatsapp-web.js #3857/#3969). `pn` is the phone JID (`<digits>@c.us`) when the account knows
     // the mapping. An empty/absent pn RESOLVES to null (a definitive "no mapping" answer); a thrown
@@ -277,6 +332,19 @@ export class WwebjsContacts {
     const [result] = await this.client().getContactLidAndPhone([contactId]);
     const pn = result?.pn;
     return pn ? pn.replace(/@c\.us$/i, '').replace(/\D/g, '') || null : null;
+  }
+
+  /**
+   * The `<lid>@lid` WhatsApp Web holds for a phone number, or null when it holds none, which an unregistered
+   * number answers too. When the page does not know the LID it asks WhatsApp, so this can send a query.
+   */
+  async getContactLid(number: string): Promise<string | null> {
+    this.host.ensureReady();
+    const phone = userPart(number).replace(/\D/g, '');
+    if (!phone) return null;
+    const [result] = await this.askPage('getContactLid', () => this.client().getContactLidAndPhone([`${phone}@c.us`]));
+    const lid = result?.lid;
+    return typeof lid === 'string' && parseWaId(lid).kind === 'lid' ? `${userPart(lid)}@lid` : null;
   }
 
   async upsertContact(contactId: string, firstName: string, lastName = ''): Promise<void> {
@@ -302,6 +370,8 @@ export class WwebjsContacts {
     this.host.ensureReady();
     await withPage(this.host, 'blockContact', async () => {
       const contact = await this.client().getContactById(contactId);
+      // The contact acts through its own client, which getClient's readiness check never sees again.
+      this.host.ensureReady();
       await contact.block();
     });
     this.host.logger.debug('Blocked contact', { contactId });
@@ -315,7 +385,7 @@ export class WwebjsContacts {
    */
   async getBlockedContacts(): Promise<string[]> {
     this.host.ensureReady();
-    const contacts = await withPage(this.host, 'getBlockedContacts', () => this.client().getBlockedContacts());
+    const contacts = await this.askPage('getBlockedContacts', () => this.client().getBlockedContacts());
     const ids = contacts.map(c => readWid(c.id as unknown as SerializedWid)).filter((id): id is string => Boolean(id));
     return [...new Set(ids)];
   }
@@ -324,6 +394,7 @@ export class WwebjsContacts {
     this.host.ensureReady();
     await withPage(this.host, 'unblockContact', async () => {
       const contact = await this.client().getContactById(contactId);
+      this.host.ensureReady();
       await contact.unblock();
     });
     this.host.logger.debug('Unblocked contact', { contactId });
@@ -331,10 +402,19 @@ export class WwebjsContacts {
 
   async getProfilePicture(contactId: string): Promise<string | null> {
     this.host.ensureReady();
+    // WhatsApp Web keys a migrated contact's chat by its LID, so the lookup by a phone id can come back empty
+    // or fail where the LID answers (the Number Checker asks by the phone id its check returned). It is
+    // retried once by the LID the page holds; a dead or unanswering page is not retried, and a retry that
+    // gets nothing leaves the first outcome standing.
+    const byLid = parseWaId(contactId).kind === 'user';
+    let url: string | undefined;
     try {
-      const url = await this.client().getProfilePicUrl(contactId);
-      return url || null;
+      url = await this.client().getProfilePicUrl(contactId);
     } catch (error) {
+      rethrowIfNavigation(this.host, error);
+      const pageDown = this.host.isPageTransportError(error) || isProtocolTimeout(error);
+      const viaLid = byLid && !pageDown ? await this.profilePictureByLid(contactId) : undefined;
+      if (viaLid) return viaLid;
       // Nothing reaching here is a statement about the avatar, so nothing reaching here may become
       // null. Returning null would answer 200 with {"url": null} — byte-identical to the verdict
       // above — and a caller that caches "no avatar" would record absence for a lookup that never
@@ -350,6 +430,28 @@ export class WwebjsContacts {
       this.host.reportIfPageTransportError(error, 'getProfilePicture');
       this.host.logger.warn(`Failed to get profile picture for ${contactId}: ${String(error)}`);
       throw new EngineTransportError(`Could not read the profile picture for ${contactId}: ${String(error)}`);
+    }
+    return url || (byLid ? await this.profilePictureByLid(contactId) : undefined) || null;
+  }
+
+  /**
+   * The picture of a phone id looked up by the LID WhatsApp Web holds for it (no query is sent to find one),
+   * or undefined when there is no LID or that lookup also gets nothing. A session torn down meanwhile still
+   * answers 409: the client is taken through the readiness check before each page call.
+   */
+  private async profilePictureByLid(phoneId: string): Promise<string | undefined> {
+    try {
+      const page = (
+        this.client() as unknown as { pupPage?: { evaluate: <T>(fn: (id: string) => T, id: string) => Promise<T> } }
+      ).pupPage;
+      const lid = await page?.evaluate(readCurrentLid, phoneId);
+      if (!lid) return undefined;
+      return (await this.client().getProfilePicUrl(lid)) || undefined;
+    } catch (error) {
+      if (error instanceof EngineNotReadyError) throw error;
+      this.host.reportIfPageTransportError(error, 'getProfilePicture');
+      this.host.logger.debug('Could not read a profile picture by its LID', { error: String(error) });
+      return undefined;
     }
   }
 }

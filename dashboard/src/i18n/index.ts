@@ -49,6 +49,8 @@ export function resolveSupportedLanguage(lang?: string): SupportedLanguage {
 
   const parts = value.toLowerCase().split('-');
   const base = parts[0];
+  // The only Portuguese catalogue is the Brazilian one; a bare or European tag would otherwise fall through to English.
+  if (base === 'pt') return 'pt-BR';
   if (base === 'zh') {
     const subtags = new Set(parts.slice(1));
     if (subtags.has('hant') || subtags.has('hk') || subtags.has('mo') || subtags.has('tw')) return 'zh-HK';

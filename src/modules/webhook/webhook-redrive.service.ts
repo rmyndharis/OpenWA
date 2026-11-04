@@ -38,9 +38,12 @@ export interface WebhookRedriveResult {
   enqueued: number;
   /** The replay failed again; the row stays, with its attempt count raised. */
   failed: number;
-  /** Not replayed: the webhook was removed, disabled or unsubscribed, or a plugin cancelled it. */
+  /**
+   * Selected rows not replayed: a hook cancelled the replay, or the row or its webhook changed during the call. Rows
+   * of a removed, disabled or unsubscribed webhook are left out before the batch and not counted.
+   */
   skipped: number;
-  /** Replayable rows still in scope after this call. */
+  /** Rows the redrive would still take after this call: replayable, in scope, with an active subscribed webhook. */
   remaining: number;
 }
 
@@ -223,8 +226,10 @@ export class WebhookRedriveService implements OnModuleDestroy {
       });
       if (outcome === 'delivered') result.delivered++;
       else if (outcome === 'enqueued') result.enqueued++;
-      else if (outcome === 'cancelled') result.skipped++;
-      else {
+      else if (outcome === 'cancelled') {
+        result.skipped++;
+        await this.bumpAttempts(row);
+      } else {
         result.failed++;
         // A failure the delivery path records raises this row's attempts itself. One it refuses before
         // sending (a body over the payload cap after the hooks) leaves the row as it was, so the attempt is
@@ -262,7 +267,7 @@ export class WebhookRedriveService implements OnModuleDestroy {
     return current !== null && current.attempts === row.attempts;
   }
 
-  /** Count the failed replay on the row. Best-effort: the row is already on record either way. */
+  /** Count a replay on its retained row so failed or cancelled rows cannot pin the next batch. */
   private async bumpAttempts(row: WebhookDeliveryFailure): Promise<void> {
     try {
       await this.failureRepository.increment({ id: row.id }, 'attempts', 1);

@@ -15,8 +15,9 @@ import * as path from 'path';
  * transcript, and the symptom only appears later, when WhatsApp Web rolls a build that carries the
  * rename. So restate it on the machine that is actually broken, as the engine starts.
  *
- * The marker is the patcher's own stand-down predicate, so the two can never disagree about what
- * "patched" means.
+ * The marker is the loose test that opens the patcher's stand-down branch. The patcher then also
+ * requires every site to carry its own text, so a release that fixes the ids another way reads as
+ * healthy here while the install refuses it.
  */
 const NORMALIZED_ID_MARKER = /_normalizeId\(|\.\$1/;
 

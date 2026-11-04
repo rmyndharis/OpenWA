@@ -65,9 +65,11 @@ export function probeOnboardingModal(options?: { labels?: string[]; headingOptio
   modalPresent: boolean;
   dismissed: boolean;
 } {
+  // Rendered size only: display: none leaves no box, while offsetParent is also null for a position: fixed element,
+  // which is how modal layers are commonly drawn.
   const isVisible = (el: Element): boolean => {
     const rect = (el as HTMLElement).getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0 && (el as HTMLElement).offsetParent !== null;
+    return rect.width > 0 && rect.height > 0;
   };
   const labels = options?.labels?.length ? options.labels : ['Continue'];
   const headingOptional = new Set(options?.headingOptionalFor ?? []);
@@ -147,9 +149,11 @@ export function collectDialogDiagnostics(): Array<{ heading: string | null; butt
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, max);
+  // Rendered size only: display: none leaves no box, while offsetParent is also null for a position: fixed element,
+  // which is how modal layers are commonly drawn.
   const isVisible = (el: Element): boolean => {
     const rect = (el as HTMLElement).getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0 && (el as HTMLElement).offsetParent !== null;
+    return rect.width > 0 && rect.height > 0;
   };
   // Association walks UP from the candidate, bounded, so a heading or button anywhere on the page
   // is never attributed to a dialog it merely shares a distant ancestor with.

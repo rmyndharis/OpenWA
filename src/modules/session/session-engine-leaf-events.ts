@@ -94,6 +94,9 @@ export class SessionEngineLeafEvents {
         return resolved;
       };
       for (const msg of messages) {
+        // Outside the per-item try: a deleted session ends the backfill, where every later item would
+        // only read the store and fail the same way.
+        lifetime.assertCurrent();
         try {
           // Mirrors the live path's own-send drop: the broadcast chat's history also contains the
           // account's OWN active statuses, which must not come back as if a contact had posted them.

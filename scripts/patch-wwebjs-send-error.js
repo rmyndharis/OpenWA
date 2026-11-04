@@ -33,6 +33,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const CLIENT_PATH = path.join('src', 'Client.js');
@@ -157,7 +158,7 @@ function applyBackport(wwjsDir = DEFAULT_WWJS) {
     );
   }
 
-  fs.writeFileSync(clientFile, source.replace(ANCHOR, FIX));
+  writeFileAtomic(clientFile, source.replace(ANCHOR, FIX));
   return { skipped: false, note: 'page-side send errors now carry what the page threw' };
 }
 

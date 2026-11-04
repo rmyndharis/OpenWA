@@ -220,3 +220,12 @@ test('a reload that answers in time is not aborted and leaves no deadline behind
   void coalescer.run();
   assert.equal(out.length, 2);
 });
+
+test('cancel on a coalescer with nothing out leaves it usable, as React replays effect cleanups before any reload', () => {
+  const { reload, out } = manualReloads();
+  const coalescer = createReloadCoalescer(reload);
+  coalescer.cancel();
+  void coalescer.run();
+  // Checked before anything is awaited: a coalescer left marked as running would hold this call forever.
+  assert.equal(out.length, 1, 'a call after an idle cancel waited behind a reload that was never started');
+});

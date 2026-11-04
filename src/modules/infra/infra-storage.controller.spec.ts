@@ -484,3 +484,44 @@ describe('InfraStorageController.importStorage reports an import that wrote noth
     await expect(importWith({ imported: 0, failed: 0 })).resolves.toMatchObject({ imported: true, count: 0 });
   });
 });
+
+describe('InfraStorageController export setup failure', () => {
+  it('prepares the directory before starting archive work', async () => {
+    const filesystem = jest.requireMock<typeof import('fs')>('fs');
+    const mkdir = jest.spyOn(filesystem, 'mkdirSync').mockImplementation(() => {
+      throw new Error('directory unavailable');
+    });
+    const source = Readable.from(['archive']);
+    const create = jest.fn().mockResolvedValue(source);
+    (fs.existsSync as jest.Mock).mockReturnValueOnce(false);
+    const controller = new InfraStorageController({
+      getCurrentStorageType: () => 'local',
+      createExportStream: create,
+    } as never);
+    try {
+      await expect(controller.exportStorage()).rejects.toThrow('directory unavailable');
+      expect(create).not.toHaveBeenCalled();
+    } finally {
+      mkdir.mockRestore();
+      source.destroy();
+    }
+  });
+
+  it('closes the archive if constructing the destination throws', async () => {
+    const source = Readable.from(['archive']);
+    (fs.existsSync as jest.Mock).mockReturnValueOnce(true);
+    (fs.createWriteStream as jest.Mock).mockImplementationOnce(() => {
+      throw new Error('destination unavailable');
+    });
+    const controller = new InfraStorageController({
+      getCurrentStorageType: () => 'local',
+      createExportStream: jest.fn().mockResolvedValue(source),
+    } as never);
+    try {
+      await expect(controller.exportStorage()).rejects.toThrow('destination unavailable');
+      expect(source.destroyed).toBe(true);
+    } finally {
+      source.destroy();
+    }
+  });
+});

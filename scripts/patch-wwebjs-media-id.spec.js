@@ -73,3 +73,15 @@ test('rejects a fix present alongside a second anchor', () => {
   assert.throws(() => applyBackport(root), /unsupported Utils\.js shape/);
   assert.equal(fs.readFileSync(utils, 'utf8'), original);
 });
+
+test('applies to a copy of the installed whatsapp-web.js, or finds it applied there already', () => {
+  // The fixtures above are built from this patcher's own find strings, so they pass just the same once the
+  // library stops containing them. A copy of the installed file does not.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openwa-media-id-installed-'));
+  const file = path.join('src', 'util', 'Injected', 'Utils.js');
+  fs.mkdirSync(path.join(dir, path.dirname(file)), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js', file), path.join(dir, file));
+  applyBackport(dir);
+  assert.equal(isApplied(dir), true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

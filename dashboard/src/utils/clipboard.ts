@@ -14,18 +14,22 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       // Fall through to the legacy path (e.g. NotAllowedError outside a user gesture).
     }
   }
+  // Selecting the textarea takes focus, and removing it leaves focus on the page: give it back to where it was.
+  const focused = document.activeElement;
+  let ta: HTMLTextAreaElement | undefined;
   try {
-    const ta = document.createElement('textarea');
+    ta = document.createElement('textarea');
     ta.value = text;
     ta.setAttribute('readonly', '');
     ta.style.position = 'fixed';
     ta.style.opacity = '0';
     document.body.appendChild(ta);
     ta.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(ta);
-    return ok;
+    return document.execCommand('copy');
   } catch {
     return false;
+  } finally {
+    ta?.remove();
+    if (focused instanceof HTMLElement) focused.focus();
   }
 }

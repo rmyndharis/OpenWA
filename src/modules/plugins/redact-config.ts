@@ -98,6 +98,8 @@ function restoreValue(
   // as-is. Without this, a composite secret (object/array) would recurse and its masked children
   // would clobber the stored secret instead of restoring it.
   if (field.secret) {
+    // The removal of a secret that is a list element; restoreObject takes a property sent as null first.
+    if (incoming === null) return { keep: false };
     if (incoming === SECRET_SENTINEL || !isMeaningful(incoming)) {
       return isMeaningful(existing) ? { keep: true, value: existing } : { keep: false };
     }

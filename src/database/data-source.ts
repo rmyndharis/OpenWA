@@ -72,9 +72,9 @@ const sqliteDataSourceOptions: DataSourceOptions = {
 // export of DataSource"). Keeping the postgres config as an options object leaves exactly one instance
 // export (the default below) so every `migration:*` command resolves it.
 // Schema selection: a non-public POSTGRES_SCHEMA sets TypeORM's `schema` option AND the session
-// search_path (via pg's startup `options` parameter) so the project's RAW, unqualified migration SQL
+// search_path (by a statement on connect, see postgresUtcExtra) so the project's RAW, unqualified migration SQL
 // (CREATE TABLE "x"..., ALTER TABLE "y"...) resolves to the configured schema. TypeORM's `schema`
-// option alone does NOT set search_path — without the `options` override, raw DDL would land in
+// option alone does NOT set search_path: without that statement, raw DDL would land in
 // `public` while the migration ledger lands in the configured schema. `<schema>,public` keeps public
 // on the path so pg_catalog + any public helpers still resolve; the configured schema wins.
 //
@@ -83,6 +83,7 @@ const sqliteDataSourceOptions: DataSourceOptions = {
 export function buildPostgresDataSourceOptions(env: NodeJS.ProcessEnv = process.env): DataSourceOptions {
   const schema = env.POSTGRES_SCHEMA || 'public';
   const useCustomSearchPath = schema !== 'public';
+  const connectionTimeoutMillis = parseInt(env.DATABASE_CONNECTION_TIMEOUT_MS || '10000', 10);
   return {
     type: 'postgres',
     schema,
@@ -103,15 +104,14 @@ export function buildPostgresDataSourceOptions(env: NodeJS.ProcessEnv = process.
         : false,
     extra: {
       // Same UTC pin the runtime data connection carries (pg-boot-migrations.ts): a migration that
-      // rewrites a timestamp column must mean the same thing as the app that wrote it.
-      ...postgresUtcExtra(),
+      // rewrites a timestamp column must mean the same thing as the app that wrote it. The search_path of
+      // a non-public schema (see above) is set in the same connect hook, as on the runtime connection.
+      ...postgresUtcExtra(connectionTimeoutMillis, useCustomSearchPath ? { searchPath: `${schema},public` } : {}),
       max: parseInt(env.DATABASE_POOL_SIZE || '10', 10),
       // Pool resilience only. NO statement_timeout here: this connection runs migrations, and a
       // long CREATE INDEX / backfill must not be aborted mid-flight.
       idleTimeoutMillis: parseInt(env.DATABASE_IDLE_TIMEOUT_MS || '30000', 10),
-      connectionTimeoutMillis: parseInt(env.DATABASE_CONNECTION_TIMEOUT_MS || '10000', 10),
-      // Only set for a non-public schema (see above).
-      ...(useCustomSearchPath ? { options: `-c search_path=${schema},public` } : {}),
+      connectionTimeoutMillis,
     },
   };
 }

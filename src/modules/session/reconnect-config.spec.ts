@@ -53,6 +53,11 @@ describe('resolveReconnectConfig', () => {
     expect(resolveReconnectConfig({ reconnectBaseDelay: 0 }).baseDelay).toBe(1000);
   });
 
+  it('floors a fractional baseDelay that a row stored before validation may hold', () => {
+    expect(resolveReconnectConfig({ reconnectBaseDelay: 2500.5 }).baseDelay).toBe(2500);
+    expect(resolveReconnectConfig({ reconnectBaseDelay: '2500.9' }).baseDelay).toBe(2500);
+  });
+
   it('clamps an explicit maxAttempts to the 0..20 range and floors fractions', () => {
     expect(resolveReconnectConfig({ maxReconnectAttempts: 999 }).maxAttempts).toBe(20);
     expect(resolveReconnectConfig({ maxReconnectAttempts: -3 }).maxAttempts).toBe(0);

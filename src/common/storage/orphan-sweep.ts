@@ -72,7 +72,8 @@ export async function sweepOrphanedFiles(options: {
     chunk = [];
   };
 
-  for await (const file of storage.iterateFiles(prefix)) {
+  // A directory the walk cannot read is left alone: this pass deletes only files it was shown.
+  for await (const file of storage.iterateFiles(prefix, { skipUnreadable: true })) {
     if (!file.startsWith(prefix)) continue;
     chunk.push(file);
     if (options.chunkSize !== undefined && chunk.length >= options.chunkSize) await flush();

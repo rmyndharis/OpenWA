@@ -6,6 +6,8 @@ describe('extFromMimetype', () => {
     ['audio/ogg; codecs=opus', 'ogg'],
     ['IMAGE/WEBP', 'webp'],
     ['application/pdf', 'pdf'],
+    ['application/constructor', 'constructor'],
+    ['IMAGE/CONSTRUCTOR', 'constructor'],
   ])('uses the subtype of %s as the extension', (mimetype, ext) => {
     expect(extFromMimetype(mimetype)).toBe(ext);
   });

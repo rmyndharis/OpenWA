@@ -1,5 +1,5 @@
 import type { GroupMetadata } from '@whiskeysockets/baileys';
-import { resolveNonNegativeIntEnv } from '../../config/configuration';
+import { MAX_TIMER_MS, resolveNonNegativeIntEnv } from '../../config/configuration';
 
 /** How long a group's participant list is reused before Baileys reads it again; 0 switches the cache off. */
 const DEFAULT_GROUP_METADATA_CACHE_TTL_MS = 5 * 60_000;
@@ -29,10 +29,14 @@ interface CachedGroup {
  */
 export class GroupMetadataCache {
   private readonly entries = new Map<string, CachedGroup>();
-  /** Reads under way, so concurrent sends to one group share a single query. */
+  /**
+   * Reads under way, so concurrent sends to one group share a single query. A read that an invalidation
+   * or a clear overtook is dropped from here: its answer still reaches the callers that joined it, but
+   * it is not kept and no later read waits on it.
+   */
   private readonly inFlight = new Map<string, Promise<GroupMetadata>>();
-  /** In-flight reads that an invalidation overtook: their answer is returned but not kept. */
-  private readonly overtaken = new Set<string>();
+  /** The pending timer that drops expired entries; armed while the cache holds any. */
+  private expiryTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly ttlMs: number,
@@ -72,52 +76,51 @@ export class GroupMetadataCache {
     if (hit) return Promise.resolve(hit);
     const joined = this.inFlight.get(jid);
     if (joined) return joined;
-    const pending = (async (): Promise<GroupMetadata> => {
-      try {
-        const metadata = await fetch();
-        if (!this.overtaken.has(jid)) this.store(jid, metadata);
+    // Gives up the group's slot and says whether this read still held it: an invalidation or a clear takes it away.
+    const settle = (): boolean => {
+      const held = this.inFlight.get(jid) === pending;
+      if (held) this.inFlight.delete(jid);
+      return held;
+    };
+    const pending: Promise<GroupMetadata> = fetch().then(
+      metadata => {
+        if (settle()) this.store(jid, metadata);
         return metadata;
-      } finally {
-        this.overtaken.delete(jid);
-        this.inFlight.delete(jid);
-      }
-    })();
+      },
+      (error: unknown) => {
+        settle();
+        throw error;
+      },
+    );
     this.inFlight.set(jid, pending);
     return pending;
   }
 
-  /**
-   * Replace the copy of a group that is already cached with metadata that arrived whole. A group nobody
-   * has sent to is not added: the cache holds what sends use, not every group the account is in.
-   */
-  refresh(metadata: GroupMetadata): void {
-    if (this.enabled && metadata.id && this.entries.has(metadata.id)) this.store(metadata.id, metadata);
-  }
-
   /** Forget one group: its membership or settings changed, so the next send reads it again. */
-  invalidate(jid: string | undefined): void {
+  invalidate(jid: string | null | undefined): void {
     if (!jid) return;
     this.entries.delete(jid);
-    if (this.inFlight.has(jid)) this.overtaken.add(jid);
+    this.inFlight.delete(jid);
   }
 
   /** Forget everything, for a connection change or a teardown. */
   clear(): void {
     this.entries.clear();
-    for (const jid of this.inFlight.keys()) this.overtaken.add(jid);
+    this.inFlight.clear();
+    clearTimeout(this.expiryTimer);
+    this.expiryTimer = undefined;
   }
 
   /**
-   * Apply a `groups.update` batch. A whole-metadata entry (the result of a full group fetch, which
-   * Baileys also emits through this event) refreshes the cached copy; a partial one is a real change to
-   * some field, so the group is read again on the next send.
+   * Apply a `groups.update` batch: every group it names is read again on the next send. A partial entry
+   * is a real change to some field. A whole-metadata entry (the result of the all-groups listing, which
+   * Baileys also emits through this event, on every dirty-groups notice as well as on GET /groups) comes
+   * from a different query than a send uses, and may name participants in another id form or leave out
+   * the addressing mode and the disappearing timer, so it never becomes the cached copy. The cost is one
+   * single-group query per cached group after such a listing.
    */
   applyUpdates(updates: ReadonlyArray<Partial<GroupMetadata>> | undefined): void {
-    for (const update of updates ?? []) {
-      if (!update?.id) continue;
-      if (Array.isArray(update.participants)) this.refresh(update as GroupMetadata);
-      else this.invalidate(update.id);
-    }
+    for (const update of updates ?? []) this.invalidate(update?.id);
   }
 
   private store(jid: string, metadata: GroupMetadata): void {
@@ -127,5 +130,25 @@ export class GroupMetadataCache {
       const [oldest] = this.entries.keys();
       this.entries.delete(oldest);
     }
+    this.scheduleExpiry();
+  }
+
+  /**
+   * Expiry is otherwise checked only when a group is read, so a group nobody sends to again would keep
+   * its participant list for as long as the socket lives. One timer drops what has expired, and runs
+   * again only while the cache still holds entries.
+   */
+  private scheduleExpiry(): void {
+    if (this.expiryTimer) return;
+    const dropExpired = (): void => {
+      this.expiryTimer = undefined;
+      const now = this.now();
+      for (const [jid, cached] of this.entries) {
+        if (now - cached.storedAt >= this.ttlMs) this.entries.delete(jid);
+      }
+      if (this.entries.size > 0) this.scheduleExpiry();
+    };
+    this.expiryTimer = setTimeout(dropExpired, Math.min(this.ttlMs, MAX_TIMER_MS));
+    this.expiryTimer.unref();
   }
 }

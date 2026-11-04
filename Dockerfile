@@ -15,7 +15,7 @@
 # security-scan.yml fails once the pin differs from what the tag serves and either the tag has
 # served that image for 7 or more days, or for 3 or more days with the pin last changed 28 or more
 # days ago. Update both stages together.
-FROM --platform=$BUILDPLATFORM docker.io/node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS builder
+FROM --platform=$BUILDPLATFORM docker.io/node:22-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS builder
 
 WORKDIR /app
 
@@ -63,7 +63,7 @@ RUN npm run build && npm run dashboard:ci -- --include=dev && npm run dashboard:
 
 # ===== Stage 2: Production =====
 # Same digest-pinned node:22-slim base as the builder stage.
-FROM docker.io/node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS production
+FROM docker.io/node:22-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS production
 
 # Run the app with production defaults from the first boot: an unset NODE_ENV selects the
 # development branch of the CORS/Swagger/DTO-error-detail/default-secret hardening (main.ts
@@ -141,12 +141,14 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 # Postgres the compose file does not control, where 17 is the current default. Pinning to 16 would
 # have left every such deployment unable to back up. Verified against live 16 and 17 servers.
 #
-# The signing key is committed rather than fetched at build time. Fetched, it was the one build input
-# nothing pinned: `signed-by` attests only that the .debs match whatever that request returned, so a
-# compromised host, or a build behind a TLS-intercepting proxy whose root is in the trust store,
-# would swap the trust anchor with nothing to notice. Committed, it is reviewed once and diffable
-# forever, and it removes one of the two network calls the release build makes uncached
-# (release.yml's `no-cache-filters: production` rebuilds this stage every tag, on both platforms).
+# The signing key is committed rather than fetched at build time. Fetched, nothing pinned it:
+# `signed-by` attests only that the .debs match whatever that request returned, so a compromised
+# host, or a build behind a TLS-intercepting proxy whose root is in the trust store, would swap the
+# trust anchor with nothing to notice. Committed, it is reviewed once and diffable forever. It is not
+# the only such input: this stage re-fetches on every release build (release.yml's
+# `no-cache-filters: production` rebuilds it every tag, on both platforms), and npm and its Undici
+# below are pinned by version over TLS only, as is the amd64 Chrome for Testing archive, which has no
+# checksum.
 # Verify with `gpg --show-keys --with-fingerprint scripts/pgdg-ACCC4CF8.asc`:
 #   B97B0AFC AA1A47F0 44F244A0 7FCC7D46 ACCC4CF8, uid "PostgreSQL Debian Repository".
 #
@@ -187,16 +189,16 @@ COPY package*.json ./
 
 # Backport upstream whatsapp-web.js#201832 (id._serialized -> id.$1 normalization,
 # broken by WA Web 2.3000.x ~2026-07-14) into the installed dep at build time.
-# The patcher self-disables once whatsapp-web.js ships the fix upstream.
+# The patcher stands down once every site it writes carries the fix; a release that fixes the ids
+# another way fails the build until the backport is retired.
 # scripts/postinstall.js rides along so a bare local `npm ci` keeps working, but the
 # --ignore-scripts install below skips the hook here: the explicit fatal run right
 # after is the sole (and stricter) applier for the image.
-COPY scripts/postinstall.js scripts/patch-wwebjs-201832.js scripts/wwebjs-201832.patch scripts/patch-wwebjs-newsletter-preview.js scripts/patch-wwebjs-status.js scripts/patch-wwebjs-ready-sync.js scripts/patch-wwebjs-participant-arity.js scripts/patch-wwebjs-block.js scripts/patch-wwebjs-group-description.js scripts/patch-wwebjs-media-id.js scripts/patch-wwebjs-send-error.js scripts/patch-baileys-appstate.js scripts/patch-baileys-newsletter-create.js scripts/patch-baileys-pairing.js ./scripts/
+COPY scripts/postinstall.js scripts/atomic-write.js scripts/patch-wwebjs-201832.js scripts/wwebjs-201832.patch scripts/patch-wwebjs-newsletter-preview.js scripts/patch-wwebjs-status.js scripts/patch-wwebjs-ready-sync.js scripts/patch-wwebjs-participant-arity.js scripts/patch-wwebjs-block.js scripts/patch-wwebjs-group-description.js scripts/patch-wwebjs-media-id.js scripts/patch-wwebjs-send-error.js scripts/patch-wwebjs-puppeteer.js scripts/patch-baileys-appstate.js scripts/patch-baileys-newsletter-create.js scripts/patch-baileys-pairing.js ./scripts/
 
-# Install production dependencies only, then apply the backports. The status patcher runs after
-# the two patchers it depends on: its transforms were written against the tree they leave behind.
-# The send-error patcher runs after the other two that edit Client.js, so theirs still meet the
-# tree they were written against.
+# Install production dependencies only, then apply the backports. Each patcher matches the pristine
+# library on its own and none depends on another's edits, so the order below is not load-bearing:
+# applied in reverse, they leave the same tree.
 # scripts/dockerfile-patchers.spec.js derives this list from scripts/patch-*.js and fails if a
 # patcher is added without being copied AND run here — a hand-written list loses one silently, and
 # the Baileys one shipped in postinstall for a whole release without ever reaching the image.
@@ -222,6 +224,7 @@ RUN npm ci --omit=dev --ignore-scripts \
     && node scripts/patch-baileys-appstate.js \
     && node scripts/patch-baileys-newsletter-create.js \
     && node scripts/patch-baileys-pairing.js \
+    && node scripts/patch-wwebjs-puppeteer.js \
     && npm cache clean --force
 
 # Replace the npm the base image bundles. npm is not on the request path — the entrypoint runs
@@ -233,7 +236,16 @@ RUN npm ci --omit=dev --ignore-scripts \
 # Deliberately AFTER `npm ci`, so the application tree is still resolved by the npm the lockfile
 # was generated with and only the global CLI is swapped. Pinned to the exact patch release —
 # a floating npm@12 would make the image's bundled npm tree depend on when the build happened.
-RUN npm install -g npm@12.1.0 && npm cache clean --force
+# npm 12.2.1 still bundles Undici 6.29.0. Replace only that package with its compatible patch;
+# npm's bundled private packages prevent reinstalling its dependency tree from the registry.
+RUN npm install -g npm@12.2.1 && \
+    node -e "if (require('/usr/local/lib/node_modules/npm/node_modules/undici/package.json').version !== '6.29.0') throw new Error('Recheck npm Undici replacement');" && \
+    npm_http_patch_dir=$(mktemp -d) && \
+    npm install --prefix "$npm_http_patch_dir" --no-save --package-lock=false --ignore-scripts --no-audit --fund=false undici@6.29.1 && \
+    rm -rf /usr/local/lib/node_modules/npm/node_modules/undici && \
+    mv "$npm_http_patch_dir/node_modules/undici" /usr/local/lib/node_modules/npm/node_modules/undici && \
+    rm -rf "$npm_http_patch_dir" && \
+    npm cache clean --force
 
 # amd64: download Chrome for Testing via Puppeteer and symlink it.
 # arm64: use Debian's chromium installed above (a choice; see the note at that install).
@@ -254,7 +266,7 @@ RUN if [ "$TARGETARCH" = arm64 ]; then \
         ln -s /usr/bin/chromium /usr/local/bin/puppeteer-chrome; \
     else \
         mkdir -p /opt/puppeteer && \
-        PUPPETEER_CACHE_DIR=/opt/puppeteer ./node_modules/.bin/puppeteer browsers install 'chrome@153.0.8010.36' && \
+        PUPPETEER_CACHE_DIR=/opt/puppeteer ./node_modules/.bin/puppeteer browsers install 'chrome@156.0.8078.80' && \
         chown -R openwa:openwa /opt/puppeteer && \
         chrome_path=$(find /opt/puppeteer/chrome/linux*/chrome-linux64/chrome | head -n 1) && \
         test -n "$chrome_path" && \

@@ -58,11 +58,7 @@ describe('Automation rules (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('creates a rule with defaults and reads it back', async () => {

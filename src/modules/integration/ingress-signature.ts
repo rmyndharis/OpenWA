@@ -88,6 +88,26 @@ function verifyStandardWebhooks(spec: IngressSignatureSpec, input: VerifyInput):
 }
 
 /**
+ * Whether a delivery that passed verifyIngressSignature reaches the plugin as `verified`. No scheme signs the
+ * query string or the method: hmac-sha256 and standard-webhooks sign the body (with a timestamp or id), so for
+ * an empty body carrying its content in the query one captured signature vouches for any query. shared-secret
+ * authenticates the caller rather than the content, and none authenticates nothing.
+ */
+export function ingressDeliveryVerified(
+  scheme: IngressSignatureSpec['scheme'],
+  rawBody: string,
+  query: Record<string, string>,
+): boolean {
+  if (scheme === 'none') return false;
+  return scheme === 'shared-secret' || !isQueryBorne(rawBody, query);
+}
+
+/** Whether a delivery carries its content in the query string of an empty body. */
+export function isQueryBorne(rawBody: string, query: Record<string, string> | undefined): boolean {
+  return rawBody === '' && Object.keys(query ?? {}).length > 0;
+}
+
+/**
  * Inverts the outbound signer (generateSignature in src/modules/webhook/utils/deliver-once.ts), but
  * over the provider's declared contentTemplate applied to the RAW request bytes, and with a
  * constant-time compare. `now` is injected so the replay-window check is deterministic in tests.

@@ -10,8 +10,16 @@ export interface GroupPickerRow {
 
 export type GroupSendPlan = { mode: 'single'; chatId: string } | { mode: 'sequential'; chatIds: string[] };
 
-// 409 on a send route means the session's engine is not ready, which fails every group alike.
-const GATEWAY_REFUSAL_STATUSES: readonly number[] = [409, 429, 503];
+// Answers the next call of the same run gets too: 409 an engine that is not ready, which fails every group alike,
+// 429 the rate limit, 502 a reverse proxy that cannot reach the gateway, 503 WhatsApp not answering. A 504 is left out:
+// the proxy reached the gateway and stopped waiting, so that request may still be running. A 400 is not listed because
+// the gateway also answers it for one chat alone (a send a plugin vetoed); it counts only when it says the session is
+// not running, see SESSION_NOT_RUNNING.
+const GATEWAY_REFUSAL_STATUSES: readonly number[] = [409, 429, 502, 503];
+
+// How the gateway words a 400 for a session with no engine: "Session '<id>' is not active. Start the session first."
+// on the send routes, "Session is not started" on the contact and group routes.
+const SESSION_NOT_RUNNING = /\bsession\b.*\bnot (active|started)\b/i;
 
 export function groupLabel(group: SelectableGroup): string {
   return group.name?.trim() || group.id;
@@ -52,7 +60,12 @@ export function planGroupSend(selectedIds: readonly string[], messageType: strin
   return { mode: 'sequential', chatIds: [...selectedIds] };
 }
 
+// A failure the rest of a run would meet too, so the run stops instead of recording one failure per remaining target:
+// one of the statuses above, a 400 that says the session is not running, or a fetch that got no answer at all (it
+// rejects with a TypeError). An error the page raised itself, or an answer it could not read, fails that call only.
 export function isGatewayRefusal(err: unknown): boolean {
-  const status = (err as { status?: unknown } | null)?.status;
+  if (err instanceof TypeError) return true;
+  const { status, message } = (err ?? {}) as { status?: unknown; message?: unknown };
+  if (status === 400) return typeof message === 'string' && SESSION_NOT_RUNNING.test(message);
   return typeof status === 'number' && GATEWAY_REFUSAL_STATUSES.includes(status);
 }

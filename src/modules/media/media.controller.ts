@@ -62,6 +62,7 @@ export class MediaController {
     status: 503,
     description:
       'Conversion is disabled, the ffmpeg binary is not runnable, or the conversion queue is saturated — retry shortly. ' +
+      'It also answers 503 once the gateway is shutting down. ' +
       MEDIA_URL_PROXY_503,
   })
   async convertVoice(@Param('sessionId') sessionId: string, @Body() dto: ConvertMediaDto) {
@@ -90,6 +91,7 @@ export class MediaController {
     status: 503,
     description:
       'Conversion is disabled, the ffmpeg binary is not runnable, or the conversion queue is saturated — retry shortly. ' +
+      'It also answers 503 once the gateway is shutting down. ' +
       MEDIA_URL_PROXY_503,
   })
   async convertVideo(@Param('sessionId') sessionId: string, @Body() dto: ConvertMediaDto) {

@@ -34,6 +34,23 @@ describe('invokeTool', () => {
     expect(out).toEqual({ got: 5 });
   });
 
+  it('hands the cancellation signal to the handler', async () => {
+    const handler = jest.fn().mockResolvedValue('ok');
+    const tool: ToolDescriptor = { ...readTool, handler };
+    const controller = new AbortController();
+    await invokeTool(
+      tool,
+      { n: 1 },
+      'rawkey',
+      auth() as unknown as AuthService,
+      undefined,
+      undefined,
+      undefined,
+      controller.signal,
+    );
+    expect(handler).toHaveBeenCalledWith({ n: 1 }, expect.objectContaining({ id: 'k1' }), undefined, controller.signal);
+  });
+
   it('refuses a chat-restricted key on a tool that declares no chat scope', async () => {
     const a = auth({ allowedChats: ['123@g.us'] });
     await expect(invokeTool(readTool, { n: 1 }, 'rawkey', a as unknown as AuthService)).rejects.toBeInstanceOf(

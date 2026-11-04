@@ -498,6 +498,62 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     expect(held).toBe(0);
   });
 
+  describe('gives the query runner back when the transaction never opens', () => {
+    const watchRunners = (prepare: (runner: ReturnType<DataSource['createQueryRunner']>) => void) => {
+      const releases: jest.SpyInstance[] = [];
+      const realCreate = ds.createQueryRunner.bind(ds);
+      jest.spyOn(ds, 'createQueryRunner').mockImplementation((...args: Parameters<typeof realCreate>) => {
+        const runner = realCreate(...args);
+        prepare(runner);
+        releases.push(jest.spyOn(runner, 'release'));
+        return runner;
+      });
+      return releases;
+    };
+
+    it('when BEGIN fails', async () => {
+      await seedSession('s1');
+      const dump = await controller.exportData();
+      const releases = watchRunners(runner => {
+        runner.startTransaction = () => Promise.reject(new Error('BEGIN failed'));
+      });
+
+      await expect(controller.importData({ tables: dump.tables })).rejects.toThrow('BEGIN failed');
+
+      expect(releases).toHaveLength(1);
+      expect(releases[0]).toHaveBeenCalledTimes(1);
+      jest.restoreAllMocks();
+    });
+
+    it('when another transaction already holds the connection', async () => {
+      await seedSession('s1');
+      const dump = await controller.exportData();
+      const releases = watchRunners(runner => {
+        Object.defineProperty(runner, 'isTransactionActive', { value: true });
+      });
+
+      await expect(controller.importData({ tables: dump.tables })).rejects.toMatchObject({
+        response: { code: 'IMPORT_NESTED_TRANSACTION' },
+      });
+
+      expect(releases).toHaveLength(1);
+      expect(releases[0]).toHaveBeenCalledTimes(1);
+      jest.restoreAllMocks();
+    });
+
+    it('and still reports the failure of BEGIN when giving the runner back fails too', async () => {
+      await seedSession('s1');
+      const dump = await controller.exportData();
+      watchRunners(runner => {
+        runner.startTransaction = () => Promise.reject(new Error('BEGIN failed'));
+        runner.release = () => Promise.reject(new Error('release failed'));
+      });
+
+      await expect(controller.importData({ tables: dump.tables })).rejects.toThrow('BEGIN failed');
+      jest.restoreAllMocks();
+    });
+  });
+
   it('does not suspend loss detection on a dialect where each query runner has its own connection', async () => {
     await seedSession('s1');
     const dump = await controller.exportData();
@@ -1555,7 +1611,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
   it('restores lid_mappings instead of dropping them on a backup→restore', async () => {
     await seedSession('s1');
     const lidRepo = ds.getRepository(LidMapping);
-    await lidRepo.save(lidRepo.create({ lid: '111', phone: '628111', sessionId: 's1' }));
+    await lidRepo.save(lidRepo.create({ lid: '111', phone: '628111', sessionId: 's1', isReported: true }));
     await lidRepo.save(lidRepo.create({ lid: '222', phone: null, sessionId: 's1' })); // negative cache
 
     const dump = await controller.exportData();
@@ -1570,6 +1626,39 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
     expect(await lidRepo.count()).toBe(2);
     expect((await lidRepo.findOneByOrFail({ lid: '111' })).phone).toBe('628111');
     expect((await lidRepo.findOneByOrFail({ lid: '222' })).phone).toBeNull();
+    expect((await lidRepo.findOneByOrFail({ lid: '111' })).isReported).toBe(true);
+    expect((await lidRepo.findOneByOrFail({ lid: '222' })).isReported).toBe(false);
+
+    const mappings = (dump.tables as unknown as { lidMappings: { isReported?: boolean | number }[] }).lidMappings;
+    for (const mapping of mappings) delete mapping.isReported;
+    const legacy = await controller.importData({ tables: dump.tables });
+    expect(legacy.warnings).toEqual([]);
+    expect((await lidRepo.findOneByOrFail({ lid: '111' })).isReported).toBe(false);
+  });
+
+  // The mark of a deleted chat outlives a restart because the stored messages it guards do, and a
+  // restore brings both back.
+  it('restores the deletion mark of a chat state, and reads an archive taken without one as none', async () => {
+    await seedSession('s1');
+    const repo = ds.getRepository(ChatState);
+    await repo.save([
+      repo.create({ sessionId: 's1', chatId: '628111@s.whatsapp.net', deletedAt: 1790000000000 }),
+      repo.create({ sessionId: 's1', chatId: '120363@g.us', pinned: true }),
+    ]);
+
+    const dump = await controller.exportData();
+    await repo.clear();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    expect(await repo.findOneByOrFail({ chatId: '628111@s.whatsapp.net' })).toMatchObject({ deletedAt: 1790000000000 });
+    expect(await repo.findOneByOrFail({ chatId: '120363@g.us' })).toMatchObject({ pinned: true, deletedAt: null });
+
+    const states = (dump.tables as unknown as { chatStates: { deletedAt?: number | null }[] }).chatStates;
+    for (const state of states) delete state.deletedAt;
+    const legacy = await controller.importData({ tables: dump.tables });
+    expect(legacy.warnings).toEqual([]);
+    expect((await repo.findOneByOrFail({ chatId: '628111@s.whatsapp.net' })).deletedAt).toBeNull();
   });
 
   // Restoring ONTO the instance that produced the archive is the rollback flow, and it is the one the
@@ -2005,6 +2094,30 @@ describe('InfraDataController audit trail — import emits only on a committed r
     const actions = (audit.logInfo.mock.calls as Array<[AuditAction, unknown]>).map(c => c[0]);
     expect(actions).toContain(AuditAction.INFRA_DATA_EXPORTED);
     expect(actions).toContain(AuditAction.INFRA_DATA_IMPORTED);
+  });
+
+  it('records each orphan session it stops, even when the restore is then rolled back', async () => {
+    await seedSession('s1');
+    const audit = { logInfo: jest.fn().mockResolvedValue(null) };
+    const sessionService = {
+      getActiveSessionIds: () => ['ghost'],
+      stopOrphanEngines: jest.fn().mockResolvedValue({ stopped: ['ghost'], notRunning: [], failed: [] }),
+    };
+    const controller = new InfraDataController(
+      new InfraDataService(cfg as never, ds, audit as never, sessionService as never),
+    );
+    const dump = await controller.exportData();
+    // A repeated primary key fails its insert inside the transaction, which rolls the restore back.
+    dump.tables.sessions = [dump.tables.sessions[0], dump.tables.sessions[0]];
+
+    const res = await controller.importData({ tables: dump.tables, stopOrphans: true });
+
+    expect(res.imported).toBe(false);
+    const calls = audit.logInfo.mock.calls as Array<[AuditAction, { sessionId?: string; metadata?: unknown }]>;
+    expect(calls.filter(([action]) => action === AuditAction.INFRA_DATA_IMPORTED)).toEqual([]);
+    expect(calls.filter(([action]) => action === AuditAction.SESSION_STOPPED)).toEqual([
+      [AuditAction.SESSION_STOPPED, { sessionId: 'ghost', metadata: { via: 'infra_import_data' } }],
+    ]);
   });
 
   it('does NOT emit INFRA_DATA_IMPORTED when an empty backup is refused (no data changed)', async () => {
@@ -2705,6 +2818,29 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     expect(res.stoppedOrphanEngines).toEqual([]);
     expect(res.orphanedEngines).toEqual([]);
     expect(await ds.getRepository(Session).count()).toBe(1);
+  });
+
+  // Committed, such a row made every entity read of it throw: GET /sessions answered 500 for every session, and the
+  // webhook lookup of each event read the session's webhooks as none.
+  it.each([
+    ['a session config', 'Skipped session s1: config is not valid JSON'],
+    ['webhook headers', 'Skipped webhook wh1: headers is not valid JSON'],
+  ])('refuses an archive whose %s does not parse, replacing nothing', async (_case, warning) => {
+    await seedSession('s1');
+    await ds.getRepository(Webhook).save({ id: 'wh0', sessionId: 's1', url: 'https://example.com/kept' });
+    const dump = await build().exportData();
+    const [session] = dump.tables.sessions as unknown as Record<string, unknown>[];
+    const webhook = { id: 'wh1', sessionId: 's1', url: 'https://example.com/hook', events: ['message.received'] };
+    const tables = warning.includes('session')
+      ? { ...dump.tables, sessions: [{ ...session, config: '{"maxReconnectAttempts": 3' }] }
+      : { ...dump.tables, webhooks: [{ ...webhook, headers: '{"Authorization": "Bearer x"' }] };
+
+    const res = await build().importData({ tables: tables as never });
+
+    expect(res.imported).toBe(false);
+    expect(res.warnings).toEqual([warning]);
+    expect(await ds.getRepository(Session).find()).toHaveLength(1);
+    expect((await ds.getRepository(Webhook).find()).map(w => w.id)).toEqual(['wh0']);
   });
 
   it('still reports the engines it already stopped when the import rolls back', async () => {

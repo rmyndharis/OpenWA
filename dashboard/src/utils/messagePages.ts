@@ -18,7 +18,7 @@ export interface MessagePage {
 }
 
 /**
- * Optimistic-send placeholders (ChatComposer's `temp_${Date.now()}` id) never reached the DB. One
+ * Optimistic-send placeholders (ChatComposer's `temp_${Date.now()}_${n}` id) never reached the DB. One
  * that failed stays in `page.db` with `status: 'failed'` and nothing ever removes it, so counting
  * it as a fetched row would offset every later page by one and strand a real row unreachable.
  * Matched on the id prefix specifically — not on a missing `waMessageId`, which is nullable on a

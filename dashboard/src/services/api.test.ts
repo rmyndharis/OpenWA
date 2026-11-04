@@ -219,6 +219,35 @@ test('archived media forwards cancellation through fetch and the response body',
   await assert.rejects(bytes, { name: 'AbortError' });
 });
 
+test('a refused media download carries the Retry-After seconds it was sent, and none without the header', async () => {
+  const refuse = (headers: Record<string, string>) => {
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ statusCode: 503, message: 'Too many media downloads are in progress' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json', ...headers },
+        }),
+      )) as typeof fetch;
+  };
+  refuse({ 'Retry-After': '3' });
+  await assert.rejects(
+    sessionApi.getMessageMediaBlob('s1', '100@c.us', 'WA1'),
+    (err: Error & { status?: number; retryAfterSeconds?: number }) => {
+      assert.equal(err.status, 503);
+      assert.equal(err.retryAfterSeconds, 3);
+      return true;
+    },
+  );
+  refuse({});
+  await assert.rejects(
+    sessionApi.getMessageMediaBlob('s1', '100@c.us', 'WA1'),
+    (err: Error & { retryAfterSeconds?: number }) => {
+      assert.equal('retryAfterSeconds' in err, false);
+      return true;
+    },
+  );
+});
+
 test('the contact list walks past the 1000 contacts one response carries', async () => {
   const { contactApi } = await import('./api.ts');
   const requested: string[] = [];
@@ -331,6 +360,26 @@ for (const status of [500, 429]) {
     assert.equal(attempts, status === 429 ? 3 : 1);
   });
 }
+
+test('the chat list request carries the caller signal, so an abort cuts a request that never answers', async () => {
+  const controller = new AbortController();
+  let seen: AbortSignal | null | undefined;
+  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+    seen = init?.signal;
+    // A half-open connection: the request answers only when its signal aborts it.
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+    });
+  }) as typeof fetch;
+
+  const result = sessionApi.getChats('s1', controller.signal);
+  await new Promise(resolve => setImmediate(resolve));
+  // Asserted before waiting on the result, which would never settle without the signal.
+  assert.ok(seen, 'the request carried no signal');
+  controller.abort();
+  assert.equal(seen.aborted, true, 'the signal of the request did not follow the caller');
+  await assert.rejects(result, { name: 'AbortError' });
+});
 
 for (const change of ['replace key', 'sign out', 'abort'] as const) {
   test(`chat pagination stops before the next page after ${change}`, async () => {

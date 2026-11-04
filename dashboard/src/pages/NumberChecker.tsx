@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   UserCheck,
@@ -17,52 +17,29 @@ import {
   Search,
 } from 'lucide-react';
 import { Trans, useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { PageHeader } from '../components/PageHeader';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { copyToClipboard } from '../utils/clipboard';
 import { useSessionsQuery } from '../hooks/queries';
-import { contactApi, type CheckNumberResponse } from '../services/api';
+import { contactApi } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import { useRole } from '../hooks/useRole';
+import { batchStopMessage, useNumberCheck, type CheckResultItem } from '../hooks/useNumberCheck';
 import { escapeCsvCell } from '../utils/csv';
-import { isGatewayRefusal } from '../utils/groupSelection';
+import { normalizePhoneText } from '../utils/phone';
+import { keepsSameKey } from '../utils/authLifecycle';
+import { isComposingKey } from '../utils/composition';
 import './NumberChecker.css';
-
-export type CheckStatus = 'registered' | 'unregistered' | 'failed';
 
 // Every lookup is an outbound WhatsApp query that counts against the gateway's per-IP limit on this route
 // (100 a minute by default) and against the linked account's standing, so one run is capped.
 export const NUMBER_CHECK_BATCH_MAX = 100;
 
-interface BatchStop {
-  status: number;
-  attempted: number;
-  total: number;
-}
+// The most digits a phone number has (E.164). Spaces are formatting inside one number, so two whole numbers on one line
+// fold into a longer run of digits: such an entry is refused, never looked up as a number nobody typed.
+const PHONE_MAX_DIGITS = 15;
 
-// What each stopping status means, so a single unanswered lookup is not reported as the gateway refusing.
-const STOP_REASON_KEYS: Record<number, string> = {
-  409: 'numberChecker.stopped.reason409',
-  429: 'numberChecker.stopped.reason429',
-  503: 'numberChecker.stopped.reason503',
-};
-
-// `attempted` counts the lookup that stopped the run, which is the last one sent; only the rest were never sent.
-function batchStopMessage(t: TFunction, { status, attempted, total }: BatchStop): string {
-  const reason = t(STOP_REASON_KEYS[status] ?? 'numberChecker.stopped.reasonOther');
-  const unsent = total - attempted;
-  return unsent > 0
-    ? t('numberChecker.stopped.partial', { reason, status, attempted, total, count: unsent })
-    : t('numberChecker.stopped.last', { reason, status });
-}
-
-export interface CheckResultItem extends CheckNumberResponse {
-  status: CheckStatus;
-  error?: string | null;
-  avatarUrl?: string | null;
-  timestamp: string;
-}
+const timeOfDay = (iso: string) => new Date(iso).toLocaleTimeString();
 
 export function NumberChecker() {
   const { t } = useTranslation();
@@ -70,15 +47,28 @@ export function NumberChecker() {
   const navigate = useNavigate();
   const toast = useToast();
   const { canWrite } = useRole();
+  // The bulk run lives above the routes, so it is still going (or its rows are still here) when this page opens again.
+  const run = useNumberCheck();
+  const isCheckingBatch = run.running;
+  const batchResults = run.results;
+  const batchProgress = run.progress;
+  const batchStop = run.stopped;
 
-  const { data: sessions = [], isLoading: loadingSessions } = useSessionsQuery();
+  const { data: sessions = [], isLoading: loadingSessions, error: sessionsError } = useSessionsQuery();
+  // A read that never produced a list is not "no session connected"; a failed refetch keeps the cached one.
+  const sessionsFailed = !!sessionsError && sessions.length === 0;
   const readySessions = useMemo(() => sessions.filter(s => s.status === 'ready'), [sessions]);
 
   const [selectedSession, setSelectedSession] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<'single' | 'batch'>('single');
+  const [activeTab, setActiveTab] = useState<'single' | 'batch'>(
+    isCheckingBatch || batchResults.length > 0 ? 'batch' : 'single',
+  );
 
-  // Set default session when loaded (API requires session UUID)
-  const currentSession = selectedSession || readySessions[0]?.id || '';
+  // The chosen session, else the first ready one (API requires session UUID). A chosen session that leaves
+  // the ready list on a refetch would otherwise stay in use while the select shows the first option.
+  const currentSession = readySessions.some(s => s.id === selectedSession)
+    ? selectedSession
+    : (readySessions[0]?.id ?? '');
 
   // Single Check State
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -88,28 +78,28 @@ export function NumberChecker() {
   const [recentChecks, setRecentChecks] = useState<CheckResultItem[]>([]);
 
   // Batch Check State
-  const [batchInput, setBatchInput] = useState('');
-  const [batchDelay, setBatchDelay] = useState<number>(1000);
-  const [isCheckingBatch, setIsCheckingBatch] = useState(false);
-  const [batchResults, setBatchResults] = useState<CheckResultItem[]>([]);
-  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
-  const [batchFilter, setBatchFilter] = useState<'all' | 'registered' | 'unregistered' | 'failed'>('all');
-  const [batchStop, setBatchStop] = useState<BatchStop | null>(null);
-  const batchRunIdRef = useRef<number>(0);
-
+  const [batchInput, setBatchInput] = useState(() => run.numbers.join('\n'));
+  const [batchDelay, setBatchDelay] = useState<number>(run.delay);
+  // The session a running bulk run is bound to. Both selects are locked meanwhile, so they keep showing it even if
+  // the chosen session leaves the ready list and returns during the run, and a single check goes to it too.
+  const shownSession = isCheckingBatch ? run.session : currentSession;
+  const singleRun = useRef(0);
   useEffect(() => {
-    const runRef = batchRunIdRef;
+    singleRun.current += 1;
+    setIsCheckingSingle(false);
     return () => {
-      runRef.current++;
+      singleRun.current += 1;
     };
-  }, []);
+  }, [shownSession]);
+  const [batchFilter, setBatchFilter] = useState<'all' | 'registered' | 'unregistered' | 'failed'>('all');
 
   // Opt-in: the +91 rewrite would turn any other country's 10-digit or 0-prefixed number into an Indian one.
   const [autoPrefix91, setAutoPrefix91] = useState(false);
 
   // Format and clean phone number based on digit rules
   const formatNumberForCheck = useCallback(
-    (raw: string, applyPrefix = autoPrefix91) => {
+    (typed: string, applyPrefix = autoPrefix91) => {
+      const raw = normalizePhoneText(typed);
       let digits = raw.replace(/[^0-9]/g, '');
       const isInternational = raw.trim().startsWith('+') || digits.startsWith('00');
       // 1. If international dial exit code 00 is present (e.g. 009196...), strip '00'
@@ -138,21 +128,30 @@ export function NumberChecker() {
   const singleFormattedNumber = useMemo(() => {
     return formatNumberForCheck(phoneNumber);
   }, [phoneNumber, formatNumberForCheck]);
+  const singleTypedDigits = normalizePhoneText(phoneNumber).replace(/[^0-9]/g, '');
+  const singleTooLong = singleFormattedNumber.length > PHONE_MAX_DIGITS;
 
   // Batch parsing statistics
   const batchParsedStats = useMemo(() => {
-    const lines = batchInput
-      .split(/[\n,;\u060C\u061B]+/)
+    const lines = normalizePhoneText(batchInput)
+      .split(/[\n,;\t\u060C\u061B]+/)
       .map(n => n.trim())
       .filter(n => n.length > 0);
 
     let tenDigitsCount = 0;
     let twelveDigitsCount = 0;
     let otherCount = 0;
+    let tooLongCount = 0;
 
     const uniqueFormatted = new Set<string>();
 
     for (const raw of lines) {
+      // Measured after the 00 strip and the +91 rewrite, so a 00-prefixed full-length number is still one number.
+      const formatted = formatNumberForCheck(raw, autoPrefix91);
+      if (formatted.length > PHONE_MAX_DIGITS) {
+        tooLongCount++;
+        continue;
+      }
       let d = raw.replace(/[^0-9]/g, '');
       const isInternational = raw.startsWith('+') || d.startsWith('00');
       if (d.startsWith('00') && d.length >= 12) d = d.substring(2);
@@ -166,7 +165,6 @@ export function NumberChecker() {
       } else if (d.length >= 7) {
         otherCount++;
       }
-      const formatted = formatNumberForCheck(raw, autoPrefix91);
       if (formatted.length >= 7) {
         uniqueFormatted.add(formatted);
       }
@@ -178,6 +176,7 @@ export function NumberChecker() {
       tenDigitsCount,
       twelveDigitsCount,
       otherCount,
+      tooLongCount,
       list: Array.from(uniqueFormatted),
     };
   }, [batchInput, autoPrefix91, formatNumberForCheck]);
@@ -191,41 +190,51 @@ export function NumberChecker() {
       toast.error(t('numberChecker.toast.enterNumber'));
       return;
     }
-    if (!currentSession) {
+    if (formatted.length > PHONE_MAX_DIGITS) {
+      toast.error(t('numberChecker.single.tooLong', { max: PHONE_MAX_DIGITS }));
+      return;
+    }
+    if (!shownSession) {
       toast.error(t('numberChecker.toast.noSession'));
       return;
     }
 
+    const request = ++singleRun.current;
+    const sameKey = keepsSameKey();
+    const isCurrent = () => singleRun.current === request && sameKey();
     setIsCheckingSingle(true);
     try {
-      const res = await contactApi.checkNumber(currentSession, formatted);
+      const res = await contactApi.checkNumber(shownSession, formatted);
+      if (!isCurrent()) return;
       let avatar: string | null = null;
       if (res.exists && res.whatsappId) {
         try {
-          const pic = await contactApi.profilePicture(currentSession, res.whatsappId);
+          const pic = await contactApi.profilePicture(shownSession, res.whatsappId);
           avatar = pic.url;
         } catch {
           // Profile picture is optional
         }
       }
 
+      if (!isCurrent()) return;
       const item: CheckResultItem = {
         ...res,
         status: res.exists ? 'registered' : 'unregistered',
         error: null,
         avatarUrl: avatar,
-        timestamp: new Date().toLocaleTimeString(),
+        timestamp: new Date().toISOString(),
       };
 
       setSingleResult(item);
       setRecentChecks(prev => [item, ...prev.filter(p => p.number !== item.number).slice(0, 9)]);
     } catch (err) {
+      if (!isCurrent()) return;
       toast.error(
         t('numberChecker.toast.checkFailed'),
         err instanceof Error ? err.message : t('numberChecker.toast.unknownError'),
       );
     } finally {
-      setIsCheckingSingle(false);
+      if (singleRun.current === request) setIsCheckingSingle(false);
     }
   };
 
@@ -239,7 +248,7 @@ export function NumberChecker() {
   };
 
   // Perform batch check
-  const handleStartBatch = async () => {
+  const handleStartBatch = () => {
     if (!canWrite || isCheckingBatch) return;
     const numbers = batchParsedStats.list;
 
@@ -252,77 +261,8 @@ export function NumberChecker() {
       return;
     }
 
-    const runId = ++batchRunIdRef.current;
-    setIsCheckingBatch(true);
-    setBatchResults([]);
-    setBatchStop(null);
-    setBatchProgress({ current: 0, total: numbers.length });
-
-    const results: CheckResultItem[] = [];
-    let refusedWith: number | undefined;
-
-    for (let i = 0; i < numbers.length; i++) {
-      if (batchRunIdRef.current !== runId) return;
-
-      const num = numbers[i];
-      try {
-        const res = await contactApi.checkNumber(currentSession, num);
-        if (batchRunIdRef.current !== runId) return;
-
-        const item: CheckResultItem = {
-          ...res,
-          status: res.exists ? 'registered' : 'unregistered',
-          error: null,
-          timestamp: new Date().toLocaleTimeString(),
-        };
-        results.push(item);
-        setBatchResults([...results]);
-      } catch (err) {
-        if (batchRunIdRef.current !== runId) return;
-
-        const errorMsg = err instanceof Error ? err.message : t('numberChecker.toast.lookupFailed');
-        results.push({
-          number: num,
-          exists: false,
-          whatsappId: null,
-          status: 'failed',
-          error: errorMsg,
-          timestamp: new Date().toLocaleTimeString(),
-        });
-        setBatchResults([...results]);
-
-        // The gateway keeps refusing this route for the rest of its window, so every number after this one
-        // would only become a false "Failed" row (and spend more of the limit).
-        if (isGatewayRefusal(err)) {
-          refusedWith = (err as { status: number }).status;
-          setBatchProgress({ current: i + 1, total: numbers.length });
-          break;
-        }
-      }
-
-      if (batchRunIdRef.current !== runId) return;
-      setBatchProgress({ current: i + 1, total: numbers.length });
-
-      if (i < numbers.length - 1 && batchDelay > 0) {
-        await new Promise(resolve => setTimeout(resolve, batchDelay));
-        if (batchRunIdRef.current !== runId) return;
-      }
-    }
-
-    if (batchRunIdRef.current !== runId) return;
-    setIsCheckingBatch(false);
-    if (refusedWith !== undefined) {
-      const stop = { status: refusedWith, attempted: results.length, total: numbers.length };
-      setBatchStop(stop);
-      toast.error(t('numberChecker.bulk.stoppedTitle'), batchStopMessage(t, stop));
-      return;
-    }
-    toast.success(t('numberChecker.toast.completed', { count: results.length }));
-  };
-
-  const handleStopBatch = () => {
-    batchRunIdRef.current++;
-    setIsCheckingBatch(false);
+    setBatchFilter('all');
+    void run.start(numbers, currentSession, batchDelay);
   };
 
   // Filter batch results
@@ -372,8 +312,17 @@ export function NumberChecker() {
         }
       />
 
+      {sessionsFailed && (
+        <div className="error-banner" role="alert">
+          <AlertCircle size={20} />
+          <span className="error-banner-text">
+            {t('dashboard.loadError')}: {sessionsError.message}
+          </span>
+        </div>
+      )}
+
       {/* Session Alert if none ready */}
-      {!loadingSessions && readySessions.length === 0 && (
+      {!loadingSessions && !sessionsFailed && readySessions.length === 0 && (
         <div className="nc-alert warning">
           <div className="nc-alert-icon">
             <AlertCircle size={22} />
@@ -389,11 +338,21 @@ export function NumberChecker() {
       )}
 
       {/* Mode Tabs */}
-      <div className="nc-tabs">
-        <button className={`nc-tab ${activeTab === 'single' ? 'active' : ''}`} onClick={() => setActiveTab('single')}>
+      <div className="nc-tabs" role="tablist">
+        <button
+          role="tab"
+          aria-selected={activeTab === 'single'}
+          className={`nc-tab ${activeTab === 'single' ? 'active' : ''}`}
+          onClick={() => setActiveTab('single')}
+        >
           <Phone size={18} /> {t('numberChecker.tabs.single')}
         </button>
-        <button className={`nc-tab ${activeTab === 'batch' ? 'active' : ''}`} onClick={() => setActiveTab('batch')}>
+        <button
+          role="tab"
+          aria-selected={activeTab === 'batch'}
+          className={`nc-tab ${activeTab === 'batch' ? 'active' : ''}`}
+          onClick={() => setActiveTab('batch')}
+        >
           <UserCheck size={18} /> {t('numberChecker.tabs.bulk')}
         </button>
       </div>
@@ -413,9 +372,9 @@ export function NumberChecker() {
                   id="nc-single-session"
                   aria-label={t('numberChecker.session.label')}
                   className="nc-input"
-                  value={currentSession}
+                  value={shownSession}
                   onChange={e => setSelectedSession(e.target.value)}
-                  disabled={readySessions.length === 0}
+                  disabled={readySessions.length === 0 || isCheckingBatch}
                 >
                   {readySessions.length === 0 ? (
                     <option value="">{t('numberChecker.session.none')}</option>
@@ -431,23 +390,33 @@ export function NumberChecker() {
               </div>
 
               <div className="nc-form-group">
-                <label className="nc-label">{t('numberChecker.single.phoneLabel')}</label>
+                <label htmlFor="nc-single-phone" className="nc-label">
+                  {t('numberChecker.single.phoneLabel')}
+                </label>
                 <div className="nc-input-row">
                   <input
+                    id="nc-single-phone"
                     type="text"
+                    dir="ltr"
                     className="nc-input"
                     placeholder={t('numberChecker.single.phonePlaceholder')}
                     value={phoneNumber}
                     onChange={e => setPhoneNumber(e.target.value)}
                     onKeyDown={e => {
-                      if (e.key === 'Enter') handleSingleCheck();
+                      if (e.key === 'Enter' && !isComposingKey(e.nativeEvent)) handleSingleCheck();
                     }}
                     disabled={isCheckingSingle}
                   />
                   <button
                     className="nc-btn nc-btn-primary"
                     onClick={handleSingleCheck}
-                    disabled={!canWrite || isCheckingSingle || !phoneNumber.trim() || readySessions.length === 0}
+                    disabled={
+                      !canWrite ||
+                      isCheckingSingle ||
+                      !phoneNumber.trim() ||
+                      singleTooLong ||
+                      readySessions.length === 0
+                    }
                   >
                     {isCheckingSingle ? <Loader2 size={18} className="animate-spin" /> : <Search size={18} />}
                     {isCheckingSingle ? t('numberChecker.single.checking') : t('numberChecker.single.check')}
@@ -467,10 +436,14 @@ export function NumberChecker() {
                   </span>
                 </label>
 
-                {phoneNumber.trim() && (
+                {phoneNumber.trim() && singleTooLong && (
+                  <span className="nc-batch-limit" role="status">
+                    {t('numberChecker.single.tooLong', { max: PHONE_MAX_DIGITS })}
+                  </span>
+                )}
+                {phoneNumber.trim() && !singleTooLong && (
                   <div className="nc-format-preview">
-                    {phoneNumber.replace(/[^0-9]/g, '').length === 10 &&
-                    singleFormattedNumber === '91' + phoneNumber.replace(/[^0-9]/g, '') ? (
+                    {singleTypedDigits.length === 10 && singleFormattedNumber === '91' + singleTypedDigits ? (
                       <span className="nc-format-pill highlight">
                         <Trans
                           i18nKey="numberChecker.preview.prefixed"
@@ -478,7 +451,7 @@ export function NumberChecker() {
                           components={{ strong: <strong dir="ltr" /> }}
                         />
                       </span>
-                    ) : phoneNumber.replace(/[^0-9]/g, '').length === 12 ? (
+                    ) : singleFormattedNumber.length === 12 && singleFormattedNumber === singleTypedDigits ? (
                       <span className="nc-format-pill">
                         <Trans
                           i18nKey="numberChecker.preview.kept"
@@ -512,13 +485,13 @@ export function NumberChecker() {
               </div>
             </div>
 
-            {/* Result Card */}
-            <div className="nc-card">
+            {/* Result Card: always rendered, so a finished check is announced as a change inside it. */}
+            <div className="nc-card" role="status">
               <h2 className="nc-card-title">{t('numberChecker.single.resultTitle')}</h2>
 
               {isCheckingSingle ? (
                 <div className="nc-result-placeholder">
-                  <Loader2 size={36} className="animate-spin" style={{ color: 'var(--primary)' }} />
+                  <Loader2 size={36} className="animate-spin" style={{ color: 'var(--primary-text)' }} />
                   <span>{t('numberChecker.single.querying')}</span>
                 </div>
               ) : singleResult ? (
@@ -577,7 +550,7 @@ export function NumberChecker() {
                     <div className="nc-detail-row">
                       <span className="nc-detail-label">{t('numberChecker.result.checkedAt')}</span>
                       <span className="nc-detail-value" style={{ fontFamily: 'inherit', fontWeight: 'normal' }}>
-                        <bdi>{singleResult.timestamp}</bdi>
+                        <bdi>{timeOfDay(singleResult.timestamp)}</bdi>
                       </span>
                     </div>
                   </div>
@@ -619,49 +592,51 @@ export function NumberChecker() {
                 </button>
               </div>
 
-              <table className="nc-history-table">
-                <thead>
-                  <tr>
-                    <th>{t('numberChecker.table.phone')}</th>
-                    <th>{t('numberChecker.table.status')}</th>
-                    <th>{t('numberChecker.table.id')}</th>
-                    <th>{t('numberChecker.table.time')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentChecks.map((item, idx) => (
-                    <tr key={`${item.number}-${idx}`}>
-                      <td style={{ fontWeight: 600 }}>
-                        <bdi dir="ltr">+{item.number}</bdi>
-                      </td>
-                      <td>
-                        {item.status === 'registered' ? (
-                          <span className="nc-status-badge registered">
-                            <CheckCircle2 size={13} /> {t('numberChecker.status.registered')}
-                          </span>
-                        ) : item.status === 'failed' ? (
-                          <span
-                            className="nc-status-badge error"
-                            title={item.error || t('numberChecker.status.failed')}
-                          >
-                            <AlertCircle size={13} /> {t('numberChecker.status.failed')}
-                          </span>
-                        ) : (
-                          <span className="nc-status-badge unregistered">
-                            <XCircle size={13} /> {t('numberChecker.status.unregistered')}
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
-                        <bdi dir="ltr">{item.whatsappId || '—'}</bdi>
-                      </td>
-                      <td style={{ color: 'var(--text-muted)' }}>
-                        <bdi>{item.timestamp}</bdi>
-                      </td>
+              <div className="nc-table-wrap" tabIndex={0} role="region" aria-label={t('numberChecker.recent.title')}>
+                <table className="nc-history-table">
+                  <thead>
+                    <tr>
+                      <th>{t('numberChecker.table.phone')}</th>
+                      <th>{t('numberChecker.table.status')}</th>
+                      <th>{t('numberChecker.table.id')}</th>
+                      <th>{t('numberChecker.table.time')}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {recentChecks.map((item, idx) => (
+                      <tr key={`${item.number}-${idx}`}>
+                        <td style={{ fontWeight: 600 }}>
+                          <bdi dir="ltr">+{item.number}</bdi>
+                        </td>
+                        <td>
+                          {item.status === 'registered' ? (
+                            <span className="nc-status-badge registered">
+                              <CheckCircle2 size={13} /> {t('numberChecker.status.registered')}
+                            </span>
+                          ) : item.status === 'failed' ? (
+                            <span
+                              className="nc-status-badge error"
+                              title={item.error || t('numberChecker.status.failed')}
+                            >
+                              <AlertCircle size={13} /> {t('numberChecker.status.failed')}
+                            </span>
+                          ) : (
+                            <span className="nc-status-badge unregistered">
+                              <XCircle size={13} /> {t('numberChecker.status.unregistered')}
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
+                          <bdi dir="ltr">{item.whatsappId || '-'}</bdi>
+                        </td>
+                        <td style={{ color: 'var(--text-muted)' }}>
+                          <bdi>{timeOfDay(item.timestamp)}</bdi>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </>
@@ -680,7 +655,7 @@ export function NumberChecker() {
                   id="nc-batch-session"
                   aria-label={t('numberChecker.session.label')}
                   className="nc-input"
-                  value={currentSession}
+                  value={shownSession}
                   onChange={e => setSelectedSession(e.target.value)}
                   disabled={readySessions.length === 0 || isCheckingBatch}
                 >
@@ -737,8 +712,12 @@ export function NumberChecker() {
 
             <div>
               <div className="nc-form-group">
-                <label className="nc-label">{t('numberChecker.bulk.numbersLabel')}</label>
+                <label htmlFor="nc-batch-numbers" className="nc-label">
+                  {t('numberChecker.bulk.numbersLabel')}
+                </label>
                 <textarea
+                  id="nc-batch-numbers"
+                  dir="ltr"
                   className="nc-textarea"
                   placeholder="919612345678&#10;6281234567890&#10;14155552671"
                   value={batchInput}
@@ -771,6 +750,11 @@ export function NumberChecker() {
                     {t('numberChecker.bulk.numbersHint', { max: NUMBER_CHECK_BATCH_MAX })}
                   </span>
                 )}
+                {batchParsedStats.tooLongCount > 0 && (
+                  <span className="nc-batch-limit" role="status">
+                    {t('numberChecker.bulk.tooLong', { max: PHONE_MAX_DIGITS, count: batchParsedStats.tooLongCount })}
+                  </span>
+                )}
                 {batchOverLimit && (
                   <span className="nc-batch-limit" role="status">
                     {t('numberChecker.bulk.tooMany', {
@@ -784,7 +768,7 @@ export function NumberChecker() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.5rem' }}>
             {!isCheckingBatch ? (
               <button
                 className="nc-btn nc-btn-primary"
@@ -794,15 +778,20 @@ export function NumberChecker() {
                 <UserCheck size={18} /> {t('numberChecker.bulk.start')}
               </button>
             ) : (
-              <button className="nc-btn nc-btn-danger" onClick={handleStopBatch}>
+              <button className="nc-btn nc-btn-danger" onClick={run.stop}>
                 <Trash2 size={18} /> {t('numberChecker.bulk.stop')}
               </button>
             )}
 
             {batchResults.length > 0 && !isCheckingBatch && (
-              <button className="nc-btn nc-btn-secondary" onClick={handleExportCSV}>
-                <Download size={18} /> {t('numberChecker.bulk.export')}
-              </button>
+              <>
+                <button className="nc-btn nc-btn-secondary" onClick={handleExportCSV} aria-describedby="nc-export-hint">
+                  <Download size={18} /> {t('numberChecker.bulk.export')}
+                </button>
+                <span id="nc-export-hint" className="nc-hint" style={{ flexBasis: '100%', margin: 0 }}>
+                  {t('numberChecker.bulk.exportHint')}
+                </span>
+              </>
             )}
           </div>
 
@@ -822,7 +811,14 @@ export function NumberChecker() {
           {(isCheckingBatch || batchResults.length > 0) && (
             <>
               {isCheckingBatch && (
-                <div className="nc-progress-bar-container">
+                <div
+                  className="nc-progress-bar-container"
+                  role="progressbar"
+                  aria-label={t('numberChecker.bulk.title')}
+                  aria-valuemin={0}
+                  aria-valuemax={batchProgress.total}
+                  aria-valuenow={batchProgress.current}
+                >
                   <div
                     className="nc-progress-bar"
                     style={{
@@ -867,18 +863,21 @@ export function NumberChecker() {
               <div className="nc-filter-bar">
                 <div className="nc-filter-btns">
                   <button
+                    aria-pressed={batchFilter === 'all'}
                     className={`nc-filter-btn ${batchFilter === 'all' ? 'active' : ''}`}
                     onClick={() => setBatchFilter('all')}
                   >
                     {t('numberChecker.bulk.all')} ({batchResults.length})
                   </button>
                   <button
+                    aria-pressed={batchFilter === 'registered'}
                     className={`nc-filter-btn ${batchFilter === 'registered' ? 'active' : ''}`}
                     onClick={() => setBatchFilter('registered')}
                   >
                     {t('numberChecker.status.registered')} ({registeredCount})
                   </button>
                   <button
+                    aria-pressed={batchFilter === 'unregistered'}
                     className={`nc-filter-btn ${batchFilter === 'unregistered' ? 'active' : ''}`}
                     onClick={() => setBatchFilter('unregistered')}
                   >
@@ -886,6 +885,7 @@ export function NumberChecker() {
                   </button>
                   {failedCount > 0 && (
                     <button
+                      aria-pressed={batchFilter === 'failed'}
                       className={`nc-filter-btn ${batchFilter === 'failed' ? 'active' : ''}`}
                       onClick={() => setBatchFilter('failed')}
                     >
@@ -895,65 +895,67 @@ export function NumberChecker() {
                 </div>
               </div>
 
-              <table className="nc-history-table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>{t('numberChecker.table.phone')}</th>
-                    <th>{t('numberChecker.table.status')}</th>
-                    <th>{t('numberChecker.table.id')}</th>
-                    <th>{t('numberChecker.table.time')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredBatchResults.map((item, idx) => (
-                    <tr key={`${item.number}-${idx}`}>
-                      <td style={{ color: 'var(--text-muted)' }}>{idx + 1}</td>
-                      <td style={{ fontWeight: 600 }}>
-                        <bdi dir="ltr">+{item.number}</bdi>
-                      </td>
-                      <td>
-                        {item.status === 'registered' ? (
-                          <span className="nc-status-badge registered">
-                            <CheckCircle2 size={13} /> {t('numberChecker.status.registered')}
-                          </span>
-                        ) : item.status === 'failed' ? (
-                          <div style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.25rem' }}>
-                            <span
-                              className="nc-status-badge error"
-                              title={item.error || t('numberChecker.toast.lookupFailed')}
-                            >
-                              <AlertCircle size={13} /> {t('numberChecker.status.failed')}
-                            </span>
-                            {item.error && (
-                              <span
-                                style={{
-                                  fontSize: '0.75rem',
-                                  color: 'var(--error-text)',
-                                  maxWidth: '240px',
-                                  wordBreak: 'break-word',
-                                }}
-                              >
-                                {item.error}
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="nc-status-badge unregistered">
-                            <XCircle size={13} /> {t('numberChecker.status.unregistered')}
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
-                        <bdi dir="ltr">{item.whatsappId || '—'}</bdi>
-                      </td>
-                      <td style={{ color: 'var(--text-muted)' }}>
-                        <bdi>{item.timestamp}</bdi>
-                      </td>
+              <div className="nc-table-wrap" tabIndex={0} role="region" aria-label={t('numberChecker.bulk.title')}>
+                <table className="nc-history-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>{t('numberChecker.table.phone')}</th>
+                      <th>{t('numberChecker.table.status')}</th>
+                      <th>{t('numberChecker.table.id')}</th>
+                      <th>{t('numberChecker.table.time')}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {filteredBatchResults.map((item, idx) => (
+                      <tr key={`${item.number}-${idx}`}>
+                        <td style={{ color: 'var(--text-muted)' }}>{idx + 1}</td>
+                        <td style={{ fontWeight: 600 }}>
+                          <bdi dir="ltr">+{item.number}</bdi>
+                        </td>
+                        <td>
+                          {item.status === 'registered' ? (
+                            <span className="nc-status-badge registered">
+                              <CheckCircle2 size={13} /> {t('numberChecker.status.registered')}
+                            </span>
+                          ) : item.status === 'failed' ? (
+                            <div style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.25rem' }}>
+                              <span
+                                className="nc-status-badge error"
+                                title={item.error || t('numberChecker.toast.lookupFailed')}
+                              >
+                                <AlertCircle size={13} /> {t('numberChecker.status.failed')}
+                              </span>
+                              {item.error && (
+                                <span
+                                  style={{
+                                    fontSize: '0.75rem',
+                                    color: 'var(--error-text)',
+                                    maxWidth: '240px',
+                                    wordBreak: 'break-word',
+                                  }}
+                                >
+                                  {item.error}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="nc-status-badge unregistered">
+                              <XCircle size={13} /> {t('numberChecker.status.unregistered')}
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
+                          <bdi dir="ltr">{item.whatsappId || '-'}</bdi>
+                        </td>
+                        <td style={{ color: 'var(--text-muted)' }}>
+                          <bdi>{timeOfDay(item.timestamp)}</bdi>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </>
           )}
         </div>

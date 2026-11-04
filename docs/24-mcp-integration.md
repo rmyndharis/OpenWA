@@ -14,7 +14,7 @@
 | **Tool registry (`ToolDescriptor`)**                                      | ✅ Implemented | `src/core/agent-tools/tool-descriptor.ts`            |
 | **Tool invoker (auth → chat gate → validate → chat arguments → service)** | ✅ Implemented | `src/core/agent-tools/tool-invoker.ts`               |
 | **Registry service**                                                      | ✅ Implemented | `src/core/agent-tools/tool-registry.service.ts`      |
-| **Curated tool tables (51 tools)**                                        | ✅ Implemented | `src/core/agent-tools/tools/*.tools.ts`              |
+| **Curated tool tables (52 tools)**                                        | ✅ Implemented | `src/core/agent-tools/tools/*.tools.ts`              |
 | **MCP transport adapter**                                                 | ✅ Implemented | `src/modules/mcp/mcp.server.ts`                      |
 | **Opt-in module gate**                                                    | ✅ Implemented | `src/modules/mcp/mcp.module.ts`, `src/app.module.ts` |
 | **Per-key rate limiter**                                                  | ✅ Implemented | `src/modules/mcp/mcp-rate-limit.ts`                  |
@@ -85,7 +85,7 @@ flowchart TB
 flowchart LR
     Client[MCP client] -->|POST /mcp| Adapter
     subgraph Core["src/core/agent-tools (SDK-free)"]
-        Registry[ToolRegistryService<br/>51 ToolDescriptors]
+        Registry[ToolRegistryService<br/>52 ToolDescriptors]
         Invoker[invokeTool<br/>auth → chat gate → validate → chat arguments → handler]
     end
     subgraph Adapter["src/modules/mcp (SDK, opt-in)"]
@@ -105,7 +105,11 @@ otherwise refuses, gets an HTTP error with a JSON-RPC body (`401` carries
 `WWW-Authenticate: Bearer`) and an `API_KEY_AUTH_FAILED` audit row (a missing or unknown
 key's row is capped at 10 per client IP a minute, a budget shared with REST and the queue
 dashboard), and no MCP method runs.
-Past the gate, a tool call flows through five steps, in this order:
+Past the gate, the MCP SDK first checks the arguments against the tool's Zod input schema. Arguments it
+refuses come back as an `isError` tool result whose text reads `MCP error -32602: Input validation
+error: ...`, without reaching authentication: a key that lacks the tool's role or session gets that
+error rather than a `403`, and no audit row is written. A call whose arguments pass flows through five
+steps, in this order:
 
 1. **Key extraction.** The adapter reads the API key from the `X-API-Key` header or
    `Authorization: Bearer …`.
@@ -114,9 +118,10 @@ Past the gate, a tool call flows through five steps, in this order:
    `allowedSessions` scope, and the IP allow-list (fail-closed). Then `hasPermission()`
    enforces the tool's required role. A key restricted to selected chats may then run only
    a tool that carries a chat scope (`403` otherwise). Auth runs **before** the handler.
-3. **Validation.** The tool's Zod input schema validates the arguments (a failure maps to
-   a `400`-style error), exactly bounding what reaches the service. A NUL character in the
-   input is refused the same way.
+3. **Validation.** `invokeTool` parses the arguments with the same schema again, exactly
+   bounding what reaches the service (a failure there would map to a `400`-style error, but the
+   SDK check above has already refused such input). A NUL character in the input is refused
+   with that `400`-style error.
 4. **Chat arguments.** For a chat-restricted key, each chat argument of the tool, read from
    the parsed values, must name a chat inside the key's allowlist, and a `quotedMessageId`
    is refused unless the tool allows one (`403`).
@@ -133,7 +138,7 @@ The surface is an **allowlist by construction** — a capability is exposed only
 `ToolDescriptor` is written for it. There is no automatic route reflection. Each tool
 declares a `tier` (`read` | `write`) and a `requiredRole` when the call warrants one: every
 write carries its privilege level, and a read carries the role its REST twin requires. The
-reads at OPERATOR are `WebhooksList`, `WebhookFindBySession` and `WebhookFindOne`,
+reads at OPERATOR are `MessageSearch`, `WebhooksList`, `WebhookFindBySession` and `WebhookFindOne`,
 `AutomationRuleFindAll` and `AutomationRuleFindOne`, `GroupGetInviteCode` (the invite
 code is a transferable join capability, so it sits at OPERATOR like the QR endpoint), and
 `ContactCheckNumber` (each call queries WhatsApp about a third party).
@@ -141,7 +146,7 @@ code is a transferable join capability, so it sits at OPERATOR like the QR endpo
 | Domain         | Read tools                                                         | Write tools                                                                                   |
 | -------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
 | **Session**    | list, get, chats, stats, presence                                  | mark read/unread, typing, subscribe presence                                                  |
-| **Message**    | list, history, reactions                                           | send text/image/video/audio/document/location/contact/sticker/template, reply, forward, react |
+| **Message**    | list, history, reactions, search (OPERATOR)                        | send text/image/video/audio/document/location/contact/sticker/template, reply, forward, react |
 | **Contact**    | list, get, check-number (OPERATOR), resolve-phone, profile-picture | block, unblock                                                                                |
 | **Group**      | list, get, invite-code (OPERATOR)                                  | create, add participants, set subject, set description                                        |
 | **Webhook**    | list, get (OPERATOR)                                               | —                                                                                             |
@@ -154,6 +159,10 @@ code is a transferable join capability, so it sits at OPERATOR like the QR endpo
 > works on both. An agent told this can pick the right call; one that is not will read the `501` as
 > a transient failure and retry something that cannot succeed on that engine. Labels are a WhatsApp
 > Business feature throughout.
+
+> **Three more tools answer `501` on one engine**, and their descriptions say so. `MessageHistory`
+> and `MessageGetReactions` need whatsapp-web.js; on Baileys use `MessageList` for stored messages.
+> `GroupCreate` needs Baileys; whatsapp-web.js cannot create a group.
 
 **Deliberately excluded from the surface** (not exposed as tools): session lifecycle
 (create/delete/start/stop/logout/force-kill), chat delete, bulk send, message delete, message edit,
@@ -213,7 +222,7 @@ only when an agent genuinely needs to send messages / mutate state.
 ### Threat model: untrusted message content
 
 The read tools return what other WhatsApp users wrote, verbatim: message bodies and captions
-(`MessageList`, `MessageHistory`), last-message previews and chat names (`SessionGetChats`,
+(`MessageList`, `MessageHistory`, `MessageSearch`), last-message previews and chat names (`SessionGetChats`,
 `LabelListChats`), push names and contact names (`ContactFindAll`, `ContactFindOne`), and group
 subjects and descriptions (`GroupFindAll`, `GroupFindOne`). Treat any read tool that returns a name
 or message text the same way. Anyone who can message the account, or join or rename a group it is

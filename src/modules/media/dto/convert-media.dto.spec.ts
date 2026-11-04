@@ -29,6 +29,14 @@ describe('ConvertMediaDto url', () => {
     expect(await validateDto({ base64: 'AAAA', url: 'junk' })).toHaveLength(0);
   });
 
+  it('ignores an empty url next to base64, which wins', async () => {
+    expect(await validateDto({ base64: 'AAAA', url: '' })).toHaveLength(0);
+  });
+
+  it('refuses an empty url without base64', async () => {
+    expect((await validateDto({ url: '' })).map(e => e.property)).toContain('url');
+  });
+
   it('checks the url when base64 is only a data-URI prefix', async () => {
     const errors = await validateDto({ base64: 'data:audio/mpeg;base64,', url: 'cdn/a.mp3' });
     expect(errors.map(e => e.property)).toContain('url');

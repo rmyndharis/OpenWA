@@ -9,8 +9,10 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { OnModuleDestroy } from '@nestjs/common';
+import { ForbiddenException, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { createLogger } from '../../common/services/logger.service';
+import { getRequestActor, runWithRequestId } from '../../common/services/request-context';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from '../auth/auth.service';
 import { ChatScopeService } from '../auth/chat-scope.service';
@@ -82,6 +84,7 @@ const CHAT_EVENTS = new Set([
   'group.update',
   'presence.update',
   'event.response',
+  'poll.vote',
 ]);
 
 /**
@@ -146,6 +149,17 @@ function isSessionSelector(sessionId: string): boolean {
   return sessionId === '*' || (sessionId.length <= MAX_SUBSCRIBE_SESSION_ID_LENGTH && isSafeSessionName(sessionId));
 }
 
+/**
+ * Whether validateApiKey judged the credential (unknown, revoked, expired, IP- or session-refused), as opposed to
+ * failing to read it. Only a judgement is an authentication failure; the REST guard lets anything else through
+ * as a 500.
+ */
+function isKeyRefusal(error: unknown): boolean {
+  return error instanceof UnauthorizedException || error instanceof ForbiddenException;
+}
+
+const KEY_UNREADABLE_MESSAGE = 'The API key could not be checked; retry shortly';
+
 /** Why an API key's live WebSocket sockets are being torn down — drives the client-facing message. */
 export type ApiKeyEvictionReason = 'revoked' | 'deleted' | 'authorization_changed' | 'expired';
 
@@ -156,11 +170,20 @@ const EVICTION_MESSAGES: Record<ApiKeyEvictionReason, string> = {
   expired: 'API key has expired',
 };
 
+/**
+ * Largest client frame the socket accepts, in bytes. A client only sends subscribe, unsubscribe and ping
+ * frames, and the longest legal one (the longest session and request id, every event) is under 1 KB.
+ * Every frame is decoded and walked before it is answered, so the Socket.IO default of 1 MB is far more
+ * than any client needs.
+ */
+export const WS_MAX_FRAME_BYTES = 8 * 1024;
+
 @WebSocketGateway({
   cors: {
     origin: resolveWsCorsOrigin(),
   },
   namespace: '/events',
+  maxHttpBufferSize: WS_MAX_FRAME_BYTES,
 })
 export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   @WebSocketServer()
@@ -175,6 +198,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
    */
   private readonly socketsByKeyId = new Map<string, Set<Socket>>();
   private readonly chatDeliveries = new Map<string, Promise<void>>();
+  // Subscribes still re-validating their key. An unsubscribe answered meanwhile cancels the ones it covers, so
+  // they cannot join rooms after the client was told they were left.
+  private readonly pendingSubscriptions = new WeakMap<Socket, Set<{ sessionId: string; cancelled: boolean }>>();
   private authzSweepTimer?: ReturnType<typeof setInterval>;
 
   /**
@@ -277,6 +303,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     if (!current) return 'deleted';
     if (!current.isActive) return 'revoked';
     const expiry = apiKeyExpiryTime(current.expiresAt);
+    // An expiry that does not parse is the epoch for apiKeyExpiryTime, so it is expired here as AuthService refuses it.
     if (expiry !== null && expiry <= now) return 'expired';
     const authorization = apiKeyAuthorizationFingerprint(current);
     // Per socket, not per key: sockets under one key connected at different moments, so one can hold
@@ -385,18 +412,24 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     // Pre-auth, per-IP handshake throttle. This must run BEFORE any credential handling: an
     // unauthenticated handshake flood otherwise reaches the DB validateApiKey below on every
     // attempt (same gap the MCP pre-auth IP throttle covers for the /mcp mount).
-    if (!this.handshakeLimiter.allow(handshakeKey)) {
+    const handshakeReservation = {};
+    if (!this.handshakeLimiter.allow(handshakeKey, handshakeReservation)) {
       this.logger.warn(`Client ${client.id} rejected: handshake rate limit exceeded (ip: ${clientIp})`);
       this.noteRateLimitViolation('handshake', { ipAddress: clientIp });
       client.emit('message', this.createError('RATE_LIMITED', 'Too many connection attempts, retry later'));
-      client.disconnect();
+      // Closing the transport too: Socket.IO cleared its connect timeout when it accepted the namespace, so a
+      // namespace-only disconnect would leave the connection open for as long as the peer answers pings.
+      client.disconnect(true);
       return;
     }
 
     // Accept the key only via Socket.IO's `auth` field or the header — never the query string, which
     // leaks the credential into proxy/access logs. (The deprecated `?apiKey=` fallback was removed.)
-    const handshakeAuth = client.handshake.auth as { apiKey?: string } | undefined;
-    const apiKey = handshakeAuth?.apiKey || (client.handshake.headers['x-api-key'] as string);
+    // A non-string `auth.apiKey` counts as absent, so it is refused as a missing key, not mistaken for a failure
+    // to read the key table below.
+    const handshakeAuth = client.handshake.auth as { apiKey?: unknown } | undefined;
+    const authKey = typeof handshakeAuth?.apiKey === 'string' ? handshakeAuth.apiKey : undefined;
+    const apiKey = authKey || (client.handshake.headers['x-api-key'] as string | undefined);
 
     if (!apiKey) {
       this.logger.warn(`Client ${client.id} rejected: No API key provided`);
@@ -406,16 +439,26 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         errorMessage: 'missing API key',
       });
       client.emit('message', this.createError('UNAUTHORIZED', 'API key required'));
-      client.disconnect();
+      client.disconnect(true);
       return;
     }
 
+    // The stored key validateApiKey resolved before refusing it, so the refusal's audit row names it as the REST
+    // guard's does. Engine.IO serves /socket.io/ ahead of the Express middleware that opens a request context,
+    // so the validation runs in one of its own and the key is read back from it.
+    let refusedKey: Pick<ApiKey, 'id' | 'name'> | undefined;
     try {
       // validateApiKey THROWS on any failure (it never resolves to a falsy value), so the rejection
       // path is the catch below — a separate `if (!validKey)` branch here was dead code. The clientIp
       // is passed so an IP-restricted key (allowedIps set) is ENFORCED rather than blanket-rejected
       // for "Client IP could not be determined".
-      const validKey = await this.authService.validateApiKey(apiKey, clientIp);
+      const validKey = await runWithRequestId(randomUUID(), () =>
+        this.authService.validateApiKey(apiKey, clientIp).catch((error: unknown) => {
+          const actor = getRequestActor();
+          if (actor?.apiKeyId) refusedKey = { id: actor.apiKeyId, name: actor.apiKeyName ?? '' };
+          throw error;
+        }),
+      );
 
       // Cap simultaneous sockets per key: each socket holds rooms, engine fan-out, and memory,
       // so one key must not open connections without bound. Enough for multi-tab dashboards;
@@ -433,7 +476,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
             `Too many concurrent connections for this API key (max ${this.rateLimits.maxSocketsPerKey})`,
           ),
         );
-        client.disconnect();
+        client.disconnect(true);
         return;
       }
 
@@ -447,7 +490,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       // handshakes, and authenticated connections stay bounded by maxSocketsPerKey above. Without
       // this, every client behind one NAT/proxy IP shares a 10/min budget and normal dashboard
       // re-mounts lock each other out.
-      this.handshakeLimiter.refund(handshakeKey);
+      this.handshakeLimiter.refund(handshakeKey, handshakeReservation);
       // The transport can close while validateApiKey is in flight, and Nest runs the disconnect
       // handler before this one returns. That untrack found no key on client.data yet and did
       // nothing, so the socket just tracked would stay in the per-key set for the life of the
@@ -461,18 +504,30 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       }
       this.logger.log(`Client connected: ${client.id} (key: ${validKey.name})`);
     } catch (error) {
+      if (!isKeyRefusal(error)) {
+        // The key table could not be read: no verdict on the credential, so no authentication failure is
+        // audited, and the client is told to retry rather than that its key failed.
+        this.logger.error(
+          `Client ${client.id} rejected: API key could not be checked`,
+          error instanceof Error ? error.stack : String(error),
+        );
+        client.emit('message', this.createError('INTERNAL_ERROR', KEY_UNREADABLE_MESSAGE));
+        client.disconnect(true);
+        return;
+      }
       this.logger.warn(`Client ${client.id} rejected: Auth error`, {
         error: error instanceof Error ? error.message : String(error),
       });
       // Audit the rejected credential like the REST guard does, so probing over the WS surface leaves
       // a forensic trail too. Fire-and-forget: audit logging must never affect the rejection path.
       void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
+        apiKey: refusedKey as ApiKey | undefined,
         ipAddress: clientIp,
         metadata: { surface: 'websocket' },
         errorMessage: error instanceof Error ? error.message : String(error),
       });
       client.emit('message', this.createError('UNAUTHORIZED', 'Authentication failed'));
-      client.disconnect();
+      client.disconnect(true);
     }
   }
 
@@ -581,22 +636,48 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     // here too, not just at connect.
     const rawApiKey = (client.data as { rawApiKey?: string }).rawApiKey;
     const clientIp = this.resolveClientIp(client);
+    const subscription = { sessionId, cancelled: false };
+    let pending = this.pendingSubscriptions.get(client);
+    if (!pending) {
+      pending = new Set();
+      this.pendingSubscriptions.set(client, pending);
+    }
+    pending.add(subscription);
     let subscriberKey: ApiKey | null;
+    let unreadable = false;
     try {
       subscriberKey = rawApiKey ? await this.authService.validateApiKey(rawApiKey, clientIp) : null;
     } catch (error) {
       subscriberKey = null;
-      // A key refused here was valid at connect (revoked, expired, deleted or IP-refused since), so it
-      // is audited like the handshake refusal; the socket is disconnected below, bounding the volume.
-      void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
-        ipAddress: clientIp,
-        metadata: { surface: 'websocket' },
-        errorMessage: error instanceof Error ? error.message : String(error),
-      });
+      if (isKeyRefusal(error)) {
+        // A key refused here was valid at connect (revoked, expired, deleted or IP-refused since), so it
+        // is audited like the handshake refusal, naming the key the socket connected with; the socket is
+        // disconnected below, bounding the volume.
+        void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
+          apiKey: (client.data as { apiKey?: ApiKey }).apiKey,
+          ipAddress: clientIp,
+          metadata: { surface: 'websocket' },
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      } else {
+        unreadable = true;
+        this.logger.error(
+          `Subscribe from ${client.id} failed: API key could not be checked`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    } finally {
+      pending.delete(subscription);
+      if (pending.size === 0) this.pendingSubscriptions.delete(client);
+    }
+    // Like a REST call that answers 500, this subscribe fails and joins nothing, and the socket keeps what it
+    // already holds: the key was not judged, and the periodic sweep still re-validates it.
+    if (unreadable) {
+      return this.createError('INTERNAL_ERROR', KEY_UNREADABLE_MESSAGE, requestId);
     }
     if (!subscriberKey) {
       client.emit('message', this.createError('UNAUTHORIZED', 'API key is no longer valid', requestId));
-      client.disconnect();
+      client.disconnect(true);
       return this.createError('UNAUTHORIZED', 'API key is no longer valid', requestId);
     }
 
@@ -617,7 +698,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       const refusal = this.createError('UNAUTHORIZED', EVICTION_MESSAGES.authorization_changed, requestId);
       this.auditAuthorizationRefusal(subscriberKey, clientIp, refusal.message);
       client.emit('message', refusal);
-      client.disconnect();
+      client.disconnect(true);
       return refusal;
     }
 
@@ -688,6 +769,10 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       return this.createError('TOO_MANY_SUBSCRIPTIONS', TOO_MANY_SUBSCRIPTIONS_MESSAGE, requestId);
     }
 
+    if (subscription.cancelled) {
+      return this.createError('SUBSCRIPTION_CANCELLED', 'Subscription was cancelled', requestId);
+    }
+
     // Join rooms for each session/event combination
     for (const room of rooms) {
       void client.join(room);
@@ -723,6 +808,10 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     }
     if (!isSessionSelector(sessionId)) {
       return this.createError('INVALID_SESSION', 'sessionId must be "*" or a session id', requestId);
+    }
+
+    for (const subscription of this.pendingSubscriptions.get(client) ?? []) {
+      if (sessionId === '*' || subscription.sessionId === sessionId) subscription.cancelled = true;
     }
 
     // Leave all rooms for this session
@@ -927,6 +1016,11 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   /** Emit an RSVP to a WhatsApp event (Baileys only). Payload mirrors the `event.response` webhook. */
   emitEventResponse(sessionId: string, data: Record<string, unknown>) {
     this.emitToRooms(sessionId, 'event.response', data);
+  }
+
+  /** Emit a voter's new selection on a poll (whatsapp-web.js only). Payload mirrors the `poll.vote` webhook. */
+  emitPollVote(sessionId: string, data: Record<string, unknown>) {
+    this.emitToRooms(sessionId, 'poll.vote', data);
   }
 
   /**

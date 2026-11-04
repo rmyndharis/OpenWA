@@ -30,6 +30,7 @@ class ChannelsResource:
         self._http = http
 
     def list(self, session_id: str) -> list[ChannelRecord]:
+        """List the channels the session is subscribed to. whatsapp-web.js only; Baileys answers 501."""
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/channels")
 
     def get(self, session_id: str, channel_id: str) -> ChannelRecord:
@@ -38,6 +39,7 @@ class ChannelsResource:
     def messages(
         self, session_id: str, channel_id: str, query: ChannelMessageQuery | None = None
     ) -> List[ChannelMessageRecord]:
+        """Get recent messages from a channel. whatsapp-web.js only; Baileys answers 501."""
         return self._http.request(
             "GET", f"/api/sessions/{quote_segment(session_id)}/channels/{quote_segment(channel_id)}/messages", query=query
         )
@@ -63,7 +65,10 @@ class ChannelsResource:
         )
 
     def subscribe(self, session_id: str, body: SubscribeChannelRequest) -> ChannelRecord:
-        """Subscribe to a channel using its invite code. Requires an OPERATOR-level key."""
+        """Subscribe to a channel using its invite code. Requires an OPERATOR-level key.
+
+        Baileys only; whatsapp-web.js answers 501.
+        """
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/channels/subscribe", body=body)
 
     def unsubscribe(self, session_id: str, channel_id: str) -> SuccessResult:

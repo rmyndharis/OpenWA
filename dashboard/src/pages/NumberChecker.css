@@ -10,6 +10,11 @@
   margin-bottom: 2rem;
 }
 
+/* A long title and the badge beside it (de, es, tr) take two rows on a narrow screen instead of running past it. */
+.number-checker .page-header__title-group {
+  flex-wrap: wrap;
+}
+
 .number-checker .nc-alert {
   display: flex;
   align-items: center;
@@ -47,7 +52,7 @@
   padding: 0.5rem 1rem;
   border-radius: 6px;
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
   border: none;
   font-size: 0.875rem;
   font-weight: 600;
@@ -65,6 +70,7 @@
 .number-checker /* Tabs */
 .nc-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   border-bottom: 1px solid var(--border);
   margin-bottom: 1.5rem;
@@ -97,13 +103,14 @@
 .number-checker /* Main Grid */
 .nc-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0, ...) lets a track shrink below its content, which a plain 1fr never does. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1.5rem;
 }
 
 @media (max-width: 900px) {
   .number-checker .nc-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .number-checker .nc-card {
@@ -140,6 +147,7 @@
 
 .number-checker .nc-input-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
 }
 
@@ -149,13 +157,19 @@
   white-space: nowrap;
 }
 
+/* Wide enough to show a whole number; on a narrow card the button wraps below it. */
+.number-checker .nc-input-row .nc-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
 .number-checker .nc-input {
   width: 100%;
   padding: 0.75rem 1rem;
   font-size: 0.9375rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-white);
+  background-color: var(--bg-white);
   color: var(--text-primary);
   transition:
     border-color 0.2s,
@@ -165,7 +179,7 @@
 
 .number-checker .nc-input:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
@@ -185,7 +199,7 @@
 
 .number-checker .nc-textarea:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
@@ -212,7 +226,7 @@
 
 .number-checker .nc-btn-primary {
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
 }
 
 .number-checker .nc-btn-primary:hover:not(:disabled) {
@@ -311,6 +325,8 @@
 
 .number-checker .nc-result-header-text {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .number-checker .nc-result-phone {
@@ -360,8 +376,10 @@
 
 .number-checker .nc-detail-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
+  gap: 0.25rem 0.75rem;
   font-size: 0.875rem;
 }
 
@@ -375,8 +393,11 @@
   font-weight: 600;
   font-family: monospace;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .number-checker .nc-copy-btn {
@@ -413,6 +434,11 @@
   border: 1px solid var(--border);
 }
 
+/* A table wider than a narrow card scrolls inside it; the page clips anything that sticks out. */
+.number-checker .nc-table-wrap {
+  overflow-x: auto;
+}
+
 .number-checker .nc-history-table {
   width: 100%;
   border-collapse: collapse;
@@ -421,7 +447,7 @@
 }
 
 .number-checker .nc-history-table th {
-  text-align: left;
+  text-align: start;
   padding: 0.75rem 1rem;
   background: var(--bg-light);
   color: var(--text-secondary);
@@ -494,6 +520,7 @@
 
 .number-checker .nc-filter-btns {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
@@ -510,7 +537,7 @@
 
 .number-checker .nc-filter-btn.active {
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
   border-color: var(--primary);
 }
 
@@ -546,6 +573,8 @@
 
 .number-checker .nc-format-pill {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   align-items: center;
   gap: 0.35rem;
   font-size: 0.78rem;
@@ -559,7 +588,7 @@
 .number-checker .nc-format-pill.highlight {
   background: rgba(37, 211, 102, 0.12);
   border-color: rgba(37, 211, 102, 0.35);
-  color: #0b8043;
+  color: var(--primary-text);
   font-weight: 600;
 }
 

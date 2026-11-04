@@ -917,6 +917,7 @@ export enum EngineStatus {
 export interface EngineEventCallbacks {
   onQRCode?: (qr: string) => void;
   onReady?: (phone: string, pushName: string) => void;
+  onPushNameChanged?: (pushName: string) => void; // the account's own name synced after onReady (Baileys)
   admitInbound?: (arrival: {
     id: string;
     chatId: string;
@@ -936,6 +937,7 @@ export interface EngineEventCallbacks {
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
   onEventResponse?: (event: EventResponseEvent) => void; // an RSVP to a WhatsApp event; Baileys only
+  onPollVote?: (event: PollVoteEvent) => void; // a voter's new selection on a poll; whatsapp-web.js only
   onGroupEvent?: (event: GroupEvent) => void; // kind selects group.join / group.leave / group.update / group.join_request
   onCall?: (event: IncomingCallEvent) => void; // incoming call ringing; Baileys can rejectCall() while it rings
   onHistoryMessages?: (messages: IncomingMessage[]) => void | Promise<IncomingMessage[] | void>; // bulk initial sync; persist, don't dispatch
@@ -1333,7 +1335,8 @@ On S3 every key sits under the `S3_KEY_PREFIX` root (default `media/`).
 **MinIO is not a separate type** — it is the `s3` backend. The S3 client is created from credentials
 alone, so plain AWS S3 works with no endpoint (the SDK derives one from the region); `S3_ENDPOINT` is
 for S3-compatible stores (MinIO, R2, …), and setting it is also what enables `forcePathStyle: true`.
-The public method set is `putFile` / `getFile` / `deleteFile` / `iterateFiles` /
+The public method set is `putFile` / `getFile` / `openFile` (a read stream; the chat and status
+media downloads use it) / `deleteFile` / `iterateFiles` /
 `createExportStream` (export) / `importFromStream` (import), plus `getFileCount`,
 `getCurrentStorageType` and `refreshS3Availability` (re-probes the bucket; the infra status endpoint
 calls it to report S3 reachability).

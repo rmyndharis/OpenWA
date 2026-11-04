@@ -162,6 +162,22 @@ describe('chat-scoped WebSocket rooms', () => {
     expect(events(unrestricted)).toHaveLength(2);
   });
 
+  it('delivers a poll vote only to keys whose chats include the chat it names', async () => {
+    const group = '120363000000000001@g.us';
+    const inside = await connect('inside', [group]);
+    const outside = await connect('outside', ['120363000000000002@g.us']);
+    const unrestricted = await connect('unrestricted', null);
+    const vote = { pollMessageId: 'POLL1', voterId: 'member@lid', selectedOptions: ['Yes'], timestamp: 1786000000 };
+    gateway.emitPollVote('s1', { ...vote, chatId: group });
+    gateway.emitPollVote('s1', { ...vote, chatId: '' });
+    await flush();
+    expect(events(inside).map(frame => frame.payload.event)).toEqual(['poll.vote']);
+    expect(events(inside)).toHaveLength(1);
+    expect(events(outside)).toHaveLength(0);
+    // An unrestricted key hears both, the vote that names no chat included.
+    expect(events(unrestricted)).toHaveLength(2);
+  });
+
   it('delivers receipts only to named subscriptions within the allowed session and chat', async () => {
     const group = '120363000000000001@g.us';
     const named = await connect('named', [group], ['s1'], 's1', ['message.receipt']);

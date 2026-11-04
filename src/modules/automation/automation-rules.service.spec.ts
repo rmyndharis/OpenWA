@@ -185,6 +185,34 @@ describe('AutomationRulesService', () => {
       await service.create('sessB', { name: 'b', replyText: 'y' });
       expect((await service.findAll('sessA')).map(r => r.name)).toEqual(['a']);
     });
+
+    // SQLite serves every repository from one connection, so a transaction the save opened would hold what other
+    // callers wrote while it was open, and the rollback of its failed insert would undo those writes.
+    it('keeps a write made beside a create whose session is deleted after the check', async () => {
+      const sessions = ds.getRepository(Session);
+      jest.spyOn(sessions, 'exists').mockResolvedValue(true);
+      let steps = 0;
+      let beside: Promise<unknown> = Promise.resolve();
+      ds.subscribers.push({
+        listenTo: () => AutomationRule,
+        beforeInsert: () => {
+          beside = (async () => {
+            for (let i = 0; i < steps; i += 1) await Promise.resolve();
+            await sessions.update('sessB', { status: SessionStatus.FAILED });
+          })();
+        },
+      });
+
+      for (; steps <= 10; steps += 1) {
+        await sessions.update('sessB', { status: SessionStatus.READY });
+        await expect(service.create('gone', { name: 'r', replyText: 'hi' })).rejects.toThrow(/FOREIGN KEY/);
+        await beside;
+        expect({ steps, status: (await sessions.findOneByOrFail({ id: 'sessB' })).status }).toEqual({
+          steps,
+          status: SessionStatus.FAILED,
+        });
+      }
+    });
   });
 
   describe('evaluateInbound', () => {

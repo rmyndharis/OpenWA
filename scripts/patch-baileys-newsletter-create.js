@@ -36,6 +36,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_BAILEYS = path.join(__dirname, '..', 'node_modules', '@whiskeysockets', 'baileys');
 const NEWSLETTER_PATH = path.join('lib', 'Socket', 'newsletter.js');
@@ -95,7 +96,7 @@ function applyNewsletterCreatePatch(baileysDir = DEFAULT_BAILEYS) {
         'before removing this patcher',
     );
   }
-  fs.writeFileSync(file, source.replace(PARSE_FIND, PARSE_REPLACE), 'utf8');
+  writeFileAtomic(file, source.replace(PARSE_FIND, PARSE_REPLACE));
   return { note: 'made the newsletter-create parse tolerate an absent picture, keeping the new channel id' };
 }
 

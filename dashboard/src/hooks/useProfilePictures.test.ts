@@ -73,9 +73,9 @@ interface Props {
   ids: string[];
 }
 
-function renderPictures(sessionId: string | undefined, ids: string[]) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
-  clients.push(client);
+function renderPictures(sessionId: string | undefined, ids: string[], existing?: QueryClient) {
+  const client = existing ?? new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  if (!existing) clients.push(client);
   const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children);
   return rtl.renderHook(({ sessionId, ids }: Props) => useProfilePictures(sessionId, ids), {
     wrapper,
@@ -309,6 +309,107 @@ test('a first batch that fails reports the error', async () => {
   const { result } = renderPictures('s1', ['a', 'b']);
   await rtl.waitFor(() => assert.equal(result.current.isError, true));
   assert.equal(result.current.data, undefined);
+});
+
+test('an invalidated batch asks again for every id it holds, so a changed picture shows', async () => {
+  const { result } = renderPictures('s1', ['a', 'b']);
+  await rtl.waitFor(() => assert.equal(Object.keys(result.current.data ?? {}).length, 2));
+
+  answer = (sessionId, ids) =>
+    Promise.resolve(json({ pictures: Object.fromEntries(ids.map(id => [id, `${urlFor(sessionId, id)}?v=2`])) }));
+  await rtl.act(() => clients[clients.length - 1].invalidateQueries({ queryKey: ['profilePictures', 's1'] }));
+  await rtl.waitFor(() => assert.equal(result.current.data?.b, `${urlFor('s1', 'b')}?v=2`));
+  assert.deepEqual(asked(), [
+    ['a', 'b'],
+    ['a', 'b'],
+  ]);
+});
+
+test('a page that mounts again with the same ids reads the pictures from the cache and asks for nothing', async () => {
+  const first = renderPictures('s1', ['a', 'b', 'c']);
+  await rtl.waitFor(() => assert.equal(Object.keys(first.result.current.data ?? {}).length, 3));
+  const client = clients[clients.length - 1];
+  first.unmount();
+
+  const second = renderPictures('s1', ['a', 'b', 'c'], client);
+  await rtl.waitFor(() => assert.equal(Object.keys(second.result.current.data ?? {}).length, 3));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(requests.length, 1, 'a second mount asked for pictures the cache already held');
+  assert.equal(second.result.current.isStale, false);
+  assert.equal(second.result.current.data?.a, urlFor('s1', 'a'));
+});
+
+test('a page that mounts again with one more id asks for that id alone', async () => {
+  const first = renderPictures('s1', ['a', 'b', 'c']);
+  await rtl.waitFor(() => assert.equal(Object.keys(first.result.current.data ?? {}).length, 3));
+  const client = clients[clients.length - 1];
+  first.unmount();
+
+  const second = renderPictures('s1', ['b', 'c', 'd'], client);
+  await rtl.waitFor(() => assert.equal(second.result.current.data?.d, urlFor('s1', 'd')));
+  assert.deepEqual(asked(), [['a', 'b', 'c'], ['d']]);
+});
+
+test('signing out drops the held pictures, so the next actor is shown none of them', async () => {
+  const first = renderPictures('s1', ['a', 'b']);
+  await rtl.waitFor(() => assert.equal(Object.keys(first.result.current.data ?? {}).length, 2));
+  const client = clients[clients.length - 1];
+  first.unmount();
+  // What the dashboard does on logout (clearActorState).
+  client.clear();
+
+  const second = renderPictures('s1', ['a', 'b'], client);
+  await rtl.waitFor(() => assert.equal(requests.length, 2));
+  assert.deepEqual(asked(), [
+    ['a', 'b'],
+    ['a', 'b'],
+  ]);
+  await rtl.waitFor(() => assert.equal(Object.keys(second.result.current.data ?? {}).length, 2));
+});
+
+test('an id that came back null is asked for again after a minute, the pictures held are not', async t => {
+  let clock = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => clock);
+  // The batch route answers null for a hidden picture and for a lookup that failed, and the two look alike.
+  answer = (sessionId, ids) =>
+    Promise.resolve(
+      json({ pictures: Object.fromEntries(ids.map(id => [id, id === 'b' ? null : urlFor(sessionId, id)])) }),
+    );
+  const { result, rerender } = renderPictures('s1', ['a', 'b']);
+  await rtl.waitFor(() => assert.ok('b' in (result.current.data ?? {})));
+
+  // Within the minute the null is held, as before.
+  clock += 30_000;
+  rerender({ sessionId: 's1', ids: ['a', 'b', 'c'] });
+  await rtl.waitFor(() => assert.equal(result.current.data?.c, urlFor('s1', 'c')));
+  assert.deepEqual(asked(), [['a', 'b'], ['c']]);
+
+  // Past it, the next change of ids asks for b again, now that it can be answered.
+  answer = everyUrl;
+  clock += 40_000;
+  rerender({ sessionId: 's1', ids: ['a', 'b', 'c', 'd'] });
+  await rtl.waitFor(() => assert.equal(result.current.data?.b, urlFor('s1', 'b')));
+  assert.deepEqual(asked().at(-1), ['b', 'd']);
+});
+
+test('an aged null does not make the batch stale, so coming back to the window asks for nothing', async t => {
+  let clock = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => clock);
+  answer = (sessionId, ids) =>
+    Promise.resolve(
+      json({ pictures: Object.fromEntries(ids.map(id => [id, id === 'b' ? null : urlFor(sessionId, id)])) }),
+    );
+  const { result } = renderPictures('s1', ['a', 'b']);
+  await rtl.waitFor(() => assert.ok('b' in (result.current.data ?? {})));
+
+  clock += 10 * 60_000;
+  rtl.act(() => {
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+  });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(requests.length, 1, 'a null that was a minute old made the whole batch refetch on focus');
+  assert.equal(result.current.isStale, false);
 });
 
 test('asks for nothing without a session or without ids', async () => {

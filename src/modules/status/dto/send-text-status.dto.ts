@@ -1,6 +1,6 @@
 import { IsString, IsOptional, IsInt, IsIn, Matches, MaxLength, IsArray, ArrayMaxSize } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ToStrictNumber } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 
 export class SendTextStatusDto {
   @ApiProperty({
@@ -9,6 +9,7 @@ export class SendTextStatusDto {
     minLength: 1,
     maxLength: 4096,
   })
+  @ToStrictString()
   @IsString()
   // A blank body would publish an empty story (Baileys) or fail inside the engine with a 500.
   @Matches(/\S/, { message: 'text must not be blank' })
@@ -17,6 +18,7 @@ export class SendTextStatusDto {
 
   @ApiPropertyOptional({ description: 'Background color (hex).', example: '#25D366' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @Matches(/^#[0-9A-Fa-f]{6}$/, { message: 'backgroundColor must be a hex color (e.g., #25D366)' })
   backgroundColor?: string;
@@ -45,6 +47,7 @@ export class SendTextStatusDto {
     maxItems: 256,
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(256)
   @IsString({ each: true })

@@ -6,6 +6,7 @@ import type {
   MessageBatchRow,
   WebhookDeliveryFailureRow,
 } from './migration-tables.types';
+import { renderTemplate, templateVariableNames } from '../../common/utils/template-render';
 
 /**
  * A `data` value that is a POINTER rather than bytes. `metadata.media.data` holds `base64 || dto.url!`
@@ -146,12 +147,42 @@ function stripBatchInlineMedia(row: MessageBatchRow, exceedsBudget: (encodedByte
   for (const entry of parsed) {
     const content = (entry as { content?: unknown } | null)?.content;
     if (typeof content !== 'object' || content === null) continue;
+    // A `base64` may be a placeholder whose payload sits in the item's variables, so those bytes are the field's
+    // too. A variable two fields share is stored once: it is charged to the first and dropped only if every
+    // field that names it was refused.
+    const rawVariables = (entry as { variables?: unknown }).variables;
+    const variables =
+      rawVariables && typeof rawVariables === 'object' && !Array.isArray(rawVariables)
+        ? (rawVariables as Record<string, unknown>)
+        : {};
+    const kept = new Set<string>();
+    const refused = new Set<string>();
     for (const key of ['image', 'video', 'audio', 'document']) {
       const media = (content as Record<string, unknown>)[key] as { base64?: unknown } | null | undefined;
       if (!media || typeof media !== 'object' || typeof media.base64 !== 'string') continue;
-      if (!exceedsBudget(Buffer.byteLength(media.base64, 'utf8'))) continue;
+      const template = media.base64;
+      // One pass over the template with the renderer's own grammar, whatever the number of variables.
+      const used = new Set(templateVariableNames(template));
+      const named = Object.keys(variables).filter(name => used.has(name) && variables[name] != null);
+      const scaffolding = renderTemplate(template, Object.fromEntries(named.map(name => [name, ''])));
+      const encodedBytes = named.reduce(
+        (bytes, name) => {
+          if (kept.has(name)) return bytes;
+          const value = variables[name];
+          return bytes + Buffer.byteLength(typeof value === 'string' ? value : JSON.stringify(value), 'utf8');
+        },
+        Buffer.byteLength(scaffolding, 'utf8'),
+      );
+      if (!exceedsBudget(encodedBytes)) {
+        for (const name of named) kept.add(name);
+        continue;
+      }
+      for (const name of named) refused.add(name);
       delete media.base64;
       stripped = true;
+    }
+    for (const name of refused) {
+      if (!kept.has(name)) delete variables[name];
     }
   }
   if (stripped) row.messages = JSON.stringify(parsed);
@@ -284,7 +315,8 @@ export const EXPORT_TABLES: AnyExportTable[] = [
     sessionFk: true,
   }),
 
-  // The persisted lid->phone resolution cache. Not a FK to sessions (provenance only), so the
+  // The persisted lid->phone resolution cache. sessionId names the session whose negative may clear the
+  // phone; it is not a FK to sessions, so the
   // import's `DELETE FROM sessions` never clears it — it must be exported + re-inserted explicitly
   // or a backup→restore into a fresh DB loses the whole cache (it self-heals, but lossily).
   defineExportTable({ key: 'lidMappings', table: 'lid_mappings', optional: true }),

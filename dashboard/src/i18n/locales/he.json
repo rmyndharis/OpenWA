@@ -42,6 +42,8 @@
     "optional": "אופציונלי",
     "fieldTooLong": "מוגבל ל-{{max}} תווים (כרגע {{count}}).",
     "language": "שפה",
+    "changeLanguage": "שינוי שפה",
+    "joinedName": "{{first}}, {{second}}",
     "back": "חזרה",
     "next": "הבא",
     "previous": "הקודם",
@@ -180,6 +182,16 @@
       "backgroundColor": "צבע רקע",
       "font": "גופן",
       "fontDefault": "ברירת מחדל",
+      "fonts": {
+        "system": "מערכת",
+        "systemText": "טקסט מערכת",
+        "script": "כתב יד",
+        "bold": "מודגש",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "או",
       "post": "פרסם",
       "posted": "הסטטוס פורסם",
@@ -204,7 +216,8 @@
       "delete": "מחיקת ההודעה נכשלה",
       "clickButton": "לחיצה על הכפתור נכשלה",
       "fileTooLarge": "הקובץ גדול מדי (מקסימום 18 MB)",
-      "searchHitSessionNotReady": "הסשן של הודעה זו אינו מחובר"
+      "searchHitSessionNotReady": "הסשן של הודעה זו אינו מחובר",
+      "searchHitChatNotListed": "לא ניתן למצוא את השיחה של הודעה זו ברשימה"
     },
     "loadMessagesError": "לא ניתן לטעון את ההודעות. בדקו את יומני השרת.",
     "messageStatus": {
@@ -214,6 +227,9 @@
       "read": "נקרא",
       "failed": "נכשל"
     },
+    "today": "היום",
+    "switchSession": "החלפת סשן",
+    "searchMessages": "חיפוש הודעות",
     "clearSearch": "ניקוי החיפוש",
     "filters": {
       "label": "סינון שיחות",
@@ -224,11 +240,13 @@
       "unknown": "לא מוכרים"
     },
     "noFilterResults": "אין צ׳אטים שתואמים למסנן זה",
+    "contactInfo": "פרטי איש קשר",
     "moreActions": "פעולות נוספות",
     "copyChatId": "העתקת מזהה הצ׳אט",
     "chatIdCopied": "מזהה הצ׳אט הועתק",
     "copyFailed": "ההעתקה ללוח נכשלה",
     "closeChat": "סגירת הצ׳אט",
+    "phone": "מספר טלפון",
     "chatId": "מזהה צ׳אט",
     "newChat": {
       "title": "צ׳אט חדש",
@@ -253,6 +271,12 @@
       "created": "הקבוצה \"{{name}}\" נוצרה",
       "createFailed": "לא ניתן ליצור את הקבוצה",
       "removeParticipant": "הסרת {{name}}"
+    },
+    "sessionPicker": {
+      "searchPlaceholder": "חיפוש סשנים...",
+      "noMatch": "אין סשן תואם",
+      "addTitle": "קישור מספר נוסף",
+      "addHint": "יצירת סשן וקישורו באמצעות קוד QR"
     },
     "group": {
       "info": "פרטי הקבוצה",
@@ -589,6 +613,7 @@
     "session": "Session",
     "events": "אירועים",
     "noEvents": "בחרו לפחות אירוע אחד.",
+    "urlInvalid": "יש להזין כתובת מלאה שמתחילה ב-http:// או ב-https://, למשל https://example.com/webhook.",
     "available": "אירועים זמינים",
     "saveChanges": "שמירת שינויים",
     "filters": {
@@ -601,6 +626,7 @@
       "incomplete": "יש לתת ערך לכל תנאי סינון ולהשתמש בעד 20 תנאים, עד 100 ערכים לכל תנאי ועד 1000 תווי טקסט.",
       "addCondition": "הוספת תנאי",
       "removeCondition": "הסרת תנאי",
+      "removeValue": "הסרת {{value}}",
       "caseSensitive": "תלוי רישיות",
       "contactPlaceholder": "מספר או מזהה WhatsApp...",
       "textPlaceholder": "טקסט להתאמה...",
@@ -650,6 +676,7 @@
       "updateFailed": "עדכון ה-Webhook נכשל: {{message}}",
       "testOk": "בדיקת ה-Webhook הצליחה! סטטוס: {{status}}",
       "testFailed": "בדיקת ה-Webhook נכשלה: {{message}}",
+      "testStatus": "המקבל השיב HTTP {{status}}",
       "testError": "בדיקת ה-Webhook נכשלה: {{message}}"
     },
     "actions": {
@@ -674,6 +701,7 @@
       "session.restriction": "כאשר WhatsApp מגביל את החשבון או מסיר הגבלה",
       "presence.update": "כאשר צ'אט במעקב מתחבר, מקליד או מתנתק",
       "event.response": "כאשר אורח עונה להזמנה לאירוע בוואטסאפ (מגיע, לא מגיע, אולי)",
+      "poll.vote": "כאשר מישהו בוחר או מבטל אפשרויות בסקר (whatsapp-web.js)",
       "group.join": "כאשר משתתפים מצטרפים לקבוצה או מתווספים אליה",
       "group.leave": "כאשר משתתפים עוזבים קבוצה או מוסרים ממנה",
       "group.update": "כאשר השם, התיאור או ההגדרות של קבוצה משתנים",
@@ -683,7 +711,7 @@
       "call.rejected": "כאשר שיחה נדחית",
       "call.missed": "כאשר שיחה לא נענית",
       "status.received": "כאשר איש קשר מפרסם סטטוס",
-      "all": "כל האירועים"
+      "all": "כל האירועים מלבד message.receipt, שיש לציין במפורש"
     },
     "auth": {
       "title": "אימות משלוח",
@@ -770,13 +798,14 @@
     "modalTitle": "יצירת מפתח API",
     "createdTitle": "מפתח ה-API נוצר",
     "createdHint": "יש להעתיק את המפתח כעת. לא ניתן יהיה לצפות בו שוב.",
+    "copyKey": "העתקת המפתח",
     "namePlaceholder": "לדוגמה: Production Key",
     "nameTooShort": "השתמשו לפחות ב-3 תווים.",
     "rolesTitle": "מדריך תפקידים",
     "roles": {
-      "admin": "Admin",
-      "operator": "Operator",
-      "viewer": "Viewer"
+      "admin": "מנהל",
+      "operator": "מפעיל",
+      "viewer": "צופה"
     },
     "roleDescriptions": {
       "admin": "גישה מלאה לכל המשאבים",
@@ -807,14 +836,14 @@
     },
     "confirm": {
       "deleteTitle": "מחיקת מפתח API",
-      "revokeTitle": "ביטול מפתח API",
+      "revokeTitle": "שלילת מפתח API",
       "deleteMessage": "האם למחוק לצמיתות את <strong>{{name}}</strong>? לא ניתן לשחזר פעולה זו.",
-      "revokeMessage": "האם לבטל את <strong>{{name}}</strong>? המפתח יפסיק לפעול.",
+      "revokeMessage": "האם לשלול את <strong>{{name}}</strong>? המפתח יפסיק לפעול.",
       "delete": "מחיקה",
-      "revoke": "ביטול"
+      "revoke": "שלילה"
     },
     "actions": {
-      "revoke": "ביטול",
+      "revoke": "שלילה",
       "delete": "מחיקה",
       "edit": "עריכת גישה"
     },
@@ -847,6 +876,7 @@
     "chats": {
       "label": "גישה לצ'אטים (אופציונלי)",
       "hint": "צ'אט אחד בכל שורה: מזהה קבוצה שמסתיים ב-@g.us, מזהה איש קשר שמסתיים ב-@c.us או ב-@lid, או מספר טלפון. השאירו ריק לכל הצ'אטים. מפתח שמוגבל לצ'אטים יכול להשתמש רק בנתיבים הפתוחים למפתחות כאלה; הגישה שלו דרך ה-WebSocket של האירועים ו-MCP מוגבלת לצ'אטים האלה.",
+      "lidHint": "רשומת @lid מאפשרת גם את מספר הטלפון שממופה אליה כרגע. אם המספר עובר לאדם אחר, המפתח הזה יכול להגיע אליו: בדקו את המפתח כשאיש קשר מחליף מספר.",
       "invalid": "אינו מזהה צ'אט או מספר טלפון: {{value}}",
       "tooMany": "יותר מדי צ'אטים ({{count}}): מפתח יכול לכלול לכל היותר {{max}}."
     },
@@ -984,6 +1014,7 @@
     "groupsSentSummary": "נשלחו {{sent}}/{{total}}",
     "groupSendCancelled": "{{count}}, בוטלו",
     "groupSendStopped": "{{count}}, נעצר אחרי HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, נעצר: השער לא השיב",
     "response": {
       "timestamp": "חותמת זמן",
       "messageId": "מזהה הודעה",
@@ -994,6 +1025,7 @@
     },
     "sendFailed": "שליחת ההודעה נכשלה",
     "notOnWhatsApp": "מספר זה אינו רשום בוואטסאפ",
+    "tooLong": "יותר מ-{{max}} ספרות אינן מספר טלפון אחד. הזינו מספר אחד.",
     "batch": {
       "status": {
         "pending": "ממתין",
@@ -1027,9 +1059,10 @@
     "single": {
       "title": "בדיקת חשבון בודד",
       "phoneLabel": "מספר טלפון",
-      "phonePlaceholder": "לדוגמה: 919876543210 או 6281234567890 (עם קידומת המדינה)",
+      "phonePlaceholder": "לדוגמה: 919876543210 או 6281234567890",
       "check": "בדיקה",
       "checking": "בודק...",
+      "tooLong": "יותר מ-{{max}} ספרות אינן מספר טלפון אחד. בדקו מספר אחד בכל פעם.",
       "autoPrefix": "הוספה אוטומטית של הקידומת ‎<strong>+91</strong> למספרים בני 10 ספרות (מספרים בני 12 ספרות נשארים כפי שהם)",
       "silent": "<strong>שקט לחלוטין:</strong> הבדיקה פונה ישירות למאגר הרישום של WhatsApp. איש הקשר לא מקבל התראה, צליל או הודעה.",
       "resultTitle": "תוצאת הבדיקה",
@@ -1058,7 +1091,7 @@
       "copy": "העתקה",
       "copied": "הועתק",
       "checkedAt": "זמן הבדיקה",
-      "openTester": "פתיחה בבדיקת הודעות"
+      "openTester": "מעבר לבדיקת הודעות"
     },
     "recent": {
       "title": "בדיקות אחרונות",
@@ -1094,9 +1127,11 @@
       "tenDigitAdded": "({{ten}} מתוכם בני 10 ספרות ← נוספה ‎+91)",
       "tenDigitAddedPreserved": "({{ten}} מתוכם בני 10 ספרות ← נוספה ‎+91, {{twelve}} בני 12 ספרות נשארו ללא שינוי)",
       "tooMany": "יותר מדי מספרים: זוהו {{parsed}}, והמקסימום לכל אצווה הוא {{max}}. יש להסיר את העודף ({{excess}}) כדי להתחיל.",
+      "tooLong": "הושמטו, יותר מ-{{max}} ספרות (לא מספר אחד): {{count}}. שימו כל מספר בשורה משלו.",
       "start": "התחלת בדיקה מרובה",
       "stop": "עצירת הבדיקה",
       "export": "ייצוא תוצאות (CSV)",
+      "exportHint": "הקובץ מכיל כל ספרה. גיליון אלקטרוני עשוי להציג מספרים ארוכים כ-9.19612E+11 או להשמיט אפס מוביל; ייבאו את הקובץ והגדירו את העמודה Phone Number כטקסט כדי לשמור אותם כפי שהם.",
       "stoppedTitle": "האצווה נעצרה",
       "checked": "נבדקו",
       "remaining": "נותרו",
@@ -1111,6 +1146,7 @@
       "partial_many": "{{reason}} (HTTP {{status}}). הבדיקה נעצרה במספר {{attempted}} מתוך {{total}}; {{count}} מספרים לא נשלחו. יש לנסות שוב מאוחר יותר.",
       "partial_other": "{{reason}} (HTTP {{status}}). הבדיקה נעצרה במספר {{attempted}} מתוך {{total}}; {{count}} מספרים לא נשלחו. יש לנסות שוב מאוחר יותר.",
       "partial_two": "{{reason}} (HTTP {{status}}). הבדיקה נעצרה במספר {{attempted}} מתוך {{total}}; שני מספרים לא נשלחו. יש לנסות שוב מאוחר יותר.",
+      "noAnswer": "השער לא השיב. הבדיקה נעצרה במספר {{attempted}} מתוך {{total}}. יש לנסות שוב מאוחר יותר.",
       "last": "{{reason}} (HTTP {{status}}). השאילתה האחרונה נכשלה. יש לנסות שוב מאוחר יותר."
     },
     "toast": {
@@ -1199,8 +1235,8 @@
       "storagePath": "נתיב אחסון",
       "bucket": "שם Bucket",
       "region": "אזור (Region)",
-      "accessKey": "Access Key",
-      "secretKey": "Secret Key",
+      "accessKey": "מפתח גישה",
+      "secretKey": "מפתח סודי",
       "endpoint": "Endpoint מותאם (אופציונלי)",
       "endpointHint": "עבור MinIO או שירותים אחרים תואמי S3",
       "s3Unreachable": "S3 (לא נגיש)"
@@ -1217,6 +1253,7 @@
       "successTitle": "✅ השרת מוכן",
       "errorTitle": "❌ האתחול נכשל",
       "idleDesc": "התצורה נשמרה ל-<code>.env.generated</code>.<br/>נדרש אתחול שרת כדי להחיל את השינויים.",
+      "stopsContainers": "האתחול יעצור גם את הקונטיינרים המובנים האלה, שנשמרים עם הנתונים שלהם ואינם נמחקים:",
       "later": "אתחול מאוחר יותר",
       "now": "אתחול עכשיו",
       "restartingMsg": "השרת מתאתחל... {{count}} שניות",
@@ -1231,7 +1268,10 @@
       "saveFailed": "השמירה נכשלה"
     },
     "envPinNote": "מקובע על ידי משתנה הסביבה {{name}} — זהו הערך הפעיל; שינויים בלוח הבקרה לא ייכנסו לתוקף עד שמשתנה זה יבוטל.",
+    "envPinFlagNote": "מקובע על ידי משתנה הסביבה {{name}}: כל עוד ערכו true ושירות זה נמצא בשימוש, הקונטיינר המובנה מופעל בכל הפעלה של השרת, גם כשמתג זה כבוי.",
     "pendingRestartNote": "נשמר, אך טרם הוחל — הפעילו מחדש את השרת כדי שהשינוי ייכנס לתוקף.",
+    "pendingBuiltInNote": "נשמר, אך טרם הוחל: השרת פועל כעת עם שירות חיצוני, והפעלה מחדש תעביר אותו לקונטיינר המובנה.",
+    "pendingExternalNote": "נשמר, אך טרם הוחל: השרת פועל כעת עם הקונטיינר המובנה, והפעלה מחדש תעביר אותו לשירות חיצוני.",
     "migration": {
       "title": "שימו לב — פעולה זו משנה את מנגנון אחסון הנתונים",
       "dbWarning": "מסד הנתונים החדש מתחיל ריק. הורידו עכשיו גיבוי של הנתונים הנוכחיים (בעודכם עדיין על מסד הנתונים הישן), ולאחר מכן שחזרו אותו לאחר ההפעלה מחדש.",
@@ -1322,6 +1362,7 @@
       "installed": "התוסף הותקן",
       "installFailed": "ההתקנה נכשלה",
       "uninstalled": "התוסף הוסר",
+      "uninstalledWithWarning": "התוסף הוסר, עם אזהרה",
       "uninstallFailed": "ההסרה נכשלה",
       "enableFailedTitle": "ההפעלה נכשלה",
       "disableFailedTitle": "ההשבתה נכשלה",

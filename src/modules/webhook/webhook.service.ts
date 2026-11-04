@@ -204,7 +204,9 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
       retryCount: dto.retryCount ?? 3,
     });
 
-    const saved = await this.webhookRepository.save(webhook);
+    // No transaction of its own: the session can be deleted while the URL is checked, and on SQLite's single shared
+    // connection the rollback of the foreign key failure would discard what other callers wrote while it was open.
+    const saved = await this.webhookRepository.save(webhook, { transaction: false });
     this.delivery.invalidateOptInSubscriptions(sessionId);
     return saved;
   }
@@ -270,6 +272,17 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
         },
       });
       for (const r of withPayload) replayable.add(r.id);
+    }
+    // The redrive replays a row only to the webhook it was recorded for, in the row's own session. A disabled or
+    // unsubscribed webhook can be switched back, so its rows stay replayable; a deleted one never comes back.
+    const held = rows.filter(r => replayable.has(r.id));
+    if (held.length > 0) {
+      const owners = await this.webhookRepository.find({
+        select: { id: true, sessionId: true },
+        where: { id: In([...new Set(held.map(r => r.webhookId))]) },
+      });
+      const sessionOf = new Map(owners.map(w => [w.id, w.sessionId]));
+      for (const r of held) if (sessionOf.get(r.webhookId) !== r.sessionId) replayable.delete(r.id);
     }
     return rows.map(r => Object.assign(r, { replayable: replayable.has(r.id) }));
   }

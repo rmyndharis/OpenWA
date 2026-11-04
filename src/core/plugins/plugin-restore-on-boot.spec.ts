@@ -120,6 +120,43 @@ describe('PluginLoaderService — restoring the operator enable decision across 
     expect(enable).not.toHaveBeenCalled();
   });
 
+  it('holds the plugins it will restore from module init, before bootstrap starts the restore', async () => {
+    // The BullMQ workers start between module init and bootstrap; a queued ingress job they take there has
+    // to find its plugin restoring rather than dispatch into a loader with no worker for it.
+    const idle: PluginManifest = { ...manifest, id: 'ext-idle', name: 'Ext Idle' };
+    const idleDir = path.join(tmpDir, 'plugins', idle.id);
+    fs.mkdirSync(idleDir, { recursive: true });
+    fs.writeFileSync(path.join(idleDir, 'manifest.json'), JSON.stringify(idle));
+    fs.writeFileSync(path.join(idleDir, 'index.js'), 'module.exports = class {};');
+    loader.loadPlugin(pluginDir);
+    storage.setPluginEnabledByOperator(manifest.id, true);
+
+    // A restart: the boot scan reads the plugins directory, as the real boot does.
+    const bootConfig = {
+      get: (k: string) => ({ dataDir: tmpDir, 'plugins.dir': path.join(tmpDir, 'plugins') })[k],
+    } as unknown as ConfigService;
+    const loader2 = new PluginLoaderService(
+      bootConfig,
+      new HookManager(),
+      new PluginStorageService(bootConfig),
+      {} as unknown as ModuleRef,
+    );
+    const enable = jest.spyOn(loader2, 'enablePlugin').mockResolvedValue(undefined);
+
+    loader2.onModuleInit();
+
+    expect(loader2.getPlugin(idle.id)).toBeDefined();
+    expect(enable).not.toHaveBeenCalled();
+    expect(loader2.isRestorePending(manifest.id)).toBe(true);
+    expect(loader2.isRestorePending(idle.id)).toBe(false);
+
+    await loader2.onApplicationBootstrap();
+
+    expect(enable).toHaveBeenCalledTimes(1);
+    expect(enable).toHaveBeenCalledWith(manifest.id);
+    expect(loader2.restorePendingIds()).toEqual([]);
+  });
+
   it('keeps booting when one plugin fails to come back, and still restores the others', async () => {
     const second: PluginManifest = { ...manifest, id: 'ext-two', name: 'Ext Two' };
     const secondDir = path.join(tmpDir, 'plugins', second.id);
@@ -298,11 +335,40 @@ describe('PluginLoaderService — restoring the operator enable decision across 
       expect(loader2.isRestorePending(manifest.id)).toBe(true);
       expect(loader2.isRestorePending(second.id)).toBe(true);
       expect(loader2.isRestorePending('never-queued')).toBe(false);
+      expect(loader2.restorePendingIds().sort()).toEqual([manifest.id, second.id].sort());
 
       releaseFirst();
       await jest.advanceTimersByTimeAsync(0);
 
       expect(loader2.isRestorePending(manifest.id)).toBe(false);
+      expect(loader2.isRestorePending(second.id)).toBe(false);
+      expect(loader2.restorePendingIds()).toEqual([]);
+    });
+
+    // The restore ending clears every id, so only a plugin that finished while a later one is still being
+    // enabled shows whether it is handed back at once or held until the whole restore is over.
+    it('hands a plugin back as soon as its own enable settles, while a later one is still being restored', async () => {
+      let releaseSecond: () => void = () => undefined;
+      enable.mockImplementation(
+        (id: string) =>
+          new Promise<void>(resolve => {
+            if (id === manifest.id) releaseFirst = resolve;
+            else releaseSecond = resolve;
+          }),
+      );
+      const booted = loader2.onApplicationBootstrap();
+      await jest.advanceTimersByTimeAsync(PLUGIN_RESTORE_BOOT_BUDGET_MS);
+      await booted;
+
+      releaseFirst();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(enable).toHaveBeenCalledWith(second.id);
+      expect(loader2.isRestorePending(manifest.id)).toBe(false);
+      expect(loader2.isRestorePending(second.id)).toBe(true);
+
+      releaseSecond();
+      await jest.advanceTimersByTimeAsync(0);
       expect(loader2.isRestorePending(second.id)).toBe(false);
     });
 

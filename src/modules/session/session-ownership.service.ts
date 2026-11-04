@@ -2,10 +2,11 @@ import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { hostname } from 'node:os';
-import { In, IsNull, LessThan, Repository } from 'typeorm';
+import { In, IsNull, LessThan, LessThanOrEqual, MoreThan, Not, Or, Repository, EntityManager } from 'typeorm';
 import { Session } from './entities/session.entity';
 import { createLogger } from '../../common/services/logger.service';
 import { DateTransformer } from '../../common/transformers/date.transformer';
+import { awaitNoOpenTransaction, SHARED_CONNECTION_DIALECTS } from '../../common/utils/shared-connection';
 
 /**
  * Bind a lease timestamp the way the column stores it.
@@ -42,7 +43,7 @@ export class SessionOwnershipService {
   /** Sessions this process believes it owns, so the heartbeat knows what to renew. */
   private readonly owned = new Set<string>();
   /**
-   * A fresh value from claimSeq on every claim, dropped when the claim ends, so renew() can tell a
+   * A fresh value from claimSeq on every new ownership, dropped when the claim ends, so renew() can tell a
    * claim it read from one replaced since. One sequence for all sessions: a per-session counter
    * restarting after a release could repeat the value a tick had read.
    */
@@ -51,7 +52,7 @@ export class SessionOwnershipService {
   /** Notified when a renewal proves this process no longer holds sessions it thought it did. */
   private onLeaseLost?: (sessionIds: string[]) => Promise<void> | void;
   /** Notified when this process takes a session over from a node whose lease lapsed. See onAdoption. */
-  private onAdopted?: (sessionId: string) => Promise<unknown>;
+  private onAdopted?: { run: (sessionId: string, manager?: EntityManager) => Promise<unknown>; transactional: boolean };
 
   /**
    * How many callers are currently telling renew() that an empty/blank result is NOT evidence of
@@ -124,57 +125,130 @@ export class SessionOwnershipService {
   }
 
   /**
-   * Take ownership, returning false when another live process holds it.
+   * Take ownership, returning false when a live peer holds it or a newer local claim supersedes it.
    *
    * The update is conditional on the same predicate the read used, so two processes racing on the
    * same free session cannot both succeed: the second one's UPDATE matches no row, because the
    * first has already written its own `nodeId` and a future expiry. Deciding on the read alone
    * would let both pass.
    */
-  async claim(sessionId: string): Promise<boolean> {
+  async claim(sessionId: string, onClaimed?: (ownsClaim: () => boolean) => void): Promise<boolean> {
     const now = new Date();
     const leaseExpiresAt = new Date(now.getTime() + this.leaseTtlMs);
-    // Who held it, read only when an adoption handler is registered. The UPDATE below still decides
-    // the claim; this read only tells whether it took a lapsed lease over from another node.
-    const previous = this.onAdopted
-      ? await this.sessions.findOne({
-          where: { id: sessionId },
-          select: { id: true, nodeId: true, leaseExpiresAt: true },
+    // A successful SQL write may still await its reply; a local overlap shares that ownership too.
+    if (this.owned.has(sessionId) || this.claimGen.has(sessionId)) {
+      const generation = this.claimGen.get(sessionId);
+      const renewed = await this.sessions.update({ id: sessionId, nodeId: this.nodeId }, { leaseExpiresAt });
+      if (this.claimGen.get(sessionId) !== generation) return false;
+      if (renewed.affected === 1) {
+        this.owned.add(sessionId);
+        if (!this.claimGen.has(sessionId)) this.claimGen.set(sessionId, ++this.claimSeq);
+        this.lastSeenLease.set(sessionId, leaseExpiresAt.getTime());
+        onClaimed?.(this.captureClaim(sessionId));
+        return true;
+      }
+    }
+    // Allocate before the awaited write: an older SQL reply cannot replace a newer local ownership.
+    const generation = ++this.claimSeq;
+    this.claimGen.set(sessionId, generation);
+    let followUp = false;
+    const claimed = await this.withAdoption(async (sessions, manager) => {
+      // Keep the previous owner, transition and SQL cleanup in one row-locked transaction.
+      if (manager) {
+        await sessions
+          .createQueryBuilder()
+          .update(Session)
+          .set({ updatedAt: () => '"updatedAt"' })
+          .where({ id: sessionId })
+          .execute();
+      }
+      const previous = this.onAdopted
+        ? await sessions.findOne({ where: { id: sessionId }, select: { id: true, nodeId: true, leaseExpiresAt: true } })
+        : null;
+      if (this.claimGen.get(sessionId) !== generation) return false;
+      const result = await sessions
+        .createQueryBuilder()
+        .update(Session)
+        .set({ nodeId: this.nodeId, claimedAt: now, leaseExpiresAt, nodeUrl: this.nodeUrl || null })
+        .where('id = :id', { id: sessionId })
+        .andWhere('("nodeId" IS NULL OR "nodeId" = :me OR "leaseExpiresAt" < :now)', {
+          me: this.nodeId,
+          now: leaseParam(now),
         })
-      : null;
-    const result = await this.sessions
-      .createQueryBuilder()
-      .update(Session)
-      .set({
-        nodeId: this.nodeId,
-        claimedAt: now,
-        leaseExpiresAt,
-        nodeUrl: this.nodeUrl || null,
-      })
-      .where('id = :id', { id: sessionId })
-      // Without leaseParam this clause would silently never match, so an expired claim would never
-      // be taken over — stranding every session a crashed process was holding.
-      .andWhere('("nodeId" IS NULL OR "nodeId" = :me OR "leaseExpiresAt" < :now)', {
-        me: this.nodeId,
-        now: leaseParam(now),
-      })
-      .execute();
-
-    const claimed = (result.affected ?? 0) > 0;
-    if (claimed) {
-      this.owned.add(sessionId);
-      this.claimGen.set(sessionId, ++this.claimSeq);
-      this.lastSeenLease.set(sessionId, leaseExpiresAt.getTime());
-      // A released row (nodeId NULL) is not an adoption: its holder may still be finishing its own
-      // batches, and failing them under it would leave two writers on one batch row.
+        .execute();
+      if (this.claimGen.get(sessionId) !== generation) return false;
+      const claimed = (result.affected ?? 0) > 0;
       const adopted =
+        claimed &&
         previous?.nodeId != null &&
         previous.nodeId !== this.nodeId &&
         previous.leaseExpiresAt != null &&
         previous.leaseExpiresAt < now;
-      if (adopted) this.followAdoption(sessionId);
-    } else this.logger.warn('Session is held by another node', { sessionId, nodeId: this.nodeId });
+      if (adopted) {
+        if (manager) await this.followAdoption(sessionId, manager);
+        else followUp = true;
+      }
+      return claimed;
+    }).catch(async (error: unknown) => {
+      if (this.claimGen.get(sessionId) === generation) {
+        if (this.owned.has(sessionId)) await this.renew();
+        else this.claimGen.delete(sessionId);
+      }
+      throw error;
+    });
+    if (this.claimGen.get(sessionId) !== generation) return false;
+    if (claimed) {
+      this.owned.add(sessionId);
+      this.lastSeenLease.set(sessionId, leaseExpiresAt.getTime());
+      onClaimed?.(this.captureClaim(sessionId));
+      if (followUp) void this.followAdoption(sessionId);
+    } else {
+      // Reconcile an existing claim through the heartbeat's loss checks, preserving a successful overlap.
+      if (this.owned.has(sessionId)) await this.renew();
+      else this.claimGen.delete(sessionId);
+      this.logger.warn('Session is held by another node', { sessionId, nodeId: this.nodeId });
+    }
     return claimed;
+  }
+
+  /** Renew this node's claim and clear only the record this start read; never reclaim a released row. */
+  async prepareStart(sessionId: string, desiredState: Session['desiredState']): Promise<boolean> {
+    const now = new Date();
+    const leaseExpiresAt = new Date(now.getTime() + this.leaseTtlMs);
+    const { affected } = await this.sessions.update(
+      {
+        id: sessionId,
+        nodeId: this.nodeId,
+        leaseExpiresAt: MoreThan(now),
+        desiredState: desiredState ?? IsNull(),
+      },
+      { desiredState: null, leaseExpiresAt },
+    );
+    // Even a successful write can return too late to admit an engine on the renewal it wrote.
+    if (affected !== 1 || leaseExpiresAt <= new Date()) return false;
+    this.lastSeenLease.set(sessionId, leaseExpiresAt.getTime());
+    return true;
+  }
+
+  /** Record a stop and release an abandoned foreign claim without letting its heartbeat revive it. */
+  async stopExpiredForeignClaim(sessionId: string): Promise<boolean> {
+    const foreign = {
+      id: sessionId,
+      nodeId: Not(this.nodeId),
+      desiredState: Or(IsNull(), Not(In(['deleting', 'deleting-stopped']))),
+    };
+    return this.withAdoption(async (sessions, manager) => {
+      const { affected } = await sessions.update(
+        [
+          { ...foreign, leaseExpiresAt: IsNull() },
+          { ...foreign, leaseExpiresAt: LessThanOrEqual(new Date()) },
+        ],
+        { desiredState: 'stopped', nodeId: null, claimedAt: null, leaseExpiresAt: null, nodeUrl: null },
+      );
+      if (affected !== 1) return false;
+      await this.followAdoption(sessionId, manager);
+      return true;
+    });
   }
 
   /**
@@ -186,7 +260,34 @@ export class SessionOwnershipService {
    * which would adopt and restart the session the operator just stopped. A LIVE foreign claim is
    * left alone — releasing that would strand a peer's running engine.
    */
-  async release(sessionId: string): Promise<void> {
+  async release(sessionId: string, ownsClaim?: () => boolean): Promise<void> {
+    if (ownsClaim) {
+      const dataSource = this.sessions.manager.connection;
+      if (!(await awaitNoOpenTransaction(dataSource))) throw new Error('Another database transaction stayed open');
+      await dataSource.transaction(async manager => {
+        // A delete releases only its captured ownership, even when a peer's newer lease has expired.
+        const { affected } = await manager
+          .createQueryBuilder()
+          .update(Session)
+          .set({ nodeId: this.nodeId, updatedAt: () => '"updatedAt"' })
+          .where({ id: sessionId, nodeId: this.nodeId })
+          .execute();
+        // Check after the lock: a same-node start may have completed while this statement waited.
+        if (!ownsClaim()) return;
+        if (affected === 1) {
+          await manager.update(
+            Session,
+            { id: sessionId, nodeId: this.nodeId },
+            { nodeId: null, claimedAt: null, leaseExpiresAt: null, nodeUrl: null },
+          );
+        }
+        if (ownsClaim()) {
+          this.owned.delete(sessionId);
+          this.claimGen.delete(sessionId);
+        }
+      });
+      return;
+    }
     const now = new Date();
     this.owned.delete(sessionId);
     this.claimGen.delete(sessionId);
@@ -197,22 +298,30 @@ export class SessionOwnershipService {
     const own = await this.sessions
       .createQueryBuilder()
       .update(Session)
-      .set(cleared)
+      .set({
+        ...cleared,
+        desiredState: () => `CASE WHEN "desiredState" = 'deleting-stopped' THEN 'stopped' ELSE "desiredState" END`,
+      })
       .where('id = :id', { id: sessionId })
       .andWhere('"nodeId" = :me', { me: this.nodeId })
       .execute();
     if ((own.affected ?? 0) > 0) return;
-    const lapsed = await this.sessions
-      .createQueryBuilder()
-      .update(Session)
-      .set(cleared)
-      .where('id = :id', { id: sessionId })
-      .andWhere('"nodeId" IS NOT NULL AND "nodeId" <> :me AND "leaseExpiresAt" < :now', {
-        me: this.nodeId,
-        now: leaseParam(now),
-      })
-      .execute();
-    if ((lapsed.affected ?? 0) > 0) this.followAdoption(sessionId);
+    await this.withAdoption(async (sessions, manager) => {
+      const lapsed = await sessions
+        .createQueryBuilder()
+        .update(Session)
+        .set(cleared)
+        .where('id = :id', { id: sessionId })
+        .andWhere('"nodeId" IS NOT NULL AND "nodeId" <> :me AND "leaseExpiresAt" < :now', {
+          me: this.nodeId,
+          now: leaseParam(now),
+        })
+        .andWhere('("desiredState" IS NULL OR "desiredState" NOT IN (:...deleting))', {
+          deleting: ['deleting', 'deleting-stopped'],
+        })
+        .execute();
+      if ((lapsed.affected ?? 0) > 0) await this.followAdoption(sessionId, manager);
+    });
   }
 
   /**
@@ -265,32 +374,52 @@ export class SessionOwnershipService {
 
   /**
    * Register what to do when this process takes a session over from a node whose lease lapsed, by
-   * claiming it (an explicit start, boot auto-start, the takeover sweep) or by releasing that node's
-   * claim (a stop of such a session). Whatever that node left unfinished for the
+   * claiming it (an explicit start, boot auto-start, the takeover sweep, a delete) or by releasing
+   * that node's claim (a stop of such a session). Whatever that node left unfinished for the
    * session can no longer finish there. A session its holder released is not taken over: that holder
    * may still be finishing its own work.
    */
-  onAdoption(handler: (sessionId: string) => Promise<unknown>): void {
-    this.onAdopted = handler;
+  onAdoption(handler: (sessionId: string, manager?: EntityManager) => Promise<unknown>, transactional = false): void {
+    this.onAdopted = { run: handler, transactional };
   }
 
-  /**
-   * Run the adoption handler off the caller's path. Awaiting it inside claim() would hold the start
-   * between its claim and the moment it counts as starting, and a stop landing in that window would
-   * release the claim and let the engine launch on a row nobody holds. A failure is logged; the claim
-   * or release stands either way.
-   */
-  private followAdoption(sessionId: string): void {
+  /** SQL adoption cleanup shares the ownership transition; arbitrary follow-ups remain detached. */
+  private async withAdoption<T>(
+    work: (sessions: Repository<Session>, manager?: EntityManager) => Promise<T>,
+  ): Promise<T> {
+    if (!this.onAdopted?.transactional) return work(this.sessions);
+    const dataSource = this.sessions.manager.connection;
+    if (!(await awaitNoOpenTransaction(dataSource))) throw new Error('Another database transaction stayed open');
+    return dataSource.transaction(manager => work(manager.getRepository(Session), manager));
+  }
+
+  /** Isolate SQL errors where they abort the transaction, while keeping successful ownership changes. */
+  private async followAdoption(sessionId: string, manager?: EntityManager): Promise<void> {
     const handler = this.onAdopted;
     if (!handler) return;
-    void Promise.resolve()
-      .then(() => handler(sessionId))
-      .catch((error: unknown) =>
-        this.logger.warn('Session adoption follow-up failed', {
-          sessionId,
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
+    const failed = (error: unknown): void => {
+      this.logger.warn('Session adoption follow-up failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    };
+    if (manager && handler.transactional) {
+      if (SHARED_CONNECTION_DIALECTS.has(manager.connection.options.type)) {
+        // SQLite statement errors keep the transaction usable. Rolling back a savepoint would also
+        // undo unrelated writes that used this shared connection while cleanup awaited its queries.
+        try {
+          await handler.run(sessionId, manager);
+        } catch (error) {
+          failed(error);
+        }
+      } else {
+        await manager.transaction(nested => handler.run(sessionId, nested)).catch(failed);
+      }
+    } else {
+      void Promise.resolve()
+        .then(() => handler.run(sessionId))
+        .catch(failed);
+    }
   }
 
   /**
@@ -317,8 +446,8 @@ export class SessionOwnershipService {
 
   /**
    * Register the probe renew() consults before extending a lease. Wired by SessionService to the
-   * engine lifecycle (engine registered, start in flight, or reconnect pending). Optional like the
-   * lease-loss handler: without it every held claim renews unconditionally.
+   * engine lifecycle (engine registered, start in flight, reconnect pending, or delete in flight).
+   * Optional like the lease-loss handler: without it every held claim renews unconditionally.
    */
   setEngineLiveness(probe: (sessionId: string) => boolean): void {
     this.engineLiveness = probe;
@@ -512,6 +641,12 @@ export class SessionOwnershipService {
   /** Test seam: what this process currently believes it holds. */
   ownedIds(): string[] {
     return [...this.owned];
+  }
+
+  /** Capture this ownership, including a loss and reacquisition under the same node id. */
+  captureClaim(sessionId: string): () => boolean {
+    const generation = this.claimGen.get(sessionId);
+    return () => generation !== undefined && this.owned.has(sessionId) && this.claimGen.get(sessionId) === generation;
   }
 
   /**

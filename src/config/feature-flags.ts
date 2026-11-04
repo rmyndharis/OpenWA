@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { positiveIntOrDefault } from '../common/utils/env-int';
 
 /**
  * Runtime feature flags, centralised so every flag's env-var name and default lives in one place
@@ -25,7 +26,7 @@ export interface FeatureFlags {
  * unchanged:
  *   - `=== 'true'`  → opt-in flag (default false)
  *   - `!== 'false'` → opt-out flag (default true)
- * and the max-ms parse mirrors the original `Number(x) || 5000` — 0, negative, empty and non-numeric
+ * The max-ms read keeps a positive number (a fraction is floored); 0, negative, empty and non-numeric
  * values all fall back to 5000 (note this differs from `parseInt`, which would keep a literal 0).
  */
 export function computeFeatureFlags(env: NodeJS.ProcessEnv = process.env): FeatureFlags {
@@ -34,7 +35,7 @@ export function computeFeatureFlags(env: NodeJS.ProcessEnv = process.env): Featu
     storeEphemeralMessages: env.STORE_EPHEMERAL_MESSAGES !== 'false',
     resolveLidToPhone: env.RESOLVE_LID_TO_PHONE === 'true',
     simulateTyping: env.SIMULATE_TYPING !== 'false',
-    simulateTypingMaxMs: Number(env.SIMULATE_TYPING_MAX_MS) || 5000,
+    simulateTypingMaxMs: positiveIntOrDefault(env.SIMULATE_TYPING_MAX_MS, 5000),
   };
 }
 

@@ -27,6 +27,19 @@ const SEND_CAP_TIMEOUT_FACTOR = 4;
 /** Longest worker-reported error kept for an exit message and the plugin's status. */
 const MAX_WORKER_ERROR_CHARS = 500;
 
+/** Longest text a worker reports in a result that the host keeps or forwards, and what stands for a non-string. */
+const MAX_WORKER_TEXT_CHARS = 8192;
+const NON_STRING_WORKER_VALUE = '[non-string worker value]';
+
+/**
+ * The text of a field a worker filled in: a string, cut to a bounded length, or a fixed marker for anything else.
+ * Plugin code can post any value, so nothing is turned into text (String(), a template, an Error message) before this.
+ */
+function workerText(value: unknown): string {
+  if (typeof value !== 'string') return NON_STRING_WORKER_VALUE;
+  return value.length > MAX_WORKER_TEXT_CHARS ? `${value.slice(0, MAX_WORKER_TEXT_CHARS)}…[truncated]` : value;
+}
+
 /**
  * Timed-out hook dispatches whose in-flight claim is still honoured, per worker. A handler that never
  * returns would otherwise keep one entry per dispatch for as long as the worker lives; past this many,
@@ -467,8 +480,9 @@ export class PluginWorkerHost {
         });
         break;
       case 'error': {
-        this.lastWorkerError = String(message.error).replace(/\s+/g, ' ').slice(0, MAX_WORKER_ERROR_CHARS);
-        const error = new Error(message.error);
+        const text = workerText(message.error);
+        this.lastWorkerError = text.replace(/\s+/g, ' ').slice(0, MAX_WORKER_ERROR_CHARS);
+        const error = new Error(text);
         this.drain(this.readyWaiters, w => {
           if (w.timer) clearTimeout(w.timer);
           w.reject(error);
@@ -481,7 +495,7 @@ export class PluginWorkerHost {
         this.pending.delete(message.id);
         if (waiter.timer) clearTimeout(waiter.timer);
         if (message.ok) waiter.resolve();
-        else waiter.reject(new Error(message.error));
+        else waiter.reject(new Error(workerText(message.error)));
         break;
       }
       case 'cap':
@@ -503,7 +517,7 @@ export class PluginWorkerHost {
         clearTimeout(waiter.timer);
         const result: { continue: boolean; data?: unknown; error?: string } = { continue: message.continue };
         if (message.data !== undefined) result.data = message.data;
-        if (message.error !== undefined) result.error = message.error;
+        if (message.error !== undefined) result.error = workerText(message.error);
         waiter.resolve(result);
         break;
       }
@@ -517,7 +531,7 @@ export class PluginWorkerHost {
           status: message.status,
           headers: message.headers,
           body: message.body,
-          error: message.error,
+          error: message.error == null ? undefined : workerText(message.error),
         });
         break;
       }
@@ -526,7 +540,11 @@ export class PluginWorkerHost {
         if (!waiter) return;
         this.healthPending.delete(message.id);
         clearTimeout(waiter.timer);
-        waiter.resolve({ healthy: message.healthy, message: message.message });
+        waiter.resolve({
+          // Plugin code returns what it likes; only a literal true reads as healthy.
+          healthy: message.healthy === true,
+          message: message.message === undefined ? undefined : workerText(message.message),
+        });
         break;
       }
       case 'pong':
@@ -544,13 +562,17 @@ export class PluginWorkerHost {
         this.searchPending.delete(message.id);
         clearTimeout(waiter.timer);
         if (message.ok) waiter.resolve({ ok: true, results: message.results });
-        else waiter.resolve({ ok: false, error: message.error });
+        else waiter.resolve({ ok: false, error: workerText(message.error) });
         break;
       }
     }
   }
 
   private async handleCapRequest(message: Extract<WorkerToHostMessage, { kind: 'cap' }>): Promise<void> {
+    if (typeof message.verb !== 'string') {
+      this.channel.postMessage({ kind: 'cap-result', id: message.id, ok: false, error: NON_STRING_WORKER_VALUE });
+      return;
+    }
     if (this.maxInFlightCaps !== undefined && this.inFlightCaps >= this.maxInFlightCaps) {
       this.channel.postMessage({
         kind: 'cap-result',

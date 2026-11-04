@@ -36,6 +36,8 @@ const MINTED = {
 };
 
 const calls: { method: string; path: string; body?: unknown }[] = [];
+// When set, a create or a secret regenerate answers only once this settles.
+let mintGate: Promise<void> | null = null;
 
 function installFetchStub(): void {
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -45,7 +47,12 @@ function installFetchStub(): void {
     calls.push({ method, path, body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
     if (method === 'GET' && path === BASE) return Promise.resolve(jsonResponse([BOUND]));
     if (method === 'PATCH' && path === `${BASE}/acct1`) return Promise.resolve(jsonResponse(BOUND));
-    if (method === 'POST' && path === BASE) return Promise.resolve(jsonResponse(MINTED, 201));
+    if (method === 'POST' && path === BASE) {
+      return (mintGate ?? Promise.resolve()).then(() => jsonResponse(MINTED, 201));
+    }
+    if (method === 'POST' && path === `${BASE}/acct1/regenerate-secret`) {
+      return (mintGate ?? Promise.resolve()).then(() => jsonResponse({ ...BOUND, secret: 'regenerated-secret-89ab' }));
+    }
     return Promise.resolve(jsonResponse({ message: `unstubbed ${method} ${path}` }, 404));
   }) as typeof fetch;
 }
@@ -71,6 +78,7 @@ afterEach(() => {
   queryClient?.clear();
   queryClient = undefined;
   calls.length = 0;
+  mintGate = null;
 });
 
 function renderInstances(): void {
@@ -113,4 +121,93 @@ test('the created view shows an auto-generated verify token with a copy button',
   const token = within(dialog).getByText('auto-verify-token-4567');
   assert.ok(token.closest('.pi-secret')?.querySelector('button'), 'no copy button next to the verify token');
   within(dialog).getByText('Verify token');
+  const create = calls.find(c => c.method === 'POST' && c.path === BASE);
+  assert.ok(create, 'expected an instance create request');
+  assert.equal((create.body as { secret?: string }).secret, undefined);
+});
+
+// A created or regenerated secret is shown once, from the answer to that request, by this component. Its dialog closed
+// as the request went out, so an Escape or a click elsewhere could close the plugin dialog around it before the answer
+// landed, and the secret was never shown while the old one had already stopped working.
+for (const flow of ['create', 'regenerate'] as const) {
+  test(`the ${flow} dialog stays until its request answers, then shows the new secret`, async () => {
+    const { screen, fireEvent } = rtl;
+    let release: () => void = () => {};
+    mintGate = new Promise<void>(resolve => (release = resolve));
+    renderInstances();
+
+    if (flow === 'create') {
+      fireEvent.click(await screen.findByRole('button', { name: 'Create instance' }));
+      fireEvent.change(screen.getByLabelText('Instance ID'), { target: { value: 'acct2' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    } else {
+      fireEvent.click(await screen.findByTitle('Regenerate secret'));
+      fireEvent.click(screen.getByRole('button', { name: 'Regenerate' }));
+    }
+    const title = flow === 'create' ? 'Create instance' : 'Regenerate secret';
+    // Once the request is under way the dialog is locked: still open, with Cancel and its close button out of reach.
+    await rtl.waitFor(() => {
+      const dialog = screen.queryByRole('dialog', { name: title });
+      assert.ok(dialog, 'the dialog closed with its request in flight');
+      const cancel = rtl.within(dialog).getByRole<HTMLButtonElement>('button', { name: 'Cancel' });
+      assert.equal(cancel.disabled, true, 'Cancel is live mid-request');
+    });
+    assert.equal(
+      screen.queryByRole('button', { name: 'Close' }) === null,
+      true,
+      'the close button is live mid-request',
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
+    assert.ok(screen.queryByRole('dialog', { name: title }), 'Escape closed the dialog mid-request');
+
+    release();
+    await screen.findByText(flow === 'create' ? 'plain-signing-secret-0123' : 'regenerated-secret-89ab');
+  });
+}
+
+test('invalid instance secrets show the matching localized length guidance', async () => {
+  const { default: i18n, supportedLanguages } = await import('../i18n/index.ts');
+  const { screen, fireEvent } = rtl;
+  const errors = [
+    ['ASCII over maximum', 'x'.repeat(513), 'common.fieldTooLong', { max: 512, count: 513 }],
+    ['padded astral over maximum', `  ${'\u{1F600}'.repeat(513)}  `, 'common.fieldTooLong', { max: 512, count: 513 }],
+    ['presentation over maximum', '\u2764\uFE0F'.repeat(513), 'common.fieldTooLong', { max: 512, count: 513 }],
+    ['ASCII below minimum', 'x'.repeat(15), 'plugins.instances.errors.invalidSecret', undefined],
+    ['astral below minimum', '\u{1F600}'.repeat(8), 'plugins.instances.errors.invalidSecret', undefined],
+  ] as const;
+
+  try {
+    for (const language of supportedLanguages) {
+      await i18n.changeLanguage(language);
+      renderInstances();
+      fireEvent.click(await screen.findByRole('button', { name: i18n.t('plugins.instances.create') }));
+      fireEvent.change(screen.getByLabelText(i18n.t('plugins.instances.form.instanceId')), {
+        target: { value: 'acct2' },
+      });
+      const secret = screen.getByLabelText(i18n.t('plugins.instances.form.secret'));
+      for (const [label, value, key, options] of errors) {
+        fireEvent.change(secret, { target: { value } });
+        fireEvent.click(screen.getByRole('button', { name: i18n.t('common.create') }));
+        const expected = i18n.t(key, options);
+        assert.equal(screen.getByText(expected).textContent, expected, `${language}: ${label}`);
+        if (key === 'common.fieldTooLong') {
+          assert.match(expected, /512/, language);
+          assert.match(expected, /513/, language);
+          assert.doesNotMatch(expected, /\{\{|\}\}/, language);
+        }
+        assert.equal(
+          calls.some(c => c.method === 'POST' && c.path === BASE),
+          false,
+          `${language}: ${label}`,
+        );
+      }
+      rtl.cleanup();
+      queryClient?.clear();
+      calls.length = 0;
+    }
+  } finally {
+    rtl.cleanup();
+    queryClient?.clear();
+    await i18n.changeLanguage('en');
+  }
 });

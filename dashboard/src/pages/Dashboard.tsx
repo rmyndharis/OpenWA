@@ -22,6 +22,10 @@ import { formatLastActive, formatSessionStatus } from '../utils/sessionDisplay';
 // main/login bundle, and only for an unscoped admin key: /stats/messages refuses every other key.
 const DashboardCharts = lazy(() => import('../components/DashboardCharts').then(m => ({ default: m.DashboardCharts })));
 
+// How often the overview re-reads the sessions and their statistics while it stays open. It holds no socket, so without
+// this a session dropping changed nothing here until the window lost and regained focus. Paused while the tab is hidden.
+const SESSION_REFRESH_MS = 30_000;
+
 export function Dashboard() {
   const { t } = useTranslation();
   useDocumentTitle(t('dashboard.title'));
@@ -35,8 +39,8 @@ export function Dashboard() {
     isLoading: loadingSessions,
     error: sessionsError,
     isLoadingError: sessionsNeverLoaded,
-  } = useSessionsQuery();
-  const { data: stats } = useSessionStatsQuery();
+  } = useSessionsQuery(SESSION_REFRESH_MS);
+  const { data: stats } = useSessionStatsQuery(SESSION_REFRESH_MS);
   // GET /webhooks is OPERATOR-only and /stats/overview ADMIN-only. A key without the role is not sent
   // them, since the gateway audits every refusal as a failed authentication; their cards show the
   // unavailable placeholder.
@@ -47,6 +51,8 @@ export function Dashboard() {
   const messagesToday = overview ? overview.messages.today.sent + overview.messages.today.received : unavailable;
   const totalMessages = overview ? overview.messages.sent + overview.messages.received : unavailable;
   const loading = loadingSessions;
+  // Statistics that are unread or refused do not mean no session is connected: the list says which are.
+  const readyCount = stats?.ready ?? sessions.filter(session => session.status === 'ready').length;
   // Only a read that never succeeded replaces the page: a failed background refetch keeps its cached
   // data (as the webhook card below does), so the last good view stays on screen.
   const error = sessionsNeverLoaded
@@ -72,7 +78,7 @@ export function Dashboard() {
       // it overstates what an operator reads as "connected". READY is the only status where the
       // session can actually send and receive.
       label: t('dashboard.stats.activeSessions'),
-      value: stats?.ready ?? 0,
+      value: readyCount,
       icon: MessageSquare,
       detail: stats ? t('dashboard.stats.sessionsDetail', { running: stats.active, total: stats.total }) : undefined,
     },
@@ -96,7 +102,13 @@ export function Dashboard() {
     return (
       <div className="dashboard" style={{ padding: '2rem' }}>
         <div
-          style={{ background: 'rgba(239, 68, 68, 0.12)', padding: '1rem', borderRadius: '8px', color: 'var(--error)' }}
+          role="alert"
+          style={{
+            background: 'rgba(239, 68, 68, 0.12)',
+            padding: '1rem',
+            borderRadius: '8px',
+            color: 'var(--error-text)',
+          }}
         >
           {t('dashboard.errorPrefix', { message: error })}
         </div>
@@ -110,8 +122,8 @@ export function Dashboard() {
         title={t('dashboard.title')}
         subtitle={t('dashboard.subtitle')}
         badge={
-          <span className={`status-badge ${stats && stats.ready > 0 ? 'connected' : 'disconnected'}`}>
-            {stats && stats.ready > 0 ? t('common.connected') : t('common.disconnected')}
+          <span className={`status-badge ${readyCount > 0 ? 'connected' : 'disconnected'}`}>
+            {readyCount > 0 ? t('common.connected') : t('common.disconnected')}
           </span>
         }
       />
@@ -140,7 +152,7 @@ export function Dashboard() {
         <div className="section-header">
           <h2>{t('dashboard.sessionsOverview')}</h2>
           <span className="section-subtitle">
-            {t('dashboard.showingSessions', { shown: sessions.length, total: stats?.total ?? 0 })}
+            {t('dashboard.showingSessions', { shown: sessions.length, total: stats?.total ?? sessions.length })}
           </span>
         </div>
 

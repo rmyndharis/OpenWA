@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsString } from 'class-validator';
+import { ToStrictString } from '../../../common/utils/strict-boolean';
 
 export class DemoteChannelAdminDto {
   @ApiProperty({
@@ -9,6 +10,7 @@ export class DemoteChannelAdminDto {
       'individual is rejected with 400 rather than handed to WhatsApp.',
     example: '628123456789@c.us',
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   userId!: string;

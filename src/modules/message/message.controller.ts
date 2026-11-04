@@ -1,6 +1,7 @@
 import { Controller, Post, Get, Param, Body, Query, Res, HttpCode, HttpStatus, StreamableFile } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiBody } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { retryAfterWhenBusy, storedFileAttachment } from '../../common/storage/storage-transfer';
 import { MessageService } from './message.service';
 import { BulkMessageService } from './bulk-message.service';
 import {
@@ -59,9 +60,11 @@ import {
   BULK_MEDIA_TOO_LARGE_413,
   MEDIA_URL_PROXY_503,
   MESSAGE_NOT_FOUND_404,
+  PREVIEW_IMAGE_PROXY_503,
+  PREVIEW_IMAGE_TOO_LARGE_413,
   QUOTED_MESSAGE_NOT_FOUND_404,
   RECIPIENT_UNREACHABLE_400,
-  RECIPIENT_LOOKUP_503,
+  SEND_503,
 } from '../../common/openapi/engine-status-responses';
 import { IdempotentSend } from './idempotency/idempotent-send.decorator';
 
@@ -103,8 +106,8 @@ export class MessageController {
     description:
       'Filter by sender. A phone also matches group messages via the author field and any lid that resolves to it.',
   })
-  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Max messages to return (default 50)' })
-  @ApiQuery({ name: 'offset', required: false, type: Number, description: 'Offset for pagination' })
+  @ApiQuery({ name: 'limit', required: false, type: 'integer', description: 'Max messages to return (default 50)' })
+  @ApiQuery({ name: 'offset', required: false, type: 'integer', description: 'Offset for pagination' })
   @ApiQuery({
     name: 'inlineMedia',
     required: false,
@@ -219,7 +222,8 @@ export class MessageController {
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 501, description: `${CUSTOM_LINK_PREVIEW_501} ${QUOTED_SEND_501}` })
-  @ApiResponse({ status: 503, description: RECIPIENT_LOOKUP_503 })
+  @ApiResponse({ status: 413, description: PREVIEW_IMAGE_TOO_LARGE_413 })
+  @ApiResponse({ status: 503, description: `${PREVIEW_IMAGE_PROXY_503} ${SEND_503}` })
   async sendText(@Param('sessionId') sessionId: string, @Body() dto: SendTextMessageDto): Promise<MessageResponseDto> {
     return this.messageService.sendText(sessionId, dto);
   }
@@ -241,7 +245,7 @@ export class MessageController {
   })
   @ApiResponse({ status: 404, description: 'Template not found' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiResponse({ status: 503, description: RECIPIENT_LOOKUP_503 })
+  @ApiResponse({ status: 503, description: SEND_503 })
   async sendTemplate(
     @Param('sessionId') sessionId: string,
     @Body() dto: SendTemplateMessageDto,
@@ -271,7 +275,7 @@ export class MessageController {
   @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 501, description: `${CHANNEL_MEDIA_501} ${QUOTED_SEND_501}` })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
-  @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${RECIPIENT_LOOKUP_503}` })
+  @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${SEND_503}` })
   async sendImage(
     @Param('sessionId') sessionId: string,
     @Body() dto: SendMediaMessageDto,
@@ -299,7 +303,7 @@ export class MessageController {
   @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 501, description: `${CHANNEL_MEDIA_501} ${QUOTED_SEND_501}` })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
-  @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${RECIPIENT_LOOKUP_503}` })
+  @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${SEND_503}` })
   async sendVideo(
     @Param('sessionId') sessionId: string,
     @Body() dto: SendMediaMessageDto,
@@ -327,7 +331,7 @@ export class MessageController {
   @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 501, description: `${CHANNEL_MEDIA_501} ${QUOTED_SEND_501}` })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
-  @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${RECIPIENT_LOOKUP_503}` })
+  @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${SEND_503}` })
   async sendAudio(
     @Param('sessionId') sessionId: string,
     @Body() dto: SendAudioMessageDto,
@@ -355,7 +359,7 @@ export class MessageController {
   @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 501, description: `${CHANNEL_MEDIA_501} ${QUOTED_SEND_501}` })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
-  @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${RECIPIENT_LOOKUP_503}` })
+  @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${SEND_503}` })
   async sendDocument(
     @Param('sessionId') sessionId: string,
     @Body() dto: SendMediaMessageDto,
@@ -381,7 +385,7 @@ export class MessageController {
   @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 400, description: RECIPIENT_UNREACHABLE_400 })
   @ApiResponse({ status: 501, description: wwebjsRefuses501(`a location to ${CHANNEL_OR_BROADCAST}`) })
-  @ApiResponse({ status: 503, description: RECIPIENT_LOOKUP_503 })
+  @ApiResponse({ status: 503, description: SEND_503 })
   async sendLocation(@Param('sessionId') sessionId: string, @Body() dto: SendLocationDto): Promise<MessageResponseDto> {
     return this.messageService.sendLocation(sessionId, dto);
   }
@@ -402,7 +406,7 @@ export class MessageController {
   @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 400, description: RECIPIENT_UNREACHABLE_400 })
   @ApiResponse({ status: 501, description: wwebjsRefuses501(`a contact card to ${CHANNEL_OR_BROADCAST}`) })
-  @ApiResponse({ status: 503, description: RECIPIENT_LOOKUP_503 })
+  @ApiResponse({ status: 503, description: SEND_503 })
   async sendContact(@Param('sessionId') sessionId: string, @Body() dto: SendContactDto): Promise<MessageResponseDto> {
     return this.messageService.sendContact(sessionId, dto);
   }
@@ -427,7 +431,7 @@ export class MessageController {
     description: `${CHANNEL_MEDIA_501} ${wwebjsRefuses501('a sticker to a status or broadcast list (`@broadcast`) either')}`,
   })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
-  @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${RECIPIENT_LOOKUP_503}` })
+  @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${SEND_503}` })
   async sendSticker(
     @Param('sessionId') sessionId: string,
     @Body() dto: SendMediaMessageDto,
@@ -456,7 +460,7 @@ export class MessageController {
       'a poll to a status or broadcast list (`@broadcast`), nor one with `quotedMessageId` to a channel (`<id>@newsletter`)',
     ),
   })
-  @ApiResponse({ status: 503, description: RECIPIENT_LOOKUP_503 })
+  @ApiResponse({ status: 503, description: SEND_503 })
   async sendPoll(@Param('sessionId') sessionId: string, @Body() dto: SendPollDto): Promise<MessageResponseDto> {
     return this.messageService.sendPoll(sessionId, dto);
   }
@@ -477,7 +481,7 @@ export class MessageController {
   @ApiResponse({ status: 400, description: RECIPIENT_UNREACHABLE_400 })
   @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 501, description: wwebjsRefuses501(`a reply to ${CHANNEL_OR_BROADCAST}`) })
-  @ApiResponse({ status: 503, description: RECIPIENT_LOOKUP_503 })
+  @ApiResponse({ status: 503, description: SEND_503 })
   async reply(@Param('sessionId') sessionId: string, @Body() dto: ReplyMessageDto): Promise<MessageResponseDto> {
     return this.messageService.reply(sessionId, dto);
   }
@@ -509,7 +513,7 @@ export class MessageController {
   @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 501, description: ENGINE_NOT_SUPPORTED_501 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiResponse({ status: 503, description: RECIPIENT_LOOKUP_503 })
+  @ApiResponse({ status: 503, description: SEND_503 })
   async clickButton(@Param('sessionId') sessionId: string, @Body() dto: ClickButtonDto): Promise<MessageResponseDto> {
     return this.messageService.clickButton(sessionId, dto);
   }
@@ -522,13 +526,15 @@ export class MessageController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({
     status: 201,
-    description: 'Message forwarded',
+    description:
+      "Message forwarded. `messageId` is the forwarded copy's id, or an empty string when the engine could not " +
+      'read it back.',
     type: MessageResponseDto,
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 400, description: RECIPIENT_UNREACHABLE_400 })
   @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
-  @ApiResponse({ status: 503, description: RECIPIENT_LOOKUP_503 })
+  @ApiResponse({ status: 503, description: SEND_503 })
   async forward(@Param('sessionId') sessionId: string, @Body() dto: ForwardMessageDto): Promise<MessageResponseDto> {
     return this.messageService.forward(sessionId, dto);
   }
@@ -548,14 +554,14 @@ export class MessageController {
   })
   @ApiResponse({
     status: 400,
-    description: 'Session not active or message not found',
+    description: 'Session not active or invalid request',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
   @ApiResponse({
     status: 503,
     description:
-      RECIPIENT_LOOKUP_503 +
+      SEND_503 +
       ' ' +
       'The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; ' +
       'repeating the request is safe, since it converges on the same state.',
@@ -643,7 +649,7 @@ export class MessageController {
   })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'chatId', description: 'Chat ID (e.g. 1234567890@c.us or groupId@g.us)' })
-  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Max messages to return (default 50)' })
+  @ApiQuery({ name: 'limit', required: false, type: 'integer', description: 'Max messages to return (default 50)' })
   @ApiQuery({
     name: 'includeMedia',
     required: false,
@@ -751,22 +757,25 @@ export class MessageController {
       '(the gateway stores none of those bytes, though on whatsapp-web.js the own-send echo may), or ' +
       'the message is not in this gateway’s history.',
   })
+  @ApiResponse({
+    status: 503,
+    description:
+      'On S3 storage, the gateway already has 50 media downloads open across the status and chat media ' +
+      'routes. Retry once the Retry-After header (1 second) has passed.',
+  })
   async getChatMedia(
     @Param('sessionId') sessionId: string,
     @Param('chatId') chatId: string,
     @Param('messageId') messageId: string,
     @Res({ passthrough: true }) res: Response,
   ): Promise<StreamableFile> {
-    const { buffer, mimetype } = await this.messageService.getChatMedia(sessionId, chatId, messageId);
+    const { mimetype, ...source } = await this.messageService
+      .getChatMedia(sessionId, chatId, messageId)
+      .catch(retryAfterWhenBusy(res));
     // attachment + nosniff together: the mimetype is already reduced to an inert set, and forcing a
     // download means even a mistake there cannot render as active content on the API origin. The
     // dashboard renders chat media from the inline copy, so nothing depends on inline display here.
-    res.set({
-      'Content-Type': mimetype,
-      'X-Content-Type-Options': 'nosniff',
-      'Content-Disposition': 'attachment',
-    });
-    return new StreamableFile(buffer);
+    return storedFileAttachment(res, source, mimetype);
   }
 
   // ========== Delete Message ==========
@@ -784,12 +793,12 @@ export class MessageController {
   })
   @ApiResponse({
     status: 400,
-    description: 'Session not active or message not found',
+    description: 'Session not active or invalid request',
   })
   @ApiResponse({
     status: 503,
     description:
-      RECIPIENT_LOOKUP_503 +
+      SEND_503 +
       ' ' +
       'WhatsApp did not answer within the request budget. The change may or may not have been applied — ' +
       'the gateway stopped waiting for a confirmation that never came.',
@@ -854,7 +863,7 @@ export class MessageController {
   @ApiResponse({
     status: 503,
     description:
-      RECIPIENT_LOOKUP_503 +
+      SEND_503 +
       ' ' +
       'The whatsapp-web.js page connection died mid-request. The pin may or may not have been applied; a ' +
       'retry is safe, but it restarts the pin duration from the moment it succeeds.',
@@ -882,7 +891,7 @@ export class MessageController {
   @ApiResponse({
     status: 503,
     description:
-      RECIPIENT_LOOKUP_503 +
+      SEND_503 +
       ' ' +
       'The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; ' +
       'repeating the request is safe, since it converges on the same state.',
@@ -930,7 +939,9 @@ export class MessageController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({
     status: 200,
-    description: 'Message edited',
+    description:
+      'Message edited. Both fields describe the edited message, not the edit: `messageId` is its id and ' +
+      '`timestamp` the time it was originally sent.',
     type: MessageResponseDto,
   })
   @ApiResponse({
@@ -940,16 +951,16 @@ export class MessageController {
   @ApiResponse({
     status: 403,
     description:
-      'The engine refused the edit. The Baileys adapter refuses a message the account did not send; ' +
-      'whatsapp-web.js reads the refusal from the page, which also covers a message that is not text. ' +
-      'Past its own guard the Baileys engine has no acceptance signal and answers 200.',
+      'The engine refused the edit. Both engines refuse a message the account did not send and one with no ' +
+      'text or caption to edit (a location, sticker, poll, contact card or audio); whatsapp-web.js reads the ' +
+      'refusal from the page. Past its own guards the Baileys engine has no acceptance signal and answers 200.',
   })
   @ApiResponse({ status: 404, description: 'Message not found' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({
     status: 503,
     description:
-      RECIPIENT_LOOKUP_503 +
+      SEND_503 +
       ' ' +
       'The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; ' +
       'repeating the request is safe, since it converges on the same state.',

@@ -67,7 +67,9 @@ Storage: SHA-256 hash only (never store plain key); `keyPrefix` keeps the first 
 
 Every key minted through the API-keys endpoints uses that format. The bootstrap seed key is the only
 exception: an explicit `API_MASTER_KEY` is taken verbatim (surrounding whitespace is stripped), and `ALLOW_DEV_API_KEY=true` opts into the
-fixed `dev-admin-key`; with neither set, the seed key is generated in the format above.
+fixed `dev-admin-key`; with neither set, the seed key is generated in the format above. The `keyPrefix` of a key seeded from
+`API_MASTER_KEY` is its first 12 characters, which every ADMIN key with no session or chat restriction can read in the key list, so replace it with a minted key
+(see the rotation note in §4.12) rather than keeping a chosen passphrase as the admin key.
 
 ### Permission Model
 
@@ -285,13 +287,13 @@ flowchart TB
 
 ### Validation Examples
 
-| Field                        | Rules                                                                                                                                                                      |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `chatId`                     | Non-empty string of at most 255 characters — **no format pattern**; the engine resolves the id, so `@c.us`, `@g.us`, `@lid`, `@newsletter` and `status@broadcast` all pass |
-| `phoneNumber` (pairing code) | Pattern: `^[0-9]{6,15}$` — digits only, international format                                                                                                               |
-| `url`                        | Valid URL (`require_tld: false`, so single-label hosts like `http://localhost:3000` pass); HTTPS is a recommendation, not enforced                                         |
-| `text`                       | Max 4096 chars (`send-text`)                                                                                                                                               |
-| `sessionName`                | Alphanumeric + hyphen, 3-50 chars                                                                                                                                          |
+| Field                        | Rules                                                                                                                                                                                                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `chatId`                     | Non-empty string of at most 255 characters in the form `localpart@host`: one `@` and no whitespace, so a bare phone number is refused with `400`. The host is not checked, so `@c.us`, `@g.us`, `@lid`, `@newsletter` and `status@broadcast` all pass and the engine resolves the id |
+| `phoneNumber` (pairing code) | Pattern: `^[0-9]{6,15}$` — digits only, international format                                                                                                                                                                                                                         |
+| `url`                        | Valid URL (`require_tld: false`, so single-label hosts like `http://localhost:3000` pass); HTTPS is a recommendation, not enforced                                                                                                                                                   |
+| `text`                       | Max 4096 chars (`send-text`)                                                                                                                                                                                                                                                         |
+| `sessionName`                | Alphanumeric + hyphen, 3-50 chars                                                                                                                                                                                                                                                    |
 
 ### DTO Validation
 
@@ -301,6 +303,7 @@ export class SendTextMessageDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH) // 255
+  @Matches(CHAT_JID_PATTERN, { message: CHAT_JID_MESSAGE }) // /^[^\s@]+@[^\s@]+$/: localpart@host
   chatId: string;
 
   @IsString()
@@ -322,7 +325,7 @@ export class CreateWebhookDto {
   @IsArray()
   @ArrayMinSize(1)
   // The full WEBHOOK_EVENTS catalog (message.*, status.received, session.*, presence.update,
-  // event.response, group.*, call.*) plus '*' for subscribe-all.
+  // event.response, poll.vote, group.*, call.*) plus '*' for subscribe-all.
   @IsIn([...WEBHOOK_EVENTS, '*'], { each: true })
   events?: string[];
 }
@@ -395,8 +398,9 @@ Socket.IO frames never pass through the Nest enhancer pipeline, so the HTTP wind
 | Client frames (subscribe/unsubscribe/ping) — token bucket           | API key (IP, IPv6 on its /64, before auth completes)            | 60 frames/s sustained, 120-frame burst | `WS_RATE_LIMIT_FRAME_PER_SECOND` / `WS_RATE_LIMIT_FRAME_BURST`      |
 | New handshakes — sliding window, enforced **before** key validation | client IP (resolved through `TRUSTED_PROXIES`, IPv6 on its /64) | 10 per 60 s                            | `WS_RATE_LIMIT_HANDSHAKE_MAX` / `WS_RATE_LIMIT_HANDSHAKE_WINDOW_MS` |
 | Simultaneous sockets                                                | API key                                                         | 16                                     | `WS_MAX_SOCKETS_PER_KEY`                                            |
+| Size of one client frame                                            | connection                                                      | 8 KiB (a larger frame closes it)       | none, fixed in code                                                 |
 
-The frame budget is sized ~6x above legitimate traffic: the dashboard emits ~8 subscribe frames at page mount and only occasional ping/unsubscribe frames afterwards (server→client event fan-out is not limited). The handshake window stops an unauthenticated connection flood from forcing a DB `validateApiKey` per attempt; Socket.IO's exponential-backoff reconnect (~6 attempts/min per tab) stays under it. The socket cap covers multi-tab dashboards and SDK clients sharing one key. A rejected handshake or excess socket is answered with a `RATE_LIMITED` error frame and a clean disconnect; an over-budget frame gets a `RATE_LIMITED` error frame and is not dispatched. Violations are audited as `rate_limit_exceeded`, sampled to at most one row per subject+kind per minute (suppressed occurrences are counted into the next row) so the audit trail itself cannot become the flood.
+The frame budget is sized ~6x above legitimate traffic: the dashboard emits ~8 subscribe frames at page mount and only occasional ping/unsubscribe frames afterwards (server→client event fan-out is not limited). The handshake window stops an unauthenticated connection flood from forcing a DB `validateApiKey` per attempt; Socket.IO's exponential-backoff reconnect (~6 attempts/min per tab) stays under it. The socket cap covers multi-tab dashboards and SDK clients sharing one key. A rejected handshake or excess socket is answered with a `RATE_LIMITED` error frame and a clean disconnect; an over-budget frame gets a `RATE_LIMITED` error frame and is not dispatched. A frame over 8 KiB closes the connection (close code `1009`) without an answer, and a polling client learns the bound in the handshake and splits its batches to it; the longest legal frame is under 1 KiB. Violations are audited as `rate_limit_exceeded`, sampled to at most one row per subject+kind per minute (suppressed occurrences are counted into the next row) so the audit trail itself cannot become the flood.
 
 ## 4.7 CORS Configuration
 
@@ -555,7 +559,8 @@ app.use(helmet({
 > **Reality check:** persisted audit coverage currently includes API-key create/update/revoke/delete
 > (updates carry before/after authorization state), rejected authentication, session lifecycle
 > (including disconnects caused by WhatsApp unlinking the device, account restrictions and their
-> lifting, and refused rebinds), integration-instance creation, update, secret rotation, deletion,
+> lifting, and refused rebinds), a privacy id newly reported for a phone number the lid table already
+> maps to another (`phone_second_lid_reported`), integration-instance creation, update, secret rotation, deletion,
 > redrive, and scope-binding bridge failures, plugin install, update, uninstall, enable, disable, configuration and session
 > activation, webhook delivery-failure redrive batches, send-pacing refusals (sampled) and breaker trips, the
 > infra operations (config save, restart request, data export/import, storage export/import),
@@ -602,7 +607,7 @@ flowchart TB
 
 ### Security Alerts
 
-> **Not implemented.** There is no alerting or automatic temp-block subsystem; the table below is a design target, not shipped behavior. The signals do get recorded: rejected authentication and WebSocket rate-limit violations write persisted audit rows, and an IP-restricted key used from a disallowed IP also emits a `logger.warn`; but nothing acts on them. A REST, queue-dashboard or MCP rejection that names no stored key (missing or unknown) is capped at 10 rows per client IP per minute; a rejection of a stored key (revoked, expired, IP or session refused, insufficient role) is recorded every time there. The public `/api/health` route bounds every auth-failure row it writes, stored key or not, at 10 per client IP per minute. Rate-limit violations are sampled. Forward the audit log / application log to your SIEM to build these alerts.
+> **Not implemented.** There is no alerting or automatic temp-block subsystem; the table below is a design target, not shipped behavior. The signals do get recorded: rejected authentication and WebSocket rate-limit violations write persisted audit rows, and an IP-restricted key used from a disallowed IP also emits a `logger.warn`; but nothing acts on them. A REST, queue-dashboard or MCP rejection that names no stored key (missing or unknown) is capped at 10 rows per client IP per minute; a rejection of a stored key (revoked, expired, IP or session refused, insufficient role) by the API-key guard, the queue dashboard or MCP is recorded every time. Four refusals that depend on the request body or query run after the guard and write no row: a chat-restricted key listing messages without `chatId`, a key without the ADMIN role creating a session with `proxyUrl`, a session-scoped key binding an integration instance outside its sessions, and a chat-restricted key searching through a plugin search provider. The public `/api/health` route bounds every auth-failure row it writes, stored key or not, at 10 per client IP per minute. Rate-limit violations are sampled. Forward the audit log / application log to your SIEM to build these alerts.
 
 | Event                | Severity | Intended action (roadmap) |
 | -------------------- | -------- | ------------------------- |
@@ -806,7 +811,7 @@ updates:
       - dependency-name: 'better-sqlite3'
         versions: ['>=14.0.0']
       - dependency-name: 'puppeteer'
-        versions: ['>24.38.0']
+        versions: ['>=26.0.0']
       - dependency-name: 'audio-decode'
         versions: ['>=3.0.0']
       - dependency-name: '@types/node'
@@ -817,15 +822,15 @@ updates:
         versions: ['>=3.2.1']
 ```
 
-Majors arrive as their own grouped PR, separate from the minor/patch group. Five ignores freeze a
-major line (TypeScript 7, better-sqlite3 14, audio-decode 3, @types/node 23 and later, NestJS 12)
-and two freeze the line in use (puppeteer above the 24.38.0 pin it shares with whatsapp-web.js,
-tar-stream from 3.2.1). Each ignore's reason and lift condition is the comment above it in
+Majors arrive as their own grouped PR, separate from the minor/patch group. Six ignores freeze a
+major line (TypeScript 7, better-sqlite3 14, puppeteer 26, audio-decode 3, @types/node 23 and later,
+NestJS 12) and one freezes the line in use (tar-stream from 3.2.1); puppeteer stays on the 25.x line
+it shares with whatsapp-web.js. Each ignore's reason and lift condition is the comment above it in
 `.github/dependabot.yml`.
 
 ### Security Scanning in CI
 
-> **Aspirational template, not in the repo.** There is no Snyk and no CodeQL workflow today. The actual dependency check is a dedicated `audit` job ("Security audit") in `ci.yml`, on push/PR. It is deliberately its own job rather than a step inside Lint: an advisory published against an unrelated dependency would otherwise abort the job before ESLint, the type-check and the drift gates ever ran. It runs `npm run check:audit` over the root tree and `npm audit --audit-level=high` over `dashboard/` and `sdk/javascript/`. All three fence `high` rather than `critical`: none of the trees carries a HIGH advisory today (the root reaches that through the `overrides` in `package.json`), so the threshold fences regressions. `check:audit` applies that threshold per advisory instead of all-or-nothing: an advisory with no patched version can be excused by id in `scripts/check-audit.mjs`, with its reason and its removal condition recorded beside it, rather than dropping the whole job to `critical`; an allowlist entry whose advisory has since gone fails the job too, so an exception cannot outlive its cause. The dashboard and the SDK keep the plain form: they have nothing to excuse and stay stricter than the root. Between releases, `.github/workflows/security-scan.yml` (Scheduled Security Scan) repeats that job every Wednesday at 03:00 UTC and on demand, together with the release Trivy scan against the published `latest` image on amd64 and arm64, and a `base-image-drift` job that fails when the Dockerfile's two `node:22-slim` FROM digests disagree, or when the pin differs from what the tag serves today and either the tag has served that image for 7 or more days, or for 3 or more days with the pin last changed 28 or more days ago. The workflow below is a recommended setup to add if you want Snyk and SAST; its scheduled `npm audit` is already covered by `security-scan.yml`.
+> **Aspirational template, not in the repo.** There is no Snyk and no CodeQL workflow today. The actual dependency check is a dedicated `audit` job ("Security audit") in `ci.yml`, on push/PR. It is deliberately its own job rather than a step inside Lint: an advisory published against an unrelated dependency would otherwise abort the job before ESLint, the type-check and the drift gates ever ran. It runs `npm run check:audit` over the root tree and `npm audit --audit-level=high` over `dashboard/` and `sdk/javascript/`. All three checks use the HIGH threshold to block HIGH and CRITICAL advisories. `check:audit` applies that threshold per advisory instead of all-or-nothing: an advisory with no patched version can be excused by id in `scripts/check-audit.mjs`, with its reason and its removal condition recorded beside it, rather than dropping the whole job to `critical`; an allowlist entry whose advisory has since gone fails the job too, so an exception cannot outlive its cause. The dashboard and the SDK keep the plain form: they have nothing to excuse and stay stricter than the root. Between releases, `.github/workflows/security-scan.yml` (Scheduled Security Scan) repeats that job every Wednesday at 03:00 UTC and on demand, together with the release Trivy scan against the published `latest` image on amd64 and arm64, and a `base-image-drift` job that fails when the Dockerfile's two `node:22-slim` FROM digests disagree, or when the pin differs from what the tag serves today and either the tag has served that image for 7 or more days, or for 3 or more days with the pin last changed 28 or more days ago. The workflow below is a recommended setup to add if you want Snyk and SAST; its scheduled `npm audit` is already covered by `security-scan.yml`.
 
 ```yaml
 # .github/workflows/security.yml
@@ -867,7 +872,7 @@ jobs:
 
 ### Allowed/Blocked Packages
 
-Security pins for transitive dependencies live in the `overrides` field of `package.json` (for example `"multer": "2.4.0"` and `"ip-address": "^10.7.1"`), and the `audit` CI job gates regressions through `npm run check:audit` (see above). No install hook fetches an unpinned package: `postinstall` runs `npm ci` against the dashboard lockfile and the repository's own patch scripts.
+Security pins for transitive dependencies live in the `overrides` field of `package.json` (for example `"multer": "2.5.0"` and `"ip-address": "^10.7.1"`), and the `audit` CI job gates regressions through `npm run check:audit` (see above). No install hook fetches an unpinned package: `postinstall` runs `npm ci` against the dashboard lockfile and the repository's own patch scripts.
 
 ### Vulnerability Response Matrix
 

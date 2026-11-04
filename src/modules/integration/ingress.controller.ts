@@ -58,7 +58,10 @@ export class IngressController {
   })
   @ApiResponse({
     status: 202,
-    description: 'Webhook accepted and queued for async plugin processing (the primary success path).',
+    description:
+      'Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. ' +
+      'With the queue off a route without a response contract answers after the plugin ran inline (at most ' +
+      'INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after.',
   })
   @ApiResponse({
     status: 400,
@@ -80,7 +83,7 @@ export class IngressController {
   @ApiResponse({
     status: 503,
     description:
-      "A route whose response contract declares a `session-alive` preflight, when the bound session has no running engine or its engine has failed (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay.",
+      "A route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session with no running engine or a failed one (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay. A route without a response contract is accepted while its plugin restores.",
   })
   async receive(
     @Param('pluginId') pluginId: string,

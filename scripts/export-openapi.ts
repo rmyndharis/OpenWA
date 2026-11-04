@@ -8,6 +8,7 @@
 // Usage: npx ts-node scripts/export-openapi.ts <output-path>
 import '../src/config/load-env';
 import { NestFactory } from '@nestjs/core';
+import type { INestApplication } from '@nestjs/common';
 import { SwaggerModule } from '@nestjs/swagger';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -36,13 +37,6 @@ process.env.REDIS_ENABLED = 'false';
 // export run with SEARCH_ENABLED=false in the caller's env would silently drop /api/search from
 // the snapshot. Pin it on — the committed snapshot documents the full default surface.
 process.env.SEARCH_ENABLED = 'true';
-// The 'data' connection must use a real SQLite file path to satisfy env-validation (an in-memory or
-// bare value is rejected to catch PostgreSQL db-name leaks — see env.validation.ts). Use a temp dir
-// so the export stays hermetic; the whole dir is removed in main()'s finally, and recursive rmSync
-// also drops any SQLite -wal/-shm sidecars. The 'main' connection keeps in-memory SQLite.
-const exportDataDir = mkdtempSync(join(tmpdir(), 'openapi-export-'));
-process.env.DATABASE_NAME = join(exportDataDir, 'export.sqlite');
-process.env.MAIN_DATABASE_NAME = ':memory:';
 
 async function main() {
   // Operator-supplied CLI path — this is a local dev/CI tool, not a network service, so there is
@@ -54,17 +48,28 @@ async function main() {
     console.error('Usage: npx ts-node scripts/export-openapi.ts <output-path>');
     process.exit(1);
   }
-  // Imported after the env pins above so AppModule's top-level reads the hermetic values. Uses
-  // require() (not a dynamic import()) so ts-node's CommonJS hook resolves the .ts directly — a
-  // native import() would fail with ERR_MODULE_NOT_FOUND under ts-node CJS.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { AppModule } = require('../src/app.module');
-  // Bootstrap the full DI graph so every controller/DTO is discovered, but never listen.
-  // Errors/warns only — bootstrap is chatty and we only need the document.
-  const app = await NestFactory.create(AppModule, { logger: ['error', 'warn'] });
-  // Mirror main.ts: the global /api prefix is part of the real route paths the docs publish.
-  app.setGlobalPrefix('api');
+  // The 'data' connection must use a real SQLite file path to satisfy env-validation (an in-memory or
+  // bare value is rejected to catch PostgreSQL db-name leaks — see env.validation.ts). Use a temp dir
+  // so the export stays hermetic; the whole dir is removed in the finally below, and recursive rmSync
+  // also drops any SQLite -wal/-shm sidecars. The 'main' connection keeps in-memory SQLite. Created
+  // only once the arguments are valid, so a usage error leaves nothing behind.
+  const exportDataDir = mkdtempSync(join(tmpdir(), 'openapi-export-'));
+  process.env.DATABASE_NAME = join(exportDataDir, 'export.sqlite');
+  process.env.MAIN_DATABASE_NAME = ':memory:';
+  let app: INestApplication | undefined;
   try {
+    // Imported after the env pins above so AppModule's top-level reads the hermetic values. Uses
+    // require() (not a dynamic import()) so ts-node's CommonJS hook resolves the .ts directly — a
+    // native import() would fail with ERR_MODULE_NOT_FOUND under ts-node CJS. Inside the try: its
+    // top-level validation throws on a bad environment.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { AppModule } = require('../src/app.module');
+    // Bootstrap the full DI graph so every controller/DTO is discovered, but never listen.
+    // Errors/warns only — bootstrap is chatty and we only need the document. abortOnError: false
+    // makes a failed bootstrap throw; the default aborts the process and skips the cleanup below.
+    app = await NestFactory.create(AppModule, { logger: ['error', 'warn'], abortOnError: false });
+    // Mirror main.ts: the global /api prefix is part of the real route paths the docs publish.
+    app.setGlobalPrefix('api');
     const doc = SwaggerModule.createDocument(app, createSwaggerConfig());
     // Before the exemption pass, so it never spends work on an operation about to be removed.
     dropUnexpressibleOperations(doc);
@@ -75,8 +80,11 @@ async function main() {
       `✓ OpenAPI snapshot written to ${out} (version ${doc.info.version}, ${Object.keys(doc.paths).length} paths)`,
     );
   } finally {
-    await app.close();
-    rmSync(exportDataDir, { recursive: true, force: true });
+    try {
+      await app?.close();
+    } finally {
+      rmSync(exportDataDir, { recursive: true, force: true });
+    }
   }
 }
 

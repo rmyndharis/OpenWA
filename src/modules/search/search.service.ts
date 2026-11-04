@@ -4,6 +4,13 @@ import { SEARCH_DEFAULT_LIMIT, SEARCH_LIMIT_MAX, SEARCH_OFFSET_MAX, SEARCH_TERMS
 import { searchTermCount } from './search-terms';
 import type { SearchQuery, SearchResults } from './search.types';
 import { ChatScopeService } from '../auth/chat-scope.service';
+import { parseWaId } from '../../engine/identity/wa-id';
+
+/** The phone digits of a user JID (`<digits>@c.us` or `@s.whatsapp.net`), as a one-item list, or none. */
+function bareUserDigits(id: string): string[] {
+  const { kind, userPart } = parseWaId(id);
+  return kind === 'user' && /^\d+$/.test(userPart) ? [userPart] : [];
+}
 
 @Injectable()
 export class SearchService {
@@ -37,7 +44,9 @@ export class SearchService {
     const scoped: SearchQuery = {
       ...query,
       chatIdAliases,
-      fromAliases,
+      // An API send stored by an earlier version names the account by its bare phone digits; the sender filter matches
+      // those rows too. Added here, not in candidatesFor, which also expands the chat filter.
+      fromAliases: fromAliases && [...new Set([...fromAliases, ...fromAliases.flatMap(bareUserDigits)])],
       sessionIds: callerSessionIds,
       chatIds: callerChatIds,
       limit: Math.min(query.limit ?? SEARCH_DEFAULT_LIMIT, SEARCH_LIMIT_MAX),

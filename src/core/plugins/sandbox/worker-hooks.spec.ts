@@ -104,6 +104,56 @@ describe('WorkerHookRegistry', () => {
     expect(sent.find(m => m.kind === 'hook-result')).toMatchObject({ continue: true });
   });
 
+  it('discards data a handler returns with an error and reports the first failure', async () => {
+    const { sent, post } = collect();
+    const reg = new WorkerHookRegistry(post);
+    const message = { id: 'm1', chatId: 'c@c.us', body: 'secret' };
+    let seen: unknown;
+    reg.register('message:received', () => ({ continue: true, data: { ...message, body: '[redacted]' } }), 10);
+    reg.register('message:received', () => ({ continue: true, data: message, error: new Error('first failure') }), 20);
+    reg.register('message:received', () => Promise.reject(new Error('second failure')), 30);
+    reg.register(
+      'message:received',
+      ({ data }) => {
+        seen = data;
+        return { continue: true };
+      },
+      40,
+    );
+
+    await reg.handleHook({ kind: 'hook', id: 1, event: 'message:received', data: message, source: 'Engine' });
+
+    expect(seen).toEqual({ ...message, body: '[redacted]' });
+    expect(sent.find(m => m.kind === 'hook-result')).toMatchObject({
+      continue: true,
+      data: { ...message, body: '[redacted]' },
+      error: 'first failure',
+    });
+  });
+
+  it('keeps a veto that comes with an error but does not apply its data', async () => {
+    const { sent, post } = collect();
+    const reg = new WorkerHookRegistry(post);
+    const message = { id: 'm1', chatId: 'c@c.us', body: 'secret' };
+    let laterRan = false;
+    reg.register('message:received', () => ({ continue: true, data: { ...message, body: '[redacted]' } }), 10);
+    reg.register('message:received', () => ({ continue: false, data: message, error: new Error('failed') }), 20);
+    reg.register('message:received', () => {
+      laterRan = true;
+      return { continue: true };
+    });
+
+    await reg.handleHook({ kind: 'hook', id: 1, event: 'message:received', data: message, source: 'Engine' });
+
+    expect(laterRan).toBe(false);
+    expect(sent.find(m => m.kind === 'hook-result')).toEqual({
+      kind: 'hook-result',
+      id: 1,
+      continue: false,
+      data: { ...message, body: '[redacted]' },
+    });
+  });
+
   it('reports a throwing handler to the host on the hook-result (later handlers still run)', async () => {
     const { sent, post } = collect();
     const reg = new WorkerHookRegistry(post);

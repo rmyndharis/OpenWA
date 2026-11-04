@@ -16,7 +16,7 @@ import { runInNewContext } from 'vm';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
-import { FindOperator, In, Repository } from 'typeorm';
+import { DataSource, FindOperator, In, Repository } from 'typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { fetch as undiciFetch } from 'undici';
@@ -30,7 +30,7 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { userPart } from '../../engine/identity/wa-id';
 import { HookManager } from '../../core/hooks';
 import { QUEUE_NAMES } from '../queue/queue-names';
-import { Session } from '../session/entities/session.entity';
+import { Session, SessionStatus } from '../session/entities/session.entity';
 
 function createMockWebhook(overrides: Partial<Webhook> = {}): Webhook {
   return {
@@ -747,16 +747,25 @@ describe('WebhookService', () => {
       (configService.get as jest.Mock).mockImplementation((key: string, def?: unknown) =>
         key === 'webhook.failurePayloadRetentionHours' ? 24 : def,
       );
-      (failureRepository.find as jest.Mock)
-        .mockResolvedValueOnce([{ id: 'f1' }, { id: 'f2' }])
-        .mockResolvedValueOnce([{ id: 'f2' }]);
+      const page = [
+        { id: 'f1', webhookId: 'w1', sessionId: 's1' },
+        { id: 'f2', webhookId: 'w1', sessionId: 's1' },
+      ];
+      (failureRepository.find as jest.Mock).mockResolvedValueOnce(page).mockResolvedValueOnce([{ id: 'f2' }]);
+      (repository.find as jest.Mock).mockResolvedValue([{ id: 'w1', sessionId: 's1' }]);
 
       const out = await service.listDeliveryFailures({});
 
       expect(out).toEqual([
-        { id: 'f1', replayable: false },
-        { id: 'f2', replayable: true },
+        { ...page[0], replayable: false },
+        { ...page[1], replayable: true },
       ]);
+      // The webhooks of the rows that hold a payload are read once, id and session only.
+      expect(repository.find).toHaveBeenCalledTimes(1);
+      expect(repository.find).toHaveBeenCalledWith({
+        select: { id: true, sessionId: true },
+        where: { id: In(['w1']) },
+      });
       const second = ((failureRepository.find as jest.Mock).mock.calls as unknown[][])[1][0] as {
         select: Record<string, boolean>;
         where: Record<string, unknown>;
@@ -777,5 +786,60 @@ describe('WebhookService', () => {
       await expect(service.listDeliveryFailures({})).resolves.toEqual([]);
       expect(failureRepository.find).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+// SQLite serves every repository from one connection, so a transaction the save opened would hold what other callers
+// wrote while it was open, and the rollback of its failed insert would undo those writes.
+describe('WebhookService.create beside other writes on one connection', () => {
+  let ds: DataSource;
+  let service: WebhookService;
+
+  beforeEach(async () => {
+    ds = new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Session, Webhook],
+      synchronize: true,
+    });
+    await ds.initialize();
+    await ds.getRepository(Session).save({ id: 'sessB', name: 'sessB', status: SessionStatus.READY, config: {} });
+    service = new WebhookService(
+      ds.getRepository(Webhook),
+      {} as never,
+      ds.getRepository(Session),
+      new ConfigService({}),
+      { invalidateOptInSubscriptions: jest.fn() } as never,
+    );
+  });
+
+  afterEach(async () => {
+    await ds.destroy();
+  });
+
+  it('keeps a write made beside a create whose session is deleted after the check', async () => {
+    const sessions = ds.getRepository(Session);
+    jest.spyOn(sessions, 'exists').mockResolvedValue(true);
+    let steps = 0;
+    let beside: Promise<unknown> = Promise.resolve();
+    ds.subscribers.push({
+      listenTo: () => Webhook,
+      beforeInsert: () => {
+        beside = (async () => {
+          for (let i = 0; i < steps; i += 1) await Promise.resolve();
+          await sessions.update('sessB', { status: SessionStatus.FAILED });
+        })();
+      },
+    });
+
+    for (; steps <= 10; steps += 1) {
+      await sessions.update('sessB', { status: SessionStatus.READY });
+      await expect(service.create('gone', { url: 'https://example.com/webhook' })).rejects.toThrow(/FOREIGN KEY/);
+      await beside;
+      expect({ steps, status: (await sessions.findOneByOrFail({ id: 'sessB' })).status }).toEqual({
+        steps,
+        status: SessionStatus.FAILED,
+      });
+    }
   });
 });

@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { markEngineSendFailure } from '../../common/errors/engine-send-failure';
+import { markNothingSent } from '../../common/errors/engine-not-sent.error';
 import { mergeSentMetadata, updateMessageMetadata } from './message-metadata';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, QueryDeepPartialEntity } from 'typeorm';
@@ -9,8 +10,15 @@ import { MessageProjector } from '../session/message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
-import { resolveMediaBody } from './media-cap.util';
-import { MediaInput, IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
+import { assertBase64WithinMediaCap, resolveMediaBody, stripBase64DataUri } from './media-cap.util';
+import { LINK_PREVIEW_THUMBNAIL_MAX_BYTES } from '../../common/media/load-remote-media';
+import { isMediaUrl, MEDIA_URL_MESSAGE } from '../../common/media/media-url';
+import {
+  CustomLinkPreview,
+  MediaInput,
+  IWhatsAppEngine,
+  MessageResult,
+} from '../../engine/interfaces/whatsapp-engine.interface';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
 import { HookManager, applySendingGate } from '../../core/hooks';
 import { SendPacingService, SettleAdmission, countsTowardSendBreaker } from './send-pacing.service';
@@ -24,6 +32,7 @@ import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.servic
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
+import { MEDIA_MESSAGE_TYPES, OMITTED_MEDIA } from '../session/message-row.mapper';
 
 /** Default cap on a rendered template's final text; overridable via TEMPLATE_RENDER_MAX_CHARS. */
 export const DEFAULT_TEMPLATE_RENDER_MAX_CHARS = 64 * 1024;
@@ -110,12 +119,23 @@ export class MessageSendService {
     if (dto.linkPreview === false && dto.customLinkPreview) {
       throw new BadRequestException('linkPreview: false cannot be combined with customLinkPreview');
     }
-    const { message, finalDto, engine } = await this.applySendingGate(sessionId, 'text', dto, finalDto => ({
-      chatId: finalDto.chatId,
-      body: finalDto.text,
-      type: 'text',
-      quotedMessageId: finalDto.quotedMessageId,
-    }));
+    const {
+      message,
+      finalDto,
+      engine,
+      prepared: customPreview,
+    } = await this.applySendingGate(
+      sessionId,
+      'text',
+      dto,
+      finalDto => ({
+        chatId: finalDto.chatId,
+        body: finalDto.text,
+        type: 'text',
+        quotedMessageId: finalDto.quotedMessageId,
+      }),
+      (d: SendTextMessageDto) => this.buildCustomPreview(d.customLinkPreview),
+    );
 
     // Humanising "typing…" pause before the actual send (anti-automation signal). On by default;
     // SIMULATE_TYPING=false disables it.
@@ -127,11 +147,11 @@ export class MessageSendService {
       // nor a preview choice keeps its two-argument shape, and one with mentions alone keeps its
       // three — trailing `undefined`s would be harmless to the engines but would rewrite the call
       // shape of every existing send for no behavioural gain.
-      const { linkPreview, customLinkPreview, quotedMessageId } = finalDto;
-      if (linkPreview !== undefined || customLinkPreview || quotedMessageId) {
+      const { linkPreview, quotedMessageId } = finalDto;
+      if (linkPreview !== undefined || customPreview || quotedMessageId) {
         result = await engine.sendTextMessage(finalDto.chatId, finalDto.text, finalDto.mentions, {
           ...(linkPreview === undefined ? {} : { linkPreview }),
-          ...(customLinkPreview ? { customPreview: customLinkPreview } : {}),
+          ...(customPreview ? { customPreview } : {}),
           ...(quotedMessageId ? { quotedMessageId } : {}),
         });
       } else if (finalDto.mentions?.length) {
@@ -293,7 +313,7 @@ export class MessageSendService {
     const maxChars =
       this.configService?.get<number>('template.renderMaxChars', DEFAULT_TEMPLATE_RENDER_MAX_CHARS) ??
       DEFAULT_TEMPLATE_RENDER_MAX_CHARS;
-    let text: string;
+    let rendered: string[];
     try {
       const length =
         parts.reduce((sum, part) => sum + renderedLength(part, vars), 0) +
@@ -303,11 +323,15 @@ export class MessageSendService {
           `Rendered template is ${length} characters, over the ${maxChars}-character limit`,
         );
       }
-      text = parts.map(part => renderTemplate(part, vars)).join(separator);
+      rendered = parts.map(part => renderTemplate(part, vars));
     } catch (error) {
       if (error instanceof TemplateRenderError) throw new BadRequestException(error.message);
       throw error;
     }
+    // send-text refuses an empty text before anything is stored or sent; a render that leaves none is the same. Each
+    // part is tested, not the joined text: the separator between empty parts would make it non-empty.
+    if (rendered.every(part => !part)) throw new BadRequestException('Rendered template is empty');
+    const text = rendered.join(separator);
 
     return this.sendText(sessionId, {
       chatId: dto.chatId,
@@ -636,17 +660,27 @@ export class MessageSendService {
         button: { id: finalDto.buttonId, text: result.body },
       };
     }
-    return this.persistSentState(message, result, result.body ? { body: result.body } : undefined);
+    return this.persistSentState(
+      message,
+      result,
+      result.body
+        ? { body: result.body, metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>> }
+        : undefined,
+    );
   }
 
   async forward(
     sessionId: string,
     dto: { fromChatId: string; toChatId: string; messageId: string },
   ): Promise<MessageResponseDto> {
-    const { message, finalDto, engine } = await this.applySendingGate(sessionId, 'forward', dto, finalDto => ({
+    // The row carries what is forwarded: the own-send echo that also carries it loses the insert race to this
+    // row whenever the send path writes the engine id first, so a placeholder stored here stayed for good.
+    const { message, finalDto, engine } = await this.applySendingGate(sessionId, 'forward', dto, async finalDto => ({
       chatId: finalDto.toChatId,
-      body: '[Forwarded]',
-      type: 'forward',
+      ...((await this.storedForwardContent(sessionId, finalDto.fromChatId, finalDto.messageId)) ?? {
+        body: '[Forwarded]',
+        type: 'forward',
+      }),
     }));
 
     let result: MessageResult;
@@ -704,6 +738,46 @@ export class MessageSendService {
   }
 
   /**
+   * The type, text and media of the message a forward copies, from its row in `fromChatId` (any of the chat's
+   * phone, lid or group forms, as for a quote), or undefined when no such row is stored, it was revoked, or the
+   * read fails. A quote or mention it carried is not copied: the forwarded copy has neither. Media the source row
+   * holds no bytes for is stored as the omitted marker, as the echo and history paths store it, without an archive
+   * pointer that names the source row's file; it never replaces an echo's bytes (see mergeSentMetadata).
+   */
+  private async storedForwardContent(
+    sessionId: string,
+    fromChatId: string,
+    messageId: string,
+  ): Promise<Pick<SaveOutgoingMessageData, 'body' | 'type' | 'metadata'> | undefined> {
+    try {
+      const store = this.lidMappingStore;
+      const expanded = await resolveJidCandidates(
+        fromChatId,
+        store && {
+          resolveLid: lid => store.findPhoneForLid(lid),
+          lidsForPhone: phone => store.findLidsForPhone(phone),
+        },
+      );
+      const source = await this.messageRepository.findOne({
+        where: { sessionId, chatId: In([...new Set([fromChatId, ...expanded])]), waMessageId: messageId },
+      });
+      if (!source || source.type === 'revoked') return undefined;
+      const { media, poll } = (source.metadata ?? {}) as { media?: Record<string, unknown>; poll?: unknown };
+      let copied = typeof media?.data === 'string' && media.data ? media : undefined;
+      if (!copied && MEDIA_MESSAGE_TYPES.has(source.type)) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { data, archived, ...kept } = media ?? {};
+        copied = { ...OMITTED_MEDIA, ...kept, omitted: true };
+      }
+      const metadata = { ...(copied ? { media: copied } : {}), ...(poll ? { poll } : {}) };
+      return { type: source.type, body: source.body, metadata: Object.keys(metadata).length ? metadata : undefined };
+    } catch (err) {
+      this.logger.warn(`Failed to read forwarded message ${messageId}`, { error: String(err) });
+      return undefined;
+    }
+  }
+
+  /**
    * Save outgoing message to database.
    * When called before sending, creates a record with PENDING status; bulk send reuses this after a
    * successful send (status SENT) so batch messages are persisted like single sends.
@@ -740,7 +814,9 @@ export class MessageSendService {
         // every caller instead of relying on each to remember.
         waMessageId: data.waMessageId || undefined,
         chatId: data.chatId,
-        from: session?.phone || 'me',
+        // The account's JID, the form the engines' own-send echo stores for the same message; 'me' only while the
+        // session has no number to name it by.
+        from: session?.phone ? `${session.phone}@c.us` : 'me',
         to: data.chatId,
         body: data.body,
         type: data.type,
@@ -859,7 +935,9 @@ export class MessageSendService {
     result: MessageResult,
     // Columns a sender changed in memory after its PENDING insert. The write below is an UPDATE of
     // fixed columns, so anything not listed here (the resolved button label, for one) is never stored.
-    changed: Pick<QueryDeepPartialEntity<Message>, 'body'> = {},
+    // `metadata` is listed only when it changed: the insert already stored it, and a base64 media
+    // payload inside it would otherwise be written a second time on every send.
+    changed: Pick<QueryDeepPartialEntity<Message>, 'body' | 'metadata'> = {},
   ): Promise<MessageResponseDto> {
     // A send whose engine couldn't read the sent message's id back reports an empty id — a forward that
     // can't recover the copy, or a WhatsApp Web build that renamed the id field out from under the
@@ -872,16 +950,26 @@ export class MessageSendService {
     message.timestamp = result.timestamp;
     try {
       // No transaction of its own, for the reason given at the first save of this message.
-      const updated = await this.messageRepository.update(
-        { id: message.id, sessionId: message.sessionId },
-        {
-          ...changed,
-          waMessageId: message.waMessageId,
-          status: message.status,
-          timestamp: message.timestamp,
-          metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>>,
-        },
+      const sent: QueryDeepPartialEntity<Message> = {
+        ...changed,
+        waMessageId: message.waMessageId,
+        status: message.status,
+        timestamp: message.timestamp,
+      };
+      // Guarded on the row still being PENDING, so the common write carries no metadata. A row the pending
+      // reaper failed while the engine was still answering has lost its media payload and gained a marker:
+      // it is written again, unguarded, with the metadata the insert stored. No row at all means the
+      // session was deleted under this send.
+      let updated = await this.messageRepository.update(
+        { id: message.id, sessionId: message.sessionId, status: MessageStatus.PENDING },
+        sent,
       );
+      if (!updated.affected) {
+        updated = await this.messageRepository.update(
+          { id: message.id, sessionId: message.sessionId },
+          { ...sent, metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>> },
+        );
+      }
       if (!updated.affected) return { messageId: result.id, timestamp: result.timestamp };
       // Reconcile the earlier PENDING emission with the finalized row (#906).
       this.emitPersisted(message.sessionId, message);
@@ -988,7 +1076,7 @@ export class MessageSendService {
       const maxMs = simulateTypingMaxMs;
       const planned = Math.min(maxMs, 500 + text.length * 45);
       const jittered = Math.round(planned * (0.85 + Math.random() * 0.3)); // ±15% so it isn't metronomic
-      await new Promise(resolve => setTimeout(resolve, jittered));
+      await new Promise(resolve => setTimeout(resolve, Math.min(maxMs, jittered)));
     } catch (error) {
       this.logger.warn(`simulateTyping skipped: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -999,11 +1087,12 @@ export class MessageSendService {
    * caller-supplied internal/unsafe URL returns a client error instead of a 500.
    * The raw guard message names the resolved internal IP (a recon/DNS-rebind oracle), so return a
    * generic message to the client and keep the detail in the server log only. Others pass through.
+   * The guard refuses before any fetch, so the replacement keeps the proof that nothing was sent.
    */
   private toClientFacingError(error: unknown): unknown {
     if (error instanceof SsrfBlockedError) {
       this.logger.warn(`Outbound media fetch blocked by SSRF guard: ${error.message}`);
-      return new BadRequestException(SSRF_BLOCKED_CLIENT_MESSAGE);
+      return markNothingSent(new BadRequestException(SSRF_BLOCKED_CLIENT_MESSAGE));
     }
     return error;
   }
@@ -1022,5 +1111,29 @@ export class MessageSendService {
       mentions: dto.mentions,
       quotedMessageId: dto.quotedMessageId,
     };
+  }
+
+  /**
+   * The custom preview the engine is handed. Its image is checked here, before the PENDING row, as a
+   * media body is: base64 loses a data: prefix and wins over a URL, an oversized one is a 413, and a URL
+   * that is not http(s) is a 400. The MCP tool reaches this without the ValidationPipe, so the DTO's
+   * rules alone would not hold there.
+   */
+  private buildCustomPreview(preview: SendTextMessageDto['customLinkPreview']): CustomLinkPreview | undefined {
+    if (!preview) return undefined;
+    const { thumbnailUrl, thumbnailBase64, ...metadata } = preview;
+    const base64 = stripBase64DataUri(thumbnailBase64);
+    if (base64) {
+      assertBase64WithinMediaCap(base64, LINK_PREVIEW_THUMBNAIL_MAX_BYTES);
+      return { ...metadata, thumbnailBase64: base64 };
+    }
+    // A null passes the DTO's @IsOptional, so it means absent here too.
+    if (thumbnailUrl != null) {
+      if (!isMediaUrl(thumbnailUrl)) {
+        throw new BadRequestException(`customLinkPreview.thumbnailUrl: ${MEDIA_URL_MESSAGE}`);
+      }
+      return { ...metadata, thumbnailUrl };
+    }
+    return metadata;
   }
 }

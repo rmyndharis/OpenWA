@@ -38,6 +38,8 @@
     "optional": "optional",
     "fieldTooLong": "Auf {{max}} Zeichen begrenzt (aktuell {{count}}).",
     "language": "Sprache",
+    "changeLanguage": "Sprache ändern",
+    "joinedName": "{{first}}, {{second}}",
     "back": "Zurück",
     "next": "Weiter",
     "previous": "Zurück",
@@ -171,6 +173,16 @@
       "backgroundColor": "Hintergrundfarbe",
       "font": "Schriftart",
       "fontDefault": "Standard",
+      "fonts": {
+        "system": "System",
+        "systemText": "Systemtext",
+        "script": "Schreibschrift",
+        "bold": "Fett",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "oder",
       "post": "Posten",
       "posted": "Status gepostet",
@@ -193,7 +205,8 @@
       "delete": "Nachricht konnte nicht gelöscht werden",
       "clickButton": "Schaltfläche konnte nicht angeklickt werden",
       "fileTooLarge": "Die Datei ist zu groß (max. 18 MB)",
-      "searchHitSessionNotReady": "Die Sitzung dieser Nachricht ist nicht verbunden"
+      "searchHitSessionNotReady": "Die Sitzung dieser Nachricht ist nicht verbunden",
+      "searchHitChatNotListed": "Der Chat dieser Nachricht wurde in der Liste nicht gefunden"
     },
     "loadMessagesError": "Nachrichten konnten nicht geladen werden. Prüfe die Serverprotokolle.",
     "messageStatus": {
@@ -203,6 +216,9 @@
       "read": "Gelesen",
       "failed": "Fehlgeschlagen"
     },
+    "today": "Heute",
+    "switchSession": "Sitzung wechseln",
+    "searchMessages": "Nachrichten durchsuchen",
     "clearSearch": "Suche leeren",
     "filters": {
       "label": "Chats filtern",
@@ -213,11 +229,13 @@
       "unknown": "Unbekannt"
     },
     "noFilterResults": "Keine Chats für diesen Filter",
+    "contactInfo": "Kontaktinfo",
     "moreActions": "Weitere Aktionen",
     "copyChatId": "Chat-ID kopieren",
     "chatIdCopied": "Chat-ID kopiert",
     "copyFailed": "Kopieren in die Zwischenablage fehlgeschlagen",
     "closeChat": "Chat schließen",
+    "phone": "Telefonnummer",
     "chatId": "Chat-ID",
     "newChat": {
       "title": "Neuer Chat",
@@ -242,6 +260,12 @@
       "created": "Gruppe „{{name}}“ erstellt",
       "createFailed": "Gruppe konnte nicht erstellt werden",
       "removeParticipant": "{{name}} entfernen"
+    },
+    "sessionPicker": {
+      "searchPlaceholder": "Sitzung suchen...",
+      "noMatch": "Keine passende Sitzung",
+      "addTitle": "Weitere Nummer koppeln",
+      "addHint": "Sitzung anlegen und per QR-Code verbinden"
     },
     "group": {
       "info": "Gruppeninfo",
@@ -526,14 +550,14 @@
     "unlink": {
       "title": "Gerät trennen",
       "message": "Sitzung <strong>\"{{name}}\"</strong> vom WhatsApp-Konto trennen?",
-      "warning": "WhatsApp entfernt dieses Gerät aus den verknüpften Geräten des Kontos und die Sitzung wird beendet. Für eine erneute Verbindung ist ein neuer QR-Code oder Kopplungscode erforderlich. Um auch alle lokalen Daten zu löschen, löschen Sie die Sitzung anschließend.",
+      "warning": "WhatsApp entfernt dieses Gerät aus den verknüpften Geräten des Kontos und die Sitzung wird beendet. Für eine erneute Verbindung ist ein neuer QR-Code oder Kopplungscode erforderlich. Um auch alle lokalen Daten zu löschen, lösche die Sitzung anschließend.",
       "confirm": "Trennen",
       "successTitle": "Gerät getrennt",
       "success": "Trennung abgeschlossen: Das Gerät wurde abgemeldet und die lokalen Sitzungsdaten wurden gelöscht. Zum erneuten Verbinden ist ein neuer QR-Scan oder Kopplungscode erforderlich.",
       "failedTitle": "Trennen fehlgeschlagen",
       "failed": "Die Sitzung konnte nicht getrennt werden.",
       "incompleteTitle": "Trennung unvollständig",
-      "incomplete": "Die Sitzung wurde lokal beendet, aber der Abmeldevorgang ist unvollständig — das Gerät ist möglicherweise noch verknüpft. Starten Sie die Sitzung und wiederholen Sie die Trennung."
+      "incomplete": "Die Sitzung wurde lokal beendet, aber der Abmeldevorgang ist unvollständig — das Gerät ist möglicherweise noch verknüpft. Starte die Sitzung und wiederhole die Trennung."
     },
     "pairing": {
       "tabQr": "QR-Code",
@@ -556,7 +580,7 @@
     },
     "start": {
       "teardownPendingTitle": "Sitzung wird gestartet",
-      "teardownPending": "Ein Anmeldedatenabbau für diese Sitzung läuft noch. Warten Sie einen Moment und versuchen Sie es erneut.",
+      "teardownPending": "Ein Anmeldedatenabbau für diese Sitzung läuft noch. Warte einen Moment und versuche es erneut.",
       "errorTitle": "Start fehlgeschlagen"
     },
     "restriction": {
@@ -578,6 +602,7 @@
     "session": "Sitzung",
     "events": "Ereignisse",
     "noEvents": "Wähle mindestens ein Ereignis aus.",
+    "urlInvalid": "Gib eine vollständige http://- oder https://-Adresse ein, z. B. https://example.com/webhook.",
     "available": "Verfügbare Ereignisse",
     "saveChanges": "Änderungen speichern",
     "filters": {
@@ -588,6 +613,7 @@
       "badge_other": "{{count}} Filter",
       "addCondition": "Bedingung hinzufügen",
       "removeCondition": "Bedingung entfernen",
+      "removeValue": "{{value}} entfernen",
       "caseSensitive": "Groß-/Kleinschreibung beachten",
       "contactPlaceholder": "Nummer oder WhatsApp-ID...",
       "textPlaceholder": "Abzugleichender Text...",
@@ -637,6 +663,7 @@
       "updateFailed": "Webhook konnte nicht aktualisiert werden: {{message}}",
       "testOk": "Webhook-Test erfolgreich! Status: {{status}}",
       "testFailed": "Webhook-Test fehlgeschlagen: {{message}}",
+      "testStatus": "der Empfänger antwortete mit HTTP {{status}}",
       "testError": "Webhook konnte nicht getestet werden: {{message}}"
     },
     "actions": {
@@ -648,7 +675,7 @@
       "message.received": "Wenn eine Nachricht empfangen wird",
       "message.sent": "Wenn eine Nachricht gesendet wird",
       "message.ack": "Wenn sich der Zustell- oder Lesestatus einer Nachricht ändert",
-      "message.receipt": "Jeder Empfänger, der eine von Ihnen gesendete Gruppen- oder Statusnachricht erhält, liest oder abspielt (nur Baileys; nicht in * enthalten)",
+      "message.receipt": "Jeder Empfänger, der eine von dir gesendete Gruppen- oder Statusnachricht erhält, liest oder abspielt (nur Baileys; nicht in * enthalten)",
       "message.failed": "Wenn eine ausgehende Nachricht nicht zugestellt werden kann",
       "message.revoked": "Wenn eine Nachricht für alle gelöscht wird",
       "message.reaction": "Wenn eine Reaktion hinzugefügt, geändert oder entfernt wird",
@@ -661,6 +688,7 @@
       "session.restriction": "Wenn WhatsApp das Konto einschränkt oder eine Einschränkung aufhebt",
       "presence.update": "Wenn ein abonnierter Chat online geht, tippt oder offline geht",
       "event.response": "Wenn ein Gast auf eine WhatsApp-Veranstaltung antwortet (Zusage, Absage, Vielleicht)",
+      "poll.vote": "Wenn jemand bei einer Umfrage Optionen auswählt oder abwählt (whatsapp-web.js)",
       "group.join": "Wenn Teilnehmer einer Gruppe beitreten oder hinzugefügt werden",
       "group.leave": "Wenn Teilnehmer eine Gruppe verlassen oder entfernt werden",
       "group.update": "Wenn sich Name, Beschreibung oder Einstellungen einer Gruppe ändern",
@@ -670,7 +698,7 @@
       "call.rejected": "Wenn ein Anruf abgelehnt wird",
       "call.missed": "Wenn ein Anruf unbeantwortet bleibt",
       "status.received": "Wenn ein Kontakt einen Status veröffentlicht",
-      "all": "Alle Ereignisse"
+      "all": "Alle Ereignisse außer message.receipt, das ausdrücklich genannt werden muss"
     },
     "auth": {
       "title": "Zustellungsauthentifizierung",
@@ -757,6 +785,7 @@
     "modalTitle": "API-Schlüssel erstellen",
     "createdTitle": "API-Schlüssel erstellt",
     "createdHint": "Kopiere diesen Schlüssel jetzt. Du kannst ihn später nicht erneut anzeigen.",
+    "copyKey": "Schlüssel kopieren",
     "namePlaceholder": "z. B. Produktionsschlüssel",
     "nameTooShort": "Verwende mindestens 3 Zeichen.",
     "rolesTitle": "Rollenübersicht",
@@ -807,7 +836,7 @@
     },
     "sessions": {
       "label": "Sitzungszugriff",
-      "hint": "Wählen Sie die Sitzungen, die dieser Schlüssel nutzen darf.",
+      "hint": "Wähle die Sitzungen, die dieser Schlüssel nutzen darf.",
       "all": "Alle Sitzungen",
       "empty": "Noch keine Sitzungen. Dieser Schlüssel kann auf alle zugreifen, sobald welche existieren.",
       "restricted": "{{count}} ausgewählt",
@@ -834,6 +863,7 @@
     "chats": {
       "label": "Chat-Zugriff (optional)",
       "hint": "Ein Chat pro Zeile: eine Gruppen-ID mit @g.us, eine Kontakt-ID mit @c.us oder @lid oder eine Telefonnummer. Leer lassen für alle Chats. Ein auf Chats beschränkter Schlüssel kann nur die für solche Schlüssel freigegebenen Routen nutzen; sein Zugriff über den Events-WebSocket und MCP bleibt auf diese Chats beschränkt.",
+      "lidHint": "Ein @lid-Eintrag lässt auch die Telefonnummer zu, die ihm gerade zugeordnet ist. Geht diese Nummer an jemand anderen über, erreicht dieser Schlüssel auch diese Person: Prüfe den Schlüssel, wenn ein Kontakt seine Nummer wechselt.",
       "invalid": "Keine Chat-ID und keine Telefonnummer: {{value}}",
       "tooMany": "Zu viele Chats ({{count}}): Ein Schlüssel darf höchstens {{max}} auflisten."
     },
@@ -971,6 +1001,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} gesendet",
     "groupSendCancelled": "{{count}}, abgebrochen",
     "groupSendStopped": "{{count}}, gestoppt nach HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, gestoppt: das Gateway hat nicht geantwortet",
     "response": {
       "timestamp": "Zeitstempel",
       "messageId": "Nachrichten-ID",
@@ -981,6 +1012,7 @@
     },
     "sendFailed": "Nachricht konnte nicht gesendet werden",
     "notOnWhatsApp": "Diese Nummer ist nicht bei WhatsApp registriert",
+    "tooLong": "Mehr als {{max}} Ziffern sind keine einzelne Telefonnummer. Gib eine Nummer ein.",
     "batch": {
       "status": {
         "pending": "Ausstehend",
@@ -1014,9 +1046,10 @@
     "single": {
       "title": "Einzelnes Konto prüfen",
       "phoneLabel": "Telefonnummer",
-      "phonePlaceholder": "z. B. 919876543210 oder 6281234567890 (mit Ländervorwahl)",
+      "phonePlaceholder": "z. B. 919876543210 oder 6281234567890",
       "check": "Prüfen",
       "checking": "Wird geprüft...",
+      "tooLong": "Mehr als {{max}} Ziffern sind keine einzelne Telefonnummer. Prüfe jeweils eine Nummer.",
       "autoPrefix": "<strong>+91</strong> bei 10-stelligen Nummern automatisch voranstellen (12-stellige Nummern bleiben unverändert)",
       "silent": "<strong>Völlig unbemerkt:</strong> Diese Abfrage geht direkt an das Registrierungsverzeichnis von WhatsApp. Der Kontakt erhält keine Benachrichtigung, keinen Ton und keine Nachricht.",
       "resultTitle": "Prüfergebnis",
@@ -1045,7 +1078,7 @@
       "copy": "Kopieren",
       "copied": "Kopiert",
       "checkedAt": "Geprüft um",
-      "openTester": "Im Nachrichtentester öffnen"
+      "openTester": "Zum Nachrichtentester"
     },
     "recent": {
       "title": "Letzte Prüfungen",
@@ -1079,9 +1112,11 @@
       "tenDigitAdded": "({{ten}} zehnstellige → +91 ergänzt)",
       "tenDigitAddedPreserved": "({{ten}} zehnstellige → +91 ergänzt, {{twelve}} zwölfstellige unverändert)",
       "tooMany": "Zu viele Nummern: {{parsed}} erkannt, höchstens {{max}} pro Durchlauf. Entferne {{excess}} davon, um zu starten.",
+      "tooLong": "Ausgelassen, mehr als {{max}} Ziffern (keine einzelne Nummer): {{count}}. Jede Nummer in eine eigene Zeile.",
       "start": "Batch-Prüfung starten",
       "stop": "Prüfung stoppen",
       "export": "Ergebnisse exportieren (CSV)",
+      "exportHint": "Die Datei enthält jede Ziffer. Eine Tabellenkalkulation zeigt lange Nummern eventuell als 9.19612E+11 an oder entfernt eine führende Null; importiere die Datei und stelle die Spalte Phone Number auf Text, damit die Nummern unverändert bleiben.",
       "stoppedTitle": "Batch gestoppt",
       "checked": "Geprüft",
       "remaining": "Verbleibend",
@@ -1094,6 +1129,7 @@
       "reasonOther": "Das Gateway hat eine Abfrage abgelehnt",
       "partial": "{{reason}} (HTTP {{status}}). Gestoppt bei Nummer {{attempted}} von {{total}}; {{count}} Nummer wurde nicht geprüft. Versuche es später erneut.",
       "partial_other": "{{reason}} (HTTP {{status}}). Gestoppt bei Nummer {{attempted}} von {{total}}; {{count}} Nummern wurden nicht geprüft. Versuche es später erneut.",
+      "noAnswer": "Das Gateway hat nicht geantwortet. Gestoppt bei Nummer {{attempted}} von {{total}}. Versuche es später erneut.",
       "last": "{{reason}} (HTTP {{status}}). Die letzte Abfrage ist fehlgeschlagen. Versuche es später erneut."
     },
     "toast": {
@@ -1192,7 +1228,10 @@
       "disabled": "Deaktiviert"
     },
     "envPinNote": "Durch die Umgebungsvariable {{name}} festgelegt — dies ist der aktuell verwendete Wert. Änderungen im Dashboard werden erst wirksam, wenn diese Variable entfernt wird.",
-    "pendingRestartNote": "Gespeichert, aber noch nicht übernommen — starten Sie den Server neu, damit diese Änderung wirksam wird.",
+    "envPinFlagNote": "Durch die Umgebungsvariable {{name}} festgelegt: Solange sie auf true steht und dieser Dienst verwendet wird, startet der integrierte Container bei jedem Serverstart, auch wenn dieser Schalter aus ist.",
+    "pendingRestartNote": "Gespeichert, aber noch nicht übernommen — starte den Server neu, damit diese Änderung wirksam wird.",
+    "pendingBuiltInNote": "Gespeichert, aber noch nicht übernommen: Der Server läuft derzeit mit einem externen Dienst, ein Neustart wechselt zum integrierten Container.",
+    "pendingExternalNote": "Gespeichert, aber noch nicht übernommen: Der Server läuft derzeit mit dem integrierten Container, ein Neustart wechselt zu einem externen Dienst.",
     "migration": {
       "title": "Achtung — dadurch wird das Daten-Backend geändert",
       "dbWarning": "Die neue Datenbank ist zunächst leer. Lade jetzt eine Sicherung deiner aktuellen Daten herunter, solange noch die alte Datenbank aktiv ist, und stelle sie nach dem Neustart wieder her.",
@@ -1218,6 +1257,7 @@
       "successTitle": "Server bereit",
       "errorTitle": "Neustart fehlgeschlagen",
       "idleDesc": "Die Konfiguration wurde in <code>.env.generated</code> gespeichert.<br/>Ein Serverneustart ist erforderlich, um die Änderungen anzuwenden.",
+      "stopsContainers": "Der Neustart stoppt außerdem diese integrierten Container, die mit ihren Daten erhalten bleiben und nicht gelöscht werden:",
       "later": "Später neu starten",
       "now": "Jetzt neu starten",
       "restartingMsg": "Server wird neu gestartet... {{count}} s",
@@ -1285,8 +1325,8 @@
       "trustWarning": "Plugins laufen mit den vollen Prozessrechten des Gateways — die Sandbox fängt Abstürze ab, keinen Schadcode. Installiere nur Plugins, denen du vertraust.",
       "choose": "ZIP-Datei auswählen…",
       "tooLarge": "Die Datei überschreitet das Limit von 5 MB.",
-      "catalogHint": "Installieren Sie direkt aus dem OpenWA-Plugin-Katalog. Die .zip-Datei wird serverseitig durch den SSRF-Schutz abgerufen, dann validiert und in einer Sandbox ausgeführt.",
-      "catalogTeaser": "Sie suchen Plugins?",
+      "catalogHint": "Installiere direkt aus dem OpenWA-Plugin-Katalog. Die .zip-Datei wird serverseitig durch den SSRF-Schutz abgerufen, dann validiert und in einer Sandbox ausgeführt.",
+      "catalogTeaser": "Suchst du Plugins?",
       "catalogTeaserSuffix": "durchstöbert den offiziellen Marktplatz.",
       "tabCatalog": "Katalog",
       "tabUpload": ".zip hochladen"
@@ -1303,6 +1343,7 @@
       "installed": "Plugin installiert",
       "installFailed": "Installation fehlgeschlagen",
       "uninstalled": "Plugin deinstalliert",
+      "uninstalledWithWarning": "Plugin deinstalliert, mit Warnung",
       "uninstallFailed": "Deinstallation fehlgeschlagen",
       "enableFailedTitle": "Aktivierung fehlgeschlagen",
       "disableFailedTitle": "Deaktivierung fehlgeschlagen",
@@ -1394,7 +1435,7 @@
       "install": "Installieren",
       "installed": "Installiert",
       "noDownload": "Dieser Katalogeintrag hat keine Download-URL.",
-      "noMatch": "Keine Plugins entsprechen Ihrer Suche.",
+      "noMatch": "Keine Plugins entsprechen deiner Suche.",
       "searchPlaceholder": "Plugins suchen…",
       "update": "Aktualisieren",
       "updateAvailable": "Update verfügbar",

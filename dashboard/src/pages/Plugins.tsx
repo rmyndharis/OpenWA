@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localizePlugin } from '../utils/localizePlugin';
 import { configUiSafeConfig, missingRequiredConfig, sparseSessionOverride } from '../utils/pluginConfigRules';
@@ -201,7 +201,7 @@ function ConfigField({
           minLength={field.min}
           maxLength={field.max}
           rows={4}
-          onChange={e => onChange(e.target.value)}
+          onChange={e => onChange(coerceFieldInput(field, e.target.value))}
         />
         {desc}
       </div>
@@ -225,7 +225,8 @@ function ConfigField({
         step={field.type === 'number' ? 'any' : undefined}
         minLength={field.type !== 'number' ? field.min : undefined}
         maxLength={field.type !== 'number' ? field.max : undefined}
-        pattern={field.type !== 'number' ? field.pattern : undefined}
+        // A stored secret reads back as the mask '***', which no pattern describes: it is only checked once typed over.
+        pattern={field.type !== 'number' && !(field.secret && value === '***') ? field.pattern : undefined}
         onChange={e => onChange(coerceFieldInput(field, e.target.value))}
       />
       {desc}
@@ -586,12 +587,50 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
   );
 }
 
+/**
+ * The remote catalog and its read. The mount prefetch can still be in flight when a later read starts (an install or
+ * an uninstall changes the installed flags), so only the latest read may publish: an older answer finishing after it
+ * would put back flags from before.
+ */
+function useCatalog() {
+  const [catalog, setCatalog] = useState<CatalogPlugin[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const latestRead = useRef(0);
+
+  const loadCatalog = useCallback(async () => {
+    const read = ++latestRead.current;
+    setCatalogLoading(true);
+    setCatalogError(null);
+    try {
+      const entries = await pluginsApi.catalog();
+      if (read === latestRead.current) setCatalog(entries);
+    } catch (err) {
+      // The error renders only inside the Catalog tab, next to a Refresh button, so a failed
+      // page-mount prefetch stays quiet on the page itself (it just means no update chips). It
+      // must still be recorded: a tab opened while that prefetch was in flight would otherwise
+      // settle on "No plugins in the catalog." with no way to retry.
+      if (read === latestRead.current) setCatalogError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (read === latestRead.current) setCatalogLoading(false);
+    }
+  }, []);
+
+  return { catalog, catalogLoading, catalogError, loadCatalog };
+}
+
 export default function Plugins() {
   const { t, i18n } = useTranslation();
   useDocumentTitle(t('plugins.title'));
   const toast = useToast();
   const queryClient = useQueryClient();
-  const { data: plugins = [], isLoading: loadingPlugins, error: queryError } = usePluginsQuery();
+  const {
+    data: plugins = [],
+    isLoading: loadingPlugins,
+    error: queryError,
+    // A read that never produced a list says nothing about what is installed. A failed refetch keeps its data.
+    isLoadingError: neverLoaded,
+  } = usePluginsQuery();
   const loading = loadingPlugins;
   const error = queryError instanceof Error ? queryError.message : null;
   // Ids of plugins with a lifecycle action in flight. One per plugin, so another plugin's action
@@ -619,9 +658,7 @@ export default function Plugins() {
   const [installFile, setInstallFile] = useState<File | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installMode, setInstallMode] = useState<'upload' | 'catalog'>('upload');
-  const [catalog, setCatalog] = useState<CatalogPlugin[]>([]);
-  const [catalogLoading, setCatalogLoading] = useState(false);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const { catalog, catalogLoading, catalogError, loadCatalog } = useCatalog();
   const [catalogSearch, setCatalogSearch] = useState('');
   const [installingId, setInstallingId] = useState<string | null>(null);
 
@@ -749,22 +786,6 @@ export default function Plugins() {
     }
   };
 
-  const loadCatalog = async () => {
-    setCatalogLoading(true);
-    setCatalogError(null);
-    try {
-      setCatalog(await pluginsApi.catalog());
-    } catch (err) {
-      // The error renders only inside the Catalog tab, next to a Refresh button, so a failed
-      // page-mount prefetch stays quiet on the page itself (it just means no update chips). It
-      // must still be recorded: a tab opened while that prefetch was in flight would otherwise
-      // settle on "No plugins in the catalog." with no way to retry.
-      setCatalogError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCatalogLoading(false);
-    }
-  };
-
   // Load the catalog when the Catalog tab opens with nothing to show: the first time, or again
   // after an earlier load failed.
   useEffect(() => {
@@ -778,7 +799,7 @@ export default function Plugins() {
   // user having to open the Install drawer first. An unreachable catalog just hides the chips.
   useEffect(() => {
     void loadCatalog();
-  }, []);
+  }, [loadCatalog]);
 
   // Catalog entries with a strictly newer version than the installed one, keyed by plugin id —
   // drives both the per-card update chip and the counter on the Install button.
@@ -833,10 +854,25 @@ export default function Plugins() {
     if (!window.confirm(t('plugins.uninstallConfirm', { name: localizePlugin(plugin, i18n.language).name }))) return;
     startAction(plugin.id);
     try {
-      await pluginsApi.uninstall(plugin.id);
+      const res = await pluginsApi.uninstall(plugin.id);
       refetchAll();
       void loadCatalog();
-      toast.success(t('plugins.toasts.uninstalled', 'Plugin uninstalled'), localizePlugin(plugin, i18n.language).name);
+      // The server ships with this page, so any answer but its plain one reports work left behind (a registry entry
+      // the uninstall could not drop), and with the card gone the answer is all that is left to say so. It stays until
+      // closed: it names the call left to make, and is too long to read before a timed toast leaves.
+      if (res.message === `Plugin ${plugin.id} uninstalled successfully`) {
+        toast.success(
+          t('plugins.toasts.uninstalled', 'Plugin uninstalled'),
+          localizePlugin(plugin, i18n.language).name,
+        );
+      } else {
+        toast.addToast({
+          type: 'warning',
+          title: t('plugins.toasts.uninstalledWithWarning'),
+          message: res.message,
+          duration: 0,
+        });
+      }
     } catch (err) {
       toast.error(t('plugins.toasts.uninstallFailed', 'Uninstall failed'), err instanceof Error ? err.message : '');
     } finally {
@@ -896,18 +932,18 @@ export default function Plugins() {
         <aside className="plugins-rail">
           <div className="rail-stats">
             <div className="rail-stat">
-              <span className="rail-stat-num">{enabledCount}</span>
+              <span className="rail-stat-num">{neverLoaded ? '-' : enabledCount}</span>
               <span className="rail-stat-label">{t('plugins.rail.enabled', 'enabled')}</span>
             </div>
             <div className="rail-stat">
-              <span className="rail-stat-num">{visiblePlugins.length}</span>
+              <span className="rail-stat-num">{neverLoaded ? '-' : visiblePlugins.length}</span>
               <span className="rail-stat-label">{t('plugins.rail.installed', 'installed')}</span>
             </div>
           </div>
 
           <div className="rail-section">
             <p className="rail-label">{t('plugins.rail.active', 'Active plugins')}</p>
-            {activePlugins.length === 0 ? (
+            {neverLoaded ? null : activePlugins.length === 0 ? (
               <p className="rail-empty">{t('plugins.rail.none', 'None enabled yet')}</p>
             ) : (
               <ul className="rail-active-list">
@@ -923,7 +959,7 @@ export default function Plugins() {
           </div>
         </aside>
 
-        <main className="plugins-main">
+        <div className="plugins-main">
           <div className="plugins-grid">
             {visiblePlugins.map(plugin => {
               const TypeIcon = pluginTypeIcons[plugin.type as PluginType] || Puzzle;
@@ -945,7 +981,10 @@ export default function Plugins() {
                             type="button"
                             className="plugin-update-chip"
                             title={`${t('plugins.catalog.updateAvailable', 'Update available')} (v${plugin.version} → v${updatesById.get(plugin.id)!.version})`}
-                            aria-label={t('plugins.catalog.updateAvailable', 'Update available')}
+                            aria-label={t('common.joinedName', {
+                              first: `v${updatesById.get(plugin.id)!.version}`,
+                              second: t('plugins.catalog.updateAvailable', 'Update available'),
+                            })}
                             onClick={() => {
                               // Land the user directly on this plugin's catalog entry, where the
                               // existing Update button (and its confirmation flow) lives.
@@ -1047,10 +1086,10 @@ export default function Plugins() {
               );
             })}
           </div>
-        </main>
+        </div>
       </div>
 
-      {visiblePlugins.length === 0 && !loading && (
+      {visiblePlugins.length === 0 && !loading && !neverLoaded && (
         <div className="empty-state">
           <Puzzle size={64} />
           <h3>{t('plugins.empty.title')}</h3>
@@ -1066,14 +1105,18 @@ export default function Plugins() {
           className="install-modal"
           closeLabel={t('common.close')}
           headerExtra={
-            <div className="install-tabs">
+            <div className="install-tabs" role="tablist">
               <button
+                role="tab"
+                aria-selected={installMode === 'upload'}
                 className={`install-tab${installMode === 'upload' ? ' active' : ''}`}
                 onClick={() => setInstallMode('upload')}
               >
                 <Upload size={15} /> {t('plugins.installModal.tabUpload', 'Upload .zip')}
               </button>
               <button
+                role="tab"
+                aria-selected={installMode === 'catalog'}
                 className={`install-tab${installMode === 'catalog' ? ' active' : ''}`}
                 onClick={() => setInstallMode('catalog')}
               >
@@ -1124,7 +1167,6 @@ export default function Plugins() {
                 <input
                   type="file"
                   accept=".zip,application/zip"
-                  hidden
                   onChange={e => setInstallFile(e.target.files?.[0] ?? null)}
                 />
                 <Upload size={28} />
@@ -1272,8 +1314,10 @@ export default function Plugins() {
               closeLabel={t('common.close')}
               subheader={
                 showTabs ? (
-                  <div className="modal-tabs">
+                  <div className="modal-tabs" role="tablist">
                     <button
+                      role="tab"
+                      aria-selected={configTab === 'config'}
                       className={`modal-tab ${configTab === 'config' ? 'active' : ''}`}
                       onClick={() => setConfigTab('config')}
                     >
@@ -1281,6 +1325,8 @@ export default function Plugins() {
                     </button>
                     {configPlugin.sessionScoped !== false && (
                       <button
+                        role="tab"
+                        aria-selected={configTab === 'sessions'}
                         className={`modal-tab ${configTab === 'sessions' ? 'active' : ''}`}
                         onClick={() => setConfigTab('sessions')}
                       >
@@ -1289,6 +1335,8 @@ export default function Plugins() {
                     )}
                     {configPlugin.ingressCapable && (
                       <button
+                        role="tab"
+                        aria-selected={configTab === 'instances'}
                         className={`modal-tab ${configTab === 'instances' ? 'active' : ''}`}
                         onClick={() => setConfigTab('instances')}
                       >

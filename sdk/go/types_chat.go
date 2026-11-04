@@ -41,9 +41,9 @@ type SubscribePresenceRequest struct {
 type MarkChatReadRequest struct {
 	ChatID string `json:"chatId"`
 	// MessageIDs are the messages to acknowledge (at most 100; an empty list is refused). Baileys
-	// acknowledges individual messages, so without this only the newest received message the
-	// engine still holds in memory gets a receipt. Ignored by whatsapp-web.js, whose own sendSeen
-	// is chat-level.
+	// acknowledges individual messages, so without this only the newest received message gets a
+	// receipt: the one the engine holds in memory, else the newest received one the gateway
+	// stored. Ignored by whatsapp-web.js, whose own sendSeen is chat-level.
 	//
 	// A POINTER because the three states differ on the wire and a plain slice cannot tell two of
 	// them apart: nil omits the key (acknowledge the newest), &[]string{} sends [] (the server

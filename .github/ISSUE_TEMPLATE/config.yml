@@ -3,6 +3,9 @@ contact_links:
   - name: 📚 Documentation
     url: https://github.com/rmyndharis/OpenWA/tree/main/docs
     about: Setup, API specification, and operational guides.
+  - name: 💬 Questions and setup help
+    url: https://github.com/rmyndharis/OpenWA/discussions
+    about: Configuration, provider, hosting, and "is X possible?" questions belong in Discussions.
   - name: 🔒 Report a security vulnerability
     url: https://github.com/rmyndharis/OpenWA/security/advisories/new
     about: Please report vulnerabilities privately — not as a public issue.

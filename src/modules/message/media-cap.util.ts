@@ -20,13 +20,15 @@ export function stripBase64DataUri(base64: string | null | undefined): string | 
  *
  * `Buffer.byteLength(_, 'base64')` derives the decoded length from the string length and padding, so
  * the check never allocates the decoded buffer (no +33% heap copy of an oversized payload).
+ *
+ * `capBytes` lowers the cap for a field that needs less (a link preview's thumbnail); it only tightens.
  */
-export function assertBase64WithinMediaCap(base64: string | null | undefined): void {
+export function assertBase64WithinMediaCap(base64: string | null | undefined, capBytes?: number): void {
   const normalized = stripBase64DataUri(base64);
   if (!normalized) {
     return;
   }
-  const maxBytes = inboundMediaMaxBytes();
+  const maxBytes = Math.min(capBytes ?? Number.POSITIVE_INFINITY, inboundMediaMaxBytes());
   if (Buffer.byteLength(normalized, 'base64') > maxBytes) {
     // 413 Payload Too Large, matching the documented MESSAGE_MEDIA_TOO_LARGE error code — distinct
     // from a generic 400 so clients can handle an oversized media payload specifically.

@@ -24,7 +24,7 @@ export function isChatId(value: unknown): boolean {
   if (trimmed === '' || trimmed !== value || trimmed.includes(',')) return false;
   if (BARE_NUMBER.test(trimmed)) return true;
   const at = trimmed.lastIndexOf('@');
-  if (at === -1) return false;
+  if (at === -1 || trimmed.indexOf('@') !== at) return false;
   const user = trimmed.slice(0, at).split(':')[0];
   const domain = trimmed.slice(at + 1).toLowerCase();
   if (domain === 'g.us') return GROUP_USER_PART.test(user);

@@ -38,11 +38,7 @@ describe('Infrastructure routes reject session-scoped keys (e2e)', () => {
   });
 
   afterAll(async () => {
-    try {
-      await app?.close();
-    } catch {
-      /* ignore teardown-only multi-datasource quirk */
-    }
+    await app?.close();
   });
 
   it('rejects a scoped ADMIN on GET /api/infra/export-data', async () => {

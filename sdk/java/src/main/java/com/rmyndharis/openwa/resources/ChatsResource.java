@@ -100,8 +100,9 @@ public final class ChatsResource {
     }
 
     /**
-     * Archive or unarchive a chat. A false success means the engine declined — on Baileys a chat
-     * with no known history cannot be archived.
+     * Archive or unarchive a chat. A false success means the engine declined — on Baileys an id the
+     * session knows no chat for. A known chat with no message in memory or stored is archived without
+     * one.
      */
     public SuccessResult archive(String sessionId, ArchiveChatRequest body) {
         return client.request(
@@ -109,8 +110,9 @@ public final class ChatsResource {
     }
 
     /**
-     * Pin a chat to the top of the list, or unpin it. A false success means WhatsApp declined —
-     * an account may pin only three chats at a time.
+     * Pin a chat to the top of the list, or unpin it. A false success means WhatsApp declined: an
+     * account may pin only three chats at a time. Only whatsapp-web.js reports that refusal; Baileys
+     * cannot observe the cap and always answers true.
      */
     public SuccessResult pin(String sessionId, PinChatRequest body) {
         return client.request(

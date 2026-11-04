@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
 import { X } from 'lucide-react';
 import { bindModalA11y } from '../utils/modalA11y.ts';
 
@@ -22,6 +22,8 @@ export interface ModalProps {
   subheader?: ReactNode;
   /** Hide the header close button — for dialogs that must not be dismissed mid-operation. */
   hideCloseButton?: boolean;
+  /** The element focus starts on, usually the first field; the first focusable when omitted or empty. */
+  initialFocusRef?: RefObject<HTMLElement | null>;
 }
 
 /**
@@ -45,11 +47,13 @@ export function Modal({
   headerExtra,
   subheader,
   hideCloseButton = false,
+  initialFocusRef,
 }: ModalProps) {
   const titleId = useId();
   const cardRef = useRef<HTMLDivElement>(null);
 
-  // Keep the latest onClose in a ref so the open/close effect below can depend on `[open]` only.
+  // Keep the latest onClose in a ref so the open/close effect below can depend on `[open]` (and the stable
+  // initial-focus ref object) only.
   // Callers commonly pass an inline arrow (`onClose={() => setShow(false)}`), which is a fresh
   // reference on every parent render. If `onClose` were a useEffect dependency, the effect would
   // re-run on every keystroke that re-renders the parent — and because that effect performs the
@@ -63,8 +67,13 @@ export function Modal({
 
   useEffect(() => {
     if (!open || !cardRef.current) return undefined;
-    return bindModalA11y(document, cardRef.current, () => onCloseRef.current());
-  }, [open]);
+    return bindModalA11y(
+      document,
+      cardRef.current,
+      () => onCloseRef.current(),
+      () => initialFocusRef?.current ?? null,
+    );
+  }, [open, initialFocusRef]);
 
   if (!open) return null;
 

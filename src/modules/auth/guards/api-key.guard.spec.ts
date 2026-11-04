@@ -632,6 +632,18 @@ describe('ApiKeyGuard', () => {
       );
     });
 
+    // An entry that is itself an array hides its chatId from a field read, and the pipe runs after the guard.
+    it('refuses a bulk entry given as an array instead of reading past it', async () => {
+      reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
+      const apiKey = createMockApiKey({ allowedChats: [ALLOWED_GROUP] });
+      (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+
+      const context = createMockContext({ 'x-api-key': 'key' }, {}, '127.0.0.1', {
+        messages: [[{ chatId: FORBIDDEN_CONTACT, type: 'text', content: { text: 'nested' } }]],
+      });
+      await expect(guard.canActivate(context)).rejects.toThrow(BadRequestException);
+    });
+
     it('admits bulk send when every message recipient is inside allowedChats', async () => {
       reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
       const apiKey = createMockApiKey({ allowedChats: [ALLOWED_GROUP, ALLOWED_CONTACT] });

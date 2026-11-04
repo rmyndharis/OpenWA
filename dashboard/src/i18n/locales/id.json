@@ -38,6 +38,8 @@
     "optional": "opsional",
     "fieldTooLong": "Dibatasi {{max}} karakter (saat ini {{count}}).",
     "language": "Bahasa",
+    "changeLanguage": "Ganti bahasa",
+    "joinedName": "{{first}}, {{second}}",
     "back": "Kembali",
     "next": "Selanjutnya",
     "previous": "Sebelumnya",
@@ -171,6 +173,16 @@
       "backgroundColor": "Warna latar",
       "font": "Font",
       "fontDefault": "Default",
+      "fonts": {
+        "system": "Sistem",
+        "systemText": "Teks sistem",
+        "script": "Tulisan tangan",
+        "bold": "Tebal",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "atau",
       "post": "Posting",
       "posted": "Status diposting",
@@ -193,7 +205,8 @@
       "delete": "Gagal menghapus pesan",
       "clickButton": "Gagal menekan tombol",
       "fileTooLarge": "Berkas terlalu besar (maks 18 MB)",
-      "searchHitSessionNotReady": "Sesi dari pesan ini tidak terhubung"
+      "searchHitSessionNotReady": "Sesi dari pesan ini tidak terhubung",
+      "searchHitChatNotListed": "Obrolan dari pesan ini tidak dapat ditemukan di daftar"
     },
     "loadMessagesError": "Gagal memuat pesan. Periksa log server.",
     "messageStatus": {
@@ -203,6 +216,9 @@
       "read": "Dibaca",
       "failed": "Gagal"
     },
+    "today": "Hari ini",
+    "switchSession": "Ganti sesi",
+    "searchMessages": "Cari pesan",
     "clearSearch": "Hapus pencarian",
     "filters": {
       "label": "Filter obrolan",
@@ -213,11 +229,13 @@
       "unknown": "Tidak dikenal"
     },
     "noFilterResults": "Tidak ada obrolan yang cocok dengan filter ini",
+    "contactInfo": "Info kontak",
     "moreActions": "Tindakan lainnya",
     "copyChatId": "Salin ID obrolan",
     "chatIdCopied": "ID obrolan disalin",
     "copyFailed": "Tidak dapat menyalin ke papan klip",
     "closeChat": "Tutup obrolan",
+    "phone": "Nomor telepon",
     "chatId": "ID obrolan",
     "newChat": {
       "title": "Obrolan baru",
@@ -242,6 +260,12 @@
       "created": "Grup \"{{name}}\" dibuat",
       "createFailed": "Tidak dapat membuat grup",
       "removeParticipant": "Hapus {{name}}"
+    },
+    "sessionPicker": {
+      "searchPlaceholder": "Cari sesi...",
+      "noMatch": "Tidak ada sesi yang cocok",
+      "addTitle": "Tautkan nomor lain",
+      "addHint": "Buat sesi dan tautkan dengan kode QR"
     },
     "group": {
       "info": "Info grup",
@@ -578,6 +602,7 @@
     "session": "Sesi",
     "events": "Kejadian",
     "noEvents": "Pilih minimal satu kejadian.",
+    "urlInvalid": "Gunakan alamat http:// atau https:// lengkap, seperti https://example.com/webhook.",
     "available": "Kejadian Tersedia",
     "saveChanges": "Simpan Perubahan",
     "filters": {
@@ -588,6 +613,7 @@
       "badge_other": "{{count}} filter",
       "addCondition": "Tambah kondisi",
       "removeCondition": "Hapus kondisi",
+      "removeValue": "Hapus {{value}}",
       "caseSensitive": "Sensitif huruf besar/kecil",
       "contactPlaceholder": "Nomor atau ID WhatsApp...",
       "textPlaceholder": "Teks yang dicocokkan...",
@@ -637,6 +663,7 @@
       "updateFailed": "Gagal memperbarui webhook: {{message}}",
       "testOk": "Tes webhook berhasil! Status: {{status}}",
       "testFailed": "Tes webhook gagal: {{message}}",
+      "testStatus": "penerima menjawab HTTP {{status}}",
       "testError": "Gagal menguji webhook: {{message}}"
     },
     "actions": {
@@ -661,6 +688,7 @@
       "session.restriction": "Saat WhatsApp membatasi akun atau mencabut pembatasan",
       "presence.update": "Saat obrolan yang dilanggani online, mengetik atau offline",
       "event.response": "Saat tamu menjawab undangan acara WhatsApp (hadir, tidak hadir, mungkin)",
+      "poll.vote": "Saat seseorang memilih atau membatalkan opsi pada polling (whatsapp-web.js)",
       "group.join": "Saat peserta bergabung atau ditambahkan ke grup",
       "group.leave": "Saat peserta keluar atau dikeluarkan dari grup",
       "group.update": "Saat nama, deskripsi atau pengaturan grup berubah",
@@ -670,7 +698,7 @@
       "call.rejected": "Saat panggilan ditolak",
       "call.missed": "Saat panggilan tidak terjawab",
       "status.received": "Saat kontak memposting status",
-      "all": "Semua kejadian"
+      "all": "Semua kejadian kecuali message.receipt, yang harus disebutkan secara eksplisit"
     },
     "auth": {
       "title": "Autentikasi pengiriman",
@@ -757,13 +785,14 @@
     "modalTitle": "Buat Kunci API",
     "createdTitle": "Kunci API Dibuat",
     "createdHint": "Salin kunci ini sekarang. Anda tidak akan dapat melihatnya lagi.",
+    "copyKey": "Salin kunci",
     "namePlaceholder": "mis. Production Key",
     "nameTooShort": "Gunakan minimal 3 karakter.",
     "rolesTitle": "Referensi Peran",
     "roles": {
       "admin": "Admin",
       "operator": "Operator",
-      "viewer": "Viewer"
+      "viewer": "Pelihat"
     },
     "roleDescriptions": {
       "admin": "Akses penuh ke semua sumber daya",
@@ -834,6 +863,7 @@
     "chats": {
       "label": "Akses obrolan (opsional)",
       "hint": "Satu obrolan per baris: ID grup yang diakhiri @g.us, ID kontak yang diakhiri @c.us atau @lid, atau nomor telepon. Kosongkan untuk semua obrolan. Kunci yang dibatasi obrolan hanya dapat menggunakan rute yang terbuka untuk kunci dengan cakupan obrolan; akses lewat WebSocket kejadian dan MCP tetap terbatas pada obrolan tersebut.",
+      "lidHint": "Entri @lid juga mengizinkan nomor telepon yang saat ini dipetakan ke sana. Jika nomor itu berpindah ke orang lain, kunci ini dapat menjangkau mereka: tinjau kunci ini saat kontak berganti nomor.",
       "invalid": "Bukan ID obrolan atau nomor telepon: {{value}}",
       "tooMany": "Terlalu banyak obrolan ({{count}}): satu kunci paling banyak memuat {{max}}."
     },
@@ -971,6 +1001,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} terkirim",
     "groupSendCancelled": "{{count}}, dibatalkan",
     "groupSendStopped": "{{count}}, dihentikan setelah HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, dihentikan: gateway tidak merespons",
     "response": {
       "timestamp": "Waktu",
       "messageId": "ID Pesan",
@@ -981,6 +1012,7 @@
     },
     "sendFailed": "Gagal mengirim pesan",
     "notOnWhatsApp": "Nomor ini tidak terdaftar di WhatsApp",
+    "tooLong": "Lebih dari {{max}} digit bukan satu nomor telepon. Masukkan satu nomor saja.",
     "batch": {
       "status": {
         "pending": "Menunggu",
@@ -1014,9 +1046,10 @@
     "single": {
       "title": "Periksa Satu Akun",
       "phoneLabel": "Nomor Telepon",
-      "phonePlaceholder": "mis. 919876543210 atau 6281234567890 (dengan kode negara)",
+      "phonePlaceholder": "mis. 919876543210 atau 6281234567890",
       "check": "Periksa",
       "checking": "Memeriksa...",
+      "tooLong": "Lebih dari {{max}} digit bukan satu nomor telepon. Periksa satu nomor setiap kali.",
       "autoPrefix": "Tambahkan awalan <strong>+91</strong> otomatis untuk nomor 10 digit (nomor 12 digit tidak diubah)",
       "silent": "<strong>Sepenuhnya Senyap:</strong> Pemeriksaan ini langsung mengakses data pendaftaran WhatsApp. Kontak tidak menerima notifikasi, suara, atau pesan apa pun.",
       "resultTitle": "Hasil Verifikasi",
@@ -1045,7 +1078,7 @@
       "copy": "Salin",
       "copied": "Tersalin",
       "checkedAt": "Diperiksa Pada",
-      "openTester": "Buka di Penguji Pesan"
+      "openTester": "Buka Penguji Pesan"
     },
     "recent": {
       "title": "Pemeriksaan Terbaru",
@@ -1079,9 +1112,11 @@
       "tenDigitAdded": "({{ten}} nomor 10 digit → +91 ditambahkan)",
       "tenDigitAddedPreserved": "({{ten}} nomor 10 digit → +91 ditambahkan, {{twelve}} nomor 12 digit dipertahankan)",
       "tooMany": "Terlalu banyak nomor: {{parsed}} terdeteksi, maksimal {{max}} per proses. Hapus {{excess}} nomor untuk memulai.",
+      "tooLong": "Dilewati, lebih dari {{max}} digit (bukan satu nomor): {{count}}. Tulis setiap nomor di barisnya sendiri.",
       "start": "Mulai Pemeriksaan Batch",
       "stop": "Hentikan Pemeriksaan",
       "export": "Ekspor Hasil (CSV)",
+      "exportHint": "File ini memuat semua digit. Aplikasi spreadsheet bisa menampilkan nomor panjang sebagai 9.19612E+11 atau menghapus nol di depan; impor file dan atur kolom Phone Number ke Teks agar nomor tetap utuh.",
       "stoppedTitle": "Batch dihentikan",
       "checked": "Diperiksa",
       "remaining": "Tersisa",
@@ -1094,6 +1129,7 @@
       "reasonOther": "Gateway menolak pemeriksaan",
       "partial": "{{reason}} (HTTP {{status}}). Berhenti di nomor {{attempted}} dari {{total}}; {{count}} nomor belum diperiksa. Coba lagi nanti.",
       "partial_other": "{{reason}} (HTTP {{status}}). Berhenti di nomor {{attempted}} dari {{total}}; {{count}} nomor belum diperiksa. Coba lagi nanti.",
+      "noAnswer": "Gateway tidak merespons. Berhenti di nomor {{attempted}} dari {{total}}. Coba lagi nanti.",
       "last": "{{reason}} (HTTP {{status}}). Pemeriksaan terakhir gagal. Coba lagi nanti."
     },
     "toast": {
@@ -1181,8 +1217,8 @@
       "storagePath": "Path Penyimpanan",
       "bucket": "Nama Bucket",
       "region": "Region",
-      "accessKey": "Access Key",
-      "secretKey": "Secret Key",
+      "accessKey": "Kunci Akses",
+      "secretKey": "Kunci Rahasia",
       "endpoint": "Endpoint Kustom (opsional)",
       "endpointHint": "Untuk MinIO atau layanan kompatibel S3 lainnya"
     },
@@ -1192,7 +1228,10 @@
       "disabled": "Dinonaktifkan"
     },
     "envPinNote": "Disematkan oleh variabel lingkungan {{name}} — ini adalah nilai yang berjalan; perubahan dasbor tidak akan berlaku sampai variabel tersebut dihapus.",
+    "envPinFlagNote": "Disematkan oleh variabel lingkungan {{name}}: selama bernilai true dan layanan ini digunakan, container bawaan tetap dijalankan setiap kali server mulai, meskipun sakelar ini mati.",
     "pendingRestartNote": "Tersimpan, tetapi belum diterapkan — restart server agar perubahan berlaku.",
+    "pendingBuiltInNote": "Tersimpan, tetapi belum diterapkan: server saat ini berjalan dengan layanan eksternal, dan restart akan mengalihkannya ke container bawaan.",
+    "pendingExternalNote": "Tersimpan, tetapi belum diterapkan: server saat ini berjalan dengan container bawaan, dan restart akan mengalihkannya ke layanan eksternal.",
     "migration": {
       "title": "Perhatian — ini mengubah backend data",
       "dbWarning": "Database baru dimulai kosong. Unduh cadangan data Anda saat ini sekarang (saat masih di database lama), lalu pulihkan setelah restart.",
@@ -1218,6 +1257,7 @@
       "successTitle": "Server siap",
       "errorTitle": "Restart gagal",
       "idleDesc": "Konfigurasi telah disimpan ke <code>.env.generated</code>.<br/>Restart server diperlukan untuk menerapkan perubahan.",
+      "stopsContainers": "Restart juga akan menghentikan container bawaan berikut, yang tetap menyimpan datanya dan tidak dihapus:",
       "later": "Restart Nanti",
       "now": "Restart Sekarang",
       "restartingMsg": "Me-restart server... {{count}}d",
@@ -1303,6 +1343,7 @@
       "installed": "Plugin terpasang",
       "installFailed": "Gagal menginstal",
       "uninstalled": "Plugin dicopot",
+      "uninstalledWithWarning": "Plugin dicopot, dengan peringatan",
       "uninstallFailed": "Gagal mencopot",
       "enableFailedTitle": "Gagal mengaktifkan",
       "disableFailedTitle": "Gagal menonaktifkan",

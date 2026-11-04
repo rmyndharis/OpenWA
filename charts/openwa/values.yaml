@@ -88,8 +88,9 @@ terminationGracePeriodSeconds: 75
 
 # Boot budget of the kubelet startupProbe on /api/health/live: the container is restarted after
 # periodSeconds x (failureThreshold - 1) = 5s x 59 = 295s without an answer. The first boot after an
-# upgrade builds indexes on a large messages table (about 3.8s per million rows) before the port
-# opens, so raise failureThreshold, or run the migrations first (docs/14, section 14.5). A higher
+# upgrade builds indexes on a large messages table (about 3.8s per million rows) and converts legacy
+# message types in the same transaction (about 60s per million legacy rows on PostgreSQL) before the
+# port opens, so raise failureThreshold, or run the migrations first (docs/14, section 14.5). A higher
 # value only delays the restart of a boot that is genuinely stuck.
 startupProbe:
   periodSeconds: 5
@@ -173,14 +174,26 @@ podDisruptionBudget:
   minAvailable: 1
 
 # Requires METRICS_TOKEN set on the app (via secretEnv); without it /api/metrics
-# returns 404.
+# returns 404. A production boot refuses the placeholder from .env.example and
+# other known weak values, so use a long random token. The Secret the pod loads its
+# environment from holds it under the key METRICS_TOKEN: the chart's own Secret
+# (named <release>-openwa, or the release name when that contains "openwa") or
+# existingSecret. For a release named openwa, scrape with:
+#
+#   serviceMonitor:
+#     enabled: true
+#     bearerTokenSecret:
+#       name: openwa
+#       key: METRICS_TOKEN
+#
 serviceMonitor:
   enabled: false
   interval: 30s
   # Extra labels for the ServiceMonitor — most Prometheus Operators select
   # ServiceMonitors by a release label (e.g. release: kube-prometheus-stack).
   additionalLabels: {}
-  # Secret holding the METRICS_TOKEN value for bearer auth.
+  # Secret and key holding the METRICS_TOKEN value for bearer auth. The default key
+  # `token` fits a Secret of your own; the chart's Secret holds it as METRICS_TOKEN.
   bearerTokenSecret:
     name: ""
     key: token

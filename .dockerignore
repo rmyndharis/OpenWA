@@ -1,15 +1,21 @@
 # Dependencies — reinstalled inside the image via npm ci
 node_modules/
 dashboard/node_modules/
+# Docker anchors a bare name at the context root, so a tree below it needs its own rule. No build
+# step reads the SDKs, so their sources, dependencies, build output and test caches all stay out.
+**/node_modules/
+sdk/
 
 # Build output — rebuilt inside the image; local output/caches must not leak
 # into the builder's `COPY . .` (a stale tsbuildinfo can poison the build)
 dist/
 dashboard/dist/
 *.tsbuildinfo
+**/*.tsbuildinfo
 
 # Test coverage
 coverage/
+**/coverage/
 
 # Environment files — secrets, never a build input (every variant, any depth)
 .env*
@@ -18,6 +24,9 @@ coverage/
 # Data files — runtime state (sessions, media, databases, API keys), never
 # part of the build context
 data/
+# The media directory a dashboard save in 0.2.0 to 0.7.3 recorded, which a bare-metal install may
+# still write (src/config/storage-root.ts)
+uploads/
 *.db
 *.sqlite
 *.sqlite3

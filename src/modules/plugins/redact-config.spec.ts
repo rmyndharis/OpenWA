@@ -411,6 +411,50 @@ describe('restoreSecretConfig (scalar-secret array)', () => {
       keys: ['k2', 'k3'],
     });
   });
+
+  // A cleared row reaches the host as null (JSON turns the form's undefined into null inside an array).
+  // As for a secret property, null is the removal and every other blank keeps the stored value. The row
+  // stays in place, so the length is unchanged and the masked rows still bind by position.
+  it('removes the secret of a row sent as null and keeps the others by position', () => {
+    const stored = { keys: ['k1', 'k2', 'k3'] };
+
+    for (const [incoming, expected] of [
+      [
+        [SECRET_SENTINEL, null, SECRET_SENTINEL],
+        ['k1', 'k3'],
+      ],
+      [
+        [null, SECRET_SENTINEL, SECRET_SENTINEL],
+        ['k2', 'k3'],
+      ],
+      [
+        [SECRET_SENTINEL, SECRET_SENTINEL, null],
+        ['k1', 'k2'],
+      ],
+    ] as const) {
+      expect(restoreSecretConfig({ keys: [...incoming] }, stored, scalarSecretArraySchema)).toEqual({
+        keys: [...expected],
+      });
+      expect(
+        restoreSecretConfig({ keys: [...incoming] }, stored, scalarSecretArraySchema, { mergedOverStored: true }),
+      ).toEqual({ keys: [...expected] });
+    }
+  });
+
+  it('removes every secret of a list sent as nulls, and stores a new one beside a removed one', () => {
+    const stored = { keys: ['k1', 'k2'] };
+
+    expect(restoreSecretConfig({ keys: [null, null] }, stored, scalarSecretArraySchema)).toEqual({ keys: [] });
+    expect(restoreSecretConfig({ keys: [null, 'brand-new'] }, stored, scalarSecretArraySchema)).toEqual({
+      keys: ['brand-new'],
+    });
+  });
+
+  it('keeps the stored secret of a row sent blank, so only null removes it', () => {
+    expect(
+      restoreSecretConfig({ keys: [SECRET_SENTINEL, ''] }, { keys: ['k1', 'k2'] }, scalarSecretArraySchema),
+    ).toEqual({ keys: ['k1', 'k2'] });
+  });
 });
 
 describe('restoreSecretConfig (row removal among rows that differ only by secret)', () => {

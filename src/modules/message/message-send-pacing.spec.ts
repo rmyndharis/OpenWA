@@ -351,6 +351,55 @@ describe('MessageSendService preparation pacing', () => {
     expect(engine.sendTextMessage).toHaveBeenCalledTimes(1);
   });
 
+  // The delete transaction must not start while the insert of a pending row is in flight: the row would
+  // land after the delete, for a session that no longer exists and with nothing left to settle it.
+  it('drains its pending insert before the session content is deleted', async () => {
+    const entered = deferred();
+    const finish = deferred();
+    const save = messages.save.bind(messages);
+    jest.spyOn(messages, 'save').mockImplementationOnce(async message => {
+      entered.resolve();
+      await finish.promise;
+      return save(message);
+    });
+    const old = send().catch((error: unknown) => error);
+    await entered.promise;
+    let deleted = false;
+    const deletion = replaceSession().then(() => {
+      deleted = true;
+    });
+    await new Promise<void>(setImmediate);
+    const deletedBeforeInsert = deleted;
+    finish.resolve();
+    await Promise.all([deletion, old]);
+
+    expect(deletedBeforeInsert).toBe(false);
+    expect(await old).toMatchObject({ status: 404 });
+    expect(await messages.count()).toBe(0);
+  });
+
+  // Told apart by the status the caller gets: a deleted session is a 404, where continuing to the engine
+  // lookup would answer a 400 telling them to start a session that is gone.
+  it('answers 404, not a missing engine, when its session is deleted during the sending hook', async () => {
+    const entered = deferred();
+    const finish = deferred();
+    hooks.register('moderation', 'message:sending', async context => {
+      entered.resolve();
+      await finish.promise;
+      return { continue: true, data: context.data };
+    });
+    const old = send().catch((error: unknown) => error);
+    await entered.promise;
+    const deletion = closeSessionWrites(ds, 's1');
+    engines.delete('s1');
+    await deletion.drain();
+    deletion.release();
+    finish.resolve();
+
+    expect(await old).toMatchObject({ status: 404 });
+    expect(engine.sendTextMessage).not.toHaveBeenCalled();
+  });
+
   it('cannot dispatch or settle successfully after its pending write lifetime retires', async () => {
     const entered = deferred();
     const finish = deferred();

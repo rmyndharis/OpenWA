@@ -96,7 +96,8 @@ export class ShutdownService {
         // The exit status mirrors the teardown outcome: 0 when teardown completed, 1 when it
         // failed, so an orchestrator (k8s, systemd, docker restart policies) must not read a
         // resource-leaking shutdown as a clean one. A teardown that hangs is cut by the force-exit
-        // timer above (or by a second signal in main.ts).
+        // timer above, or by a repeat stop signal 1 s or more after the first (stop-signals.ts; a
+        // repeat inside that window is the same signal delivered twice and is ignored).
         let exitCode = 0;
         try {
           if (this.destroyCallback) {

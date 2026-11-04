@@ -38,6 +38,8 @@
     "optional": "isteğe bağlı",
     "fieldTooLong": "En fazla {{max}} karakter olabilir (şu an {{count}}).",
     "language": "Dil",
+    "changeLanguage": "Dili değiştir",
+    "joinedName": "{{first}}, {{second}}",
     "back": "Geri",
     "next": "İleri",
     "previous": "Önceki",
@@ -171,6 +173,16 @@
       "backgroundColor": "Arka plan rengi",
       "font": "Yazı Tipi",
       "fontDefault": "Varsayılan",
+      "fonts": {
+        "system": "Sistem",
+        "systemText": "Sistem metni",
+        "script": "El yazısı",
+        "bold": "Kalın",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "veya",
       "post": "Paylaş",
       "posted": "Durum paylaşıldı",
@@ -193,7 +205,8 @@
       "delete": "Mesaj silinemedi",
       "clickButton": "Düğmeye tıklanamadı",
       "fileTooLarge": "Dosya çok büyük (maks 18 MB)",
-      "searchHitSessionNotReady": "Bu mesajın oturumu bağlı değil"
+      "searchHitSessionNotReady": "Bu mesajın oturumu bağlı değil",
+      "searchHitChatNotListed": "Bu mesajın sohbeti listede bulunamadı"
     },
     "loadMessagesError": "Mesajlar yüklenemedi. Sunucu kayıtlarını kontrol edin.",
     "messageStatus": {
@@ -203,6 +216,9 @@
       "read": "Okundu",
       "failed": "Başarısız"
     },
+    "today": "Bugün",
+    "switchSession": "Oturum değiştir",
+    "searchMessages": "Mesajlarda ara",
     "clearSearch": "Aramayı temizle",
     "filters": {
       "label": "Sohbetleri filtrele",
@@ -213,11 +229,13 @@
       "unknown": "Bilinmeyen"
     },
     "noFilterResults": "Bu filtreyle eşleşen sohbet yok",
+    "contactInfo": "Kişi bilgisi",
     "moreActions": "Diğer işlemler",
     "copyChatId": "Sohbet kimliğini kopyala",
     "chatIdCopied": "Sohbet kimliği kopyalandı",
     "copyFailed": "Panoya kopyalanamadı",
     "closeChat": "Sohbeti kapat",
+    "phone": "Telefon numarası",
     "chatId": "Sohbet kimliği",
     "newChat": {
       "title": "Yeni sohbet",
@@ -242,6 +260,12 @@
       "created": "\"{{name}}\" grubu oluşturuldu",
       "createFailed": "Grup oluşturulamadı",
       "removeParticipant": "{{name}} kaldır"
+    },
+    "sessionPicker": {
+      "searchPlaceholder": "Oturum ara...",
+      "noMatch": "Eşleşen oturum yok",
+      "addTitle": "Başka bir numara bağla",
+      "addHint": "Bir oturum oluşturun ve QR koduyla bağlayın"
     },
     "group": {
       "info": "Grup bilgisi",
@@ -578,6 +602,7 @@
     "session": "Oturum",
     "events": "Olaylar",
     "noEvents": "En az bir olay seçin.",
+    "urlInvalid": "http:// veya https:// ile başlayan tam bir adres girin, örneğin https://example.com/webhook.",
     "available": "Kullanılabilir Olaylar",
     "saveChanges": "Değişiklikleri Kaydet",
     "filters": {
@@ -588,6 +613,7 @@
       "badge_other": "{{count}} filtre",
       "addCondition": "Koşul ekle",
       "removeCondition": "Koşulu kaldır",
+      "removeValue": "{{value}} kaldır",
       "caseSensitive": "Büyük/küçük harfe duyarlı",
       "contactPlaceholder": "Numara veya WhatsApp ID...",
       "textPlaceholder": "Eşleşecek metin...",
@@ -637,6 +663,7 @@
       "updateFailed": "Webhook güncellenemedi: {{message}}",
       "testOk": "Webhook testi başarılı! Durum: {{status}}",
       "testFailed": "Webhook testi başarısız: {{message}}",
+      "testStatus": "alıcı HTTP {{status}} ile yanıt verdi",
       "testError": "Webhook test edilemedi: {{message}}"
     },
     "actions": {
@@ -661,6 +688,7 @@
       "session.restriction": "WhatsApp hesabı kısıtladığında veya bir kısıtlamayı kaldırdığında",
       "presence.update": "Abone olunan bir sohbet çevrimiçi olduğunda, yazdığında veya çevrimdışı olduğunda",
       "event.response": "Bir davetli bir WhatsApp etkinliğine yanıt verdiğinde (katılıyor, katılmıyor, belki)",
+      "poll.vote": "Biri bir ankette seçenek işaretlediğinde veya kaldırdığında (whatsapp-web.js)",
       "group.join": "Katılımcılar bir gruba katıldığında veya eklendiğinde",
       "group.leave": "Katılımcılar bir gruptan ayrıldığında veya çıkarıldığında",
       "group.update": "Bir grubun adı, açıklaması veya ayarları değiştiğinde",
@@ -670,7 +698,7 @@
       "call.rejected": "Bir arama reddedildiğinde",
       "call.missed": "Bir arama yanıtsız kaldığında",
       "status.received": "Bir kişi durum paylaştığında",
-      "all": "Tüm olaylar"
+      "all": "message.receipt hariç tüm olaylar (message.receipt açıkça belirtilmelidir)"
     },
     "auth": {
       "title": "Teslimat kimlik doğrulaması",
@@ -757,6 +785,7 @@
     "modalTitle": "API Anahtarı Oluştur",
     "createdTitle": "API Anahtarı Oluşturuldu",
     "createdHint": "Bu anahtarı şimdi kopyalayın. Bir daha göremeyeceksiniz.",
+    "copyKey": "Anahtarı kopyala",
     "namePlaceholder": "ör. Prodüksiyon Anahtarı",
     "nameTooShort": "En az 3 karakter kullanın.",
     "rolesTitle": "Roller Referansı",
@@ -834,6 +863,7 @@
     "chats": {
       "label": "Sohbet erişimi (isteğe bağlı)",
       "hint": "Her satıra bir sohbet: @g.us ile biten bir grup kimliği, @c.us veya @lid ile biten bir kişi kimliği ya da bir telefon numarası. Tüm sohbetler için boş bırakın. Sohbetle sınırlı bir anahtar yalnızca bu tür anahtarlara açık yolları kullanabilir; olay WebSocket'i ve MCP üzerinden erişimi de bu sohbetlerle sınırlı kalır.",
+      "lidHint": "Bir @lid girdisi, şu anda ona eşlenmiş telefon numarasına da izin verir. Bu numara başka birine geçerse bu anahtar o kişiye de ulaşabilir: bir kişi numarasını değiştirdiğinde anahtarı gözden geçirin.",
       "invalid": "Sohbet kimliği veya telefon numarası değil: {{value}}",
       "tooMany": "Çok fazla sohbet ({{count}}): bir anahtar en fazla {{max}} sohbet listeleyebilir."
     },
@@ -971,6 +1001,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} gönderildi",
     "groupSendCancelled": "{{count}}, iptal edildi",
     "groupSendStopped": "{{count}}, HTTP {{status}} sonrası durduruldu",
+    "groupSendStoppedNoAnswer": "{{count}}, durduruldu: ağ geçidi yanıt vermedi",
     "response": {
       "timestamp": "Zaman Damgası",
       "messageId": "Mesaj ID'si",
@@ -981,6 +1012,7 @@
     },
     "sendFailed": "Mesaj gönderilemedi",
     "notOnWhatsApp": "Bu numara WhatsApp'ta kayıtlı değil",
+    "tooLong": "{{max}} haneden uzun bir değer tek bir telefon numarası değildir. Tek bir numara girin.",
     "batch": {
       "status": {
         "pending": "Beklemede",
@@ -1014,9 +1046,10 @@
     "single": {
       "title": "Tek Hesabı Kontrol Et",
       "phoneLabel": "Telefon Numarası",
-      "phonePlaceholder": "ör. 919876543210 veya 6281234567890 (ülke koduyla birlikte)",
+      "phonePlaceholder": "ör. 919876543210 veya 6281234567890",
       "check": "Kontrol Et",
       "checking": "Kontrol ediliyor...",
+      "tooLong": "{{max}} haneden uzun bir değer tek bir telefon numarası değildir. Her seferinde bir numara kontrol edin.",
       "autoPrefix": "10 basamaklı numaraların başına otomatik olarak <strong>+91</strong> ekle (12 basamaklı numaralar olduğu gibi bırakılır)",
       "silent": "<strong>Tamamen Sessiz:</strong> Bu kontrol, WhatsApp'ın kayıtlı numara dizinini doğrudan sorgular. Kişiye herhangi bir bildirim, ses veya mesaj ulaşmaz.",
       "resultTitle": "Kontrol Sonucu",
@@ -1045,7 +1078,7 @@
       "copy": "Kopyala",
       "copied": "Kopyalandı",
       "checkedAt": "Kontrol Saati",
-      "openTester": "Mesaj Test Aracı'nda Aç"
+      "openTester": "Mesaj Test Aracı'na git"
     },
     "recent": {
       "title": "Son Kontroller",
@@ -1079,9 +1112,11 @@
       "tenDigitAdded": "({{ten}} on basamaklı → +91 eklendi)",
       "tenDigitAddedPreserved": "({{ten}} on basamaklı → +91 eklendi, {{twelve}} on iki basamaklı korundu)",
       "tooMany": "Çok fazla numara: {{parsed}} algılandı, her seferde en fazla {{max}} olabilir. Başlamak için {{excess}} numara kaldırın.",
+      "tooLong": "Atlandı, {{max}} haneden uzun (tek numara değil): {{count}}. Her numarayı ayrı bir satıra yazın.",
       "start": "Toplu Kontrolü Başlat",
       "stop": "Kontrolü Durdur",
       "export": "Sonuçları Dışa Aktar (CSV)",
+      "exportHint": "Dosya her rakamı içerir. Bir hesap tablosu uzun numaraları 9.19612E+11 olarak gösterebilir veya baştaki sıfırı silebilir; numaraları olduğu gibi korumak için dosyayı içe aktarın ve Phone Number sütununu Metin olarak ayarlayın.",
       "stoppedTitle": "Toplu Kontrol Durduruldu",
       "checked": "Kontrol Edilen",
       "remaining": "Kalan",
@@ -1094,6 +1129,7 @@
       "reasonOther": "Ağ geçidi bir sorguyu reddetti",
       "partial": "{{reason}} (HTTP {{status}}). {{total}} numaradan {{attempted}}. numarada durduruldu; {{count}} numara gönderilmedi. Daha sonra tekrar deneyin.",
       "partial_other": "{{reason}} (HTTP {{status}}). {{total}} numaradan {{attempted}}. numarada durduruldu; {{count}} numara gönderilmedi. Daha sonra tekrar deneyin.",
+      "noAnswer": "Ağ geçidi yanıt vermedi. {{total}} numaradan {{attempted}}. numarada durduruldu. Daha sonra tekrar deneyin.",
       "last": "{{reason}} (HTTP {{status}}). Son sorgu başarısız oldu. Daha sonra tekrar deneyin."
     },
     "toast": {
@@ -1192,7 +1228,10 @@
       "disabled": "Devre Dışı"
     },
     "envPinNote": "{{name}} ortam değişkeni tarafından sabitlendi — bu çalışan değerdir; ortam değişkeni kaldırılana kadar kontrol panelindeki değişiklikler uygulanmayacaktır.",
+    "envPinFlagNote": "{{name}} ortam değişkeni tarafından sabitlendi: değeri true olduğu ve bu hizmet kullanıldığı sürece, bu anahtar kapalı olsa bile dahili konteyner sunucunun her başlatılışında başlatılır.",
     "pendingRestartNote": "Kaydedildi, ancak henüz uygulanmadı — bu değişikliğin yürürlüğe girmesi için sunucuyu yeniden başlatın.",
+    "pendingBuiltInNote": "Kaydedildi, ancak henüz uygulanmadı: sunucu şu anda harici bir hizmetle çalışıyor, yeniden başlatma onu dahili konteynere geçirir.",
+    "pendingExternalNote": "Kaydedildi, ancak henüz uygulanmadı: sunucu şu anda dahili konteynerle çalışıyor, yeniden başlatma onu harici bir hizmete geçirir.",
     "migration": {
       "title": "Dikkat — bu işlem veri arka ucunu değiştirir",
       "dbWarning": "Yeni veritabanı boş olarak başlar. Mevcut verilerinizin yedeğini şimdi (hala eski veritabanındayken) indirin, ardından yeniden başlattıktan sonra geri yükleyin.",
@@ -1218,6 +1257,7 @@
       "successTitle": "Sunucu hazır",
       "errorTitle": "Yeniden başlatma başarısız",
       "idleDesc": "Yapılandırma <code>.env.generated</code> dosyasına kaydedildi.<br/>Değişikliklerin uygulanması için sunucunun yeniden başlatılması gerekir.",
+      "stopsContainers": "Yeniden başlatma şu dahili konteynerleri de durdurur; verileriyle birlikte saklanırlar ve silinmezler:",
       "later": "Daha Sonra Yeniden Başlat",
       "now": "Şimdi Yeniden Başlat",
       "restartingMsg": "Sunucu yeniden başlatılıyor... {{count}}s",
@@ -1303,6 +1343,7 @@
       "installed": "Eklenti yüklendi",
       "installFailed": "Yükleme başarısız",
       "uninstalled": "Eklenti kaldırıldı",
+      "uninstalledWithWarning": "Eklenti kaldırıldı, bir uyarıyla",
       "uninstallFailed": "Kaldırma başarısız",
       "enableFailedTitle": "Etkinleştirme başarısız",
       "disableFailedTitle": "Devre dışı bırakma başarısız",

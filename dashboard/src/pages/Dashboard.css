@@ -86,7 +86,7 @@
 
 .dashboard .stat-watermark {
   position: absolute;
-  right: -10px;
+  inset-inline-end: -10px;
   bottom: -15px;
   width: 96px;
   height: 96px;
@@ -237,9 +237,10 @@
   color: var(--info);
 }
 
-/* Needs a human: a heavier tint of the in-progress amber, so the two do not read alike. */
+/* Needs a human: a heavier tint of the in-progress amber, so the two do not read alike. The Sessions page
+   paints the same status with 22 percent; 30 left the amber text at 3.83:1 on the dark card. */
 .dashboard .status-pill.action_required {
-  background: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.22);
   color: var(--warning-text);
 }
 
@@ -296,34 +297,9 @@
   .dashboard .stats-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-}
 
-@media (max-width: 768px) {
-  .dashboard {
-    padding: 1rem;
-  }
-
-  .dashboard .stats-grid {
-    grid-template-columns: 1fr;
-    gap: 1rem;
-  }
-
-  .dashboard .stat-value {
-    font-size: 1.5rem;
-  }
-
-  .dashboard .sessions-section {
-    padding: 1rem;
-  }
-
-  .dashboard .section-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-  }
-
-  /* Convert table to card layout on mobile */
+  /* Convert table to card layout wherever its fixed columns do not fit: they need about 1150px of
+     viewport with the sidebar open. */
   .dashboard .sessions-table .table-header {
     display: none;
   }
@@ -368,6 +344,32 @@
     justify-content: flex-start;
     padding-top: 0.5rem;
     border-top: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard {
+    padding: 1rem;
+  }
+
+  .dashboard .stats-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .dashboard .stat-value {
+    font-size: 1.5rem;
+  }
+
+  .dashboard .sessions-section {
+    padding: 1rem;
+  }
+
+  .dashboard .section-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
   }
 }
 

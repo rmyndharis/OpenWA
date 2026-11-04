@@ -129,6 +129,12 @@ export class SessionLivenessWatchdog {
     if (!this.engines.isLive(id, engine)) {
       return;
     }
+    // The engine left the state this probe was taken in (a reconnect of its own, or a step only an
+    // operator can take): the result says nothing about it now, and a failure must not recycle it.
+    if (engine.getStatus() !== status) {
+      this.failures.delete(id);
+      return;
+    }
 
     if (alive) {
       // Note a recovery on the observe-only path, so the log shows the page came back rather than

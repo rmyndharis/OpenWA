@@ -13,9 +13,11 @@ describe('positiveIntFromEnv', () => {
     expect(positiveIntFromEnv(KEY, 7)).toBe(7);
   });
 
-  it('reads a plain positive integer', () => {
+  it('reads a plain positive integer, 1 included', () => {
     process.env[KEY] = '42';
     expect(positiveIntFromEnv(KEY, 7)).toBe(42);
+    process.env[KEY] = '1';
+    expect(positiveIntFromEnv(KEY, 7)).toBe(1);
   });
 
   it.each(['0', '-5', 'abc'])('falls back on %s', raw => {
@@ -37,8 +39,9 @@ describe('positiveIntOrDefault', () => {
     expect(positiveIntOrDefault(raw, 7)).toBe(7);
   });
 
-  it('reads a positive number and floors a fraction', () => {
+  it('reads a positive number, 1 included, and floors a fraction', () => {
     expect(positiveIntOrDefault('42', 7)).toBe(42);
+    expect(positiveIntOrDefault('1', 7)).toBe(1);
     expect(positiveIntOrDefault('2.9', 7)).toBe(2);
     expect(positiveIntOrDefault(' 15 ', 7)).toBe(15);
   });

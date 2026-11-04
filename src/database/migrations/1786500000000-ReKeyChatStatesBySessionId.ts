@@ -12,14 +12,16 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Idempotent: after a successful run no `sessionId` matches a session name, so a re-run updates
  * nothing. Rows whose key matches no session are left alone (they belong to a deleted session and
  * nothing reads them either way), and a row whose target key is already taken is skipped rather than
- * violating the (sessionId, chatId) primary key.
+ * violating the (sessionId, chatId) primary key. A key that already is a session's id is left alone
+ * even when another session is named after it: a database built by synchronize holds id-keyed rows
+ * before this migration first runs.
  */
 export class ReKeyChatStatesBySessionId1786500000000 implements MigrationInterface {
   name = 'ReKeyChatStatesBySessionId1786500000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     if (!(await queryRunner.hasTable('chat_states'))) return;
-    await queryRunner.query(ReKeyChatStatesBySessionId1786500000000.rekey('name', 'id'));
+    await queryRunner.query(ReKeyChatStatesBySessionId1786500000000.rekey('name', 'id', { skipAlreadyKeyed: true }));
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

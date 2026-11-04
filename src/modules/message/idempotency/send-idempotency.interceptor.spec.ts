@@ -5,13 +5,14 @@ import {
   HttpStatus,
   InternalServerErrorException,
   NotImplementedException,
+  PayloadTooLargeException,
   ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { lastValueFrom, of, throwError } from 'rxjs';
 import { EngineNotReadyError } from '../../../common/errors/engine-not-ready.error';
 import { markEngineSendFailure } from '../../../common/errors/engine-send-failure';
-import { EngineNotSentError } from '../../../common/errors/engine-not-sent.error';
+import { EngineNotSentError, markNothingSent } from '../../../common/errors/engine-not-sent.error';
 import { EngineThrottledError } from '../../../common/errors/engine-throttled.error';
 import { EngineTransportError } from '../../../common/errors/engine-transport.error';
 import { SendIdempotencyInterceptor, sendFailureProvesNothingSent } from './send-idempotency.interceptor';
@@ -190,6 +191,15 @@ describe('sendFailureProvesNothingSent', () => {
   ])('%p -> %p', (error, expected) => {
     expect(sendFailureProvesNothingSent(error)).toBe(expected);
   });
+
+  // Media the engine could not fetch or read is refused before anything reaches WhatsApp: the proof
+  // outranks the engine-stage marker, and the error keeps its own status.
+  it.each([new BadRequestException(), new PayloadTooLargeException(), new InternalServerErrorException()])(
+    'frees the key for an engine-stage %p raised before anything was sent',
+    error => {
+      expect(sendFailureProvesNothingSent(markEngineSendFailure(markNothingSent(error)))).toBe(true);
+    },
+  );
 
   it('frees the key for a WhatsApp rate limit, which turned the request away, but not for a timeout', () => {
     expect(sendFailureProvesNothingSent(markEngineSendFailure(new EngineThrottledError('rate limited')))).toBe(true);

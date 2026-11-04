@@ -116,6 +116,11 @@ class SessionsResource:
         cleanup failure); ``phone`` is cleared and no success audit is written.
         Start the session again and retry the logout. Do not assume the retry
         reconnects automatically or lands in a guaranteed QR state.
+
+        On Baileys, a session with no linked device raises on HTTP 409 instead:
+        it was stopped locally, ``phone`` is cleared and no success audit is
+        written. Start it to link a device, or delete it; retrying the logout
+        cannot help.
         """
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/logout")
 

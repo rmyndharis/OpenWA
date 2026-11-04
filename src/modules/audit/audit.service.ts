@@ -172,9 +172,10 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
       // them one fixed order, or separate LIMIT/OFFSET pages could repeat one row and skip another.
       order: { createdAt: 'DESC', id: 'DESC' },
       take,
-      // Clamp to a non-negative skip: a negative offset (e.g. from an unvalidated `?offset=-5`) would
-      // otherwise reach the query driver verbatim.
-      skip: options.offset && options.offset > 0 ? options.offset : 0,
+      // Bound the skip to [0, MAX_SAFE_INTEGER]: a negative offset (e.g. from an unvalidated `?offset=-5`)
+      // would otherwise reach the query driver verbatim, and the driver refuses an OFFSET of 2^63 or more
+      // as a 500, where any offset past the last row is just an empty page.
+      skip: options.offset && options.offset > 0 ? Math.min(options.offset, Number.MAX_SAFE_INTEGER) : 0,
     });
 
     return { data, total };

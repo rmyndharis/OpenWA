@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsString } from 'class-validator';
+import { ToStrictString } from '../../../common/utils/strict-boolean';
 
 export class TransferChannelOwnershipDto {
   @ApiProperty({
@@ -10,6 +11,7 @@ export class TransferChannelOwnershipDto {
       'transfer lands, this session can no longer take the channel back.',
     example: '628123456789@c.us',
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   newOwnerId!: string;

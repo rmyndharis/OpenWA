@@ -15,6 +15,11 @@
 // surrounding whitespace — so existing single-brace bulk content renders bit-for-bit as before.
 const PLACEHOLDER_PATTERN = /\{\{\s*([\w.-]+)\s*\}\}|\{(\w+)\}/g;
 
+/** The variable names a template mentions, in order of appearance, read with the syntax the renderer substitutes. */
+export function templateVariableNames(body: string): string[] {
+  return Array.from(body.matchAll(PLACEHOLDER_PATTERN), match => match[1] ?? match[2]);
+}
+
 /** A template that cannot be rendered for a reason the caller can report, such as a value with no text form. */
 export class TemplateRenderError extends Error {}
 

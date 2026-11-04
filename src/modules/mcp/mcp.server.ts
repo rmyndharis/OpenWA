@@ -135,6 +135,7 @@ function buildServer(
             // as auth failures. Best-effort; success and non-auth errors skip this.
             error => auditMcpAuthFailure(auditService, error, reqContext),
             chatScope,
+            extra.signal,
           );
           return smartToolResult(result as object);
         } catch (error) {

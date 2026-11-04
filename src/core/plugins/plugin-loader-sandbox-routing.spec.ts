@@ -8,6 +8,7 @@ import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { PluginLogLevel } from './sandbox/protocol';
 import { PLUGIN_SEARCH_REGISTRY_PORT } from './plugin-host-ports';
 import { SearchProviderRegistry } from '../../modules/search/search-provider.registry';
+import { redactSecrets } from '../../common/services/logger.service';
 
 type FakeHost = {
   load: jest.Mock;
@@ -590,6 +591,32 @@ describe('PluginLoaderService - sandbox search provider ownership', () => {
     expect(registry.active()?.id).toBe('plugin:p1');
   });
 
+  // Plugin code can post the declaration itself, as often as it likes.
+  it('takes one declaration per worker, so a repeat cannot retake the active slot', async () => {
+    const { loader, registry } = await setup();
+    registry.register({ id: 'plugin:other', label: 'Other', search: jest.fn(), health: jest.fn() });
+    registry.setActive('plugin:other');
+
+    loader.capturedOnSearchProviderRegister!();
+
+    expect(registry.active()?.id).toBe('plugin:other');
+  });
+
+  it('denies an undeclared provider with one warning per worker', async () => {
+    const loader = makeLoader(new SearchProviderRegistry());
+    seed(loader, { builtIn: false, instance: null });
+    await loader.enablePlugin('p1');
+    const logger = (loader as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger;
+    const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+    loader.capturedOnSearchProviderRegister!();
+    loader.capturedOnSearchProviderRegister!();
+
+    expect(
+      warn.mock.calls.filter(([, meta]) => (meta as { action?: string })?.action === 'sandbox_search_provider_denied'),
+    ).toHaveLength(1);
+  });
+
   it.each(['disable', 'unload'])('removes the provider during normal %s', async operation => {
     const { loader, registry } = await setup();
     const onExit = loader.capturedOnWorkerExit!;
@@ -669,7 +696,7 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
 
     expect(() => loader.capturedOnLog!('info' as PluginLogLevel, 'hello')).not.toThrow();
-    expect(logSpy).toHaveBeenCalledWith('[p1] hello', { pluginId: 'p1' });
+    expect(logSpy).toHaveBeenCalledWith('[p1] hello', {}, { pluginId: 'p1' });
   });
 
   it('truncates an oversized worker log line before relaying it', async () => {
@@ -686,17 +713,43 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     expect(relayed.length).toBe('[p1] '.length + 8192 + '…[truncated]'.length);
   });
 
-  it('bounds a non-string worker log message like a string one', async () => {
-    // Plugin code can post to parentPort directly, so the message is untrusted and may not be a string.
-    const loader = makeLoader();
-    seed(loader, { builtIn: false, instance: null });
-    await loader.enablePlugin('p1');
-    const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+  describe('a non-string worker log message', () => {
+    // Plugin code can post to parentPort directly, so the message is untrusted and may not be a string. It is not
+    // turned into text, which for an array would write out every shared reference at every use.
+    const sharedArray = (levels: number): unknown[] => {
+      let node: unknown[] = [1];
+      for (let level = 0; level < levels; level++) node = new Array<unknown>(10).fill(node);
+      return node;
+    };
 
-    loader.capturedOnLog!('log', ['x'.repeat(6000), 'y'.repeat(6000)] as unknown as string);
+    it.each([
+      ['an array', ['x'.repeat(6000), 'y'.repeat(6000)]],
+      ['a number', 42],
+      ['an object', { text: 'x'.repeat(10000) }],
+      ['null', null],
+    ])('is relayed as a fixed marker when it is %s', async (_name, message) => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
 
-    const relayed = logSpy.mock.calls[0][0] as string;
-    expect(relayed.length).toBe('[p1] '.length + 8192 + '…[truncated]'.length);
+      loader.capturedOnLog!('log', message as unknown as string);
+
+      expect(logSpy).toHaveBeenCalledWith('[p1] [non-string log message]', {}, { pluginId: 'p1' });
+    });
+
+    it('is relayed at once when it is an array whose levels share the same child', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+      const started = Date.now();
+      loader.capturedOnLog!('log', sharedArray(7) as unknown as string);
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(logSpy).toHaveBeenCalledWith('[p1] [non-string log message]', {}, { pluginId: 'p1' });
+    });
   });
 
   it('replaces an oversized worker log meta with a size marker instead of relaying it', async () => {
@@ -708,12 +761,32 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     loader.capturedOnLog!('log', 'big', { data: 'x'.repeat(20000) });
     loader.capturedOnLog!('log', 'small', { n: 1 });
 
-    expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] big', {
-      metaTruncated: true,
-      metaLength: 20011,
-      pluginId: 'p1',
-    });
-    expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] small', { n: 1, pluginId: 'p1' });
+    expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] big', { metaTruncated: true }, { pluginId: 'p1' });
+    expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] small', { n: 1 }, { pluginId: 'p1' });
+  });
+
+  it('relays a worker log meta that is a string or an array as one field', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+    await loader.enablePlugin('p1');
+    const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+    loader.capturedOnLog!('log', 'string', 'abc' as unknown as Record<string, unknown>);
+    loader.capturedOnLog!('log', 'array', [1, 2] as unknown as Record<string, unknown>);
+    loader.capturedOnLog!(
+      'log',
+      'bytes',
+      structuredClone(new Uint8Array([1, 2])) as unknown as Record<string, unknown>,
+    );
+    loader.capturedOnLog!('log', 'boxed', structuredClone(new String('ab')) as unknown as Record<string, unknown>);
+    loader.capturedOnLog!('log', 'record', structuredClone({ id: 1 }));
+
+    expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] string', { meta: 'abc' }, { pluginId: 'p1' });
+    expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] array', { meta: [1, 2] }, { pluginId: 'p1' });
+    expect(logSpy).toHaveBeenNthCalledWith(3, '[p1] bytes', { meta: new Uint8Array([1, 2]) }, { pluginId: 'p1' });
+    expect(Object.keys(logSpy.mock.calls[3][1] as object)).toEqual(['meta']);
+    expect(String((logSpy.mock.calls[3][1] as { meta: unknown }).meta)).toBe('ab');
+    expect(logSpy).toHaveBeenNthCalledWith(5, '[p1] record', { id: 1 }, { pluginId: 'p1' });
   });
 
   it('keeps the error text of a worker error log whose meta is oversized or not serializable', async () => {
@@ -730,16 +803,247 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     loader.capturedOnLog!('error', 'long', { error: 'e'.repeat(10000) });
     loader.capturedOnLog!('error', 'nullmeta', null as unknown as Record<string, unknown>);
 
-    expect(errorSpy).toHaveBeenNthCalledWith(1, '[p1] big', 'undefined', {
-      error: 'boom',
-      metaTruncated: true,
-      metaLength: 20026,
-      pluginId: 'p1',
-    });
-    expect(errorSpy).toHaveBeenNthCalledWith(2, '[p1] bigint', 'undefined', { error: 'boom', pluginId: 'p1' });
+    expect(errorSpy).toHaveBeenNthCalledWith(
+      1,
+      '[p1] big',
+      undefined,
+      { error: 'boom', metaTruncated: true },
+      { pluginId: 'p1' },
+    );
+    expect(errorSpy).toHaveBeenNthCalledWith(2, '[p1] bigint', undefined, { error: 'boom' }, { pluginId: 'p1' });
     const longMeta = errorSpy.mock.calls[2][2] as { error: string; metaTruncated: boolean };
     expect(longMeta.metaTruncated).toBe(true);
     expect(longMeta.error).toBe(`${'e'.repeat(8192)}…[truncated]`);
-    expect(errorSpy).toHaveBeenNthCalledWith(4, '[p1] nullmeta', 'undefined', { pluginId: 'p1' });
+    expect(errorSpy).toHaveBeenNthCalledWith(4, '[p1] nullmeta', undefined, {}, { pluginId: 'p1' });
+  });
+
+  // postMessage keeps shared references shared, so a meta that is small to hold writes out, at every use, as JSON
+  // text of any size: ten keys over the same child, eight levels deep, is a hundred million leaves.
+  describe('a meta whose shared references write out to an enormous text', () => {
+    const fanOut = (levels: number): Record<string, unknown> => {
+      let node: Record<string, unknown> = { leaf: 1 };
+      for (let level = 0; level < levels; level++) {
+        node = Object.fromEntries(Array.from({ length: 10 }, (_, key) => [`k${key}`, node]));
+      }
+      return node;
+    };
+    const ones = (length: number): number[] => new Array<number>(length).fill(1);
+
+    it('is replaced by a size marker at once, without being written out', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+      const started = Date.now();
+      loader.capturedOnLog!('log', 'fan-out', fanOut(8));
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(logSpy).toHaveBeenCalledWith('[p1] fan-out', { metaTruncated: true }, { pluginId: 'p1' });
+    });
+
+    it('keeps the error text of a worker error log', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const errorSpy = jest
+        .spyOn((loader as unknown as { logger: { error: jest.Mock } }).logger, 'error')
+        .mockImplementation(() => undefined);
+
+      const started = Date.now();
+      loader.capturedOnLog!('error', 'fan-out', { error: 'boom', fan: fanOut(8) });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[p1] fan-out',
+        undefined,
+        { error: 'boom', metaTruncated: true },
+        { pluginId: 'p1' },
+      );
+    });
+
+    it('still reports the exact length of a meta that has no more values than the size limit', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+      // The array is one value and each entry another, and the limit is 8192 values: a text of more values than
+      // that is longer than the size limit, so the walk stops there and no length is known.
+      loader.capturedOnLog!('log', 'walked', ones(8191) as unknown as Record<string, unknown>);
+      loader.capturedOnLog!('log', 'stopped', ones(8192) as unknown as Record<string, unknown>);
+
+      expect(logSpy).toHaveBeenNthCalledWith(
+        1,
+        '[p1] walked',
+        { metaTruncated: true, metaLength: 8191 + 8190 + 2 },
+        { pluginId: 'p1' },
+      );
+      expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] stopped', { metaTruncated: true }, { pluginId: 'p1' });
+    });
+
+    it('replaces a typed array of 20 million elements by the size marker at once', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+      const started = Date.now();
+      loader.capturedOnLog!('log', 'buffer', { b: new Uint8Array(20_000_000) });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(logSpy).toHaveBeenCalledWith('[p1] buffer', { metaTruncated: true }, { pluginId: 'p1' });
+    });
+
+    it('replaces a String wrapper of 10 million characters by the size marker at once', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+      const started = Date.now();
+      const boxed = structuredClone(new String('x'.repeat(10_000_000)));
+      loader.capturedOnLog!('log', 'boxed', boxed as unknown as Record<string, unknown>);
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(logSpy).toHaveBeenCalledWith('[p1] boxed', { metaTruncated: true }, { pluginId: 'p1' });
+    });
+
+    it('replaces one long string shared by 2000 entries by the size marker at once', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const holder = { s: 'x'.repeat(500_000) };
+
+      const started = Date.now();
+      loader.capturedOnLog!('log', 'shared-string', { list: Array.from({ length: 2000 }, () => holder) });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(logSpy).toHaveBeenCalledWith('[p1] shared-string', { metaTruncated: true }, { pluginId: 'p1' });
+    });
+
+    it('replaces one object with a long property name shared by 4000 entries by the size marker at once', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const holder = { ['k'.repeat(100_000)]: 1 };
+
+      const started = Date.now();
+      loader.capturedOnLog!('log', 'shared-name', { list: Array.from({ length: 4000 }, () => holder) });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(logSpy).toHaveBeenCalledWith('[p1] shared-name', { metaTruncated: true }, { pluginId: 'p1' });
+    });
+
+    it('counts a Map or a Set by its size', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+      loader.capturedOnLog!('log', 'map', { m: new Map(ones(9000).map((one, key) => [key, one])) });
+      loader.capturedOnLog!('log', 'set', { s: new Set(ones(9000).map((_, key) => key)) });
+
+      expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] map', { metaTruncated: true }, { pluginId: 'p1' });
+      expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] set', { metaTruncated: true }, { pluginId: 'p1' });
+    });
+
+    // JSON.stringify writes an Error, a Map and a Set as {}, but the logger writes what they hold.
+    it('counts the message and stack of an Error and the entries of a Map or a Set that the logger writes', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const text = 'x'.repeat(9000);
+
+      loader.capturedOnLog!('log', 'error', structuredClone({ e: new Error(text) }));
+      loader.capturedOnLog!('log', 'map', structuredClone({ m: new Map([[1, text]]) }));
+      loader.capturedOnLog!('log', 'set', structuredClone({ s: new Set([text]) }));
+      loader.capturedOnLog!('log', 'small', structuredClone({ e: new Error('boom'), m: new Map([[1, 2]]) }));
+
+      for (const [call, name] of [
+        [1, 'error'],
+        [2, 'map'],
+        [3, 'set'],
+      ] as const) {
+        expect(logSpy).toHaveBeenNthCalledWith(call, `[p1] ${name}`, { metaTruncated: true }, { pluginId: 'p1' });
+      }
+      expect((logSpy.mock.calls[3][1] as { e: Error }).e.message).toBe('boom');
+    });
+
+    // Few values, but a long text once written: numbers in a Map, or a BigInt in a Set, which JSON.stringify alone
+    // would write as {}. A worker's meta arrives in the host's realm; structuredClone here would make it in another,
+    // which the logger copies by its own properties.
+    it('measures the text of a Map or a Set as the logger writes it', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const float = -Math.PI * 1e-300;
+      const pairs = Array.from({ length: 2000 }, (_, key): [number, number] => [float * (key + 1), float]);
+
+      const started = Date.now();
+      loader.capturedOnLog!('log', 'floats', { m: new Map(pairs) });
+      loader.capturedOnLog!('log', 'bigints', { s: new Set([10n ** 100_000n, 10n ** 100_000n + 1n]) });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      const [floats, bigints] = logSpy.mock.calls.map(call => call[1] as Record<string, unknown>);
+      expect(floats).toMatchObject({ metaTruncated: true });
+      expect(floats.metaLength).toBeGreaterThan(8192);
+      expect(bigints).toEqual({});
+    });
+
+    // Few values, but a longer text once written: an invalid Date is written as text where JSON.stringify writes null,
+    // and the value of a credential key as the marker however short it is. A typed array is written as its type and
+    // length, so one that fits the count is relayed.
+    it('measures an invalid Date, a credential value and a typed array as the logger writes them', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const invalid = new Date(Number.NaN);
+
+      loader.capturedOnLog!('log', 'dates', { d: Array.from({ length: 1600 }, () => new Date(Number.NaN)) });
+      loader.capturedOnLog!('log', 'shared', { d: Array.from({ length: 1600 }, () => invalid) });
+      loader.capturedOnLog!('log', 'tokens', { l: Array.from({ length: 600 }, () => ({ token: 0 })) });
+      loader.capturedOnLog!('log', 'bytes', { b: new Uint8Array(5000) });
+
+      const [dates, shared, tokens, bytes] = logSpy.mock.calls.map(call => call[1] as Record<string, unknown>);
+      for (const marked of [dates, shared, tokens]) {
+        expect(marked).toMatchObject({ metaTruncated: true });
+        expect(marked.metaLength).toBeGreaterThan(8192);
+      }
+      expect(JSON.stringify(redactSecrets(bytes))).toBe('{"b":{"type":"Uint8Array","length":5000}}');
+    });
+
+    // A boxed string is written as its text, so one that fits is relayed and written in that many characters. A worker's
+    // meta arrives in the host's realm; structuredClone here would make it in another, which the logger copies by its
+    // own properties.
+    it('relays a boxed string that the logger writes as its text', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const text = 'x'.repeat(8000);
+
+      loader.capturedOnLog!('log', 'boxed', { s: new String(text) });
+
+      expect(JSON.stringify(redactSecrets(logSpy.mock.calls[0][1]))).toBe(JSON.stringify({ s: text }));
+    });
+
+    it('still drops a circular meta without a marker, as it cannot be written as JSON', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const circular: Record<string, unknown> = { id: 1 };
+      circular.self = circular;
+
+      loader.capturedOnLog!('log', 'circular', circular);
+
+      expect(logSpy).toHaveBeenCalledWith('[p1] circular', {}, { pluginId: 'p1' });
+    });
   });
 });

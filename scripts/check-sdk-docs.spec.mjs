@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { snake, methodsInSummaryCell, summaryRow, sectionMethods, slice, harvestShipped } from './check-sdk-docs.mjs';
 
 test('snake-cases a JS method into the Python spelling', () => {
@@ -85,5 +89,30 @@ test('harvests the real client surface, and every resource has at least one meth
   for (const [resource, methods] of shipped) {
     assert.ok(methods.length > 0, `${resource} harvested no methods`);
     assert.ok(!methods.includes('constructor'), `${resource} harvested its constructor`);
+  }
+});
+
+test('harvests async methods and arrow-function properties, not plain properties or private methods', () => {
+  // Either form ships a public method; missing it let one go out undocumented with the gate green.
+  const dir = mkdtempSync(join(tmpdir(), 'sdk-docs-'));
+  try {
+    writeFileSync(
+      join(dir, 'fake.ts'),
+      [
+        'export class FakeResource {',
+        '  constructor(private readonly client: unknown) {}',
+        '  list(): void {}',
+        '  async create(): Promise<void> {}',
+        '  remove = (id: string): void => {};',
+        '  update = async (id: string): Promise<void> => {};',
+        "  label = 'not a method';",
+        '  private helper(): void {}',
+        '}',
+      ].join('\n'),
+    );
+    const root = fileURLToPath(new URL('..', import.meta.url));
+    assert.deepEqual(harvestShipped(relative(root, dir)).get('fake'), ['list', 'create', 'remove', 'update']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

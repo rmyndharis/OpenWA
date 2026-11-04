@@ -3,6 +3,8 @@ import { RESPONSE_PASSTHROUGH_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { Server } from 'http';
+import { EventEmitter } from 'events';
+import { Readable } from 'stream';
 import { MessageController } from './message.controller';
 import { MessageService } from './message.service';
 import { BulkMessageService } from './bulk-message.service';
@@ -112,7 +114,10 @@ describe('MessageController - message-time selection', () => {
  * controller passed every suite in the repo.
  */
 describe('MessageController — stored media download', () => {
-  const getChatMedia = jest.fn().mockResolvedValue({ buffer: Buffer.from('GIF89a'), mimetype: 'image/gif' });
+  // A fresh stream per call: the service hands over an opened file, which can be read once.
+  const getChatMedia = jest.fn(() =>
+    Promise.resolve({ stream: Readable.from([Buffer.from('GIF89a')]), size: 6, mimetype: 'image/gif' }),
+  );
   const controller = new MessageController(
     { getChatMedia } as unknown as MessageService,
     {} as unknown as BulkMessageService,
@@ -161,7 +166,8 @@ describe('MessageController — stored media download', () => {
     const body = await controller.getChatMedia('session-1', '628123@c.us', 'msg-1', res);
 
     expect(body).toBeInstanceOf(StreamableFile);
-    expect(body.getStream().read()).toEqual(Buffer.from('GIF89a'));
+    expect(body.getHeaders().length).toBe(6);
+    expect(Buffer.concat(await body.getStream().toArray())).toEqual(Buffer.from('GIF89a'));
   });
 });
 
@@ -259,6 +265,137 @@ describe('MessageController - stored history for a chat-restricted key', () => {
 });
 
 /**
+ * The stored list narrows by sender, window and page with options the controller parses itself: a
+ * dropped `from` returns every sender's history to a caller that asked for one.
+ */
+describe('MessageController - stored list options', () => {
+  const getMessages = jest.fn().mockResolvedValue({ messages: [], total: 0 });
+  const controller = new MessageController(
+    { getMessages } as unknown as MessageService,
+    {} as unknown as BulkMessageService,
+    new ChatScopeService(),
+  );
+
+  beforeEach(() => getMessages.mockClear());
+
+  it('passes the sender filter, the page window and the chat to the service', async () => {
+    await controller.getMessages('s1', '111@c.us', '628123@c.us', '25', '50');
+
+    expect(getMessages).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ chatId: '111@c.us', from: '628123@c.us', limit: 25, offset: 50 }),
+    );
+  });
+
+  it('leaves the sender filter, limit and offset unset when none is sent', async () => {
+    await controller.getMessages('s1');
+
+    expect(getMessages).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ chatId: undefined, from: undefined, limit: undefined, offset: undefined }),
+    );
+  });
+});
+
+/**
+ * The live history route reads from WhatsApp on demand, and `includeMedia` can mean dozens of multi-MB
+ * downloads, so what the query turns on and what stops the loop when the client goes away are both
+ * behaviour a caller depends on, and neither shows in the service's own tests.
+ */
+describe('MessageController - live chat history', () => {
+  const getChatHistory = jest.fn().mockResolvedValue([]);
+  const controller = new MessageController(
+    { getChatHistory } as unknown as MessageService,
+    {} as unknown as BulkMessageService,
+    new ChatScopeService(),
+  );
+
+  type ServiceArgs = [
+    sessionId: string,
+    chatId: string,
+    limit: number | undefined,
+    includeMedia: boolean,
+    deep: boolean,
+    signal: AbortSignal,
+  ];
+  const call = async (query: { limit?: string; includeMedia?: string; deep?: string }, res = new EventEmitter()) => {
+    getChatHistory.mockClear();
+    await controller.getChatHistory(
+      's1',
+      '111@c.us',
+      query.limit,
+      query.includeMedia,
+      query.deep,
+      res as unknown as Response,
+    );
+    return getChatHistory.mock.calls[0] as ServiceArgs;
+  };
+
+  it('passes the session and the chat through', async () => {
+    const [sessionId, chatId] = await call({});
+    expect({ sessionId, chatId }).toEqual({ sessionId: 's1', chatId: '111@c.us' });
+  });
+
+  // 'true' and '1' are the two spellings the API spec accepts; any other string leaves the flag off.
+  it.each([
+    ['true', true],
+    ['1', true],
+    ['false', false],
+    ['0', false],
+    ['yes', false],
+    ['TRUE', false],
+    ['', false],
+    [undefined, false],
+  ])('reads includeMedia=%p as %p', async (raw, expected) => {
+    const [, , , includeMedia, deep] = await call({ includeMedia: raw });
+    expect({ includeMedia, deep }).toEqual({ includeMedia: expected, deep: false });
+  });
+
+  it.each([
+    ['true', true],
+    ['1', true],
+    ['false', false],
+    ['0', false],
+    ['yes', false],
+    ['TRUE', false],
+    ['', false],
+    [undefined, false],
+  ])('reads deep=%p as %p', async (raw, expected) => {
+    const [, , , includeMedia, deep] = await call({ deep: raw });
+    expect({ includeMedia, deep }).toEqual({ includeMedia: false, deep: expected });
+  });
+
+  it.each([
+    ['25', 25],
+    ['abc', undefined],
+    ['', undefined],
+    [undefined, undefined],
+  ])('reads limit=%p as %p, leaving a non-number to the service default', async (raw, expected) => {
+    const [, , limit] = await call({ limit: raw });
+    expect(limit).toBe(expected);
+  });
+
+  it('aborts the signal handed to the service when the client disconnects', async () => {
+    const res = new EventEmitter();
+    const [, , , , , signal] = await call({ includeMedia: 'true' }, res);
+
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+    res.emit('close');
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('hands over a live signal even when there is no response to listen on', async () => {
+    getChatHistory.mockClear();
+    await controller.getChatHistory('s1', '111@c.us');
+
+    const signal = (getChatHistory.mock.calls[0] as ServiceArgs)[5];
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+  });
+});
+
+/**
  * A caller may pick its own batchId. 'history' shares the two-segment shape of ':chatId/history',
  * and an id with a reserved character must survive the statusUrl handed back on creation.
  */
@@ -315,5 +452,19 @@ describe('MessageController OpenAPI error responses', () => {
       Object.getOwnPropertyDescriptor(MessageController.prototype, method)!.value as object,
     ) as Record<string, unknown>;
     expect(Object.keys(responses)).toContain('400');
+  });
+
+  // An unknown message answers 404 (MessageNotFoundError), which these routes declare on its own, so
+  // their 400 is never "message not found": a client reading it that way would never handle the 404 the
+  // engine actually raises. The 400 is the missing live engine, or a body that fails validation (an unknown
+  // field, or a value of the wrong type), which is why it also says "invalid request", as send-text does.
+  it.each(['react', 'deleteMessage'])('%s keeps "message not found" out of its 400', method => {
+    const responses = Reflect.getMetadata(
+      'swagger/apiResponse',
+      Object.getOwnPropertyDescriptor(MessageController.prototype, method)!.value as object,
+    ) as Record<string, { description: string }>;
+    expect(responses['400'].description).toBe('Session not active or invalid request');
+    expect(responses['400'].description).not.toMatch(/not found/i);
+    expect(Object.keys(responses)).toContain('404');
   });
 });

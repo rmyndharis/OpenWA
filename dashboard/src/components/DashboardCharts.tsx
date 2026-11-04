@@ -20,6 +20,7 @@ import { useStatsMessagesQuery } from '../hooks/queries';
 import type { MessageType, StatsPeriod } from '../services/api';
 import { formatTick } from '../utils/chartTicks';
 import { messageTypeLabelKey } from '../utils/enumLabels';
+import { isolate, shortenLabel } from '../utils/shortenLabel';
 import './DashboardCharts.css';
 
 const PERIODS: StatsPeriod[] = ['24h', '7d', '30d'];
@@ -185,6 +186,9 @@ export function DashboardCharts() {
                     dataKey="name"
                     width={120}
                     tick={{ fontSize: 12, fill: 'var(--text-secondary)' }}
+                    // A group has no name here, so its label is its numeric id, wider than the axis; the tooltip
+                    // keeps the full label.
+                    tickFormatter={(label: string) => isolate(shortenLabel(String(label)))}
                   />
                   <Tooltip />
                   <Bar dataKey="count" name={t('dashboard.charts.messages')} fill="#25d366" radius={[0, 4, 4, 0]} />

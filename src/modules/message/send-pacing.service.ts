@@ -10,8 +10,10 @@ import { createLogger } from '../../common/services/logger.service';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
-import { EngineNotSentError } from '../../common/errors/engine-not-sent.error';
+import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
+import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+import { toParticipantWid } from '../../engine/identity/wa-id';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 
@@ -41,11 +43,15 @@ export function isPacingLimitedError(error: unknown): boolean {
  * WhatsApp itself returned — EngineRefusedError (403) — and anything unclassified (a raw engine
  * error, a timeout, a 5xx) does. A rate limit WhatsApp answered (EngineThrottledError, a 503 on the wire)
  * counts as well: it is WhatsApp refusing this account's traffic, the signal the breaker exists to act on,
- * even though the send provably went nowhere (see sentNothing).
+ * even though the send provably went nowhere (see sentNothing). A whatsapp-web.js send whose recipient lookup did
+ * not answer (RecipientLookupUnansweredError) is a 500 that does not count: it says nothing about the account, and
+ * neither does any fault the engine marked as raised before anything was sent (markNothingSent), such as a host
+ * where sharp cannot load.
  */
 export function countsTowardSendBreaker(error: unknown): boolean {
   if (error instanceof EngineRefusedError || error instanceof EngineThrottledError) return true;
-  if (error instanceof SsrfBlockedError) return false;
+  if (error instanceof SsrfBlockedError || error instanceof RecipientLookupUnansweredError) return false;
+  if (provesNothingSent(error)) return false;
   if (error instanceof HttpException) {
     const status = error.getStatus();
     // 4xx = the caller's request was wrong; 501 = this engine cannot do it; 503 = the engine is not
@@ -60,19 +66,18 @@ export function countsTowardSendBreaker(error: unknown): boolean {
 /**
  * Whether a send that threw provably never went out, so its admission can be handed back: a client or
  * refusal status (4xx), a 501 for something the engine cannot do, a media URL the SSRF guard blocked
- * before any fetch, a WhatsApp rate limit (EngineThrottledError), turned away before it ran, or a transport
- * failure before the message was handed to WhatsApp (EngineNotSentError). Anything else (a deadline, a
- * dropped socket, a dead page) leaves the outcome unknown; WhatsApp may have taken the message, so its
- * admission stays held.
+ * before any fetch, a WhatsApp rate limit (EngineThrottledError), turned away before it ran, or an error
+ * raised before the message was handed to WhatsApp (EngineNotSentError, or any error markNothingSent
+ * recorded, whatever its status: the proof a keyed send frees its Idempotency-Key on). Anything else (a
+ * deadline, a dropped socket, a dead page) leaves the outcome unknown; WhatsApp may have taken the message,
+ * so its admission stays held.
  */
 export function sentNothing(error: unknown): boolean {
   return (
     error instanceof SsrfBlockedError ||
+    provesNothingSent(error) ||
     (error instanceof HttpException &&
-      (error.getStatus() < 500 ||
-        error instanceof EngineNotSupportedError ||
-        error instanceof EngineThrottledError ||
-        error instanceof EngineNotSentError))
+      (error.getStatus() < 500 || error instanceof EngineNotSupportedError || error instanceof EngineThrottledError))
   );
 }
 
@@ -108,6 +113,8 @@ interface BreakerState {
 interface Admission {
   /** Epoch ms its own term ends: a window from its admission, or from its settle. */
   until: number;
+  /** An untilSettled caller still has no engine outcome to count in the persisted day. */
+  unsettled: boolean;
   /** Epoch ms it stops being held, so only its row counts from then on; refreshed by heldAdmissions. */
   heldUntil: number;
   /** Reset at UTC rollover, then filled from the first current-day count. */
@@ -273,9 +280,16 @@ export class SendPacingService {
     const sentToday = await this.messageRepository.count({
       where: { sessionId, direction: MessageDirection.OUTGOING, createdAt: MoreThanOrEqual(dayStart) },
     });
+    // A stale count must not reset the new day's held admissions.
+    if (startOfUtcDay(new Date()).getTime() !== dayStart.getTime()) {
+      return this.assertSendAllowed(sessionId, chatId, opts);
+    }
     // The overall cap is the cheaper check and bounds everything, so it settles before the cold probe.
     this.assertUnderDailyCap(sessionId, dayStart, ageDays, allowance, sentToday);
     const cold = await this.readColdReachouts(sessionId, chatId, dayStart, ageDays, config);
+    if (startOfUtcDay(new Date()).getTime() !== dayStart.getTime()) {
+      return this.assertSendAllowed(sessionId, chatId, opts);
+    }
 
     // Judged again, and admitted, with no await from here on: a concurrent request admitted while this
     // one was reading must count, and this one must count for the next.
@@ -293,6 +307,7 @@ export class SendPacingService {
         : Date.now() + (opts.untilSettled ? UNSETTLED_ADMISSION_MAX_MS : ADMISSION_WINDOW_MS);
       const admission: Admission = {
         until,
+        unsettled: opts.untilSettled === true,
         heldUntil: until,
         sentToday,
         cold: cold ? { key, coldToday: cold.coldToday } : null,
@@ -304,6 +319,7 @@ export class SendPacingService {
       return (mayHaveSent = false) => {
         if (settled) return;
         settled = true;
+        admission.unsettled = false;
         if (mayHaveSent) {
           admission.until = Date.now() + ADMISSION_WINDOW_MS;
           return;
@@ -340,17 +356,16 @@ export class SendPacingService {
   private heldAdmissions(sessionId: string, dayStart: Date): Admission[] {
     const hold = this.holds.get(sessionId);
     if (!hold) return [];
+    const now = Date.now();
     if (hold.dayStartMs !== dayStart.getTime()) {
-      // Preparing sends still have no row to count today. Keep their settlement identity and rebase
-      // their snapshots on the new day's first count; yesterday's finite holds have expired.
-      hold.admissions = hold.admissions.filter(a => a.until === Infinity);
+      // Preparations and engine calls still running may write today; completed yesterday's sends do not.
+      hold.admissions = hold.admissions.filter(a => a.until === Infinity || (a.unsettled && a.until > now));
       hold.dayStartMs = dayStart.getTime();
       for (const admission of hold.admissions) {
         admission.sentToday = null;
         if (admission.cold) admission.cold.coldToday = null;
       }
     }
-    const now = Date.now();
     // The cold terms lapse as a whole, once no cold admission's own term is running: a warm admission read no
     // cold count, so it cannot have missed a cold row, and letting it hold them would keep a cold send that
     // wrote no row counted for as long as warm sends keep arriving. Cleared rather than skipped, so a cold
@@ -400,7 +415,7 @@ export class SendPacingService {
     // The same id twice in one request is one contact, and must cost one. Each contact is probed
     // under both user-id dialects (see dialectVariants) — a contact known under the other spelling
     // is not a stranger.
-    const unique = [...new Set(contactIds)];
+    const unique = [...new Set(contactIds.map(toParticipantWid))];
     const variantsByContact = new Map(unique.map(id => [id, dialectVariants(id)]));
     const knownRows = await this.messageRepository
       .createQueryBuilder('m')

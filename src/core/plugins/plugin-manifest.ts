@@ -93,6 +93,64 @@ export function validatePluginManifest(
   }
 }
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * Remove, in place and at any depth, a configSchema `properties` or `items` that is not a plain object and a
+ * `properties` entry that is not a field object. Every reader of the schema (secret masking and restore, the
+ * dashboard form) takes such an entry as a field and fails on a null one, which took down the plugin list for
+ * every plugin. The key is then read as an undescribed one, as seedConfigDefaults already does. Not a refusal:
+ * such a package loads today.
+ */
+export function dropMalformedConfigFields(schema: unknown): void {
+  if (!isPlainObject(schema)) return;
+  if ('properties' in schema) {
+    const properties = schema.properties;
+    if (!isPlainObject(properties)) {
+      delete schema.properties;
+    } else {
+      for (const [key, field] of Object.entries(properties)) {
+        if (isPlainObject(field)) dropMalformedConfigFields(field);
+        else delete properties[key];
+      }
+    }
+  }
+  if ('items' in schema) {
+    if (isPlainObject(schema.items)) dropMalformedConfigFields(schema.items);
+    else delete schema.items;
+  }
+}
+
+const dropNonText = (obj: Record<string, unknown>, ...keys: string[]): void => {
+  for (const key of keys) if (key in obj && typeof obj[key] !== 'string') delete obj[key];
+};
+
+/**
+ * Remove, in place, the manifest text the dashboard renders when it is not text: `description` and `author`, the
+ * entries of `provides` (all of it when it is not a list), and a locale's `name`, `description` and config field
+ * `title`/`description` under `i18n`. Each is a React child on the plugin list, and an object there took down the
+ * Plugins page for every operator, the page that would disable or remove the plugin. Not a refusal: such a package
+ * loads today.
+ */
+export function dropMalformedDisplayFields(manifest: PluginManifest): void {
+  const m = manifest as unknown as Record<string, unknown>;
+  dropNonText(m, 'description', 'author');
+  if ('provides' in m) {
+    if (Array.isArray(m.provides)) m.provides = m.provides.filter(item => typeof item === 'string');
+    else delete m.provides;
+  }
+  if (!isPlainObject(m.i18n)) return;
+  for (const locale of Object.values(m.i18n)) {
+    if (!isPlainObject(locale)) continue;
+    dropNonText(locale, 'name', 'description');
+    if (!isPlainObject(locale.config)) continue;
+    for (const field of Object.values(locale.config)) {
+      if (isPlainObject(field)) dropNonText(field, 'title', 'description');
+    }
+  }
+}
+
 function assertStringArray(value: unknown, field: string): void {
   if (value !== undefined && value !== null && !(Array.isArray(value) && value.every(v => typeof v === 'string'))) {
     throw new Error(`manifest.json ${field} must be an array of strings`);

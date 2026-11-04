@@ -272,3 +272,35 @@ test('the throttle backoff doubles on each retry', async () => {
   }
   assert.deepEqual(delays, [40, 80]);
 });
+
+test('a walk does not retry a 503', async () => {
+  let calls = 0;
+  await assert.rejects(
+    retryThrottled(async () => {
+      calls += 1;
+      throw httpError(503);
+    }, 5),
+    { status: 503 },
+  );
+  assert.equal(calls, 1);
+});
+
+test('a retried 503 waits at least its Retry-After, up to ten seconds, and a 429 keeps its fixed waits', async () => {
+  const delays: number[] = [];
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((fn: () => void, ms?: number) => {
+    delays.push(ms ?? 0);
+    return realSetTimeout(fn, 0);
+  }) as typeof setTimeout;
+  const refuse = (code: number, retryAfterSeconds: number) => async () => {
+    throw Object.assign(httpError(code), { retryAfterSeconds });
+  };
+  try {
+    await assert.rejects(retryThrottled(refuse(503, 2), 40, [503]), { status: 503 });
+    await assert.rejects(retryThrottled(refuse(503, 3600), 40, [503]), { status: 503 });
+    await assert.rejects(retryThrottled(refuse(429, 3600), 40, [429]), { status: 429 });
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+  assert.deepEqual(delays, [2000, 2000, 10_000, 10_000, 40, 80]);
+});

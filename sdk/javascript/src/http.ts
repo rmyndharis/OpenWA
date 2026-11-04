@@ -44,7 +44,7 @@ export interface ClientConfig {
   fetch?: FetchLike;
 }
 
-/** Stands in for an empty or dot id; encodeURIComponent output never contains it. */
+/** Stands in for an empty, dot or unencodable id; encodeURIComponent output never contains it. */
 const BLANK_SEGMENT = '\u0000';
 
 /**
@@ -56,27 +56,38 @@ const BLANK_SEGMENT = '\u0000';
  * An empty, `.` or `..` segment becomes {@link BLANK_SEGMENT}, which `send()`
  * rejects: fetch resolves dot segments before sending, and an empty one means
  * a required id was blank, so either would reach the parent resource instead
- * of the intended one. Marking it here rather than throwing keeps the refusal
- * a rejection of the returned promise, since resource methods are not async.
+ * of the intended one. So does an id holding a lone surrogate, which
+ * encodeURIComponent cannot encode. Marking it here rather than throwing keeps
+ * the refusal a rejection of the returned promise, since resource methods are
+ * not async.
  */
 export function encodeSegment(segment: string | number): string {
   const text = String(segment);
   if (text === '' || text === '.' || text === '..') return BLANK_SEGMENT;
-  return encodeURIComponent(text).replace(/%40/g, '@').replace(/%3A/g, ':').replace(/%2B/g, '+');
+  try {
+    return encodeURIComponent(text).replace(/%40/g, '@').replace(/%3A/g, ':').replace(/%2B/g, '+');
+  } catch {
+    // URIError for a lone surrogate: thrown here it would escape the promise the caller holds.
+    return BLANK_SEGMENT;
+  }
 }
 
 /** Build a URL with serialized query params, omitting `undefined`/`null` values. */
 export function buildUrl(baseUrl: string, path: string, query?: object): string {
-  const url = `${baseUrl.replace(/\/$/, '')}${path}`;
-  if (!query) return url;
+  const base = baseUrl.replace(/\/$/, '');
+  if (!query) return `${base}${path}`;
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined || value === null) continue;
     params.append(key, String(value));
   }
   const qs = params.toString();
-  // A raw path may already carry a query string; extend it rather than start a second one.
-  return qs ? `${url}${path.includes('?') ? '&' : '?'}${qs}` : url;
+  if (!qs) return `${base}${path}`;
+  // A raw path may already carry a query string; extend it rather than start a second one. The values go
+  // ahead of any fragment, since fetch drops everything after a '#' and the server would never see them.
+  const hash = path.indexOf('#');
+  const head = hash === -1 ? path : path.slice(0, hash);
+  return `${base}${head}${head.includes('?') ? '&' : '?'}${qs}${hash === -1 ? '' : path.slice(hash)}`;
 }
 
 /**
@@ -178,12 +189,19 @@ async function send<T>(
   const rawPath = tail.split(/[?#]/, 1)[0];
   let pathOnly = rawPath.replace(/[\t\n\r]/g, '');
   if (rawPath.length === tail.length) pathOnly = pathOnly.replace(/[\x00-\x20]+$/, '');
-  for (const segment of pathOnly.split(/[/\\]/).slice(1)) {
+  // %2F and %5C split too: a proxy that decodes them before it resolves dot segments reads an id sent as
+  // `..%2Fx` as `../x` and sends the call to another route.
+  for (const segment of pathOnly.split(/[/\\]|%2f|%5c/i).slice(1)) {
     const dots = segment.replace(/%2e/gi, '.');
     if (dots === '.' || dots === '..') {
       throw new TypeError(`OpenWA: dot path segment in ${JSON.stringify(options.path)}`);
     }
   }
+  // fetch upper-cases GET, POST, PUT and DELETE itself but sends PATCH and any other verb as written, and the
+  // gateway answers 400 to a lowercase method; a caller without the HttpMethod type can pass one. A missing
+  // method stays undefined, which fetch sends as GET. Read before the timer is armed: a value that is not a
+  // string throws here, and nothing would clear the timer.
+  const method = options.method?.toUpperCase();
   const timeoutMs = toTimeoutMs(options.timeoutMs ?? config.timeoutMs);
 
   const controller = new AbortController();
@@ -213,7 +231,7 @@ async function send<T>(
   const doFetch = config.fetch;
   try {
     const res = await doFetch(url, {
-      method: options.method,
+      method,
       headers,
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
@@ -224,7 +242,7 @@ async function send<T>(
     });
 
     if (!res.ok) {
-      const context = `${options.method} ${options.path}`;
+      const context = `${method} ${options.path}`;
       const apiError = await OpenWAApiError.fromResponse(res, context);
       throw classifyApiError(apiError.status, apiError.message, apiError.body, apiError.errorKind, apiError.headers);
     }

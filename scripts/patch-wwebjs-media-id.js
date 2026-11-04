@@ -17,6 +17,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const UTILS_PATH = path.join('src', 'util', 'Injected', 'Utils.js');
@@ -51,7 +52,7 @@ function applyBackport(wwjsDir = DEFAULT_WWJS) {
     );
   }
 
-  fs.writeFileSync(utilsFile, source.replace(ANCHOR, FIX + ANCHOR));
+  writeFileAtomic(utilsFile, source.replace(ANCHOR, FIX + ANCHOR));
   return { skipped: false, note: 'media model id stripped from outgoing messages' };
 }
 

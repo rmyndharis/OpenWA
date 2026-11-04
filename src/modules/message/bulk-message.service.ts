@@ -15,7 +15,7 @@ import { ShutdownService } from '../../common/services/shutdown.service';
 import { ConfigService } from '@nestjs/config';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Not, QueryDeepPartialEntity, Repository } from 'typeorm';
+import { In, IsNull, Not, QueryDeepPartialEntity, Repository, EntityManager } from 'typeorm';
 import { createHash, randomUUID } from 'crypto';
 import { setTimeout } from 'node:timers/promises';
 import {
@@ -26,6 +26,8 @@ import {
   BatchMessageResult,
 } from './entities/message-batch.entity';
 import { SendBulkMessageDto } from './dto/bulk-message.dto';
+import { MENTIONS_MAX, MENTION_WID_MAX_LENGTH } from './dto/send-message.dto';
+import { isMentionWid } from './dto/is-mention-wid.validator';
 import { isMediaUrl } from '../../common/media/media-url';
 import { MessageStatus } from './entities/message.entity';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -58,6 +60,14 @@ interface BulkMessageContent {
   video?: { url?: string; base64?: string; mimetype?: string; filename?: string };
   audio?: { url?: string; base64?: string; mimetype?: string; filename?: string; ptt?: boolean };
   document?: { url?: string; base64?: string; mimetype?: string; filename?: string };
+}
+
+/**
+ * The type a bulk item is reported and stored as: an audio item flagged ptt is a voice note, so the send
+ * hooks and the stored row say 'voice', as they do for a single voice send.
+ */
+function messageTypeOf(type: string, content: BulkMessageContent): string {
+  return type === 'audio' && content.audio?.ptt ? 'voice' : type;
 }
 
 /**
@@ -155,7 +165,10 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
    * Registered here, before any bootstrap hook can start a session.
    */
   onModuleInit(): void {
-    this.ownership?.onAdoption(sessionId => this.reapProcessingBatches(sessionId, 'session taken from a lapsed node'));
+    this.ownership?.onAdoption(
+      (sessionId, manager) => this.reapProcessingBatches(sessionId, 'session taken from a lapsed node', manager),
+      true,
+    );
   }
 
   /**
@@ -172,13 +185,17 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
    * because the two cannot diverge: only the engine holder can send.
    */
   async onApplicationBootstrap(): Promise<void> {
+    // Ids first, then one whole row at a time: an unfinished row still holds its media payloads, and a run that
+    // crashed with many of them must not need room for all at once, nor for a live peer's.
     const unfinished = await this.batchRepository.find({
+      select: { id: true, sessionId: true },
       where: { status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
     });
     const orphaned = await this.ownedByThisNode(unfinished);
     let failed = 0;
-    for (const batch of orphaned) {
-      if (await this.failOrphanedBatch(batch)) failed++;
+    for (const { id } of orphaned) {
+      const batch = await this.batchRepository.findOne({ where: { id } });
+      if (await this.failOrphanedBatch(batch ?? { id })) failed++;
     }
     if (failed > 0) {
       this.logger.warn(`Marked ${failed} orphaned unfinished batch(es) FAILED on startup (interrupted by a restart)`);
@@ -223,6 +240,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
   private async failOrphanedBatch(
     batch: Pick<MessageBatch, 'id'> & Partial<MessageBatch>,
     withRunState = false,
+    repository = this.batchRepository,
   ): Promise<boolean> {
     const set: QueryDeepPartialEntity<MessageBatch> = { status: BatchStatus.FAILED, completedAt: new Date() };
     if (batch.messages) {
@@ -234,7 +252,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       if (batch.results) set.results = batch.results;
       if (batch.currentIndex !== undefined) set.currentIndex = batch.currentIndex;
     }
-    const failed = await this.batchRepository.update(
+    const failed = await repository.update(
       { id: batch.id, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
       set,
     );
@@ -253,15 +271,19 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
    * the session before or still runs a stale engine for it: createBatch registers every batch before
    * its row is written, so only the lapsed node's batches go.
    */
-  async reapProcessingBatches(sessionId: string, reason: string): Promise<number> {
+  async reapProcessingBatches(sessionId: string, reason: string, manager?: EntityManager): Promise<number> {
+    const repository = manager?.getRepository(MessageBatch) ?? this.batchRepository;
+    // Ids first, as at boot: the payloads are read one row at a time, and never for a batch left alone.
     const unfinished = (
-      await this.batchRepository.find({
+      await repository.find({
+        select: { id: true },
         where: { status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]), sessionId },
       })
     ).filter(batch => !this.processingBatches.has(batch.id));
     let failed = 0;
-    for (const batch of unfinished) {
-      if (await this.failOrphanedBatch(batch)) failed++;
+    for (const { id } of unfinished) {
+      const batch = await repository.findOne({ where: { id } });
+      if (await this.failOrphanedBatch(batch ?? { id }, false, repository)) failed++;
     }
     if (failed > 0) {
       this.logger.warn(`Marked ${failed} unfinished batch(es) FAILED for session ${sessionId} (${reason})`);
@@ -648,7 +670,11 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       // decide; a rewritten chatId is ignored, the item always goes to its own msg.chatId.
       const gate = await this.hookManager.execute(
         'message:sending',
-        { sessionId: batch.sessionId, input: { ...content, chatId: msg.chatId }, type: msg.type },
+        {
+          sessionId: batch.sessionId,
+          input: { ...content, chatId: msg.chatId },
+          type: messageTypeOf(msg.type, content),
+        },
         { sessionId: batch.sessionId, source: 'BulkMessageService' },
       );
       if (!gate.continue) {
@@ -725,7 +751,13 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
 
       this.logger.debug(`Batch ${batch.batchId}: Sent message ${i + 1}/${batch.messages.length} to ${msg.chatId}`);
     } catch (error) {
-      if (!engineAsked) settleAdmission?.();
+      if (!engineAsked) {
+        settleAdmission?.();
+        // A session deleted under an item the engine was never asked to send is no delivery failure to
+        // count or report; the run stops here and the batch goes with the session (or is failed by the
+        // delete that did not complete).
+        lifetime.assertCurrent();
+      }
       result.status = BatchMessageStatus.FAILED;
       // Sanitize: an SSRF block names an internal address — never store/return/log it verbatim.
       const sanitized = sanitizeBatchError(error);
@@ -744,7 +776,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
             sessionId: batch.sessionId,
             error: sanitized.message,
             input: { ...content, chatId: msg.chatId },
-            type: msg.type,
+            type: messageTypeOf(msg.type, content),
           },
           { sessionId: batch.sessionId, source: 'BulkMessageService' },
         );
@@ -904,6 +936,20 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
    * creation (a 400) and again per item after variables and the message:sending gate.
    */
   private assertItemContent(type: string, content: BulkMessageContent, beforeRender = false): void {
+    // A mention may be a placeholder until it is rendered, so the DTO accepts it unchecked. What is sent is
+    // held to the single-send rule: a malformed WID reaches the engine as an opaque failure otherwise.
+    const mentions = content?.mentions;
+    if (
+      !beforeRender &&
+      mentions != null &&
+      (!Array.isArray(mentions) ||
+        mentions.length > MENTIONS_MAX ||
+        Array.from(mentions).some(
+          wid => typeof wid !== 'string' || wid.length > MENTION_WID_MAX_LENGTH || !isMentionWid(wid),
+        ))
+    ) {
+      throw new BadRequestException('content.mentions must contain bounded individual WIDs');
+    }
     if (type === 'text') {
       if (typeof content?.text !== 'string' || !content.text) {
         throw new BadRequestException('A text item requires a non-empty content.text');
@@ -1048,8 +1094,6 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     // media item (audio carries none). Other keys on the item were never delivered.
     const media = type === 'text' ? undefined : content[type as 'image' | 'video' | 'audio' | 'document'];
     const body = type === 'text' ? content.text : type === 'audio' ? undefined : content.caption;
-    // A bulk audio item flagged ptt is a voice note; store it in the 'voice' bucket like inbound PTT.
-    const persistType = type === 'audio' && content.audio?.ptt ? 'voice' : type;
     try {
       await this.messageService.saveOutgoingMessage(
         sessionId,
@@ -1057,7 +1101,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
           waMessageId: result.id,
           chatId,
           body: body ?? '',
-          type: persistType,
+          type: messageTypeOf(type, content),
           timestamp: result.timestamp,
           status: MessageStatus.SENT,
           metadata: media

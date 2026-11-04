@@ -94,7 +94,9 @@ describe('StorageService (s3) client init', () => {
     );
     await flush();
 
-    expect(mockedS3Client).toHaveBeenCalledTimes(1);
+    // One client for the store and one for the downloads openFile streams, built from the same config.
+    expect(mockedS3Client).toHaveBeenCalledTimes(2);
+    expect(mockedS3Client.mock.calls[1][0]).toEqual(mockedS3Client.mock.calls[0][0]);
     const cfg = lastConfig();
     expect(cfg.endpoint).toBeUndefined(); // AWS derives it from region
     expect(cfg.forcePathStyle).toBeFalsy(); // AWS uses virtual-hosted addressing
@@ -110,7 +112,8 @@ describe('StorageService (s3) client init', () => {
     );
     await flush();
 
-    expect(mockedS3Client).toHaveBeenCalledTimes(1);
+    expect(mockedS3Client).toHaveBeenCalledTimes(2);
+    expect(mockedS3Client.mock.calls[1][0]).toEqual(mockedS3Client.mock.calls[0][0]);
     const cfg = lastConfig();
     expect(cfg.endpoint).toBe('http://minio:9000');
     expect(cfg.forcePathStyle).toBe(true);
@@ -123,10 +126,13 @@ describe('StorageService (s3) client init', () => {
     new StorageService(makeConfig({ accessKeyId: 'minio', secretAccessKey: 'minio123', region: 'us-east-1' }));
     await flush();
 
-    expect(lastConfig().requestHandler).toEqual({
-      connectionTimeout: S3_CONNECT_TIMEOUT_MS,
-      socketTimeout: S3_SOCKET_TIMEOUT_MS,
-    });
+    expect(mockedS3Client.mock.calls).toHaveLength(2);
+    for (const [cfg] of mockedS3Client.mock.calls) {
+      expect(cfg.requestHandler).toEqual({
+        connectionTimeout: S3_CONNECT_TIMEOUT_MS,
+        socketTimeout: S3_SOCKET_TIMEOUT_MS,
+      });
+    }
   });
 
   it('falls back to local (no client) when credentials are missing, and says so', async () => {

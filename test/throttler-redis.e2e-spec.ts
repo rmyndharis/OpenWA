@@ -75,6 +75,8 @@ describeWithRedis('RedisThrottlerStorage against a real Redis', () => {
 
   it('blocks past the limit until the window expires, without extending it', async () => {
     for (let i = 0; i < LIMIT; i++) await storage.increment('busy', TTL_MS, LIMIT, 60_000, throttler);
+    // Back to back, the blocked hit would read a full window whether or not a hit re-arms it.
+    await new Promise(resolve => setTimeout(resolve, 1100));
 
     const record = await storage.increment('busy', TTL_MS, LIMIT, 60_000, throttler);
     const pttl = await redis.pttl(keyOf('busy'));
@@ -82,8 +84,9 @@ describeWithRedis('RedisThrottlerStorage against a real Redis', () => {
     expect(record.totalHits).toBe(LIMIT + 1);
     expect(record.isBlocked).toBe(true);
     expect(record.timeToBlockExpire).toBeGreaterThanOrEqual(Math.ceil(pttl / 1000));
-    expect(record.timeToBlockExpire).toBeLessThanOrEqual(TTL_MS / 1000);
+    expect(record.timeToBlockExpire).toBeLessThanOrEqual((TTL_MS - 1000) / 1000);
     expect(pttl).toBeGreaterThan(0);
+    expect(pttl).toBeLessThanOrEqual(TTL_MS - 1000);
   });
 });
 
@@ -96,29 +99,30 @@ describeWithRedis('the throttler client against a Redis that stops answering', (
   let blackhole = false;
   let proxy: net.Server;
   let storage: RedisThrottlerStorage;
+  let client: Redis;
   let cleaner: Redis;
 
   beforeAll(async () => {
-    proxy = net.createServer(client => {
+    proxy = net.createServer(peer => {
       const upstream = net.connect(REDIS_PORT, REDIS_HOST);
-      sockets.add(client).add(upstream);
-      client.on('data', data => {
+      sockets.add(peer).add(upstream);
+      peer.on('data', data => {
         if (!blackhole) upstream.write(data);
       });
       upstream.on('data', data => {
-        if (!blackhole) client.write(data);
+        if (!blackhole) peer.write(data);
       });
       const end = (): void => {
-        client.destroy();
+        peer.destroy();
         upstream.destroy();
       };
-      client.on('close', end);
+      peer.on('close', end);
       upstream.on('close', end);
-      client.on('error', () => undefined);
+      peer.on('error', () => undefined);
       upstream.on('error', () => undefined);
     });
     await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve));
-    const client = new Redis({
+    client = new Redis({
       ...buildThrottlerRedisOptions(),
       host: '127.0.0.1',
       port: (proxy.address() as AddressInfo).port,
@@ -132,6 +136,10 @@ describeWithRedis('the throttler client against a Redis that stops answering', (
 
   afterAll(async () => {
     blackhole = false;
+    // The client can still report the stall it was put through after this file is done, when the mocked logger is
+    // gone and a log line fails the whole run: its errors have nobody left to tell.
+    client.removeAllListeners('error');
+    client.on('error', () => undefined);
     const keys = await cleaner.keys(`openwa:throttle:*:${throttler}*`);
     if (keys.length) await cleaner.del(...keys);
     cleaner.disconnect();

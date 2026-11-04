@@ -24,6 +24,11 @@ export function runWithRequestId<T>(requestId: string, fn: () => T): T {
   return requestContextStorage.run({ requestId }, fn);
 }
 
+/** Run `fn`, and what it schedules, with no request context: work a request started that is not part of it. */
+export function outsideRequest<T>(fn: () => T): T {
+  return requestContextStorage.exit(fn);
+}
+
 /** The active request id, or `undefined` when not running inside a request scope. */
 export function getRequestId(): string | undefined {
   return requestContextStorage.getStore()?.requestId;
