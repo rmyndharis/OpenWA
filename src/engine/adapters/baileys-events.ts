@@ -57,6 +57,7 @@ import type { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter'
 import { type createLogger } from '../../common/services/logger.service';
 import { createSilentLogger } from './baileys-logger';
 import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
+import { GroupAckAggregator } from './baileys-group-ack';
 import { chatKind, parseWaId, userPart, type ChatKind } from '../identity/wa-id';
 
 /**
@@ -264,6 +265,14 @@ export interface BaileysEventsHost {
   getOnMessageAck(): EngineEventCallbacks['onMessageAck'];
   /** The currently-registered onMessageReceipt callback, if any (assigned at initialize()). */
   getOnMessageReceipt(): EngineEventCallbacks['onMessageReceipt'];
+  /**
+   * The members of a group, one list per member holding every id form the roster gives them (`id`, `lid`,
+   * `phoneNumber`), from the cached metadata when it is fresh. Null when the roster cannot be read. Without it
+   * a group message keeps no aggregate ack.
+   */
+  readGroupRoster?(groupId: string): Promise<string[][] | null>;
+  /** The phone user part the session knows for a lid, or null; no network read. */
+  resolvePhone?(jid: string): string | null;
   /** The currently-registered onGroupEvent callback, if any (assigned at initialize()). */
   getOnGroupEvent(): EngineEventCallbacks['onGroupEvent'];
   /** The currently-registered onEventResponse callback, if any (assigned at initialize()). */
@@ -438,7 +447,26 @@ export class BaileysEvents {
    */
   private storeGeneration = 0;
 
+  /**
+   * Turns the per-member receipts of a group message into the `delivered` and `read` acks Baileys never raises
+   * for one (its 1:1 status update does not fire for a group).
+   */
+  private readonly groupAcks = new GroupAckAggregator({
+    readRoster: groupId => this.readMemberRoster(groupId),
+    resolvePhone: jid => this.host.resolvePhone?.(jid) ?? null,
+    report: (messageId, status, chatId) => this.host.getOnMessageAck()?.(messageId, status, chatId),
+    warn: (message, context) => this.host.logger.warn(message, context),
+  });
+
   constructor(private readonly host: BaileysEventsHost) {}
+
+  /** The members of a group other than this account, or null when the roster is unavailable. */
+  private async readMemberRoster(groupId: string): Promise<string[][] | null> {
+    const roster = await this.host.readGroupRoster?.(groupId);
+    if (!roster) return null;
+    const isSelf = this.selfMatcher();
+    return roster.filter(forms => !forms.some(isSelf));
+  }
 
   getStoredWriteGeneration(): number {
     return this.storeGeneration;
@@ -1806,7 +1834,7 @@ export class BaileysEvents {
     }>,
   ): void {
     const onReceipt = this.host.getOnMessageReceipt();
-    if (!onReceipt) {
+    if (!onReceipt && !this.host.getOnMessageAck()) {
       return;
     }
     const isSelf = this.selfMatcher();
@@ -1835,7 +1863,13 @@ export class BaileysEvents {
           status,
           timestamp: toUnixSeconds(ts),
         };
-        onReceipt(event);
+        onReceipt?.(event);
+        void this.groupAcks.record(event).catch(error =>
+          this.host.logger.warn('Following the acks of a group message failed', {
+            messageId: event.messageId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
       }
     }
   }

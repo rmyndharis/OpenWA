@@ -762,6 +762,103 @@ describe('BaileysEvents.handleMessageReceiptUpdate', () => {
   });
 });
 
+// Baileys raises a group message's receipts member by member and never its 1:1 status update, so the message
+// would stay at "sent". Each member reports in the dialect the group addresses them by (a lid), once per device.
+describe('BaileysEvents group message acks', () => {
+  const group = '120363000000000001@g.us';
+  const alice = '111111111111111@lid';
+  const bob = '222222222222222@lid';
+  // The roster as Baileys lists a lid-addressed group: the lid with the phone number beside it, and this
+  // account among the members.
+  const roster = [
+    [alice, '6281111111111@s.whatsapp.net'],
+    [bob, '6282222222222@s.whatsapp.net'],
+    ['999999999999999@lid', '6280000000000@s.whatsapp.net'],
+  ];
+  const own = { user: { id: '6280000000000:3@s.whatsapp.net', lid: '999999999999999@lid' } } as unknown as WASocket;
+  const delivered = (userJid: string, remoteJid = group) => ({
+    key: { id: 'OUT1', remoteJid, fromMe: true },
+    receipt: { userJid, receiptTimestamp: 1 },
+  });
+  const read = (userJid: string) => ({
+    key: { id: 'OUT1', remoteJid: group, fromMe: true },
+    receipt: { userJid, readTimestamp: 2 },
+  });
+  const settle = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+  function setup(overrides: Partial<BaileysEventsHost> = {}) {
+    const onMessageAck = jest.fn();
+    const readGroupRoster = jest.fn(() => Promise.resolve(roster));
+    const events = new BaileysEvents(
+      makeHost({ getOnMessageAck: () => onMessageAck, readGroupRoster, getSocketOrNull: () => own, ...overrides }),
+    );
+    return { events, onMessageAck, readGroupRoster };
+  }
+
+  it('reports delivered and then read once every other member has received and read the message', async () => {
+    const { events, onMessageAck, readGroupRoster } = setup();
+    events.handleMessageReceiptUpdate([delivered(alice), delivered(alice), delivered('999999999999999@lid')]);
+    await settle();
+    expect(onMessageAck).not.toHaveBeenCalled();
+
+    events.handleMessageReceiptUpdate([delivered(bob)]);
+    await settle();
+    expect(onMessageAck.mock.calls).toEqual([['OUT1', 'delivered', group]]);
+
+    events.handleMessageReceiptUpdate([read(alice)]);
+    await settle();
+    expect(onMessageAck).toHaveBeenCalledTimes(1);
+
+    events.handleMessageReceiptUpdate([read(bob)]);
+    await settle();
+    expect(onMessageAck.mock.calls).toEqual([
+      ['OUT1', 'delivered', group],
+      ['OUT1', 'read', group],
+    ]);
+    expect(readGroupRoster).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not wait for this account, whose own devices are left out of the roster', async () => {
+    const { events, onMessageAck } = setup();
+    events.handleMessageReceiptUpdate([delivered(alice), delivered(bob)]);
+    await settle();
+    expect(onMessageAck.mock.calls).toEqual([['OUT1', 'delivered', group]]);
+  });
+
+  it('still reports the per-recipient events beside the aggregate ack', async () => {
+    const onMessageReceipt = jest.fn();
+    const { events, onMessageAck } = setup({ getOnMessageReceipt: () => onMessageReceipt });
+    events.handleMessageReceiptUpdate([delivered(alice), delivered(bob)]);
+    await settle();
+    expect(onMessageReceipt).toHaveBeenCalledTimes(2);
+    expect(onMessageAck).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a status post at sent', async () => {
+    const { events, onMessageAck, readGroupRoster } = setup();
+    events.handleMessageReceiptUpdate([delivered(alice, 'status@broadcast'), delivered(bob, 'status@broadcast')]);
+    await settle();
+    expect(readGroupRoster).not.toHaveBeenCalled();
+    expect(onMessageAck).not.toHaveBeenCalled();
+  });
+
+  it('reports no ack when the engine cannot read a roster, and still reports the receipts', async () => {
+    const onMessageReceipt = jest.fn();
+    const { events, onMessageAck } = setup({ readGroupRoster: undefined, getOnMessageReceipt: () => onMessageReceipt });
+    events.handleMessageReceiptUpdate([delivered(alice), delivered(bob)]);
+    await settle();
+    expect(onMessageReceipt).toHaveBeenCalledTimes(2);
+    expect(onMessageAck).not.toHaveBeenCalled();
+  });
+
+  it('does nothing without an ack callback or a receipt callback', async () => {
+    const { events, readGroupRoster } = setup({ getOnMessageAck: () => undefined });
+    events.handleMessageReceiptUpdate([delivered(alice), delivered(bob)]);
+    await settle();
+    expect(readGroupRoster).not.toHaveBeenCalled();
+  });
+});
+
 // Baileys' event buffer merges a receipt that lands while a message's own upsert is still buffered (about
 // 100 ms after the send, or inside an offline replay) into that upsert as `userReceipt`, and raises no
 // message-receipt.update for it.

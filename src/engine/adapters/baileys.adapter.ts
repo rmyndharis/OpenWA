@@ -178,6 +178,20 @@ export class BaileysAdapter implements IWhatsAppEngine {
       getOnMessageReaction: () => this.callbacks.onMessageReaction,
       getOnMessageAck: () => this.callbacks.onMessageAck,
       getOnMessageReceipt: () => this.callbacks.onMessageReceipt,
+      readGroupRoster: async groupId => {
+        const sock = this.sock;
+        if (!sock) return null;
+        const query = () =>
+          withQueryDeadline(
+            sock.groupMetadata(groupId),
+            BAILEYS_QUERY_BUDGET_MS,
+            'WhatsApp did not answer the group metadata query in time',
+          );
+        const metadata = (await this.lifecycle.groupMetadata.read(groupId, query)) ?? (await query());
+        return metadata.participants.map(participant =>
+          [participant.id, participant.lid, participant.phoneNumber].filter((jid): jid is string => !!jid),
+        );
+      },
       getOnGroupEvent: () => this.callbacks.onGroupEvent,
       getOnEventResponse: () => this.callbacks.onEventResponse,
       getOnCall: () => this.callbacks.onCall,
