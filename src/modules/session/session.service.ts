@@ -49,6 +49,7 @@ import {
   resolveReconnectConfig,
 } from './session-engine-lifecycle.service';
 import { SessionOwnershipService } from './session-ownership.service';
+import { sessionNotFound } from './session-id.pipe';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { ListingMemo } from '../../common/utils/listing-memo';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
@@ -529,7 +530,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   async findOne(id: string): Promise<Session> {
     const session = await this.sessionRepository.findOne({ where: { id } });
     if (!session) {
-      throw new NotFoundException(`Session with id '${id}' not found`);
+      throw sessionNotFound(id);
     }
     return this.attachRuntimeState(session);
   }
@@ -590,7 +591,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         .where('session.id = :id', { id })
         .getRawOne<{ config: string | null }>();
       if (!row) {
-        throw new NotFoundException(`Session with id '${id}' not found`);
+        throw sessionNotFound(id);
       }
       const stored = row.config;
       const config = { ...((stored ? JSON.parse(stored) : null) as Record<string, unknown> | null) };

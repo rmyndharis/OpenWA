@@ -34,6 +34,7 @@ import { type createLogger } from '../../common/services/logger.service';
 import { HookManager } from '../../core/hooks';
 import { SessionLifecycleFences } from './session-lifecycle-fences';
 import { SessionStatusBroadcaster } from './session-status-broadcaster';
+import { sessionNotFound } from './session-id.pipe';
 // The two pure config resolvers stay exported from the lifecycle module (its export surface is
 // unchanged — session.service re-exports them from there), so this unit imports them back. The
 // resulting import cycle is deferred-usage only — the bindings are read inside method bodies,
@@ -282,7 +283,7 @@ export class SessionEngineControls {
   private async requireSession(id: string): Promise<Session> {
     const session = await this.sessionRepository.findOne({ where: { id } });
     if (!session) {
-      throw new NotFoundException(`Session with id '${id}' not found`);
+      throw sessionNotFound(id);
     }
     return this.sessionRestrictions.attachTo(this.sessionErrors.attachTo(session));
   }

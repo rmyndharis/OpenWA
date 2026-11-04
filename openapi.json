@@ -787,7 +787,7 @@
             }
           },
           "400": {
-            "description": "The session id is not a UUID",
+            "description": "The session id has characters other than letters, digits and hyphens, or is longer than 128 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -850,7 +850,7 @@
             "description": "Session deleted"
           },
           "400": {
-            "description": "The session id is not a UUID",
+            "description": "The session id has characters other than letters, digits and hyphens, or is longer than 128 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -942,7 +942,7 @@
             }
           },
           "400": {
-            "description": "The session id is not a UUID",
+            "description": "The session id has characters other than letters, digits and hyphens, or is longer than 128 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -1105,7 +1105,7 @@
             }
           },
           "400": {
-            "description": "The session id is not a UUID",
+            "description": "The session id has characters other than letters, digits and hyphens, or is longer than 128 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -1360,7 +1360,7 @@
             }
           },
           "400": {
-            "description": "The session id is not a UUID",
+            "description": "The session id has characters other than letters, digits and hyphens, or is longer than 128 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -2475,7 +2475,7 @@
             }
           },
           "400": {
-            "description": "The session id is not a UUID",
+            "description": "The session id has characters other than letters, digits and hyphens, or is longer than 128 characters",
             "content": {
               "application/json": {
                 "schema": {

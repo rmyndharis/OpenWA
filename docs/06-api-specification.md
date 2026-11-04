@@ -222,6 +222,8 @@ Every path below is prefixed with `/api`. Unless marked **public**, send `X-API-
 
 Base path `/api/sessions`. All routes that return a session return data shaped by `SessionResponseDto.fromEntity` (via `transformSession`), which **strips** `config` and the raw credential-bearing `proxyUrl` / `proxyType` columns and renames the entity field `lastActiveAt` to `lastActive`. Masked proxy details are available from `GET/PATCH /api/sessions/:sessionId/proxy` only. Session `status` wire values are lowercase: `created | initializing | qr_ready | authenticating | ready | disconnected | action_required | failed`.
 
+`:sessionId` is the session's id, not its name. A session created through the API always has a UUID. A session restored from a backup keeps the id its archive held, so every session route also takes any id of letters, digits and hyphens up to 128 characters. An id with other characters, or a longer one, answers `400`. An id no session has answers `404`; for an id that is not a UUID the message adds that the routes take the id, not the name.
+
 #### GET /api/sessions
 
 List all sessions, scoped to the API key's `allowedSessions`, ordered `createdAt` DESC.
@@ -304,7 +306,7 @@ Get a single session by ID.
 }
 ```
 
-**Errors:** `400` the session id is not a UUID · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
 
 #### GET /api/sessions/:sessionId/config
 
@@ -334,7 +336,7 @@ Baileys that covers only the reconnect after a logged-out close: that engine ret
 internally, with a fixed 1s to 60s backoff and no attempt cap. See §5 (Database Design) for what each
 key does and the moment it is read.
 
-**Errors:** `400` the session id is not a UUID · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
 
 #### PATCH /api/sessions/:sessionId/config
 
@@ -393,7 +395,7 @@ Read a session's masked proxy configuration. Credentials embedded in the stored 
 
 When no proxy is configured, `enabled` is `false` and the other fields are `null`/`false`.
 
-**Errors:** `400` the session id is not a UUID · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
 
 #### PATCH /api/sessions/:sessionId/proxy
 
@@ -722,7 +724,7 @@ A stopped session stays down: boot auto-start (`AUTO_START_SESSIONS`) and the mu
 
 An accepted stop on an expired or missing foreign lease clears that claim in the same write, except while a delete holds it. Repeated stops during a delete preserve every claim field so the deleting node can renew; an independent stop remains if that delete is refused. If the former owner still runs, its next successful heartbeat detects lease loss and retires its engine. The stop response does not wait for that remote teardown.
 
-**Errors:** `400` the session id is not a UUID · `401` · `403` · `404` not found · `409` another node currently holds this session's live engine (multi-node deployments) · `502` `SESSION_STOP_INCOMPLETE` — session stopped locally but the engine teardown did not complete (retryable; the graceful disconnect and the force-destroy escalation both failed, status `disconnected`, no success audit)
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` · `403` · `404` not found · `409` another node currently holds this session's live engine (multi-node deployments) · `502` `SESSION_STOP_INCOMPLETE` — session stopped locally but the engine teardown did not complete (retryable; the graceful disconnect and the force-destroy escalation both failed, status `disconnected`, no success audit)
 
 #### POST /api/sessions/:sessionId/logout
 
@@ -947,7 +949,7 @@ changed since. That is a normal state rather than a missing resource, so it is `
 body, not a `404`. Presence is held in memory and never persisted: answering "typing" from before a
 restart would be worse than answering nothing.
 
-**Errors:** `400` the session id is not a UUID · `401` · `403` · `404` session not found
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` · `403` · `404` session not found
 
 #### PUT /api/sessions/:sessionId/presence
 
@@ -1317,7 +1319,7 @@ The delete holds its claim while it runs. Each destructive batch and the final t
 
 The delete first removes the session's messages, webhook outbox rows and webhook delivery-failure records in batches (on SQLite up to 2000 rows, each sized to about 150 ms; 500 rows on PostgreSQL) that are not atomic with the rest: a failure part-way (a database error, a timeout, a restart), while the delete still owns its claim, leaves the session in place with fewer rows and stopped, as `POST /stop` leaves it, and repeating the delete finishes it. It then removes, in one transaction, the session's message batches, chat states, received statuses, webhooks, templates, stored Baileys messages, automation rules, integration dead-letter rows and send idempotency claims together with the session itself, then purges its on-disk auth data. It keeps the audit log, the LID mappings, and the integration conversation mappings (so a re-paired session keeps its provider conversations); ingress dedup rows age out on their own after `INGRESS_DEDUP_RETENTION_DAYS` (default 7).
 
-**Errors:** `400` the session id is not a UUID · `401` missing/invalid key · `403` key not scoped to this session, or key role below OPERATOR · `404` session not found · `409` credential teardown for the same session name still in flight (retryable; body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; on a `409` the row is **not** deleted and no hook/auth-purge runs — retry after cleanup settles), or, on a multi-node deployment, another node currently holds this session's live engine (no `code`; nothing is deleted; send the delete to the owning node), or ownership changed during removal (earlier batches may already be removed) · `503` the session could not be claimed for the delete because the database did not answer (nothing is deleted; retry), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed; retry)
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session, or key role below OPERATOR · `404` session not found · `409` credential teardown for the same session name still in flight (retryable; body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; on a `409` the row is **not** deleted and no hook/auth-purge runs — retry after cleanup settles), or, on a multi-node deployment, another node currently holds this session's live engine (no `code`; nothing is deleted; send the delete to the owning node), or ownership changed during removal (earlier batches may already be removed) · `503` the session could not be claimed for the delete because the database did not answer (nothing is deleted; retry), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed; retry)
 
 ### 6.4.2 Messages
 
