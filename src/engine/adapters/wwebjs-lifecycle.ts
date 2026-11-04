@@ -174,6 +174,15 @@ export const NAVIGATION_EPISODE_CAP_MS = 3 * NAVIGATION_REINJECT_GRACE_MS;
 // reload triggers.
 const PREVIOUS_PAGE_READY_MS = 5_000;
 
+/**
+ * Whether the patched whatsapp-web.js client says the page it has loaded has no event listeners attached yet
+ * (scripts/patch-wwebjs-ready-sync.js): false from the start of a re-inject until its attach completes. A tree
+ * without the patch has no marker (undefined) and cannot say, which keeps the helpers as the only evidence.
+ */
+function eventBridgeUnattached(client: Client): boolean {
+  return (client as Client & { eventsAttached?: boolean }).eventsAttached === false;
+}
+
 // The single in-adapter retry of a navigation-killed first inject only runs while at least this much
 // of the lifecycle's outer init deadline remains — a retry the outer race SIGKILLs mid-launch would
 // surface as a bare 504 with no reason. Below it, fail with today's exact terminal shape instead.
@@ -281,7 +290,9 @@ export class WwebjsLifecycle {
    * When the navigation that began the current unverified episode of a ready page happened, 0 when there is none.
    * The library's re-emitted 'ready' closes the grace window but proves nothing about the page now loaded: it can
    * come from a run that started in the previous document, and a re-inject that threw emits nothing at all. Only a
-   * read of whatsapp-web.js's helpers in the current page clears it, by a probe or on a 'ready'. A 'ready' that came
+   * read of whatsapp-web.js's helpers in the current page clears it, by a probe or on a 'ready', and only while the
+   * patched client does not report the page's event bridge as unattached: the helpers are defined before the
+   * listeners are attached, so a page with them can still have no way to deliver an inbound event. A 'ready' that came
    * well after its own navigation does say that page re-injected, so the next navigation starts an episode of its own
    * instead of inheriting this one's anchor; a page that never re-injects keeps the anchor of its first reload.
    */
@@ -291,10 +302,10 @@ export class WwebjsLifecycle {
   /** When the live client last re-emitted 'ready'. */
   private lastReadyAt = 0;
   /**
-   * When the probe whose helpers read last answered no, or failed, started (Date.now()), 0 when none. Kept across the
-   * navigations of an episode, so a page stuck reloading still counts its answers. A read is kept only if no
-   * navigation landed while its probe ran, so one kept from an earlier episode predates the navigation that began the
-   * current one.
+   * When the probe whose read last did not verify the page (the helpers answered no, or failed, or exist with the event
+   * bridge unattached) started (Date.now()), 0 when none. Kept across the navigations of an episode, so a page stuck
+   * reloading still counts its answers. A read is kept only if no navigation landed while its probe ran, so one kept
+   * from an earlier episode predates the navigation that began the current one.
    */
   private helpersMissingProbeAt = 0;
   /**
@@ -724,6 +735,24 @@ export class WwebjsLifecycle {
       // navigation window HERE, before the guards below: markReadyFromClientInfo early-returns while
       // already READY, so a clear behind it would never run for the re-inject case (#1081).
       this.clearNavigationReinjectWindow();
+      // whatsapp-web.js can emit `ready` BEFORE its message listeners are attached: its post-auth
+      // callback runs once per hasSynced trigger, and any run that finds `window.WWebJS` already
+      // defined skips the attach and bare-emits `ready` — including while the first run's attach is
+      // still in flight (observed live). Promoting on that premature emit binds READY to a session
+      // whose inbound bridge may never come up. The patched client's `eventsAttached` flag
+      // (scripts/patch-wwebjs-ready-sync.js) distinguishes the cases: `false` → ignore this emit
+      // and let the attach's own completion re-emit `ready` (it always does), with the readiness
+      // reconciliation as the backstop when the attach failed instead. `undefined` (unpatched
+      // tree) keeps the legacy behaviour. The same holds for a page that reloaded: the flag is false
+      // again from the start of its re-inject, so this emit says nothing about the page now loaded,
+      // and it must not close the unverified reload or count as a re-inject of the page it replaced.
+      if (eventBridgeUnattached(source)) {
+        this.host.logger.warn('Ignoring premature ready: the message event bridge is not attached yet', {
+          sessionId: this.host.config.sessionId,
+          action: 'premature_ready_ignored',
+        });
+        return;
+      }
       this.lastReadyAt = Date.now();
       // While a reload is unverified, ask the page now loaded for the helpers, as a probe would: a yes closes the episode
       // only when no navigation landed since it was asked, so it speaks for the page it read and nothing later.
@@ -737,22 +766,6 @@ export class WwebjsLifecycle {
           },
           () => undefined,
         );
-      }
-      // whatsapp-web.js can emit `ready` BEFORE its message listeners are attached: its post-auth
-      // callback runs once per hasSynced trigger, and any run that finds `window.WWebJS` already
-      // defined skips the attach and bare-emits `ready` — including while the first run's attach is
-      // still in flight (observed live). Promoting on that premature emit binds READY to a session
-      // whose inbound bridge may never come up. The patched client's `eventsAttached` flag
-      // (scripts/patch-wwebjs-ready-sync.js) distinguishes the cases: `false` → ignore this emit
-      // and let the attach's own completion re-emit `ready` (it always does), with the readiness
-      // reconciliation as the backstop when the attach failed instead. `undefined` (unpatched
-      // tree) keeps the legacy behaviour.
-      if ((source as Client & { eventsAttached?: boolean }).eventsAttached === false) {
-        this.host.logger.warn('Ignoring premature ready: the message event bridge is not attached yet', {
-          sessionId: this.host.config.sessionId,
-          action: 'premature_ready_ignored',
-        });
-        return;
       }
       this.markReadyFromClientInfo();
     });
@@ -1306,13 +1319,18 @@ export class WwebjsLifecycle {
       helpersPending = true;
       // Undefined while the read is pending, and after it failed.
       let found: boolean | undefined;
+      let verified = false;
       try {
         found = await this.pageHasWwebjsHelpers(client);
-        return found;
+        // The helpers exist before the listeners are attached, so they alone do not show that a reload recovered.
+        // Read after the page answered: a page whose attach completed meanwhile is verified. A page with the helpers
+        // and no bridge can still send, so it is not marked as lacking them (found, not verified, feeds that latch).
+        verified = found && !eventBridgeUnattached(client);
+        return verified;
       } finally {
         helpersPending = false;
-        // A no or a failure answers for the page now loaded even when it lands after the deadline, so it is kept.
-        if (found !== true && this.client === client && navigationsBefore === this.navigationCount) {
+        // An answer that did not verify the page now loaded counts even when it lands after the deadline, so it is kept.
+        if (!verified && this.client === client && navigationsBefore === this.navigationCount) {
           this.helpersMissingProbeAt = startedAt;
           if (found === false) this.pageWithoutHelpers = true;
         }

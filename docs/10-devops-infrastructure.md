@@ -1033,9 +1033,14 @@ Puppeteer rejections a page navigation or an engine teardown leaves without an o
 `kind="other"`. A whatsapp-web.js session reports a failed re-inject into its reloaded page itself, as a
 `page_reinject_failed` warning naming the session, so that one is not counted here. A re-inject that
 loads its helpers but then fails to attach the event listeners raises neither signal and emits no
-`ready`: the liveness probe finds the helpers, so the session stays `READY` with sends working while
-inbound messages can stop arriving until the session is restarted or WhatsApp Web reloads its page again (the new
-page runs the whole inject again, listeners included).
+`ready`. The patched client resets its `eventsAttached` marker whenever a page without the helpers
+starts attaching, so the liveness probe does not take the helpers alone as a recovered reload: the
+session stays `READY` with sends working until the 3-minute recovery bound after the reload has
+passed, and the watchdog then restarts it after two failed probes in a row (a minute apart). An
+install whose ready-sync patch is missing or still the earlier version (the startup log names it)
+cannot tell a page that lost its listeners from a healthy one and keeps the older behavior: inbound
+messages can stop arriving until the session is restarted or WhatsApp Web reloads its page again (the
+new page runs the whole inject again, listeners included).
 
 `src/common/docs-metrics-list.spec.ts` compares this table against the metric names declared in
 `metrics.service.ts` and `request-metrics.ts`, and checks that every helper `render()` splices in is
