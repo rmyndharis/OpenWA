@@ -22,16 +22,19 @@
  * socket.bytesRead on the poll interval, so it can briefly under-report by the bytes that arrive
  * within one interval. Separately, and by design, an admitted identity body still costs a constant
  * multiple of its wire size once parsed (the raw Buffer pinned on rawBody, plus the decoded string
- * and the parsed object) — the budget bounds the input, not the parse.
+ * and the parsed object) — the budget bounds the input, not the parse. Nor does it follow the body
+ * into its handler: the request stream closes as soon as the whole body has been read, which releases
+ * the reservation, so what a running handler holds of the parsed body is not counted.
  *
  * A stalled sender (headers, then silence) holds its reservation only until the stall reaper drops
  * the socket after STALL_TIMEOUT_MS without any new body bytes. A body that keeps trickling is
  * dropped once it falls behind the pace needed to deliver its reservation (the declared size, or a
- * chunked body's placeholder) within Node's request timeout, after the same STALL_TIMEOUT_MS grace. The reservation is never lowered mid-stream,
- * only released with the request, so declared bodies that complete together stay within the
- * budget, and the per-client share bounds what one slow source can hold. The request
- * stream itself is never tapped — no 'data' listener — so downstream consumers (the body
- * parser, busboy) see every chunk exactly as it arrives, even when they attach late.
+ * chunked body's placeholder) within Node's request timeout, after the same STALL_TIMEOUT_MS grace.
+ * The reservation is never lowered mid-stream, only released once the body has been read or the
+ * request ends, so declared bodies that complete together stay within the budget, and the
+ * per-client share bounds what one slow source can hold. The request stream itself is never
+ * tapped — no 'data' listener — so downstream consumers (the body parser, busboy) see every chunk
+ * exactly as it arrives, even when they attach late.
  *
  * Extracted from main.ts so the accounting — notably the exactly-once release across every
  * terminal path — is unit-tested without booting the app.
@@ -60,10 +63,11 @@ const UNIT_BYTES: Record<string, number> = {
 const FALLBACK_LIMIT_BYTES = 25 * UNIT_BYTES.mb;
 
 /**
- * Stall reaper. A reservation is normally released when the response finishes or the connection
- * dies — but a socket that sends headers and then goes silent fires NEITHER, so without a reaper
- * it would hold its declared bytes until Node's requestTimeout (5 minutes by default), and four
- * such connections at the per-request cap would pin the entire default budget, renewable forever.
+ * Stall reaper. A reservation is normally released when the body has been read, when the response
+ * finishes or when the connection dies — but a socket that sends headers and then goes silent fires
+ * NONE of these, so without a reaper it would hold its declared bytes until Node's requestTimeout
+ * (5 minutes by default), and four such connections at the per-request cap would pin the entire
+ * default budget, renewable forever.
  * Any admitted request expecting a body is therefore polled: if no new body bytes arrive for
  * STALL_TIMEOUT_MS the socket is destroyed and the reservation released. Polling (rather than one
  * fixed deadline) lets any progress reset the clock, so slow-but-moving uploads are not dropped.
@@ -328,9 +332,10 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
       stallTimer = undefined;
     };
 
-    // Exactly-once release: the first terminal event wins: normal completion (res 'finish'),
-    // client/socket abort (req/res 'close'), stream failure (req/res 'error'). An aborted upload
-    // typically fires several of these; the flag guarantees the aggregate is decremented once.
+    // Exactly-once release: the first terminal event wins: the body has been read (req 'close', which
+    // Node emits as soon as the whole body is in), the response finishing (res 'finish'), the
+    // connection ending (req/res 'close') or a stream failing (req/res 'error'). Most requests fire
+    // several of these; the flag guarantees the aggregate is decremented once.
     const release = (): void => {
       if (released) return;
       released = true;
@@ -361,9 +366,9 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
     // A declared body keeps its declared size until it is released. A chunked body is re-priced at
     // the bytes that have arrived, never below its opening placeholder: budget handed back mid-stream
     // would be taken back, unchecked, by a body that then completes between polls. The floor holds
-    // after completion too, because bytes that arrived in the same read as the headers were already
-    // counted in startBytes, so a small body sent with its headers measures as 0 while the handler
-    // still holds it. Growth that crosses the aggregate, the client share or the anonymous pool
+    // after completion too, until the reservation is released, because bytes that arrived in the same
+    // read as the headers were already counted in startBytes, so a small body sent with its headers
+    // measures as 0 while nothing has read it yet. Growth that crosses the aggregate, the client share or the anonymous pool
     // aborts the request mid-stream, the same bound a declared length gets at admission. A complete
     // body is never aborted: it is already buffered. reserved is updated BEFORE release() so the
     // exactly-once decrement subtracts the reconciled size.
