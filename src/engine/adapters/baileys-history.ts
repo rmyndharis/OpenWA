@@ -170,8 +170,12 @@ export class BaileysHistory {
     const nameUpdates: { id: string; notify: string }[] = [];
     const mapped: IncomingMessage[] = [];
     const revokes: { message: WAMessage; target: WAMessageKey }[] = [];
-    const targets = new Map(messages.filter(msg => msg.key?.id).map(msg => [msg.key.id!, msg]));
+    // An id can name messages of different chats: each mapped message keeps its own source, and a revoke is
+    // matched with the message of its own chat.
+    const sources = new Map<IncomingMessage, WAMessage>();
+    const targets = new Map<string, WAMessage[]>();
     for (const msg of messages) {
+      if (msg.key?.id) targets.set(msg.key.id, [...(targets.get(msg.key.id) ?? []), msg]);
       if (msg.key?.fromMe !== true && msg.pushName) {
         const sender = keyParticipant(msg.key ?? {}) ?? msg.key?.remoteJid;
         if (sender) {
@@ -181,6 +185,7 @@ export class BaileysHistory {
       const incoming = this.mapHistoryMessage(b, msg);
       if (incoming) {
         mapped.push(incoming);
+        sources.set(incoming, msg);
       } else if (msg.key?.remoteJid) {
         const content = b.normalizeMessageContent(msg.message) ?? msg.message;
         const protocol = content?.protocolMessage;
@@ -194,7 +199,11 @@ export class BaileysHistory {
     const self = this.host.toNeutralJid(this.host.normalizedSelfJid());
     const isSelf = (jid: string | null | undefined): boolean => !!jid && !!self && this.host.toNeutralJid(jid) === self;
     for (const { message, target } of revokes) {
-      const original = targets.get(target.id!);
+      const sameId = targets.get(target.id!) ?? [];
+      const chat = this.host.toNeutralJid(message.key.remoteJid!);
+      // None in the revoke's chat: the last one, as before, which the chat check then refuses.
+      const original =
+        sameId.find(msg => !!msg.key.remoteJid && this.host.toNeutralJid(msg.key.remoteJid) === chat) ?? sameId.at(-1);
       const key = await this.host.applyHistoryRevoke(
         original?.key ?? revokeFallbackKey(target, message.key, isSelf),
         message.key,
@@ -232,7 +241,7 @@ export class BaileysHistory {
       }
       for (const incoming of mapped) {
         if (incoming.type === 'revoked') continue;
-        const original = targets.get(incoming.id)!;
+        const original = sources.get(incoming)!;
         const deleted = revokedKeys.has(JSON.stringify([incoming.id, incoming.chatId, incoming.fromMe]));
         if (parseWaId(incoming.chatId).kind === 'lid') {
           this.rememberLidMessage(incoming.id, incoming.chatId, incoming.fromMe);
