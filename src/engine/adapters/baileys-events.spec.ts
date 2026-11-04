@@ -857,6 +857,43 @@ describe('BaileysEvents group message acks', () => {
     await settle();
     expect(readGroupRoster).not.toHaveBeenCalled();
   });
+
+  it('stops waiting for a member who leaves the group', async () => {
+    const { events, onMessageAck } = setup();
+    events.handleMessageReceiptUpdate([delivered(alice)]);
+    await settle();
+    expect(onMessageAck).not.toHaveBeenCalled();
+
+    // Baileys 7 lists a departure as objects that carry the lid and the phone number
+    events.handleGroupParticipantsUpdate({
+      id: group,
+      action: 'remove',
+      participants: [{ id: bob, phoneNumber: '6282222222222@s.whatsapp.net' }],
+    });
+    expect(onMessageAck.mock.calls).toEqual([['OUT1', 'delivered', group]]);
+  });
+
+  it('keeps waiting through an add, a promotion and a departure from another group', async () => {
+    const { events, onMessageAck } = setup();
+    events.handleMessageReceiptUpdate([delivered(alice)]);
+    await settle();
+    events.handleGroupParticipantsUpdate({ id: group, action: 'add', participants: [{ id: bob }] });
+    events.handleGroupParticipantsUpdate({ id: group, action: 'promote', participants: [{ id: bob }] });
+    events.handleGroupParticipantsUpdate({ id: '120363000000000009@g.us', action: 'remove', participants: [bob] });
+    expect(onMessageAck).not.toHaveBeenCalled();
+  });
+
+  it("recognises this account's row by the phone number the session knows for its lid", async () => {
+    // Credentials without `user.lid`, and a roster row for this account that lists only its lid
+    const { events, onMessageAck } = setup({
+      getSocketOrNull: () => ({ user: { id: '6280000000000:3@s.whatsapp.net' } }) as unknown as WASocket,
+      resolvePhone: jid => (jid === '999999999999999@lid' ? '6280000000000' : null),
+      readGroupRoster: () => Promise.resolve([[alice], [bob], ['999999999999999@lid']]),
+    });
+    events.handleMessageReceiptUpdate([delivered(alice), delivered(bob)]);
+    await settle();
+    expect(onMessageAck.mock.calls).toEqual([['OUT1', 'delivered', group]]);
+  });
 });
 
 // Baileys' event buffer merges a receipt that lands while a message's own upsert is still buffered (about

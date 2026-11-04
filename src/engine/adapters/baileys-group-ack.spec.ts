@@ -22,10 +22,11 @@ const receipt = (
 ): MessageReceiptEvent => ({ messageId, chatId, participant, status, timestamp: 1 });
 
 function setup(
-  roster: string[][] | null | (() => Promise<string[][] | null>) = ROSTER,
+  roster: string[][] | null | ((groupId: string) => Promise<string[][] | null>) = ROSTER,
   overrides: Partial<GroupAckHost> = {},
   maxMessages?: number,
   maxKeys?: number,
+  maxHeld?: number,
 ) {
   let time = 1_700_000_000_000;
   const reports: Array<[string, GroupAckStatus, string]> = [];
@@ -36,6 +37,7 @@ function setup(
     () => time,
     maxMessages,
     maxKeys,
+    maxHeld,
   );
   return {
     aggregator,
@@ -170,7 +172,68 @@ describe('GroupAckAggregator', () => {
     expect(reports).toEqual([['M1', 'delivered', GROUP]]);
   });
 
+  it('reads the roster of a group once for the messages that arrive together', async () => {
+    const { aggregator, reports, readRoster } = setup();
+    await Promise.all(
+      ['M1', 'M2', 'M3'].flatMap(id => [ALICE, BOB, CARA].map(m => aggregator.record(receipt(m[0], 'delivered', id)))),
+    );
+    expect(readRoster).toHaveBeenCalledTimes(1);
+    expect(reports.map(([id]) => id).sort()).toEqual(['M1', 'M2', 'M3']);
+  });
+
+  it('keeps messages that share an id in different chats apart', async () => {
+    const other = '120363000000000002@g.us';
+    const dave = '444444444444444@lid';
+    const erin = '555555555555555@lid';
+    const rosters: Record<string, string[][]> = { [GROUP]: ROSTER, [other]: [[dave], [erin]] };
+    const { aggregator, reports } = setup(groupId => Promise.resolve(rosters[groupId]));
+    await aggregator.record(receipt(ALICE[0], 'delivered', 'M1', GROUP));
+    await aggregator.record(receipt(dave, 'delivered', 'M1', other));
+    await aggregator.record(receipt(erin, 'delivered', 'M1', other));
+    expect(reports).toEqual([['M1', 'delivered', other]]);
+
+    await aggregator.record(receipt(BOB[0], 'delivered', 'M1', GROUP));
+    await aggregator.record(receipt(CARA[0], 'delivered', 'M1', GROUP));
+    expect(reports).toEqual([
+      ['M1', 'delivered', other],
+      ['M1', 'delivered', GROUP],
+    ]);
+  });
+
   describe('when the roster cannot be read', () => {
+    it('does not read the group again for another message until the retry delay has passed', async () => {
+      const { aggregator, reports, readRoster, advance } = setup(null);
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M1'));
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M2'));
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M3'));
+      expect(readRoster).toHaveBeenCalledTimes(1);
+
+      advance(GROUP_ACK_RETRY_MS);
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M4'));
+      expect(readRoster).toHaveBeenCalledTimes(2);
+      expect(reports).toEqual([]);
+    });
+
+    it('still reads a different group meanwhile, and remembers only a bounded number of unreadable groups', async () => {
+      const failing = new Set<string>();
+      const { aggregator, readRoster, reports } = setup(groupId =>
+        Promise.resolve(failing.has(groupId) ? null : ROSTER),
+      );
+      const groupId = (n: number): string => `1203630000000${String(n).padStart(5, '0')}@g.us`;
+      for (let n = 0; n < 300; n++) failing.add(groupId(n));
+      for (let n = 0; n < 300; n++) await aggregator.record(receipt(ALICE[0], 'delivered', 'M1', groupId(n)));
+      expect(readRoster).toHaveBeenCalledTimes(300);
+
+      // the oldest unreadable groups were forgotten, so they are read again at once; the newest are not
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M2', groupId(0)));
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M2', groupId(299)));
+      expect(readRoster).toHaveBeenCalledTimes(301);
+
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M3', '120363000000999999@g.us'));
+      expect(readRoster).toHaveBeenCalledTimes(302);
+      expect(reports).toEqual([]);
+    });
+
     it.each([
       ['answers null', () => Promise.resolve(null)],
       ['throws', () => Promise.reject(new Error('WhatsApp did not answer'))],
@@ -188,6 +251,141 @@ describe('GroupAckAggregator', () => {
       expect(readRoster).toHaveBeenCalledTimes(2);
       expect(reports).toEqual([['M1', 'delivered', GROUP]]);
       expect(warn).toHaveBeenCalledTimes(_how === 'throws' ? 1 : 0);
+    });
+  });
+
+  describe('receipts held while the roster cannot be read', () => {
+    // The first read fails, every later one answers: what a dropped query followed by a working socket looks like.
+    const recovering = (): (() => Promise<string[][] | null>) => {
+      const failures = [() => Promise.resolve(null)];
+      return () => (failures.shift() ?? (() => Promise.resolve(ROSTER)))();
+    };
+
+    it('are counted once a later receipt of the message finds the roster readable', async () => {
+      const read = recovering();
+      const { aggregator, reports, advance } = setup(() => read());
+      for (const member of [ALICE, BOB, CARA]) await aggregator.record(receipt(member[0], 'delivered'));
+      expect(reports).toEqual([]);
+
+      advance(GROUP_ACK_RETRY_MS);
+      await aggregator.record(receipt(ALICE[0], 'delivered'));
+      expect(reports).toEqual([['M1', 'delivered', GROUP]]);
+    });
+
+    it('are counted in order, so a held read still completes delivered before read', async () => {
+      const read = recovering();
+      const { aggregator, reports, advance } = setup(() => read());
+      for (const member of [ALICE, BOB, CARA]) await aggregator.record(receipt(member[0], 'read'));
+      advance(GROUP_ACK_RETRY_MS);
+      await aggregator.record(receipt(ALICE[0], 'delivered'));
+      expect(reports.map(([, status]) => status)).toEqual(['delivered', 'read']);
+    });
+
+    it('are bounded, and the receipts of the oldest message are given up first', async () => {
+      const read = recovering();
+      const { aggregator, reports, advance } = setup(() => read(), {}, undefined, undefined, 3);
+      for (const id of ['M1', 'M2']) {
+        await aggregator.record(receipt(ALICE[0], 'delivered', id));
+        await aggregator.record(receipt(BOB[0], 'delivered', id));
+      }
+      advance(GROUP_ACK_RETRY_MS);
+      await aggregator.record(receipt(CARA[0], 'delivered', 'M1'));
+      await aggregator.record(receipt(CARA[0], 'delivered', 'M2'));
+      expect(reports).toEqual([['M2', 'delivered', GROUP]]);
+    });
+
+    it('are let go when the message turns out to have no one to wait for', async () => {
+      const reads = [() => Promise.resolve(null), () => Promise.resolve([])];
+      const { aggregator, reports, readRoster, advance } = setup(() => (reads.shift() ?? reads[0])());
+      await aggregator.record(receipt(ALICE[0], 'delivered'));
+      advance(GROUP_ACK_RETRY_MS);
+      await aggregator.record(receipt(BOB[0], 'delivered'));
+      await aggregator.record(receipt(CARA[0], 'delivered'));
+      expect(reports).toEqual([]);
+      expect(readRoster).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('a member who leaves the group', () => {
+    it('is no longer waited for, which completes the messages it was the last to hold up', async () => {
+      const { aggregator, reports } = setup();
+      await aggregator.record(receipt(ALICE[0], 'delivered'));
+      await aggregator.record(receipt(BOB[0], 'delivered'));
+      expect(reports).toEqual([]);
+
+      aggregator.forget(GROUP, [CARA[0]]);
+      expect(reports).toEqual([['M1', 'delivered', GROUP]]);
+
+      await aggregator.record(receipt(ALICE[0], 'read'));
+      await aggregator.record(receipt(BOB[0], 'read'));
+      expect(reports.map(([, status]) => status)).toEqual(['delivered', 'read']);
+    });
+
+    it('is matched by the phone number the departure names as well as by lid', async () => {
+      const { aggregator, reports } = setup();
+      await aggregator.record(receipt(ALICE[0], 'delivered'));
+      await aggregator.record(receipt(BOB[0], 'delivered'));
+      aggregator.forget(GROUP, [CARA[1]]);
+      expect(reports).toEqual([['M1', 'delivered', GROUP]]);
+    });
+
+    it('takes its own receipts out of the count', async () => {
+      const { aggregator, reports } = setup();
+      await aggregator.record(receipt(ALICE[0], 'delivered'));
+      await aggregator.record(receipt(BOB[0], 'delivered'));
+      aggregator.forget(GROUP, [ALICE[0]]);
+      expect(reports).toEqual([]);
+
+      await aggregator.record(receipt(CARA[0], 'delivered'));
+      expect(reports).toEqual([['M1', 'delivered', GROUP]]);
+    });
+
+    it('changes nothing for someone who is not followed, for another group, or for a finished message', async () => {
+      const { aggregator, reports } = setup();
+      await aggregator.record(receipt(ALICE[0], 'delivered'));
+      aggregator.forget(GROUP, ['999999999999999@lid', 'not-a-jid']);
+      aggregator.forget('120363000000000009@g.us', [BOB[0], CARA[0]]);
+      expect(reports).toEqual([]);
+
+      for (const status of ['delivered', 'read'] as const) {
+        for (const member of [ALICE, BOB, CARA]) await aggregator.record(receipt(member[0], status, 'M2'));
+      }
+      expect(reports).toHaveLength(2);
+      aggregator.forget(GROUP, [CARA[0]]);
+      expect(reports).toHaveLength(2);
+    });
+
+    it('ends the following of a message once every member has left, with nothing reported', async () => {
+      const { aggregator, reports, readRoster } = setup();
+      await aggregator.record(receipt(ALICE[0], 'delivered'));
+      aggregator.forget(GROUP, [ALICE[0], BOB[0], CARA[0]]);
+      await aggregator.record(receipt(BOB[0], 'delivered'));
+      expect(reports).toEqual([]);
+      expect(readRoster).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the budget exact when completing one message drops expired ones the departure was still to visit', async () => {
+      const { aggregator, reports, advance } = setup();
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'MA'));
+      await aggregator.record(receipt(ALICE[0], 'read', 'MK'));
+      await aggregator.record(receipt(BOB[0], 'read', 'MK'));
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'MB'));
+      advance(GROUP_ACK_FOLLOW_MS + 1);
+
+      aggregator.forget(GROUP, [CARA[0]]);
+      expect(reports.map(([id, status]) => `${id} ${status}`)).toEqual(['MK delivered', 'MK read']);
+      // only the fresh record of the finished message is left, and it weighs 1
+      expect((aggregator as unknown as { weight: number }).weight).toBe(1);
+    });
+
+    it('keeps the budget in step with the members that remain', async () => {
+      // M1 holds 6 ids and room for 6 marks (12), and 8 once CARA has left; M2 holds 12: 20 fits a budget of 20.
+      const { aggregator, readRoster } = setup(ROSTER, {}, 500, 20);
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M1'));
+      aggregator.forget(GROUP, [CARA[0]]);
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M2'));
+      await aggregator.record(receipt(BOB[0], 'delivered', 'M1'));
+      expect(readRoster).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -232,6 +430,32 @@ describe('GroupAckAggregator', () => {
       expect(readRoster).toHaveBeenCalledTimes(2);
       await aggregator.record(receipt(BOB[0], 'delivered', 'M1'));
       expect(readRoster).toHaveBeenCalledTimes(3);
+    });
+
+    it('frees the budget of a message it drops', async () => {
+      // A message weighs 12 here, so a budget of 30 keeps two: the third drops the first, not the second.
+      const { aggregator, readRoster } = setup(ROSTER, {}, 500, 30);
+      for (const id of ['M1', 'M2', 'M3']) await aggregator.record(receipt(ALICE[0], 'delivered', id));
+      expect(readRoster).toHaveBeenCalledTimes(3);
+
+      await aggregator.record(receipt(BOB[0], 'delivered', 'M2'));
+      expect(readRoster).toHaveBeenCalledTimes(3);
+      await aggregator.record(receipt(BOB[0], 'delivered', 'M1'));
+      expect(readRoster).toHaveBeenCalledTimes(4);
+    });
+
+    it('frees the budget of a finished message, and still remembers that it finished', async () => {
+      // A finished message weighs 1, so with a budget of 14 it fits beside a followed one (12).
+      const { aggregator, readRoster, reports } = setup(ROSTER, {}, 500, 14);
+      for (const status of ['delivered', 'read'] as const) {
+        for (const member of [ALICE, BOB, CARA]) await aggregator.record(receipt(member[0], status, 'M1'));
+      }
+      await aggregator.record(receipt(ALICE[0], 'delivered', 'M2'));
+      expect(readRoster).toHaveBeenCalledTimes(2);
+
+      await aggregator.record(receipt(ALICE[0], 'read', 'M1'));
+      expect(readRoster).toHaveBeenCalledTimes(2);
+      expect(reports).toHaveLength(2);
     });
 
     it('keeps the newest message even when it alone passes the budget', async () => {

@@ -460,12 +460,20 @@ export class BaileysEvents {
 
   constructor(private readonly host: BaileysEventsHost) {}
 
-  /** The members of a group other than this account, or null when the roster is unavailable. */
+  /**
+   * The members of a group other than this account, or null when the roster is unavailable. A row is this
+   * account's when any of its ids is, or when a lid in it is one the session knows the account's phone number
+   * for (the lid fallback of {@link selfMatcher} resolves nothing in the adapter, and credentials without a
+   * `user.lid` leave a lid-only row with nothing else to be recognised by).
+   */
   private async readMemberRoster(groupId: string): Promise<string[][] | null> {
     const roster = await this.host.readGroupRoster?.(groupId);
     if (!roster) return null;
     const isSelf = this.selfMatcher();
-    return roster.filter(forms => !forms.some(isSelf));
+    const ownPhone = userPart(this.host.normalizedSelfJid());
+    const isOwnLid = (jid: string): boolean =>
+      ownPhone !== '' && parseWaId(jid).kind === 'lid' && this.host.resolvePhone?.(jid) === ownPhone;
+    return roster.filter(forms => !forms.some(jid => isSelf(jid) || isOwnLid(jid)));
   }
 
   getStoredWriteGeneration(): number {
@@ -1820,7 +1828,8 @@ export class BaileysEvents {
    * reached this handler; receipts from the account's own linked devices are dropped. The event
    * buffer can merge several receipts of one participant into one entry, so each timestamp the entry
    * carries becomes its own event. rc14 files a `played` receipt under `readTimestamp`, so on that
-   * version a voice note that was played reports `read`.
+   * version a voice note that was played reports `read`. A group message's receipts also feed
+   * {@link GroupAckAggregator}, which reports the `delivered` and `read` acks Baileys raises for no group message.
    */
   handleMessageReceiptUpdate(
     updates: Array<{
@@ -1990,12 +1999,14 @@ export class BaileysEvents {
     if (!kind || !event.id) {
       return;
     }
-    const participantIds = (Array.isArray(event.participants) ? event.participants : [])
+    const entries = Array.isArray(event.participants) ? event.participants : [];
+    const participantIds = entries
       .map(entry => this.toNeutralGroupParticipantId(entry))
       .filter((jid): jid is string => jid !== null);
+    const groupId = this.host.toNeutralJid(event.id);
     const payload: GroupEvent = {
       kind,
-      groupId: this.host.toNeutralJid(event.id),
+      groupId,
       participantIds,
       timestamp: Math.floor(Date.now() / 1000),
     };
@@ -2006,6 +2017,25 @@ export class BaileysEvents {
       payload.actorId = this.host.toNeutralJid(actor);
     }
     this.host.getOnGroupEvent()?.(payload);
+    if (kind === 'leave') this.forgetLeavers(groupId, entries);
+  }
+
+  /**
+   * A member who left is no longer waited for by the group messages whose acks are being followed. Done after
+   * the group event is out, which a failure here must not hold back.
+   */
+  private forgetLeavers(groupId: string, entries: unknown[]): void {
+    try {
+      this.groupAcks.forget(
+        groupId,
+        entries.flatMap(entry => this.groupParticipantForms(entry)),
+      );
+    } catch (error) {
+      this.host.logger.warn('Dropping a departed member from the group acks failed', {
+        groupId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -2410,6 +2440,14 @@ export class BaileysEvents {
       isGroup: entry.isGroup,
       timestamp: Math.floor(Date.now() / 1000),
     });
+  }
+
+  /** Every id form one `group-participants.update` entry carries (its `id`, `lid` and `phoneNumber`). */
+  private groupParticipantForms(entry: unknown): string[] {
+    if (typeof entry === 'string') return entry ? [entry] : [];
+    if (!entry || typeof entry !== 'object') return [];
+    const e = entry as { phoneNumber?: unknown; id?: unknown; lid?: unknown };
+    return [e.id, e.lid, e.phoneNumber].filter((v): v is string => typeof v === 'string' && v.length > 0);
   }
 
   /**

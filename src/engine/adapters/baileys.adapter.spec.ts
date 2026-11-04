@@ -3150,8 +3150,9 @@ describe('BaileysAdapter inbound fan-out', () => {
     const onMessageAck = jest.fn();
     const adapter = newAdapter();
     await adapter.initialize({ onMessageAck });
-    // A lid-addressed group: the roster lists each member's lid with the phone number beside it.
-    fakeSock.groupMetadata.mockResolvedValue({
+    // A lid-addressed group: the roster lists each member's lid with the phone number beside it. Once, so the
+    // answer does not outlive this test: the roster is read a single time and then cached.
+    fakeSock.groupMetadata.mockResolvedValueOnce({
       id: group,
       subject: 'Team',
       participants: [
@@ -12359,5 +12360,64 @@ describe('BaileysAdapter group metadata cache', () => {
     await cachedGroupMetadata(GROUP);
 
     expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  describe('as the roster behind the acks of a group message', () => {
+    const delivered = (id: string) => ({
+      key: { id, remoteJid: GROUP, fromMe: true },
+      receipt: { userJid: '111@lid', receiptTimestamp: 1700000000 },
+    });
+    const settle = async (): Promise<void> => {
+      for (let hop = 0; hop < 3; hop++) await new Promise(resolve => setImmediate(resolve));
+    };
+    const roster = () =>
+      fakeSock.groupMetadata.mockReset().mockResolvedValue({
+        id: GROUP,
+        subject: 'G',
+        participants: [{ id: '111@lid', phoneNumber: '628111@s.whatsapp.net' }],
+      });
+    const readyWithAcks = async (): Promise<jest.Mock> => {
+      const onMessageAck = jest.fn();
+      const adapter = newAdapter();
+      await adapter.initialize({ onMessageAck });
+      fakeSock.fire('connection.update', { connection: 'open' });
+      return onMessageAck;
+    };
+
+    it('is read once for the first receipts of several messages of a group, from the cache the sends use', async () => {
+      roster();
+      const onMessageAck = await readyWithAcks();
+      fakeSock.fire('message-receipt.update', [delivered('OUT1'), delivered('OUT2')]);
+      await settle();
+
+      expect(onMessageAck.mock.calls).toEqual([
+        ['OUT1', 'delivered', GROUP],
+        ['OUT2', 'delivered', GROUP],
+      ]);
+      expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(1);
+    });
+
+    it('is queried for every message when the cache is off', async () => {
+      process.env[TTL_ENV] = '0';
+      roster();
+      const onMessageAck = await readyWithAcks();
+      fakeSock.fire('message-receipt.update', [delivered('OUT1')]);
+      await settle();
+      fakeSock.fire('message-receipt.update', [delivered('OUT2')]);
+      await settle();
+
+      expect(onMessageAck).toHaveBeenCalledTimes(2);
+      expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+    });
+
+    it('leaves a message without an ack, and reports nothing wrong, when the group cannot be read', async () => {
+      fakeSock.groupMetadata.mockReset().mockRejectedValueOnce(new Error('item-not-found'));
+      const onMessageAck = await readyWithAcks();
+      fakeSock.fire('message-receipt.update', [delivered('OUT1')]);
+      await settle();
+
+      expect(onMessageAck).not.toHaveBeenCalled();
+      expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(1);
+    });
   });
 });

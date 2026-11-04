@@ -1077,11 +1077,13 @@ adapter boundary — none silently stubs.
   unknown and the revoke is still sent.
 - **Group sends (baileys) reuse the group's participant list.** Rather than query it for every
   message, the adapter keeps each group's list for `BAILEYS_GROUP_METADATA_CACHE_TTL_MS` (default 5
-  minutes; `0` queries for every send). A membership or settings event for the group, a refresh of
-  the all-groups listing (Baileys runs one on its own and `GET /groups` another), a write to it
-  through the API, and every reconnect drop the cached list early. A member added without the adapter
-  receiving the event gets the group's messages once the entry expires or its client asks for a
-  retry. whatsapp-web.js has no counterpart: the page keeps the member list itself.
+  minutes; `0` queries for every send, and for the first receipt of every group message the account
+  sent, whose roster the delivered and read acks are judged against). A membership or settings event
+  for the group, a refresh of the all-groups listing (Baileys runs one on its own and `GET /groups`
+  another), a write to it through the API, and every reconnect drop the cached list early. A member
+  added without the adapter receiving the event gets the group's messages once the entry expires or
+  its client asks for a retry. whatsapp-web.js has no counterpart: the page keeps the member list
+  itself.
 
 ## 29.8 Snapshot summary
 
