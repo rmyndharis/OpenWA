@@ -1800,7 +1800,8 @@ admission until that row is written, however long the `message:sending` hooks ta
 day change, and for 10 seconds after. A bulk item or product send is held while it is in flight (at
 most 5 minutes) and for 10 seconds after. A held send also stays held for as long as any send admitted after it is still
 held; for the cold-reachout cap, only a later cold send keeps an earlier one held. A send that fails
-before WhatsApp may have taken it hands its place back at once. A daily or
+before WhatsApp may have taken it hands its place back at once; one whose failure leaves open whether
+WhatsApp took it stays held like a send that went out. A daily or
 cold-reachout refusal can therefore come while the stored count is still under the cap; when only such
 held sends push it over, including for the group participant adds below, its `retryAfterSeconds` is 10
 or less instead of the time to the next UTC day; while a held send is still in flight or holding, a

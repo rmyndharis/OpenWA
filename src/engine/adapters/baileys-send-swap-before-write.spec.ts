@@ -5,6 +5,7 @@ import { BaileysMessaging, blockSvgDecoding, type BaileysMessagingHost } from '.
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { markEngineSendFailure } from '../../common/errors/engine-send-failure';
 import { sendFailureProvesNothingSent } from '../../modules/message/idempotency/send-idempotency.interceptor';
+import { sentNothing } from '../../modules/message/send-pacing.service';
 
 const PNG_BYTES = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -21,7 +22,8 @@ const fakeSock = (id: string): FakeSock => ({
 /**
  * A Baileys send refuses with 409 when its socket was replaced (a reconnect, or a logout and a relink) while
  * it waited, and never moves to the new socket. Found before sock.sendMessage is called, that 409 proves
- * nothing was sent, so a keyed send frees its Idempotency-Key; found after, it proves nothing.
+ * nothing was sent, so a keyed send frees its Idempotency-Key and a paced send hands its admission back; found
+ * after, it proves nothing, and both keep what they hold.
  */
 describe('a Baileys send whose socket is replaced while it waits', () => {
   let server: Server;
@@ -33,6 +35,8 @@ describe('a Baileys send whose socket is replaced while it waits', () => {
 
   /** The interceptor's own decision on an error escaping the engine call, which the send service marks. */
   const freesKey = (error: unknown): boolean => sendFailureProvesNothingSent(markEngineSendFailure(error));
+  /** The pacing decision on the same error: a bulk item or product card hands its admission back only on proof. */
+  const handsAdmissionBack = (error: unknown): boolean => sentNothing(error);
   /** What a close followed by a reconnect leaves behind: the session holds a different socket. */
   const reconnect = () => {
     current = newSock;
@@ -112,6 +116,7 @@ describe('a Baileys send whose socket is replaced while it waits', () => {
     expect(oldSock.sendMessage).not.toHaveBeenCalled();
     expect(newSock.sendMessage).not.toHaveBeenCalled();
     expect(freesKey(error)).toBe(true);
+    expect(handsAdmissionBack(error)).toBe(true);
   });
 
   it('frees the key after a reconnect while the recipient lookup was answered', async () => {
@@ -125,6 +130,7 @@ describe('a Baileys send whose socket is replaced while it waits', () => {
     expect(error).toBeInstanceOf(EngineNotReadyError);
     expect(newSock.sendMessage).not.toHaveBeenCalled();
     expect(freesKey(error)).toBe(true);
+    expect(handsAdmissionBack(error)).toBe(true);
   });
 
   it('frees the key after a reconnect under a recipient lookup that failed', async () => {
@@ -137,10 +143,12 @@ describe('a Baileys send whose socket is replaced while it waits', () => {
 
     expect(error).toBeInstanceOf(EngineNotReadyError);
     expect(freesKey(error)).toBe(true);
+    expect(handsAdmissionBack(error)).toBe(true);
   });
 
-  // The message may have been written before the socket went: that 409 still keeps the key.
-  it('keeps the key for a swap found after sock.sendMessage was called', async () => {
+  // The message may have been written before the socket went: that 409 still keeps the key, and a paced send
+  // keeps its admission held for the window.
+  it('keeps the key and the admission for a swap found after sock.sendMessage was called', async () => {
     oldSock.sendMessage.mockImplementation(() => {
       reconnect();
       return Promise.reject(new Error('Connection Closed'));
@@ -151,5 +159,6 @@ describe('a Baileys send whose socket is replaced while it waits', () => {
     expect(error).toBeInstanceOf(EngineNotReadyError);
     expect(oldSock.sendMessage).toHaveBeenCalledTimes(1);
     expect(freesKey(error)).toBe(false);
+    expect(handsAdmissionBack(error)).toBe(false);
   });
 });

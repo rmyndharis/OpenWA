@@ -42,7 +42,7 @@ import { MessageNotFoundError } from '../../common/errors/message-not-found.erro
 import { type createLogger } from '../../common/services/logger.service';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
-import { EngineNotSentError, markNothingSent } from '../../common/errors/engine-not-sent.error';
+import { EngineNotSentError, markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, guardLookup, withQueryDeadline } from './baileys-query-deadline';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
@@ -1127,8 +1127,9 @@ export class BaileysMessaging {
    * A send that fails after a stop or logout has torn its socket down is not ready (409), the same as
    * one interrupted before it reached the socket; a failure on a socket still in place propagates. A swap
    * found before sock.sendMessage is called sent nothing, so that 409 carries markNothingSent, as does the 400
-   * for a recipient WhatsApp reports unregistered. The send is not moved to the new socket: a logout followed
-   * by a relink to another account looks the same.
+   * for a recipient WhatsApp reports unregistered; one found after the write was attempted carries
+   * markOutcomeUnknown, since the frame may already be on the wire. The send is not moved to the new socket: a
+   * logout followed by a relink to another account looks the same.
    *
    * `content` may be a function, for content that costs work to build (a link preview image): it is
    * called after the recipient check, and its own errors are not send refusals.
@@ -1169,7 +1170,7 @@ export class BaileysMessaging {
     try {
       sent = sendOptions ? await sock.sendMessage(jid, message, sendOptions) : await sock.sendMessage(jid, message);
     } catch (error) {
-      if (this.host.getSocketOrNull() !== sock) throw new EngineNotReadyError();
+      if (this.host.getSocketOrNull() !== sock) throw markOutcomeUnknown(new EngineNotReadyError());
       throw mapSendRefusal(error);
     }
     // Mutations are announced by their library echo; no local callback replaces it.

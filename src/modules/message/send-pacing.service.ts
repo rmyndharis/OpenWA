@@ -10,7 +10,7 @@ import { createLogger } from '../../common/services/logger.service';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
-import { provesNothingSent } from '../../common/errors/engine-not-sent.error';
+import { hasUnknownOutcome, provesNothingSent } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { toParticipantWid } from '../../engine/identity/wa-id';
@@ -70,9 +70,12 @@ export function countsTowardSendBreaker(error: unknown): boolean {
  * raised before the message was handed to WhatsApp (EngineNotSentError, or any error markNothingSent
  * recorded, whatever its status: the proof a keyed send frees its Idempotency-Key on). Anything else (a
  * deadline, a dropped socket, a dead page) leaves the outcome unknown; WhatsApp may have taken the message,
- * so its admission stays held.
+ * so its admission stays held. So does an error an adapter marked as raised after it attempted the send
+ * (markOutcomeUnknown), whatever its status: a not-ready 409 or an unreachable-recipient 400 then says
+ * nothing about the message.
  */
 export function sentNothing(error: unknown): boolean {
+  if (hasUnknownOutcome(error)) return false;
   return (
     error instanceof SsrfBlockedError ||
     provesNothingSent(error) ||

@@ -31,6 +31,8 @@ import { EnginePageError } from '../../common/errors/engine-page.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
 
 /** Regression lock for the terminal-status decision (cancel-clobber + stopOnError overwrite bugs). */
 describe('resolveFinalBatchStatus', () => {
@@ -1425,6 +1427,10 @@ describe('BulkMessageService.processBatch', () => {
       () => engine.sendTextMessage.mockRejectedValueOnce(new EngineThrottledError('rate-overlimit')),
     ],
     ['its media URL is blocked', () => engine.sendTextMessage.mockRejectedValueOnce(new SsrfBlockedError('blocked'))],
+    [
+      'the engine answers not-ready before it handed the message over',
+      () => engine.sendTextMessage.mockRejectedValueOnce(markNothingSent(new EngineNotReadyError())),
+    ],
   ])('releases the pacing admission of an item that fails before its row when %s', async (_label, arrange) => {
     const release = jest.fn();
     pacing.assertSendAllowed.mockResolvedValue(release);
@@ -1446,6 +1452,10 @@ describe('BulkMessageService.processBatch', () => {
     [
       'the engine transport fails',
       () => engine.sendTextMessage.mockRejectedValueOnce(new EngineTransportError('timeout')),
+    ],
+    [
+      'the engine answers not-ready after it attempted the send',
+      () => engine.sendTextMessage.mockRejectedValueOnce(markOutcomeUnknown(new EngineNotReadyError())),
     ],
   ])('keeps the pacing admission held for a window from the engine return when %s', async (_label, arrange) => {
     const release = jest.fn();

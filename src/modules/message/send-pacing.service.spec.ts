@@ -8,7 +8,9 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { SendPacingService, SEND_PACING_LIMITED, countsTowardSendBreaker, sentNothing } from './send-pacing.service';
-import { markNothingSent } from '../../common/errors/engine-not-sent.error';
+import { markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { EnginePageError, RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -661,5 +663,20 @@ describe('sentNothing', () => {
 
     expect(sentNothing(markNothingSent(refusal()))).toBe(true);
     expect(sentNothing(refusal())).toBe(false);
+  });
+
+  // An adapter answers a client status once the write may already have left; the status alone proves nothing then.
+  it.each([
+    ['a not-ready 409', () => new EngineNotReadyError()],
+    ['an unreachable-recipient 400', () => new RecipientUnreachableError('628111@c.us')],
+    ['a 404', () => new NotFoundException('message not found')],
+  ])('reads %s the engine marked as raised after the send was attempted as an unknown outcome', (_label, make) => {
+    expect(sentNothing(make())).toBe(true);
+    expect(sentNothing(markOutcomeUnknown(make()))).toBe(false);
+  });
+
+  it('keeps the hand-back for a refusal WhatsApp answered and for an unmarked client fault', () => {
+    expect(sentNothing(new EngineRefusedError('not allowed to send here'))).toBe(true);
+    expect(sentNothing(new BadRequestException('recipients is required'))).toBe(true);
   });
 });
