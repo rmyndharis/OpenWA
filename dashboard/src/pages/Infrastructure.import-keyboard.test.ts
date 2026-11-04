@@ -286,15 +286,20 @@ test('keyboard focus stays on Download backup first in the restart modal after a
   const restartBackupBtn = (await rtl.screen.findByRole('button', {
     name: 'Download backup first',
   })) as HTMLButtonElement;
+  // The dialog moves focus onto itself in an effect after it mounts; take focus only once that has happened.
+  await rtl.waitFor(() => assert.ok(document.activeElement?.closest('[role="dialog"]')));
   restartBackupBtn.focus();
   assert.equal(document.activeElement?.textContent?.trim(), 'Download backup first');
 
   rtl.fireEvent.click(restartBackupBtn);
   await rtl.waitFor(() => assert.equal(restartBackupBtn.disabled, true));
   await rtl.waitFor(() => assert.equal(restartBackupBtn.disabled, false));
-  assert.equal(
-    document.activeElement === document.body ? 'body' : document.activeElement?.textContent?.trim(),
-    'Download backup first',
+  // The page restores focus in an effect after the commit that re-enables the button.
+  await rtl.waitFor(() =>
+    assert.equal(
+      document.activeElement === document.body ? 'body' : document.activeElement?.textContent?.trim(),
+      'Download backup first',
+    ),
   );
 });
 
