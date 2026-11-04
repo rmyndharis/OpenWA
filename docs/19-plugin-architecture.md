@@ -242,8 +242,9 @@ export default class MyAwesomePlugin implements IPlugin {
       const message = data as { from: string; body?: string };
 
       if (message.body?.toLowerCase() === 'help' && sessionId) {
-        // Capability call — requires the 'messages:send' permission + an in-scope, live session.
-        await ctx.messages.sendText(sessionId, message.from, cfg.greeting ?? 'How can I help you?');
+        void ctx.messages
+          .sendText(sessionId, message.from, cfg.greeting ?? 'How can I help you?')
+          .catch(error => ctx.logger.error('Reply failed', error));
         return { continue: false }; // stop the chain
       }
       return { continue: true };
@@ -403,6 +404,8 @@ A key that is spelled like another key's encoded filename (`key-Zm9v` for `foo`)
 ## 19.5 Hook System
 
 ### Hook Lifecycle
+
+A plain text send may wait up to `SIMULATE_TYPING_MAX_MS` (5 s by default) for typing simulation before the engine send. Do not await message sends in hooks or webhook handlers: start the promise with a `.catch` handler and return the hook result or webhook response promptly.
 
 ```mermaid
 sequenceDiagram
@@ -705,8 +708,10 @@ export default class AutoReplyPlugin implements IPlugin {
       const text = message.body.toLowerCase();
       const rule = (cfg.rules ?? []).find(r => text.includes(r.match.toLowerCase()));
       if (rule) {
-        await ctx.messages.sendText(sessionId, message.from, rule.reply);
-        await ctx.storage.set(`stats:replies:${Date.now()}`, rule.match);
+        void ctx.messages
+          .sendText(sessionId, message.from, rule.reply)
+          .then(() => ctx.storage.set(`stats:replies:${Date.now()}`, rule.match))
+          .catch(error => ctx.logger.error('Auto-reply failed', error));
       }
       return { continue: true }; // keep the chain going (still delivers the webhook)
     });
@@ -853,7 +858,7 @@ tier automatically. Key properties:
   resolves `{ continue: true }` (fail-open), so each sandboxed subscriber delays the hook chain by at most
   5 s per event. The same fail-open value drains in-flight hooks if the worker crashes. The timeout is
   logged at most once per event per minute and shows as the last hook error in plugin health.
-- A sandboxed **webhook** handler (`ctx.registerWebhook`) has the same **5 s** budget (`INGRESS_DISPATCH_TIMEOUT_MS`), and the host
+- A sandboxed **webhook** handler (`ctx.registerWebhook`) has a **5 s** inline budget (`INGRESS_DISPATCH_TIMEOUT_MS`). Queued dispatch gets `SIMULATE_TYPING_MAX_MS` plus 5 s, capped at 25 s (10 s by default). The host
   cannot cancel a handler that overruns it: the delivery is retried while the first run still lands, so a handler must key
   its side effects on `req.deliveryId` and hand slow work to a background task (docs/25, section 25.7).
 - After a hook, webhook or search dispatch times out, the host pings the worker. A worker whose event

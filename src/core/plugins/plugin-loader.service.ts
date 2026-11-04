@@ -521,10 +521,10 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
 
   /**
    * Ingress dispatch into the plugin's live sandbox worker; implemented by PluginSandboxBridge.
-   * The public contract (callers: IngressProcessor, IngressEnqueueService) is unchanged.
+   * Queued dispatch gets a longer processing budget after the provider is acknowledged.
    */
-  dispatchWebhookForInstance(d: IngressJobData): Promise<void> {
-    return this.sandboxBridge.dispatchWebhookForInstance(d);
+  dispatchWebhookForInstance(d: IngressJobData, options?: { queued?: boolean }): Promise<void> {
+    return this.sandboxBridge.dispatchWebhookForInstance(d, options);
   }
 
   /**

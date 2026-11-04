@@ -7,7 +7,7 @@ import configuration from '../../config/configuration';
 import { PLUGIN_SHUTDOWN_WAIT_MS } from '../../core/plugins/plugin-loader.service';
 import { ApiKeyUsageTracker } from '../../modules/auth/api-key-usage-tracker.service';
 import { WS_REDIS_QUIT_TIMEOUT_MS } from '../../modules/events/redis-io.adapter';
-import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integration.constants';
+import { INGRESS_SHUTDOWN_WAIT_MS } from '../../modules/integration/integration.constants';
 import { MAX_WORKER_CLOSE_WAIT_MS } from '../../modules/queue/processors/close-worker';
 import { QUEUE_NAMES } from '../../modules/queue/queue-names';
 import { QUEUE_CLOSE_TIMEOUT_MS } from '../../modules/queue/shutdown-safe-queue';
@@ -33,7 +33,7 @@ describe('shutdown time budget', () => {
   const QUEUE_COUNT = Object.keys(QUEUE_NAMES).length;
   const base =
     DEFAULT_SHUTDOWN_DELAY_MS +
-    INGRESS_DISPATCH_TIMEOUT_MS +
+    INGRESS_SHUTDOWN_WAIT_MS +
     ENGINE_TEARDOWN_TIMEOUT_MS +
     AUTOSTART_SHUTDOWN_WAIT_MS +
     DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS +

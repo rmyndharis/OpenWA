@@ -6,7 +6,7 @@ import { IngressEvent } from './entities/ingress-event.entity';
 import { IngressEnqueueService } from './ingress-enqueue.service';
 import { IngressJobData } from '../queue/processors/ingress.processor';
 import { KeyedAsyncLock } from './ordering-lock';
-import { INGRESS_DISPATCH_TIMEOUT_MS } from './integration.constants';
+import { INGRESS_SHUTDOWN_WAIT_MS } from './integration.constants';
 import { createLogger } from '../../common/services/logger.service';
 import { isAllSessionsScope } from '../../core/plugins/plugin-activation';
 
@@ -49,12 +49,12 @@ export class RedriveService implements OnModuleDestroy {
     let timer: NodeJS.Timeout | undefined;
     const settled = await Promise.race([
       Promise.allSettled([...this.inFlight]).then(() => true),
-      new Promise<false>(resolve => (timer = setTimeout(resolve, INGRESS_DISPATCH_TIMEOUT_MS, false))),
+      new Promise<false>(resolve => (timer = setTimeout(resolve, INGRESS_SHUTDOWN_WAIT_MS, false))),
     ]);
     clearTimeout(timer);
     if (!settled) {
       this.logger.warn('Ingress redrive still running at shutdown; continuing without it', {
-        waitMs: INGRESS_DISPATCH_TIMEOUT_MS,
+        waitMs: INGRESS_SHUTDOWN_WAIT_MS,
         action: 'ingress_redrive_shutdown_timeout',
       });
     }

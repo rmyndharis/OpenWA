@@ -3,7 +3,7 @@ import { IngressEnqueueService } from './ingress-enqueue.service';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
 import { IngressEvent } from './entities/ingress-event.entity';
 import { Repository } from 'typeorm';
-import { INGRESS_DISPATCH_TIMEOUT_MS } from './integration.constants';
+import { INGRESS_SHUTDOWN_WAIT_MS } from './integration.constants';
 import { LoggerService } from '../../common/services/logger.service';
 
 describe('RedriveService', () => {
@@ -327,7 +327,7 @@ describe('RedriveService', () => {
         let settled = false;
         const destroyed = svc.onModuleDestroy().then(() => (settled = true));
 
-        await jest.advanceTimersByTimeAsync(INGRESS_DISPATCH_TIMEOUT_MS - 1);
+        await jest.advanceTimersByTimeAsync(INGRESS_SHUTDOWN_WAIT_MS - 1);
         expect(settled).toBe(false);
         await jest.advanceTimersByTimeAsync(1);
         await destroyed;

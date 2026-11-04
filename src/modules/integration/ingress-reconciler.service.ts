@@ -14,7 +14,7 @@ import {
   resolveIngressJobOptions,
 } from './ingress-enqueue.service';
 import { extractConversationId } from './ingress.service';
-import { INGRESS_DISPATCH_TIMEOUT_MS } from './integration.constants';
+import { INGRESS_SHUTDOWN_WAIT_MS } from './integration.constants';
 import { PluginInstanceService } from './plugin-instance.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { IngressJobData } from '../queue/processors/ingress.processor';
@@ -135,12 +135,12 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     let timer: NodeJS.Timeout | undefined;
     const settled = await Promise.race([
       this.inFlight.then(() => true),
-      new Promise<false>(resolve => (timer = setTimeout(resolve, INGRESS_DISPATCH_TIMEOUT_MS, false))),
+      new Promise<false>(resolve => (timer = setTimeout(resolve, INGRESS_SHUTDOWN_WAIT_MS, false))),
     ]);
     clearTimeout(timer);
     if (!settled) {
       this.logger.warn('Ingress reconcile pass still running at shutdown; continuing without it', {
-        waitMs: INGRESS_DISPATCH_TIMEOUT_MS,
+        waitMs: INGRESS_SHUTDOWN_WAIT_MS,
         action: 'ingress_reconcile_shutdown_timeout',
       });
     }
