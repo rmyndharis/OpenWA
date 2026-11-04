@@ -2,15 +2,16 @@ import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nes
 import { Observable } from 'rxjs';
 import type { Request, Response } from 'express';
 import { recordHttpRequest } from '../metrics/request-metrics';
-import { claimHttpRequestMetrics } from '../middleware/request-metrics.middleware';
+import { claimHttpRequestMetrics, unfinishedResponseStatus } from '../middleware/request-metrics.middleware';
 
 /**
  * Records one HTTP RED observation per request into the in-process request-metrics store.
  *
  * Listens for the response's `finish` (and `close`, for premature disconnects) rather than tapping
  * the handler observable, because exception filters set the final `res.statusCode` AFTER the
- * interceptor's observable chain — `finish`/`close` see the real status (2xx/4xx/5xx). The `recorded`
- * guard keeps it to one observation per request even when both events fire.
+ * interceptor's observable chain — `finish` sees the real status (2xx/4xx/5xx). A `close` that comes first
+ * means the connection ended before the response did, and is counted by unfinishedResponseStatus (499 when
+ * nothing had been sent). The `recorded` guard keeps it to one observation per request even when both events fire.
  *
  * Only requests that PASS the guards reach this interceptor; requests rejected earlier (throttler
  * 429, API-key guard 401/403) are recorded by requestMetricsBoundaryMiddleware instead. The request
@@ -35,13 +36,17 @@ export class RequestMetricsInterceptor implements NestInterceptor {
     const method = (req.method ?? 'UNKNOWN').toUpperCase();
     const start = process.hrtime.bigint();
     let recorded = false;
+    let finished = false;
     const record = (): void => {
       if (recorded) return;
       recorded = true;
       const seconds = Number(process.hrtime.bigint() - start) / 1e9;
-      recordHttpRequest(method, route, res.statusCode ?? 200, seconds);
+      recordHttpRequest(method, route, finished ? (res.statusCode ?? 200) : unfinishedResponseStatus(res), seconds);
     };
-    res.on('finish', record);
+    res.on('finish', () => {
+      finished = true;
+      record();
+    });
     res.on('close', record);
     return next.handle();
   }

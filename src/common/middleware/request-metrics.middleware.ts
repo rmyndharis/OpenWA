@@ -27,8 +27,38 @@ export function claimHttpRequestMetrics(req: Request): void {
   (req as MetricsRequest)[HTTP_REQUEST_METRICS_CLAIMED] = true;
 }
 
+/** Nginx's "client closed request": the connection went away before the gateway answered. */
+const CLIENT_CLOSED_REQUEST = 499;
+
+/** Where a body drop leaves the status its request is to be counted under. */
+const HTTP_DROPPED_STATUS = Symbol('openwa.httpDroppedStatus');
+
+type DroppedResponse = Response & { [HTTP_DROPPED_STATUS]?: number };
+
+/**
+ * Mark a response whose request the gateway is about to cut off (the in-flight body budget does), so the series
+ * count it under `status`. Nothing is written to the client. A response that has already started is left alone: the
+ * client was answered, and what it got is what counts.
+ */
+export function markDroppedResponse(res: Response, status: number): void {
+  if (!res.headersSent) (res as DroppedResponse)[HTTP_DROPPED_STATUS] = status;
+}
+
+/**
+ * The status a response is counted under when its connection closed before it finished. A drop's mark comes first:
+ * cutting a multipart upload fails its parser at once, and the 500 the stack writes for that lands on the dead
+ * connection before the response reports the close. Without a mark, a response that had started keeps the status it
+ * sent, and one that had not was never answered because the client left while the gateway was working: 499.
+ */
+export function unfinishedResponseStatus(res: Response): number {
+  const dropped = (res as DroppedResponse)[HTTP_DROPPED_STATUS];
+  if (dropped !== undefined) return dropped;
+  return res.headersSent ? res.statusCode : CLIENT_CLOSED_REQUEST;
+}
+
 export function requestMetricsBoundaryMiddleware(req: Request, res: Response, next: NextFunction): void {
   const start = process.hrtime.bigint();
+  let finished = false;
   const record = (): void => {
     const request = req as MetricsRequest;
     if (request[HTTP_REQUEST_METRICS_CLAIMED]) return;
@@ -42,11 +72,15 @@ export function requestMetricsBoundaryMiddleware(req: Request, res: Response, ne
     const route = typeof routePath === 'string' ? routePath : '(unmatched)';
     if (SKIPPED_PREFIXES.some(prefix => route.startsWith(prefix))) return;
     const seconds = Number(process.hrtime.bigint() - start) / 1e9;
-    recordHttpRequest((req.method ?? 'UNKNOWN').toUpperCase(), route, res.statusCode ?? 200, seconds);
+    const status = finished ? (res.statusCode ?? 200) : unfinishedResponseStatus(res);
+    recordHttpRequest((req.method ?? 'UNKNOWN').toUpperCase(), route, status, seconds);
   };
-  // `finish` sees the status the exception filter wrote (the guard's 401/403/429); `close`
-  // covers a premature client disconnect. The claim flag keeps it to one observation.
-  res.on('finish', record);
+  // `finish` sees the status the exception filter wrote (the guard's 401/403/429); `close` without it means
+  // the connection ended first, which unfinishedResponseStatus counts. The claim flag keeps it to one observation.
+  res.on('finish', () => {
+    finished = true;
+    record();
+  });
   res.on('close', record);
   next();
 }
