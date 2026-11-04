@@ -165,8 +165,11 @@
 > exists: it cannot know whether another replica holds a restricted socket, so it names the chat in
 > every form for the rooms to match. Events about one chat of one session that are raised together
 > share a lookup, and an answer that named the chat's other identity is reused for 5 seconds (for up to
-> 1,000 chats), so a mapping that changes, or a chat that gains a second identity, reaches a restricted
-> socket within 5 seconds. A chat the table has no other identity for is read again by every event.
+> 1,000 chats). That reuse applies whenever the gateway expands a chat for chat-restricted delivery: with
+> Redis fan-out on, or while a chat-restricted socket is connected to the node. A mapping that arrives can
+> be seen up to 5 seconds late, and after a mapping is removed or moved, events of that chat can keep
+> reaching sockets restricted to the old identity for up to 5 seconds. A chat the table has no other
+> identity for is read again by every event.
 >
 > **The fan-out to other replicas is best effort and keeps no replay queue.** A Redis that pauses for less
 > than 10 s (a snapshot fork, a slow fsync) answers afterwards, and every event raised meanwhile reaches the

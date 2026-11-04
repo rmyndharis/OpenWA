@@ -181,8 +181,8 @@ export const WS_MAX_FRAME_BYTES = 8 * 1024;
 /**
  * How long the lid table's answer for a chat is reused when it named another identity for it, so the acks of one
  * message read the table once. A chat the table has no other identity for is read again by the next event, so a
- * mapping learned meanwhile routes at once; one that changes, or gains a second identity, within this long
- * reaches the sockets after it.
+ * first mapping routes at once. A second identity arrives up to this long late, and after a mapping is removed or
+ * moved, events of the chat keep reaching sockets restricted to the old identity for up to this long.
  */
 export const CHAT_IDS_MEMO_TTL_MS = 5_000;
 /** Most chats the answers are kept for; the oldest go first. */
