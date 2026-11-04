@@ -390,6 +390,16 @@ The windows above run at the routing layer, after a request body has been buffer
 - Each drop is logged as one warning naming the reason, the client address, the sizes and the path (at most ten a minute), and counted in `http_requests_total` as `408` for a body that stalled or fell behind and `503` for a chunked body that outgrew the budget, its client's share or the unkeyed pool. The client only sees its connection close. A client that abandons a body while it is arriving is not a drop: the body parser answers an aborted request with `400`, which is what counts (`499` for a multipart upload that a route is reading), and a body that Node's own request timeout cuts is counted the same way.
 - Requests without a body are never refused for lack of budget.
 
+### Request body width
+
+The validation pipe copies a whole body before any validator can refuse it, and it scans the keys of each object once per key, so a body padded with array items or object keys can hold the process for seconds to minutes. A step ahead of that pipe refuses such a body with `400`, naming the limit it exceeded, for about the cost of reading it:
+
+- an array of more than 10,000 items (the longest list any request field allows is 2,000);
+- an object of more than 1,000 keys (the scan makes an object quadratic in its keys; the free-form maps a request carries are a message's template variables, limited by the 4,096 characters of its text, a webhook's headers, at most 50, and the config objects of plugins, integration instances and sessions, whose keys are the ones their schema declares);
+- more than 250,000 array items and object keys in the whole body (the largest documented request, a bulk send of 100 messages that each tag 1,024 mentions, holds about 104,000).
+
+It checks only a body that a request DTO defines. The data import is exempt, since its tables hold as many rows as the database does, and so are the routes whose body the gateway does not validate against a DTO: integration ingress and plugin-hosted webhooks.
+
 ### WebSocket (`/events`) limits
 
 Socket.IO frames never pass through the Nest enhancer pipeline, so the HTTP windows above do **not** apply to the WebSocket surface. `EventsGateway` enforces its own in-process limits instead (all keyed in-memory per process; a blank env value falls back to the default, and one that is not a positive integer fails the boot):

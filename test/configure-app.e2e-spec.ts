@@ -12,6 +12,7 @@ import {
   Req,
   Injectable,
   OnModuleDestroy,
+  ValidationPipe,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { NestFactory } from '@nestjs/core';
@@ -358,6 +359,57 @@ describe('production HTTP surface (configureApp)', () => {
 
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ statusCode: 400, error: 'Bad Request' });
+  });
+
+  // class-transformer copies every array element and every object key of a body before a validator can refuse
+  // it (and scans an object's keys once per key), so the width is bounded ahead of the validation pipe.
+  describe('a DTO body past a width limit', () => {
+    const validText = { chatId: '628123456789@c.us', text: 'hi' };
+    const list = (length: number): number[] => Array.from({ length }, () => 1);
+
+    it.each([
+      [
+        'an array of more than 10000 items',
+        { mentions: list(10_001) },
+        'Request body must not hold an array of more than 10000 items',
+      ],
+      [
+        'an object of more than 1000 keys',
+        { extra: Object.fromEntries(list(1_001).map((_, index) => [`k${index}`, 1])) },
+        'Request body must not hold an object of more than 1000 keys',
+      ],
+      [
+        'more than 250000 items and keys in all',
+        { junk: Array.from({ length: 26 }, () => list(9_999)) },
+        'Request body must not hold more than 250000 array items and object keys in all',
+      ],
+    ])(
+      'is refused with 400 naming the limit when it holds %s, before it is transformed',
+      async (_label, padded, message) => {
+        const transform = jest.spyOn(ValidationPipe.prototype, 'transform');
+        try {
+          const res = await request(app.getHttpServer())
+            .post('/api/validated/text')
+            .type('json')
+            .send({ ...validText, ...padded });
+
+          expect(res.status).toBe(400);
+          expect(res.body).toMatchObject({ statusCode: 400, error: 'Bad Request', message });
+          expect(transform).not.toHaveBeenCalled();
+        } finally {
+          transform.mockRestore();
+        }
+      },
+    );
+
+    it('is left alone when no DTO defines the body, however wide', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/echo')
+        .type('json')
+        .send({ list: list(20_000), many: Array.from({ length: 30 }, () => list(9_999)) });
+
+      expect(res.status).toBe(201);
+    });
   });
 
   it('refuses a body over the per-request cap with 413', async () => {
