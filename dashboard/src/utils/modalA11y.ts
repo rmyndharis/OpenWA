@@ -44,7 +44,7 @@ export function bindModalA11y(
   // Capture before moving focus into the dialog — this is the trigger focus returns to on close.
   // Guarded structurally (not instanceof) so the binder also runs under non-DOM test doubles.
   const active = doc.activeElement;
-  const previouslyFocused =
+  let previouslyFocused =
     active && typeof (active as HTMLElement).focus === 'function' ? (active as HTMLElement) : null;
 
   const stackEntry = {};
@@ -88,9 +88,25 @@ export function bindModalA11y(
   // Initial focus: the element the dialog names, else the first visible focusable in it, else the card itself.
   // The opener was recorded above, so focus a field here and not with autoFocus: React focuses an autoFocus
   // input during the commit, before this runs, and it would be recorded as the opener and lost on close.
-  (initialFocus?.() ?? visibleFocusables(card)[0] ?? card).focus();
+  const focusInitial = () => (initialFocus?.() ?? visibleFocusables(card)[0] ?? card).focus();
+  focusInitial();
+  // A dialog can open before the navigation drawer releases the page's inert state.
+  const inertAncestor = card.closest?.('[inert]');
+  const inertObserver = inertAncestor
+    ? new MutationObserver(() => {
+        if (card.closest('[inert]')) return;
+        inertObserver?.disconnect();
+        if (modalStack[modalStack.length - 1] === stackEntry) {
+          const opener = doc.activeElement as HTMLElement | null;
+          if (opener && !card.contains(opener) && !opener.closest('[inert]')) previouslyFocused = opener;
+          focusInitial();
+        }
+      })
+    : null;
+  if (inertAncestor) inertObserver?.observe(inertAncestor, { attributes: true, attributeFilter: ['inert'] });
 
   return () => {
+    inertObserver?.disconnect();
     const stackIndex = modalStack.indexOf(stackEntry);
     if (stackIndex !== -1) modalStack.splice(stackIndex, 1);
     doc.removeEventListener('keydown', onKeyDown, true);
