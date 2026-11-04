@@ -257,6 +257,8 @@ List all sessions, scoped to the API key's `allowedSessions`, ordered `createdAt
 ]
 ```
 
+`lastActive` is when the session last received a message or echoed one it sent, and when it last became `ready`. While messages keep arriving it is recorded at most once every 30 seconds, so it can lag the latest message by up to that long.
+
 `lastError` can be non-null only when `status` is `failed` or `action_required`, or `initializing` from the fifth consecutive reconnect attempt of a session whose engine retries a dropped connection on its own (Baileys), until the session is ready or a QR arrives (a QR window that runs out unscanned is not an attempt), or `initializing` while a reconnect waits to retry after the engine failed to relaunch, carrying that failure's reason until the next attempt starts; any other status clears it. It is held in memory per process, so it reads `null` after a restart and on a node not running the session. `config` and the raw `proxyUrl` / `proxyType` columns are not present (stripped by `fromEntity`).
 
 `restriction` reports a limit **WhatsApp itself** has placed on the account, as opposed to `lastError`, which describes a fault on the gateway's side of the link. It is `null` when there is none, and otherwise `{ kind, code, expiresAt }`:

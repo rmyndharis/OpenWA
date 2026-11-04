@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { MessageProjector, PERSIST_RETRY_DELAY_MS } from './message-projector.service';
+import { LAST_ACTIVE_WRITE_WINDOW_MS, MessageProjector, PERSIST_RETRY_DELAY_MS } from './message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IsNull, Not, Or, type Repository } from 'typeorm';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
@@ -2146,6 +2146,112 @@ describe('MessageProjector (inbound projection)', () => {
       );
       expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.sent', sent);
       expect(eventsGateway.emitMessageSent).toHaveBeenCalledWith(SESSION_ID, sent);
+    });
+  });
+
+  // lastActive is read as minutes by the session response, so a session's busiest traffic stamps its row at most
+  // once per window and engine instead of once per message.
+  describe('the session activity stamp', () => {
+    let now: number;
+    let clock: jest.SpyInstance;
+
+    beforeEach(() => {
+      now = 1_700_000_000_000;
+      clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
+    });
+    afterEach(() => clock.mockRestore());
+
+    const stamps = (): unknown[] =>
+      sessionRepository.update.mock.calls.filter(([, patch]) => 'lastActiveAt' in (patch as object));
+    const inbound = (engine: IWhatsAppEngine, id: string): void =>
+      void projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id }));
+    const echo = (engine: IWhatsAppEngine, id: string): void =>
+      projector.handleOwnSendEcho(SESSION_ID, engine, makeIncoming({ id, fromMe: true }));
+
+    it('stamps once for a burst of inbound messages and own-send echoes', () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+
+      for (let i = 0; i < 5; i++) inbound(engine, `in-${i}`);
+      for (let i = 0; i < 5; i++) echo(engine, `out-${i}`);
+
+      expect(stamps()).toEqual([[SESSION_ID, { lastActiveAt: new Date(now) }]]);
+    });
+
+    it('stamps again once the window has passed, and not before', () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      inbound(engine, 'first');
+
+      now += LAST_ACTIVE_WRITE_WINDOW_MS - 1;
+      inbound(engine, 'inside');
+      expect(stamps()).toHaveLength(1);
+
+      now += 1;
+      echo(engine, 'after');
+      expect(stamps()).toHaveLength(2);
+      expect(stamps()[1]).toEqual([SESSION_ID, { lastActiveAt: new Date(now) }]);
+    });
+
+    it('lets the next message stamp again after a write that failed', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      sessionRepository.update.mockRejectedValueOnce(new Error('database is locked'));
+      inbound(engine, 'first');
+      await settle();
+
+      inbound(engine, 'second');
+
+      expect(stamps()).toHaveLength(2);
+    });
+
+    it('does not let a write that failed late undo the stamp of a newer one', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      let fail!: (error: Error) => void;
+      sessionRepository.update.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+      inbound(engine, 'first');
+      now += LAST_ACTIVE_WRITE_WINDOW_MS;
+      inbound(engine, 'second');
+
+      fail(new Error('database is locked'));
+      await settle();
+      inbound(engine, 'third');
+
+      expect(stamps()).toHaveLength(2);
+    });
+
+    it('stamps at once for the first message of a replacement engine', () => {
+      const first = makeEngine();
+      engines.set(SESSION_ID, first);
+      inbound(first, 'before');
+
+      const replacement = makeEngine();
+      engines.set(SESSION_ID, replacement);
+      inbound(replacement, 'after');
+
+      expect(stamps()).toHaveLength(2);
+    });
+
+    it('stamps again when the clock moved back instead of waiting out the difference', () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      inbound(engine, 'first');
+
+      now -= 3_600_000;
+      inbound(engine, 'later');
+
+      expect(stamps()).toHaveLength(2);
+    });
+
+    it('stamps nothing for an engine that is no longer the live one', () => {
+      const retired = makeEngine();
+      engines.set(SESSION_ID, makeEngine());
+
+      inbound(retired, 'late');
+      echo(retired, 'late-echo');
+
+      expect(stamps()).toHaveLength(0);
     });
   });
 
