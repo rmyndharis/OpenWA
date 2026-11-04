@@ -251,6 +251,12 @@ Proxy egress (if WhatsApp is blocked on your network) is configured **per sessio
 which need an ADMIN key. It is **not** an environment variable, and an unreachable proxy silently
 blocks the WhatsApp WebSocket on either engine (see the _No QR code appears, or `/start` returns `504`_
 entry below: on whatsapp-web.js `/start` returns `504`, on Baileys it succeeds and no QR arrives).
+On whatsapp-web.js a SOCKS proxy cannot log in: Chromium cannot authenticate one, so the user name and
+password of a `socks4://` or `socks5://` `proxyUrl` are not used and a SOCKS proxy that requires a login
+refuses the session. Use a proxy that admits the gateway by its IP address, or an `http`/`https` proxy
+with credentials. A start that such a proxy refuses ends in `auth timeout` or a browser network error
+and adds this to the session's `lastError`; a proxy that never answers ends at the engine
+initialization deadline, without it.
 
 ### Issue: Linking asks for a passkey and never completes (both engines)
 

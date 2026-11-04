@@ -297,6 +297,26 @@ describe('governance docs match the repository', () => {
     );
   });
 
+  // Chromium has no SOCKS authentication, so on whatsapp-web.js the credentials of a socks4:// or socks5:// proxy URL are
+  // never sent. The proxy URL is chosen from the API reference for either engine, so the limit has to be stated there.
+  it('tells a whatsapp-web.js operator that a SOCKS proxy URL cannot log in', () => {
+    const states = (text: string): boolean =>
+      text
+        .replace(/\s+/g, ' ')
+        .split(/(?<=\.)\s+/)
+        .some(
+          sentence =>
+            /whatsapp-web\.js/.test(sentence) && /SOCKS/.test(sentence) && /user name and password/.test(sentence),
+        );
+    const api = read('docs/06-api-specification.md');
+    expect(states(between(api, 'per-session egress proxy.**', '**Response** `201`'))).toBe(true);
+    const rows = api.split('\n').filter(line => line.startsWith('| `proxyUrl`'));
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row).toMatch(/whatsapp-web\.js[^|]*SOCKS|SOCKS[^|]*whatsapp-web\.js/);
+    const faq = read('docs/12-troubleshooting-faq.md');
+    expect(states(between(faq, 'Proxy egress (if WhatsApp is blocked', '### Issue:'))).toBe(true);
+  });
+
   // The bootstrap key file outlives a demotion or a scope change, and the Helm chart's StatefulSet
   // leaves no pod to exec into once it is scaled to 0 for the database write.
   it('gives the admin key recovery its Helm commands and the bootstrap key caveat', () => {

@@ -183,6 +183,22 @@ function eventBridgeUnattached(client: Client): boolean {
   return (client as Client & { eventsAttached?: boolean }).eventsAttached === false;
 }
 
+/**
+ * Appended to the reason of a start that failed behind a SOCKS proxy URL carrying credentials. Chromium never sends
+ * them, so a proxy that requires a login refuses the browser, and what the start reports for that names no cause.
+ */
+const SOCKS_CREDENTIALS_ADVICE =
+  'The session proxy URL carries credentials for a SOCKS proxy, which Chromium cannot send. If the proxy requires a ' +
+  'login it refuses the connection: use an IP-authorized proxy or an HTTP/HTTPS proxy.';
+
+/**
+ * The two failures a proxy that refuses the browser produces: whatsapp-web.js's own `auth timeout`, thrown as a bare
+ * string when the pinned page boots from the local cache but its other requests are refused, and Chromium's
+ * navigation error when the main document itself cannot be fetched. Any other failure (a browser that did not
+ * launch, a page context destroyed under the inject) says nothing about the proxy.
+ */
+const PROXY_REFUSAL_REASON = /^(?:auth timeout$|net::ERR_)/;
+
 // The single in-adapter retry of a navigation-killed first inject only runs while at least this much
 // of the lifecycle's outer init deadline remains — a retry the outer race SIGKILLs mid-launch would
 // surface as a bare 504 with no reason. Below it, fail with today's exact terminal shape instead.
@@ -336,6 +352,8 @@ export class WwebjsLifecycle {
       this.host.logger.error(unappliedPatchesMessage('wwebjs', unapplied));
     }
 
+    // Set once the launch is known to drop the credentials of a SOCKS proxy URL, for the reason a failed start reports.
+    let socksCredentialsDropped = false;
     try {
       // Build puppeteer args, including proxy if configured
       // Pinned on configured args too: a plugin config stored through the API replaces the whole puppeteer object
@@ -357,6 +375,7 @@ export class WwebjsLifecycle {
           puppeteerArgs.push(`--proxy-server=${proxyLaunch.serverArg}`);
           proxyAuthentication = proxyLaunch.proxyAuthentication;
           if (proxyLaunch.socksAuthUnsupported) {
+            socksCredentialsDropped = true;
             this.host.logger.warn(
               `Proxy for session ${this.host.config.sessionId} has credentials on a SOCKS proxy, but Chromium ` +
                 `cannot authenticate SOCKS proxies. Use an IP-authorized proxy or an HTTP/HTTPS proxy instead.`,
@@ -481,6 +500,8 @@ export class WwebjsLifecycle {
           `${reason} ${STALE_PROFILE_ADVICE} If this followed an ` +
           `upgrade, the session's browser profile is likely stale — see docs/12-troubleshooting-faq.md.`;
       }
+      if (socksCredentialsDropped && PROXY_REFUSAL_REASON.test(reason))
+        surfacedReason += ` ${SOCKS_CREDENTIALS_ADVICE}`;
       this.host.getCallbacks().onError?.(surfacedReason);
       throw error;
     }
