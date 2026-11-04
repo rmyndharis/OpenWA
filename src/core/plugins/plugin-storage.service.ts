@@ -173,6 +173,12 @@ export class PluginStorageService {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
+      try {
+        // Preserve an intentionally owner-readonly directory while removing group/other access.
+        fs.chmodSync(dir, fs.statSync(dir).mode & 0o7700);
+      } catch {
+        /* best-effort hardening */
+      }
 
       const entries = Array.from(this.registry.values());
       // Owner-only: plugin config can hold secrets (e.g. an API key). writeFileSync's mode only
@@ -439,6 +445,11 @@ export class PluginStorageService {
     // hardening saveRegistry already applies rather than inherit a group/other-readable umask default.
     if (!fs.existsSync(pluginDataDir)) {
       fs.mkdirSync(pluginDataDir, { recursive: true, mode: 0o700 });
+    }
+    try {
+      fs.chmodSync(pluginDataDir, fs.statSync(pluginDataDir).mode & 0o7700);
+    } catch {
+      /* best-effort hardening */
     }
 
     const logger = this.logger;
