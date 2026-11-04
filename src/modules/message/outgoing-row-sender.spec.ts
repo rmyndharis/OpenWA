@@ -43,6 +43,19 @@ describe('the sender stored on an outgoing row', () => {
     for (let i = 0; i < 25; i++) await new Promise(resolve => setImmediate(resolve));
     if (db.options.type === 'postgres') await pause(150);
   };
+  // Retries an assertion until it holds or the deadline passes. An ack is applied in the background (and one
+  // that finds no row is retried once after ACK_RECONCILE_DELAY_MS), so a fixed wait can read the row first.
+  const eventually = async (assertion: () => Promise<void>, timeoutMs = 3000): Promise<void> => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      try {
+        return await assertion();
+      } catch (error) {
+        if (Date.now() >= deadline) throw error;
+        await pause(50);
+      }
+    }
+  };
 
   beforeEach(async () => {
     process.env.SIMULATE_TYPING = 'false';
@@ -281,15 +294,17 @@ describe('the sender stored on an outgoing row', () => {
       projector.handleMessageAck(sessionId, engine, 'WA_FORWARDED', 'delivered');
       await flush();
 
-      expect(await forwardedRows()).toEqual([
-        {
-          waMessageId: 'WA_FORWARDED',
-          type: 'image',
-          body: 'the caption',
-          status: MessageStatus.DELIVERED,
-          metadata: { media: { mimetype: 'image/jpeg', data: BYTES } },
-        },
-      ]);
+      await eventually(async () =>
+        expect(await forwardedRows()).toEqual([
+          {
+            waMessageId: 'WA_FORWARDED',
+            type: 'image',
+            body: 'the caption',
+            status: MessageStatus.DELIVERED,
+            metadata: { media: { mimetype: 'image/jpeg', data: BYTES } },
+          },
+        ]),
+      );
     });
 
     it('keeps the bytes a whatsapp-web.js echo downloaded when the source row holds none', async () => {
