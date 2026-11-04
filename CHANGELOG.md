@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update `@aws-sdk/client-s3` to 3.1160.0 and `bullmq` to 6.5.1 in the gateway.
 - Update `@tanstack/react-query` to 5.105.0, `i18next` to 26.5.11, `i18next-browser-languagedetector` to 8.2.3, `lucide-react` to 1.65.0, `react-i18next` to 17.1.9 and `react-router-dom` to 7.18.5 in the dashboard bundle.
 - Update `typescript-eslint` to 8.72.1, `guzzlehttp/guzzle` to 8.3.1 in the PHP SDK lockfile and `maven-surefire-plugin` to 3.6.1 in the Java SDK; these touch development and test setups only.
+- Update the transitive `@smithy/core` to 3.38.1, which npm no longer marks deprecated for a bug in custom logger data redaction; the gateway passes no custom logger to the AWS SDK.
 
 ### Upgrade notes (behavior changes)
 
