@@ -1043,7 +1043,7 @@ correct alerting primitive.
 Two rows need care when aggregating. `openwa_queue_jobs` is read from the shared Redis, so every node
 reports the same cluster-wide value: aggregate it with `max`, not `sum`. The event-loop delay window
 runs from the previous uncached render (renders are cached for 5 s), so with several scrapers it is
-shared between them. `openwa_unhandled_rejections_total{kind="page_context_lost"}` counts the expected
+shared between them, and scrapes that arrive while a render is running share that render. `openwa_unhandled_rejections_total{kind="page_context_lost"}` counts the expected
 Puppeteer rejections a page navigation or an engine teardown leaves without an owner; alert on
 `kind="other"`. A whatsapp-web.js session reports a failed re-inject into its reloaded page itself, as a
 `page_reinject_failed` warning naming the session, so that one is not counted here. A re-inject that
