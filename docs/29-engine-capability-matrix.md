@@ -935,6 +935,15 @@ adapter boundary — none silently stubs.
   `status@broadcast` or a broadcast list, and a poll or a sticker to `status@broadcast` or a
   broadcast list. `ensureSendable` (`wwebjs-messaging.ts`) refuses them before the library is
   called, so nothing is sent. The Baileys adapter refuses none of them.
+- **`sendVideoMessage` and `postVideoStatus` (wwjs) depend on the page loading the video.** Before
+  the upload, WhatsApp Web loads the file into a `<video>` element and throws its own bare
+  `TimeoutError` when that load neither finishes nor fails within 20 seconds, so the send answers
+  `500` `ENGINE_PAGE_ERROR` with `TimeoutError: TimeoutError`. A file the browser cannot decode fails
+  in under a second with a named error instead. On that timeout the adapter logs
+  `video_load_timeout` with the page's visibility, the browser's `canPlayType` answer for an H.264/AAC
+  MP4 and the browser version (`wwebjs-video-load-timeout.ts`). A hidden page reproduced the timeout
+  in a test; that has not been seen in OpenWA. How to read the line: 12.4 in
+  `docs/12-troubleshooting-faq.md`. Baileys runs no browser, so it has no such step.
 - **`sendStickerMessage` — what each engine converts.** Both engines guarantee the payload really is
   WebP, but they reach it differently and they do not accept the same inputs. whatsapp-web.js passes
   `sendMediaAsSticker: true`, and `Util.formatToWebpSticker` converts `image/*` **and** `video/*`
