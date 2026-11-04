@@ -25,6 +25,16 @@ export interface StoredChatPreview {
 }
 
 /**
+ * Every spelling a stored row can name an account's own side by (`to` of a received message, `from` of a
+ * sent one): its JID in either dialect, and the bare digits of an API send stored before 0.27.0. The `me`
+ * placeholder of a send stored before the number was known names no account and is not among them. Every
+ * reader that keeps only the rows of the account a session is linked to takes its spellings from here.
+ */
+export function ownAccountIds(phone: string): string[] {
+  return [`${phone}@c.us`, `${phone}@s.whatsapp.net`, phone];
+}
+
+/**
  * Read port over the neutral `messages` table for a Baileys engine that starts with no chats: WhatsApp
  * resyncs no chat list to a device it already linked, so after a restart the stored rows are the only
  * record of a 1:1 chat with no persisted state. Kept to this one read so the engine never writes there.
@@ -32,11 +42,12 @@ export interface StoredChatPreview {
 export interface StoredChatPreviewSource {
   /**
    * The newest stored message of each of the session's chats, newest chat first, from the `limit` chats
-   * with the newest rows (0: all). Only rows of the account in `ownIds` count: the table outlives an
-   * unlink, so a session linked to another number still holds the rows of the one before. A row counts
-   * when the account's side of it (`to` of a received message, `from` of a sent one) is one of those
-   * spellings. The limit is applied before that check, to keep the scan on the index: a chat that holds
-   * only another account's rows, or rows without a WhatsApp id, uses a slot and lists nothing.
+   * with the newest rows (0: all). Only rows of the account in `ownIds` (see {@link ownAccountIds}) count:
+   * the table outlives an unlink, so a session linked to another number still holds the rows of the one
+   * before. A row counts when the account's side of it (`to` of a received message, `from` of a sent one)
+   * is one of those spellings. The limit is applied before that check, to keep the scan on the index: a
+   * chat that holds only another account's rows, or rows without a WhatsApp id, uses a slot and lists
+   * nothing.
    */
   latestPerChat(sessionId: string, ownIds: string[], limit: number): Promise<StoredChatPreview[]>;
 }

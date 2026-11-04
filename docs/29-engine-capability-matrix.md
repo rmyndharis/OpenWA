@@ -1019,7 +1019,12 @@ adapter boundary — none silently stubs.
   refused. Link by QR when the session of that number must stay up.
 - **`archiveChat` / `clearChatMessages` / `deleteChat` / `sendSeen` / `markUnread` (baileys).** The
   four `chatModify` actions (archive, clear, delete, unread) are keyed to the chat's newest message:
-  the one the session holds in memory, else the newest one the gateway stored (#1891). The patch is
+  the one the session holds in memory, else the newest one the gateway stored (#1891). Only the rows
+  of the account the session is linked to count, as in the chat list above: a stored message names
+  that account in `to` when it was received and in `from` when it was sent, so a session linked to
+  another number never keys a write to a message of the one before. A send stored before the gateway
+  knew the account's number names no account and keys nothing, and no stored message is used while
+  the engine reports no number. The patch is
   indexed by the same jid as that message's key: a message in memory under the jid it arrived with,
   a stored one under the lid its row is filed under, or the chat's only reported lid, else a lid the
   session's cache holds for it, else its phone jid; an own group message goes without its participant.

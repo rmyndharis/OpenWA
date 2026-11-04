@@ -28,6 +28,7 @@ import {
 import { differentWaIds, type BaileysEvents } from './baileys-events';
 import type { BaileysHistory } from './baileys-history';
 import { SESSION_STORE_MAP_CAP_DEFAULT, type BaileysSessionStore } from './baileys-session-store';
+import { ownAccountIds } from './baileys-stored-chat-previews.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 import { chatKind, userPart } from '../identity/wa-id';
 
@@ -1252,9 +1253,8 @@ export class BaileysLifecycle {
     );
     let giveUp: ReturnType<typeof setTimeout> | undefined;
     try {
-      const own = [`${phone}@c.us`, `${phone}@s.whatsapp.net`, phone];
       const rows = await Promise.race([
-        source.latestPerChat(this.host.config.dbSessionId, own, limit),
+        source.latestPerChat(this.host.config.dbSessionId, ownAccountIds(phone), limit),
         new Promise<never>((_, reject) => {
           giveUp = setTimeout(
             () => reject(new Error(`no answer within ${STORED_PREVIEWS_READ_TIMEOUT_MS} ms`)),

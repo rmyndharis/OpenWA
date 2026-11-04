@@ -1,7 +1,11 @@
 import { randomUUID } from 'crypto';
 import { DataSource, type Repository } from 'typeorm';
 import { Message, MessageDirection, MessageStatus } from '../../modules/message/entities/message.entity';
-import { StoredChatPreviewService, type StoredChatPreview } from './baileys-stored-chat-previews.service';
+import {
+  ownAccountIds,
+  StoredChatPreviewService,
+  type StoredChatPreview,
+} from './baileys-stored-chat-previews.service';
 
 // The newest stored message per chat, read by a Baileys engine that starts with no chats. Runs on SQLite,
 // and on the postgres:16 service when DATABASE_TYPE=postgres (the test-postgres job), where the bigint
@@ -227,4 +231,10 @@ describe('StoredChatPreviewService', () => {
       );
     },
   );
+});
+
+describe('ownAccountIds', () => {
+  it('names an account by its JID in both dialects and by its bare digits, never by the placeholder of an unnumbered send', () => {
+    expect(ownAccountIds('628999')).toEqual(['628999@c.us', '628999@s.whatsapp.net', '628999']);
+  });
 });

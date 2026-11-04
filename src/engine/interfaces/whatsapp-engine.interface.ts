@@ -1702,9 +1702,10 @@ export interface StoredChatMessage {
 }
 
 /**
- * Reads the newest stored message of the chat a write is for, across the chat's id forms. Engines
- * call it only when they know no message of the chat themselves, so a lookup costs nothing when it is
- * not needed; it resolves null when the gateway stored none.
+ * Reads the newest stored message of the chat a write is for, across the chat's id forms, among the rows
+ * of the account the engine is linked to. Engines call it only when they know no message of the chat
+ * themselves, so a lookup costs nothing when it is not needed; it resolves null when the gateway stored
+ * none.
  */
 export type StoredChatMessageLookup = () => Promise<StoredChatMessage | null>;
 
