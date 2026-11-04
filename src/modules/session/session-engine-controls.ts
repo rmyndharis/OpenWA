@@ -181,6 +181,9 @@ export interface SessionEngineControlsHost {
   hookManager: HookManager;
   configService?: ConfigService;
   nodeId?: string;
+  /** Same contract as SessionEngineWiringHost.bindingEpoch. */
+  bindingEpoch(id: string): number;
+  forgetBindingEpoch?(id: string): void;
   logger: ReturnType<typeof createLogger>;
   /** LIVE closure — read at call time, never captured (specs replace lifecycle.dataSource at runtime). */
   dataSource(): DataSource;
@@ -329,6 +332,8 @@ export class SessionEngineControls {
     // above all, which writes nothing else this start could read and counts on it aborting. That
     // includes a mark set again on top of a stale one, which only its stamp tells apart.
     const markAtEntry = this.stoppingSessions.stamp(id);
+    // A WhatsApp unlink recorded after this point clears the binding either read below may still return.
+    const bindingEpoch = this.host.bindingEpoch(id);
 
     try {
       const session = await this.requireSession(id);
@@ -404,7 +409,8 @@ export class SessionEngineControls {
       // mark again and retires this start after its init. A launch that fails after the clear still
       // counts as the start the operator asked for. A delete issued since this start began that failed once it
       // began removing has dropped its mark and left a record this start may have read too: it still stands.
-      const { desiredState } = await this.requireSession(id);
+      const current = await this.requireSession(id);
+      const { desiredState } = current;
       if ((desiredState && (!explicit || desiredState !== session.desiredState)) || stoppedSince?.()) {
         this.stoppingSessions.add(id);
         throw new SessionStoppedException(`Session ${id} was stopped`);
@@ -475,7 +481,10 @@ export class SessionEngineControls {
       // The catch must use this capture, not a later lookup: a disconnect of this engine mid-init can
       // schedule a reconnect that registers a replacement before initialize() rejects.
       const before = this.engines.get(id);
-      const init = this.host.initializeEngine(id, session);
+      // The binding the engine checks comes from the read past the teardown fence, and none at all once a WhatsApp
+      // unlink was recorded since this start began: the number that scans next must not be refused as a rebind.
+      const phone = this.host.bindingEpoch(id) === bindingEpoch ? current.phone : null;
+      const init = this.host.initializeEngine(id, { ...session, phone });
       const registered = this.engines.get(id);
       const mine = registered !== before ? registered : undefined;
       let failedWritten = false;
@@ -1072,6 +1081,7 @@ export class SessionEngineControls {
         // session under the same name gets a fresh UUID + fresh budget). Left only on a committed
         // delete so a failed/409 delete — the session still exists — keeps the budget intact.
         this.stuckAuthRecoveryUsed.delete(id);
+        this.host.forgetBindingEpoch?.(id);
       }
       // NOTE: pendingTeardowns is intentionally NOT cleared here. It is keyed by session NAME and
       // its entries self-remove on settlement (identity-checked). A delete that refused at either

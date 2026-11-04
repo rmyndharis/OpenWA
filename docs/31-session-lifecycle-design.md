@@ -50,9 +50,14 @@ pins the other half: a late INITIALIZING reply announces nothing once its engine
 **Interleaving:** control A starts engine #1; engine #1 fails and is destroyed; control B (a
 retry) starts engine #2; a stale callback from #1 arrives and mutates registry state owned by #2.
 **Defense:** `EngineRegistry` keys by session id but validates liveness by object identity
-(`isLive` / `deleteIfLive`) — a superseded engine's late callback cannot act.
+(`isLive` / `deleteIfLive`) — a superseded engine's late callback cannot act. One report is the
+exception: a superseded engine's terminal unlink (LOGOUT, UNPAIRED, UNPAIRED_IDLE, Baileys `logged out`)
+needs neither the engine nor the row, so it is still recorded (the audit row, the phone clear, the
+`session.disconnected` announcement). It changes no registry state, and it is skipped while a local
+replacement engine is READY.
 **Pinned by:** `engine-registry.service.spec.ts` (isLive / deleteIfLive cases); the registry
-is the single most repeated invariant in the module.
+is the single most repeated invariant in the module. The unlink exception is pinned by
+`session-unlink-retired-engine.spec.ts`.
 
 ### INV-4 — Init timeout evicts and 504s; init rejection propagates as FAILED
 
@@ -97,7 +102,7 @@ stop/delete lands during start() (no resurrection to READY)'.
 **Interleaving:** node A holds session X's lease; node B adopts it after A's lease lapses; a
 stale in-flight write from A would clobber B's status.
 **Defense:** on lease loss, `stopOrphanEngines` destroys local engines; the session row is the
-owning node's alone (`session.service.ts` boot path). Four writes are exceptions, each under a
+owning node's alone (`session.service.ts` boot path). Five writes are exceptions, each under a
 predicate. The takeover sweep's `markLapsedDisconnected` marks a row disconnected only under the
 predicate it read (same `nodeId`, same status, lease expired more than two TTLs ago, and for a
 `qr_ready` row still no phone), so a row B has claimed, or a pairing that completed meanwhile, matches
@@ -108,7 +113,10 @@ DISCONNECTED report is held back, because the in-memory ownership it is fenced o
 session until the next heartbeat, and the verb writes DISCONNECTED only on a row whose `nodeId` is this
 node's or empty, so a row B has claimed keeps B's status. The init deadline's DISCONNECTED (INV-4) is
 written under that same predicate: it can fire while `stopOrphanEngines` is still tearing the engine
-down, after B adopted the row. Last, a start that fails or is refused with no engine left here (a
+down, after B adopted the row. So is the phone clear of a WhatsApp unlink reported after its engine was
+retired (`reportUnlinkWithoutRow`): a launch retired for its lost claim can still report the unlink its
+cleanup was finishing, while the in-memory ownership that write is also fenced on has not caught up. Last,
+a start that fails or is refused with no engine left here (a
 takeover adoption whose launch fails, say) releases its claim and then writes DISCONNECTED only on a
 row that no node holds and that still has an active status: a row no node holds is revisited by
 neither `markLapsedDisconnected` nor the adoption sweep, so the READY a vanished node left on it would
@@ -119,6 +127,7 @@ otherwise stand until a boot, and any claim since sets `nodeId`, so a row B clai
 predicate spec for `markLapsedDisconnected` in `src/modules/session/session.service.spec.ts` +
 `session-retired-start-leaves-peer-row.spec.ts` for the retired launch +
 `session-init-timeout-after-lease-loss.spec.ts` for the init deadline +
+`session-unlink-retired-engine.spec.ts` for the unlink's phone clear +
 `src/modules/takeover/session-takeover-failed-adoption.spec.ts` for the failed start. That
 `stopOrphanEngines` itself writes no row is pinned by `session-delete-claim.spec.ts` ('retires an old
 local engine after a peer takes over and a fresh claim fails with SQL error %s'), where the peer's

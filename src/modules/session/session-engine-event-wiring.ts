@@ -72,6 +72,17 @@ export interface SessionEngineWiringHost {
     incomingPhone: string,
   ): Promise<void>;
   handleEngineDisconnected(id: string, engine: IWhatsAppEngine, reason: string): Promise<void>;
+  /**
+   * A disconnect reported by an engine that is no longer the live one: recorded when it is a terminal unlink, which
+   * needs neither the engine nor the row (Baileys reports one only after its credential cleanup, which a stop or
+   * shutdown can outlast), dropped otherwise.
+   */
+  reportDroppedUnlink(id: string, reason: string): void;
+  /**
+   * Moves each time this node clears the session's phone binding for a terminal unlink: a binding read before it
+   * moved is gone. Optional: a host without it keeps every binding.
+   */
+  bindingEpoch?(id: string): number;
   updateStatus(id: string, status: SessionStatus): Promise<void>;
   cancelReconnect(id: string): void;
   /** The live engine reported a non-READY state: record when its READY stretch ended. */
@@ -152,6 +163,8 @@ export class SessionEngineEventWiring {
     // Closure state rather than a Map: it is scoped to this engine instance. A service-level
     // reconnect builds a new engine and a new callback table, so nothing has to be cleaned up.
     let reconnectingSince = 0;
+    // The binding is gone once this node records an unlink after these callbacks were built.
+    const bindingEpoch = host.bindingEpoch?.(id);
     /**
      * Persist an engine-driven status, but only while this node still owns the session.
      *
@@ -232,7 +245,12 @@ export class SessionEngineEventWiring {
         // already bound to is a different account scanning its QR (a takeover), not a re-link. Refuse
         // it rather than silently overwrite the binding. An empty incoming phone (wwjs can report one)
         // is not identifiable, so it is never treated as a mismatch.
-        if (previousPhone && phone && userPart(phone) !== userPart(previousPhone)) {
+        if (
+          previousPhone &&
+          phone &&
+          host.bindingEpoch?.(id) === bindingEpoch &&
+          userPart(phone) !== userPart(previousPhone)
+        ) {
           void host.rejectRebind(id, engine, sessionName, previousPhone, phone);
           return;
         }
@@ -386,7 +404,10 @@ export class SessionEngineEventWiring {
         });
       },
       onDisconnected: (reason: string): void => {
-        if (!host.isLiveEngine(id, engine)) return;
+        if (!host.isLiveEngine(id, engine)) {
+          host.reportDroppedUnlink(id, reason);
+          return;
+        }
         // Shared with the liveness watchdog (see handleEngineDisconnected). Pass the captured
         // engine so the handler can re-check identity across its DB await — this closure's `engine`
         // (and `session`) snapshots can be stale by the time a disconnect lands, so the handler

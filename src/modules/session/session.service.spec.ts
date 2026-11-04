@@ -22,6 +22,7 @@ import { ConfigService } from '@nestjs/config';
 import { SessionService, AUTOSTART_SHUTDOWN_WAIT_MS, AUTOSTART_THROTTLE_MS } from './session.service';
 import { SessionOwnershipService } from './session-ownership.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
 import {
   SESSION_DELETE_BATCH_MIN_SQLITE,
   SESSION_DELETE_BATCH_SIZE_POSTGRES,
@@ -6268,13 +6269,13 @@ describe('SessionService', () => {
       }
     });
 
-    // The audit row is a disconnect side effect like the webhook and the socket emit, so it belongs
-    // behind the SAME post-await identity fence. Superseding before the call would only exercise the
-    // wiring's entry check, which would pass wherever the emit sat — so supersede the engine while
-    // the handler is parked on its session reload, the one window that discriminates the placement.
-    it('does not audit an unlink from an engine superseded during the async session reload', async () => {
+    // A terminal unlink needs neither the row nor a live engine, so an engine superseded while the handler is
+    // parked on its session reload still has its unlink audited, once, at the post-await fence, and the binding
+    // cleared. Every effect that belongs to the live engine stays behind that fence: no DISCONNECTED write, no
+    // reconnect.
+    it('audits an unlink from an engine superseded during the async session reload without its live effects', async () => {
       const callbacks = await startAndCapture();
-      jest
+      const scheduleReconnect = jest
         .spyOn(lifecycle as unknown as { scheduleReconnect: (id: string, s: unknown) => void }, 'scheduleReconnect')
         .mockImplementation(() => {});
       let resolveReload!: (value: Session | null) => void;
@@ -6294,8 +6295,11 @@ describe('SessionService', () => {
       resolveReload(createMockSession({ status: SessionStatus.READY }));
       await handled;
 
-      expect(auditService.logWarn).not.toHaveBeenCalled();
-      expect(repository.update).not.toHaveBeenCalledWith('sess-uuid-1', { phone: null });
+      expect(auditService.logWarn).toHaveBeenCalledTimes(1);
+      expect(auditService.logWarn).toHaveBeenCalledWith(AuditAction.SESSION_DISCONNECTED, expect.anything());
+      expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { phone: null });
+      expect(repository.update).not.toHaveBeenCalledWith('sess-uuid-1', { status: SessionStatus.DISCONNECTED });
+      expect(scheduleReconnect).not.toHaveBeenCalled();
     });
 
     it('ignores onReady from an engine that was torn down (post-stop window)', async () => {
