@@ -751,7 +751,7 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
     return this.messaging.unpinMessage(chatId, messageId);
   }
 
-  deleteMessage(chatId: string, messageId: string, forEveryone: boolean = true): Promise<void> {
+  deleteMessage(chatId: string, messageId: string, forEveryone: boolean = true): Promise<string | void> {
     return this.messaging.deleteMessage(chatId, messageId, forEveryone);
   }
 

@@ -829,6 +829,32 @@ describe('MessageService', () => {
       );
       expect(repository.update).not.toHaveBeenCalled();
     });
+
+    it('also clears the row stored under the id the engine deleted, after the id the caller named', async () => {
+      mockEngine.deleteMessage.mockResolvedValueOnce('true_test@c.us_wa-msg-1');
+
+      await service.deleteMessage('sess-1', { chatId: 'test@c.us', messageId: 'wa-msg-1' });
+
+      const source = { kind: 'revoke', chatId: 'test@c.us' };
+      expect(messageProjector.recordRevoke.mock.calls).toEqual([
+        ['sess-1', 'wa-msg-1', source],
+        ['sess-1', 'true_test@c.us_wa-msg-1', source],
+      ]);
+    });
+
+    it.each([
+      ['the id the caller named', 'wa-msg-1'],
+      ['an empty id', ''],
+      ['no id', undefined],
+      ['something that is not an id', {}],
+    ])('clears one row when the engine answers %s', async (_what, answer) => {
+      mockEngine.deleteMessage.mockResolvedValueOnce(answer);
+
+      await service.deleteMessage('sess-1', { chatId: 'test@c.us', messageId: 'wa-msg-1' });
+
+      expect(messageProjector.recordRevoke).toHaveBeenCalledTimes(1);
+      expect(messageProjector.recordRevoke).toHaveBeenCalledWith('sess-1', 'wa-msg-1', expect.anything());
+    });
   });
 
   describe('editMessage', () => {

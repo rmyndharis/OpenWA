@@ -1237,12 +1237,14 @@ export class WwebjsMessaging {
     return results;
   }
 
-  async deleteMessage(chatId: string, messageId: string, forEveryone: boolean = true): Promise<void> {
+  async deleteMessage(chatId: string, messageId: string, forEveryone: boolean = true): Promise<string | void> {
     this.host.ensureReady();
     // NOTE: do NOT resolve chatId to @lid here — delete operates on the found message's own key, not
     // this chatId, so LID-resolving the lookup gives no benefit and would miss a message stored under
     // the pre-migration @c.us chat (#583).
-    await this.withPage('deleteMessage', async () => {
+    // The message is found by its serialized id or by the bare key id, but its row is keyed by the serialized one,
+    // which is what the caller needs to clear the stored copy.
+    const deleted = await this.withPage('deleteMessage', async () => {
       const chat = await this.client()
         .getChatById(chatId)
         .catch(error => recoverGroupChatById(this.host, 'deleteMessage', chatId, error));
@@ -1256,8 +1258,10 @@ export class WwebjsMessaging {
       }
       this.host.ensureReady();
       await message.delete(forEveryone);
+      return readWid(message.id);
     });
     this.host.logger.debug('Deleted message', { chatId, messageId, forEveryone });
+    return deleted;
   }
 
   async editMessage(chatId: string, messageId: string, body: string, mentions?: string[]): Promise<MessageResult> {
