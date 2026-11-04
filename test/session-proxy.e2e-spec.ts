@@ -11,6 +11,7 @@ import { applyGlobalValidation } from './../src/config/app-validation';
 import { AuthService } from './../src/modules/auth/auth.service';
 import { ApiKeyRole } from './../src/modules/auth/entities/api-key.entity';
 import { Session, SessionStatus } from './../src/modules/session/entities/session.entity';
+import { FORWARD_BUFFER_LIMIT_BYTES } from './../src/modules/session/session-proxy.interceptor';
 
 /**
  * The routed topology end-to-end, with a fake peer standing in for the owner node: a request
@@ -27,6 +28,13 @@ describe('Session request forwarding (e2e)', () => {
   let ownerSeen: Array<{ url?: string; headers: http.IncomingHttpHeaders }>;
   const prevNodeUrl = process.env.NODE_URL;
   const prevNodeId = process.env.NODE_ID;
+  const DOWNLOAD_BYTES = FORWARD_BUFFER_LIMIT_BYTES + 2 * 1024 * 1024;
+  const downloadBytes = Buffer.from(Array.from({ length: DOWNLOAD_BYTES }, (_, i) => i % 251));
+  const wholeBody = (res: NodeJS.ReadableStream, done: (error: Error | null, body: Buffer) => void): void => {
+    const chunks: Buffer[] = [];
+    res.on('data', (chunk: Buffer) => chunks.push(chunk));
+    res.on('end', () => done(null, Buffer.concat(chunks)));
+  };
 
   beforeAll(async () => {
     process.env.NODE_URL = 'http://127.0.0.1:2785';
@@ -35,6 +43,17 @@ describe('Session request forwarding (e2e)', () => {
     ownerSeen = [];
     owner = http.createServer((req, res) => {
       ownerSeen.push({ url: req.url, headers: req.headers });
+      // A stored-media download: bigger than the forwarding node holds, so it is relayed as it arrives.
+      if (req.url?.endsWith('/media')) {
+        res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(DOWNLOAD_BYTES) });
+        if (req.url.includes('/broken/')) {
+          res.write(downloadBytes.subarray(0, FORWARD_BUFFER_LIMIT_BYTES + 1024 * 1024));
+          setTimeout(() => req.socket.destroy(), 50);
+        } else {
+          res.end(downloadBytes);
+        }
+        return;
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ answeredBy: 'the-peer-owner' }));
     });
@@ -134,6 +153,39 @@ describe('Session request forwarding (e2e)', () => {
 
     expect(ownerSeen).toHaveLength(0);
     expect((res.body as { id: string }).id).toBe(session.id);
+  });
+
+  it('relays a download larger than the node holds, byte for byte, through the whole app', async () => {
+    const session = await seedOwnedElsewhere();
+
+    const res = await request(app.getHttpServer())
+      .get(`/api/sessions/${session.id}/messages/628123%40c.us/3EB0A1/media`)
+      .set('X-API-Key', apiKey)
+      .buffer(true)
+      .parse(wholeBody as never)
+      .expect(200);
+
+    expect(res.headers['x-openwa-served-by']).toBe('peer-node');
+    expect(res.headers['content-length']).toBe(String(DOWNLOAD_BYTES));
+    expect((res.body as Buffer).equals(downloadBytes)).toBe(true);
+  });
+
+  it('cuts a download the owner breaks off part-way and keeps serving', async () => {
+    const session = await seedOwnedElsewhere();
+
+    await expect(
+      request(app.getHttpServer())
+        .get(`/api/sessions/${session.id}/messages/broken/3EB0A1/media`)
+        .set('X-API-Key', apiKey)
+        .buffer(true)
+        .parse(wholeBody as never),
+    ).rejects.toBeDefined();
+
+    const res = await request(app.getHttpServer())
+      .get(`/api/sessions/${session.id}`)
+      .set('X-API-Key', apiKey)
+      .expect(200);
+    expect(res.body).toEqual({ answeredBy: 'the-peer-owner' });
   });
 
   it('an unreachable live owner answers 503 naming the owner, not a hang', async () => {

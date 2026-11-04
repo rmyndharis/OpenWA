@@ -11,6 +11,7 @@ import { Reflector } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Observable, of } from 'rxjs';
+import { pipeline } from 'node:stream/promises';
 import type { Request, Response } from 'express';
 import { Session } from './entities/session.entity';
 import { SessionOwnershipService } from './session-ownership.service';
@@ -67,6 +68,33 @@ const NOT_DISPATCHED_CODES = new Set([
 
 /** Marks a request as already forwarded once. Whatever happens, it is never forwarded again. */
 export const FORWARDED_HEADER = 'x-openwa-forwarded';
+
+/**
+ * How much of the owner's answer is held whole before it is relayed. An ordinary JSON answer fits, and keeps the
+ * all-or-nothing relay: a read that fails midway leaves no status or headers behind. A larger one, a media
+ * download above all, is relayed as it arrives, because holding it would put a whole copy in memory for every
+ * concurrent download through this node, which the owner itself does not do (it streams stored media).
+ */
+export const FORWARD_BUFFER_LIMIT_BYTES = 4 * 1024 * 1024;
+
+/**
+ * What was read ahead, then the rest of the owner's body. The read-ahead is let go as it is sent, so a slow client
+ * does not keep it in memory for the whole transfer. The owner's request is cancelled if the relay stops early.
+ */
+async function* relayBody(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  held: Uint8Array[],
+): AsyncGenerator<Uint8Array> {
+  try {
+    for (let chunk = held.shift(); chunk; chunk = held.shift()) yield chunk;
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) yield chunk.value;
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
+/** The longest delay a Node timer takes; a longer one fires after 1 ms. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /**
  * The URL to forward to: ALWAYS the owner's origin (under its NODE_URL path, if it has one),
@@ -217,6 +245,13 @@ export class SessionProxyInterceptor implements NestInterceptor {
       headers['x-forwarded-for'] = inboundChain ? `${inboundChain}, ${observedPeer}` : observedPeer;
     }
 
+    // Aborted when the time runs out, named like AbortSignal.timeout's reason so a timeout is still told from a broken
+    // connection below, and when the client leaves while a large answer is being relayed.
+    const abort = new AbortController();
+    const timer = setTimeout(
+      () => abort.abort(new DOMException(`No answer within ${timeoutMs}ms`, 'TimeoutError')),
+      Math.min(timeoutMs, MAX_TIMER_MS),
+    );
     let target: string | undefined;
     try {
       // Inside the try: a NODE_URL that is not a usable absolute URL makes this throw, and that is
@@ -230,12 +265,24 @@ export class SessionProxyInterceptor implements NestInterceptor {
         // it as JSON keeps the parsed values the owner's DTOs would have seen (there are no multipart
         // session routes).
         body: hasBody ? JSON.stringify(request.body ?? {}) : undefined,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: abort.signal,
         redirect: 'manual',
       });
-      // Read the whole body before touching the response, so a read that fails midway leaves no
+      // Read up to the ceiling before touching the response, so a read that fails midway leaves no
       // relayed status or headers behind on the error answer below.
-      const body = Buffer.from(await upstream.arrayBuffer());
+      const reader = upstream.body?.getReader();
+      const held: Uint8Array[] = [];
+      let heldBytes = 0;
+      let ended = !reader;
+      while (reader && !ended && heldBytes <= FORWARD_BUFFER_LIMIT_BYTES) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          ended = true;
+        } else {
+          held.push(chunk.value);
+          heldBytes += chunk.value.byteLength;
+        }
+      }
 
       response.status(upstream.status);
       for (const name of RELAYED_RESPONSE_HEADERS) {
@@ -243,13 +290,48 @@ export class SessionProxyInterceptor implements NestInterceptor {
         if (value) response.setHeader(name, value);
       }
       response.setHeader('x-openwa-served-by', ownerNodeId);
-      if (body.length > 0) response.send(body);
-      else response.end();
+      if (ended || !reader) {
+        const body = Buffer.concat(held);
+        if (body.length > 0) response.send(body);
+        else response.end();
+        return;
+      }
+
+      // Too large to hold: the rest is relayed as it arrives, with the reader paused while the client is slow. The time
+      // limit covered getting this far; a slow client must not be cut by it, and an owner that stops sending is ended
+      // by the dispatcher's own idle limit. The owner's length is kept so a short body cannot pass for the whole one,
+      // unless fetch decoded the body, when it no longer describes the bytes.
+      clearTimeout(timer);
+      if (response.destroyed) {
+        // The client left while the answer was being read: only the owner's request is left to let go.
+        await reader.cancel().catch(() => undefined);
+        return;
+      }
+      const length = upstream.headers.get('content-length');
+      if (length && !upstream.headers.has('content-encoding')) response.setHeader('content-length', length);
+      response.once('close', () => abort.abort());
+      await pipeline(relayBody(reader, held), response);
     } catch (error) {
       // Duck-typed rather than `instanceof`: fetch rejects with a DOMException on timeout, and its
       // errors are not guaranteed to share this context's Error class.
-      const failure = (error ?? {}) as { name?: unknown; cause?: { code?: unknown } };
+      const failure = (error ?? {}) as { name?: unknown; code?: unknown; cause?: { code?: unknown } };
       const code = failure.cause?.code;
+      // The answer had begun (status and bytes are out): nothing honest is left to say, so the connection is cut and a
+      // short body cannot pass for the whole one. A client that left is no failure of the owner. The response closing
+      // aborts the fetch and the timer is cleared by now, so an aborted signal here can only mean that. It is judged by
+      // that state, not by the error: pipeline reports a client that leaves while the next chunk is awaited as an
+      // AggregateError, which no check of the error's shape would recognise.
+      if (response.headersSent) {
+        if (!abort.signal.aborted && failure.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+          this.logger.warn(`Forwarding to session owner '${ownerNodeId}' broke after the answer began`, {
+            ownerNodeUrl,
+            error: error instanceof Error ? error.message : String(error),
+            cause: code,
+          });
+        }
+        response.destroy();
+        return;
+      }
       // fetch reports every network failure as 'fetch failed'; the cause code (a TLS certificate
       // error, a DNS failure) is what tells the operator what went wrong.
       this.logger.warn(`Forwarding to session owner '${ownerNodeId}' failed`, {
@@ -283,6 +365,8 @@ export class SessionProxyInterceptor implements NestInterceptor {
             'was sent; it may have been carried out there, check the owner node and its NODE_URL',
         error: timedOut ? 'Gateway Timeout' : 'Bad Gateway',
       });
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

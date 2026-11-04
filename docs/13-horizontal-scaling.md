@@ -124,6 +124,17 @@
 > may already have carried it out, so a non-idempotent call such as a message send must not
 > be repeated blindly on either.
 >
+> **A large answer is relayed as it arrives.** The forwarding node holds an answer of up to
+> 4 MiB whole: a read that fails answers `502` or `504`, and nothing of the owner's status
+> or headers is passed on. A larger answer, such as a media download, is passed on as it
+> arrives instead, so that concurrent downloads through a node that does not own the session
+> do not each hold a copy in its memory. It carries the owner's `Content-Length` when the
+> owner sent one. `SESSION_PROXY_TIMEOUT_MS` then covers the owner's reply up to those first
+> 4 MiB and no more, so a slow client is not cut by it, and an owner that stops sending is
+> ended by the HTTP client's own limit of 5 minutes without data. A failure after the first
+> byte can no longer answer `502`: the connection to the client is cut, so a short body
+> cannot pass for the whole one, and the client should repeat the download.
+>
 > **The lease compares timestamps written by different nodes, so their clocks must agree.** Each
 > node writes `leaseExpiresAt` from its own clock and reads every other node's the same way. Just
 > before each renewal the holder's lease is only one TTL minus one heartbeat ahead, so a node whose

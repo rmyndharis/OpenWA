@@ -428,6 +428,26 @@ describe('SessionProxyInterceptor', () => {
       );
     });
 
+    // A setting past what a timer takes would fire after 1 ms and time every forwarded request out at once.
+    it('does not time requests out at once for a timeout setting beyond the timer ceiling', async () => {
+      await withOwner(
+        (_req, res) => {
+          setTimeout(() => res.end('{}'), 100);
+        },
+        async url => {
+          const { interceptor, context, next, res } = build({
+            row: row({ nodeUrl: url }),
+            req: sendRequest(),
+            timeoutMs: 5_000_000_000,
+          });
+          await interceptor.intercept(context, next);
+
+          expect(res.status).toHaveBeenCalledTimes(1);
+          expect(res.status).toHaveBeenCalledWith(200);
+        },
+      );
+    });
+
     it('answers 502, not 503, when the connection breaks after the send was dispatched', async () => {
       await withOwner(
         req => req.socket.destroy(),
