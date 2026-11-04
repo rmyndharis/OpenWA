@@ -100,10 +100,11 @@ describe('a receipt naming a chat for an own message still in flight', () => {
       .filter(([, event]) => event === 'message.ack')
       .map(([, , payload]) => payload.status);
 
-  /** The row once its insert has landed and the changes kept for it have been applied. */
-  const written = async (): Promise<Message | null> => {
-    for (const start = Date.now(); Date.now() - start < 2000;) {
-      if (await repo.findOneBy({ waMessageId: ID })) break;
+  /** The row once its insert has landed (and, given `status`, reached it) and the changes kept for it were applied. */
+  const written = async (status?: MessageStatus): Promise<Message | null> => {
+    for (const start = Date.now(); Date.now() - start < 3000;) {
+      const row = await repo.findOneBy({ waMessageId: ID });
+      if (row && (!status || row.status === status)) break;
       await new Promise(resolve => setTimeout(resolve, 20));
     }
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -147,7 +148,7 @@ describe('a receipt naming a chat for an own message still in flight', () => {
     await new Promise(resolve => setTimeout(resolve, 50));
     release();
 
-    expect({ status: (await written())?.status, acks: acks() }).toEqual({
+    expect({ status: (await written(MessageStatus.DELIVERED))?.status, acks: acks() }).toEqual({
       status: MessageStatus.DELIVERED,
       acks: ['delivered'],
     });
@@ -159,7 +160,10 @@ describe('a receipt naming a chat for an own message still in flight', () => {
     await new Promise(resolve => setTimeout(resolve, 50));
     release();
 
-    expect({ status: (await written())?.status, acks: acks() }).toEqual({ status: MessageStatus.READ, acks: ['read'] });
+    expect({ status: (await written(MessageStatus.READ))?.status, acks: acks() }).toEqual({
+      status: MessageStatus.READ,
+      acks: ['read'],
+    });
   });
 
   it('lands a receipt on a row whose message:sent hook outlasts the ack retry', async () => {
@@ -168,6 +172,22 @@ describe('a receipt naming a chat for an own message still in flight', () => {
     await new Promise(resolve => setTimeout(resolve, ACK_RECONCILE_DELAY_MS + 250));
     release();
 
-    expect({ status: (await written())?.status, acks: acks() }).toEqual({ status: MessageStatus.READ, acks: ['read'] });
+    expect({ status: (await written(MessageStatus.READ))?.status, acks: acks() }).toEqual({
+      status: MessageStatus.READ,
+      acks: ['read'],
+    });
+  });
+
+  it('advances to the furthest of the receipts kept from the message chat in either dialect', async () => {
+    await inFlight();
+    projector.handleMessageAck(SESSION, engine, ID, 'delivered', OWN_CHAT);
+    projector.handleMessageAck(SESSION, engine, ID, 'read', PAIRED);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    release();
+
+    expect({ status: (await written(MessageStatus.READ))?.status, acks: acks().sort() }).toEqual({
+      status: MessageStatus.READ,
+      acks: ['delivered', 'read'],
+    });
   });
 });
