@@ -73,7 +73,7 @@ keeps its first 12 characters as the prefix, which every ADMIN key with no sessi
 the database and its backups hold: replace it with a minted key (see the rotation note in §4.12) rather than keeping a chosen passphrase
 as the admin key. The startup banner of a later boot prints the first 8 characters of a key only when its row says the key was generated.
 A chosen key in the `owa_k1_` shape that an earlier release seeded cannot be told from a generated one once `API_MASTER_KEY` is removed
-from the environment, and still shows them until it is replaced.
+from the environment or set to another value, and still shows them until it is replaced.
 
 ### Permission Model
 

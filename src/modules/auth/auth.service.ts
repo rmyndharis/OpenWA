@@ -88,8 +88,8 @@ export function resolveSeedApiKey(): string {
  * generated key; a missing or unreadable one identifies nothing. A seed from API_MASTER_KEY is stored under a fixed
  * marker, so one shaped like a generated key prints no fingerprint, and neither does the key still configured as
  * API_MASTER_KEY (see readLiveBootstrapKey). A row seeded by an earlier release holds the first 12 characters of
- * its key instead, so a key chosen in that shape, once its variable is removed, cannot be told from a generated one
- * and keeps its fingerprint until it is replaced.
+ * its key instead, so a key chosen in that shape, once its variable is removed or set to another value, cannot be
+ * told from a generated one and keeps its fingerprint until it is replaced.
  *
  * `displayKey` is null when no live key file is left to point at, and the banner then names the dashboard. A key is
  * never taken for that placeholder by how it starts: an API_MASTER_KEY may begin with any character.
