@@ -5,6 +5,7 @@ import type { LidMappingStore } from '../identity/lid-mapping-store.service';
 import { mergeTwinStates, type ChatStateStore, type ChatStateValue } from './baileys-chat-state-store.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 import { baileysChatJid, baileysMessageText } from './baileys-message-mapper';
+import type { StoredChatPreview } from './baileys-stored-chat-previews.service';
 
 interface LastMessage {
   key: WAMessageKey;
@@ -187,10 +188,12 @@ function mergeContactTwins(a: ContactTwin, b: ContactTwin): ContactTwin {
  * and `messaging-history.set` arrives only on the first link: once the account has synced, WhatsApp
  * skips history sync on every later connect (see BaileysHistory.hydrateNames). A new engine (a process
  * restart, a session stop and start, a reconnect the gateway runs itself) therefore starts with no
- * chats: the groups hydrateNames re-fetches on every open come back at once, a chat with a persisted
- * mute, archive or pin (ChatStateStore) is listed from that row, and any other 1:1 chat comes back with
- * its next message, since Baileys emits `chats.update` for every real message. Contacts are rebuilt
- * from the address-book snapshot instead.
+ * chats. It is seeded once, before its first socket opens, with the newest message the gateway stored
+ * for each chat ({@link seedStoredPreviews}), which lists every chat with a stored message and gives a
+ * group, otherwise known only from the names hydrateNames re-fetches on every open, its time and
+ * preview. A chat with a persisted mute, archive or pin (ChatStateStore) is listed from that row, and
+ * a chat with neither comes back with its next message, since Baileys emits `chats.update` for every
+ * real message. Contacts are rebuilt from the address-book snapshot instead.
  *
  * Every map is LRU-bounded (`BAILEYS_SESSION_STORE_MAX_ENTRIES`, default 5000 per map, 0 = unbounded)
  * because contacts/chats/lastMessages/lidToPn all grow from peer-controlled traffic — without a cap a
@@ -209,6 +212,13 @@ export class BaileysSessionStore {
   private readonly contacts: LruMap<string, BaileysContact>;
   private readonly chats: LruMap<string, Chat>;
   private readonly lastMessages: LruMap<string, LastMessage>;
+  /**
+   * The newest stored message of each chat, under the same keys as {@link lastMessages}, seeded once
+   * per engine ({@link seedStoredPreviews}). Read by the listing and kept current by edits and deletes,
+   * never read by a chat write or a receipt: those key to a message this process saw, else to the
+   * stored lookup, which spells a lid-migrated chat by its lid (#1891, #1901).
+   */
+  private readonly storedPreviews: LruMap<string, LastMessage>;
   /**
    * The newest message each chat RECEIVED, kept apart from the preview because a read receipt can
    * only acknowledge a message the other side sent: Baileys drops an own key from the receipt, so
@@ -269,6 +279,7 @@ export class BaileysSessionStore {
     this.contacts = new LruMap(maxEntries, contact => Boolean(contact.name));
     this.chats = new LruMap(maxEntries);
     this.lastMessages = new LruMap(maxEntries);
+    this.storedPreviews = new LruMap(maxEntries);
     this.lastInbound = new LruMap(maxEntries);
     this.lidToPn = new LruMap(maxEntries);
     // Double-keyed (raw + neutral JID per chat), so it needs two slots per chat to cover the same span.
@@ -307,6 +318,38 @@ export class BaileysSessionStore {
         this.lidToPn.set(lid, phone);
         this.persistLidMapping(lid, phone, r.phoneNumber !== undefined || kind === 'user');
       }
+    }
+  }
+
+  /**
+   * List the chats the gateway stored messages of, each with its newest one as the preview, as the live
+   * previews would have had them before the engine started. Called once, before the first socket opens,
+   * so no message, edit or delete can come between the read and this. A live preview of the same chat
+   * outranks one of these when it is as new (see {@link listChats}). The key carries no addressing of
+   * the chat: it serves the listing and the edit and delete checks only.
+   *
+   * The name a contact's newest stored message came with is its pushname, which live traffic records
+   * the same way (`contacts.update` brings `notify` with every message), so an unsaved contact is
+   * listed by name rather than by its digits; upsertContacts leaves a group's posters out. A name saved
+   * in the address book still wins over it.
+   *
+   * Oldest first: a chat stored under two spellings of one id (`@c.us` and `@s.whatsapp.net`) ends with
+   * the newer row, and a cap evicts the oldest chats' entries and names, not the newest.
+   */
+  seedStoredPreviews(rows: StoredChatPreview[]): void {
+    const oldestFirst = [...rows].sort((a, b) => a.timestamp - b.timestamp);
+    this.upsertContacts(oldestFirst.flatMap(r => (r.name ? [{ id: this.toEngineJid(r.chatId), notify: r.name }] : [])));
+    for (const r of oldestFirst) {
+      const key = this.toEngineJid(r.chatId);
+      const participant = r.author ? this.toEngineJid(r.author) : undefined;
+      this.storedPreviews.set(key, {
+        key: { remoteJid: key, id: r.id, fromMe: r.fromMe, ...(participant ? { participant } : {}) },
+        timestamp: r.timestamp,
+        // A deleted message's row keeps no text.
+        text: r.body ?? '',
+        type: r.type,
+        order: 0,
+      });
     }
   }
 
@@ -446,6 +489,7 @@ export class BaileysSessionStore {
     for (const key of keys) {
       this.chats.delete(key);
       this.lastMessages.delete(key);
+      this.storedPreviews.delete(key);
       this.lastInbound.delete(key);
     }
     if (keys.size && this.chatStateStore && this.sessionId) {
@@ -725,7 +769,7 @@ export class BaileysSessionStore {
     if (accept && parseWaId(chatId).kind === 'user') {
       // Only a preview whose own message sits in a lid chat: `accept` judges the chat of exactly those, and a
       // received broadcast-list message previews under its sender's lid with the list as its remoteJid.
-      for (const [key, existing] of this.lastMessages.entries()) {
+      for (const [key, existing] of [...this.lastMessages.entries(), ...this.storedPreviews.entries()]) {
         if (
           existing.key.id === messageId &&
           parseWaId(key).kind === 'lid' &&
@@ -735,12 +779,14 @@ export class BaileysSessionStore {
         }
       }
     }
-    for (const key of targets) {
-      const existing = this.lastMessages.get(key);
-      // A delete is final: an edit that reaches the preview afterwards must not bring the deleted text back.
-      if (existing?.type === 'revoked' && type !== 'revoked') continue;
-      if (existing?.key.id === messageId && (!accept || accept(existing.key)))
-        this.lastMessages.set(key, { ...existing, text, type: type ?? existing.type });
+    for (const previews of [this.lastMessages, this.storedPreviews]) {
+      for (const key of targets) {
+        const existing = previews.get(key);
+        // A delete is final: an edit that reaches the preview afterwards must not bring the deleted text back.
+        if (existing?.type === 'revoked' && type !== 'revoked') continue;
+        if (existing?.key.id === messageId && (!accept || accept(existing.key)))
+          previews.set(key, { ...existing, text, type: type ?? existing.type });
+      }
     }
   }
 
@@ -935,7 +981,8 @@ export class BaileysSessionStore {
    * lid ({@link toNeutralJid}), so those are two rows, `<phone>@c.us` and `<lid>@lid`, as the contact
    * listing keeps the two identities apart. Records that do project to one id fold: the phone-keyed
    * record is primary and a field it lacks comes from the other. The preview is the newest message filed
-   * under any key that projects to the row, indexed in one pass rather than a twin scan per chat.
+   * under any key that projects to the row, live or stored, indexed in one pass rather than a twin scan
+   * per chat. Stored ones are read last and hold no observed order, so a live one of the same second wins.
    *
    * Every loop is over a SNAPSHOT: projecting an id resolves a lid through maps whose read moves the
    * entry to the most-recent end, so a live iterator would hand the same entry back forever.
@@ -943,7 +990,8 @@ export class BaileysSessionStore {
   listChats(): ChatSummary[] {
     const lidIndex = this.lidsByPhone();
     const previews = new Map<string, LastMessage>();
-    for (const [key, m] of [...this.lastMessages.entries()]) {
+    const messages = [...this.lastMessages.entries(), ...this.storedPreviews.entries()];
+    for (const [key, m] of messages) {
       const id = this.toNeutralJid(key);
       const seen = previews.get(id);
       if (!seen || m.timestamp > seen.timestamp || (m.timestamp === seen.timestamp && m.order > seen.order)) {
@@ -956,7 +1004,7 @@ export class BaileysSessionStore {
       byId.set(id, [...(byId.get(id) ?? []), c]);
     }
     // A message proves the raw conversation exists even before its chat record reaches this process.
-    for (const [key] of [...this.lastMessages.entries()]) {
+    for (const [key] of messages) {
       const id = this.toNeutralJid(key);
       if (!byId.has(id)) byId.set(id, [{ id: key }]);
     }

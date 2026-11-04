@@ -10,6 +10,7 @@ import { createLogger } from '../common/services/logger.service';
 import { BaileysMessageStoreService } from './adapters/baileys-message-store.service';
 import { LidMappingStoreService } from './identity/lid-mapping-store.service';
 import { ChatStateStoreService } from './adapters/baileys-chat-state-store.service';
+import { StoredChatPreviewService } from './adapters/baileys-stored-chat-previews.service';
 import { isSafeSessionName } from '../common/utils/path-safety';
 import { ensurePrivateDir } from '../common/utils/private-dir.util';
 import { baileysAuthDir, readAuthDirEntries, wwjsAuthDir } from './auth-dir-paths';
@@ -39,6 +40,7 @@ export class EngineFactory implements OnModuleInit {
     private readonly baileysMessageStore: BaileysMessageStoreService,
     private readonly lidMappingStore: LidMappingStoreService,
     private readonly chatStateStore: ChatStateStoreService,
+    private readonly storedChatPreviews?: StoredChatPreviewService,
   ) {
     this.engineType = this.configService.get<string>('engine.type') ?? 'whatsapp-web.js';
   }
@@ -82,7 +84,13 @@ export class EngineFactory implements OnModuleInit {
     };
     this.pluginLoader.registerBuiltInPlugin(
       baileysManifest,
-      new BaileysPlugin(this.baileysMessageStore, engineConfig, this.lidMappingStore, this.chatStateStore),
+      new BaileysPlugin(
+        this.baileysMessageStore,
+        engineConfig,
+        this.lidMappingStore,
+        this.chatStateStore,
+        this.storedChatPreviews,
+      ),
       engineConfig,
     );
 

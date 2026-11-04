@@ -984,12 +984,28 @@ adapter boundary — none silently stubs.
 - **`getChats` after a restart (baileys).** Baileys keeps no chat list of its own, and WhatsApp
   skips history sync on every connect after the first link, so a new engine (a process restart, a
   session stop and start, or a reconnect the gateway runs itself, as for `deleteStatus` above) starts
-  with an empty one. `GET /chats` then lists the groups, re-fetched on every connect, and every chat
-  with a persisted archive, pin or mute state (bounded by `BAILEYS_CHAT_STATE_CACHE_MAX`); any other
-  1:1 chat comes back when its next message arrives and stays out of the list until then. Rows
-  rebuilt this way carry timestamp `0` and no `lastMessage` until a message arrives. The transient
-  reconnects Baileys runs on its own keep the list. whatsapp-web.js reads WhatsApp Web's own chat
-  list and is unaffected.
+  with an empty one. On its first connect, before the socket opens, it lists every chat the gateway
+  stored a message of, groups included, with the newest stored message as `timestamp`,
+  `lastMessage` and `lastMessageType`, and names a contact the address book does not by the
+  pushname its newest received message came with. Only the rows of the account the session is
+  linked to count, so a session linked to another number does not list the chats of the one before,
+  and a row without a WhatsApp id (a pending or failed send) shows no chat, nor does a send the
+  gateway stored before it knew the account's number, which names no account. A chat with a
+  persisted archive, pin or mute state is listed too, and a chat deleted on the phone stays out
+  until a newer message arrives, for as long as its deletion mark exists: an unlink removes the
+  marks, and a chat deleted before 0.27.0 has none, so such a chat is listed again while the gateway
+  still stores its messages. Limits: the read takes the `BAILEYS_SESSION_STORE_MAX_ENTRIES` chats
+  (default 5000) with the newest rows, and a chat that holds only another account's rows, or only
+  rows without a WhatsApp id, uses a slot and lists nothing; a start waits ten seconds for the read
+  at most, and lists as it did before chats were seeded when the read takes longer; a chat with no
+  stored message (not kept under `STORE_EPHEMERAL_MESSAGES=false`, or removed by retention) and no
+  persisted state comes back when its next message arrives; `unreadCount` reads `0` until a message
+  arrives, since nothing stored records it; a contact stored under both its phone and its lid lists
+  as two rows, as the live listing keeps them; and when the chat states outgrow
+  `BAILEYS_CHAT_STATE_CACHE_MAX`, a deleted chat whose state row was not cached can show in the
+  first listing after the start, and is left out once that row is read.
+  A first link gets its chats from history sync instead. The transient reconnects Baileys runs on
+  its own keep the list. whatsapp-web.js reads WhatsApp Web's own chat list and is unaffected.
 - **`getContactStatus` / `getContactStatuses` (wwjs).** `Status.type` is the `text|image|video|voice`
   union: a voice note reads back as `voice`, and any other story type collapses to `text`.
 - **`requestPairingCode` (wwjs) for a number that already has a linked session.** Both engines

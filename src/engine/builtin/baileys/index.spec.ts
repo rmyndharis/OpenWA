@@ -8,6 +8,7 @@ import { BaileysPlugin } from './index';
 import { BaileysAdapter } from '../../adapters/baileys.adapter';
 import type { LidMappingStore } from '../../identity/lid-mapping-store.service';
 import type { ChatStateStore } from '../../adapters/baileys-chat-state-store.service';
+import type { StoredChatPreviewSource } from '../../adapters/baileys-stored-chat-previews.service';
 
 describe('BaileysPlugin.createEngine (opaque config)', () => {
   beforeEach(() => jest.clearAllMocks());
@@ -83,6 +84,15 @@ describe('BaileysPlugin.createEngine (opaque config)', () => {
     const chatStateStore = {} as ChatStateStore;
     new BaileysPlugin(undefined, undefined, lidMappingStore, chatStateStore).createEngine({ sessionId: 'sess-1' });
     expect(BaileysAdapter).toHaveBeenCalledWith(expect.objectContaining({ lidMappingStore, chatStateStore }));
+  });
+
+  // Optional too: a dropped hop would leave the chat list of a restarted engine empty again.
+  it('passes the stored chat previews to the adapter', () => {
+    const storedChatPreviews = {} as StoredChatPreviewSource;
+    new BaileysPlugin(undefined, undefined, undefined, undefined, storedChatPreviews).createEngine({
+      sessionId: 'sess-1',
+    });
+    expect(BaileysAdapter).toHaveBeenCalledWith(expect.objectContaining({ storedChatPreviews }));
   });
 
   it('Uses the constructor-supplied engine config when onLoad never ran (enable-failure path)', () => {

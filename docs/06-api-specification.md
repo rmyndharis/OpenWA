@@ -525,7 +525,7 @@ far-future `muteUntil`, up to `9007199254740991`, instead.
 
 Sorted by `timestamp` DESC (most recent first) then paginated. `timestamp` is an epoch number (seconds). `kind` is the user-facing chat discriminator — one of `individual|group|channel|status|broadcast|unknown`; `isGroup` is retained for back-compat (true only for `kind: "group"`).
 
-On the Baileys engine the list is rebuilt after a restart: groups and chats with a persisted archive, pin or mute state come back at once, and any other 1:1 chat when its next message arrives. See `docs/29-engine-capability-matrix.md` §29.7 (`getChats` after a restart).
+On the Baileys engine the list is rebuilt after a restart from the messages the gateway stored: every chat with a stored message of the linked account comes back at once, groups included, with its newest stored message as `timestamp`, `lastMessage` and `lastMessageType` and `unreadCount` `0`; a chat with a persisted archive, pin or mute state comes back as well, and any other chat when its next message arrives. See `docs/29-engine-capability-matrix.md` §29.7 (`getChats` after a restart) for the limits.
 
 On the Baileys engine a chat deleted on WhatsApp (on the phone or through `chats/delete`) is left out until a newer message re-creates it, and the deletion is dated by the gateway's clock when it arrives, whereas a message carries WhatsApp's server second, so a message whose second is earlier than that date (the gateway's clock running ahead, or a deletion made on the phone reaching the gateway late) counts as older and the chat stays hidden until a message dated after the deletion arrives.
 

@@ -9,6 +9,7 @@ import { BaileysAdapter } from '../../adapters/baileys.adapter';
 import { BaileysMessageStore } from '../../types/baileys.types';
 import { LidMappingStore } from '../../identity/lid-mapping-store.service';
 import { ChatStateStore } from '../../adapters/baileys-chat-state-store.service';
+import { StoredChatPreviewSource } from '../../adapters/baileys-stored-chat-previews.service';
 
 export class BaileysPlugin implements IEnginePlugin {
   type = PluginType.ENGINE as const;
@@ -22,6 +23,7 @@ export class BaileysPlugin implements IEnginePlugin {
     private readonly registeredConfig?: Record<string, unknown>,
     private readonly lidMappingStore?: LidMappingStore,
     private readonly chatStateStore?: ChatStateStore,
+    private readonly storedChatPreviews?: StoredChatPreviewSource,
   ) {}
 
   onLoad(context: PluginContext): Promise<void> {
@@ -60,6 +62,7 @@ export class BaileysPlugin implements IEnginePlugin {
       messageStore: this.messageStore,
       lidMappingStore: this.lidMappingStore,
       chatStateStore: this.chatStateStore,
+      storedChatPreviews: this.storedChatPreviews,
     });
   }
 

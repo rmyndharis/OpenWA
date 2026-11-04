@@ -7,6 +7,7 @@ import {
   type ChatStateValue,
 } from './baileys-chat-state-store.service';
 import { userPart } from '../identity/wa-id';
+import type { StoredChatPreview } from './baileys-stored-chat-previews.service';
 
 /** In-memory ChatStateStore for tests: remember() applies synchronously so a following read sees it. */
 class FakeChatStateStore implements ChatStateStore {
@@ -1444,6 +1445,212 @@ describe('BaileysSessionStore', () => {
       s.upsertChats([{ id: LID, ephemeralExpiration: 86400 }]);
       s.addLidMappings([{ lid: LID, pn: PHONE }]);
       expect(s.getEphemeralExpiration('628111@c.us')).toBe(86400);
+    });
+  });
+
+  // A new engine starts with no chats. The newest message the gateway stored for each one is seeded before the
+  // first socket opens, so the listing has every chat it stored and a group its time and preview (#1978).
+  describe('the chats stored before a restart', () => {
+    const SID = 'sess-1';
+    const PHONE = '628111@s.whatsapp.net';
+    const LID = '484848@lid';
+    const GROUP = '120363001@g.us';
+    const T = 1_762_000_000;
+    const K = (c: string) => `${SID}\u0000${c}`;
+    let fake: FakeChatStateStore;
+    beforeEach(() => {
+      fake = new FakeChatStateStore();
+    });
+    const newStore = () => new BaileysSessionStore(undefined, SID, fake);
+    const stored = (over: Partial<StoredChatPreview> = {}): StoredChatPreview => ({
+      chatId: '628111@c.us',
+      id: 'M1',
+      fromMe: false,
+      timestamp: T,
+      body: 'hello',
+      type: 'text',
+      ...over,
+    });
+    const chat = (s: BaileysSessionStore, id: string) => s.listChats().find(c => c.id === id);
+
+    it('lists a stored 1:1 chat and gives a group its stored time and preview', () => {
+      const s = newStore();
+      s.upsertChats([{ id: GROUP, name: 'Support team' }]); // all hydrateNames knows of a group
+      expect(chat(s, GROUP)).toEqual(expect.objectContaining({ timestamp: 0, lastMessage: undefined }));
+      s.seedStoredPreviews([stored(), stored({ chatId: GROUP, id: 'G1', author: '628333@c.us', body: 'standup' })]);
+      expect(chat(s, '628111@c.us')).toEqual(
+        expect.objectContaining({ timestamp: T, lastMessage: 'hello', lastMessageType: 'text', unreadCount: 0 }),
+      );
+      expect(chat(s, GROUP)).toEqual(
+        expect.objectContaining({ name: 'Support team', timestamp: T, lastMessage: 'standup' }),
+      );
+    });
+
+    it('previews a deleted message with no text', () => {
+      const s = newStore();
+      s.seedStoredPreviews([stored({ body: undefined, type: 'revoked' })]);
+      expect(chat(s, '628111@c.us')).toEqual(expect.objectContaining({ lastMessage: '', lastMessageType: 'revoked' }));
+    });
+
+    it('keeps a chat WhatsApp deleted after its newest stored message out, and the persisted state on the rest', () => {
+      fake.rows.set(K(PHONE), { muteEndTime: null, archived: false, pinned: false, deletedAt: (T + 10) * 1000 });
+      fake.rows.set(K('628222@s.whatsapp.net'), {
+        muteEndTime: null,
+        archived: false,
+        pinned: false,
+        deletedAt: (T - 10) * 1000,
+      });
+      fake.rows.set(K('628444@s.whatsapp.net'), { muteEndTime: -1, archived: true, pinned: true });
+      const s = newStore();
+      s.seedStoredPreviews([
+        stored(),
+        stored({ chatId: '628222@c.us', id: 'M2' }),
+        stored({ chatId: '628444@c.us', id: 'M4' }),
+      ]);
+      expect(chat(s, '628111@c.us')).toBeUndefined();
+      // A message newer than the deletion re-created the chat.
+      expect(chat(s, '628222@c.us')).toEqual(expect.objectContaining({ lastMessage: 'hello' }));
+      expect(chat(s, '628444@c.us')).toEqual(
+        expect.objectContaining({ archived: true, pinned: true, muted: true, muteExpiration: 0, lastMessage: 'hello' }),
+      );
+    });
+
+    it('gives way to a live message of the same second or later, and outranks an older one', () => {
+      const s = newStore();
+      s.seedStoredPreviews([stored(), stored({ chatId: '628222@c.us', id: 'M2' })]);
+      s.recordMessage({
+        key: { remoteJid: PHONE, fromMe: false, id: 'L1' },
+        message: { conversation: 'live' },
+        messageTimestamp: T,
+      });
+      s.recordMessage({
+        key: { remoteJid: '628222@s.whatsapp.net', fromMe: false, id: 'H1' },
+        message: { conversation: 'from history' },
+        messageTimestamp: T - 60,
+      });
+      expect(chat(s, '628111@c.us')).toEqual(expect.objectContaining({ lastMessage: 'live' }));
+      expect(chat(s, '628222@c.us')).toEqual(expect.objectContaining({ lastMessage: 'hello', timestamp: T }));
+    });
+
+    it('never keys a chat write or a receipt to a stored preview', () => {
+      const s = newStore();
+      s.seedStoredPreviews([stored({ chatId: LID })]);
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      expect(s.lastMessage('628111@c.us')).toBeNull();
+      expect(s.lastMessage(LID)).toBeNull();
+      expect(s.lastInboundMessage(LID)).toBeNull();
+      // Nothing in memory names the chat's spelling, so the write path asks the stored lookup.
+      expect(s.chatJid('628111@c.us')).toBe(PHONE);
+    });
+
+    it('takes a delete or an edit of the stored message into the preview', () => {
+      const s = newStore();
+      s.seedStoredPreviews([stored(), stored({ chatId: '628222@c.us', id: 'M2', body: 'typo' })]);
+      s.recordMessageEdit(PHONE, 'M1', '', 'revoked');
+      s.recordMessageEdit('628222@s.whatsapp.net', 'M2', 'fixed');
+      // A delete is final.
+      s.recordMessageEdit(PHONE, 'M1', 'back again');
+      expect(chat(s, '628111@c.us')).toEqual(expect.objectContaining({ lastMessage: '', lastMessageType: 'revoked' }));
+      expect(chat(s, '628222@c.us')).toEqual(
+        expect.objectContaining({ lastMessage: 'fixed', lastMessageType: 'text' }),
+      );
+    });
+
+    it('judges an edit of a stored group message by its author, and finds a lid chat from the phone', () => {
+      const s = newStore();
+      s.seedStoredPreviews([
+        stored({ chatId: GROUP, id: 'G1', author: '628333@c.us', body: 'standup' }),
+        stored({ chatId: LID, id: 'L1', body: 'typo' }),
+      ]);
+      s.recordMessageEdit(GROUP, 'G1', 'forged', undefined, key => key.participant === '628444@s.whatsapp.net');
+      expect(chat(s, GROUP)).toEqual(expect.objectContaining({ lastMessage: 'standup' }));
+      s.recordMessageEdit(GROUP, 'G1', 'edited', undefined, key => key.participant === '628333@s.whatsapp.net');
+      expect(chat(s, GROUP)).toEqual(expect.objectContaining({ lastMessage: 'edited' }));
+      s.recordMessageEdit(PHONE, 'L1', 'fixed', undefined, key => key.remoteJid === LID);
+      expect(chat(s, LID)).toEqual(expect.objectContaining({ lastMessage: 'fixed' }));
+    });
+
+    it('drops a stored preview with the chat WhatsApp deletes', () => {
+      // No chat-state store, so no deletion mark: only the dropped preview keeps the chat out.
+      const s = new BaileysSessionStore();
+      s.seedStoredPreviews([stored(), stored({ chatId: '628222@c.us', id: 'M2' })]);
+      s.removeChats(['628111@c.us']);
+      expect(s.listChats().map(c => c.id)).toEqual(['628222@c.us']);
+    });
+
+    it.each([
+      [
+        'newest first',
+        [
+          ['628111@s.whatsapp.net', 'reply', T],
+          ['628111@c.us', 'question', T - 100],
+        ],
+      ],
+      [
+        'oldest first',
+        [
+          ['628111@c.us', 'question', T - 100],
+          ['628111@s.whatsapp.net', 'reply', T],
+        ],
+      ],
+    ] as const)('keeps the newer row of a chat stored under two spellings of its id, %s', (_order, spelled) => {
+      const s = newStore();
+      s.seedStoredPreviews(
+        spelled.map(([chatId, body, timestamp], i) => stored({ chatId, id: `M${i}`, body, timestamp })),
+      );
+      expect(s.listChats().map(c => [c.id, c.lastMessage, c.timestamp])).toEqual([['628111@c.us', 'reply', T]]);
+    });
+
+    it('keeps a contact stored under its phone and its lid as two rows, as the live listing does', () => {
+      const s = newStore();
+      s.addLidMappings([{ lid: LID, pn: PHONE }]);
+      s.seedStoredPreviews([
+        stored({ timestamp: T - 100, body: 'old' }),
+        stored({ chatId: LID, id: 'M9', body: 'new' }),
+      ]);
+      expect(s.listChats().map(c => [c.id, c.lastMessage])).toEqual([
+        ['628111@c.us', 'old'],
+        [LID, 'new'],
+      ]);
+    });
+
+    it('lists an unsaved contact by the name its stored message came with, and a group by its subject', () => {
+      const s = newStore();
+      s.upsertChats([{ id: GROUP, name: 'Support team' }]);
+      s.seedStoredPreviews([
+        stored({ name: 'Rina' }),
+        stored({ chatId: LID, id: 'M9', name: 'Budi' }),
+        stored({ chatId: '628222@c.us', id: 'M2' }),
+        stored({ chatId: GROUP, id: 'G1', author: '628333@c.us', name: 'A member' }),
+      ]);
+      expect(chat(s, '628111@c.us')?.name).toBe('Rina');
+      expect(chat(s, LID)?.name).toBe('Budi');
+      expect(chat(s, '628222@c.us')?.name).toBe('628222');
+      expect(chat(s, GROUP)?.name).toBe('Support team');
+      // Only the address book is the contact list, and a name saved there wins.
+      expect(s.listContacts()).toEqual([]);
+      s.upsertContacts([{ id: PHONE, name: 'Rina (VIP)' }]);
+      expect(chat(s, '628111@c.us')?.name).toBe('Rina (VIP)');
+    });
+
+    it('holds no more chats than BAILEYS_SESSION_STORE_MAX_ENTRIES, and gives up the oldest first', () => {
+      const before = process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES;
+      process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES = '2';
+      try {
+        const s = newStore();
+        s.seedStoredPreviews(
+          ['628333', '628222', '628111'].map((n, i) => stored({ chatId: `${n}@c.us`, id: n, timestamp: T - i * 10 })),
+        );
+        expect(
+          s
+            .listChats()
+            .map(c => c.id)
+            .sort(),
+        ).toEqual(['628222@c.us', '628333@c.us']);
+      } finally {
+        if (before === undefined) delete process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES;
+        else process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES = before;
+      }
     });
   });
 
