@@ -167,6 +167,21 @@ describe('RedriveController after an instance was rebound', () => {
             })),
         );
       }),
+      findOneBy: jest.fn((criteria: Record<string, unknown> | Array<Record<string, unknown>>) => {
+        const alternatives = Array.isArray(criteria) ? criteria : [criteria];
+        const row = rows.find(row => alternatives.some(where => row.id === where.id && matches(row, where)));
+        return Promise.resolve(
+          row
+            ? {
+                ...row,
+                direction: 'inbound',
+                deliveryId: `d-${row.id}`,
+                attempts: 0,
+                payload: { route: 'r', ingress: { headers: {}, query: {}, body: '{}', rawBody: '{}' } },
+              }
+            : null,
+        );
+      }),
       update: jest.fn((where: { id: string }, patch: Partial<Row>) => {
         Object.assign(rows.find(row => row.id === where.id) ?? {}, patch);
         return Promise.resolve();

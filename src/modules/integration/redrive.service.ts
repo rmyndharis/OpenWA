@@ -95,40 +95,30 @@ export class RedriveService implements OnModuleDestroy {
     // Failed replays increment attempts and move behind never-retried rows, preventing one permanent
     // failure from livelocking the bounded window while keeping it redrivable.
     const order = { attempts: 'ASC', createdAt: 'ASC' } as const;
-    let rows: IntegrationDeliveryFailure[];
-    try {
-      rows = await this.repo.find({ where, order, take: REDRIVE_BATCH_SIZE });
-    } catch (err) {
-      // A stored payload that does not parse (an imported or hand-edited dead letter) fails the read of
-      // the whole window, and it heads the window for good since it is never replayed, so every redrive
-      // of the instance would fail with it. Read the window again row by row and skip the unreadable one.
-      this.logger.warn('Reading the dead letters of an instance failed; reading them row by row', {
-        pluginId,
-        instanceId,
-        error: err instanceof Error ? err.message : String(err),
-        action: 'ingress_redrive_window_unreadable',
-      });
-      const ids = await this.repo.find({ select: { id: true }, where, order, take: REDRIVE_BATCH_SIZE });
-      rows = [];
-      for (const { id } of ids) {
-        try {
-          const row = await this.repo.findOneBy({ id });
-          if (row) rows.push(row);
-        } catch (rowError) {
-          this.logger.error(
-            'A dead letter could not be read and is skipped',
-            rowError instanceof Error ? rowError.message : String(rowError),
-            { id, action: 'ingress_redrive_row_unreadable' },
-          );
-          // Counted as a failed replay, by id and so without reading the payload: left at attempts 0 it
-          // heads every window for good, and a batch of them would starve the rows behind it.
-          await this.repo.increment({ id }, 'attempts', 1).catch(() => undefined);
-        }
-      }
-    }
+    // Read one body as its replay starts, so the window holds only ids and malformed payloads stay isolated.
+    const rows = this.stop.signal.aborted
+      ? []
+      : await this.repo.find({ select: { id: true }, where, order, take: REDRIVE_BATCH_SIZE });
 
     let redriven = 0;
-    for (const row of rows) {
+    for (const { id } of rows) {
+      if (this.stop.signal.aborted) break;
+      let row: IntegrationDeliveryFailure | null;
+      try {
+        row = await this.repo.findOneBy(
+          Array.isArray(where) ? where.map(scope => ({ ...scope, id })) : { ...where, id },
+        );
+      } catch (rowError) {
+        this.logger.error(
+          'A dead letter could not be read and is skipped',
+          rowError instanceof Error ? rowError.message : String(rowError),
+          { id, action: 'ingress_redrive_row_unreadable' },
+        );
+        // Move an unreadable row behind the others so it cannot occupy every later window.
+        await this.repo.increment({ id }, 'attempts', 1).catch(() => undefined);
+        continue;
+      }
+      if (!row) continue;
       if (this.stop.signal.aborted) break;
       const stored = (row.payload ?? {}) as StoredDlqPayload;
       // Re-mint a jobId so BullMQ accepts the replay even if the original jobId lingers.
