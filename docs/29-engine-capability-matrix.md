@@ -963,6 +963,13 @@ adapter boundary — none silently stubs.
   the same engine, and the list with it.
   The `sendMessage(status@broadcast, {delete})` revoke shape is _empirically unverified_: only posting
   was live-spiked. On wwjs it calls `revokeStatusMessage(statusId)` (own status only).
+- **Status post acks (baileys).** An own status post reports no aggregate `delivered` or `read`
+  `message.ack`: the tracker in `baileys-group-ack.ts` follows group messages only, and a status post
+  has no stored row. Baileys raises each viewer's receipt through `message-receipt.update`, which the
+  gateway forwards as `message.receipt` under the chat `status@broadcast`. The viewers of a status are
+  the distinct `participant` values with `status` `read` for its id; a viewer whose read receipts are
+  off never appears among them, and the per-webhook bound on `message.receipt` applies. whatsapp-web.js
+  broadcasts a status to the account's status-privacy audience, so there is no recipient list there.
 - **`getChats` after a restart (baileys).** Baileys keeps no chat list of its own, and WhatsApp
   skips history sync on every connect after the first link, so a new engine (a process restart, a
   session stop and start, or a reconnect the gateway runs itself, as for `deleteStatus` above) starts
