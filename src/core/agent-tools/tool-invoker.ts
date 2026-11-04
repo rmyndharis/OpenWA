@@ -97,12 +97,14 @@ export async function invokeTool(
       if (typeof tool.chatScope !== 'string') {
         const fields = tool.chatScope ?? [];
         if (fields.length === 0) throw new ForbiddenException('API key is restricted to selected chats');
+        // The allowlist is the same for every field, so it is compiled once.
+        const scope = chatScope.scopeFor(apiKey);
         for (const field of fields) {
           const chatId = values[field];
           if (typeof chatId !== 'string' || !chatId.trim()) {
             throw new ForbiddenException(`${field} is required for a key restricted to selected chats`);
           }
-          if (!(await chatScope.allows(apiKey, chatId))) {
+          if (!(await chatScope.allows(apiKey, chatId, scope))) {
             throw new ForbiddenException('API key not authorized for this chat');
           }
         }

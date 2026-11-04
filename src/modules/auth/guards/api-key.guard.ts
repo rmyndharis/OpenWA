@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { AuthService, UnresolvedApiKeyException } from '../auth.service';
 import { ChatScopeService } from '../chat-scope.service';
+import type { ChatScope } from '../../../common/security/chat-scope';
 import { BULK_MESSAGES_MAX } from '../../message/dto/bulk-message.dto';
 import { ApiKey, ApiKeyRole } from '../entities/api-key.entity';
 import {
@@ -200,6 +201,8 @@ export class ApiKeyGuard implements CanActivate {
   private async assertChatsAllowed(request: Request, apiKey: ApiKey, context: ExecutionContext): Promise<void> {
     // A bulk send repeats the same chat freely; each distinct id is expanded once.
     const checked = new Set<string>();
+    // The allowlist is the same for every id the request names, so it is compiled on the first one.
+    let scope: ChatScope | null | undefined;
     for (const [field, value] of this.chatIdsIn(request)) {
       if (value === undefined || value === null) continue;
       if (typeof value !== 'string') {
@@ -207,7 +210,8 @@ export class ApiKeyGuard implements CanActivate {
       }
       if (value.length === 0 || checked.has(value)) continue;
       checked.add(value);
-      if (!(await this.chatScope.allows(apiKey, value))) {
+      scope ??= this.chatScope.scopeFor(apiKey);
+      if (!(await this.chatScope.allows(apiKey, value, scope))) {
         throw new ForbiddenException('API key not authorized for this chat');
       }
     }
