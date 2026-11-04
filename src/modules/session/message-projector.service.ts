@@ -1677,7 +1677,7 @@ export class MessageProjector {
     id: string,
     engine: IWhatsAppEngine,
     message: RevokedMessage,
-    actor?: { fromMe: boolean },
+    actor?: { fromMe: boolean; participant?: string; admin?: boolean },
   ): void {
     if (!this.engines.isLive(id, engine)) return;
     this.logger.debug(`Message revoked: ${message.id}`, {
@@ -1694,7 +1694,9 @@ export class MessageProjector {
     // `message.id` is the revocation notification, which never matches a stored row.
     // `revokedId` falls back to `id` (Baileys, where the two are the same).
     const revokedWaMessageId = message.revokedId ?? message.id;
-    const source = actor ? ({ kind: 'revoke', chatId: message.chatId, fromMe: actor.fromMe } as const) : undefined;
+    const source: MutationSource | undefined = actor
+      ? { kind: 'revoke', chatId: message.chatId, fromMe: actor.fromMe, author: actor.participant, admin: actor.admin }
+      : undefined;
     const apply = (): void => {
       void this.recordRevoke(id, revokedWaMessageId, source, true);
 

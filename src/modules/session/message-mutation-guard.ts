@@ -14,8 +14,10 @@ export interface MutationSource {
   chatId: string;
   /** Whether the account itself made the change, from its phone; undefined when the engine does not say. */
   fromMe?: boolean;
-  /** For a group edit, the participant who wrote the message being edited. */
+  /** For a group edit, the participant who wrote the message being edited; for a group revoke, who sent it. */
   author?: string;
+  /** For a group revoke a member sent, whether the group's roster shows them an admin; undefined when unknown. */
+  admin?: boolean;
 }
 
 /**
@@ -110,7 +112,9 @@ export function provablyDifferent(
  *  - `direction`: an edit, and a revoke in a one-to-one chat, come from the author only, so a change
  *    made by the counterparty cannot name a message the account sent, nor the reverse. Group revokes are
  *    exempt, since an admin may delete anyone's message.
- *  - `author`: a group edit comes from the participant who wrote the message.
+ *  - `author`: a group edit comes from the participant who wrote the message, and so does a group revoke
+ *    by a member the group's roster shows is no admin: it cannot name a message the account sent, nor one
+ *    another member wrote. A lid and a phone number with no reported pairing prove nothing here.
  */
 export function mutationTargetsForeignRow(
   row: StoredMessageRef,
@@ -131,6 +135,15 @@ export function mutationTargetsForeignRow(
     group &&
     source.fromMe === false &&
     provablyDifferent(row.author, source.author, resolveLid)
+  ) {
+    return 'author';
+  }
+  if (
+    source.kind === 'revoke' &&
+    group &&
+    source.fromMe === false &&
+    source.admin === false &&
+    (row.direction === MessageDirection.OUTGOING || differentWhenPaired(row.author, source.author, resolveLid))
   ) {
     return 'author';
   }
@@ -169,12 +182,21 @@ export function receiptTargetsForeignRow(
   resolveLid?: (jid: string) => string | null,
 ): boolean {
   if (isOwnBroadcast(row) || receivedThroughList(row, chatId, resolveLid)) return false;
-  const stored = entityOf(row.chatId);
-  const named = entityOf(chatId);
-  if (stored && named && stored.kind !== named.kind && isPerson(stored.kind) && isPerson(named.kind)) {
-    if (!resolveLid?.(stored.kind === 'lid' ? row.chatId : chatId)) return false;
+  return differentWhenPaired(row.chatId, chatId, resolveLid);
+}
+
+/** {@link provablyDifferent}, except that a lid and a phone number with no reported pairing prove nothing. */
+function differentWhenPaired(
+  a?: string | null,
+  b?: string | null,
+  resolveLid?: (jid: string) => string | null,
+): boolean {
+  const left = a ? entityOf(a) : null;
+  const right = b ? entityOf(b) : null;
+  if (left && right && left.kind !== right.kind && isPerson(left.kind) && isPerson(right.kind)) {
+    if (!resolveLid?.(left.kind === 'lid' ? a! : b!)) return false;
   }
-  return provablyDifferent(row.chatId, chatId, resolveLid);
+  return provablyDifferent(a, b, resolveLid);
 }
 
 /** {@link receiptTargetsForeignRow} with the lids it compares resolved through reported directory data. */

@@ -933,7 +933,10 @@ export interface EngineEventCallbacks {
   onMessageCreate?: (message: IncomingMessage, ticket?: InboundTicket) => void; // outgoing (incl. linked-phone sends)
   onMessageAck?: (messageId: string, status: DeliveryStatus, chatId?: string) => void;
   onMessageReceipt?: (event: MessageReceiptEvent) => void; // per-recipient group/status receipts (Baileys only)
-  onMessageRevoked?: (message: RevokedMessage, actor?: { fromMe: boolean }) => void;
+  onMessageRevoked?: (
+    message: RevokedMessage,
+    actor?: { fromMe: boolean; participant?: string; admin?: boolean },
+  ) => void; // a member's group revoke names them and what the roster said (Baileys)
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
   onEventResponse?: (event: EventResponseEvent) => void; // an RSVP to a WhatsApp event; Baileys only

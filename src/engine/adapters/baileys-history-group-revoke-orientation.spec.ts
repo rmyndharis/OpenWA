@@ -56,6 +56,7 @@ describe('Baileys history group revokes keyed from the revoker side', () => {
   let repo: Repository<Message>;
   let history: BaileysHistory;
   let pending: Promise<IncomingMessage[]>[];
+  let readGroupMembers: jest.Mock;
 
   beforeEach(async () => {
     ds = await new DataSource({
@@ -70,6 +71,8 @@ describe('Baileys history group revokes keyed from the revoker side', () => {
     const previews = new BaileysSessionStore(undefined, 's1');
     previews.upsertChats([{ id: GROUP }]);
     pending = [];
+    // A roster that shows the sender of every delete here is no admin.
+    readGroupMembers = jest.fn(() => Promise.resolve([{ ids: [ADMIN, MEMBER], admin: false }]));
     const onHistory = jest.fn((messages: IncomingMessage[]) => {
       const saving = persistHistoryMessages(repo, undefined, 's1', messages, { log: jest.fn() } as never, () => true);
       pending.push(saving);
@@ -104,6 +107,7 @@ describe('Baileys history group revokes keyed from the revoker side', () => {
       getStoredMessage: (id: string) => raw.getMessage('s1', id),
       updateStoredMessage: (id: string, change: (stored: WAMessage) => WAMessage | null) =>
         raw.update('s1', id, change),
+      readGroupMembers,
     };
     const events = new BaileysEvents(host as unknown as BaileysEventsHost);
     history = new BaileysHistory({
@@ -176,5 +180,19 @@ describe('Baileys history group revokes keyed from the revoker side', () => {
       direction: MessageDirection.INCOMING,
       author: '628333@c.us',
     });
+  });
+
+  // Today's roster says nothing of the sender's role when a delete synced from history was made, and refusing a
+  // former admin's delete would keep the text that was withdrawn, so a history delete is not checked against it.
+  it('applies a history delete of another member message without reading the group roster', async () => {
+    await capture([memberMessage]);
+    await capture([adminRevokeOf(MEMBER)]);
+    expect(await row()).toEqual({
+      type: 'revoked',
+      body: '',
+      direction: MessageDirection.INCOMING,
+      author: '628333@c.us',
+    });
+    expect(readGroupMembers).not.toHaveBeenCalled();
   });
 });

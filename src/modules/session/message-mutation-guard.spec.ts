@@ -138,6 +138,36 @@ describe('mutationTargetsForeignRow', () => {
     ).toBeNull();
   });
 
+  describe('a group delete by a member the roster shows is no admin', () => {
+    const member = { kind: 'revoke', chatId: group, fromMe: false, author: '628333@c.us', admin: false } as const;
+    const withAdmin = (admin?: boolean) => ({ ...member, admin });
+
+    it('is refused for a message the account sent or another member wrote, and applied to their own', () => {
+      expect(mutationTargetsForeignRow({ chatId: group, direction: OUT }, member)).toBe('author');
+      expect(mutationTargetsForeignRow({ chatId: group, direction: IN, author: '628111@c.us' }, member)).toBe('author');
+      expect(mutationTargetsForeignRow({ chatId: group, direction: IN, author: '628333@c.us' }, member)).toBeNull();
+      expect(mutationTargetsForeignRow({ chatId: group, direction: IN }, member)).toBeNull();
+    });
+
+    it('is applied to anyone when the sender is an admin or the roster could not say', () => {
+      for (const admin of [true, undefined]) {
+        expect(mutationTargetsForeignRow({ chatId: group, direction: OUT }, withAdmin(admin))).toBeNull();
+        expect(
+          mutationTargetsForeignRow({ chatId: group, direction: IN, author: '628111@c.us' }, withAdmin(admin)),
+        ).toBeNull();
+      }
+    });
+
+    it('compares a lid sender with the author only through a reported pairing', async () => {
+      const byLid = { ...member, author: '333@lid' };
+      const row = { chatId: group, direction: IN, author: '628333@c.us' };
+      expect(mutationTargetsForeignRow(row, byLid)).toBeNull();
+      expect(await mutationTargetsForeignRowPersisted(row, byLid, () => Promise.resolve(null))).toBeNull();
+      expect(await mutationTargetsForeignRowPersisted(row, byLid, () => Promise.resolve('628333'))).toBeNull();
+      expect(await mutationTargetsForeignRowPersisted(row, byLid, () => Promise.resolve('628111'))).toBe('author');
+    });
+  });
+
   it('refuses a group edit by somebody other than the author, and one of the account message by a member', () => {
     const row = { chatId: group, direction: IN, author: '628111@c.us' };
     expect(

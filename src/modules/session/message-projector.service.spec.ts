@@ -387,6 +387,33 @@ describe('MessageProjector', () => {
         expect(eventsGateway.emitMessageRevoked).toHaveBeenCalledTimes(1);
       });
 
+      describe('in a group, by a member the roster shows is no admin', () => {
+        const groupRevoke = { id: 'M1', revokedId: 'M1', chatId: '120363@g.us' } as never;
+        const member = { fromMe: false, participant: '628333@c.us', admin: false };
+
+        it.each([
+          ['a message the account sent', { direction: 'outgoing' }],
+          ['another member message', { author: '628111@c.us' }],
+        ])('drops the delete of %s', async (_what, fields) => {
+          row({ chatId: '120363@g.us', ...fields });
+
+          projector.handleMessageRevoked('s1', engine, groupRevoke, member);
+          await settle();
+
+          expect(messageRepository.update).not.toHaveBeenCalled();
+          expect(eventsGateway.emitMessageRevoked).not.toHaveBeenCalled();
+        });
+
+        it('applies the delete of their own message', async () => {
+          row({ chatId: '120363@g.us', author: '628333@c.us' });
+
+          projector.handleMessageRevoked('s1', engine, groupRevoke, member);
+          await settle();
+
+          expect(eventsGateway.emitMessageRevoked).toHaveBeenCalledTimes(1);
+        });
+      });
+
       it('applies a revoke of a message nothing stored, as it always did', async () => {
         messageRepository.findOne.mockResolvedValue(null);
 

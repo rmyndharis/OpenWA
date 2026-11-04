@@ -1018,9 +1018,14 @@ export interface EngineEventCallbacks {
   onMessageReceipt?: (event: MessageReceiptEvent) => void;
   /**
    * `actor.fromMe` says whether the account itself made the revoke (from its phone). Only an engine that
-   * receives the raw protocol message can say; whatsapp-web.js leaves it out.
+   * receives the raw protocol message can say; whatsapp-web.js leaves it out. For a group revoke a member
+   * sent, `actor.participant` is that member's neutral id and `actor.admin` whether the group's roster
+   * shows them an admin, undefined when the engine did not read it or it could not say.
    */
-  onMessageRevoked?: (message: RevokedMessage, actor?: { fromMe: boolean }) => void;
+  onMessageRevoked?: (
+    message: RevokedMessage,
+    actor?: { fromMe: boolean; participant?: string; admin?: boolean },
+  ) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
   /**
