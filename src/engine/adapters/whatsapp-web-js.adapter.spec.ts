@@ -4132,10 +4132,10 @@ describe('WhatsAppWebJsAdapter message_reaction (id resolution across WA Web bui
     return calls[0][0];
   };
 
-  const emitReaction = (client: EventEmitter, msgId: unknown): void => {
+  const emitReaction = (client: EventEmitter, msgId: unknown, key: object = { remote: 'peer@c.us' }): void => {
     client.emit('message_reaction', {
       msgId,
-      id: { remote: 'peer@c.us' },
+      id: key,
       reaction: '👍',
       senderId: 'peer@c.us',
     });
@@ -4167,6 +4167,31 @@ describe('WhatsAppWebJsAdapter message_reaction (id resolution across WA Web bui
     // Never undefined: downstream looks the message up by this id, and TypeORM drops an undefined
     // condition from the where-clause — which would match an unrelated row.
     expect(reactionArg(onMessageReaction).messageId).toBe('');
+  });
+
+  // The reaction's key crosses the page boundary as JSON, so a chat id WhatsApp Web keeps as a Wid object arrives
+  // as an object; downstream compares chatId as a string and publishes it in the message.reaction payload.
+  it.each([
+    ['a string', 'peer@c.us'],
+    ['an object with _serialized', { _serialized: 'peer@c.us', user: 'peer', server: 'c.us' }],
+    ['an object on a build that renamed _serialized (#747)', { $1: 'peer@c.us' }],
+  ])('reads the chat id of a reaction whose remote arrives as %s', (_how, remote) => {
+    const { onMessageReaction, client } = wireReactionHandler();
+
+    emitReaction(client, { _serialized: 'REACTED_MSG' }, { remote });
+
+    expect(reactionArg(onMessageReaction).chatId).toBe('peer@c.us');
+  });
+
+  it.each([
+    ['missing', {}],
+    ['an object with no readable id', { remote: {} }],
+  ])('emits the empty chat id, never undefined or an object, when the remote is %s', (_how, key) => {
+    const { onMessageReaction, client } = wireReactionHandler();
+
+    emitReaction(client, { _serialized: 'REACTED_MSG' }, key);
+
+    expect(reactionArg(onMessageReaction).chatId).toBe('');
   });
 });
 
