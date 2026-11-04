@@ -19961,6 +19961,7 @@
               "session.status"
             ],
             "minItems": 1,
+            "maxItems": 27,
             "items": {
               "type": "string",
               "enum": [
@@ -20162,6 +20163,7 @@
             "type": "array",
             "description": "Event types to subscribe to. '*' subscribes to all events except `message.receipt`, which must be named explicitly.",
             "minItems": 1,
+            "maxItems": 27,
             "items": {
               "type": "string",
               "enum": [
