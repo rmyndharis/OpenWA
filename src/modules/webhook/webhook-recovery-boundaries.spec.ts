@@ -497,6 +497,56 @@ describe('webhook recovery across live ownership and configuration changes', () 
       expect(row.payload).toBeNull();
     });
 
+    it('hands the replay payload to a recent terminal row recorded before retention was enabled', async () => {
+      await build().recordReplayExhaustion(spent('key-retention-enabled'), primary.url);
+
+      expect(
+        await build({ failurePayloadRetentionHours: 24 }).recordReplayExhaustion(
+          spent('key-retention-enabled'),
+          primary.url,
+        ),
+      ).toBe(true);
+
+      const [row] = await failures.find({ select: { id: true, payload: true, attempts: true, lastError: true } });
+      expect(row.payload).toEqual({ id: 1 });
+      expect(row.attempts).toBe(5);
+      expect(row.lastError).toBe('Webhook replay budget exhausted');
+    });
+
+    it.each(['expired', 'retained', 'disabled'] as const)('preserves %s terminal payload state', async state => {
+      const key = `key-${state}`;
+      await build().recordReplayExhaustion(spent(key), primary.url);
+      if (state === 'expired') {
+        await failures.update({ idempotencyKey: key }, { createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) });
+      }
+      if (state === 'retained') {
+        await failures.update({ idempotencyKey: key }, { payload: { original: true } });
+      }
+
+      expect(
+        await build({ failurePayloadRetentionHours: state === 'disabled' ? 0 : 24 }).recordReplayExhaustion(
+          spent(key),
+          primary.url,
+        ),
+      ).toBe(true);
+
+      const [row] = await failures.find({ select: { id: true, payload: true, attempts: true } });
+      expect(row.payload).toEqual(state === 'retained' ? { original: true } : null);
+      expect(row.attempts).toBe(5);
+    });
+
+    it('keeps the replay copy when attaching its payload to an existing terminal row fails', async () => {
+      await build().recordReplayExhaustion(spent('key-write-failed'), primary.url);
+      jest.spyOn(failures, 'update').mockRejectedValueOnce(new Error('database unavailable'));
+
+      expect(
+        await build({ failurePayloadRetentionHours: 24 }).recordReplayExhaustion(
+          spent('key-write-failed'),
+          primary.url,
+        ),
+      ).toBe(false);
+    });
+
     it('keeps the event body on the exhaustion row for a redrive while payload retention is on', async () => {
       await build({ failurePayloadRetentionHours: 24 }).recordReplayExhaustion(spent('key-kept'), primary.url);
 
