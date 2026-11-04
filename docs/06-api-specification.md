@@ -51,7 +51,7 @@ A key may also be restricted to selected chats (`allowedChats`: group `<id>@g.us
 
 ### API-Key Lifecycle
 
-OpenWA seeds an initial admin key on first run (printed to the startup log and written to `data/.api-key`, or `/app/data/.api-key` in Docker). Use it to mint scoped, lower-privilege keys for integrations. Full key creation, listing, rotation, and revocation are documented under the auth resource in **§6.4.9 (API Keys)**.
+OpenWA seeds an initial admin key on first run: `API_MASTER_KEY` when it is set, otherwise a generated key. Either is written to `data/.api-key` (or `/app/data/.api-key` in Docker); the startup log prints a generated key once and never an `API_MASTER_KEY`. Use it to mint scoped, lower-privilege keys for integrations. Full key creation, listing, rotation, and revocation are documented under the auth resource in **§6.4.9 (API Keys)**.
 
 ## 6.2 Response Format
 

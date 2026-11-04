@@ -41,6 +41,15 @@ export class UnresolvedApiKeyException extends UnauthorizedException {
 }
 
 /**
+ * The key the operator chose in `API_MASTER_KEY`, or undefined when there is none.
+ * Trimmed because validateApiKey hashes the trimmed key: a seed hashed with a trailing newline could
+ * never authenticate. A whitespace-only value counts as unset.
+ */
+function configuredMasterKey(): string | undefined {
+  return process.env.API_MASTER_KEY?.trim() || undefined;
+}
+
+/**
  * Resolves the API key to seed on first boot (when no keys exist yet).
  * Precedence: an explicit `API_MASTER_KEY` always wins; otherwise a
  * cryptographically random `owa_k1_` key is generated — the secure default,
@@ -48,9 +57,7 @@ export class UnresolvedApiKeyException extends UnauthorizedException {
  * a developer explicitly opts in with `ALLOW_DEV_API_KEY=true`, never by default.
  */
 export function resolveSeedApiKey(): string {
-  // Trimmed because validateApiKey hashes the trimmed key: a seed hashed with a trailing newline could
-  // never authenticate. A whitespace-only value counts as unset.
-  const masterKey = process.env.API_MASTER_KEY?.trim();
+  const masterKey = configuredMasterKey();
   if (masterKey) {
     return masterKey;
   }
@@ -62,9 +69,10 @@ export function resolveSeedApiKey(): string {
 
 /**
  * The line to print for the API key in the startup banner. The full raw key is shown ONLY when it was
- * just created (first run, when the operator needs to capture it once). On every subsequent boot the
- * banner names only where the key is, so the live admin key is not re-written to the log
- * pipeline (Docker/Loki/CloudWatch) on each restart — it stays in `data/.api-key` (0600), or wherever
+ * just created and the operator has no other copy (a generated key on the first run, when they need to
+ * capture it once); a key taken from API_MASTER_KEY arrives as the placeholder masterKeyBannerLine builds.
+ * On every subsequent boot the banner names only where the key is, so the live admin key is not re-written
+ * to the log pipeline (Docker/Loki/CloudWatch) on each restart — it stays in `data/.api-key` (0600), or wherever
  * `BOOTSTRAP_KEY_FILE` points; the dashboard only ever shows a key's prefix. A generated key keeps a
  * short fingerprint, its fixed `owa_k1_` tag and one hex digit; an API_MASTER_KEY is taken verbatim, so
  * any of its characters is part of the secret and none is printed. A placeholder
@@ -75,6 +83,15 @@ export function bannerKeyLine(displayKey: string, isNewKey: boolean): string {
   if (displayKey.startsWith('(')) return displayKey;
   const fingerprint = displayKey.startsWith('owa_k1_') ? `${displayKey.slice(0, 8)}… ` : '';
   return `${fingerprint}(full key in ${bootstrapKeyFilePath()})`;
+}
+
+/**
+ * What the banner shows, on the boot that seeds it, for a key taken from `API_MASTER_KEY`: the operator chose
+ * that value and already holds it, so the banner says where else it is kept and never prints a character of it.
+ * The file is named only when it was written.
+ */
+function masterKeyBannerLine(savedToFile: boolean): string {
+  return `(the configured API_MASTER_KEY${savedToFile ? `; also in ${bootstrapKeyFilePath()}` : ''})`;
 }
 
 @Injectable()
@@ -96,18 +113,22 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     let isNewKey = false;
 
     if (count === 0) {
-      displayKey = resolveSeedApiKey();
+      const seedKey = resolveSeedApiKey();
 
-      await this.seedApiKey(displayKey, 'Default Admin Key', ApiKeyRole.ADMIN);
+      await this.seedApiKey(seedKey, 'Default Admin Key', ApiKeyRole.ADMIN);
       isNewKey = true;
       this.keyIndex?.refreshSoon();
 
       // Save raw key to file for startup script to read (owner-only — it's the raw admin key).
+      let saved = true;
       try {
-        writeBootstrapKey(displayKey);
+        writeBootstrapKey(seedKey);
       } catch (err) {
+        saved = false;
         this.logger.warn('Could not save API key file', { error: String(err) });
       }
+      // A generated key is shown once, because the operator has no other copy of it; a key they chose is not.
+      displayKey = seedKey === configuredMasterKey() ? masterKeyBannerLine(saved) : seedKey;
     } else {
       // Read the saved bootstrap key from the file — but only while it still resolves to a LIVE
       // key; a revoked/rotated/deleted key must not be advertised in the banner.
