@@ -124,6 +124,24 @@ describe('StoredChatPreviewService', () => {
     ]);
   });
 
+  it('names a chat after the newest message it received with a name, not after a reply', async () => {
+    await row({ chatId: '628111@c.us', chatName: 'Old name', timestamp: T - 30 });
+    await row({ chatId: '628111@c.us', chatName: 'Rina', timestamp: T - 20 });
+    await row({ chatId: '628111@c.us', chatName: 'Desk', direction: MessageDirection.OUTGOING, timestamp: T });
+    // Received by the account this session was linked to before.
+    await row({ chatId: '628111@c.us', chatName: 'Someone else', timestamp: T - 10, to: '628000@c.us' });
+    await row({ chatId: '628222@c.us', direction: MessageDirection.OUTGOING, chatName: 'Desk' });
+    await row({ chatId: '628333@c.us' });
+
+    const previews = await service.latestPerChat(SESSION, OWN, 0);
+
+    expect(Object.fromEntries(previews.map(p => [p.chatId, p.name]))).toEqual({
+      '628111@c.us': 'Rina',
+      '628222@c.us': undefined,
+      '628333@c.us': undefined,
+    });
+  });
+
   it('answers nothing without an account to match', async () => {
     await row({ chatId: '628111@c.us' });
 
@@ -159,19 +177,15 @@ describe('StoredChatPreviewService', () => {
   (process.env.DATABASE_TYPE === 'postgres' ? it.skip : it)(
     'reads the candidate chats from the session-chat-time index alone on SQLite',
     async () => {
-      const logged: string[] = [];
+      const logged: Parameters<typeof query>[] = [];
       const query = repository.manager.query.bind(repository.manager);
       jest.spyOn(repository.manager, 'query').mockImplementation((...args: Parameters<typeof query>) => {
-        logged.push(args[0]);
+        logged.push(args);
         return query<unknown>(...args);
       });
       await service.latestPerChat(SESSION, OWN, 0);
-      const plan: Array<{ detail: string }> = await query(`EXPLAIN QUERY PLAN ${logged[0]}`, [
-        SESSION,
-        SESSION,
-        MessageDirection.INCOMING,
-        ...OWN,
-      ]);
+      const [[sql, params]] = logged;
+      const plan: Array<{ detail: string }> = await query(`EXPLAIN QUERY PLAN ${sql}`, params);
 
       expect(plan.map(step => step.detail)).toEqual(
         expect.arrayContaining([

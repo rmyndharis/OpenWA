@@ -327,8 +327,14 @@ export class BaileysSessionStore {
    * so no message, edit or delete can come between the read and this. A live preview of the same chat
    * outranks one of these when it is as new (see {@link listChats}). The key carries no addressing of
    * the chat: it serves the listing and the edit and delete checks only.
+   *
+   * The name a contact's newest stored message came with is its pushname, which live traffic records
+   * the same way (`contacts.update` brings `notify` with every message), so an unsaved contact is
+   * listed by name rather than by its digits; upsertContacts leaves a group's posters out. A name saved
+   * in the address book still wins over it.
    */
   seedStoredPreviews(rows: StoredChatPreview[]): void {
+    this.upsertContacts(rows.flatMap(r => (r.name ? [{ id: this.toEngineJid(r.chatId), notify: r.name }] : [])));
     for (const r of rows) {
       const key = this.toEngineJid(r.chatId);
       const participant = r.author ? this.toEngineJid(r.author) : undefined;

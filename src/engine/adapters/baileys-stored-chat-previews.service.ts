@@ -17,6 +17,11 @@ export interface StoredChatPreview {
   timestamp: number;
   body?: string;
   type?: MessageType;
+  /**
+   * The name the newest message received in the chat came with: in a 1:1 chat the contact's own
+   * (pushname), in a group the member who posted it. Absent when no received message carries one.
+   */
+  name?: string;
 }
 
 /**
@@ -50,6 +55,8 @@ export class StoredChatPreviewService implements StoredChatPreviewSource {
    *
    * A pending or failed send can have no WhatsApp id: it shows no chat and previews nothing, as live
    * (the #1891 rule). Ties take the row stored last, the order the stored lookup of a chat write uses.
+   * The name comes from the newest received row of the chat, which need not be the newest row: a
+   * support chat usually ends with a reply.
    */
   async latestPerChat(sessionId: string, ownIds: string[], limit: number): Promise<StoredChatPreview[]> {
     if (!ownIds.length) return [];
@@ -59,7 +66,14 @@ export class StoredChatPreviewService implements StoredChatPreviewSource {
       .map(part => driver.escape(part))
       .join('.');
     const [sql, params] = driver.escapeQueryWithParameters(
-      `SELECT m."chatId", m."waMessageId", m."direction", m."author", m."timestamp", m."body", m."type"
+      `SELECT m."chatId", m."waMessageId", m."direction", m."author", m."timestamp", m."body", m."type",
+         (
+           SELECT n."chatName" FROM ${table} n
+           WHERE n."sessionId" = :sessionId AND n."chatId" = c."chatId" AND n."direction" = :incoming
+             AND n."to" IN (:...ownIds) AND n."chatName" IS NOT NULL AND n."timestamp" IS NOT NULL
+           ORDER BY n."timestamp" DESC
+           LIMIT 1
+         ) AS "name"
        FROM (
          SELECT l."chatId" FROM ${table} l
          WHERE l."sessionId" = :sessionId AND l."timestamp" IS NOT NULL
@@ -79,6 +93,7 @@ export class StoredChatPreviewService implements StoredChatPreviewSource {
     const rows: Array<
       Pick<Message, 'chatId' | 'waMessageId' | 'direction' | 'author' | 'body' | 'type'> & {
         timestamp: number | string;
+        name: string | null;
       }
     > = await this.repo.manager.query(sql, params);
     return rows.map(row => ({
@@ -90,6 +105,7 @@ export class StoredChatPreviewService implements StoredChatPreviewSource {
       timestamp: Number(row.timestamp),
       ...(row.body ? { body: row.body } : {}),
       type: row.type as MessageType,
+      ...(row.name ? { name: row.name } : {}),
     }));
   }
 }

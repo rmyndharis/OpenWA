@@ -1591,6 +1591,25 @@ describe('BaileysSessionStore', () => {
       ]);
     });
 
+    it('lists an unsaved contact by the name its stored message came with, and a group by its subject', () => {
+      const s = newStore();
+      s.upsertChats([{ id: GROUP, name: 'Support team' }]);
+      s.seedStoredPreviews([
+        stored({ name: 'Rina' }),
+        stored({ chatId: LID, id: 'M9', name: 'Budi' }),
+        stored({ chatId: '628222@c.us', id: 'M2' }),
+        stored({ chatId: GROUP, id: 'G1', author: '628333@c.us', name: 'A member' }),
+      ]);
+      expect(chat(s, '628111@c.us')?.name).toBe('Rina');
+      expect(chat(s, LID)?.name).toBe('Budi');
+      expect(chat(s, '628222@c.us')?.name).toBe('628222');
+      expect(chat(s, GROUP)?.name).toBe('Support team');
+      // Only the address book is the contact list, and a name saved there wins.
+      expect(s.listContacts()).toEqual([]);
+      s.upsertContacts([{ id: PHONE, name: 'Rina (VIP)' }]);
+      expect(chat(s, '628111@c.us')?.name).toBe('Rina (VIP)');
+    });
+
     it('holds no more chats than BAILEYS_SESSION_STORE_MAX_ENTRIES', () => {
       const before = process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES;
       process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES = '2';
