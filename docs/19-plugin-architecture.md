@@ -394,7 +394,9 @@ export interface PluginStorage {
 }
 ```
 
-A key that is spelled like another key's encoded filename (`key-Zm9v` for `foo`) is not read as a legacy key, so it neither returns nor deletes that other key's value. `list()` returns only keys that `get`, `set` and `delete` accept.
+Writes accept keys of at most 184 UTF-8 bytes, keeping their encoded filenames within the 255-byte filesystem limit. A longer key is rejected with a validation error before any file is written.
+
+A key that is spelled like another key's encoded filename (`key-Zm9v` for `foo`) is not read as a legacy key, so it neither returns nor deletes that other key's value. `list()` returns only keys that `get` and `delete` accept.
 
 ## 19.5 Hook System
 

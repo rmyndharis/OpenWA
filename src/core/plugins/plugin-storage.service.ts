@@ -469,6 +469,11 @@ export class PluginStorageService {
         if (!filePath) {
           return Promise.reject(new Error(`Unsafe plugin storage key: ${key}`));
         }
+        if (Buffer.byteLength(path.basename(filePath), 'utf8') > 255) {
+          return Promise.reject(
+            new Error(`Plugin storage key exceeds 184 UTF-8 bytes (received ${Buffer.byteLength(key, 'utf8')})`),
+          );
+        }
         try {
           const payload = JSON.stringify(value, null, 2);
           const bytes = Buffer.byteLength(payload, 'utf8');
