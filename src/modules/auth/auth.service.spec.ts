@@ -97,11 +97,18 @@ describe('bannerKeyLine (startup banner key masking)', () => {
   });
 
   it('masks the key on subsequent boots — the full secret is never re-logged', () => {
-    const line = bannerKeyLine(FULL, false);
+    const line = bannerKeyLine(FULL, false, FULL.slice(0, 12));
     expect(line).not.toContain('0123456789abcdef'); // the secret tail must not appear
     expect(line.startsWith('owa_k1_0')).toBe(true); // a short fingerprint is fine
     expect(line).toMatch(/data[\\/]\.api-key/); // points the operator to the real source
     expect(line).not.toContain('dashboard'); // the dashboard only ever shows a key's prefix
+  });
+
+  // The tag is only known to be a tag when the stored row says the key was generated.
+  it('prints no fingerprint unless the stored prefix says the key was generated', () => {
+    for (const stored of [undefined, null, '', '(master key)', 'Acme-Prod-Ga']) {
+      expect(bannerKeyLine(FULL, false, stored)).toMatch(/^\(full key in .*\.api-key\)$/);
+    }
   });
 
   it('names the bootstrap key file BOOTSTRAP_KEY_FILE points at', () => {

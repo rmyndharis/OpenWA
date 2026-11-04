@@ -80,15 +80,23 @@ export function resolveSeedApiKey(): string {
  * capture it once); a key taken from API_MASTER_KEY arrives as the placeholder masterKeyBannerLine builds.
  * On every subsequent boot the banner names only where the key is, so the live admin key is not re-written
  * to the log pipeline (Docker/Loki/CloudWatch) on each restart — it stays in `data/.api-key` (0600), or wherever
- * `BOOTSTRAP_KEY_FILE` points; the dashboard only ever shows a key's prefix. A generated key keeps a
- * short fingerprint, its fixed `owa_k1_` tag and one hex digit; an API_MASTER_KEY is taken verbatim, so
- * any of its characters is part of the secret and none is printed. A placeholder
- * (e.g. "(check dashboard for keys)") is passed through unchanged.
+ * `BOOTSTRAP_KEY_FILE` points; the dashboard only ever shows a key's prefix. A key stored as a generated one
+ * keeps a short fingerprint, its fixed `owa_k1_` tag and one hex digit. Any other key may have every character
+ * secret (an API_MASTER_KEY is taken verbatim), so none is printed.
+ *
+ * `storedPrefix` is the prefix the live row is stored under, and only one that starts with the tag identifies a
+ * generated key; a missing or unreadable one identifies nothing. A seed from API_MASTER_KEY is stored under a fixed
+ * marker, so one shaped like a generated key prints no fingerprint. A row seeded by an earlier release holds the
+ * first 12 characters of its key instead, so a key chosen in that shape cannot be told from a generated one and
+ * keeps its fingerprint until it is replaced.
+ *
+ * A placeholder (e.g. "(check dashboard for keys)") is passed through unchanged.
  */
-export function bannerKeyLine(displayKey: string, isNewKey: boolean): string {
+export function bannerKeyLine(displayKey: string, isNewKey: boolean, storedPrefix?: string | null): string {
   if (isNewKey) return displayKey;
   if (displayKey.startsWith('(')) return displayKey;
-  const fingerprint = displayKey.startsWith('owa_k1_') ? `${displayKey.slice(0, 8)}… ` : '';
+  const generated = displayKey.startsWith('owa_k1_') && !!storedPrefix?.startsWith('owa_k1_');
+  const fingerprint = generated ? `${displayKey.slice(0, 8)}… ` : '';
   return `${fingerprint}(full key in ${bootstrapKeyFilePath()})`;
 }
 
@@ -117,6 +125,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     // Seed a default API key if none exist
     const count = await this.apiKeyRepository.count();
     let displayKey: string;
+    let storedPrefix: string | undefined;
     let isNewKey = false;
 
     if (count === 0) {
@@ -145,7 +154,9 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     } else {
       // Read the saved bootstrap key from the file — but only while it still resolves to a LIVE
       // key; a revoked/rotated/deleted key must not be advertised in the banner.
-      displayKey = (await this.readLiveBootstrapKey()) ?? '(check dashboard for keys)';
+      const live = await this.readLiveBootstrapKey();
+      displayKey = live?.rawKey ?? '(check dashboard for keys)';
+      storedPrefix = live?.keyPrefix;
     }
 
     // Always show the welcome banner on startup
@@ -169,7 +180,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     } else {
       this.logger.log('  🔑 API Key:');
     }
-    this.logger.log(`     ${bannerKeyLine(displayKey, isNewKey)}`);
+    this.logger.log(`     ${bannerKeyLine(displayKey, isNewKey, storedPrefix)}`);
     this.logger.log('');
     this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     this.logger.log('');
@@ -185,14 +196,15 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
    * The file is written once at first boot; when that key is later revoked, rotated, or deleted, the
    * file (and the banner quoting it) would otherwise keep advertising a dead credential. A stale file
    * is removed here too, so a backup restore that lost the key self-heals on the next boot.
-   * Returns null when the file is absent, unreadable, empty, or stale.
+   * Returns null when the file is absent, unreadable, empty, or stale; otherwise the key and the prefix its
+   * live row is stored under.
    */
-  private async readLiveBootstrapKey(): Promise<string | null> {
+  private async readLiveBootstrapKey(): Promise<{ rawKey: string; keyPrefix: string | undefined } | null> {
     const rawKey = readBootstrapKey(this.logger);
     if (!rawKey) return null;
     const stored = await this.apiKeyRepository.findOne({ where: { keyHash: this.hashKey(rawKey) } });
     const live = Boolean(stored && stored.isActive && (!stored.expiresAt || stored.expiresAt > new Date()));
-    if (live) return rawKey;
+    if (live) return { rawKey, keyPrefix: stored?.keyPrefix };
     if (!stored) {
       // A hash miss alone does not prove the key is gone: the same raw key hashes differently under
       // a changed API_KEY_PEPPER. The prefix is seeded unhashed alongside the key, so it still finds

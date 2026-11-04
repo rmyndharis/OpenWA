@@ -6,6 +6,7 @@ import type { Repository } from 'typeorm';
 import type { ModuleRef } from '@nestjs/core';
 import { AuthService } from './auth.service';
 import type { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
+import { hashApiKey } from './api-key-hash';
 import { ApiKeyRole, type ApiKey } from './entities/api-key.entity';
 import { LoggerService } from '../../common/services/logger.service';
 
@@ -235,5 +236,61 @@ describe('a bootstrap key file that no stored hash matches (API_KEY_PEPPER chang
     await bootWithFile(MASTER);
 
     expect(JSON.stringify(warn.mock.calls)).not.toContain(MASTER.slice(0, 4));
+  });
+});
+
+describe('the startup banner of a later boot', () => {
+  const saved = { BOOTSTRAP_KEY_FILE: process.env.BOOTSTRAP_KEY_FILE };
+  const GENERATED = `owa_k1_${'ab12'.repeat(16)}`;
+
+  /** Boots over a non-empty table whose live row, stored with `keyPrefix`, matches the key in the bootstrap file. */
+  async function bannerOfLaterBoot(fileKey: string, keyPrefix: string | undefined): Promise<string> {
+    process.env.BOOTSTRAP_KEY_FILE = KEY_FILE;
+    jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+    jest.spyOn(fs, 'readFileSync').mockReturnValue(fileKey);
+    const log = jest.spyOn(LoggerService.prototype, 'log').mockImplementation(() => undefined);
+    const row = {
+      id: 'row-1',
+      keyHash: hashApiKey(fileKey, process.env.API_KEY_PEPPER),
+      keyPrefix,
+      isActive: true,
+      expiresAt: null,
+    } as ApiKey;
+    const repository = {
+      count: jest.fn().mockResolvedValue(1),
+      findOne: jest.fn((options: { where: { keyHash?: string } }) =>
+        Promise.resolve(options.where.keyHash === row.keyHash ? row : null),
+      ),
+    } as unknown as Repository<ApiKey>;
+    await new AuthService(repository, {} as ApiKeyUsageTracker, {} as ModuleRef).onModuleInit();
+    return (log.mock.calls as unknown[][]).map(call => String(call[0])).join('\n');
+  }
+
+  afterEach(() => {
+    if (saved.BOOTSTRAP_KEY_FILE === undefined) delete process.env.BOOTSTRAP_KEY_FILE;
+    else process.env.BOOTSTRAP_KEY_FILE = saved.BOOTSTRAP_KEY_FILE;
+    jest.restoreAllMocks();
+  });
+
+  it('prints nothing of a seeded API_MASTER_KEY that looks like a generated key', async () => {
+    const banner = await bannerOfLaterBoot(GENERATED, MARKER);
+
+    expect(banner).not.toContain(GENERATED.slice(0, 8));
+    expect(banner).toContain(`(full key in ${KEY_FILE})`);
+  });
+
+  it('still prints the fingerprint of a generated key, and no more than it', async () => {
+    const banner = await bannerOfLaterBoot(GENERATED, GENERATED.substring(0, 12));
+
+    expect(banner).toContain(GENERATED.slice(0, 8));
+    expect(banner).not.toContain(GENERATED.slice(0, 9));
+    expect(banner).toContain(`(full key in ${KEY_FILE})`);
+  });
+
+  it('prints no fingerprint when the live row has no readable prefix', async () => {
+    const banner = await bannerOfLaterBoot(GENERATED, undefined);
+
+    expect(banner).not.toContain(GENERATED.slice(0, 8));
+    expect(banner).toContain(`(full key in ${KEY_FILE})`);
   });
 });
