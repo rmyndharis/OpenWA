@@ -6,13 +6,14 @@ import type { Repository } from 'typeorm';
 import type { ModuleRef } from '@nestjs/core';
 import { AuthService } from './auth.service';
 import type { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
-import type { ApiKey } from './entities/api-key.entity';
+import { ApiKeyRole, type ApiKey } from './entities/api-key.entity';
 import { LoggerService } from '../../common/services/logger.service';
 
 // An API_MASTER_KEY is taken verbatim, so every character of it is part of the secret. The operator already
-// holds it, so the startup banner on the boot that seeds it names where it is kept instead of printing it.
+// holds it, so it is neither printed in the startup banner nor listed as the key's prefix.
 const MASTER = 'Acme-Prod-Gateway-Master-2026-Q4!';
 const KEY_FILE = '/isolated/virtual/path/.api-key';
+const MARKER = '(master key)';
 
 describe('the first admin key seeded into an empty key table', () => {
   const saved = {
@@ -21,6 +22,7 @@ describe('the first admin key seeded into an empty key table', () => {
     BOOTSTRAP_KEY_FILE: process.env.BOOTSTRAP_KEY_FILE,
   };
   let written: string | undefined;
+  let created: Partial<ApiKey>[];
   let banner: () => string;
   let warnings: () => string;
 
@@ -34,7 +36,7 @@ describe('the first admin key seeded into an empty key table', () => {
     jest.spyOn(fs, 'chmodSync').mockImplementation(() => undefined);
     jest.spyOn(fs, 'writeFileSync').mockImplementation((_file, data) => {
       if (writeFails) throw new Error('read-only file system');
-      written = String(data);
+      if (typeof data === 'string') written = data;
     });
     const log = jest.spyOn(LoggerService.prototype, 'log').mockImplementation(() => undefined);
     const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
@@ -43,7 +45,10 @@ describe('the first admin key seeded into an empty key table', () => {
 
     const repository = {
       count: jest.fn().mockResolvedValue(0),
-      create: jest.fn((dto: Partial<ApiKey>) => dto as ApiKey),
+      create: jest.fn((dto: Partial<ApiKey>) => {
+        created.push(dto);
+        return dto as ApiKey;
+      }),
       save: jest.fn((entity: ApiKey) => Promise.resolve(entity)),
     } as unknown as Repository<ApiKey>;
     await new AuthService(repository, {} as ApiKeyUsageTracker, {} as ModuleRef).onModuleInit();
@@ -51,6 +56,7 @@ describe('the first admin key seeded into an empty key table', () => {
 
   beforeEach(() => {
     written = undefined;
+    created = [];
   });
 
   afterEach(() => {
@@ -104,5 +110,130 @@ describe('the first admin key seeded into an empty key table', () => {
       expect(banner()).toContain('dev-admin-key');
       expect(written).toBe('dev-admin-key');
     });
+  });
+
+  describe('stored prefix', () => {
+    it('is a fixed marker for an API_MASTER_KEY, whose characters are all secret', async () => {
+      await boot({ master: MASTER });
+
+      expect(created).toHaveLength(1);
+      expect(created[0].keyPrefix).toBe(MARKER);
+      expect(created[0].keyPrefix).toHaveLength(12);
+      expect(created[0].role).toBe(ApiKeyRole.ADMIN);
+    });
+
+    it('is the fixed marker for an API_MASTER_KEY that looks like a generated key', async () => {
+      await boot({ master: `owa_k1_${'ab12'.repeat(16)}` });
+
+      expect(created[0].keyPrefix).toBe(MARKER);
+    });
+
+    it('stays the first 12 characters of a generated key', async () => {
+      await boot({});
+
+      expect(created[0].keyPrefix).toBe(written!.substring(0, 12));
+      expect(created[0].keyPrefix).toMatch(/^owa_k1_[a-f0-9]{5}$/);
+    });
+
+    it('stays the first 12 characters of the development key', async () => {
+      await boot({ dev: true });
+
+      expect(created[0].keyPrefix).toBe('dev-admin-ke');
+    });
+  });
+});
+
+describe('a bootstrap key file that no stored hash matches (API_KEY_PEPPER changed)', () => {
+  const saved = { BOOTSTRAP_KEY_FILE: process.env.BOOTSTRAP_KEY_FILE };
+  let rows: ApiKey[];
+  let unlink: jest.SpyInstance;
+  let warn: jest.SpyInstance;
+
+  const row = (overrides: Partial<ApiKey>): ApiKey =>
+    ({
+      id: 'row-1',
+      name: 'Default Admin Key',
+      keyHash: 'hash-under-the-old-pepper',
+      keyPrefix: MASTER.substring(0, 12),
+      role: ApiKeyRole.ADMIN,
+      isActive: true,
+      expiresAt: null,
+      ...overrides,
+    }) as ApiKey;
+
+  /** Boots over a non-empty table whose bootstrap file holds `fileKey`; no row matches its hash. */
+  async function bootWithFile(fileKey: string): Promise<void> {
+    process.env.BOOTSTRAP_KEY_FILE = KEY_FILE;
+    jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+    jest.spyOn(fs, 'readFileSync').mockReturnValue(fileKey);
+    unlink = jest.spyOn(fs, 'unlinkSync').mockImplementation(() => undefined);
+    jest.spyOn(LoggerService.prototype, 'log').mockImplementation(() => undefined);
+    warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    const repository = {
+      count: jest.fn().mockResolvedValue(rows.length),
+      findOne: jest.fn((options: { where: { keyHash?: string; keyPrefix?: string } }) =>
+        Promise.resolve(
+          rows.find(r => r.keyHash === options.where.keyHash || r.keyPrefix === options.where.keyPrefix) ?? null,
+        ),
+      ),
+    } as unknown as Repository<ApiKey>;
+    await new AuthService(repository, {} as ApiKeyUsageTracker, {} as ModuleRef).onModuleInit();
+  }
+
+  afterEach(() => {
+    if (saved.BOOTSTRAP_KEY_FILE === undefined) delete process.env.BOOTSTRAP_KEY_FILE;
+    else process.env.BOOTSTRAP_KEY_FILE = saved.BOOTSTRAP_KEY_FILE;
+    jest.restoreAllMocks();
+  });
+
+  it('keeps the file of a master key seeded with its first characters as the prefix', async () => {
+    rows = [row({})];
+    await bootWithFile(MASTER);
+
+    expect(unlink).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('API_KEY_PEPPER'),
+      expect.objectContaining({ action: 'bootstrap_key_pepper_mismatch' }),
+    );
+  });
+
+  it('keeps the file of a master key seeded under the fixed marker', async () => {
+    rows = [row({ keyPrefix: MARKER })];
+    await bootWithFile(MASTER);
+
+    expect(unlink).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('API_KEY_PEPPER'),
+      expect.objectContaining({ action: 'bootstrap_key_pepper_mismatch' }),
+    );
+  });
+
+  it('keeps the file of a master key that looks like a generated key, seeded under the marker', async () => {
+    rows = [row({ keyPrefix: MARKER })];
+    await bootWithFile(`owa_k1_${'ab12'.repeat(16)}`);
+
+    expect(unlink).not.toHaveBeenCalled();
+  });
+
+  it('removes the file when no stored key carries its prefix or the marker', async () => {
+    rows = [row({ keyPrefix: 'owa_k1_other' })];
+    await bootWithFile(MASTER);
+
+    expect(unlink).toHaveBeenCalledWith(KEY_FILE);
+  });
+
+  it('names the key by id in the warning and carries no character of the key', async () => {
+    rows = [row({ keyPrefix: MARKER })];
+    await bootWithFile(MASTER);
+
+    expect(warn).toHaveBeenCalledWith(expect.any(String), { keyId: 'row-1', action: 'bootstrap_key_pepper_mismatch' });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(MASTER.slice(0, 4));
+  });
+
+  it('names a row seeded with its first characters by id too', async () => {
+    rows = [row({})];
+    await bootWithFile(MASTER);
+
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(MASTER.slice(0, 4));
   });
 });

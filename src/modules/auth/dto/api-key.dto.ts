@@ -110,7 +110,8 @@ export class ApiKeyResponseDto {
   name!: string;
 
   @ApiProperty({
-    description: 'First 12 characters of the key (for identification)',
+    description:
+      'First 12 characters of a generated key (for identification); the fixed text "(master key)" for the key seeded from API_MASTER_KEY',
   })
   keyPrefix!: string;
 

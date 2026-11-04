@@ -68,8 +68,10 @@ Storage: SHA-256 hash only (never store plain key); `keyPrefix` keeps the first 
 Every key minted through the API-keys endpoints uses that format. The bootstrap seed key is the only
 exception: an explicit `API_MASTER_KEY` is taken verbatim (surrounding whitespace is stripped), and `ALLOW_DEV_API_KEY=true` opts into the
 fixed `dev-admin-key`; with neither set, the seed key is generated in the format above. The `keyPrefix` of a key seeded from
-`API_MASTER_KEY` is its first 12 characters, which every ADMIN key with no session or chat restriction can read in the key list, so replace it with a minted key
-(see the rotation note in §4.12) rather than keeping a chosen passphrase as the admin key.
+`API_MASTER_KEY` is the fixed text `(master key)`, because every character of a chosen key is secret. A key seeded by an earlier release
+keeps its first 12 characters as the prefix, which every ADMIN key with no session or chat restriction can read in the key list, and which
+the database and its backups hold: replace it with a minted key (see the rotation note in §4.12) rather than keeping a chosen passphrase
+as the admin key.
 
 ### Permission Model
 

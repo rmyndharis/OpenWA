@@ -50,6 +50,13 @@ function configuredMasterKey(): string | undefined {
 }
 
 /**
+ * The prefix the key list shows for the key seeded from `API_MASTER_KEY`. A generated key lists its first 12
+ * characters, a fixed tag plus five hex digits; a key the operator chose has no such tag, so every character
+ * of it is secret. Exactly the 12 characters of the column.
+ */
+export const MASTER_KEY_PREFIX = '(master key)';
+
+/**
  * Resolves the API key to seed on first boot (when no keys exist yet).
  * Precedence: an explicit `API_MASTER_KEY` always wins; otherwise a
  * cryptographically random `owa_k1_` key is generated — the secure default,
@@ -114,8 +121,14 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
 
     if (count === 0) {
       const seedKey = resolveSeedApiKey();
+      const fromMasterKey = seedKey === configuredMasterKey();
 
-      await this.seedApiKey(seedKey, 'Default Admin Key', ApiKeyRole.ADMIN);
+      await this.seedApiKey(
+        seedKey,
+        'Default Admin Key',
+        ApiKeyRole.ADMIN,
+        fromMasterKey ? MASTER_KEY_PREFIX : undefined,
+      );
       isNewKey = true;
       this.keyIndex?.refreshSoon();
 
@@ -128,7 +141,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn('Could not save API key file', { error: String(err) });
       }
       // A generated key is shown once, because the operator has no other copy of it; a key they chose is not.
-      displayKey = seedKey === configuredMasterKey() ? masterKeyBannerLine(saved) : seedKey;
+      displayKey = fromMasterKey ? masterKeyBannerLine(saved) : seedKey;
     } else {
       // Read the saved bootstrap key from the file — but only while it still resolves to a LIVE
       // key; a revoked/rotated/deleted key must not be advertised in the banner.
@@ -184,13 +197,17 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       // A hash miss alone does not prove the key is gone: the same raw key hashes differently under
       // a changed API_KEY_PEPPER. The prefix is seeded unhashed alongside the key, so it still finds
       // the row — when it resolves, the file holds the only copy of a still-live key and must
-      // survive. Delete only when nothing carries the prefix either (e.g. a backup restore that
-      // lost the key row), preserving the documented self-heal.
-      const byPrefix = await this.apiKeyRepository.findOne({ where: { keyPrefix: rawKey.substring(0, 12) } });
+      // survive. A key seeded from API_MASTER_KEY lists a fixed marker instead of its first characters,
+      // and a row seeded by an earlier release carries them, so both are tried. Delete only when
+      // nothing carries either (e.g. a backup restore that lost the key row), preserving the
+      // documented self-heal.
+      const byPrefix =
+        (await this.apiKeyRepository.findOne({ where: { keyPrefix: rawKey.substring(0, 12) } })) ??
+        (await this.apiKeyRepository.findOne({ where: { keyPrefix: MASTER_KEY_PREFIX } }));
       if (byPrefix) {
         this.logger.warn(
           'Bootstrap API key file does not match any stored key hash — API_KEY_PEPPER changed since the key was seeded? The key itself is still live, so the file is kept; restore the original pepper, or clear the api_keys table and restart to seed a new admin key.',
-          { keyPrefix: byPrefix.keyPrefix, action: 'bootstrap_key_pepper_mismatch' },
+          { keyId: byPrefix.id, action: 'bootstrap_key_pepper_mismatch' },
         );
         return null;
       }
@@ -211,9 +228,13 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     removeBootstrapKey('its key was revoked or deleted', this.logger);
   }
 
-  private async seedApiKey(rawKey: string, name: string, role: ApiKeyRole): Promise<ApiKey> {
+  private async seedApiKey(
+    rawKey: string,
+    name: string,
+    role: ApiKeyRole,
+    keyPrefix = rawKey.substring(0, 12),
+  ): Promise<ApiKey> {
     const keyHash = this.hashKey(rawKey);
-    const keyPrefix = rawKey.substring(0, 12);
 
     const apiKey = this.apiKeyRepository.create({
       name,
