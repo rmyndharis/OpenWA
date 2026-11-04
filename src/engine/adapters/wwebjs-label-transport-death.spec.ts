@@ -118,4 +118,28 @@ describe('label operations distinguish a dead page from an ordinary failure', ()
     await expect(labels.removeLabelFromChat('628999@c.us', '7')).rejects.toBeInstanceOf(NotFoundException);
     expect(client.addOrRemoveLabels).not.toHaveBeenCalled();
   });
+
+  // A write first looks the chat up to learn which writes it has to wait for, and that lookup is a page call of its
+  // own: a dead page there is the same 503 and the same death signal, and nothing is written.
+  it('answers a dead page during the chat lookup of a write with the 503 and writes nothing', async () => {
+    const client = {
+      getChatById: jest.fn().mockRejectedValue(transportError),
+      addOrRemoveLabels: jest.fn().mockResolvedValue(undefined),
+    };
+    const reportIfPageTransportError = jest.fn();
+    const host = {
+      ensureReady: jest.fn(),
+      getClient: () => client as unknown as Client,
+      isPageTransportError: (error: unknown) => error === transportError,
+      reportIfPageTransportError,
+      logger,
+    } as unknown as WwebjsEngineHost;
+    const labels = new WwebjsLabels(host);
+
+    await expect(labels.addLabelToChat('628123@c.us', '7')).rejects.toBeInstanceOf(EngineTransportError);
+    await expect(labels.removeLabelFromChat('628123@c.us', '7')).rejects.toBeInstanceOf(EngineTransportError);
+    expect(reportIfPageTransportError).toHaveBeenCalledTimes(2);
+    expect(reportIfPageTransportError).toHaveBeenCalledWith(transportError, expect.any(String));
+    expect(client.addOrRemoveLabels).not.toHaveBeenCalled();
+  });
 });
