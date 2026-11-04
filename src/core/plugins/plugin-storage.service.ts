@@ -16,14 +16,36 @@ let tmpWriteSeq = 0;
  * same filesystem, so a crash (SIGKILL/OOM) mid-write can never leave a truncated/corrupt target —
  * a reader sees either the old complete file or the new complete file, never a partial one.
  */
-function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: number }): void {
+function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: number; durable?: boolean }): void {
   // Named by a hash of the target, not the target plus a suffix: that ran past the 255-byte name limit for a long
   // storage key, which then failed once the write counter grew a digit. Still one temp name space per target.
   const target = createHash('sha256').update(path.basename(filePath)).digest('hex').slice(0, 16);
   const tmp = path.join(path.dirname(filePath), `.${target}.${process.pid}.${tmpWriteSeq++}.tmp`);
   try {
-    fs.writeFileSync(tmp, data, options);
+    if (options?.durable) {
+      const fd = fs.openSync(tmp, 'w', options.mode);
+      try {
+        fs.writeFileSync(fd, data);
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else {
+      fs.writeFileSync(tmp, data, options);
+    }
     fs.renameSync(tmp, filePath);
+    if (options?.durable && process.platform !== 'win32') {
+      try {
+        const dir = fs.openSync(path.dirname(filePath), 'r');
+        try {
+          fs.fsyncSync(dir);
+        } finally {
+          fs.closeSync(dir);
+        }
+      } catch {
+        // Directory sync is best-effort: the target has already been replaced.
+      }
+    }
   } catch (err) {
     try {
       fs.rmSync(tmp, { force: true });
@@ -155,7 +177,7 @@ export class PluginStorageService {
       const entries = Array.from(this.registry.values());
       // Owner-only: plugin config can hold secrets (e.g. an API key). writeFileSync's mode only
       // applies on CREATE, so chmod an already-existing, looser file too (best-effort).
-      atomicWriteFileSync(this.registryPath, JSON.stringify(entries, null, 2), { mode: 0o600 });
+      atomicWriteFileSync(this.registryPath, JSON.stringify(entries, null, 2), { mode: 0o600, durable: true });
       try {
         fs.chmodSync(this.registryPath, 0o600);
       } catch {
