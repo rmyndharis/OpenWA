@@ -1229,6 +1229,7 @@ for (const chatId of ['185290012345678@lid', '628123456789:5@s.whatsapp.net']) {
 // No phone number starts with 0, so `00` in front of one is the international exit code. Kept, it made a registered
 // number look unregistered, and a full-length number written with it read as more than one number.
 for (const [typed, number] of [
+  ['00376 612 345', '376612345'],
   ['00 49 151 2345 6789', '4915123456789'],
   ['00 123 456 789 012 345', '123456789012345'],
 ] as const) {
@@ -1251,28 +1252,32 @@ for (const [typed, number] of [
 
 // With no digit and no @ there is no number to check: the lookup went out as GET .../contacts/check/, which the gateway
 // routes to the contact read with the id "check", and the tester showed that answer instead of asking for a number.
-for (const field of ['recipient', 'forward target'] as const) {
-  test(`a ${field} with no digit and no @ holds Send`, async () => {
-    const { checked } = stubPersonalSend();
-    const { container, client } = renderTesterForKey();
-    try {
-      await rtl.screen.findByRole('option', { name: /Main/ });
-      type(container, '#mt-13', field === 'recipient' ? ' abc ' : '15550000001');
-      if (field === 'recipient') {
-        type(container, '#mt-2', 'hello');
-      } else {
-        rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
-        type(container, '#mt-9', 'abc');
-        type(container, '#mt-10', 'original-message');
+// The 00 exit code is no digit of a number, so a field holding only that names nothing either, however it is spaced.
+// A full-width @ (U+FF20) is no chat id: the send reads the text as typed and finds no number in it.
+for (const typed of [' abc ', '00', '+00', '0 0', String.fromCharCode(0xff20)]) {
+  for (const field of ['recipient', 'forward target'] as const) {
+    test(`a ${field} written as ${JSON.stringify(typed)} names no number and holds Send`, async () => {
+      const { checked } = stubPersonalSend();
+      const { container, client } = renderTesterForKey();
+      try {
+        await rtl.screen.findByRole('option', { name: /Main/ });
+        type(container, '#mt-13', field === 'recipient' ? typed : '15550000001');
+        if (field === 'recipient') {
+          type(container, '#mt-2', 'hello');
+        } else {
+          rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+          type(container, '#mt-9', typed);
+          type(container, '#mt-10', 'original-message');
+        }
+        assert.equal(sendButton().disabled, true, 'Send was offered for a field with no number in it');
+        rtl.fireEvent.click(sendButton());
+        assert.deepEqual(checked, []);
+      } finally {
+        client.clear();
+        sessionStorage.removeItem('openwa_api_key');
       }
-      assert.equal(sendButton().disabled, true, 'Send was offered for a field with no number in it');
-      rtl.fireEvent.click(sendButton());
-      assert.deepEqual(checked, []);
-    } finally {
-      client.clear();
-      sessionStorage.removeItem('openwa_api_key');
-    }
-  });
+    });
+  }
 }
 
 // The recipient is only the default chat a forward is taken from. With From Chat ID filled it goes unused, yet Send

@@ -7,7 +7,7 @@ import { formatPhoneForDisplay, isolateNumber } from '../../utils/formatPhone';
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import ChatAvatar from './ChatAvatar';
-import { normalizePhoneText, phoneQueryDigits } from '../../utils/phone';
+import { normalizePhoneDigits, normalizePhoneText, phoneQueryDigits } from '../../utils/phone';
 import { isComposingKey } from '../../utils/composition';
 
 type Mode = 'chat' | 'group';
@@ -44,8 +44,8 @@ const toInternationalDigits = (input: string): string | null => {
   const trimmed = input.trim();
   if (!trimmed || /[a-z]/i.test(trimmed)) return null;
   let digits = normalizePhoneText(trimmed).replace(/\D/g, '');
-  if (digits.startsWith('00')) digits = digits.slice(2);
-  else if (!trimmed.startsWith('+') && digits.startsWith('0')) return null;
+  if (!digits.startsWith('00') && !trimmed.startsWith('+') && digits.startsWith('0')) return null;
+  digits = normalizePhoneDigits(digits);
   return digits.length >= 7 && digits.length <= 15 ? digits : null;
 };
 

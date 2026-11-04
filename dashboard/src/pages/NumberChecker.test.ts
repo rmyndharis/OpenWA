@@ -174,6 +174,8 @@ test('NumberChecker: switches to bulk / batch tab when clicked', () => {
 
 // The +91 rewrite is opt-in: `autoPrefix` is whether the box is ticked before the number is checked.
 for (const [raw, autoPrefix, expected] of [
+  ['00376 612 345', false, '376612345'],
+  ['00298 212345', true, '298212345'],
   ['+65 8123 4567', true, '6581234567'],
   ['0065 8123 4567', true, '6581234567'],
   ['+65 8123 4567', false, '6581234567'],

@@ -1,4 +1,4 @@
-import { normalizePhoneText } from './phone.ts';
+import { normalizePhoneDigits, normalizePhoneText } from './phone.ts';
 
 // The backend caps a bulk batch at 100 messages (ArrayMaxSize on SendBulkMessageDto).
 export const BULK_MAX_RECIPIENTS = 100;
@@ -75,8 +75,7 @@ export function parseBulkRecipients(text: string): string[] {
         if (CHAT_ID.test(id)) seen.add(id);
         continue;
       }
-      let digits = field.replace(/[^0-9]/g, '');
-      if (digits.startsWith('00') && digits.length >= 12) digits = digits.slice(2);
+      const digits = normalizePhoneDigits(field);
       if (digits.length >= MIN_PHONE_DIGITS && digits.length <= MAX_PHONE_DIGITS) seen.add(`${digits}@c.us`);
     }
   }

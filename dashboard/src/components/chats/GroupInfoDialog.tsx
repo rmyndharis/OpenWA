@@ -17,7 +17,7 @@ import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import { formatPhoneForDisplay, isolateNumber } from '../../utils/formatPhone';
 import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
-import { normalizePhoneText } from '../../utils/phone';
+import { normalizePhoneDigits } from '../../utils/phone';
 import ChatAvatar from './ChatAvatar';
 
 // The gateway's caps (CreateGroupDto / GroupDescriptionDto).
@@ -144,7 +144,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   const [newMember, setNewMember] = useState('');
   // The gateway takes ASCII digits, whatever script the operator typed them in. 7-15 digits covers E.164: more is
   // two numbers run together, refused as the new-chat panel refuses it.
-  const memberDigits = normalizePhoneText(newMember).replace(/\D/g, '').replace(/^00/, '');
+  const memberDigits = normalizePhoneDigits(newMember);
   const memberNumberValid = memberDigits.length >= 7 && memberDigits.length <= 15;
   // The gateway answers 200 for a membership write even when it refused some participants, and says
   // which in `results`. Returns whether every participant was accepted.

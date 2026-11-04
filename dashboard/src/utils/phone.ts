@@ -20,6 +20,13 @@ export function normalizePhoneText(text: string): string {
     .replace(/(?![0-9])\p{Nd}/gu, asciiDigit);
 }
 
+/** ASCII phone digits without formatting or the international 00 exit code. */
+export function normalizePhoneDigits(text: string): string {
+  return normalizePhoneText(text)
+    .replace(/[^0-9]/g, '')
+    .replace(/^00/, '');
+}
+
 // The digits of a search query that reads as a phone number: digits, with the spaces, plus sign, parentheses, hyphens
 // and dots a number is written with. Any other query gives none, so it matches names only: "Shop 2" names something,
 // and its 2 is no reason to list every number that holds one.
