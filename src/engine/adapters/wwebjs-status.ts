@@ -11,6 +11,7 @@ import { SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { toMessageMedia } from './wwebjs-messaging';
 import { type WwebjsEngineHost, requireClient, withPage, reportPageDeath } from './wwebjs-host';
+import { noteVideoLoadTimeout } from './wwebjs-video-load-timeout';
 
 /**
  * The status-post counterpart of `toMessageResult`, but its absent-message case is *narrower* than a
@@ -191,7 +192,10 @@ export class WwebjsStatus {
         ...(options.caption !== undefined ? { caption: options.caption } : {}),
         ...extra,
       }),
-    );
+    ).catch((error: unknown) => {
+      noteVideoLoadTimeout(this.host, error, messageMedia.mimetype);
+      throw error;
+    });
     return toStatusResult(msg);
   }
 
