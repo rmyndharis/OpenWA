@@ -394,6 +394,7 @@
 .infrastructure-page .page-footer {
   margin-top: 2rem;
   padding-top: 1.5rem;
+  padding-bottom: var(--toast-stack-height, 0px);
   border-top: 1px solid var(--border);
   display: flex;
   justify-content: flex-end;
