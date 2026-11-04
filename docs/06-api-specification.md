@@ -1502,6 +1502,49 @@ Returns a bare array of `MessageReaction`:
 
 **Errors:** `400` session not active · `401` missing/invalid API key · `404` message not found in the chat (whatsapp-web.js) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read (retryable)
 
+#### GET /api/sessions/:sessionId/messages/:chatId/:messageId/receipts
+
+Get who received, read and played a message this account sent, with the time of each. **whatsapp-web.js only**: Baileys answers `501`; its receipts arrive live as the opt-in `message.receipt` event and are not stored.
+
+The message is looked up by its full serialized id, exactly as the send routes return it (`true_<chatId>_<id>`, which carries one more segment on some messages: the sender of a group message, or `out` on an own 1:1 message), among every message WhatsApp Web holds, not only the 100 most recent of the chat; a message WhatsApp Web no longer holds answers `404`. It must belong to `chatId`: a message of another chat answers `404`. A 1:1 chat that WhatsApp Web keeps under the contact's `@lid` can be named by its `@c.us`; the reverse, naming the `@lid` of a chat whose messages are still stored under the `@c.us`, answers `404`. Participants are reported as WhatsApp Web lists them, so a group member can appear as `<lid>@lid`. `deliveryRemaining`, `readRemaining` and `playedRemaining` count the recipients that have not reached that state yet.
+
+**Auth:** API key
+
+**Path parameters**
+
+| Name      | Type   | Description                                       |
+| --------- | ------ | ------------------------------------------------- |
+| sessionId | string | Session ID                                        |
+| chatId    | string | Chat ID containing the message                    |
+| messageId | string | Full serialized ID of a message this account sent |
+
+**Response** `200`
+
+Returns a `MessageReceipts` object:
+
+```json
+{
+  "delivery": [
+    {
+      "participant": "628123456789@c.us",
+      "timestamp": 1719312050
+    }
+  ],
+  "deliveryRemaining": 0,
+  "read": [
+    {
+      "participant": "628123456789@c.us",
+      "timestamp": 1719312060
+    }
+  ],
+  "readRemaining": 0,
+  "played": [],
+  "playedRemaining": 0
+}
+```
+
+**Errors:** `400` session not active · `401` missing/invalid API key · `403` the message was received rather than sent by this account, or the key's `allowedChats` excludes the chat · `404` message not found in the chat · `409` conflict or engine not ready (retryable) · `500` engine error · `501` not supported on the active engine · `503` the whatsapp-web.js page died mid-read (retryable)
+
 #### POST /api/sessions/:sessionId/messages/vote-poll
 
 Cast a vote on a poll.
