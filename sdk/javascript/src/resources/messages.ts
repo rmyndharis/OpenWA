@@ -200,7 +200,10 @@ export class MessagesResource {
     });
   }
 
-  /** Get per-participant delivery and read receipts for a specific message. */
+  /**
+   * Get who received, read and played a message the account sent; `messageId` is the full serialized id.
+   * **whatsapp-web.js only**: Baileys answers 501.
+   */
   receipts(sessionId: string, chatId: string, messageId: string): Promise<MessageReceiptsResponse> {
     return this.client.request<MessageReceiptsResponse>({
       method: 'GET',

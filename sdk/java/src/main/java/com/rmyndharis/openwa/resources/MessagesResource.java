@@ -348,7 +348,10 @@ public final class MessagesResource {
             ReactionRecord.class);
     }
 
-    /** Get per-participant delivery and read receipts for a specific message. */
+    /**
+     * Get who received, read and played a message the account sent. whatsapp-web.js only; Baileys
+     * answers {@code 501}.
+     */
     public MessageReceiptsResponse receipts(String sessionId, String chatId, String messageId) {
         return client.request(
             HttpMethod.GET,

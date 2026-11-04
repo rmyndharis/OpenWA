@@ -184,7 +184,11 @@ class MessagesResource
         return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/{$this->http->encodeSegment($chatId)}/{$this->http->encodeSegment($messageId)}/reactions") ?? [];
     }
 
-    /** @return array<string,mixed> */
+    /**
+     * Get who received, read and played a message the account sent. whatsapp-web.js only; Baileys answers 501.
+     *
+     * @return array<string,mixed>
+     */
     public function receipts(string $sessionId, string $chatId, string $messageId): array
     {
         return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/{$this->http->encodeSegment($chatId)}/{$this->http->encodeSegment($messageId)}/receipts") ?? [];

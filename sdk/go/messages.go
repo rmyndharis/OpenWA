@@ -142,7 +142,8 @@ func (s *MessagesService) Reactions(ctx context.Context, sessionID, chatID, mess
 	return out, err
 }
 
-// Receipts returns the per-participant delivery, read, and played receipts for a message.
+// Receipts returns who received, read and played a message the account sent. whatsapp-web.js only;
+// Baileys answers 501.
 func (s *MessagesService) Receipts(ctx context.Context, sessionID, chatID, messageID string) (*MessageReceiptsResponse, error) {
 	var out MessageReceiptsResponse
 	path := s.base(sessionID) + "/" + pathEscape(chatID) + "/" + pathEscape(messageID) + "/receipts"
