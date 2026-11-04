@@ -25,6 +25,12 @@ import './DashboardCharts.css';
 
 const PERIODS: StatsPeriod[] = ['24h', '7d', '30d'];
 
+const tooltipStyles = {
+  contentStyle: { backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' },
+  labelStyle: { color: 'var(--text-primary)' },
+  itemStyle: { color: 'var(--text-primary)' },
+};
+
 // Stable, distinct color per message type (recharts needs literal colors). Keyed by type name, not
 // array index, so a slice keeps its color even when the set of present types changes between requests.
 // Covers every MESSAGE_TYPES value (the `satisfies` fails the build when one is missing). No color
@@ -131,8 +137,8 @@ export function DashboardCharts() {
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis dataKey="label" tick={{ fontSize: 12, fill: 'var(--text-secondary)' }} />
                 <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: 'var(--text-secondary)' }} />
-                <Tooltip />
-                <Legend />
+                <Tooltip {...tooltipStyles} />
+                <Legend labelStyle={{ color: 'var(--text-secondary)' }} />
                 <Area
                   type="monotone"
                   dataKey="sent"
@@ -165,8 +171,8 @@ export function DashboardCharts() {
                       <Cell key={entry.name} fill={colorForType(entry.name)} />
                     ))}
                   </Pie>
-                  <Tooltip />
-                  <Legend />
+                  <Tooltip {...tooltipStyles} />
+                  <Legend labelStyle={{ color: 'var(--text-secondary)' }} />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -190,7 +196,7 @@ export function DashboardCharts() {
                     // keeps the full label.
                     tickFormatter={(label: string) => isolate(shortenLabel(String(label)))}
                   />
-                  <Tooltip />
+                  <Tooltip {...tooltipStyles} />
                   <Bar dataKey="count" name={t('dashboard.charts.messages')} fill="#25d366" radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
