@@ -21,7 +21,7 @@ import {
   type MutationSource,
   type StoredMessageRef,
 } from './message-mutation-guard';
-import { updateMessageMetadata } from '../message/message-metadata';
+import { mergeSentMetadata, updateMessageMetadata } from '../message/message-metadata';
 import { persistHistoryMessages } from './message-history-projector';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
 import { resolveFeatureFlags } from '../../config/feature-flags';
@@ -1108,6 +1108,54 @@ export class MessageProjector {
   }
 
   /**
+   * A forward of a message the gateway holds no row for stores a placeholder of type 'forward', the only writer of
+   * that type, because the send path has nothing but the engine id to go on. When that row takes the id first, the
+   * own-send echo, which carries the forwarded type, caption and media marker, loses its insert and lands here: its
+   * content replaces the placeholder and the row is announced again. Status is left alone, an ack may have advanced
+   * it, and so is an edit that reached the message while its insert was running. Must run on the message's mutation
+   * chain. Never rejects.
+   */
+  private async replaceForwardPlaceholder(
+    id: string,
+    echoRow: Message,
+    source: MutationSource,
+    entry: InFlightEntry,
+  ): Promise<void> {
+    const { waMessageId, type, metadata } = echoRow;
+    const body = entry.editedBody ?? echoRow.body;
+    if (!waMessageId || type === 'revoked') return;
+    try {
+      const placeholder = await this.messageRepository.findOne({
+        where: { sessionId: id, waMessageId, type: 'forward' },
+        select: { id: true },
+      });
+      if (!placeholder) return;
+      const reason = await this.mutationProjector.foreignRowReason(id, waMessageId, source);
+      if (reason) {
+        this.logger.warn('Not replacing the forward placeholder with a message that is not the one it holds', {
+          sessionId: id,
+          messageId: waMessageId,
+          reason,
+        });
+        return;
+      }
+      // Before the type flips, so a merge that fails leaves the placeholder as it was, not a typed row without its media.
+      if (metadata) {
+        await updateMessageMetadata(this.messageRepository, { sessionId: id, waMessageId }, current =>
+          mergeSentMetadata(current, metadata),
+        );
+      }
+      const replaced = await this.messageRepository.update(
+        { sessionId: id, waMessageId, type: 'forward' },
+        { type, body },
+      );
+      if (replaced?.affected) await this.announceChangedRow(id, waMessageId);
+    } catch (err) {
+      this.logger.error(`Failed to replace the forward placeholder of ${waMessageId}`, String(err));
+    }
+  }
+
+  /**
    * Hand a stored row whose text an edit changed to `message:persisted` again, as {@link revokeRow} does for a
    * cleared one, so a plugin keeping a copy keyed by the row id follows the edit. Re-read, so the payload carries
    * the edited marker. Never rejects.
@@ -1425,6 +1473,7 @@ export class MessageProjector {
         // changes queued for the message have run, with the mark they left.
         rowMarked = await new Promise<boolean>(resolve =>
           this.enqueueMessageMutation(id, outgoing.id, async () => {
+            await this.replaceForwardPlaceholder(id, dbMessage, claimOf(outgoing), entry);
             const marked = this.markedEdited.get(id)?.has(outgoing.id) === true;
             const foreign =
               marked && (await this.mutationProjector.foreignRowReason(id, outgoing.id, claimOf(outgoing)));

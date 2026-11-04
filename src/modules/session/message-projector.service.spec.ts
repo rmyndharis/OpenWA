@@ -2255,6 +2255,126 @@ describe('MessageProjector (inbound projection)', () => {
     });
   });
 
+  // A forward of a message the table holds no row for stores a placeholder of type 'forward'. When that row takes the
+  // engine id first, the own-send echo loses its insert, and its type, caption and media marker are the only copy of
+  // what was forwarded.
+  describe('an own-send echo that loses its id to a forward placeholder', () => {
+    const own = '15550001111@c.us';
+    const dup = (): Error => Object.assign(new Error('UNIQUE constraint failed'), { code: 'SQLITE_CONSTRAINT_UNIQUE' });
+    const flush = async (): Promise<void> => {
+      for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve));
+    };
+    const media = { mimetype: 'image/jpeg', omitted: true, sizeBytes: 10 };
+    const echo = (over: Partial<IncomingMessage> = {}): IncomingMessage =>
+      makeIncoming({ fromMe: true, chatId: own, to: own, type: 'image', body: 'the caption', media, ...over });
+    const placeholder = {
+      id: 'row-1',
+      type: 'forward',
+      chatId: own,
+      direction: 'outgoing',
+      author: null,
+      metadata: null,
+    };
+    const persisted = (): unknown[] => hookManager.execute.mock.calls.filter(([e]) => e === 'message:persisted');
+    const replaces = (): unknown[] =>
+      messageRepository.update.mock.calls.filter(([where]) => (where as { type?: unknown }).type === 'forward');
+
+    /** The table refuses the echo's insert; `row` is what it holds under the id, a placeholder unless `forward` is false. */
+    const deliver = async (
+      message: IncomingMessage,
+      row: Record<string, unknown> = placeholder,
+      forward = true,
+    ): Promise<void> => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      messageRepository.insert.mockRejectedValueOnce(dup());
+      messageRepository.update.mockResolvedValue({ affected: 1 });
+      messageRepository.findOne.mockImplementation((options: { where: { type?: unknown } }) =>
+        Promise.resolve(options.where.type === 'forward' && !forward ? null : row),
+      );
+      projector.handleOwnSendEcho(SESSION_ID, engine, message);
+      await flush();
+    };
+
+    it('replaces the placeholder with the type, caption and media marker the echo carries, and announces the row', async () => {
+      await deliver(echo());
+
+      expect(messageRepository.update).toHaveBeenCalledWith(expect.anything(), { metadata: { media } });
+      expect(replaces()).toEqual([
+        [
+          { sessionId: SESSION_ID, waMessageId: 'wamid.1', type: 'forward' },
+          { type: 'image', body: 'the caption' },
+        ],
+      ]);
+      expect(persisted()).toEqual([
+        ['message:persisted', { sessionId: SESSION_ID, message: placeholder }, expect.anything()],
+      ]);
+      // The webhook and the socket event carry the echo either way.
+      expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.sent', expect.anything());
+    });
+
+    it('keeps the text of an edit that reached the message while its insert was running', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      messageRepository.insert.mockImplementationOnce(() => {
+        projector.applyMessageEditQueued(SESSION_ID, {
+          messageId: 'wamid.1',
+          body: 'the edited caption',
+          chatId: own,
+          fromMe: true,
+        } as never);
+        return Promise.reject(dup());
+      });
+      messageRepository.update.mockResolvedValue({ affected: 1 });
+      messageRepository.findOne.mockResolvedValue(placeholder);
+
+      projector.handleOwnSendEcho(SESSION_ID, engine, echo());
+      await flush();
+
+      expect(replaces()).toEqual([
+        [
+          { sessionId: SESSION_ID, waMessageId: 'wamid.1', type: 'forward' },
+          { type: 'image', body: 'the edited caption' },
+        ],
+      ]);
+    });
+
+    it('leaves a row that is not a forward placeholder alone', async () => {
+      await deliver(echo(), { ...placeholder, type: 'image' }, false);
+
+      expect(messageRepository.update).not.toHaveBeenCalled();
+      expect(persisted()).toHaveLength(0);
+    });
+
+    it('leaves the placeholder alone when the row under the id is a message of another chat', async () => {
+      await deliver(echo(), { ...placeholder, chatId: '15559998888@c.us' });
+
+      expect(messageRepository.update).not.toHaveBeenCalled();
+      expect(persisted()).toHaveLength(0);
+    });
+
+    it('does not replace the placeholder with a message that came deleted', async () => {
+      await deliver(echo({ type: 'revoked', body: '', media: undefined }));
+
+      expect(replaces()).toEqual([]);
+    });
+
+    it('leaves the placeholder as it was when storing the media marker fails', async () => {
+      messageRepository.update.mockRejectedValueOnce(new Error('database is locked'));
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      messageRepository.insert.mockRejectedValueOnce(dup());
+      messageRepository.findOne.mockResolvedValue(placeholder);
+
+      projector.handleOwnSendEcho(SESSION_ID, engine, echo());
+      await flush();
+
+      expect(replaces()).toEqual([]);
+      expect(persisted()).toHaveLength(0);
+      expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.sent', expect.anything());
+    });
+  });
+
   describe('handleMessageAck payload', () => {
     it('carries the chat the engine named, on the socket and on both webhook events', async () => {
       const engine = makeEngine();
