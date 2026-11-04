@@ -18,6 +18,7 @@ import type { Response } from 'express';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiExtraModels, getSchemaPath } from '@nestjs/swagger';
 import { SessionService } from './session.service';
 import { MAX_SESSION_ID_LENGTH, SessionIdPipe } from './session-id.pipe';
+import { MAX_SESSION_CONFIG_BYTES } from './dto/recognised-session-config.validator';
 import {
   CreateSessionDto,
   SessionConfigResponseDto,
@@ -103,7 +104,12 @@ export class SessionController {
     description:
       'Key lacks the OPERATOR role, is restricted to specific sessions, or set proxyUrl without the ADMIN role',
   })
-  @ApiResponse({ status: 400, description: 'Validation failed, or the body carries a field the DTO does not declare.' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Validation failed, the body carries a field the DTO does not declare, or `config` is over ' +
+      `${MAX_SESSION_CONFIG_BYTES} bytes serialised as JSON.`,
+  })
   @ApiResponse({ status: 409, description: 'Session name already exists' })
   @ApiResponse({
     status: 503,

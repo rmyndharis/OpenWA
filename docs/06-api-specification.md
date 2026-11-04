@@ -580,6 +580,8 @@ Create a new WhatsApp session.
 
 Minimal: `{ "name": "my-bot" }`.
 
+The limit on `config` applies when a session is created: its serialised form may be at most 16384 bytes, unrecognised keys included, and a larger one answers `400`. The three recognised keys take under 100 of them; the rest is room for keys of your own, which are stored and ignored. A session that already holds more, restored from a backup or stored by an earlier version, keeps working: reading it and `PATCH /api/sessions/:sessionId/config` are not bounded.
+
 **Optional — per-session egress proxy.** Route a session's traffic through a proxy only if your
 network cannot reach WhatsApp directly. Set `proxyUrl` on the same request:
 
@@ -642,7 +644,7 @@ whichever proxy they go through.
 
 Like every other session route, this returns the `SessionResponseDto` shape (via `fromEntity`), so `config`, `proxyUrl` and `proxyType` are stripped and `lastActiveAt` appears as `lastActive`. Newly created `status` is `created`. Masked proxy details come only from `GET /api/sessions/{sessionId}/proxy`.
 
-**Errors:** `400` validation (bad `name`/`proxyUrl`/`proxyType`, or an extra non-whitelisted field) · `401` · `403` key lacks OPERATOR role, `proxyUrl` set by a key below ADMIN, or the key is restricted to specific sessions · `409` session name already exists · `503` on SQLite, another database transaction stayed open for 10 s (nothing is stored; retry)
+**Errors:** `400` validation (bad `name`/`proxyUrl`/`proxyType`, an extra non-whitelisted field, or a `config` over 16384 bytes serialised as JSON) · `401` · `403` key lacks OPERATOR role, `proxyUrl` set by a key below ADMIN, or the key is restricted to specific sessions · `409` session name already exists · `503` on SQLite, another database transaction stayed open for 10 s (nothing is stored; retry)
 
 #### POST /api/sessions/:sessionId/start
 

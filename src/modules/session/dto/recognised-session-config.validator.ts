@@ -26,17 +26,34 @@ export function normaliseSessionConfig(value: unknown): unknown {
   return normalised;
 }
 
+/**
+ * The most a create body's `config` may hold, in bytes of JSON. Only the three recognised keys are read (79 bytes at
+ * their largest) and every session read loads and parses the whole stored column, so the rest is capped at what an
+ * operator plausibly keeps beside them. It bounds what is created, not what is stored: a row that already holds more
+ * (restored, or stored before the bound) still loads and still takes PATCH /config.
+ */
+export const MAX_SESSION_CONFIG_BYTES = 16 * 1024;
+
 function configErrors(value: unknown): string[] {
   if (!isRecord(value)) return [];
-  return validateSync(recognisedKeys(value))
-    .flatMap(error => Object.values(error.constraints ?? {}))
-    .map(message => `config.${message}`);
+  const bytes = Buffer.byteLength(JSON.stringify(value));
+  const oversize =
+    bytes > MAX_SESSION_CONFIG_BYTES
+      ? [`config must be at most ${MAX_SESSION_CONFIG_BYTES} bytes as JSON (got ${bytes})`]
+      : [];
+  return [
+    ...oversize,
+    ...validateSync(recognisedKeys(value))
+      .flatMap(error => Object.values(error.constraints ?? {}))
+      .map(message => `config.${message}`),
+  ];
 }
 
 /**
  * Hold the create route's `config` to the rules PATCH /config enforces on the same three keys. Without
  * it the values were stored as sent and clamped at start time without a word: `-1` or `0.5` turned
- * reconnect off, `50` became `20`, and `"yes"` left autoRejectCalls off.
+ * reconnect off, `50` became `20`, and `"yes"` left autoRejectCalls off. The object as a whole is held to
+ * MAX_SESSION_CONFIG_BYTES.
  */
 @ValidatorConstraint({ name: 'isRecognisedSessionConfig', async: false })
 export class RecognisedSessionConfigConstraint implements ValidatorConstraintInterface {
