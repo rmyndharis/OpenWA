@@ -804,3 +804,41 @@ describe('both paths exercise the real engine libraries', () => {
     for (const spec of specs) expect(fs.existsSync(path.join(__dirname, '..', '..', spec))).toBe(true);
   });
 });
+
+/**
+ * trivy-action installs Trivy through contrib/install.sh, which downloads the tarball from get.trivy.dev. That
+ * name returned NXDOMAIN on 2026-11-04 and the weekly scan failed before it started; the scan a release waits
+ * for installs Trivy the same way. Both scan jobs install the pinned release from GitHub themselves, against a
+ * digest kept in scripts/install-trivy.sh, and tell the action to use that binary.
+ */
+describe('the image scans install the pinned Trivy release themselves', () => {
+  type ScanStep = { uses?: string; run?: string; with?: Record<string, unknown> };
+  const scanSteps = (file: string): ScanStep[] =>
+    (
+      yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as {
+        jobs?: Record<string, { steps?: ScanStep[] }>;
+      }
+    ).jobs?.['image-scan']?.steps ?? [];
+  const script = path.join(__dirname, '..', '..', 'scripts', 'install-trivy.sh');
+
+  it.each(['release.yml', 'security-scan.yml'])('%s installs Trivy before the scan and has the action use it', file => {
+    const steps = scanSteps(file);
+    const install = steps.findIndex(step => step.run?.trim() === './scripts/install-trivy.sh');
+    const scan = steps.findIndex(step => (step.uses ?? '').startsWith('aquasecurity/trivy-action'));
+    expect(install).toBeGreaterThanOrEqual(0);
+    expect(scan).toBeGreaterThan(install);
+    expect(String(steps[scan].with?.['skip-setup-trivy'])).toBe('true');
+    expect(steps.filter(step => (step.uses ?? '').startsWith('aquasecurity/setup-trivy'))).toEqual([]);
+  });
+
+  it('install-trivy.sh pins a release and its SHA-256, verifies the download, and can be executed', () => {
+    const text = fs.readFileSync(script, 'utf8');
+    expect(text).toMatch(/^VERSION=\d+\.\d+\.\d+$/m);
+    expect(text).toMatch(/^SHA256=[0-9a-f]{64}$/m);
+    // Lines the shell runs: a comment that names the check, or a `|| true` after it, does not count as the check.
+    const code = executableLines(text);
+    expect(code).toMatch(/^set -eu$/m);
+    expect(code).toMatch(/^echo "\$SHA256 {2}\$archive" \| sha256sum --check --strict -$/m);
+    expect(fs.statSync(script).mode & 0o111).not.toBe(0);
+  });
+});

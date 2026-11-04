@@ -159,6 +159,12 @@ jobs:
         # lowercases — GHCR paths are lowercase and github.repository may not be.
         run: echo "ref=ghcr.io/${REPO,,}:latest" >> "$GITHUB_OUTPUT"
 
+      # Installed from the GitHub release against a digest kept in the repository. The action's own
+      # installer downloads from get.trivy.dev, which returned NXDOMAIN on 2026-11-04
+      # (aquasecurity/setup-trivy#42).
+      - name: Install Trivy
+        run: ./scripts/install-trivy.sh
+
       - name: Trivy image scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
@@ -167,6 +173,8 @@ jobs:
           # variant of the manifest — only a pull, which the GHCR login above authorizes.
           TRIVY_PLATFORM: ${{ matrix.platform }}
         with:
+          # Trivy is on PATH from the step above.
+          skip-setup-trivy: 'true'
           scan-type: image
           image-ref: ${{ steps.image.outputs.ref }}
           format: table
