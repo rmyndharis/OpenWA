@@ -538,6 +538,8 @@ export class BaileysLifecycle {
         // own mapping (a local store read) for its phone number too. When neither knows it, the retry
         // is still answered: refusing then would leave a real recipient waiting for good, at the cost of
         // answering a requester known only by such a lid that holds the id of a phone-number chat's message.
+        // The stored side is not looked up: a message filed under a lid with no number beside it, as the
+        // account's own message typed in a chat addressed by lid is, answers a retry asked by any phone number.
         const lid = key.remoteJid;
         if (lid?.endsWith('@lid') && neutral(lid).endsWith('@lid')) {
           const pn = await this.sock?.signalRepository?.lidMapping?.getPNForLID(lid).catch(() => null);
