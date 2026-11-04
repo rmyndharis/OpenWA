@@ -641,8 +641,9 @@ instance projection records the warn audit row of any binding it could not apply
 dispatches `onUnload`: for a sandboxed plugin it runs in the worker between `onDisable` and terminate
 (a plain disable does NOT fire `onUnload`; disable is reversible and its cleanup hook is `onDisable`).
 Uninstall also hands every chat the plugin had taken over back to the bot. The plugin's integration
-instances, with their encrypted secrets, and its stored deliveries stay in the database, so a reinstall finds
-its provider webhooks still pointing at live instance ids. They also outlive the emptied registry entry: every
+instances, with their secrets (stored in plain text, masked on read), and its stored deliveries stay in
+the database, so a reinstall finds its provider webhooks still pointing at live instance ids. They also
+outlive the emptied registry entry: every
 boot that loads the id (after a reinstall, or with a package a part-way uninstall left behind) projects every
 enabled instance back onto the plugin and into `registry.json`, its config into
 the per-session config of its scope (a wildcard instance's into the base config, secrets included) and its
