@@ -165,6 +165,16 @@ export class SessionEngineEventWiring {
     let reconnectingSince = 0;
     // The binding is gone once this node records an unlink after these callbacks were built.
     const bindingEpoch = host.bindingEpoch?.(id);
+    // Account-binding guard: a ready link whose number differs from the one this session is already bound to is a
+    // different account scanning its QR (a takeover), not a re-link. An empty incoming phone (wwjs can report one)
+    // is not identifiable, so it is never treated as a mismatch.
+    const refusesLink = (phone: string | null | undefined): boolean =>
+      Boolean(
+        previousPhone &&
+        host.bindingEpoch?.(id) === bindingEpoch &&
+        phone &&
+        userPart(phone) !== userPart(previousPhone),
+      );
     /**
      * Persist an engine-driven status, but only while this node still owns the session.
      *
@@ -241,16 +251,8 @@ export class SessionEngineEventWiring {
       },
       onReady: (phone, pushName): void => {
         reconnectingSince = 0;
-        // Account-binding guard: a ready link whose number differs from the one this session is
-        // already bound to is a different account scanning its QR (a takeover), not a re-link. Refuse
-        // it rather than silently overwrite the binding. An empty incoming phone (wwjs can report one)
-        // is not identifiable, so it is never treated as a mismatch.
-        if (
-          previousPhone &&
-          phone &&
-          host.bindingEpoch?.(id) === bindingEpoch &&
-          userPart(phone) !== userPart(previousPhone)
-        ) {
+        // Refuse a different account rather than silently overwrite the binding.
+        if (previousPhone && refusesLink(phone)) {
           void host.rejectRebind(id, engine, sessionName, previousPhone, phone);
           return;
         }
@@ -417,6 +419,9 @@ export class SessionEngineEventWiring {
       },
       onStateChanged: (engineState: EngineStatus): void => {
         if (!host.isLiveEngine(id, engine)) return;
+        // Both engines set the linked number and report READY just before onReady: a link the binding refuses there
+        // is never stored or announced as ready first (rejectRebind lands it in FAILED).
+        if (engineState === EngineStatus.READY && refusesLink(engine.getPhoneNumber?.())) return;
         if (engineState !== EngineStatus.READY) host.endReadyStretch(id);
         const statusMap: Record<EngineStatus, SessionStatus> = {
           [EngineStatus.DISCONNECTED]: SessionStatus.DISCONNECTED,
