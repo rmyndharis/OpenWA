@@ -23,6 +23,8 @@ export const GROUP_ACK_RETRY_MS = 30_000;
 export const GROUP_ACK_MAX_HELD = 5_000;
 /** Most groups remembered as unreadable at once. */
 const MAX_UNREADABLE_GROUPS = 256;
+/** How often a roster read that a member change overtook is repeated, so a group in constant flux still settles. */
+const MAX_ROSTER_RETRIES = 4;
 
 export interface GroupAckHost {
   /**
@@ -104,6 +106,8 @@ export class GroupAckAggregator {
   private readonly reading = new Map<string, Promise<string[][] | null>>();
   /** Groups whose roster could not be read, with the time they may be read again. */
   private readonly unreadable = new Map<string, number>();
+  /** Roster reads that a change of members overtook while they were under way: their answer is read again. */
+  private readonly outdated = new WeakSet<Promise<string[][] | null>>();
   /** Receipts waiting for the roster of their group, by message, oldest message first. */
   private readonly held = new Map<string, MessageReceiptEvent[]>();
   private heldCount = 0;
@@ -130,6 +134,17 @@ export class GroupAckAggregator {
     if (followed === 'finished') return;
     for (const receipt of waiting) this.count(key, followed, receipt);
     this.count(key, followed, event);
+  }
+
+  /**
+   * A member joined or left the group. A roster read under way began before the change and may not show it, so
+   * the messages waiting for it read the roster again, and a message that starts now does not join that read.
+   */
+  membershipChanged(groupId: string): void {
+    const current = this.reading.get(groupId);
+    if (!current) return;
+    this.outdated.add(current);
+    this.reading.delete(groupId);
   }
 
   /**
@@ -197,11 +212,11 @@ export class GroupAckAggregator {
     const now = this.now();
     const known = this.entries.get(key);
     if (known && now - known.heardAt < GROUP_ACK_FOLLOW_MS) {
-      if (known.state === 'finished') return Promise.resolve('finished');
+      // A finished message is remembered for as long after its latest receipt as one that is still followed.
       known.heardAt = now;
       this.entries.delete(key);
       this.entries.set(key, known);
-      return Promise.resolve(known);
+      return Promise.resolve(known.state === 'finished' ? 'finished' : known);
     }
     const joined = this.loading.get(key);
     if (joined) return joined;
@@ -216,7 +231,7 @@ export class GroupAckAggregator {
   }
 
   private async load(key: string, event: MessageReceiptEvent, now: number): Promise<Followed> {
-    const roster = await this.readRoster(event.chatId);
+    const roster = await this.readCurrentRoster(event.chatId);
     if (!roster) return 'unreadable';
     const members = new Map<string, number>();
     let size = 0;
@@ -246,11 +261,25 @@ export class GroupAckAggregator {
     return following;
   }
 
+  /**
+   * The roster of a group as it stands after the last change of its members that was reported before the read
+   * ended: a read that a change overtook did not see it, and is repeated (a bounded number of times).
+   */
+  private async readCurrentRoster(chatId: string): Promise<string[][] | null> {
+    let roster: string[][] | null = null;
+    for (let attempt = 0; attempt <= MAX_ROSTER_RETRIES; attempt++) {
+      const read = this.readRoster(chatId);
+      roster = await read;
+      if (!roster || !this.outdated.has(read)) break;
+    }
+    return roster;
+  }
+
   /** The roster of a group, read once however many of its messages ask at the same time. */
   private readRoster(chatId: string): Promise<string[][] | null> {
     const joined = this.reading.get(chatId);
     if (joined) return joined;
-    const pending = (async (): Promise<string[][] | null> => {
+    const pending: Promise<string[][] | null> = (async (): Promise<string[][] | null> => {
       try {
         return await this.host.readRoster(chatId);
       } catch (error) {
@@ -262,10 +291,13 @@ export class GroupAckAggregator {
       }
     })()
       .then(roster => {
-        if (!roster) this.markUnreadable(chatId);
+        // A read that a member change replaced says nothing about the group's next one.
+        if (!roster && this.reading.get(chatId) === pending) this.markUnreadable(chatId);
         return roster;
       })
-      .finally(() => this.reading.delete(chatId));
+      .finally(() => {
+        if (this.reading.get(chatId) === pending) this.reading.delete(chatId);
+      });
     this.reading.set(chatId, pending);
     return pending;
   }
