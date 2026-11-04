@@ -35,18 +35,6 @@ export class InstanceExistsError extends Error {
 export class PluginInstanceService implements PluginInstancePort {
   constructor(@InjectRepository(PluginInstance, 'data') private readonly repo: Repository<PluginInstance>) {}
 
-  async mint(
-    pluginId: string,
-    instanceId: string,
-    opts: { sessionScope?: string; verifyToken?: string; secret?: string; config?: Record<string, unknown> },
-  ): Promise<PluginInstance> {
-    const existing = await this.resolve(pluginId, instanceId);
-    if (existing) return existing;
-    return (
-      (await this.insert(pluginId, instanceId, opts)) ?? ((await this.resolve(pluginId, instanceId)) as PluginInstance)
-    );
-  }
-
   // A plain INSERT, never save(): with the primary key set, save() re-selects and turns a concurrent
   // duplicate into an UPDATE that overwrites the first row's secret. Null when the id already exists.
   private async insert(
