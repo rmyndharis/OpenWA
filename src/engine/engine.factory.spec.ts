@@ -9,6 +9,8 @@ import { PluginLoaderService, PluginType } from '../core/plugins';
 import { BaileysMessageStoreService } from './adapters/baileys-message-store.service';
 import { LidMappingStoreService } from './identity/lid-mapping-store.service';
 import { ChatStateStoreService } from './adapters/baileys-chat-state-store.service';
+import type { StoredChatPreviewService } from './adapters/baileys-stored-chat-previews.service';
+import type { BaileysPlugin } from './builtin/baileys';
 import { baileysAuthDir, wwjsAuthDir } from './auth-dir-paths';
 
 describe('EngineFactory', () => {
@@ -187,6 +189,33 @@ describe('EngineFactory', () => {
     const registeredIds = registerBuiltInPlugin.mock.calls.map(call => (call as [{ id: string }])[0].id);
     expect(registeredIds).toContain('whatsapp-web.js');
     expect(registeredIds).toContain('baileys');
+  });
+
+  it('gives the baileys engine the stored chat previews it lists after a restart', async () => {
+    const registerBuiltInPlugin = jest.fn();
+    const pluginLoader = {
+      registerBuiltInPlugin,
+      enablePlugin: jest.fn().mockResolvedValue(undefined),
+      getPlugin: jest.fn(),
+    } as unknown as PluginLoaderService;
+    const storedChatPreviews = { latestPerChat: jest.fn() } as unknown as StoredChatPreviewService;
+
+    await new EngineFactory(
+      buildConfigService(),
+      pluginLoader,
+      buildMessageStore(),
+      buildLidStore(),
+      buildChatStateStore(),
+      storedChatPreviews,
+    ).onModuleInit();
+
+    const [, plugin] = registerBuiltInPlugin.mock.calls.find(
+      call => (call as [{ id: string }])[0].id === 'baileys',
+    ) as [unknown, BaileysPlugin];
+    const engine = plugin.createEngine({ sessionId: SESSION_ID, dbSessionId: SESSION_ID, authDir: '/nonexistent' });
+    expect((engine as unknown as { config: { storedChatPreviews: unknown } }).config.storedChatPreviews).toBe(
+      storedChatPreviews,
+    );
   });
 
   describe('create() with no usable engine plugin', () => {

@@ -27,7 +27,8 @@ import {
 } from '../terminal-engine-failure';
 import { differentWaIds, type BaileysEvents } from './baileys-events';
 import type { BaileysHistory } from './baileys-history';
-import type { BaileysSessionStore } from './baileys-session-store';
+import { SESSION_STORE_MAP_CAP_DEFAULT, type BaileysSessionStore } from './baileys-session-store';
+import { resolveNonNegativeIntEnv } from '../../config/configuration';
 import { chatKind, userPart } from '../identity/wa-id';
 
 /** Linked-device identity shown in WhatsApp (Settings → Linked Devices). The OS platform is
@@ -163,6 +164,8 @@ export interface BaileysLifecycleHost {
   upsertChats: BaileysSessionStore['upsertChats'];
   /** Drop chats the socket reports deleted (chats.delete). */
   removeChats: BaileysSessionStore['removeChats'];
+  /** List the chats the gateway stored messages of (once, before the first socket opens). */
+  seedStoredPreviews: BaileysSessionStore['seedStoredPreviews'];
   /** Learn lid<->phone mappings pushed by the socket (messaging-history.set, lid-mapping.update). */
   addLidMappings: BaileysSessionStore['addLidMappings'];
   handleMessagesUpsert: BaileysEvents['handleMessagesUpsert'];
@@ -234,6 +237,8 @@ export class BaileysLifecycle {
   private pairingTimers: ReturnType<typeof setTimeout>[] = [];
   /** Date.now() of the last close that scheduled a reconnect — input to the stability reset. */
   private lastConnectionCloseAt = 0;
+  /** Set by the first connect, which is the only one that may seed the listing from the stored messages. */
+  private storedPreviewsRead = false;
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
   private lib?: typeof BaileysLib;
   /** The session proxy's fetch dispatcher, built on first use and closed at teardown. */
@@ -379,6 +384,20 @@ export class BaileysLifecycle {
       );
       if (this.intentionalClose) {
         return;
+      }
+    }
+    // A new engine starts with no chats (see BaileysSessionStore). The first connect lists the stored ones
+    // while no socket exists, so no message, edit or delete can come between the read and the seed. A first
+    // link has no account yet and gets its chats from history sync, which the connect after the scan must
+    // not race, so a connect that cannot seed still uses up the one read.
+    if (!this.storedPreviewsRead) {
+      this.storedPreviewsRead = true;
+      const me = state.creds.account ? state.creds.me?.id : undefined;
+      if (me) {
+        await this.seedStoredPreviews(userPart(me));
+        if (this.intentionalClose) {
+          return;
+        }
       }
     }
     const version = await this.versionResolver.resolve(b, {
@@ -1208,6 +1227,30 @@ export class BaileysLifecycle {
     // that same name. tracked under the captured name, settled regardless of the outcome.
     this.host.getOnCredentialTeardownStarted()?.(cleanup);
     await cleanup;
+  }
+
+  /**
+   * Seed the listing with the newest stored message of each chat of the account `phone`. The rows name
+   * the account in every spelling it was stored under: its JID in either dialect, the bare digits of an
+   * API send stored before 0.27.0, and the placeholder of a send made before the number was known. A
+   * failed read leaves the listing as it was before chats were seeded: it fills from live traffic.
+   */
+  private async seedStoredPreviews(phone: string): Promise<void> {
+    const source = this.host.config.storedChatPreviews;
+    if (!source) return;
+    const limit = resolveNonNegativeIntEnv(
+      process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES,
+      SESSION_STORE_MAP_CAP_DEFAULT,
+    );
+    try {
+      const own = [`${phone}@c.us`, `${phone}@s.whatsapp.net`, phone, 'me'];
+      this.host.seedStoredPreviews(await source.latestPerChat(this.host.config.dbSessionId, own, limit));
+    } catch (err) {
+      this.host.logger.warn('Could not read the stored chats; the chat list fills as messages arrive', {
+        sessionId: this.host.config.sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**

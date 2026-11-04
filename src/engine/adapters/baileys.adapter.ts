@@ -221,6 +221,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       upsertContacts: records => this.sessionStore.upsertContacts(records),
       upsertChats: records => this.sessionStore.upsertChats(records),
       removeChats: ids => this.sessionStore.removeChats(ids),
+      seedStoredPreviews: rows => this.sessionStore.seedStoredPreviews(rows),
       extractEphemeralDuration: msg => this.sessionStore.extractEphemeralDuration(msg),
       getOnHistoryMessages: () => this.callbacks.onHistoryMessages,
       getStoredWriteGeneration: () => this.events.getStoredWriteGeneration(),
