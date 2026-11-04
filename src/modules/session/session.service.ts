@@ -646,6 +646,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return projectSessionProxy(session);
   }
 
+  /**
+   * The row a delete is about to remove, read first for its audit record. Nothing is marked or taken down yet, so a
+   * database failure here deleted nothing and answers the retryable 503 the delete's own claim answers.
+   */
+  findOneForDelete(id: string): Promise<Session> {
+    return this.checkedBefore('delete', id, () => this.findOne(id));
+  }
+
   /** Record removal + engine retirement + credential purge: owned by the lifecycle service. */
   async delete(id: string): Promise<void> {
     // Set the tearing-down mark SYNCHRONOUSLY, before the ownership fence's awaited query. The
@@ -766,7 +774,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     if (claimed) return;
     this.withdrawStop(request);
     // The claim is a conditional UPDATE, so an id with no row matches nothing too: answer its 404.
-    await this.findOne(id);
+    await this.checkedBefore('delete', id, () => this.findOne(id));
     throw new ConflictException(`Session ${id} is running on another node`);
   }
 
@@ -851,6 +859,32 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   /**
+   * A database failure while a start, stop or delete is still deciding whether it may act (the reads behind its 404 and
+   * its 409) has launched, stopped and deleted nothing, so it answers the retryable 503 a failed claim write does
+   * rather than a 500. Anything else comes back as it was: a refusal (an HttpException, whose text can quote an id
+   * that spells a driver message) and a statement the database rejected, which a retry cannot fix. Never
+   * ServerShuttingDownException: boot auto-start and the takeover sweep stop on that one.
+   */
+  private unavailableIfDatabaseDown(error: unknown, verb: 'start' | 'stop' | 'delete', id: string): unknown {
+    if (error instanceof HttpException || !isTransientDbError(error)) return error;
+    const done = { start: 'started', stop: 'stopped', delete: 'deleted' }[verb];
+    this.logger.warn(`Could not check session ${id} for the ${verb}; nothing was ${done}`, {
+      sessionId: id,
+      action: `session_${verb}_check_failed`,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return new ServiceUnavailableException(`Session ${id} could not be checked for the ${verb}; nothing was ${done}`);
+  }
+
+  private async checkedBefore<T>(verb: 'start' | 'stop' | 'delete', id: string, read: () => Promise<T>): Promise<T> {
+    try {
+      return await read();
+    } catch (error) {
+      throw this.unavailableIfDatabaseDown(error, verb, id);
+    }
+  }
+
+  /**
    * Refuse a lifecycle write for a session a LIVE peer is running.
    *
    * start() is fenced by the claim itself, and logout/force-kill require a local engine, so they
@@ -870,7 +904,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     const heldElsewhere = await this.ownership?.isHeldByOtherNode(id).catch((error: unknown) => {
       this.engineLifecycle.clearStopping(id);
       this.withdrawStop(request);
-      throw error;
+      throw this.unavailableIfDatabaseDown(error, request.kind, id);
     });
     if (heldElsewhere) {
       this.withdrawStop(request);
@@ -898,10 +932,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       holders.delete(id);
       if (holders.size >= max) {
         // Same answer the failed claim below would give, so the cap does not mask a 404 or a 409.
-        await this.findOne(id);
-        if (await this.ownership.isHeldByOtherNode(id)) {
-          throw new ConflictException(`Session ${id} is running on another node`);
-        }
+        const ownership = this.ownership;
+        await this.checkedBefore('start', id, async () => {
+          await this.findOne(id);
+          if (await ownership.isHeldByOtherNode(id)) {
+            throw new ConflictException(`Session ${id} is running on another node`);
+          }
+        });
         throw new BadRequestException(`Maximum concurrent sessions reached (${max})`);
       }
     }
@@ -970,7 +1007,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       throw new ServiceUnavailableException(`Session ${id} could not be claimed for the start; nothing was started`);
     }
     if (claimed) return;
-    await this.findOne(id);
+    await this.checkedBefore('start', id, () => this.findOne(id));
     throw new ConflictException(`Session ${id} is running on another node`);
   }
 

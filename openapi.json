@@ -900,7 +900,7 @@
             }
           },
           "503": {
-            "description": "The session could not be claimed for the delete because the database did not answer (nothing is deleted), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed). Retry the delete.",
+            "description": "The session could not be read, checked or claimed for the delete because the database did not answer (nothing is deleted), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed). Retry the delete.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1308,7 +1308,7 @@
             }
           },
           "503": {
-            "description": "The gateway is shutting down, the session could not be claimed for this node (a database error; nothing was launched), or the engine's browser or socket connection died during launch and the one automatic retry failed too (no engine is left running); the start can be retried.",
+            "description": "The gateway is shutting down, the session could not be checked or claimed for this node (a database error; nothing was launched), or the engine's browser or socket connection died during launch and the one automatic retry failed too (no engine is left running); the start can be retried.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1411,6 +1411,16 @@
           },
           "502": {
             "description": "Session was stopped locally, but the engine teardown did not complete (the graceful disconnect and the force-destroy escalation both failed, so the engine process may still be running). Retryable — the body carries `code: 'SESSION_STOP_INCOMPLETE'`; the status is settled to `disconnected` and no success audit is written. Retry the stop; restart the node to reap a leaked process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database did not answer the check of whether another node holds the session, so nothing was stopped. Retry the stop.",
             "content": {
               "application/json": {
                 "schema": {

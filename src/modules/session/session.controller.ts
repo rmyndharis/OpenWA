@@ -310,12 +310,12 @@ export class SessionController {
   @ApiResponse({
     status: 503,
     description:
-      'The session could not be claimed for the delete because the database did not answer (nothing is ' +
-      'deleted), or, on SQLite, another database transaction stayed open for 10 s before a delete ' +
+      'The session could not be read, checked or claimed for the delete because the database did not answer ' +
+      '(nothing is deleted), or, on SQLite, another database transaction stayed open for 10 s before a delete ' +
       'transaction (no further rows are removed). Retry the delete.',
   })
   async delete(@Param('sessionId', SessionIdPipe) id: string): Promise<void> {
-    const session = await this.sessionService.findOne(id);
+    const session = await this.sessionService.findOneForDelete(id);
     await this.sessionService.delete(id);
     await this.auditService.logInfo(AuditAction.SESSION_DELETED, {
       sessionId: id,
@@ -362,8 +362,8 @@ export class SessionController {
   @ApiResponse({
     status: 503,
     description:
-      'The gateway is shutting down, the session could not be claimed for this node (a database error; ' +
-      "nothing was launched), or the engine's browser or socket connection died during launch and the one " +
+      'The gateway is shutting down, the session could not be checked or claimed for this node (a database ' +
+      "error; nothing was launched), or the engine's browser or socket connection died during launch and the one " +
       'automatic retry failed too (no engine is left running); the start can be retried.',
   })
   @ApiResponse({
@@ -409,6 +409,12 @@ export class SessionController {
       "be running). Retryable — the body carries `code: 'SESSION_STOP_INCOMPLETE'`; the status " +
       'is settled to `disconnected` and no success audit is written. Retry the stop; restart the ' +
       'node to reap a leaked process.',
+  })
+  @ApiResponse({
+    status: 503,
+    description:
+      'The database did not answer the check of whether another node holds the session, so nothing was ' +
+      'stopped. Retry the stop.',
   })
   async stop(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.stop(id);

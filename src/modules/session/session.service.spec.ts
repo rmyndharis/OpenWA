@@ -2779,7 +2779,7 @@ describe('SessionService', () => {
       ownership.isHeldByOtherNode.mockRejectedValue(new Error('Connection terminated unexpectedly'));
       const stopping = (lifecycle as unknown as { stoppingSessions: Set<string> }).stoppingSessions;
 
-      await expect(call(service)).rejects.toThrow('Connection terminated unexpectedly');
+      await expect(call(service)).rejects.toBeInstanceOf(ServiceUnavailableException);
 
       expect(stopping.has('sess-uuid-1')).toBe(false);
     });
@@ -3127,7 +3127,7 @@ describe('SessionService', () => {
             jest
               .spyOn(ownership, 'isHeldByOtherNode')
               .mockRejectedValueOnce(new Error('Connection terminated unexpectedly')),
-          'Connection terminated unexpectedly',
+          ServiceUnavailableException,
         ],
         [
           'refused for a live peer',
