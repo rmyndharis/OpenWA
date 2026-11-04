@@ -260,9 +260,9 @@ const runningGroups = new Set<number>();
 /**
  * SIGKILL every ffmpeg process group still running. Each run is detached into its own group, so a
  * Ctrl-C or a signal to the gateway's group no longer reaches it, and its timeout dies with this
- * process. Called from the media service's shutdown hook, which Nest runs before it re-raises a
- * signal (the process then dies without emitting `exit`), and registered on `exit` for every path
- * that ends in `process.exit`; `process.kill` is synchronous, so it still runs there.
+ * process. Called from the media service's shutdown hook, which runs on `app.close()`, and registered
+ * on `exit` for every path that ends in `process.exit`; `process.kill` is synchronous, so it still
+ * runs there.
  */
 export function killRunningConversions(): void {
   for (const pid of runningGroups) {

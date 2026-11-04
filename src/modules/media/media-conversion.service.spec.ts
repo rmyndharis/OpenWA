@@ -420,8 +420,8 @@ describe('MediaConversionService', () => {
   });
 
   describe('shutdown', () => {
-    // Nest's own signal handler re-raises the signal after its hooks run, so the process dies from it
-    // and never emits `exit`. The shutdown hook is what still reaches the detached ffmpeg groups then.
+    // The shutdown hook is what kills the detached ffmpeg groups when app.close() runs, ahead of the
+    // process.exit that ShutdownService ends in.
     it('kills the running ffmpeg groups when the application shuts down', () => {
       const kill = jest.spyOn(ffmpeg, 'killRunningConversions').mockImplementation(() => undefined);
 
