@@ -751,6 +751,72 @@ describe('LoggerService', () => {
       expect(output).toContain('stack trace line');
       expect(output).toMatch(/\n.*stack trace line/);
     });
+
+    // The format is read line by line, so text from a contact, a plugin or a request must not be able to start a
+    // line of its own that reads as another record.
+    describe('keeps a record on one physical line', () => {
+      const FORGED = 'Alice\n[OpenWA] 1  - 1/1/2026, 12:00:00 AM   ERROR [AuthService] Admin key rotated';
+      // The painted output carries escape codes of its own, so the assertions below read the plain text.
+      const previousNoColor = process.env.NO_COLOR;
+      beforeEach(() => {
+        process.env.NO_COLOR = '1';
+      });
+      afterEach(() => {
+        if (previousNoColor === undefined) delete process.env.NO_COLOR;
+        else process.env.NO_COLOR = previousNoColor;
+      });
+
+      it('for a newline in a metadata value', () => {
+        logger.log('Contact synced', { displayName: FORGED });
+
+        const output = getRawOutput(consoleSpy);
+        expect(output.split('\n')).toHaveLength(1);
+        expect(output).toContain('displayName=Alice\\n[OpenWA] 1  - 1/1/2026');
+      });
+
+      it('for a newline in the message', () => {
+        logger.log(`Message from ${FORGED}`);
+
+        const output = getRawOutput(consoleSpy);
+        expect(output.split('\n')).toHaveLength(1);
+        expect(output).toContain('Message from Alice\\n[OpenWA]');
+      });
+
+      it('for a newline in a metadata key and in the context name', () => {
+        logger.setContext(FORGED);
+        logger.log('hello', { [FORGED]: 'x' });
+
+        expect(getRawOutput(consoleSpy).split('\n')).toHaveLength(1);
+      });
+
+      it('for a carriage return and the other control characters, which are written as escapes', () => {
+        logger.log('a\rb', { note: 'esc\x1b[31m del\x7f nul\x00 end' });
+
+        const output = getRawOutput(consoleSpy);
+        // eslint-disable-next-line no-control-regex
+        expect(output).not.toMatch(/[\x00-\x08\x0a-\x1f\x7f-\x9f]/);
+        expect(output).toContain('a\\rb');
+        expect(output).toContain('note=esc\\x1b[31m del\\x7f nul\\x00 end');
+      });
+
+      it('and leaves plain text, quotes, tabs and non-ASCII letters as they were', () => {
+        logger.log('Dewi said "halo"\tapa kabar', { name: 'Zoë "Z" O\'Neil', nested: { a: 'b\nc' } });
+
+        const output = getRawOutput(consoleSpy);
+        expect(output).toContain('Dewi said "halo"\tapa kabar');
+        expect(output).toContain('name=Zoë "Z" O\'Neil');
+        // An object is written as JSON, which already escapes the newline.
+        expect(output).toContain('nested={"a":"b\\nc"}');
+      });
+
+      it('while a stack trace keeps the lines it has', () => {
+        const errorSpy = jest.spyOn(console, 'error');
+        logger.error('failed', 'Error: boom\n    at first (a.ts:1:1)\n    at second (b.ts:2:2)');
+
+        // The record line and the three lines of the trace.
+        expect(getRawOutput(errorSpy).split('\n')).toHaveLength(4);
+      });
+    });
   });
 
   describe('non-string input (the call shapes Nest uses)', () => {
