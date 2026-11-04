@@ -19,13 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Install Trivy for the release and scheduled image scans from its GitHub release against a pinned SHA-256, since the action's own installer needs a host that no longer resolves.
+- Share one lid table lookup between the events of a chat when the gateway expands it for chat-restricted delivery (Redis fan-out on, or a chat-restricted socket connected to the node), and reuse a lookup that found a mapping for 5 seconds.
+- Print no part of an `API_MASTER_KEY` in the startup banner: the first boot names the key file, and later boots show no fingerprint of a key this release seeded.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
+- List a key seeded from `API_MASTER_KEY` as `(master key)` instead of its first 12 characters; keys seeded by earlier releases keep their stored prefix until replaced.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
+- Compile a chat-restricted key's allowlist once per request instead of once per chat id.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
 
 ### Documentation
 
 - The community integrations page lists `openwa-n8n-workflows`, an import-ready n8n workflow that answers `message.received` webhooks with a local AI model. Thanks @Abhishekrajpurohit.
+- The Helm notes and the security guide say the admin key is read from the key file when `API_MASTER_KEY` is set.
 - The API reference says how to count the viewers of a Baileys status post from `message.receipt`, and that a status post reports no `delivered` or `read` ack.
 
 ### Dependencies
