@@ -240,18 +240,24 @@ describe('a bootstrap key file that no stored hash matches (API_KEY_PEPPER chang
 });
 
 describe('the startup banner of a later boot', () => {
-  const saved = { BOOTSTRAP_KEY_FILE: process.env.BOOTSTRAP_KEY_FILE };
+  const saved = { API_MASTER_KEY: process.env.API_MASTER_KEY, BOOTSTRAP_KEY_FILE: process.env.BOOTSTRAP_KEY_FILE };
   const GENERATED = `owa_k1_${'ab12'.repeat(16)}`;
+  const PAREN = `(${MASTER}`;
 
-  /** Boots over a non-empty table whose live row, stored with `keyPrefix`, matches the key in the bootstrap file. */
-  async function bannerOfLaterBoot(fileKey: string, keyPrefix: string | undefined): Promise<string> {
+  /**
+   * Boots over a non-empty table whose live row, stored with `keyPrefix`, matches the key in the bootstrap file;
+   * without a file key there is no live key to point at. `configured` is the API_MASTER_KEY still set.
+   */
+  async function bannerOfLaterBoot(fileKey: string | null, keyPrefix?: string, configured?: string): Promise<string> {
     process.env.BOOTSTRAP_KEY_FILE = KEY_FILE;
-    jest.spyOn(fs, 'existsSync').mockReturnValue(true);
-    jest.spyOn(fs, 'readFileSync').mockReturnValue(fileKey);
+    if (configured === undefined) delete process.env.API_MASTER_KEY;
+    else process.env.API_MASTER_KEY = configured;
+    jest.spyOn(fs, 'existsSync').mockReturnValue(fileKey !== null);
+    jest.spyOn(fs, 'readFileSync').mockReturnValue(fileKey ?? '');
     const log = jest.spyOn(LoggerService.prototype, 'log').mockImplementation(() => undefined);
     const row = {
       id: 'row-1',
-      keyHash: hashApiKey(fileKey, process.env.API_KEY_PEPPER),
+      keyHash: hashApiKey(fileKey ?? '', process.env.API_KEY_PEPPER),
       keyPrefix,
       isActive: true,
       expiresAt: null,
@@ -267,13 +273,33 @@ describe('the startup banner of a later boot', () => {
   }
 
   afterEach(() => {
-    if (saved.BOOTSTRAP_KEY_FILE === undefined) delete process.env.BOOTSTRAP_KEY_FILE;
-    else process.env.BOOTSTRAP_KEY_FILE = saved.BOOTSTRAP_KEY_FILE;
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     jest.restoreAllMocks();
   });
 
   it('prints nothing of a seeded API_MASTER_KEY that looks like a generated key', async () => {
     const banner = await bannerOfLaterBoot(GENERATED, MARKER);
+
+    expect(banner).not.toContain(GENERATED.slice(0, 8));
+    expect(banner).toContain(`(full key in ${KEY_FILE})`);
+  });
+
+  it('prints no character of a seeded API_MASTER_KEY that starts with an opening parenthesis', async () => {
+    for (const keyPrefix of [MARKER, PAREN.substring(0, 12)]) {
+      const banner = await bannerOfLaterBoot(PAREN, keyPrefix);
+
+      expect(banner).not.toContain(PAREN.slice(0, 8));
+      expect(banner).toContain(`(full key in ${KEY_FILE})`);
+      jest.restoreAllMocks();
+    }
+  });
+
+  it('prints no fingerprint for the configured API_MASTER_KEY, whatever prefix its row holds', async () => {
+    // A row seeded by an earlier release holds the first 12 characters of a key the operator chose.
+    const banner = await bannerOfLaterBoot(GENERATED, GENERATED.substring(0, 12), GENERATED);
 
     expect(banner).not.toContain(GENERATED.slice(0, 8));
     expect(banner).toContain(`(full key in ${KEY_FILE})`);
@@ -292,5 +318,9 @@ describe('the startup banner of a later boot', () => {
 
     expect(banner).not.toContain(GENERATED.slice(0, 8));
     expect(banner).toContain(`(full key in ${KEY_FILE})`);
+  });
+
+  it('points at the dashboard when no key file is left', async () => {
+    expect(await bannerOfLaterBoot(null)).toContain('(check dashboard for keys)');
   });
 });

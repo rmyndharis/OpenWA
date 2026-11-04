@@ -86,15 +86,17 @@ export function resolveSeedApiKey(): string {
  *
  * `storedPrefix` is the prefix the live row is stored under, and only one that starts with the tag identifies a
  * generated key; a missing or unreadable one identifies nothing. A seed from API_MASTER_KEY is stored under a fixed
- * marker, so one shaped like a generated key prints no fingerprint. A row seeded by an earlier release holds the
- * first 12 characters of its key instead, so a key chosen in that shape cannot be told from a generated one and
- * keeps its fingerprint until it is replaced.
+ * marker, so one shaped like a generated key prints no fingerprint, and neither does the key still configured as
+ * API_MASTER_KEY (see readLiveBootstrapKey). A row seeded by an earlier release holds the first 12 characters of
+ * its key instead, so a key chosen in that shape, once its variable is removed, cannot be told from a generated one
+ * and keeps its fingerprint until it is replaced.
  *
- * A placeholder (e.g. "(check dashboard for keys)") is passed through unchanged.
+ * `displayKey` is null when no live key file is left to point at, and the banner then names the dashboard. A key is
+ * never taken for that placeholder by how it starts: an API_MASTER_KEY may begin with any character.
  */
-export function bannerKeyLine(displayKey: string, isNewKey: boolean, storedPrefix?: string | null): string {
+export function bannerKeyLine(displayKey: string | null, isNewKey: boolean, storedPrefix?: string | null): string {
+  if (displayKey === null) return '(check dashboard for keys)';
   if (isNewKey) return displayKey;
-  if (displayKey.startsWith('(')) return displayKey;
   const generated = displayKey.startsWith('owa_k1_') && !!storedPrefix?.startsWith('owa_k1_');
   const fingerprint = generated ? `${displayKey.slice(0, 8)}… ` : '';
   return `${fingerprint}(full key in ${bootstrapKeyFilePath()})`;
@@ -124,7 +126,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
     // Seed a default API key if none exist
     const count = await this.apiKeyRepository.count();
-    let displayKey: string;
+    let displayKey: string | null;
     let storedPrefix: string | undefined;
     let isNewKey = false;
 
@@ -155,7 +157,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       // Read the saved bootstrap key from the file — but only while it still resolves to a LIVE
       // key; a revoked/rotated/deleted key must not be advertised in the banner.
       const live = await this.readLiveBootstrapKey();
-      displayKey = live?.rawKey ?? '(check dashboard for keys)';
+      displayKey = live?.rawKey ?? null;
       storedPrefix = live?.keyPrefix;
     }
 
@@ -196,15 +198,19 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
    * The file is written once at first boot; when that key is later revoked, rotated, or deleted, the
    * file (and the banner quoting it) would otherwise keep advertising a dead credential. A stale file
    * is removed here too, so a backup restore that lost the key self-heals on the next boot.
-   * Returns null when the file is absent, unreadable, empty, or stale; otherwise the key and the prefix its
-   * live row is stored under.
+   * Returns null when the file is absent, unreadable, empty, or stale; otherwise the key and the prefix it is
+   * stored under, which is the fixed one when the key is the one configured as API_MASTER_KEY.
    */
   private async readLiveBootstrapKey(): Promise<{ rawKey: string; keyPrefix: string | undefined } | null> {
     const rawKey = readBootstrapKey(this.logger);
     if (!rawKey) return null;
     const stored = await this.apiKeyRepository.findOne({ where: { keyHash: this.hashKey(rawKey) } });
     const live = Boolean(stored && stored.isActive && (!stored.expiresAt || stored.expiresAt > new Date()));
-    if (live) return { rawKey, keyPrefix: stored?.keyPrefix };
+    if (live) {
+      // The key still configured as API_MASTER_KEY is a chosen one whatever its row holds: a row seeded by an
+      // earlier release holds its first 12 characters, which could pass for the tag of a generated key.
+      return { rawKey, keyPrefix: rawKey === configuredMasterKey() ? MASTER_KEY_PREFIX : stored?.keyPrefix };
+    }
     if (!stored) {
       // A hash miss alone does not prove the key is gone: the same raw key hashes differently under
       // a changed API_KEY_PEPPER. The prefix is seeded unhashed alongside the key, so it still finds

@@ -71,7 +71,9 @@ fixed `dev-admin-key`; with neither set, the seed key is generated in the format
 `API_MASTER_KEY` is the fixed text `(master key)`, because every character of a chosen key is secret. A key seeded by an earlier release
 keeps its first 12 characters as the prefix, which every ADMIN key with no session or chat restriction can read in the key list, and which
 the database and its backups hold: replace it with a minted key (see the rotation note in §4.12) rather than keeping a chosen passphrase
-as the admin key.
+as the admin key. The startup banner of a later boot prints the first 8 characters of a key only when its row says the key was generated.
+A chosen key in the `owa_k1_` shape that an earlier release seeded cannot be told from a generated one once `API_MASTER_KEY` is removed
+from the environment, and still shows them until it is replaced.
 
 ### Permission Model
 
@@ -116,7 +118,7 @@ found where it was saved, or replaced. Try these in order. If every key stopped 
    after step 4 or the §4.4 pepper reset), the gateway seeds an ADMIN key, set to `API_MASTER_KEY`
    when that is set, and keeps it in `data/.api-key` (or the `BOOTSTRAP_KEY_FILE` path) until that
    key is no longer active (revoked, expired or deleted). The seeding boot prints a generated key once
-   in the startup banner and no part of an `API_MASTER_KEY`, for which the banner names the file.
+   in the startup banner and no part of an `API_MASTER_KEY`, for which the banner names the file when it could be written.
    While the file holds a live key, the startup banner ends with `(full key in <path>)`. Read it with
    `cat data/.api-key`, with `docker compose exec openwa-api cat /app/data/.api-key` on the compose
    deployment, or with `kubectl exec openwa-0 -- cat /app/data/.api-key` on the Helm chart (release `openwa`). The file has no

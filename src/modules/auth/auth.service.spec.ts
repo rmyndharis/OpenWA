@@ -122,8 +122,16 @@ describe('bannerKeyLine (startup banner key masking)', () => {
     }
   });
 
-  it('passes a placeholder through unchanged', () => {
-    expect(bannerKeyLine('(check dashboard for keys)', false)).toBe('(check dashboard for keys)');
+  it('points at the dashboard when there is no key to name', () => {
+    expect(bannerKeyLine(null, false)).toBe('(check dashboard for keys)');
+  });
+
+  // A key is told from the placeholder by where it came from, not by how it starts: an API_MASTER_KEY may begin
+  // with any character, an opening parenthesis and the placeholder's own words included.
+  it('never takes a key for the placeholder by its first character', () => {
+    for (const key of ['(Acme-Prod-Gateway-Master-2026-Q4!', '(check dashboard for keys)']) {
+      expect(bannerKeyLine(key, false)).toMatch(/^\(full key in .*\.api-key\)$/);
+    }
   });
 
   // An API_MASTER_KEY is taken verbatim, so its first characters are part of the secret, not a fixed tag.
