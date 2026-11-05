@@ -1021,6 +1021,9 @@ export class SessionEngineLifecycle {
     // READY proves any in-flight stuck-auth recovery succeeded (or none was needed), so the
     // one-shot recovery budget is re-armed for a future episode.
     this.stuckAuthRecoveryUsed.delete(id);
+    // The number this READY links is what later row reads return, not the one an unlink released: a clear still
+    // pending from before it must not take the new binding out of a later snapshot.
+    this.unlinkClears.delete(id);
 
     void this.sessionRepository.update(id, readyRowUpdate(phone, pushName, new Date())).catch(err =>
       this.logger.warn('Failed to persist session ready state', {

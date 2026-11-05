@@ -18,6 +18,8 @@ async function until(condition: () => boolean, what: string): Promise<void> {
   }
 }
 
+const tick = (): Promise<unknown> => new Promise(resolve => setImmediate(resolve));
+
 function fixture() {
   const stored = {
     id: ID,
@@ -345,6 +347,94 @@ describe('a start issued while the phone clear of a recorded unlink is pending',
       const actual = { logouts: f.engines[1].logout.mock.calls.length, status: f.stored.status, phone: f.stored.phone };
       await f.lifecycle.shutdown();
       expect(actual).toEqual({ logouts: 0, status: SessionStatus.READY, phone: OTHER });
+    },
+  );
+});
+
+describe('a binding accepted after an unlink whose phone clear is still pending', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    'keeps the accepted binding (answered before the read: %s, answer failed: %s)',
+    async (settleBeforeRead, failAnswer) => {
+      const f = fixture();
+      const inside = f.lifecycle as unknown as { reconnectStates: Map<string, { session?: Session }> };
+      let finishClear!: () => void;
+      try {
+        await f.lifecycle.start(ID);
+        f.engines[0].getStatus.mockReturnValue(EngineStatus.READY);
+        f.engines[0].getPhoneNumber = jest.fn(() => BOUND);
+        f.callbacksOf(0).onStateChanged?.(EngineStatus.READY);
+        f.callbacksOf(0).onReady?.(BOUND, 'Bound');
+        await tick();
+        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask', 'Date'] });
+        await f.lifecycle.handleEngineDisconnected(ID, f.engines[0] as never, 'liveness probe failed (watchdog)');
+        const oldRead = f.holdRead();
+        f.callbacksOf(0).onCredentialTeardownStarted?.(Promise.resolve());
+        f.engines[0].getStatus.mockReturnValue(EngineStatus.DISCONNECTED);
+        f.callbacksOf(0).onStateChanged?.(EngineStatus.DISCONNECTED);
+        f.callbacksOf(0).onDisconnected?.('LOGOUT');
+        await jest.advanceTimersByTimeAsync(2_000);
+        await until(() => Boolean(f.engines[1]?.initialize.mock.calls.length), 'the first replacement');
+
+        const write = f.repository.update.getMockImplementation()!;
+        f.repository.update.mockImplementation((where: unknown, patch: Partial<Session>) => {
+          if ('phone' in patch && patch.phone === null) {
+            // The update committed before this connection's answer returns, so a later READY can write its phone.
+            void write(where, patch);
+            return new Promise<{ affected: number }>((resolve, reject) => {
+              finishClear = () =>
+                failAnswer ? reject(new Error('synthetic phone clear response failure')) : resolve({ affected: 1 });
+            });
+          }
+          return write(where, patch);
+        });
+        oldRead.answer();
+        await f.handled.mock.results[1].value;
+        expect(f.recordedUnlinks()).toHaveLength(1);
+
+        f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
+        await f.linkOther(1);
+        expect(f.stored.phone).toBe(OTHER);
+        expect(f.stored.status).toBe(SessionStatus.READY);
+        expect(f.engines[1].logout).not.toHaveBeenCalled();
+
+        if (settleBeforeRead) {
+          finishClear();
+          await tick();
+        }
+        f.engines[1].getStatus.mockReturnValue(EngineStatus.DISCONNECTED);
+        f.callbacksOf(1).onStateChanged?.(EngineStatus.DISCONNECTED);
+        f.callbacksOf(1).onDisconnected?.('Browser process closed or crashed');
+        await f.settled();
+        const snapshotPhone = inside.reconnectStates.get(ID)?.session?.phone;
+        if (!settleBeforeRead) finishClear();
+        await tick();
+        expect(f.stored.phone).toBe(OTHER);
+
+        await jest.advanceTimersByTimeAsync(10_000);
+        await until(() => Boolean(f.engines[2]?.initialize.mock.calls.length), 'the second replacement');
+        const third = '628999';
+        f.engines[2].getPhoneNumber = jest.fn(() => third);
+        f.callbacksOf(2).onStateChanged?.(EngineStatus.READY);
+        f.callbacksOf(2).onReady?.(third, 'Third');
+        for (let i = 0; i < 20; i++) await tick();
+        expect({
+          snapshotPhone,
+          logouts: f.engines[2].logout.mock.calls.length,
+          status: f.stored.status,
+          phone: f.stored.phone,
+        }).toEqual({ snapshotPhone: OTHER, logouts: 1, status: SessionStatus.FAILED, phone: OTHER });
+      } finally {
+        if (finishClear) finishClear();
+        await tick();
+        await f.lifecycle.shutdown();
+      }
     },
   );
 });
