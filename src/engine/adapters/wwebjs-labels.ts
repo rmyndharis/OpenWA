@@ -42,7 +42,10 @@ export function readLabelChatIds(labelId: string): string[] {
  * via closures, so the delegate never touches lifecycle state directly.
  */
 export class WwebjsLabels {
-  /** The settled tail of each chat's label writes, so the next write starts after it; gone once the chat is idle. */
+  /**
+   * The settled tail of each chat's label writes, so the next write starts after it; gone once the chat is idle.
+   * Keyed by the id WhatsApp Web resolves the chat to, not by the id a caller typed.
+   */
   private readonly chatWrites = new Map<string, Promise<void>>();
 
   constructor(private readonly host: WwebjsEngineHost) {}
@@ -233,25 +236,40 @@ export class WwebjsLabels {
    *
    * The read and write are separate calls, and the page derives the removals from the chat's labels at the
    * moment it runs, so two single-label writes to the SAME chat that overlap would undo each other (the
-   * later one removes the label the earlier one just added). They run one after the other per chat; a
-   * write that waited re-reads the labels, and answers 409 if the session went away meanwhile.
+   * later one removes the label the earlier one just added). They run one after the other per chat, whichever
+   * id names it; a write that waited re-reads the labels, and answers 409 if the session went away meanwhile.
    */
   private async changeChatLabel(chatId: string, labelId: string, add: boolean): Promise<void> {
     if (isChannelJid(chatId)) {
       throw new ChatLabelsUnsupportedError('Channels do not support chat labels.');
     }
+    const queue = await this.resolveChatId(chatId);
     // `previous` never rejects (it is the settled tail below), so a failed write does not stop the next.
-    const previous = this.chatWrites.get(chatId) ?? Promise.resolve();
+    const previous = this.chatWrites.get(queue) ?? Promise.resolve();
     const write = previous.then(() => this.writeChatLabel(chatId, labelId, add));
     const tail = write.then(
       () => undefined,
       () => undefined,
     );
-    this.chatWrites.set(chatId, tail);
+    this.chatWrites.set(queue, tail);
     void tail.then(() => {
-      if (this.chatWrites.get(chatId) === tail) this.chatWrites.delete(chatId);
+      if (this.chatWrites.get(queue) === tail) this.chatWrites.delete(queue);
     });
     await write;
+  }
+
+  /**
+   * The id WhatsApp Web keys the chat by. A migrated contact's chat is keyed by its lid and found for the phone id as
+   * well, so the writes to one chat have to queue under this id, not the one the caller typed. The typed id stands
+   * in when the page resolves no chat; the write then answers 404 as it does without this lookup.
+   */
+  private async resolveChatId(chatId: string): Promise<string> {
+    const chat = await withPage(this.host, 'changeChatLabel', () =>
+      this.client()
+        .getChatById(chatId)
+        .catch(error => recoverGroupChatById(this.host, 'changeChatLabel', chatId, error)),
+    );
+    return readWid(chat?.id) ?? chatId;
   }
 
   private async writeChatLabel(chatId: string, labelId: string, add: boolean): Promise<void> {

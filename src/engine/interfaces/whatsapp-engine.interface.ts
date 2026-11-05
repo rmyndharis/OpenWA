@@ -1276,7 +1276,13 @@ export interface MessageOperationsCapability {
    */
   getMessageReceipts(chatId: string, messageId: string): Promise<MessageReceipts>;
 
-  deleteMessage(chatId: string, messageId: string, forEveryone?: boolean): Promise<void>;
+  /**
+   * Delete a message. Resolves the id the engine keys the deleted message by, when it reports one, so the caller can
+   * clear the stored copy under that id too: whatsapp-web.js resolves the serialized id of the message it found, which
+   * differs from the id it was given when that was the bare key id of a message it keys by the serialized id. An engine
+   * that keys the message by the id it was given (Baileys) resolves nothing.
+   */
+  deleteMessage(chatId: string, messageId: string, forEveryone?: boolean): Promise<string | void>;
 
   /**
    * Edit the body of a text message. Only the account's OWN messages can be edited; engines reject

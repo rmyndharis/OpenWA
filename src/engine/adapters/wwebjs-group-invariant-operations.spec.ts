@@ -177,7 +177,7 @@ describe('WhatsAppWebJsAdapter group operations when groupMetadata.update hits i
     await expect(adapter.replyToMessage(GROUP, 'M1', 'ack')).resolves.toEqual({ id: 'M2', timestamp: 1700000002 });
     await expect(adapter.reactToMessage(GROUP, 'M1', '👍')).resolves.toBeUndefined();
     await expect(adapter.editMessage(GROUP, 'M1', 'edited')).resolves.toEqual({ id: 'M1', timestamp: 1700000001 });
-    await expect(adapter.deleteMessage(GROUP, 'M1', true)).resolves.toBeUndefined();
+    await expect(adapter.deleteMessage(GROUP, 'M1', true)).resolves.toBe('M1');
     await expect(adapter.pinMessage(GROUP, 'M1', 86400)).resolves.toBeUndefined();
     expect(react).toHaveBeenCalledWith('👍');
     expect(edit).toHaveBeenCalledWith('edited');

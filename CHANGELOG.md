@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - List a key seeded from `API_MASTER_KEY` as `(master key)` instead of its first 12 characters; keys seeded by earlier releases keep their stored prefix until replaced.
 - Key Baileys chat writes and read receipts to the newest stored message of the account the session is linked to, so a session relinked to another number no longer names the previous account's messages.
 - Warn when a session delete removes only a symlinked auth directory and leaves the WhatsApp login at its target, instead of logging it as purged.
+- Report the chat id of a whatsapp-web.js `message.reaction` as a string if WhatsApp Web sends it as an object.
+- Clear the stored body, media and metadata of a message deleted on whatsapp-web.js by its bare key id, which stayed in place before.
+- Fold a whatsapp-web.js mention given as a padded, upper-case, `@s.whatsapp.net`, `:device` or hosted id to the neutral id before it reaches WhatsApp Web, in text, media, sticker, reply and edit sends, as Baileys already does.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Stop announcing `message.ack` for the acks of whatsapp-web.js system notices, which are no longer delivered as messages.
 - Stop delivering whatsapp-web.js system notices (a changed security code, the encryption notice, business and broadcast notices) as `unknown` messages on `message.received` and `message.sent`, so they are no longer stored, passed to the message hooks or answered by automation rules (#1864). Thanks @dwimnofan.
@@ -62,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pretty log output escapes control characters, so a value holding a newline cannot start a forged log record.
 - `GET /api/health/ready` shares its database probes between concurrent requests and reuses the verdict for one second, so a flood no longer queues probes ahead of application queries on PostgreSQL.
 - A request whose client left while the gateway was working on it is counted as 499 in `http_requests_total` instead of the status set before the handler ran.
+- Queue whatsapp-web.js label writes per chat whichever id names it, so adding two labels to one chat by its phone id and by its lid at the same time no longer removes one of them.
 
 ### Documentation
 
