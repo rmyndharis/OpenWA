@@ -48,6 +48,7 @@ let hitSession = SESSION.id;
 // ready, and the user can leave before the answer comes.
 let sessionsGate: Promise<void> | null = null;
 let releaseSessions: (() => void) | null = null;
+let sessionsStatus = 200;
 const holdSessions = (): void => {
   sessionsGate = new Promise(resolve => {
     releaseSessions = resolve;
@@ -86,7 +87,10 @@ before(async () => {
     const path = url.replace(/^https?:\/\/[^/]+/, '');
     calls.push(path);
     if (path === '/api/sessions') {
-      const answer = () => json(hitSession === THIRD.id ? [SESSION, OTHER, THIRD] : [SESSION, OTHER]);
+      const answer = () =>
+        sessionsStatus === 200
+          ? json(hitSession === THIRD.id ? [SESSION, OTHER, THIRD] : [SESSION, OTHER])
+          : json({ statusCode: sessionsStatus, message: 'unavailable' }, sessionsStatus);
       return sessionsGate ? sessionsGate.then(answer) : Promise.resolve(answer());
     }
     if (path.startsWith('/api/search?')) {
@@ -119,6 +123,7 @@ beforeEach(() => {
   hitSession = SESSION.id;
   sessionsGate = null;
   releaseSessions = null;
+  sessionsStatus = 200;
   window.sessionStorage.setItem('openwa_user_role', 'admin');
   window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
   window.sessionStorage.setItem('openwa_api_key', 'test-key');
@@ -247,4 +252,42 @@ test('a search hit waiting for the session list raises no notice once the Chats 
     false,
     'the answer to the session list read raised no notice on the page that replaced Chats',
   );
+});
+
+// The same wait can end in a failure to read the session list, which the page answers with an error notice of its own.
+test('a search hit whose session list read fails raises no notice once the Chats page is left', async () => {
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  hitSession = THIRD.id;
+  const view = rtl.render(page(true));
+  await rtl.screen.findByText('Elsewhere');
+  holdSessions();
+  await searchAndClickFirstHit(view.container);
+
+  view.rerender(page(false));
+  sessionsStatus = 503;
+  releaseSessions?.();
+  await settle(300);
+
+  assert.equal(
+    Boolean(rtl.screen.queryByText('Failed to load sessions')),
+    false,
+    'the failed session list read raised no notice on the page that replaced Chats',
+  );
+});
+
+// A chat opened and closed again leaves the open chat as it was, which only the choice itself can tell.
+test('a search hit stops asking for privacy-id phones when the user opens a chat and closes it again meanwhile', async () => {
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  const view = rtl.render(page(true));
+  await rtl.screen.findByText('Lid 0');
+  await clickFirstHit(view.container);
+
+  rtl.fireEvent.click(rtl.screen.getByText('Lid 0'));
+  await rtl.waitFor(() => assert.ok(view.container.querySelector('.room-header')));
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Back' }));
+  await rtl.waitFor(() => assert.equal(view.container.querySelector('.room-header'), null));
+  await settle(1_600);
+
+  const late = lookups().filter(path => SECOND_BATCH.some(id => path.includes(id)));
+  assert.deepEqual(late, [], 'the second batch is not asked for once the user has opened and left a chat');
 });
