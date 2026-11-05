@@ -329,8 +329,8 @@ describe('a disconnect read that overlaps the phone writes of an unlink', () => 
 describe('a binding linked after the unlink', () => {
   afterEach(() => jest.useRealTimers());
 
-  // The clear is committed and its answer is late, or fails: the read waits for the answer either way and then returns
-  // the number the READY wrote.
+  // The clear is committed and its answer is late, or fails: the row of the READY is written once the answer came, and
+  // the read waits for both before it returns the number the READY wrote.
   it.each([false, true])('is kept when the answer of the clear is late (answer failed: %s)', async failAnswer => {
     const { f, oldRead } = await replacement();
     try {
@@ -340,16 +340,46 @@ describe('a binding linked after the unlink', () => {
       expect(f.recordedUnlinks()).toHaveLength(1);
       f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
       await f.linkOther(1);
-      expect(f.stored.phone).toBe(OTHER);
+      expect(f.stored.phone).toBeNull(); // the clear has committed, the row of the READY waits for its answer
 
       disconnect(f, 1);
       await tick();
       await clear.release(failAnswer);
       await f.settled();
+      expect(f.stored.phone).toBe(OTHER);
 
       // The next attempt holds the number the READY linked, so a third account is refused.
       await scan(f, THIRD);
       expect(outcome(f, 2)).toEqual({ logouts: 1, status: SessionStatus.FAILED, phone: OTHER });
+    } finally {
+      await f.lifecycle.shutdown();
+    }
+  });
+
+  // Both writes go to the same row from two connections: the clear must not be able to land after the READY's row and take
+  // the new number out of it again.
+  it('writes the row of its READY after the clear of the unlink issued before it', async () => {
+    const { f, oldRead } = await replacement();
+    try {
+      const order: string[] = [];
+      const write = f.repository.update.getMockImplementation()!;
+      f.repository.update.mockImplementation((where: unknown, patch: Partial<Session>) => {
+        if (clearsPhone(patch)) order.push('clear');
+        if (patch.phone === OTHER) order.push('ready');
+        return write(where, patch);
+      });
+      const clear = holdUpdates(f, clearsPhone);
+      oldRead.answer();
+      await f.handled.mock.results[1].value;
+      f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
+      await f.linkOther(1);
+      expect(order).toEqual([]); // the clear is still on its way to the database, and the READY's row waits for it
+      expect(f.stored.phone).toBe(BOUND);
+
+      await clear.release();
+      await tick();
+      expect(order).toEqual(['clear', 'ready']);
+      expect(f.stored.phone).toBe(OTHER);
     } finally {
       await f.lifecycle.shutdown();
     }
@@ -368,11 +398,12 @@ describe('a binding linked after the unlink', () => {
       f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
       await f.linkOther(1);
       expect(f.engines[1].logout).not.toHaveBeenCalled();
-      expect(ready.count()).toBe(1);
+      expect(ready.count()).toBe(0); // behind the clear
 
       disconnect(f, 1);
       await tick();
       await clear.release();
+      expect(ready.count()).toBe(1);
       await ready.release();
       await f.settled();
 

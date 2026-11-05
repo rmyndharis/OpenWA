@@ -121,10 +121,12 @@ takeover adoption whose launch fails, say) releases its claim and then writes DI
 row that no node holds and that still has an active status: a row no node holds is revisited by
 neither `markLapsedDisconnected` nor the adoption sweep, so the READY a vanished node left on it would
 otherwise stand until a boot, and any claim since sets `nodeId`, so a row B claimed matches nothing.
-Two of these writes are not awaited by their issuer, the unlink's phone clear and the row a READY writes, and a
+Two of these writes are not awaited by their issuer, the unlink's phone clear and the row a READY writes. They
+are issued one after another per session, so the database receives them in the order they were issued, and a
 row read that acts on the session's phone (the disconnect handler's reload, the second read of a start) must
 not return the binding they replace: it starts once the writes this process issued have been answered and is
-repeated when another is issued while it runs (`session-phone-writes.ts`).
+repeated when another is issued while it runs (`session-phone-writes.ts`). A write that is not answered holds
+up the ones behind it, and a read waits for it, for five seconds at most.
 **Pinned by:** `src/modules/takeover/session-takeover.service.spec.ts` +
 `session-ownership.service.spec.ts` + `session-ownership-status-fence.spec.ts` +
 `session-failed-write-ownership-fence.spec.ts` for the FAILED writers outside the wiring + the real-database

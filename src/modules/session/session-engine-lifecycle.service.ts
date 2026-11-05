@@ -1026,15 +1026,15 @@ export class SessionEngineLifecycle {
     // one-shot recovery budget is re-armed for a future episode.
     this.stuckAuthRecoveryUsed.delete(id);
 
-    this.phoneWrites.track(
-      id,
-      this.sessionRepository.update(id, readyRowUpdate(phone, pushName, new Date())).catch(err =>
+    const readyAt = new Date();
+    void this.phoneWrites
+      .run(id, () => this.sessionRepository.update(id, readyRowUpdate(phone, pushName, readyAt)))
+      .catch(err =>
         this.logger.warn('Failed to persist session ready state', {
           sessionId: id,
           error: err instanceof Error ? err.message : String(err),
         }),
-      ),
-    );
+      );
 
     // Re-apply a prior PUT /presence once per open. Baileys' markOnlineOnConnect has already
     // broadcast `available` during this handshake; without this, an `available: false` the caller
@@ -1327,16 +1327,15 @@ export class SessionEngineLifecycle {
             { id, nodeId: IsNull() },
           ]
         : id;
-    this.phoneWrites.track(
-      id,
-      this.sessionRepository.update(where, { phone: null }).catch((err: unknown) =>
+    void this.phoneWrites
+      .run(id, () => this.sessionRepository.update(where, { phone: null }))
+      .catch((err: unknown) =>
         this.logger.warn('Failed to clear phone after a terminal unlink', {
           sessionId: id,
           error: String(err),
           action: 'unlink_phone_clear_failed',
         }),
-      ),
-    );
+      );
     // A reconnect episode keeps its own snapshot (scheduleReconnect leaves it alone), so the clear reaches that one
     // too, whatever the episode is doing: an attempt that is initializing its replacement re-arms the next attempt
     // from the snapshot when it fails. Only the phone: the rest is what the report that armed it read.
