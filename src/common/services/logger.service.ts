@@ -282,11 +282,17 @@ const STRUCTURAL_KEYS = new Set(['timestamp', 'level', 'context', 'message', 'tr
 
 // The pretty format is read line by line, so text a caller did not write (a contact's name, a plugin's metadata, a
 // request value) must not start a line of its own that reads as another record, or send a terminal an escape
-// sequence. Control characters are written as escapes; a tab stays, since it cannot start a line.
+// sequence. Control characters are written as escapes, and so are the two Unicode line separators, which a reader that
+// splits lines (Python's splitlines, a multiline regex) breaks on as it does on a newline; a tab stays, since it
+// cannot start a line.
 // eslint-disable-next-line no-control-regex
-const PRETTY_CONTROLS = /[\x00-\x08\x0a-\x1f\x7f-\x9f]/g;
-const escapeControl = (char: string): string =>
-  char === '\n' ? '\\n' : char === '\r' ? '\\r' : `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`;
+const PRETTY_CONTROLS = /[\x00-\x08\x0a-\x1f\x7f-\x9f\u2028\u2029]/g;
+const escapeControl = (char: string): string => {
+  if (char === '\n') return '\\n';
+  if (char === '\r') return '\\r';
+  const code = char.charCodeAt(0);
+  return code > 0xff ? `\\u${code.toString(16).padStart(4, '0')}` : `\\x${code.toString(16).padStart(2, '0')}`;
+};
 const escapeControls = (text: string): string => text.replace(PRETTY_CONTROLS, escapeControl);
 
 // A stack trace opens with the error's message, which can be text the caller did not write, and its lines are the one
@@ -295,7 +301,7 @@ const escapeControls = (text: string): string => text.replace(PRETTY_CONTROLS, e
 // begins, the first one included, is indented. The frames of a real stack already start with spaces and are left as
 // they are, and a blank line stays blank.
 // eslint-disable-next-line no-control-regex
-const PRETTY_TRACE_CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+const PRETTY_TRACE_CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029]/g;
 const escapeTrace = (trace: string): string =>
   trace.replace(PRETTY_TRACE_CONTROLS, escapeControl).replace(/(^|\n)(?=[^ \t\n])/g, '$1    ');
 

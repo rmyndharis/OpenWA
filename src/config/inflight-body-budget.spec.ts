@@ -16,12 +16,12 @@ import { LoggerService, LogFormat } from '../common/services/logger.service';
 const MB = 1024 * 1024;
 
 /** Every request a case made: each is closed after the case, so the stall reaper armed for an admitted one ends with it. */
-const admitted: Array<Request & EventEmitter> = [];
+const made: Array<Request & EventEmitter> = [];
 
 /** Minimal req/res doubles: real EventEmitters so the middleware's listener accounting runs as-is. */
 const makeReq = (headers: Record<string, string> = {}): Request & EventEmitter => {
   const req = new EventEmitter() as unknown as Request & EventEmitter;
-  admitted.push(req);
+  made.push(req);
   (req as unknown as { headers: Record<string, string> }).headers = headers;
   (req as unknown as { socket: { bytesRead: number; remoteAddress: string } }).socket = {
     bytesRead: 0,
@@ -69,7 +69,7 @@ beforeEach(() => {
 afterEach(() => {
   // A request left open keeps its unref'd 5 s reaper alive; when the pace check drops it later the warning is written
   // outside any case, after the console spy is gone. Under fake timers the restored clock retires the reaper instead.
-  for (const req of admitted.splice(0)) req.emit('close');
+  for (const req of made.splice(0)) req.emit('close');
   warn.mockRestore();
   LoggerService.setLogFormat(null);
 });

@@ -851,6 +851,32 @@ describe('LoggerService', () => {
         expect(rest.every(line => line.startsWith(' '))).toBe(true);
       });
 
+      // A reader that splits lines on the Unicode separators too breaks on these two as on a newline.
+      it.each([
+        ['in the message', 'log', () => logger.log(`Message from Alice\u2028${FORGED.split('\n')[1]}`)],
+        [
+          'in a metadata value',
+          'log',
+          () => logger.log('Contact synced', { displayName: `Alice\u2029${FORGED.split('\n')[1]}` }),
+        ],
+        ['in a trace', 'error', () => logger.error('failed', `Error: boom\u2028${FORGED.split('\n')[1]}`)],
+      ] as const)('for a Unicode line separator %s', (_where, method, write) => {
+        const spy = jest.spyOn(console, method);
+        write();
+
+        const output = getRawOutput(spy);
+        expect(output).not.toMatch(/[\u2028\u2029]/);
+        expect(output).toMatch(/\\u202[89]/);
+        expect(output.split(/\r\n|[\n\r\u2028\u2029]/).filter(line => line.startsWith('[OpenWA]'))).toHaveLength(1);
+      });
+
+      it('and leaves a line of a trace that starts with a tab as it was', () => {
+        const errorSpy = jest.spyOn(console, 'error');
+        logger.error('failed', 'Error: boom\n\tat first (a.ts:1:1)');
+
+        expect(getRawOutput(errorSpy).split('\n').slice(2)).toEqual(['\tat first (a.ts:1:1)']);
+      });
+
       it('and leaves a blank line of a trace blank', () => {
         const errorSpy = jest.spyOn(console, 'error');
         logger.error('failed', 'Error: boom\n\n    at first (a.ts:1:1)\n');
