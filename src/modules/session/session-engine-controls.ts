@@ -1001,8 +1001,9 @@ export class SessionEngineControls {
     await this.fences.awaitPendingTeardown(session.name);
 
     // Mark as tearing down BEFORE cleanup so an in-flight reconnect can't resurrect it.
-    this.stoppingSessions.add(id);
-    const ownMark = this.stoppingSessions.stamp(id) as number;
+    // Held, not added: it goes with this delete unless the row is removed, and must not push a stop that finished out of
+    // the finished marks meanwhile.
+    const ownMark = this.stoppingSessions.hold(id);
     // Cancel any reconnection attempts
     this.host.cancelReconnect(id);
 

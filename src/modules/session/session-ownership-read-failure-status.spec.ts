@@ -601,6 +601,24 @@ describe('a delete refused at its second credential fence', () => {
     } as never);
   };
 
+  it('leaves the mark of a stop that finished when several deletes are refused one after another', async () => {
+    const marks = new StopMarks();
+    marks.add(ID); // a stop that finished leaves its mark
+    const refusals = Array.from({ length: 4 }, () => deferred<void>());
+    const deletes = refusals.map(refusal =>
+      controlsWith(marks, () => refusal.promise)
+        .delete(ID)
+        .catch((error: unknown) => error),
+    );
+    await turn();
+
+    for (const refusal of refusals) refusal.reject(new ConflictException('a logout is tearing it down'));
+    for (const result of deletes) expect(await result).toBeInstanceOf(ConflictException);
+
+    expect(marks.has(ID)).toBe(true);
+    expect(marks.markedSince(ID, undefined)).toBe(true);
+  });
+
   it('drops the mark it set itself', async () => {
     const marks = new StopMarks();
     const controls = controlsWith(marks, () => Promise.reject(new ConflictException('a logout is tearing it down')));
