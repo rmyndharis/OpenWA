@@ -911,6 +911,7 @@ adapter boundary — none silently stubs.
 
 ✅ means works end-to-end — but these rows carry behavioral differences worth knowing:
 
+- **1:1 sends prefer a resolved LID on both engines.** A phone-number destination can be sent to the contact's `@lid` when the engine already knows it or obtains it from a lookup, including for a cold, unsaved contact on the first send. Baileys uses `getLIDForPN` (which can query WhatsApp); whatsapp-web.js uses `getNumberId`. WhatsApp can reject phone-addressed sends to LID-migrated accounts with ack `463` (missing privacy token), so a successful number check does not force phone addressing. If no LID is resolved, the existing phone-addressed fallback applies. The linked account's own phone may show a first message to an unsaved contact under an unnamed id; see [troubleshooting](./12-troubleshooting-faq.md#issue-a-first-outbound-message-appears-under-an-unnamed-id).
 - **`clickButton` (Baileys), native-flow is unverified.** Classic `buttonsMessage` /
   `templateMessage` / `listMessage` prompts go through Baileys' `buttonReply` / `listReply`
   helpers. A native-flow `interactiveMessage` prompt is answered with the same template
