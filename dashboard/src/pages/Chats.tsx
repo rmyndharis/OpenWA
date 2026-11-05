@@ -779,9 +779,12 @@ export function Chats() {
   // Synced in a layout effect: a socket frame handled after the list commits but before passive
   // effects flush would otherwise see the previous list, miss the chat and refetch the whole list.
   const chatsRef = useRef(chats);
+  // The session whose rows chatsRef holds: listedSessionRef moves as soon as a list answers, a render before the rows do.
+  const chatsOwnerRef = useRef('');
   const activeChatIdRef = useRef<string | undefined>(undefined);
   useLayoutEffect(() => {
     chatsRef.current = chats;
+    chatsOwnerRef.current = listedSession;
     activeChatIdRef.current = activeChat?.id;
     selectedSessionRef.current = selectedSessionId;
   });
@@ -1352,7 +1355,11 @@ export function Chats() {
       const sessionId = selectedSessionRef.current;
       const sameKey = keepsSameKey();
       const isCurrent = () =>
-        sameKey() && selectedSessionRef.current === sessionId && listedSessionRef.current === sessionId && isWanted();
+        sameKey() &&
+        selectedSessionRef.current === sessionId &&
+        listedSessionRef.current === sessionId &&
+        chatsOwnerRef.current === sessionId &&
+        isWanted();
       if (!isCurrent()) return null;
       const spelled = chatsRef.current.find(c => contactKey(c.id) === contactKey(phoneId));
       if (spelled) return spelled.id;
