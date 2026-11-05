@@ -70,6 +70,35 @@ describe('loadEnvironment', () => {
     expect(workerConnectionOptions().host).toBe('redis.internal');
   });
 
+  // dotenv reports a read failure in its result instead of throwing, and the loader is the only reader of this
+  // file (AppModule leaves it alone). A skipped read would boot on the saved configuration and the defaults, with
+  // another database and a freshly seeded admin key, so a .env that exists but cannot be read stops the boot.
+  it('fails the load, naming the file, when .env is a directory', () => {
+    const dir = makeTempCwd({ 'data/.env.generated': 'REDIS_HOST=redis.saved\n' });
+    fs.mkdirSync(path.join(dir, '.env'));
+    delete process.env.REDIS_HOST;
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(runLoader).toThrow(path.join(dir, '.env'));
+    expect(process.env.REDIS_HOST).toBeUndefined();
+  });
+
+  // Running as root bypasses permission bits, so the refusal is unprovable there.
+  (process.getuid?.() === 0 ? it.skip : it)('fails the load, naming the file, when .env has no read permission', () => {
+    const dir = makeTempCwd({ '.env': 'REDIS_HOST=redis.internal\n', 'data/.env.generated': '' });
+    const file = path.join(dir, '.env');
+    fs.chmodSync(file, 0o000);
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    delete process.env.REDIS_HOST;
+
+    try {
+      expect(runLoader).toThrow(file);
+    } finally {
+      fs.chmodSync(file, 0o600);
+    }
+    expect(process.env.REDIS_HOST).toBeUndefined();
+  });
+
   it('lets a real process env value win over the .env file (precedence preserved)', () => {
     process.env.REDIS_HOST = 'host-from-process-env';
     makeTempCwd({

@@ -118,9 +118,11 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
 
 @Module({
   imports: [
-    // Configuration
+    // Configuration. The .env and data/.env.generated layers belong to src/config/load-env.ts, which main.ts imports
+    // first; this validates the environment as it stands, so evaluating AppModule never reads a working directory's .env.
     ConfigModule.forRoot({
       isGlobal: true,
+      ignoreEnvFile: true,
       load: [configuration],
       validate: validateEnv,
     }),

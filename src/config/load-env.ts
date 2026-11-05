@@ -83,7 +83,10 @@ function mergeEnvironment(lines: Array<{ level: 'log' | 'warn'; message: string 
   // 2. User-managed .env (does not override real process env)
   if (fs.existsSync(userEnvPath)) {
     lines.push({ level: 'log', message: `Loading .env from: ${userEnvPath}` });
-    dotenv.config({ path: userEnvPath, override: false, quiet: true });
+    const { error } = dotenv.config({ path: userEnvPath, override: false, quiet: true });
+    // dotenv hands a read failure back instead of throwing, and this loader is the only reader of the file: skipping
+    // it would boot on the saved configuration and the defaults (another database, a freshly seeded admin key).
+    if (error) throw new Error(`Cannot read ${userEnvPath}: ${error.message}`);
   }
 
   // Snapshot the layers that will SHADOW the dashboard-saved file — process env plus the .env just
