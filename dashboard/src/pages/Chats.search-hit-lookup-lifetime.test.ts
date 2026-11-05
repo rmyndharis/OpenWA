@@ -15,6 +15,7 @@ const SESSION: Session = {
   updatedAt: '2026-01-01T00:00:00.000Z',
 };
 const OTHER: Session = { ...SESSION, id: 'session-2', name: 'Second', phone: '15559876543' };
+const THIRD: Session = { ...SESSION, id: 'session-3', name: 'Third', status: 'disconnected', phone: '15555550000' };
 const OTHER_CHAT: Chat = {
   id: '15550009999@c.us',
   name: 'Elsewhere',
@@ -43,6 +44,15 @@ const LID_CHATS: Chat[] = Array.from({ length: 7 }, (_, i) => ({
 const SECOND_BATCH = LID_CHATS.slice(5).map(chat => chat.id.split('@')[0]);
 
 let hitSession = SESSION.id;
+// While set, every read of the session list waits for it: the page asks again for the session of a hit it does not list as
+// ready, and the user can leave before the answer comes.
+let sessionsGate: Promise<void> | null = null;
+let releaseSessions: (() => void) | null = null;
+const holdSessions = (): void => {
+  sessionsGate = new Promise(resolve => {
+    releaseSessions = resolve;
+  });
+};
 const HIT: SearchHit = {
   messageId: 'db-1',
   waMessageId: 'wa-1',
@@ -75,7 +85,10 @@ before(async () => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const path = url.replace(/^https?:\/\/[^/]+/, '');
     calls.push(path);
-    if (path === '/api/sessions') return Promise.resolve(json([SESSION, OTHER]));
+    if (path === '/api/sessions') {
+      const answer = () => json(hitSession === THIRD.id ? [SESSION, OTHER, THIRD] : [SESSION, OTHER]);
+      return sessionsGate ? sessionsGate.then(answer) : Promise.resolve(answer());
+    }
     if (path.startsWith('/api/search?')) {
       return Promise.resolve(json({ hits: [{ ...HIT, sessionId: hitSession }], total: 1 }));
     }
@@ -104,6 +117,8 @@ before(async () => {
 beforeEach(() => {
   calls.length = 0;
   hitSession = SESSION.id;
+  sessionsGate = null;
+  releaseSessions = null;
   window.sessionStorage.setItem('openwa_user_role', 'admin');
   window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
   window.sessionStorage.setItem('openwa_api_key', 'test-key');
@@ -128,7 +143,7 @@ const page = (showChats: boolean): ReactElement =>
     ),
   );
 
-async function clickFirstHit(container: HTMLElement): Promise<void> {
+async function searchAndClickFirstHit(container: HTMLElement): Promise<void> {
   rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Search messages' }));
   const input = container.querySelector('.global-search-input') as HTMLInputElement;
   rtl.fireEvent.change(input, { target: { value: 'sample' } });
@@ -138,6 +153,10 @@ async function clickFirstHit(container: HTMLElement): Promise<void> {
     return found;
   });
   rtl.fireEvent.click(result);
+}
+
+async function clickFirstHit(container: HTMLElement): Promise<void> {
+  await searchAndClickFirstHit(container);
   // The first batch of five goes out at once; the other two wait for the gap between batches.
   await rtl.waitFor(() => assert.equal(lookups().length, 5));
 }
@@ -190,4 +209,42 @@ test('a search hit that switched session stops asking for privacy-id phones when
   await settle(1_600);
 
   assert.equal(lookups().length, 5, 'no lookup follows the first batch once the page is left');
+});
+
+// The same gap in the lookup of a hit that switched session: opening a chat in the new session ends it, as the click of a
+// chat in the same session does.
+test('a search hit that switched session stops asking for privacy-id phones when the user opens a chat meanwhile', async () => {
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  hitSession = OTHER.id;
+  const view = rtl.render(page(true));
+  await rtl.screen.findByText('Elsewhere');
+  await clickFirstHit(view.container);
+
+  rtl.fireEvent.click(rtl.screen.getByText('Lid 0'));
+  await rtl.waitFor(() => assert.ok(view.container.querySelector('.room-header')));
+  await settle(1_600);
+
+  const late = lookups().filter(path => SECOND_BATCH.some(id => path.includes(id)));
+  assert.deepEqual(late, [], 'the second batch is not asked for once the user has chosen a chat');
+});
+
+// A hit for a session the page does not list as ready waits for a fresh read of the session list. Leaving the page ends
+// that wait too: the answer would otherwise tell the page that replaced this one that a session is not connected.
+test('a search hit waiting for the session list raises no notice once the Chats page is left', async () => {
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  hitSession = THIRD.id;
+  const view = rtl.render(page(true));
+  await rtl.screen.findByText('Elsewhere');
+  holdSessions();
+  await searchAndClickFirstHit(view.container);
+
+  view.rerender(page(false));
+  releaseSessions?.();
+  await settle(300);
+
+  assert.equal(
+    Boolean(rtl.screen.queryByText('The session of this message is not connected')),
+    false,
+    'the answer to the session list read raised no notice on the page that replaced Chats',
+  );
 });
