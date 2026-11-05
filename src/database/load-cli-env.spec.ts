@@ -49,6 +49,18 @@ describe('loadCliEnv (migration CLI env precedence)', () => {
     expect(process.env[KEY]).toBe('postgres');
   });
 
+  // The app refuses to boot on a file it cannot read, and this loader reads the same two. A directory where a bind mount
+  // found no file would otherwise send the migration to the default SQLite database while the deployment runs on another.
+  it.each([
+    ['.env', ['.env']],
+    ['data/.env.generated', ['data', '.env.generated']],
+  ])('fails, naming the file, when %s is a directory', (_name, parts) => {
+    const file = path.join(dir, ...parts);
+    fs.mkdirSync(file, { recursive: true });
+
+    expect(() => loadCliEnv(dir)).toThrow(file);
+  });
+
   // dotenv writes its "injected env" banner to stdout up to dotenv 17 and to stderr (console.error) from 18,
   // so every console channel is watched, not the one the installed version happens to use.
   it("loads both files without printing dotenv's banner", () => {

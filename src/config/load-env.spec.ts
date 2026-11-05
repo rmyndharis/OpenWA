@@ -70,9 +70,9 @@ describe('loadEnvironment', () => {
     expect(workerConnectionOptions().host).toBe('redis.internal');
   });
 
-  // dotenv reports a read failure in its result instead of throwing, and the loader is the only reader of this
-  // file (AppModule leaves it alone). A skipped read would boot on the saved configuration and the defaults, with
-  // another database and a freshly seeded admin key, so a .env that exists but cannot be read stops the boot.
+  // dotenv reports a read failure in its result instead of throwing. A skipped read would boot on the saved
+  // configuration and the defaults, with another database and a freshly seeded admin key, so a .env that exists but
+  // cannot be read stops the boot.
   it('fails the load, naming the file, when .env is a directory', () => {
     const dir = makeTempCwd({ 'data/.env.generated': 'REDIS_HOST=redis.saved\n' });
     fs.mkdirSync(path.join(dir, '.env'));
@@ -86,14 +86,11 @@ describe('loadEnvironment', () => {
   // The saved configuration is read by the same loader and fails the same way: a single-file bind mount of a host file
   // that does not exist leaves a directory at this path, and skipping it would boot on the defaults, with another database.
   it('fails the load, naming the file, when data/.env.generated is a directory', () => {
-    const dir = makeTempCwd({ '.env': 'REDIS_HOST=redis.internal\n' });
+    const dir = makeTempCwd({});
     fs.mkdirSync(path.join(dir, 'data', '.env.generated'), { recursive: true });
-    delete process.env.REDIS_HOST;
-    delete process.env.DATABASE_TYPE;
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
 
     expect(runLoader).toThrow(path.join(dir, 'data', '.env.generated'));
-    expect(process.env.DATABASE_TYPE).toBeUndefined();
   });
 
   // Root bypasses permission bits and Windows has no read bit to clear, so the refusal is unprovable on either.

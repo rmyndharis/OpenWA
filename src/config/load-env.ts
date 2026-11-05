@@ -84,8 +84,8 @@ function mergeEnvironment(lines: Array<{ level: 'log' | 'warn'; message: string 
   if (fs.existsSync(userEnvPath)) {
     lines.push({ level: 'log', message: `Loading .env from: ${userEnvPath}` });
     const { error } = dotenv.config({ path: userEnvPath, override: false, quiet: true });
-    // dotenv hands a read failure back instead of throwing, and this loader is the only reader of the file: skipping
-    // it would boot on the saved configuration and the defaults (another database, a freshly seeded admin key).
+    // dotenv hands a read failure back instead of throwing: skipping the file would boot on the saved configuration and
+    // the defaults (another database, a freshly seeded admin key).
     if (error) throw new Error(`Cannot read ${userEnvPath}: ${error.message}`);
   }
 
