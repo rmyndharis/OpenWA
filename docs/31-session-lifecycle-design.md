@@ -121,17 +121,19 @@ takeover adoption whose launch fails, say) releases its claim and then writes DI
 row that no node holds and that still has an active status: a row no node holds is revisited by
 neither `markLapsedDisconnected` nor the adoption sweep, so the READY a vanished node left on it would
 otherwise stand until a boot, and any claim since sets `nodeId`, so a row B claimed matches nothing.
-Three writes change the session's phone: the unlink's clear, the number a READY links and the clear of a
-logout. The first two are not awaited by their issuer; the logout awaits its own. They are issued one after
-another per session, so the database receives them in the order they were issued, and a row read that acts on
-the session's phone (the disconnect handler's reload, the second read of a start) must not return the binding
-they replace: it starts once the writes this process issued have been answered and is repeated when another is
-issued while it runs (`session-phone-writes.ts`). A write that is not answered holds up the ones behind it, and
-a read waits for it, for five seconds at most. A READY writes its status and times at once and only its
-number joins this order, so a stop or a failure that follows it is not overwritten by a write that was
-waiting. The logout issues its clear in the step that removes its engine from the registry, before a start
-can find the registry empty. Both readers also compare the binding epoch they took before reading with the
-one at the moment they use the row, since an unlink recorded in between clears a binding the row still shows.
+Four writes change the binding of a session: the unlink's clear, the number and push name a READY links, the
+push name an engine syncs after it, and the clear of a logout. The first three are not awaited by their issuer;
+the logout awaits its own. They are issued one after another per session, so the database receives them in the
+order they were issued, and a row read that acts on the session's phone (the disconnect handler's reload, the
+second read of a start) must not return the binding they replace: it starts once the writes this process issued
+have been answered and is repeated when another is issued while it runs (`session-phone-writes.ts`). A write
+that is not answered holds up the ones behind it for five seconds at most, and a read that finds them
+unanswered for that long fails like any failed read. A READY writes its status and times at once and only its
+number and push name join this order, so a stop or a failure that follows it is not overwritten by a write
+that was waiting; the synced push name joins it too, so the empty name of the READY row cannot land after it.
+The logout issues its clear in the step that removes its engine from the registry, before a start can find
+the registry empty. Both readers also compare the binding epoch they took before reading with the one at the
+moment they use the row, since an unlink recorded in between clears a binding the row still shows.
 **Pinned by:** `src/modules/takeover/session-takeover.service.spec.ts` +
 `session-ownership.service.spec.ts` + `session-ownership-status-fence.spec.ts` +
 `session-failed-write-ownership-fence.spec.ts` for the FAILED writers outside the wiring + the real-database

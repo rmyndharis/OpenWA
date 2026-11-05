@@ -185,8 +185,8 @@ export interface SessionEngineControlsHost {
   bindingEpoch(id: string): number;
   forgetBindingEpoch?(id: string): void;
   /**
-   * `read`, once the phone writes the lifecycle issued without waiting for them (an unlink's clear, the number a READY
-   * links) have been answered: a row read that overlaps one can return the binding it replaces.
+   * `read`, once the phone writes this process issued (an unlink's clear, the number and push name a READY links, the
+   * clear of a logout) have been answered: a row read that overlaps one can return the binding it replaces.
    */
   readAfterPhoneWrites?<T>(id: string, read: () => Promise<T>): Promise<T>;
   /** `write`, a change to the session's phone, issued in order with those writes. The caller awaits its answer. */
@@ -416,8 +416,8 @@ export class SessionEngineControls {
       // mark again and retires this start after its init. A launch that fails after the clear still
       // counts as the start the operator asked for. A delete issued since this start began that failed once it
       // began removing has dropped its mark and left a record this start may have read too: it still stands.
-      // It also supplies the binding the engine checks, so it is read once the phone writes of an unlink or a READY that
-      // the lifecycle did not wait for have been answered, and again when one is issued while it runs.
+      // It also supplies the binding the engine checks, so it is read once the phone writes of an unlink, a READY or a
+      // logout have been answered, and again when one is issued while it runs.
       const readCurrent = (): Promise<Session> => this.requireSession(id);
       const current = await (this.host.readAfterPhoneWrites?.(id, readCurrent) ?? readCurrent());
       const { desiredState } = current;

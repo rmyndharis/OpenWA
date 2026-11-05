@@ -327,8 +327,9 @@ export class SessionEngineLifecycle {
   // Moved each time this node records a terminal unlink of a session it owns. A start or an engine holding the
   // binding it read before the move treats it as gone, instead of depending on when the row write lands.
   private readonly bindingEpochs = new Map<string, number>();
-  // The row writes that change a session's phone and are not awaited (an unlink's clear, a READY): a row read that
-  // acts on the phone waits for them, so it cannot return the binding they replace.
+  // The writes of a session's phone binding (an unlink's clear, the number and push name a READY links, the synced push
+  // name, a logout's clear) are issued in order, and a row read that acts on the phone waits for them, so it cannot
+  // return the binding they replace.
   private readonly phoneWrites = new PhoneWrites();
 
   constructor(
@@ -1176,7 +1177,7 @@ export class SessionEngineLifecycle {
     try {
       const read = (): Promise<Session | null> => this.sessionRepository.findOne({ where: { id } });
       // After the phone writes this process issued have been answered, and again if another was issued meanwhile:
-      // a read that overlaps an unlink's clear or a READY's row can return the binding the write replaces.
+      // a read that overlaps an unlink's clear or the number a READY links can return the binding the write replaces.
       if (this.phoneWrites.hasPending(id)) {
         session = await this.phoneWrites.readSettled(id, read);
       } else {

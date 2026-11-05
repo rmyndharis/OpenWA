@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
 - Stop announcing and storing `ready` for a link the session's account binding refuses; the session goes straight to `failed`.
 - Record a WhatsApp unlink that arrives after a stop, delete or shutdown retired the engine, or whose session read fails during shutdown, so another number can link the session.
+- Stop a start right after a logout, or a reconnect after a WhatsApp unlink, from keeping the old number and refusing the account that scans next.
 
 ### Documentation
 

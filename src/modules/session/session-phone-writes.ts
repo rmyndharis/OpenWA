@@ -6,16 +6,18 @@ const PHONE_WRITE_WAIT_MS = 5_000;
 const MAX_READ_ATTEMPTS = 3;
 
 /**
- * The row writes that change a session's phone and whose issuer does not wait for them: the clear of a terminal unlink
- * and the row a READY writes. Two rules keep what a reader sees in step with what this process wrote:
+ * The row writes that change a session's phone binding: the clear of a terminal unlink, the number and push name a
+ * READY links, the push name an engine syncs after it, and the clear of a logout (its issuer awaits the answer, the
+ * others do not). Two rules keep what a reader sees in step with what this process wrote:
  *
  *  - {@link PhoneWrites.run} issues them one after another per session, so the database receives them in the order they
  *    were issued, whichever connection of the pool each one takes;
  *  - {@link PhoneWrites.readSettled} starts a read that acts on the phone once the writes issued so far have been
  *    answered, and repeats it when another is issued while it runs.
  *
- * Neither waits longer than {@link PHONE_WRITE_WAIT_MS} for a write that is not answered: the order is then best effort
- * rather than a session that cannot be read.
+ * A write that is not answered holds up the ones behind it for {@link PHONE_WRITE_WAIT_MS} at most, and the order is then
+ * best effort. A read that finds the writes unanswered for that long, counted over the whole call, or still being issued
+ * after its attempts, rejects: its caller treats that as any failed read.
  */
 export class PhoneWrites {
   /** Settles once every write issued for a session so far has been answered, or has held things up for the limit. */
