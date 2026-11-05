@@ -884,8 +884,8 @@ docker compose run --rm openwa-api npm run migration:run:prod
 
 > [!WARNING]
 > Use `migration:run:prod` inside the production image. Plain `npm run migration:run` needs `ts-node` and
-> the TypeScript sources, both stripped by `npm ci --omit=dev` in the released image. The same holds for
-> the main chain: use `migration:run:main:prod`, not `migration:run:main`.
+> the TypeScript sources, and the released image ships neither: it holds the compiled `dist/` only. The same
+> holds for the main chain: use `migration:run:main:prod`, not `migration:run:main`.
 
 On PostgreSQL the boot migrations run in one transaction, so an index build on a large table holds back
 writes to that table until the whole chain commits. On the Helm chart a boot that outlasts the startup

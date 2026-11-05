@@ -546,7 +546,7 @@ docker compose build openwa-api
 
 # 7. Run database migrations (if any)
 # Use migration:run:prod in the production image — `migration:run` needs ts-node + the TS
-# source, both stripped from the prod image by `npm ci --omit=dev`.
+# source, and the image ships neither: it holds the compiled dist/ only.
 docker compose run --rm openwa-api npm run migration:run:prod
 
 # 8. Start services

@@ -756,6 +756,56 @@ describe('both paths exercise the real engine libraries', () => {
     }
   });
 
+  /**
+   * Runs scripts/smoke-test-engine-libs.sh against a stub `docker` that records every call. What follows the
+   * image name is what the container would run: a `find` runs on the host inside a synthetic /app (the image's
+   * working directory), the migration CLI prints `listing`, and anything else is only recorded.
+   */
+  const smokeAgainstStubDocker = (
+    options: { platform?: string; layout?: (app: string) => void; listing?: string } = {},
+  ): { status: number | null; stderr: string; runs: string[] } => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engine-libs-docker-'));
+    try {
+      const app = path.join(dir, 'app');
+      fs.mkdirSync(path.join(app, 'node_modules', '.bin'), { recursive: true });
+      options.layout?.(app);
+      const calls = path.join(dir, 'calls');
+      fs.writeFileSync(
+        path.join(dir, 'docker'),
+        [
+          '#!/bin/sh',
+          'if [ "$1" = version ]; then echo amd64; exit 0; fi',
+          `printf '%s\\n@@end@@\\n' "$*" >> '${calls}'`,
+          'while [ "$#" -gt 0 ] && [ "$1" != img ]; do shift; done',
+          'if [ "$#" -gt 0 ]; then shift; fi',
+          'case "$1" in',
+          `  find) cd '${app}' && exec "$@" ;;`,
+          '  npm) printf "%s" "$MIGRATION_LISTING" ;;',
+          'esac',
+          '',
+        ].join('\n'),
+        { mode: 0o755 },
+      );
+      // The CLI underlines each line it lists where the environment advertises color.
+      const esc = String.fromCharCode(27);
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        PATH: `${dir}:${process.env.PATH}`,
+        OPENWA_SMOKE_IMAGE: 'img',
+        MIGRATION_LISTING: options.listing ?? `${esc}[4m[ ] AddMessageStatus1770108659848${esc}[24m\n`,
+      };
+      delete env.OPENWA_SMOKE_PLATFORM;
+      if (options.platform) env.OPENWA_SMOKE_PLATFORM = options.platform;
+      const result = spawnSync('sh', [path.join(__dirname, '..', '..', 'scripts', 'smoke-test-engine-libs.sh')], {
+        env,
+      });
+      const runs = fs.readFileSync(calls, 'utf8').split('@@end@@\n').filter(Boolean);
+      return { status: result.status, stderr: result.stderr.toString(), runs };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
   // A full browser launch under QEMU user emulation is slow and unreliable, and the release gate
   // cannot fail on an emulator fault. An emulated platform runs the browser binary instead; the
   // daemon's own platform, and the host-platform run in ci.yml, still launch it.
@@ -764,35 +814,88 @@ describe('both paths exercise the real engine libraries', () => {
     ['linux/amd64', true],
     ['linux/arm64', false],
   ])('the engine library smoke on %s launches the browser: %s', (platform, launches) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engine-libs-docker-'));
-    try {
-      const calls = path.join(dir, 'calls');
-      fs.writeFileSync(
-        path.join(dir, 'docker'),
-        `#!/bin/sh\nif [ "$1" = version ]; then echo amd64; exit 0; fi\nprintf '%s\\n@@end@@\\n' "$*" >> '${calls}'\n`,
-        { mode: 0o755 },
-      );
-      const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${dir}:${process.env.PATH}`, OPENWA_SMOKE_IMAGE: 'img' };
-      delete env.OPENWA_SMOKE_PLATFORM;
-      if (platform) env.OPENWA_SMOKE_PLATFORM = platform;
-      const result = spawnSync('sh', [path.join(__dirname, '..', '..', 'scripts', 'smoke-test-engine-libs.sh')], {
-        env,
-      });
-      expect(result.status).toBe(0);
-      const runs = fs.readFileSync(calls, 'utf8').split('@@end@@\n').filter(Boolean);
-      expect(runs).toHaveLength(2);
-      const browser = runs[1];
-      expect(browser).toContain("require('whatsapp-web.js')");
-      if (platform) expect(browser).toContain(`--platform ${platform}`);
-      if (launches) {
-        expect(browser).toContain('.launch(');
-      } else {
-        expect(browser).not.toContain('.launch(');
-        expect(browser).toContain('--version');
-      }
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+    const { status, runs } = smokeAgainstStubDocker({ platform });
+    expect(status).toBe(0);
+    expect(runs).toHaveLength(4);
+    const browser = runs[1];
+    expect(browser).toContain("require('whatsapp-web.js')");
+    if (platform) expect(browser).toContain(`--platform ${platform}`);
+    if (launches) {
+      expect(browser).toContain('.launch(');
+    } else {
+      expect(browser).not.toContain('.launch(');
+      expect(browser).toContain('--version');
     }
+  });
+
+  // The image is built per platform, so the toolchain check and the migration CLI run on each, an
+  // emulated one included.
+  it.each([undefined, 'linux/amd64', 'linux/arm64'])(
+    'the engine library smoke on %s checks the toolchain and runs the migration CLI',
+    platform => {
+      const [toolchain, migrations] = smokeAgainstStubDocker({ platform }).runs.slice(2);
+      expect(toolchain).toContain('find node_modules node_modules/.bin');
+      expect(migrations).toContain('npm run --silent migration:show:prod');
+      if (platform) {
+        expect(toolchain).toContain(`--platform ${platform}`);
+        expect(migrations).toContain(`--platform ${platform}`);
+      }
+    },
+  );
+
+  // npm ci --omit=dev keeps typescript and ts-node (devDependencies that valibot and typeorm list as optional
+  // peers), so the Dockerfile removes both with their bin links and the smoke proves it on the built image.
+  // A bin link left behind by a removal that stopped halfway is dangling, which a plain existence test misses.
+  const danglingBin = (app: string, name: string, target: string): void =>
+    fs.symlinkSync(target, path.join(app, 'node_modules', '.bin', name));
+  const leftovers: Array<[string, string, (app: string) => void]> = [
+    [
+      'a typescript package',
+      'node_modules/typescript',
+      app => fs.mkdirSync(path.join(app, 'node_modules', 'typescript')),
+    ],
+    ['a ts-node package', 'node_modules/ts-node', app => fs.mkdirSync(path.join(app, 'node_modules', 'ts-node'))],
+    ['a dangling tsc link', 'node_modules/.bin/tsc', app => danglingBin(app, 'tsc', '../typescript/bin/tsc')],
+    [
+      'a dangling tsserver link',
+      'node_modules/.bin/tsserver',
+      app => danglingBin(app, 'tsserver', '../typescript/bin/tsserver'),
+    ],
+    [
+      'a dangling ts-script link',
+      'node_modules/.bin/ts-script',
+      app => danglingBin(app, 'ts-script', '../ts-node/dist/bin-script-deprecated.js'),
+    ],
+    [
+      'a dangling ts-node-esm link',
+      'node_modules/.bin/ts-node-esm',
+      app => danglingBin(app, 'ts-node-esm', '../ts-node/dist/bin-esm.js'),
+    ],
+  ];
+
+  it('the engine library smoke passes an image without the TypeScript toolchain', () => {
+    // The neighbours a loose pattern would catch: the typeorm package and its CLI link, and tslib.
+    const { status, runs } = smokeAgainstStubDocker({
+      layout: app => {
+        fs.mkdirSync(path.join(app, 'node_modules', 'typeorm'));
+        fs.mkdirSync(path.join(app, 'node_modules', 'tslib'));
+        fs.writeFileSync(path.join(app, 'node_modules', '.bin', 'typeorm'), '');
+      },
+    });
+    expect(status).toBe(0);
+    expect(runs).toHaveLength(4);
+  });
+
+  it.each(leftovers)('the engine library smoke fails on %s left in the image', (_what, leftover, layout) => {
+    const { status, stderr } = smokeAgainstStubDocker({ layout });
+    expect(status).not.toBe(0);
+    expect(stderr).toContain(leftover);
+  });
+
+  it('the engine library smoke fails when the migration CLI lists no migration', () => {
+    const { status, stderr } = smokeAgainstStubDocker({ listing: '' });
+    expect(status).not.toBe(0);
+    expect(stderr).toContain('migration:show:prod');
   });
 
   it('the lane script names the spec it runs', () => {
