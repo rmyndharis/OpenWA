@@ -84,7 +84,7 @@ export class IngressProcessor extends WorkerHost {
     // before QueueModule is destroyed, so a job taken in between fails and spends an attempt. Stop taking
     // jobs once shutdown begins: the jobs already running keep the drain window to finish while the
     // engines are up, onModuleDestroy below waits for them, and the rest stay in Redis for another node
-    // or the next start. A close that skips ShutdownService (a signal Nest handles) closes there only.
+    // or the next start. A close that skips ShutdownService (the teardown after a failed boot) closes there only.
     shutdown?.onShutdown(() => {
       const worker = startedWorker(this);
       void worker?.close().catch(() => undefined);

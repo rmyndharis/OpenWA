@@ -491,6 +491,23 @@ curl -H "X-API-Key: $API_KEY" \
 
 ---
 
+### Reference: Process Signals
+
+What each signal does to the gateway process. `docker stop`, Kubernetes and systemd send `SIGTERM`, and the `dumb-init` that is PID 1 in the image forwards every signal it receives.
+
+| Signal                                             | What the gateway does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SIGTERM`, `SIGINT`, `SIGHUP`                      | Stops gracefully. Readiness answers `503` for `SHUTDOWN_DELAY_MS` (3 seconds unless `NODE_ENV` is `development` or `test`), then the ordered teardown runs and the process exits `0`, or `1` if the teardown failed or overran its budget. A second `SIGTERM` or `SIGINT` at least a second after the first exits `130` at once. A `SIGHUP` that arrives after another stop signal is ignored.                                                                                                                                                                                                       |
+| `SIGQUIT`, `SIGABRT`                               | Not handled. The default action ends the process at once, with a core dump where `ulimit -c` allows one. It is the way to get a core from a gateway whose event loop is blocked, where a handler could not run.                                                                                                                                                                                                                                                                                                                                                                                      |
+| `SIGUSR2`                                          | Not handled, so Node's diagnostic flags keep working. With `NODE_OPTIONS="--report-on-signal --report-directory=/app/data"` (or `--heapsnapshot-signal=SIGUSR2 --diagnostic-dir=/app/data`), `kill -USR2` writes the file to the data volume and the gateway keeps running. Name a writable directory: the working directory `/app` of the image is not writable, so without one the report is not written and a heap snapshot attempt ends the process with exit `1`. `--diagnostic-dir` does not move the report. Without a diagnostic flag the signal ends the process at once, with no teardown. |
+| `SIGSEGV`, `SIGBUS`, `SIGILL`, `SIGFPE`, `SIGTRAP` | Not handled. A crash in native code ends the process by that signal, with no teardown and no log line, so the container exits with status 139, 135, 132, 136 or 133 and its restart policy starts it again.                                                                                                                                                                                                                                                                                                                                                                                          |
+
+A closed terminal (`SIGHUP`) drains like any other stop: the log lines the gateway can no longer write to it, or to a log pipe that has broken, are lost instead of ending the stop early. Outside a stop, a lost log output still ends the process, as before.
+
+Read the status of a stopped container with `docker inspect -f '{{.State.ExitCode}}' openwa-api`.
+
+---
+
 ### Runbook: Version Upgrade
 
 **Trigger:** New version release

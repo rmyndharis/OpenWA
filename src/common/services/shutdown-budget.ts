@@ -1,5 +1,5 @@
 /**
- * Shutdown time budget. On SIGTERM/SIGINT (and POST /api/infra/restart) the ordered teardown has to
+ * Shutdown time budget. On SIGTERM/SIGINT/SIGHUP (and POST /api/infra/restart) the ordered teardown has to
  * finish before the orchestrator's kill deadline, or the late destroy hooks (API-key usage flush,
  * plugin onDisable, DataSource close) are SIGKILLed half way. The bounded stages below run one after
  * another in Nest destroy order (modules in sequence, hooks inside one module in parallel); sessions
@@ -44,8 +44,8 @@
  *   75 s + (SHUTDOWN_DELAY_MS - 3 s) + (WEBHOOK_SHUTDOWN_DRAIN_MS - 5 s)
  *
  * and the shipped 75 s holds for the defaults. A healthy stop exits on its own and never waits. The
- * force-exit covers only SIGTERM, SIGINT and the admin restart; the other signals Nest handles itself
- * (main.ts) call app.close() with no exit timer.
+ * force-exit covers every stop signal (SIGTERM, SIGINT, SIGHUP; stop-signals.ts) and the admin restart. No
+ * other signal starts a teardown, and the one after a failed boot is cut at 5 s by bootstrap-fatal.ts.
  *
  * Waits with no cap of their own, which only the force-exit bounds: the bulk-message destroy hook (a
  * lookup and an update per processing batch), the pending-message reaper (it awaits its running

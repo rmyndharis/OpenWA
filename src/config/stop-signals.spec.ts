@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { installStopSignalHandlers, STOP_SIGNAL_REPEAT_WINDOW_MS } from './stop-signals';
+import { installStopSignalHandlers, STOP_SIGNALS, STOP_SIGNAL_REPEAT_WINDOW_MS } from './stop-signals';
 import { ShutdownService } from '../common/services/shutdown.service';
 import { shutdownTeardownLimitMs, DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS } from '../common/services/shutdown-budget';
 
@@ -33,8 +35,39 @@ describe('stop signal handling', () => {
     };
   };
 
-  it('listens for SIGINT and SIGTERM', () => {
-    expect(install(jest.fn()).signals).toEqual(['SIGINT', 'SIGTERM']);
+  it('listens for SIGHUP, SIGINT and SIGTERM', () => {
+    expect(install(jest.fn()).signals).toEqual(['SIGHUP', 'SIGINT', 'SIGTERM']);
+  });
+
+  it('treats a hangup as a stop request: it drains once and a SIGTERM a second later forces exit 130', () => {
+    const shutdown = jest.fn();
+    const { exit, at } = install(shutdown);
+
+    at(0, 'SIGHUP');
+    at(0.2, 'SIGHUP');
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(exit).not.toHaveBeenCalled();
+
+    at(STOP_SIGNAL_REPEAT_WINDOW_MS, 'SIGTERM');
+
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(130);
+  });
+
+  it('lets a hangup after a stop signal run its course: no second drain, no exit 130, at any time', () => {
+    const shutdown = jest.fn();
+    const { exit, at } = install(shutdown);
+
+    at(0, 'SIGTERM');
+    at(STOP_SIGNAL_REPEAT_WINDOW_MS, 'SIGHUP');
+    at(30_000, 'SIGHUP');
+
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(exit).not.toHaveBeenCalled();
+
+    at(30_001, 'SIGINT');
+
+    expect(exit).toHaveBeenCalledWith(130);
   });
 
   it('drains once and ignores the duplicate of a single stop request', () => {
@@ -83,7 +116,11 @@ describe('stop signal handling', () => {
   });
 
   it('uses process.on, performance.now and process.exit by default, and stays installed', () => {
-    const before = { int: process.listenerCount('SIGINT'), term: process.listenerCount('SIGTERM') };
+    const before = {
+      hup: process.listenerCount('SIGHUP'),
+      int: process.listenerCount('SIGINT'),
+      term: process.listenerCount('SIGTERM'),
+    };
     const added: Array<[NodeJS.Signals, Listener]> = [];
     const realOn = process.on.bind(process);
     jest.spyOn(process, 'on').mockImplementation(((event: NodeJS.Signals, listener: Listener) => {
@@ -102,6 +139,7 @@ describe('stop signal handling', () => {
 
       expect(shutdown).toHaveBeenCalledTimes(1);
       expect(exitSpy).toHaveBeenCalledWith(130);
+      expect(process.listenerCount('SIGHUP')).toBe(before.hup + 1);
       expect(process.listenerCount('SIGINT')).toBe(before.int + 1);
       expect(process.listenerCount('SIGTERM')).toBe(before.term + 1);
     } finally {
@@ -166,6 +204,37 @@ describe('stop signal handling', () => {
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
+    it('puts a hangup through the same drain as SIGTERM: draining first, then the force-exit budget', () => {
+      process.env.NODE_ENV = 'production';
+      process.env.SHUTDOWN_DELAY_MS = '3000';
+      const drain = hungDrain();
+
+      drain.signal('SIGHUP');
+      expect(drain.service.isShuttingDown()).toBe(true);
+      expect(drain.service.isTearingDown()).toBe(false);
+      drain.advance(3000);
+      expect(drain.service.isTearingDown()).toBe(true);
+      drain.advance(shutdownTeardownLimitMs(DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS));
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it('still force-exits 1 at the budget when the terminal closes during a teardown that hangs', () => {
+      process.env.NODE_ENV = 'production';
+      process.env.SHUTDOWN_DELAY_MS = '3000';
+      const drain = hungDrain();
+
+      drain.signal('SIGTERM');
+      drain.advance(1500);
+      drain.signal('SIGHUP');
+      drain.advance(1500);
+      expect(drain.service.isTearingDown()).toBe(true);
+      drain.advance(shutdownTeardownLimitMs(DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS));
+
+      expect(drain.forced).not.toHaveBeenCalled();
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
     it('lets a deliberate second signal during a hung teardown exit 130 before the budget', () => {
       process.env.NODE_ENV = 'production';
       process.env.SHUTDOWN_DELAY_MS = '3000';
@@ -205,5 +274,24 @@ describe('stop signal handling', () => {
 
       expect(drain.forced).toHaveBeenCalledWith(130);
     });
+  });
+});
+
+/**
+ * Which signals the process answers is a decision, not a default. A listener on SIGSEGV, SIGBUS, SIGILL, SIGFPE
+ * or SIGTRAP makes a native crash spin at full CPU instead of ending the process; a listener on SIGQUIT or
+ * SIGABRT takes away the core dump that is the way out of a blocked event loop; SIGUSR2 is Node's diagnostic
+ * report signal. The booted gateway is checked in main-process-signals.spec.ts.
+ */
+describe('the signals the gateway stops on', () => {
+  it('are SIGTERM, SIGINT and SIGHUP, and nothing else', () => {
+    expect(STOP_SIGNALS).toEqual(['SIGTERM', 'SIGINT', 'SIGHUP']);
+  });
+
+  it('are handled by installStopSignalHandlers alone: main.ts registers none with Nest', () => {
+    const source = readFileSync(join(__dirname, '..', 'main.ts'), 'utf8');
+
+    // Nest adds one listener per signal it is given, and an empty list means every signal.
+    expect(source).not.toMatch(/\.enableShutdownHooks\(/);
   });
 });

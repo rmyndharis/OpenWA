@@ -80,9 +80,9 @@ export class MediaConversionService implements OnModuleInit, OnApplicationShutdo
   }
 
   /**
-   * Kill the detached ffmpeg groups still running. Nest's own signal handler re-raises the signal
-   * once its hooks finish, so the process dies from it without ever emitting `exit`; this hook runs
-   * on that path and on `app.close()`.
+   * Kill the detached ffmpeg groups still running, as the application closes. Every stop signal reaches
+   * this through the app.close() that ShutdownService runs; a signal left to its default action (SIGQUIT,
+   * SIGABRT, a fault) ends the process with no hook at all.
    */
   onApplicationShutdown(): void {
     this.shutdown.abort();

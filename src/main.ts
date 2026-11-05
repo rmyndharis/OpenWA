@@ -3,7 +3,7 @@
 // webhook Worker's @Processor connection) see the configured values rather than pre-dotenv defaults.
 import './config/load-env';
 import { NestFactory } from '@nestjs/core';
-import { INestApplication, ShutdownSignal } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SwaggerModule } from '@nestjs/swagger';
 import { AppModule, DASHBOARD_DIST, dashboardServingEnabled, dashboardBuildPresent } from './app.module';
@@ -15,7 +15,11 @@ import {
   dropUnexpressibleOperations,
   exemptPublicOperations,
 } from './config/swagger.config';
-import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './config/process-error-monitor';
+import {
+  ignoreLostOutput,
+  registerUncaughtExceptionMonitor,
+  registerUnhandledRejectionHandler,
+} from './config/process-error-monitor';
 import { runBootstrapOrExit } from './config/bootstrap-fatal';
 import { installStopSignalHandlers } from './config/stop-signals';
 import { s3EndpointError, validateEnv } from './config/env.validation';
@@ -187,13 +191,10 @@ async function bootstrap() {
   const { bodyLimit, inflightBudgetBytes } = configureApp(app);
   bootstrapLogger.log(`Request body caps: ${bodyLimit} per request, ${inflightBudgetBytes} bytes aggregate in flight`);
 
-  // Let Nest own every shutdown signal EXCEPT SIGTERM/SIGINT — those we route through the bounded
-  // drain below, so a load balancer / orchestrator observes readiness=503 and stops routing BEFORE
-  // teardown begins. (enableShutdownHooks with an EMPTY array registers ALL signals; this filtered
-  // list is non-empty, so the exclusion is honoured.)
-  app.enableShutdownHooks(
-    Object.values(ShutdownSignal).filter(s => s !== ShutdownSignal.SIGTERM && s !== ShutdownSignal.SIGINT),
-  );
+  // Nest's enableShutdownHooks is deliberately not called: it adds a process listener for each signal it is
+  // given (an empty list means every signal), and a listener on a fault signal makes a crash in native code
+  // spin the process at full CPU instead of ending it. The stop signals are STOP_SIGNALS, installed below;
+  // every other signal keeps its default action (see stop-signals.ts).
 
   // Wire up graceful shutdown service
   const shutdownService = app.get(ShutdownService);
@@ -201,12 +202,20 @@ async function bootstrap() {
     await app.close();
   });
 
-  // On SIGTERM/SIGINT: drain gracefully. shutdown() flips readiness to 503 immediately (the LB stops
-  // routing), keeps serving in-flight requests for a bounded grace, then runs app.close() (the SAME
-  // Nest lifecycle hooks Nest's own handler would run) and exits deterministically. A repeat signal
-  // one second or more after the first forces an immediate exit (130); a repeat inside that second is
-  // the same stop request delivered twice, which npm and the Nest CLI do. See stop-signals.ts.
-  installStopSignalHandlers({ shutdown: () => shutdownService.shutdown() });
+  // On SIGTERM/SIGINT/SIGHUP: drain gracefully. shutdown() flips readiness to 503 immediately (the LB stops
+  // routing), keeps serving in-flight requests for a bounded grace, then runs app.close() (every Nest
+  // lifecycle hook) and exits deterministically. A repeat SIGTERM or SIGINT one second or more after the
+  // first forces an immediate exit (130); a repeat inside that second is the same stop request delivered
+  // twice, which npm and the Nest CLI do, and a SIGHUP after the first signal is ignored (a closing
+  // terminal does not cut the teardown short). See stop-signals.ts. A terminal that closed (SIGHUP) or a pipe
+  // that broke fails the next log write with EIO or EPIPE, and unhandled that ends the process at the first
+  // log line after the grace, before app.close() has run; the stop path ignores those errors.
+  installStopSignalHandlers({
+    shutdown: () => {
+      ignoreLostOutput();
+      shutdownService.shutdown();
+    },
+  });
 
   // Shared production/e2e prefix and DTO validation contract.
   applyGlobalValidation(app);
