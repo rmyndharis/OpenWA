@@ -475,6 +475,7 @@ export class SessionEngineLifecycle {
       nodeId: this.ownership?.nodeId,
       bindingEpoch: id => this.bindingEpochs.get(id) ?? 0,
       forgetBindingEpoch: id => void this.bindingEpochs.delete(id),
+      unlinkClearPending: id => this.unlinkClears.has(id),
       prepareStart: (id, desiredState) => this.prepareStart(id, desiredState),
       purgeAuthDirsIfDeleted: id => this.purgeAuthDirsIfDeleted(id),
       updateStatus: (id, status) => this.updateStatus(id, status),

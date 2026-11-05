@@ -285,3 +285,66 @@ describe('a disconnect read that overlaps the unlink record of the engine it rep
     }
   });
 });
+
+describe('a start issued while the phone clear of a recorded unlink is pending', () => {
+  it.each([false, true])(
+    'accepts the next number when the clear committed before the reads is %s',
+    async clearBeforeReads => {
+      const f = fixture();
+      await f.lifecycle.start(ID);
+      f.engines[0].getStatus.mockReturnValue(EngineStatus.READY);
+      f.engines[0].getPhoneNumber = jest.fn(() => BOUND);
+      f.callbacksOf(0).onStateChanged?.(EngineStatus.READY);
+      f.callbacksOf(0).onReady?.(BOUND, 'Bound');
+      await new Promise(resolve => setImmediate(resolve));
+      const oldRead = f.holdRead();
+      f.engines[0].getStatus.mockReturnValue(EngineStatus.DISCONNECTED);
+      f.callbacksOf(0).onStateChanged?.(EngineStatus.DISCONNECTED);
+      f.callbacksOf(0).onDisconnected?.('LOGOUT');
+      await f.lifecycle.stop(ID);
+      f.stored.desiredState = 'stopped';
+
+      const write = f.repository.update.getMockImplementation()!;
+      let releaseClear!: () => void;
+      let releaseAdmission: (() => void) | undefined;
+      let clearReleased = false;
+      f.repository.update.mockImplementation((where: unknown, patch: Partial<Session>) => {
+        if ('phone' in patch && patch.phone === null) {
+          return new Promise<{ affected: number }>(resolve => {
+            releaseClear = () => {
+              clearReleased = true;
+              resolve(write(where, patch));
+            };
+          });
+        }
+        if (!clearReleased && 'desiredState' in patch && patch.desiredState === null) {
+          return new Promise<{ affected: number }>(resolve => (releaseAdmission = () => resolve(write(where, patch))));
+        }
+        return write(where, patch);
+      });
+      oldRead.answer();
+      await f.settled();
+      expect(f.recordedUnlinks()).toHaveLength(1);
+      expect(f.stored.phone).toBe(BOUND);
+
+      if (clearBeforeReads) {
+        releaseClear();
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      const restart = f.lifecycle.start(ID, { explicit: true });
+      if (!clearBeforeReads) {
+        // Both reads of the start return the bound number. Its admission write waits for the clear to commit first.
+        await until(() => releaseAdmission !== undefined, 'start admission after its reads');
+        releaseClear();
+        await new Promise(resolve => setImmediate(resolve));
+        expect(f.stored.phone).toBeNull();
+        releaseAdmission!();
+      }
+      await restart;
+      await f.linkOther(1);
+      const actual = { logouts: f.engines[1].logout.mock.calls.length, status: f.stored.status, phone: f.stored.phone };
+      await f.lifecycle.shutdown();
+      expect(actual).toEqual({ logouts: 0, status: SessionStatus.READY, phone: OTHER });
+    },
+  );
+});

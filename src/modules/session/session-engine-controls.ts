@@ -184,6 +184,8 @@ export interface SessionEngineControlsHost {
   /** Same contract as SessionEngineWiringHost.bindingEpoch. */
   bindingEpoch(id: string): number;
   forgetBindingEpoch?(id: string): void;
+  /** Whether the phone clear of a recorded terminal unlink is still being written: a row read now can return it. */
+  unlinkClearPending?(id: string): boolean;
   logger: ReturnType<typeof createLogger>;
   /** LIVE closure — read at call time, never captured (specs replace lifecycle.dataSource at runtime). */
   dataSource(): DataSource;
@@ -332,8 +334,10 @@ export class SessionEngineControls {
     // above all, which writes nothing else this start could read and counts on it aborting. That
     // includes a mark set again on top of a stale one, which only its stamp tells apart.
     const markAtEntry = this.stoppingSessions.stamp(id);
-    // A WhatsApp unlink recorded after this point clears the binding either read below may still return.
+    // A WhatsApp unlink recorded after this point clears the binding either read below may still return, and so
+    // does one whose phone clear is still being written now.
     const bindingEpoch = this.host.bindingEpoch(id);
+    const unlinkClearing = this.host.unlinkClearPending?.(id) ?? false;
 
     try {
       const session = await this.requireSession(id);
@@ -482,8 +486,9 @@ export class SessionEngineControls {
       // schedule a reconnect that registers a replacement before initialize() rejects.
       const before = this.engines.get(id);
       // The binding the engine checks comes from the read past the teardown fence, and none at all once a WhatsApp
-      // unlink was recorded since this start began: the number that scans next must not be refused as a rebind.
-      const phone = this.host.bindingEpoch(id) === bindingEpoch ? current.phone : null;
+      // unlink was recorded since this start began or its clear was still being written then: the number that scans
+      // next must not be refused as a rebind.
+      const phone = !unlinkClearing && this.host.bindingEpoch(id) === bindingEpoch ? current.phone : null;
       const init = this.host.initializeEngine(id, { ...session, phone });
       const registered = this.engines.get(id);
       const mine = registered !== before ? registered : undefined;
