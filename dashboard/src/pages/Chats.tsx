@@ -1640,12 +1640,14 @@ export function Chats() {
   // The filter and search are cleared so the opened chat is visible in the list. A chat the panel found
   // through another session (a lookup that answered after a switch) is dropped: opening it here would
   // send the next message through the wrong account. Until the selected session's own list has committed the rows
-  // are still the previous session's, so the chat opens without being read from or added to them.
+  // are still the previous session's, so the chat opens without being read from or added to them. A lookup that was
+  // pending when the list committed calls the handler of the render it began in: the rows are read from the ref that
+  // is paired with their owner, never from that render's `chats`.
   const handleOpenNewChat = (chat: Chat, sessionId: string) => {
     if (sessionId !== selectedSessionRef.current) return;
     const listed = chatsOwnerRef.current === sessionId;
-    const existing = listed ? chats.find(c => c.id === chat.id) : undefined;
-    if (listed && !existing) setChats(prev => [chat, ...prev]);
+    const existing = listed ? chatsRef.current.find(c => c.id === chat.id) : undefined;
+    if (listed && !existing) setChats(prev => (prev.some(c => c.id === chat.id) ? prev : [chat, ...prev]));
     setActiveTab('chats');
     setActiveChannel(null);
     setActiveStatusContactId(null);
