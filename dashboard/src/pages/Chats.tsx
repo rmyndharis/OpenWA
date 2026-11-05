@@ -1415,15 +1415,24 @@ export function Chats() {
   useLayoutEffect(() => {
     hitContextRef.current += 1;
   }, [selectedSessionId, activeChat?.id]);
+  // A hit still looking up its chat when the page is left has nothing to open it in: ending it also ends its lookup, and
+  // the continuation of a click that waited for the session list says nothing on the page that replaced this one.
+  useEffect(
+    () => () => {
+      pendingHitRef.current = null;
+      hitClickRef.current = null;
+    },
+    [],
+  );
 
   // The listed chat a hit was found in. A stored row keeps the chat id it was written with, which can be another
   // spelling of a listed chat: an API send to the raw `@s.whatsapp.net` form, or to the phone of a contact the list
   // holds under its @lid. The thread read takes those as one chat, and so does this.
   const findHitChat = useCallback(
-    async (chatId: string): Promise<Chat | undefined> => {
+    async (chatId: string, isWanted?: () => boolean): Promise<Chat | undefined> => {
       const listed = chatsRef.current.find(c => c.id === chatId);
       if (listed || !phoneContactId(chatId)) return listed;
-      const id = await findListedChat(chatId).catch(() => null);
+      const id = await findListedChat(chatId, isWanted).catch(() => null);
       return id === null ? undefined : chatsRef.current.find(c => c.id === id);
     },
     [findListedChat],
@@ -1516,7 +1525,12 @@ export function Chats() {
       if (!listReady) return;
       const openBefore = activeChatIdRef.current;
       const contextBefore = hitContextRef.current;
-      const chat = await findHitChat(hit.chatId);
+      // The lookup asks the gateway for the phones of privacy-id chats, so it ends, with no further request, as soon as the
+      // answer would be dropped below.
+      const chat = await findHitChat(
+        hit.chatId,
+        () => pendingHitRef.current === pending && hitContextRef.current === contextBefore,
+      );
       // A newer hit, a session switch, or a chat the user opened while the lookup ran takes over from this one, also when
       // a room was opened and closed again and the open chat is what it was.
       if (
@@ -1565,7 +1579,10 @@ export function Chats() {
     pendingHitRef.current = resolving;
     const openBefore = activeChatIdRef.current;
     const contextBefore = hitContextRef.current;
-    void findHitChat(pending.chatId).then(chat => {
+    void findHitChat(
+      pending.chatId,
+      () => pendingHitRef.current === resolving && hitContextRef.current === contextBefore,
+    ).then(chat => {
       if (
         pendingHitRef.current !== resolving ||
         activeChatIdRef.current !== openBefore ||
