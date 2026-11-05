@@ -145,7 +145,8 @@ export class ContactController {
     summary: 'Check if a phone number exists on WhatsApp',
     description:
       'Returns whether the number is a registered WhatsApp account and its canonical id. Use this to ' +
-      'pre-validate a recipient before sending. Baileys also checks unmapped phone destinations before ' +
+      'pre-validate a recipient before sending. Only the digits of `number` are queried, so a `+`, spaces ' +
+      'or an `@c.us` suffix are tolerated. Baileys also checks unmapped phone destinations before ' +
       'sending: a number reported as unregistered is rejected with 400. A successful check does not ' +
       'confirm message delivery. Requires an OPERATOR key.',
   })
@@ -156,7 +157,12 @@ export class ContactController {
     description: 'Number existence check result',
     type: NumberCheckResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Session is not started' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Session is not started, or `number` is an id of another kind (a privacy id, a group or a channel) or holds ' +
+      'no digits, so it names no phone number',
+  })
   @ApiResponse({
     status: 503,
     description:

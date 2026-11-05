@@ -12,7 +12,7 @@ import { startGuardedInterval } from '../../common/utils/guarded-interval';
 import { extFromMimetype } from '../../common/media/mime-ext';
 import { isUniqueViolation } from '../../common/utils/db-errors';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
-import { parseWaId, userPart } from '../../engine/identity/wa-id';
+import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { createLogger } from '../../common/services/logger.service';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 
@@ -298,22 +298,16 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
   private async contactCandidates(contactJid: string): Promise<string[]> {
     // The same person may hold rows under both a @lid and their @c.us (the mapping was learned
     // mid-window) — match every candidate so a resolved-form query doesn't silently miss lid rows.
+    // The expansion is the one the message filters and the chat fence use: a lid's digits are never read
+    // as a phone, and an id that names no individual (a group, or one with a second @) matches only itself.
     const candidates = new Set<string>([contactJid]);
-    if (this.lidMappingStore) {
-      // parseWaId classifies the input, so an upper-case or hosted.lid input is a lid too.
-      const parsed = parseWaId(contactJid);
-      if (parsed.kind === 'lid') {
-        // A lid's digits are not a phone (the map's keys are raw digits, so a phone could collide
-        // with a lid): add the folded `<lid>@lid` form it is stored under and forward-resolve it, so
-        // rows ingested after the mapping was learned (stored under @c.us) still match.
-        candidates.add(`${parsed.userPart}@lid`);
-        const resolved = await this.lidMappingStore.findPhoneForLid(parsed.userPart);
-        if (resolved) candidates.add(`${resolved}@c.us`);
-      } else {
-        const phone = userPart(contactJid);
-        candidates.add(`${phone}@c.us`);
-        for (const lid of await this.lidMappingStore.findLidsForPhone(phone)) candidates.add(`${lid}@lid`);
-      }
+    const lids = this.lidMappingStore;
+    if (lids) {
+      const forms = await resolveJidCandidates(contactJid, {
+        resolveLid: lid => lids.findPhoneForLid(lid),
+        lidsForPhone: phone => lids.findLidsForPhone(phone),
+      });
+      for (const form of forms) candidates.add(form);
     }
     return [...candidates];
   }

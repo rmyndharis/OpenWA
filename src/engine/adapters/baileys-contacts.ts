@@ -199,8 +199,9 @@ export class BaileysContacts {
    * The read half of block/unblockContact. Bounded by our own clock: Baileys' `query()` swallows
    * its timeout, and an unanswered blocklist query would otherwise surface as an EMPTY blocklist —
    * a claim about the account sold in place of a transport failure. Wire items without a jid attr
-   * are dropped rather than reported as "undefined". A contact held under both its LID and its phone
-   * is two wire items that read as one id, which is listed once.
+   * are dropped rather than reported as "undefined". Items that fold to the same neutral id are listed once.
+   * The session folds only the account's own LID into its phone, so an item that names a person by LID is
+   * listed under that LID, and {@link withBlockedState} marks a contact only when the list holds its own id.
    */
   async getBlockedContacts(budgetMs: number = this.queryBudgetMs): Promise<string[]> {
     this.host.ensureReady();

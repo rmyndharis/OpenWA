@@ -41,10 +41,7 @@ export class BaileysStatus {
   private sock(expected?: WASocket): WASocket {
     this.host.ensureReady();
     const socket = this.host.getSocket();
-    const current = this.host.getSocketOrNull?.() ?? socket;
-    if (expected && (current !== expected || socket !== expected) && socket.sendMessage !== expected.sendMessage) {
-      throw new EngineNotReadyError();
-    }
+    if (expected && socket !== expected) throw new EngineNotReadyError();
     return socket;
   }
 
@@ -92,6 +89,8 @@ export class BaileysStatus {
     options: StatusPostOptions,
   ): Promise<StatusResult> {
     const socket = this.sock();
+    // Before the media is fetched or probed: a status that cannot be posted costs neither.
+    this.requireRecipients(options);
     // The kind's default labels a URL whose host serves a generic type, rather than octet-stream.
     const fallbackType = kind === 'image' ? 'image/jpeg' : kind === 'video' ? 'video/mp4' : 'audio/ogg; codecs=opus';
     const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl(), fallbackType);
@@ -106,6 +105,14 @@ export class BaileysStatus {
           ? { video: data, caption: options.caption, mimetype, ...(await describeVideo(data)) }
           : { audio: data, mimetype, ptt: true, ...(await describeAudio(data, true)) };
     return this.postStatus(content, options, socket);
+  }
+
+  /** Baileys posts to exactly the statusJidList allow-list, so a status without recipients is a client error. */
+  private requireRecipients(options: StatusPostOptions): string[] {
+    if (!options.recipients?.length) {
+      throw new BadRequestException('recipients is required to post a status on the Baileys engine');
+    }
+    return options.recipients;
   }
 
   /**
@@ -156,10 +163,7 @@ export class BaileysStatus {
     // Baileys posts to exactly the statusJidList allow-list, so unlike whatsapp-web.js (which
     // broadcasts) an absent/empty recipients list would publish to nobody — reject it as a client
     // error here rather than send a status no contact can see.
-    if (!options.recipients?.length) {
-      throw new BadRequestException('recipients is required to post a status on the Baileys engine');
-    }
-    const statusJidList = options.recipients.map(r => this.host.toEngineJid(r));
+    const statusJidList = this.requireRecipients(options).map(r => this.host.toEngineJid(r));
     const sent = await this.sendStatus(
       content,
       {

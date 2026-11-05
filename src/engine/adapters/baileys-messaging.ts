@@ -376,13 +376,7 @@ export class BaileysMessaging {
     } catch (error) {
       throw markNothingSent(error);
     }
-    if (
-      expected &&
-      (socket !== expected ||
-        (typeof this.host.getSocketOrNull === 'function' && this.host.getSocketOrNull() !== expected))
-    ) {
-      throw markNothingSent(new EngineNotReadyError());
-    }
+    if (expected && socket !== expected) throw markNothingSent(new EngineNotReadyError());
     return socket;
   }
 
@@ -645,14 +639,15 @@ export class BaileysMessaging {
     const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl(), 'video/mp4');
     return this.sendContent(
       chatId,
-      {
+      // Built by send() once the recipient has passed its check, so a send that is refused costs no ffmpeg run.
+      async () => ({
         video: data,
         caption: media.caption,
         mimetype,
         // Made outside Baileys, which would otherwise run ffmpeg on the file itself (see describeVideo).
         ...(await describeVideo(data)),
         ...this.withMentions(media.mentions),
-      },
+      }),
       await this.quoteOption(media.quotedMessageId, socket),
       socket,
     );
@@ -669,8 +664,14 @@ export class BaileysMessaging {
       // extends SendMediaMessageDto) and whatsapp-web.js sends it, so dropping it here made the same
       // request notify participants on one engine and silently not on the other.
       // The duration and a voice note's waveform come from describeAudio, never from Baileys, which
-      // would read the file in this process.
-      { audio: data, mimetype, ptt, ...(await describeAudio(data, ptt)), ...this.withMentions(media.mentions) },
+      // would read the file in this process. Built by send() once the recipient has passed its check.
+      async () => ({
+        audio: data,
+        mimetype,
+        ptt,
+        ...(await describeAudio(data, ptt)),
+        ...this.withMentions(media.mentions),
+      }),
       await this.quoteOption(media.quotedMessageId, socket),
       socket,
     );
@@ -1074,7 +1075,7 @@ export class BaileysMessaging {
 
   private async sendContent(
     chatId: string,
-    content: AnyMessageContent,
+    content: AnyMessageContent | (() => Promise<AnyMessageContent>),
     options?: MiscMessageGenerationOptions,
     expected?: WASocket,
   ): Promise<MessageResult> {
@@ -1082,8 +1083,13 @@ export class BaileysMessaging {
     const b = await this.host.loadLib();
     if (expected) this.sock(expected);
     const jid = await this.toDeliverableJid(chatId, expected);
-    const safe = this.previewSafe(content);
-    const merged = this.previewSafeOptions(safe, this.withEphemeral(jid, options));
+    // A function builds content that costs work (see send()). What it builds passes the same preview guard, so a
+    // text-bearing content made that way cannot reach the library's own link preview generator either: its
+    // `linkPreview: null` makes the library skip the generator, and the vetted `getUrlInfo` option is not needed.
+    const safe =
+      typeof content === 'function' ? async () => this.previewSafe(await content()) : this.previewSafe(content);
+    const ephemeral = this.withEphemeral(jid, options);
+    const merged = typeof safe === 'function' ? ephemeral : this.previewSafeOptions(safe, ephemeral);
     const sent = await this.send(jid, safe, merged, expected);
     if (sent) {
       void this.host.putStoredMessage(sent)?.catch(err =>

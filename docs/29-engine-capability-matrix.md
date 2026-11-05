@@ -1000,12 +1000,14 @@ adapter boundary — none silently stubs.
   marks, and a chat deleted before 0.27.0 has none, so such a chat is listed again while the gateway
   still stores its messages. Limits: the read takes the `BAILEYS_SESSION_STORE_MAX_ENTRIES` chats
   (default 5000) with the newest rows, and a chat that holds only another account's rows, or only
-  rows without a WhatsApp id, uses a slot and lists nothing; a start waits ten seconds for the read
-  at most, and lists as it did before chats were seeded when the read takes longer; a chat with no
-  stored message (not kept under `STORE_EPHEMERAL_MESSAGES=false`, or removed by retention) and no
-  persisted state comes back when its next message arrives; `unreadCount` reads `0` until a message
-  arrives, since nothing stored records it; a contact stored under both its phone and its lid lists
-  as two rows, as the live listing keeps them; and when the chat states outgrow
+  rows without a WhatsApp id, uses a slot and lists nothing; on PostgreSQL a start waits ten seconds
+  for the read at most, and lists as it did before chats were seeded when the read takes longer, while
+  on SQLite the read is one synchronous statement that holds the event loop until it ends, so the
+  start waits for all of it; a chat with no stored message (not kept under
+  `STORE_EPHEMERAL_MESSAGES=false`, or removed by retention) and no persisted state comes back when
+  its next message arrives; `unreadCount` reads `0` until a message arrives, since nothing stored
+  records it; a contact stored under both its phone and its lid lists as two rows, as the live
+  listing keeps them; and when the chat states outgrow
   `BAILEYS_CHAT_STATE_CACHE_MAX`, a deleted chat whose state row was not cached can show in the
   first listing after the start, and is left out once that row is read.
   A first link gets its chats from history sync instead. The transient reconnects Baileys runs on

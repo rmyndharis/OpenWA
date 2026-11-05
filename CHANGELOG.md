@@ -77,6 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove group and other access from existing plugin directories without granting owner permissions.
 - Take any restored session id (letters, digits and hyphens, up to 128 characters) on the `/api/sessions/{sessionId}` routes, which answered `400` for a non-UUID id and left a restored session impossible to stop, log out or delete; a restore refuses an archive whose session id is longer.
 - Relay a session owner's answer over 4 MiB as it arrives, so concurrent media downloads through another node no longer hold a full copy each in memory.
+- Stop `GET status/{id}` from returning the statuses of the phone before the first `@` for an id with a second `@` or for a group or channel id.
+- Refuse a group, channel, privacy or two-@ id, and a value with no digits, with 400 in the number check (REST and MCP), and query WhatsApp with the digits of the number only.
+- Read the thumbnail, duration and waveform of a Baileys video or audio send, or a video or voice status, only after the recipient, quote and status recipients checks pass, so a refused send no longer spawns the ffmpeg and parser child processes.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
 - Refuse a Baileys retry receipt from another chat for a message received under a lid with its sender's number.
 - Webhook writes refuse more than 27 events, and webhook and automation rule writes refuse id filter values over 128 characters.
@@ -109,6 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Explain that schema defaults remain stored across plugin updates.
 - Explain how hooks and webhook handlers can start reply sends without awaiting them, with error handling.
 - Describe plain-text storage and masked reads for retained integration instance secrets.
+- Scope the ten second Baileys stored-chat read bound to PostgreSQL; on SQLite the read holds the event loop until it ends.
 - The API reference says how to count the viewers of a Baileys status post from `message.receipt`, and that a status post reports no `delivered` or `read` ack.
 - Explain redirect and blocked-destination delivery errors in the n8n troubleshooting guide.
 - API reference and troubleshooting guide: a SOCKS proxy cannot log in on whatsapp-web.js; use a proxy that admits the gateway by IP or an HTTP or HTTPS proxy with credentials.

@@ -2710,13 +2710,15 @@ Check whether a phone number exists on WhatsApp and return its canonical WhatsAp
 }
 ```
 
+`number` is echoed as sent. Only its digits are queried, so a `+`, spaces, hyphens or an `@c.us` suffix are tolerated. An id with an `@` that is not a phone id (a privacy id `@lid`, a group `@g.us`, a channel, an empty local part such as `@c.us`, or an unknown domain) and a value with no digits are refused with `400` before WhatsApp is asked, since neither names a phone number; resolve a privacy id with `GET /api/sessions/:sessionId/contacts/:contactId/phone`.
+
 `whatsappId` is the chat id WhatsApp holds for the number, in the neutral `<phone>@c.us` form on both engines (it can differ from the digits supplied), or `null` when the number is not on WhatsApp; `exists` is `whatsappId !== null`.
 
 On whatsapp-web.js, a number WhatsApp answers under a privacy id (`@lid`) needs a second read for its phone, and when WhatsApp Web does not hold that phone locally the read sends a second query to WhatsApp, so one check can cost two outbound queries. If that second read fails, `whatsappId` is the supplied digits as `<digits>@c.us`.
 
 > Route-order caveat: this route is two path segments (`check/:number`), so it never collides with the single-segment `GET /:contactId` — a contact id of literally `check` resolves to `GET /:contactId`.
 
-**Errors:** `400` session is not started · `401` missing/invalid API key · `403` key lacks OPERATOR role, is not scoped to this session, is restricted to selected chats, or its IP allow-list excludes the client · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable)
+**Errors:** `400` session is not started, or `number` is an id of another kind or holds no digits · `401` missing/invalid API key · `403` key lacks OPERATOR role, is not scoped to this session, is restricted to selected chats, or its IP allow-list excludes the client · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable)
 
 #### GET /api/sessions/:sessionId/contacts/:contactId
 
