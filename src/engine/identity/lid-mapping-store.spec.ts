@@ -2519,15 +2519,29 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
   const flushed = () => new Promise(resolve => setImmediate(resolve));
   /**
    * Run out the checks queued so far: each window timer fires (it was set inside a remembered write),
-   * its table reads answer and the reports land. Only where no read is held open on purpose; the
-   * deadline keeps a window that never fires a fast failure.
+   * its table reads answer and the reports land. Only where no read is held open on purpose. It fails
+   * the case when that does not happen within two seconds, a window that never fires and a read that
+   * never answers included: an absence assertion after it would otherwise pass without the work it
+   * stands for having run.
    */
   const checksRun = async (store: LidMappingStoreService, repo: ReturnType<typeof makeFakeRepo>): Promise<void> => {
     const timers = store as unknown as { secondLidTimer?: unknown };
-    for (const end = Date.now() + 2000; Date.now() < end;) {
-      while (timers.secondLidTimer !== undefined && Date.now() < end)
+    const end = Date.now() + 2000;
+    const notFinished = () => new Error('the second-lid checks did not finish within 2000 ms');
+    for (;;) {
+      while (timers.secondLidTimer !== undefined) {
+        if (Date.now() >= end) throw notFinished();
         await new Promise(resolve => setTimeout(resolve, 1));
-      await Promise.allSettled(repo.find.mock.results.map(result => result.value as unknown));
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(notFinished()), Math.max(0, end - Date.now()));
+      });
+      try {
+        await Promise.race([Promise.allSettled(repo.find.mock.results.map(result => result.value as unknown)), late]);
+      } finally {
+        clearTimeout(timer);
+      }
       await flushed();
       if (timers.secondLidTimer === undefined) return;
     }
@@ -2537,10 +2551,10 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     (store as unknown as { secondLidReadWarning: { at: number; held: number } }).secondLidReadWarning;
   /** One later turn of the same timer delay: same-delay timers fire in the order they were set. */
   const aTick = () => new Promise(resolve => setTimeout(resolve, 0));
-  /** Wait for a condition, up to a deadline; the expectations after it then show what is missing. */
+  /** Wait for a condition, and fail the case when it does not hold within the deadline. */
   const until = async (done: () => boolean, ms = 2000): Promise<void> => {
-    for (const end = Date.now() + ms; !done() && Date.now() < end;)
-      await new Promise(resolve => setTimeout(resolve, 2));
+    for (const end = Date.now() + ms; !done(); await new Promise(resolve => setTimeout(resolve, 2)))
+      if (Date.now() >= end) throw new Error(`a condition did not hold within ${ms} ms`);
   };
   const owedChecks = (store: LidMappingStoreService) =>
     (store as unknown as { secondLidOwed: Map<string, { phone: string }> }).secondLidOwed;
