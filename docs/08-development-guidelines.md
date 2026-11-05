@@ -274,8 +274,10 @@ export class CreateExampleDto {
 
 `@Global()` makes a module's exported providers injectable everywhere without an import, which is
 convenient exactly until two modules both assume they own a name and the injector silently picks
-one. The sanctioned set is therefore frozen at these ten — every one of them a cross-cutting
-concern that nearly every module would otherwise have to import:
+one. The sanctioned set is therefore frozen at these eleven — ten of them cross-cutting
+concerns that nearly every module would otherwise have to import, and `SearchModule`, which is global
+only so that the tool registry can take `SearchService` as an optional dependency without importing a
+module that `SEARCH_ENABLED=false` leaves out:
 
 | Module             | Path                                         | Why it is global                                      |
 | ------------------ | -------------------------------------------- | ----------------------------------------------------- |
@@ -289,8 +291,9 @@ concern that nearly every module would otherwise have to import:
 | `StorageModule`    | `src/common/storage/storage.module.ts`       | File/media storage used across modules                |
 | `LoggerModule`     | `src/common/services/logger.module.ts`       | The logger is needed literally everywhere             |
 | `AgentToolsModule` | `src/core/agent-tools/agent-tools.module.ts` | The tool registry is shared by MCP and the REST layer |
+| `SearchModule`     | `src/modules/search/search.module.ts`        | Optional `SearchService` for the MessageSearch tool   |
 
-Do not add an eleventh. A new global needs an ADR-level justification — written down and reviewed
+Do not add a twelfth. A new global needs an ADR-level justification — written down and reviewed
 with the same weight as an architecture decision record — because the cost (implicit coupling,
 order-dependent provider resolution, tests that pass only because the whole app booted) is paid by
 every future module, not by the one that opts out of an explicit `imports` entry. The default for a

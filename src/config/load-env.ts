@@ -83,7 +83,10 @@ function mergeEnvironment(lines: Array<{ level: 'log' | 'warn'; message: string 
   // 2. User-managed .env (does not override real process env)
   if (fs.existsSync(userEnvPath)) {
     lines.push({ level: 'log', message: `Loading .env from: ${userEnvPath}` });
-    dotenv.config({ path: userEnvPath, override: false, quiet: true });
+    const { error } = dotenv.config({ path: userEnvPath, override: false, quiet: true });
+    // dotenv hands a read failure back instead of throwing: skipping the file would boot on the saved configuration and
+    // the defaults (another database, a freshly seeded admin key).
+    if (error) throw new Error(`Cannot read ${userEnvPath}: ${error.message}`);
   }
 
   // Snapshot the layers that will SHADOW the dashboard-saved file — process env plus the .env just
@@ -95,7 +98,11 @@ function mergeEnvironment(lines: Array<{ level: 'log' | 'warn'; message: string 
   // 3. Dashboard-saved config (does not override .env or process env)
   if (fs.existsSync(generatedEnvPath)) {
     lines.push({ level: 'log', message: `Loading saved configuration from: ${generatedEnvPath}` });
-    const { parsed = {} } = dotenv.config({ path: generatedEnvPath, override: false, quiet: true });
+    const { parsed = {}, error } = dotenv.config({ path: generatedEnvPath, override: false, quiet: true });
+    // Refused like .env above, and for the same reason: this file is where the dashboard saves the database, storage and
+    // queue settings, so skipping one that cannot be read (a directory where a bind mount found no file, or a file the
+    // app user may not open) would boot on the defaults, with another database, without a word.
+    if (error) throw new Error(`Cannot read ${generatedEnvPath}: ${error.message}`);
     // Compose forwards DATABASE_SSL*, and templates older than 0.18 set DATABASE_SSL=false in .env, so
     // a stale line can outrank TLS turned on in the dashboard. The override stands; the log names it.
     for (const key of ['DATABASE_SSL', 'DATABASE_SSL_REJECT_UNAUTHORIZED']) {

@@ -259,7 +259,8 @@ export class DockerService implements OnModuleInit {
   }
 
   /**
-   * Get container by service name or label
+   * Get container by service name or label. Null when there is none, and also when the daemon could not be asked or
+   * did not answer: a caller that must tell the two apart uses findContainerByService.
    */
   async getContainerByService(service: string): Promise<Docker.Container | null> {
     if (!this.docker || !this.isAvailable) {
@@ -267,40 +268,53 @@ export class DockerService implements OnModuleInit {
     }
 
     try {
-      const containers = await this.answered(
-        abortSignal =>
-          this.docker!.listContainers({
-            all: true,
-            filters: {
-              label: [`com.openwa.service=${service}`],
-            },
-            abortSignal,
-          }),
-        'a container list',
-      );
-
-      if (containers.length > 0) {
-        return this.docker.getContainer(containers[0].Id);
-      }
-
-      // Fallback: try by EXACT name (never a substring — a substring, and especially the empty
-      // string, would resolve an arbitrary container). OpenWA-managed containers are `openwa-<service>`.
-      const target = `openwa-${service}`;
-      const allContainers = await this.answered(
-        abortSignal => this.docker!.listContainers({ all: true, abortSignal }),
-        'a container list',
-      );
-      const match = allContainers.find(c => c.Names?.some(n => n === target || n === `/${target}`));
-
-      if (match) {
-        return this.docker.getContainer(match.Id);
-      }
-
-      return null;
+      return await this.findContainerByService(service);
     } catch (error) {
       this.logger.error(`Failed to get container for service: ${service}`, error);
       return null;
     }
+  }
+
+  /**
+   * The container of a service: null only when the daemon answered and none matches. Unlike getContainerByService it
+   * throws when the daemon is unavailable, fails or does not answer in time, for a caller that must not read
+   * "unknown" as "absent" (a stop).
+   */
+  private async findContainerByService(service: string): Promise<Docker.Container | null> {
+    if (!this.docker || !this.isAvailable) {
+      throw new Error('Docker is not available');
+    }
+
+    const containers = await this.answered(
+      abortSignal =>
+        this.docker!.listContainers({
+          all: true,
+          filters: {
+            label: [`com.openwa.service=${service}`],
+          },
+          abortSignal,
+        }),
+      'a container list',
+    );
+
+    if (containers.length > 0) {
+      return this.docker.getContainer(containers[0].Id);
+    }
+
+    // Fallback: try by EXACT name (never a substring — a substring, and especially the empty
+    // string, would resolve an arbitrary container). OpenWA-managed containers are `openwa-<service>`.
+    const target = `openwa-${service}`;
+    const allContainers = await this.answered(
+      abortSignal => this.docker!.listContainers({ all: true, abortSignal }),
+      'a container list',
+    );
+    const match = allContainers.find(c => c.Names?.some(n => n === target || n === `/${target}`));
+
+    if (match) {
+      return this.docker.getContainer(match.Id);
+    }
+
+    return null;
   }
 
   /**
@@ -642,7 +656,15 @@ export class DockerService implements OnModuleInit {
    * Stop a container by service name (without removing)
    */
   async stopService(service: string): Promise<boolean> {
-    const container = await this.getContainerByService(service);
+    let container: Docker.Container | null;
+    try {
+      container = await this.findContainerByService(service);
+    } catch (error) {
+      // A daemon that could not say whether the container exists is not "already gone": a restart would report a
+      // still-running datastore as stopped.
+      this.logger.error(`Failed to look up service '${service}' to stop it`, error);
+      return false;
+    }
     if (!container) {
       this.logger.warn(`Container for service '${service}' not found`);
       return true; // Already doesn't exist

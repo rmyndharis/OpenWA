@@ -15,6 +15,12 @@ export function loadCliEnv(cwd: string = process.cwd()): void {
   clearBlankEnv(process.env, BLANK_SHADOWED_ENV_KEYS);
   const userEnvPath = path.resolve(cwd, '.env');
   const generatedEnvPath = path.resolve(cwd, 'data', '.env.generated');
-  if (fs.existsSync(userEnvPath)) config({ path: userEnvPath, override: false, quiet: true });
-  if (fs.existsSync(generatedEnvPath)) config({ path: generatedEnvPath, override: false, quiet: true });
+  for (const file of [userEnvPath, generatedEnvPath]) {
+    if (!fs.existsSync(file)) continue;
+    const { error } = config({ path: file, override: false, quiet: true });
+    // The app refuses to boot on a file it cannot read (src/config/load-env.ts), and the CLI must not go on without
+    // it: skipped, a migration would run against the default SQLite database while the deployment is configured for
+    // another one.
+    if (error) throw new Error(`Cannot read ${file}: ${error.message}`);
+  }
 }

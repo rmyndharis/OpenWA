@@ -2714,6 +2714,22 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
     expect(JSON.stringify(result.removal)).not.toContain('removed');
   });
 
+  it('does not list a profile as stopped when Docker could not list its container', async () => {
+    const docker = {
+      listContainers: jest.fn().mockRejectedValue(new Error('socket hang up')),
+      getContainer: jest.fn(),
+    };
+    const dockerService = new DockerService();
+    Object.assign(dockerService as unknown as Record<string, unknown>, { docker, isAvailable: true });
+    const controller = buildController(dockerService as unknown as Record<string, unknown>);
+
+    const result = await controller.requestRestart({ profilesToRemove: ['minio'] });
+
+    // Nothing is known about the container, so the answer must not say it was stopped: the dashboard warns from errors.
+    expect(result.removal).toEqual({ stopped: [], errors: ['Failed to stop minio'] });
+    expect(docker.getContainer).not.toHaveBeenCalled();
+  });
+
   // A name every object inherits is no profile either: it is ignored like any other unknown name, and the managed
   // names beside it still act.
   describe('POST /api/infra/restart with a profile name an object inherits', () => {

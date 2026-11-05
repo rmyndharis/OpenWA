@@ -1430,6 +1430,8 @@ docker compose up -d
 
 (The CLI runner does not impose a statement timeout; the migration lifts it via `SET LOCAL`.)
 
+The CLI reads `.env` and `data/.env.generated` of the directory it runs in, and stops, naming the file, when one exists but cannot be read (a directory where a bind mount found no file, or a file owned by the container user with mode 0600). Run it as the user that owns them, or inside the image with `docker compose run --rm openwa-api npm run migration:run:prod`.
+
 `DATABASE_SYNCHRONIZE=true` on PostgreSQL is unsupported for production. Leave it unset (the default `false`) and let migrations manage the schema.
 
 ### Debug Commands

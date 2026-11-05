@@ -51,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fold a whatsapp-web.js mention given as a padded, upper-case, `@s.whatsapp.net`, `:device` or hosted id to the neutral id before it reaches WhatsApp Web, in text, media, sticker, reply and edit sends, as Baileys already does.
 - Cap the chat media and status orphan sweeps at 100,000 tracked files per pass, so a session delete or a retention run over a large archive no longer grows memory with the number of files left behind.
 - Remove a status, with its media file, from `GET /status`, `GET /status/:id` and the status media route when its poster deletes it, instead of serving it until it expires.
+- List a built-in Redis, MinIO or PostgreSQL under `removal.errors` instead of `removal.stopped` when a restart could not ask Docker for its container.
+- Keep a working directory `.env` out of the e2e and unit boots, which read the environment their harness sets; a `.env` that cannot be read still stops the boot, and the error names the file.
+- Stop the boot, naming the file, when `data/.env.generated` exists but cannot be read (a directory where a bind mount found no file, or a file the app user cannot open), instead of starting on the defaults without the database and storage settings saved there.
+- Stop the migration CLI, naming the file, when `.env` or `data/.env.generated` exists but cannot be read, instead of migrating without that file's settings.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Stop announcing `message.ack` for the acks of whatsapp-web.js system notices, which are no longer delivered as messages.
 - Stop delivering whatsapp-web.js system notices (a changed security code, the encryption notice, business and broadcast notices) as `unknown` messages on `message.received` and `message.sent`, so they are no longer stored, passed to the message hooks or answered by automation rules (#1864). Thanks @dwimnofan.
@@ -114,6 +118,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - State the glibc 2.34 requirement and startup remedies for Linux glibc source installs on x64/arm64.
 - Describe PHP empty-response behavior for coalescing, nullable and required-body methods.
 - The FAQ says that a media send by `url` holds its download in memory until the send finishes, and that nothing limits how many run at once.
+- The database design lists every step that still runs at boot on a SQLite database with `DATABASE_SYNCHRONIZE=true`.
+- The development guidelines list `SearchModule` among the global modules, and a check keeps the list equal to the source.
+- The API reference says where the app version is visible without a key.
+- The security design and architecture diagrams no longer show an encryption layer the gateway does not have.
 
 ### Dependencies
 
