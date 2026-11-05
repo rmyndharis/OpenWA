@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - whatsapp-web.js: a reloaded page whose event listeners fail to attach is no longer counted as recovered, so the watchdog restarts the session instead of leaving it READY without inbound messages.
 - whatsapp-web.js: an `auth timeout` or browser network error behind a SOCKS proxy URL with credentials now says in `lastError` that Chromium cannot send them.
 - Metrics scrapes that arrive together share one render, so the cached event-loop delay no longer reads zero after an overlap.
+- Treat the phone and lid forms of a chat as one contact in send pacing when the gateway holds a reported phone pairing for the lid, so replies and group adds for a contact known by its lid are no longer charged as new conversations.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - List a key seeded from `API_MASTER_KEY` as `(master key)` instead of its first 12 characters; keys seeded by earlier releases keep their stored prefix until replaced.
 - Key Baileys chat writes and read receipts to the newest stored message of the account the session is linked to, so a session relinked to another number no longer names the previous account's messages.

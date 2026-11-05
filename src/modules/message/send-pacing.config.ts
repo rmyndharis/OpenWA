@@ -18,8 +18,10 @@ export interface SendPacingConfig {
   warmupSchedule: number[];
   /**
    * Daily allowance for **cold reachouts** — the first message to a chat this account has no history
-   * with in either direction. Same by-age shape as `warmupSchedule`, and a single number is a flat
-   * cap. `0` or `off` disables the rule (an empty value does too, outside a container env).
+   * with in either direction, under any form the contact is stored by (its phone, or a lid the gateway
+   * holds a reported pairing for; a lid sees its phone but not that phone's other lids). Same by-age
+   * shape as `warmupSchedule`, and a single number is a flat cap. `0` or `off` disables the rule (an
+   * empty value does too, outside a container env).
    *
    * Separate from the overall cap because the two bound different risks. Answering people who
    * already wrote to you is not what gets numbers banned; starting conversations with strangers is,

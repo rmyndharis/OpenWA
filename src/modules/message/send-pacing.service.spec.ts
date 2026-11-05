@@ -54,7 +54,10 @@ const build = (
   const createQueryBuilder = jest.fn(() => {
     const qb: Record<string, unknown> = {};
     for (const method of ['select', 'where', 'andWhere']) qb[method] = jest.fn(() => qb);
-    qb.getRawOne = jest.fn().mockResolvedValue({ count: chat.coldToday ?? 0 });
+    // The chats the account started today, one row each: the day's count is how many there are.
+    qb.getRawMany = jest
+      .fn()
+      .mockResolvedValue(Array.from({ length: chat.coldToday ?? 0 }, (_, i) => ({ chatId: `cold-${i}@c.us` })));
     return qb;
   });
   const configService = {
