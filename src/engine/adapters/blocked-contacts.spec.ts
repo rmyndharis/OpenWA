@@ -1,5 +1,6 @@
 import { WwebjsContacts } from './wwebjs-contacts';
 import { BaileysContacts } from './baileys-contacts';
+import { toNeutralJid } from '../identity/wa-id';
 import { createLogger } from '../../common/services/logger.service';
 import { type WwebjsEngineHost } from './wwebjs-host';
 import type { Client } from 'whatsapp-web.js';
@@ -93,14 +94,22 @@ describe('BaileysContacts.getBlockedContacts', () => {
     await expect(contacts.getBlockedContacts()).resolves.toEqual(['628333@c.us']);
   });
 
-  it('lists an id once when the blocklist holds a contact under both its LID and its phone', async () => {
-    // The session knows the pair, so both wire jids fold to the contact's phone id.
+  it('lists an id once when two blocklist items fold to the same id', async () => {
+    // A host that folds the privacy id into the contact's phone id, as the session does for the account's own.
     const { contacts, sock } = makeContacts(jid =>
       jid === '111222333@lid' ? '628111@c.us' : jid.replace('@s.whatsapp.net', '@c.us'),
     );
     sock.fetchBlocklist.mockResolvedValue(['111222333@lid', '628111@s.whatsapp.net', '628999@s.whatsapp.net']);
 
     await expect(contacts.getBlockedContacts()).resolves.toEqual(['628111@c.us', '628999@c.us']);
+  });
+
+  it('lists a contact the blocklist holds by LID under that LID, which the session does not fold into a phone', async () => {
+    // The session store neutralises with the plain wa-id fold, which has no phone resolver.
+    const { contacts, sock } = makeContacts(jid => toNeutralJid(jid));
+    sock.fetchBlocklist.mockResolvedValue(['111222333@lid', '628111@s.whatsapp.net']);
+
+    await expect(contacts.getBlockedContacts()).resolves.toEqual(['111222333@lid', '628111@c.us']);
   });
 
   it('resolves [] for an empty blocklist', async () => {
