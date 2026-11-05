@@ -121,6 +121,10 @@ takeover adoption whose launch fails, say) releases its claim and then writes DI
 row that no node holds and that still has an active status: a row no node holds is revisited by
 neither `markLapsedDisconnected` nor the adoption sweep, so the READY a vanished node left on it would
 otherwise stand until a boot, and any claim since sets `nodeId`, so a row B claimed matches nothing.
+Two of these writes are not awaited by their issuer, the unlink's phone clear and the row a READY writes, and a
+row read that acts on the session's phone (the disconnect handler's reload, the second read of a start) must
+not return the binding they replace: it starts once the writes this process issued have been answered and is
+repeated when another is issued while it runs (`session-phone-writes.ts`).
 **Pinned by:** `src/modules/takeover/session-takeover.service.spec.ts` +
 `session-ownership.service.spec.ts` + `session-ownership-status-fence.spec.ts` +
 `session-failed-write-ownership-fence.spec.ts` for the FAILED writers outside the wiring + the real-database
@@ -128,6 +132,7 @@ predicate spec for `markLapsedDisconnected` in `src/modules/session/session.serv
 `session-retired-start-leaves-peer-row.spec.ts` for the retired launch +
 `session-init-timeout-after-lease-loss.spec.ts` for the init deadline +
 `session-unlink-retired-engine.spec.ts` for the unlink's phone clear +
+`session-reconnect-stale-binding.spec.ts` for the reads that wait for it +
 `src/modules/takeover/session-takeover-failed-adoption.spec.ts` for the failed start. That
 `stopOrphanEngines` itself writes no row is pinned by `session-delete-claim.spec.ts` ('retires an old
 local engine after a peer takes over and a fresh claim fails with SQL error %s'), where the peer's

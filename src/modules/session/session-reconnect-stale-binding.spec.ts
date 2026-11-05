@@ -138,120 +138,166 @@ function fixture() {
   };
 }
 
-describe('a disconnect read that overlaps the unlink record of the engine it replaced', () => {
+type Fixture = ReturnType<typeof fixture>;
+
+/**
+ * Updates whose patch matches wait for the case: `release()` answers them, `release(true)` fails the answer. They are
+ * executed when released, or at once when `executeAtOnce` (the database has committed, the answer is what is late).
+ */
+function holdUpdates(f: Fixture, matches: (patch: Partial<Session>) => boolean, executeAtOnce = false) {
+  const original = f.repository.update.getMockImplementation()!;
+  const pending: Array<(fail: boolean) => void> = [];
+  f.repository.update.mockImplementation((where: unknown, patch: Partial<Session>) => {
+    if (!matches(patch)) return original(where, patch);
+    const done = executeAtOnce ? original(where, patch) : undefined;
+    return new Promise<{ affected: number }>((resolve, reject) => {
+      pending.push(fail =>
+        fail ? reject(new Error('synthetic database failure')) : resolve(done ?? original(where, patch)),
+      );
+    });
+  });
+  return {
+    count: (): number => pending.length,
+    release: async (fail = false): Promise<void> => {
+      for (const answer of pending.splice(0)) answer(fail);
+      await tick();
+    },
+  };
+}
+
+const clearsPhone = (patch: Partial<Session>): boolean => 'phone' in patch && patch.phone === null;
+const writesPhone =
+  (phone: string) =>
+  (patch: Partial<Session>): boolean =>
+    patch.phone === phone;
+
+const disconnect = (f: Fixture, index: number): void => {
+  f.engines[index].getStatus.mockReturnValue(EngineStatus.DISCONNECTED);
+  f.callbacksOf(index).onStateChanged?.(EngineStatus.DISCONNECTED);
+  f.callbacksOf(index).onDisconnected?.('Browser process closed or crashed');
+};
+
+const outcome = (f: Fixture, index: number) => ({
+  logouts: f.engines[index].logout.mock.calls.length,
+  status: f.stored.status,
+  phone: f.stored.phone,
+});
+
+/** The first engine is bound to BOUND and READY. */
+async function bound(f: Fixture): Promise<void> {
+  await f.lifecycle.start(ID);
+  f.engines[0].getStatus.mockReturnValue(EngineStatus.READY);
+  f.engines[0].getPhoneNumber = jest.fn(() => BOUND);
+  f.callbacksOf(0).onStateChanged?.(EngineStatus.READY);
+  f.callbacksOf(0).onReady?.(BOUND, 'Bound');
+  await tick();
+}
+
+/**
+ * The watchdog has scheduled a reconnect of the bound session; the old engine then reports LOGOUT and its session read is
+ * held (`oldRead`), while the replacement has finished initializing and shows its QR.
+ */
+async function replacement() {
+  const f = fixture();
+  await bound(f);
+  jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask', 'Date'] });
+  await f.lifecycle.handleEngineDisconnected(ID, f.engines[0] as never, 'liveness probe failed (watchdog)');
+  const oldRead = f.holdRead();
+  f.callbacksOf(0).onCredentialTeardownStarted?.(Promise.resolve());
+  f.engines[0].getStatus.mockReturnValue(EngineStatus.DISCONNECTED);
+  f.callbacksOf(0).onStateChanged?.(EngineStatus.DISCONNECTED);
+  f.callbacksOf(0).onDisconnected?.('LOGOUT');
+  await jest.advanceTimersByTimeAsync(2_000);
+  await until(() => Boolean(f.engines[1]?.initialize.mock.calls.length), 'the initialized replacement');
+  f.engines[1].getStatus.mockReturnValue(EngineStatus.QR_READY);
+  return { f, oldRead };
+}
+
+/** The next reconnect attempt runs and its engine reports `phone` as the account that scanned. */
+async function scan(f: Fixture, phone: string): Promise<void> {
+  await jest.advanceTimersByTimeAsync(10_000);
+  await until(() => Boolean(f.engines[2]?.initialize.mock.calls.length), 'the next attempt');
+  f.engines[2].getPhoneNumber = jest.fn(() => phone);
+  f.callbacksOf(2).onStateChanged?.(EngineStatus.READY);
+  f.callbacksOf(2).onReady?.(phone, 'Scanned');
+  for (let i = 0; i < 20; i++) await tick();
+}
+
+const ACCEPTED = { logouts: 0, status: SessionStatus.READY };
+const THIRD = '628999';
+
+// A row read that acts on the phone starts once the phone writes the process issued have been answered, and is repeated when
+// another is issued while it runs; whichever order the database executes the statements in, it returns what was written last.
+describe('a disconnect read that overlaps the phone writes of an unlink', () => {
   afterEach(() => jest.useRealTimers());
 
-  it('keeps the binding released when the read started before the unlink was recorded', async () => {
-    const f = fixture();
-    await f.lifecycle.start(ID);
-    f.engines[0].getStatus.mockReturnValue(EngineStatus.READY);
-    f.engines[0].getPhoneNumber = jest.fn(() => BOUND);
-    f.callbacksOf(0).onStateChanged?.(EngineStatus.READY);
-    f.callbacksOf(0).onReady?.(BOUND, 'Bound');
-    await new Promise(resolve => setImmediate(resolve));
-    jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask', 'Date'] });
-
-    // The watchdog schedules the attempt without the adapter having reported a disconnect.
-    await f.lifecycle.handleEngineDisconnected(ID, f.engines[0] as never, 'liveness probe failed (watchdog)');
-    const oldRead = f.holdRead();
-    f.callbacksOf(0).onCredentialTeardownStarted?.(Promise.resolve());
-    f.engines[0].getStatus.mockReturnValue(EngineStatus.DISCONNECTED);
-    f.callbacksOf(0).onStateChanged?.(EngineStatus.DISCONNECTED);
-    f.callbacksOf(0).onDisconnected?.('LOGOUT');
-
-    // The old engine's unlink read is still pending when it is retired and the replacement initializes.
-    await jest.advanceTimersByTimeAsync(2_000);
-    await until(() => Boolean(f.engines[1]?.initialize.mock.calls.length), 'the initialized replacement');
-    const state = (
-      f.lifecycle as unknown as {
-        reconnectStates: Map<string, { session?: Session; initInFlight?: boolean }>;
-      }
-    ).reconnectStates.get(ID)!;
-    expect(state.initInFlight).toBe(false);
-
-    // The replacement then crashes. Its row read saw the bound number, but the reply arrives after the unlink record.
-    const readSnapshot = { ...f.stored };
-    let answerDrop!: (row: Session) => void;
-    f.repository.findOne.mockImplementationOnce(() => new Promise<Session>(resolve => (answerDrop = resolve)));
-    f.callbacksOf(1).onStateChanged?.(EngineStatus.DISCONNECTED);
-    f.callbacksOf(1).onDisconnected?.('Browser process closed or crashed');
-    oldRead.answer();
-    await f.handled.mock.results[1].value;
-    expect(f.recordedUnlinks()).toHaveLength(1);
-    expect(f.stored.phone).toBeNull();
-    expect(state.session?.phone).toBeNull();
-    answerDrop(readSnapshot);
-    await f.settled();
-
-    await jest.advanceTimersByTimeAsync(10_000);
-    await until(() => Boolean(f.engines[2]?.initialize.mock.calls.length), 'the next replacement');
-    await f.linkOther(2);
+  it('is repeated when the unlink was recorded while it ran', async () => {
+    const { f, oldRead } = await replacement();
     try {
-      expect({
-        logouts: f.engines[2].logout.mock.calls.length,
-        status: f.stored.status,
-        phone: f.stored.phone,
-      }).toEqual({
-        logouts: 0,
-        status: SessionStatus.READY,
-        phone: OTHER,
-      });
+      // The replacement crashes; its row read saw the bound number but answers after the unlink was recorded.
+      const stale = { ...f.stored };
+      let answer!: (row: Session) => void;
+      f.repository.findOne.mockImplementationOnce(() => new Promise<Session>(resolve => (answer = resolve)));
+      disconnect(f, 1);
+      oldRead.answer();
+      await f.handled.mock.results[1].value;
+      expect(f.recordedUnlinks()).toHaveLength(1);
+      expect(f.stored.phone).toBeNull();
+      answer(stale);
+      await f.settled();
+
+      await scan(f, OTHER);
+      expect(outcome(f, 2)).toEqual({ ...ACCEPTED, phone: OTHER });
     } finally {
       await f.lifecycle.shutdown();
     }
   });
 
-  it('keeps the binding released when the read started before the phone clear committed', async () => {
-    const f = fixture();
-    await f.lifecycle.start(ID);
-    f.engines[0].getStatus.mockReturnValue(EngineStatus.READY);
-    f.engines[0].getPhoneNumber = jest.fn(() => BOUND);
-    f.callbacksOf(0).onStateChanged?.(EngineStatus.READY);
-    f.callbacksOf(0).onReady?.(BOUND, 'Bound');
-    await new Promise(resolve => setImmediate(resolve));
-    jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask', 'Date'] });
-    await f.lifecycle.handleEngineDisconnected(ID, f.engines[0] as never, 'liveness probe failed (watchdog)');
-    const oldRead = f.holdRead();
-    f.callbacksOf(0).onCredentialTeardownStarted?.(Promise.resolve());
-    f.engines[0].getStatus.mockReturnValue(EngineStatus.DISCONNECTED);
-    f.callbacksOf(0).onStateChanged?.(EngineStatus.DISCONNECTED);
-    f.callbacksOf(0).onDisconnected?.('LOGOUT');
-    await jest.advanceTimersByTimeAsync(2_000);
-    await until(() => Boolean(f.engines[1]?.initialize.mock.calls.length), 'the initialized replacement');
-
-    const write = f.repository.update.getMockImplementation()!;
-    let releaseClear!: () => void;
-    f.repository.update.mockImplementation((where: unknown, patch: Partial<Session>) => {
-      if ('phone' in patch && patch.phone === null) {
-        return new Promise<{ affected: number }>(resolve => (releaseClear = () => resolve(write(where, patch))));
-      }
-      return write(where, patch);
-    });
-    oldRead.answer();
-    await f.handled.mock.results[1].value;
-    expect(f.recordedUnlinks()).toHaveLength(1);
-    expect(f.stored.phone).toBe(BOUND);
-
-    // This read starts after the unlink was recorded but before its database write committed.
-    f.callbacksOf(1).onStateChanged?.(EngineStatus.DISCONNECTED);
-    f.callbacksOf(1).onDisconnected?.('Browser process closed or crashed');
-    await f.settled();
-    releaseClear();
-    await new Promise(resolve => setImmediate(resolve));
-    expect(f.stored.phone).toBeNull();
-    await jest.advanceTimersByTimeAsync(10_000);
-    await until(() => Boolean(f.engines[2]?.initialize.mock.calls.length), 'the next replacement');
-    await f.linkOther(2);
+  it('waits for the clear of the unlink before it reads', async () => {
+    const { f, oldRead } = await replacement();
     try {
-      expect({
-        logouts: f.engines[2].logout.mock.calls.length,
-        status: f.stored.status,
-        phone: f.stored.phone,
-      }).toEqual({
-        logouts: 0,
-        status: SessionStatus.READY,
-        phone: OTHER,
-      });
+      const clear = holdUpdates(f, clearsPhone);
+      oldRead.answer();
+      await f.handled.mock.results[1].value;
+      expect(f.recordedUnlinks()).toHaveLength(1);
+      expect(f.stored.phone).toBe(BOUND);
+
+      const reads = f.repository.findOne.mock.calls.length;
+      disconnect(f, 1);
+      await tick();
+      expect(f.repository.findOne.mock.calls.length).toBe(reads);
+      await clear.release();
+      await f.settled();
+      expect(f.repository.findOne.mock.calls.length).toBeGreaterThan(reads);
+
+      await scan(f, OTHER);
+      expect(outcome(f, 2)).toEqual({ ...ACCEPTED, phone: OTHER });
+    } finally {
+      await f.lifecycle.shutdown();
+    }
+  });
+
+  it('does not bring the old number back when the replacement reports READY without one', async () => {
+    const { f, oldRead } = await replacement();
+    try {
+      const clear = holdUpdates(f, clearsPhone);
+      oldRead.answer();
+      await f.handled.mock.results[1].value;
+      expect(f.recordedUnlinks()).toHaveLength(1);
+
+      // A READY that carries no number links nobody: the row keeps what the clear leaves of it.
+      f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
+      f.engines[1].getPhoneNumber = jest.fn(() => '');
+      f.callbacksOf(1).onStateChanged?.(EngineStatus.READY);
+      f.callbacksOf(1).onReady?.('', '');
+      await tick();
+      disconnect(f, 1);
+      await tick();
+      await clear.release();
+      await f.settled();
+
+      await scan(f, OTHER);
+      expect(outcome(f, 2)).toEqual({ ...ACCEPTED, phone: OTHER });
     } finally {
       await f.lifecycle.shutdown();
     }
@@ -259,26 +305,18 @@ describe('a disconnect read that overlaps the unlink record of the engine it rep
 
   it('still refuses another account when no unlink was recorded', async () => {
     const f = fixture();
-    await f.lifecycle.start(ID);
-    f.engines[0].getStatus.mockReturnValue(EngineStatus.READY);
-    f.engines[0].getPhoneNumber = jest.fn(() => BOUND);
-    f.callbacksOf(0).onStateChanged?.(EngineStatus.READY);
-    f.callbacksOf(0).onReady?.(BOUND, 'Bound');
-    await new Promise(resolve => setImmediate(resolve));
+    await bound(f);
     jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask', 'Date'] });
-
-    await f.lifecycle.handleEngineDisconnected(ID, f.engines[0] as never, 'liveness probe failed (watchdog)');
-    await jest.advanceTimersByTimeAsync(2_000);
-    await until(() => Boolean(f.engines[1]?.initialize.mock.calls.length), 'the initialized replacement');
-    f.callbacksOf(1).onStateChanged?.(EngineStatus.DISCONNECTED);
-    f.callbacksOf(1).onDisconnected?.('Browser process closed or crashed');
-    await f.settled();
-    await jest.advanceTimersByTimeAsync(10_000);
-    await until(() => Boolean(f.engines[2]?.initialize.mock.calls.length), 'the next replacement');
-    await f.linkOther(2);
     try {
+      await f.lifecycle.handleEngineDisconnected(ID, f.engines[0] as never, 'liveness probe failed (watchdog)');
+      await jest.advanceTimersByTimeAsync(2_000);
+      await until(() => Boolean(f.engines[1]?.initialize.mock.calls.length), 'the initialized replacement');
+      disconnect(f, 1);
+      await f.settled();
+
+      await scan(f, OTHER);
       expect(f.recordedUnlinks()).toHaveLength(0);
-      expect({ logouts: f.engines[2].logout.mock.calls.length, status: f.stored.status }).toEqual({
+      expect({ logouts: outcome(f, 2).logouts, status: outcome(f, 2).status }).toEqual({
         logouts: 1,
         status: SessionStatus.FAILED,
       });
@@ -288,153 +326,136 @@ describe('a disconnect read that overlaps the unlink record of the engine it rep
   });
 });
 
-describe('a start issued while the phone clear of a recorded unlink is pending', () => {
-  it.each([false, true])(
-    'accepts the next number when the clear committed before the reads is %s',
-    async clearBeforeReads => {
-      const f = fixture();
-      await f.lifecycle.start(ID);
-      f.engines[0].getStatus.mockReturnValue(EngineStatus.READY);
-      f.engines[0].getPhoneNumber = jest.fn(() => BOUND);
-      f.callbacksOf(0).onStateChanged?.(EngineStatus.READY);
-      f.callbacksOf(0).onReady?.(BOUND, 'Bound');
-      await new Promise(resolve => setImmediate(resolve));
-      const oldRead = f.holdRead();
-      f.engines[0].getStatus.mockReturnValue(EngineStatus.DISCONNECTED);
-      f.callbacksOf(0).onStateChanged?.(EngineStatus.DISCONNECTED);
-      f.callbacksOf(0).onDisconnected?.('LOGOUT');
-      await f.lifecycle.stop(ID);
-      f.stored.desiredState = 'stopped';
-
-      const write = f.repository.update.getMockImplementation()!;
-      let releaseClear!: () => void;
-      let releaseAdmission: (() => void) | undefined;
-      let clearReleased = false;
-      f.repository.update.mockImplementation((where: unknown, patch: Partial<Session>) => {
-        if ('phone' in patch && patch.phone === null) {
-          return new Promise<{ affected: number }>(resolve => {
-            releaseClear = () => {
-              clearReleased = true;
-              resolve(write(where, patch));
-            };
-          });
-        }
-        if (!clearReleased && 'desiredState' in patch && patch.desiredState === null) {
-          return new Promise<{ affected: number }>(resolve => (releaseAdmission = () => resolve(write(where, patch))));
-        }
-        return write(where, patch);
-      });
-      oldRead.answer();
-      await f.settled();
-      expect(f.recordedUnlinks()).toHaveLength(1);
-      expect(f.stored.phone).toBe(BOUND);
-
-      if (clearBeforeReads) {
-        releaseClear();
-        await new Promise(resolve => setImmediate(resolve));
-      }
-      const restart = f.lifecycle.start(ID, { explicit: true });
-      if (!clearBeforeReads) {
-        // Both reads of the start return the bound number. Its admission write waits for the clear to commit first.
-        await until(() => releaseAdmission !== undefined, 'start admission after its reads');
-        releaseClear();
-        await new Promise(resolve => setImmediate(resolve));
-        expect(f.stored.phone).toBeNull();
-        releaseAdmission!();
-      }
-      await restart;
-      await f.linkOther(1);
-      const actual = { logouts: f.engines[1].logout.mock.calls.length, status: f.stored.status, phone: f.stored.phone };
-      await f.lifecycle.shutdown();
-      expect(actual).toEqual({ logouts: 0, status: SessionStatus.READY, phone: OTHER });
-    },
-  );
-});
-
-describe('a binding accepted after an unlink whose phone clear is still pending', () => {
+describe('a binding linked after the unlink', () => {
   afterEach(() => jest.useRealTimers());
 
+  // The clear is committed and its answer is late, or fails: the read waits for the answer either way and then returns
+  // the number the READY wrote.
+  it.each([false, true])('is kept when the answer of the clear is late (answer failed: %s)', async failAnswer => {
+    const { f, oldRead } = await replacement();
+    try {
+      const clear = holdUpdates(f, clearsPhone, true);
+      oldRead.answer();
+      await f.handled.mock.results[1].value;
+      expect(f.recordedUnlinks()).toHaveLength(1);
+      f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
+      await f.linkOther(1);
+      expect(f.stored.phone).toBe(OTHER);
+
+      disconnect(f, 1);
+      await tick();
+      await clear.release(failAnswer);
+      await f.settled();
+
+      // The next attempt holds the number the READY linked, so a third account is refused.
+      await scan(f, THIRD);
+      expect(outcome(f, 2)).toEqual({ logouts: 1, status: SessionStatus.FAILED, phone: OTHER });
+    } finally {
+      await f.lifecycle.shutdown();
+    }
+  });
+
   it.each([
-    [false, false],
-    [false, true],
-    [true, false],
-    [true, true],
-  ])(
-    'keeps the accepted binding (answered before the read: %s, answer failed: %s)',
-    async (settleBeforeRead, failAnswer) => {
+    ['the same account scans again', OTHER, { ...ACCEPTED, phone: OTHER }],
+    ['a third account scans', THIRD, { logouts: 1, status: SessionStatus.FAILED, phone: OTHER }],
+  ])('is kept while the row of its READY is still being written: %s', async (_name, scanned, expected) => {
+    const { f, oldRead } = await replacement();
+    try {
+      const clear = holdUpdates(f, clearsPhone);
+      const ready = holdUpdates(f, writesPhone(OTHER));
+      oldRead.answer();
+      await f.handled.mock.results[1].value;
+      f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
+      await f.linkOther(1);
+      expect(f.engines[1].logout).not.toHaveBeenCalled();
+      expect(ready.count()).toBe(1);
+
+      disconnect(f, 1);
+      await tick();
+      await clear.release();
+      await ready.release();
+      await f.settled();
+
+      await scan(f, scanned);
+      expect(outcome(f, 2)).toEqual(expected);
+    } finally {
+      await f.lifecycle.shutdown();
+    }
+  });
+});
+
+describe('a start that overlaps the phone writes of an unlink', () => {
+  afterEach(() => jest.useRealTimers());
+
+  /** The first engine is unlinked after it was stopped: the unlink is recorded with no engine registered. */
+  async function stoppedAfterUnlink(f: Fixture) {
+    await bound(f);
+    const oldRead = f.holdRead();
+    f.engines[0].getStatus.mockReturnValue(EngineStatus.DISCONNECTED);
+    f.callbacksOf(0).onStateChanged?.(EngineStatus.DISCONNECTED);
+    f.callbacksOf(0).onDisconnected?.('LOGOUT');
+    await f.lifecycle.stop(ID);
+    f.stored.desiredState = 'stopped';
+    return oldRead;
+  }
+
+  it.each([false, true])(
+    'reads its row once the clear has been answered (answered before it began: %s)',
+    async early => {
       const f = fixture();
-      const inside = f.lifecycle as unknown as { reconnectStates: Map<string, { session?: Session }> };
-      let finishClear!: () => void;
+      const oldRead = await stoppedAfterUnlink(f);
       try {
-        await f.lifecycle.start(ID);
-        f.engines[0].getStatus.mockReturnValue(EngineStatus.READY);
-        f.engines[0].getPhoneNumber = jest.fn(() => BOUND);
-        f.callbacksOf(0).onStateChanged?.(EngineStatus.READY);
-        f.callbacksOf(0).onReady?.(BOUND, 'Bound');
-        await tick();
-        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask', 'Date'] });
-        await f.lifecycle.handleEngineDisconnected(ID, f.engines[0] as never, 'liveness probe failed (watchdog)');
-        const oldRead = f.holdRead();
-        f.callbacksOf(0).onCredentialTeardownStarted?.(Promise.resolve());
-        f.engines[0].getStatus.mockReturnValue(EngineStatus.DISCONNECTED);
-        f.callbacksOf(0).onStateChanged?.(EngineStatus.DISCONNECTED);
-        f.callbacksOf(0).onDisconnected?.('LOGOUT');
-        await jest.advanceTimersByTimeAsync(2_000);
-        await until(() => Boolean(f.engines[1]?.initialize.mock.calls.length), 'the first replacement');
-
-        const write = f.repository.update.getMockImplementation()!;
-        f.repository.update.mockImplementation((where: unknown, patch: Partial<Session>) => {
-          if ('phone' in patch && patch.phone === null) {
-            // The update committed before this connection's answer returns, so a later READY can write its phone.
-            void write(where, patch);
-            return new Promise<{ affected: number }>((resolve, reject) => {
-              finishClear = () =>
-                failAnswer ? reject(new Error('synthetic phone clear response failure')) : resolve({ affected: 1 });
-            });
-          }
-          return write(where, patch);
-        });
+        const clear = holdUpdates(f, clearsPhone);
         oldRead.answer();
-        await f.handled.mock.results[1].value;
-        expect(f.recordedUnlinks()).toHaveLength(1);
-
-        f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
-        await f.linkOther(1);
-        expect(f.stored.phone).toBe(OTHER);
-        expect(f.stored.status).toBe(SessionStatus.READY);
-        expect(f.engines[1].logout).not.toHaveBeenCalled();
-
-        if (settleBeforeRead) {
-          finishClear();
-          await tick();
-        }
-        f.engines[1].getStatus.mockReturnValue(EngineStatus.DISCONNECTED);
-        f.callbacksOf(1).onStateChanged?.(EngineStatus.DISCONNECTED);
-        f.callbacksOf(1).onDisconnected?.('Browser process closed or crashed');
         await f.settled();
-        const snapshotPhone = inside.reconnectStates.get(ID)?.session?.phone;
-        if (!settleBeforeRead) finishClear();
-        await tick();
-        expect(f.stored.phone).toBe(OTHER);
+        expect(f.recordedUnlinks()).toHaveLength(1);
+        expect(f.stored.phone).toBe(BOUND);
 
-        await jest.advanceTimersByTimeAsync(10_000);
-        await until(() => Boolean(f.engines[2]?.initialize.mock.calls.length), 'the second replacement');
-        const third = '628999';
-        f.engines[2].getPhoneNumber = jest.fn(() => third);
-        f.callbacksOf(2).onStateChanged?.(EngineStatus.READY);
-        f.callbacksOf(2).onReady?.(third, 'Third');
-        for (let i = 0; i < 20; i++) await tick();
-        expect({
-          snapshotPhone,
-          logouts: f.engines[2].logout.mock.calls.length,
-          status: f.stored.status,
-          phone: f.stored.phone,
-        }).toEqual({ snapshotPhone: OTHER, logouts: 1, status: SessionStatus.FAILED, phone: OTHER });
-      } finally {
-        if (finishClear) finishClear();
+        if (early) await clear.release();
+        const restart = f.lifecycle.start(ID, { explicit: true });
         await tick();
+        if (!early) {
+          expect(f.engines).toHaveLength(1); // the start waits for the clear: no engine yet
+          await clear.release();
+        }
+        await restart;
+        await f.linkOther(1);
+
+        expect(outcome(f, 1)).toEqual({ ...ACCEPTED, phone: OTHER });
+      } finally {
         await f.lifecycle.shutdown();
       }
     },
   );
+
+  it('reads the number a stopped READY engine linked once its row was written', async () => {
+    const { f, oldRead } = await replacement();
+    try {
+      const clear = holdUpdates(f, clearsPhone);
+      const ready = holdUpdates(f, writesPhone(OTHER));
+      oldRead.answer();
+      await f.handled.mock.results[1].value;
+      f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
+      await f.linkOther(1);
+      await f.lifecycle.stop(ID);
+      f.stored.desiredState = 'stopped';
+
+      const restart = f.lifecycle.start(ID, { explicit: true });
+      await tick();
+      expect(f.engines).toHaveLength(2); // the start waits for both writes: no new engine yet
+      await clear.release();
+      await ready.release();
+      await restart;
+      expect(f.stored.phone).toBe(OTHER);
+
+      // The new engine holds the number that was linked, so the same account is accepted and another is refused.
+      f.engines[2].getPhoneNumber = jest.fn(() => THIRD);
+      f.callbacksOf(2).onStateChanged?.(EngineStatus.READY);
+      f.callbacksOf(2).onReady?.(THIRD, 'Third');
+      for (let i = 0; i < 20; i++) await tick();
+      expect(outcome(f, 2)).toEqual({ logouts: 1, status: SessionStatus.FAILED, phone: OTHER });
+    } finally {
+      await f.lifecycle.shutdown();
+    }
+  });
 });

@@ -42,6 +42,7 @@ import {
   type StopHooks,
 } from './session-engine-controls';
 import { SessionOwnershipService, nodeOwnsSession } from './session-ownership.service';
+import { PhoneWrites } from './session-phone-writes';
 
 /**
  * Eager status-history reads are opt-in. On affected freshly paired whatsapp-web.js accounts,
@@ -326,9 +327,9 @@ export class SessionEngineLifecycle {
   // Moved each time this node records a terminal unlink of a session it owns. A start or an engine holding the
   // binding it read before the move treats it as gone, instead of depending on when the row write lands.
   private readonly bindingEpochs = new Map<string, number>();
-  // The phone clear of a session's latest terminal unlink, until the database has answered it. It is fire-and-forget,
-  // so a row read that starts while it is pending can still return the binding the unlink released.
-  private readonly unlinkClears = new Map<string, Promise<void>>();
+  // The row writes that change a session's phone and are not awaited (an unlink's clear, a READY): a row read that
+  // acts on the phone waits for them, so it cannot return the binding they replace.
+  private readonly phoneWrites = new PhoneWrites();
 
   constructor(
     @InjectRepository(Session, 'data')
@@ -474,8 +475,11 @@ export class SessionEngineLifecycle {
       isSessionRetired: id => this.isSessionRetired(id),
       nodeId: this.ownership?.nodeId,
       bindingEpoch: id => this.bindingEpochs.get(id) ?? 0,
-      forgetBindingEpoch: id => void this.bindingEpochs.delete(id),
-      unlinkClearPending: id => this.unlinkClears.has(id),
+      forgetBindingEpoch: id => {
+        this.bindingEpochs.delete(id);
+        this.phoneWrites.forget(id);
+      },
+      readAfterPhoneWrites: (id, read) => this.phoneWrites.readSettled(id, read),
       prepareStart: (id, desiredState) => this.prepareStart(id, desiredState),
       purgeAuthDirsIfDeleted: id => this.purgeAuthDirsIfDeleted(id),
       updateStatus: (id, status) => this.updateStatus(id, status),
@@ -1021,15 +1025,15 @@ export class SessionEngineLifecycle {
     // READY proves any in-flight stuck-auth recovery succeeded (or none was needed), so the
     // one-shot recovery budget is re-armed for a future episode.
     this.stuckAuthRecoveryUsed.delete(id);
-    // The number this READY links is what later row reads return, not the one an unlink released: a clear still
-    // pending from before it must not take the new binding out of a later snapshot.
-    this.unlinkClears.delete(id);
 
-    void this.sessionRepository.update(id, readyRowUpdate(phone, pushName, new Date())).catch(err =>
-      this.logger.warn('Failed to persist session ready state', {
-        sessionId: id,
-        error: err instanceof Error ? err.message : String(err),
-      }),
+    this.phoneWrites.track(
+      id,
+      this.sessionRepository.update(id, readyRowUpdate(phone, pushName, new Date())).catch(err =>
+        this.logger.warn('Failed to persist session ready state', {
+          sessionId: id,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      ),
     );
 
     // Re-apply a prior PUT /presence once per open. Baileys' markOnlineOnConnect has already
@@ -1129,8 +1133,8 @@ export class SessionEngineLifecycle {
    * reconnect. The session row is re-read here rather than trusting a caller-held snapshot (the
    * watchdog detects death long after the last state change, and even the callback's closure
    * snapshot can be stale), so the reconnect re-initializes from the row read here, with the phone
-   * a terminal unlink clears already cleared, including one recorded while this read ran or whose
-   * clear was still pending when it began. A later report while that reconnect is armed leaves its
+   * a terminal unlink clears already cleared: the read waits for the phone writes this process has
+   * issued, and is repeated when one is issued while it runs. A later report while that reconnect is armed leaves its
    * timer and snapshot alone, except that a terminal unlink clears the phone on the armed snapshot
    * too. Never throws: a DB hiccup must not turn a disconnect into an unhandled rejection.
    *
@@ -1158,11 +1162,18 @@ export class SessionEngineLifecycle {
       return;
     }
 
-    const bindingEpoch = this.bindingEpochs.get(id) ?? 0;
-    const unlinkClearing = this.unlinkClears.has(id);
     let session: Session | null;
     try {
-      session = await this.sessionRepository.findOne({ where: { id } });
+      const read = (): Promise<Session | null> => this.sessionRepository.findOne({ where: { id } });
+      // After the phone writes this process issued have been answered, and again if another was issued meanwhile:
+      // a read that overlaps an unlink's clear or a READY's row can return the binding the write replaces.
+      if (this.phoneWrites.hasPending(id)) {
+        session = await this.phoneWrites.readSettled(id, read);
+      } else {
+        const mark = this.phoneWrites.mark(id);
+        session = await read();
+        if (this.phoneWrites.overlapped(id, mark)) session = await this.phoneWrites.readSettled(id, read);
+      }
     } catch (err) {
       this.logger.error('Failed to reload the session for reconnect scheduling', String(err), {
         sessionId: id,
@@ -1185,11 +1196,6 @@ export class SessionEngineLifecycle {
       this.reportDroppedUnlink(id, reason, retry);
       return;
     }
-
-    // A terminal unlink recorded while the row was read, or whose phone clear was still pending when the read began,
-    // released the binding this read may still carry. The reconnect must not take it back: the next attempt would
-    // refuse the account that scans its QR.
-    if (unlinkClearing || (this.bindingEpochs.get(id) ?? 0) !== bindingEpoch) session = { ...session, phone: null };
 
     if (retry && TERMINAL_UNLINK_REASONS.has(retry.reason) && !TERMINAL_UNLINK_REASONS.has(reason)) {
       reason = retry.reason;
@@ -1321,19 +1327,16 @@ export class SessionEngineLifecycle {
             { id, nodeId: IsNull() },
           ]
         : id;
-    const clear = this.sessionRepository.update(where, { phone: null }).then(
-      () => undefined,
-      (err: unknown) =>
+    this.phoneWrites.track(
+      id,
+      this.sessionRepository.update(where, { phone: null }).catch((err: unknown) =>
         this.logger.warn('Failed to clear phone after a terminal unlink', {
           sessionId: id,
           error: String(err),
           action: 'unlink_phone_clear_failed',
         }),
+      ),
     );
-    this.unlinkClears.set(id, clear);
-    void clear.then(() => {
-      if (this.unlinkClears.get(id) === clear) this.unlinkClears.delete(id);
-    });
     // A reconnect episode keeps its own snapshot (scheduleReconnect leaves it alone), so the clear reaches that one
     // too, whatever the episode is doing: an attempt that is initializing its replacement re-arms the next attempt
     // from the snapshot when it fails. Only the phone: the rest is what the report that armed it read.

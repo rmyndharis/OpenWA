@@ -184,8 +184,11 @@ export interface SessionEngineControlsHost {
   /** Same contract as SessionEngineWiringHost.bindingEpoch. */
   bindingEpoch(id: string): number;
   forgetBindingEpoch?(id: string): void;
-  /** Whether the phone clear of a recorded terminal unlink is still being written: a row read now can return it. */
-  unlinkClearPending?(id: string): boolean;
+  /**
+   * `read`, once the phone writes the lifecycle issued without waiting for them (an unlink's clear, a READY's row) have
+   * been answered: a row read that overlaps one can return the binding it replaces.
+   */
+  readAfterPhoneWrites?<T>(id: string, read: () => Promise<T>): Promise<T>;
   logger: ReturnType<typeof createLogger>;
   /** LIVE closure — read at call time, never captured (specs replace lifecycle.dataSource at runtime). */
   dataSource(): DataSource;
@@ -334,10 +337,8 @@ export class SessionEngineControls {
     // above all, which writes nothing else this start could read and counts on it aborting. That
     // includes a mark set again on top of a stale one, which only its stamp tells apart.
     const markAtEntry = this.stoppingSessions.stamp(id);
-    // A WhatsApp unlink recorded after this point clears the binding either read below may still return, and so
-    // does one whose phone clear is still being written now.
+    // A WhatsApp unlink recorded after this point clears the binding either read below may still return.
     const bindingEpoch = this.host.bindingEpoch(id);
-    const unlinkClearing = this.host.unlinkClearPending?.(id) ?? false;
 
     try {
       const session = await this.requireSession(id);
@@ -413,7 +414,10 @@ export class SessionEngineControls {
       // mark again and retires this start after its init. A launch that fails after the clear still
       // counts as the start the operator asked for. A delete issued since this start began that failed once it
       // began removing has dropped its mark and left a record this start may have read too: it still stands.
-      const current = await this.requireSession(id);
+      // It also supplies the binding the engine checks, so it is read once the phone writes of an unlink or a READY that
+      // the lifecycle did not wait for have been answered, and again when one is issued while it runs.
+      const readCurrent = (): Promise<Session> => this.requireSession(id);
+      const current = await (this.host.readAfterPhoneWrites?.(id, readCurrent) ?? readCurrent());
       const { desiredState } = current;
       if ((desiredState && (!explicit || desiredState !== session.desiredState)) || stoppedSince?.()) {
         this.stoppingSessions.add(id);
@@ -486,9 +490,8 @@ export class SessionEngineControls {
       // schedule a reconnect that registers a replacement before initialize() rejects.
       const before = this.engines.get(id);
       // The binding the engine checks comes from the read past the teardown fence, and none at all once a WhatsApp
-      // unlink was recorded since this start began or its clear was still being written then: the number that scans
-      // next must not be refused as a rebind.
-      const phone = !unlinkClearing && this.host.bindingEpoch(id) === bindingEpoch ? current.phone : null;
+      // unlink was recorded since this start began: the number that scans next must not be refused as a rebind.
+      const phone = this.host.bindingEpoch(id) === bindingEpoch ? current.phone : null;
       const init = this.host.initializeEngine(id, { ...session, phone });
       const registered = this.engines.get(id);
       const mine = registered !== before ? registered : undefined;

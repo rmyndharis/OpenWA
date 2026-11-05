@@ -569,10 +569,10 @@ describe('a start that read the binding before a late unlink was recorded', () =
     await until(() => f.repository.findOne.mock.calls.length > reads, 'the restart to read its row');
 
     await finish();
-    await restart;
-    // Both of the restart's reads ran before the clear was written.
-    expect(clear.held()).toBe(true);
+    // The restart reads its row again only once the clear has been answered, so it launches without the old number.
+    await until(() => clear.held(), 'the clear of the recorded unlink');
     clear.release();
+    await restart;
     await linkOther(f, 1);
 
     expect(f.engines[1].logout).not.toHaveBeenCalled();
