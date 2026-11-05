@@ -1,7 +1,7 @@
 import { Injectable, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { In, IsNull, LessThan, MoreThan, Not, Repository } from 'typeorm';
+import { In, LessThan, MoreThan, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { StatusUpdate } from './entities/status-update.entity';
 import type { IncomingStatus } from './incoming-status';
@@ -27,11 +27,13 @@ const PURGE_BATCH_SIZE = 500;
 /** Cap on batches per run, so one tick cannot monopolise the process draining a huge backlog;
  *  whatever is left is picked up by the next scheduled run. */
 const PURGE_MAX_BATCHES_PER_RUN = 200;
+/** Files the orphan sweep reconciles per reference lookup: bounds the keys it holds and each query's key list. */
+const SWEEP_CHUNK_SIZE = 500;
 /** Default per-file cap on persisted status media. Exported for the session service's seed, which
  * pre-gates history downloads at the same cap so over-cap blobs are never fetched. */
 export const DEFAULT_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 /** Default cadence of the orphaned-media reconciliation sweep (overridable via
- * STATUS_ORPHAN_SWEEP_INTERVAL_MS). Lighter-than-it-sounds: one streamed enumeration + one indexed query. */
+ * STATUS_ORPHAN_SWEEP_INTERVAL_MS). Lighter-than-it-sounds: one streamed enumeration + one indexed query per chunk. */
 const DEFAULT_ORPHAN_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 /** Default grace window before an unreferenced status media file is deleted (overridable via
  * STATUS_ORPHAN_GRACE_MS), so a file mid-ingest is never reaped. */
@@ -228,12 +230,16 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
         error instanceof Error ? error.stack : String(error),
       );
       row.omitReason = 'write_failed';
-      await this.repository.update({ id: row.id, sessionId }, { omitReason: row.omitReason }).catch(err =>
-        this.logger.warn(`Failed to record the write_failed omission for status ${s.waStatusId}`, {
-          error: String(err),
-        }),
-      );
-      return true;
+      const omitted = await this.repository
+        .update({ id: row.id, sessionId }, { omitReason: row.omitReason })
+        .catch(err => {
+          this.logger.warn(`Failed to record the write_failed omission for status ${s.waStatusId}`, {
+            error: String(err),
+          });
+          return undefined;
+        });
+      // A row removed while its media was being written (a delete of the story, a purge) was never stored.
+      return omitted?.affected !== 0;
     }
 
     row.mediaPath = key;
@@ -376,7 +382,10 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
   async removeRevoked(sessionId: string, waStatusId: string, by?: { poster?: string }): Promise<boolean> {
     // An undefined value is dropped from a where clause, which would then match every row of the session.
     if (!waStatusId || (by && !by.poster)) return false;
-    await this.unsaved.get(`${sessionId}:${waStatusId}`);
+    // A second ingest of the story can join the wait while it lasts (the connect-time seed beside the live message),
+    // so the wait ends only when none is left: one that saved after the delete would put the story back.
+    const key = `${sessionId}:${waStatusId}`;
+    for (let pending = this.unsaved.get(key); pending; pending = this.unsaved.get(key)) await pending;
     const contactJid = by?.poster ? In(await this.contactCandidates(by.poster)) : undefined;
     const row = await this.repository.findOne({
       where: { sessionId, waStatusId, ...(contactJid ? { contactJid } : {}) },
@@ -467,19 +476,18 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
    */
   async sweepOrphanedMedia(now: number = Date.now()): Promise<number> {
     const graceMs = this.configService.get<number>('status.orphanGraceMs', DEFAULT_ORPHAN_GRACE_MS);
-    // The referenced set is bounded by the 24h TTL, so a single whole-set query is the cheap shape
-    // here (no chunking) — unlike the chat-media archive, whose rows can accumulate without bound.
+    // Reconciled in chunks, as the chat-media archive does: the rows are bounded by the 24h TTL, but the files under the
+    // prefix are not (a session delete leaves every file of the session behind), and listing them all before asking
+    // the database would hold every key at once. Each chunk asks only which of its own keys are referenced.
     const removed = await sweepOrphanedFiles({
       storage: this.storageService,
       prefix: STATUS_MEDIA_PREFIX,
       graceMs,
       now,
       firstSeenAt: this.orphanFirstSeenAt,
-      referencedAmong: async () => {
-        const rows = await this.repository.find({
-          where: { mediaPath: Not(IsNull()) },
-          select: { mediaPath: true },
-        });
+      chunkSize: SWEEP_CHUNK_SIZE,
+      referencedAmong: async keys => {
+        const rows = await this.repository.find({ where: { mediaPath: In(keys) }, select: { mediaPath: true } });
         return new Set(rows.map(row => row.mediaPath));
       },
       onDeleteFailed: (file, err) =>

@@ -32,6 +32,15 @@ const settle = async (): Promise<void> => {
   for (let n = 0; n < 10; n++) await new Promise(resolve => setTimeout(resolve, 5));
 };
 
+/** A step a case holds until it opens the gate, and a way to wait until the step has reached it. */
+const gate = (): { reach: () => void; reached: Promise<void>; open: () => void; opened: Promise<void> } => {
+  let reach!: () => void;
+  let open!: () => void;
+  const reached = new Promise<void>(resolve => (reach = resolve));
+  const opened = new Promise<void>(resolve => (open = resolve));
+  return { reach, reached, open, opened };
+};
+
 /** What Baileys says of a revoke it announces: whether the account made it, and who sent it. */
 const sentBy = (participant?: string, fromMe = false): { fromMe: boolean; participant?: string } => ({
   fromMe,
@@ -243,6 +252,54 @@ describe('a received status its poster deleted', () => {
       await settle();
 
       expect(await storedFiles()).toEqual([]);
+      expect(announced('status.received')).toEqual([]);
+    });
+
+    it('removes the story when a second ingest of it joins before the first row is saved', async () => {
+      const repository = db.getRepository(StatusUpdate);
+      const save = repository.save.bind(repository) as (...args: unknown[]) => Promise<unknown>;
+      const saves = [gate(), gate()];
+      let started = 0;
+      jest.spyOn(repository, 'save').mockImplementation(((...args: unknown[]) => {
+        const mine = saves[started++];
+        mine.reach();
+        return mine.opened.then(() => save(...args));
+      }) as never);
+
+      const first = projector.handleInboundMessage(SESSION, engine, story(statusId, POSTER, false));
+      await saves[0].reached;
+      projector.handleMessageRevoked(SESSION, engine, revoked, actor);
+      // The connect-time seed ingests the story again while the delete still waits for the first save.
+      const second = projector.handleInboundMessage(SESSION, engine, story(statusId, POSTER, false));
+      await saves[1].reached;
+      saves[0].open();
+      await first?.settled;
+      await settle();
+      saves[1].open();
+      await second?.settled;
+      await settle();
+
+      expect(await rowCount()).toBe(0);
+    });
+
+    it('announces no status.received when its media write fails after the story was deleted', async () => {
+      const writing = gate();
+      jest.spyOn(storage, 'putFile').mockImplementation(async () => {
+        writing.reach();
+        await writing.opened;
+        throw new Error('storage unavailable');
+      });
+
+      const receipt = projector.handleInboundMessage(SESSION, engine, story(statusId, POSTER));
+      await writing.reached; // the row is saved, the file is being written
+      projector.handleMessageRevoked(SESSION, engine, revoked, actor);
+      await settle();
+      expect(await rowCount()).toBe(0);
+
+      writing.open();
+      await receipt?.settled;
+      await settle();
+
       expect(announced('status.received')).toEqual([]);
     });
 

@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, FindOperator, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 
 import { StorageService } from '../../common/storage/storage.service';
@@ -948,6 +948,26 @@ describe('StatusStoreService.sweepOrphanedMedia', () => {
     expect(await service.sweepOrphanedMedia(t0)).toBe(0); // first sighting starts the grace clock
     expect(await service.sweepOrphanedMedia(t0 + 61 * 60 * 1000)).toBe(8);
     expect(fs.readdirSync(path.join(baseDir, 'media', 'statuses', 'sess'))).toHaveLength(0);
+  });
+
+  it('asks which files are referenced a chunk at a time, so a large backlog is never held whole', async () => {
+    const live = await ingestWithMedia('live', Date.now());
+    const keys = [live.mediaPath!, ...Array.from({ length: 1_200 }, (_, i) => `statuses/sess/orphan-${i}.jpg`)];
+    jest.spyOn(storageService, 'iterateFiles').mockImplementation((() => keys) as never);
+    const deleteFile = jest.spyOn(storageService, 'deleteFile').mockResolvedValue(undefined);
+    const find = jest.spyOn(repository, 'find');
+
+    const t0 = Date.now();
+    expect(await service.sweepOrphanedMedia(t0)).toBe(0);
+    const asked = find.mock.calls.map(([options]) => {
+      const where = options?.where as unknown as { mediaPath: FindOperator<string[]> };
+      return where.mediaPath.value.length;
+    });
+    expect(asked).toEqual([500, 500, 201]);
+
+    // The file a row references is never reaped, in a chunk of its own or among orphans.
+    expect(await service.sweepOrphanedMedia(t0 + 61 * 60 * 1000)).toBe(1_200);
+    expect(deleteFile).not.toHaveBeenCalledWith(live.mediaPath);
   });
 });
 
