@@ -1742,13 +1742,26 @@ export class BaileysEvents {
     }
   }
 
-  /** Whether a change arriving under `key` names a message other than the one `original` is. */
-  private readsAsForeign(original: WAMessageKey, key: WAMessageKey, checkAuthor: boolean, kind?: 'reaction'): boolean {
+  /**
+   * Whether a change arriving under `key` names a message other than the one `original` is. `resolve` maps a lid to the
+   * phone number the gateway holds a reported pairing for, so a lid that is provably another person's reads as such; a
+   * lid it cannot map stays unresolved, and the comparison fails open on it (see differentWaIds).
+   */
+  private readsAsForeign(
+    original: WAMessageKey,
+    key: WAMessageKey,
+    checkAuthor: boolean,
+    kind?: 'reaction',
+    resolve?: (jid: string) => string | null,
+  ): boolean {
     const broadcast = kind === 'reaction' && !!original.remoteJid?.endsWith('@broadcast');
     if (broadcast && original.fromMe === true) return false;
     const originalChats = [original.remoteJid, original.remoteJidAlt];
     if (broadcast && original.remoteJid !== 'status@broadcast') originalChats.push(original.participant);
-    const neutral = (jid: string): string => this.host.toNeutralJid(jid);
+    const neutral = (jid: string): string => {
+      const phone = resolve && parseWaId(jid).kind === 'lid' ? resolve(jid) : null;
+      return phone ? `${phone}@c.us` : this.host.toNeutralJid(jid);
+    };
     return (
       differentWaIds(originalChats, [key.remoteJid, key.remoteJidAlt], neutral) ||
       (checkAuthor &&
@@ -1795,14 +1808,9 @@ export class BaileysEvents {
   }
 
   /**
-   * Whether an edit or delete sent under `envelope` may change the stored message `target`. Baileys
-   * checks neither the chat nor the sender of either (Utils/process-message.js), so the stored copy
-   * changes only for one from the same chat and from the message's author. A group admin may delete
-   * anyone's message, so a group delete (`isDelete`) skips the author check; the caller passes `isDelete`
-   * false for one whose sender the roster shows is no admin, unless every copy it judges reads as the sender's
-   * (see judgeGroupDelete).
-   * Compare raw identities and incoming alt pairs. A stored LID/phone pair matches only through a
-   * reported directory lookup; own-message senderAlt is not proof of the recipient's phone.
+   * The phone number the gateway holds a reported pairing for, by lid, over the lids that the keys name as their chat or
+   * participant. A pairing it holds only as a display lookup is not reported and maps nothing. Never rejects: a lookup
+   * that fails maps nothing.
    */
   private async reportedPhones(...keys: Array<WAMessageKey | undefined>): Promise<(jid: string) => string | null> {
     const lids = new Set(
@@ -1820,6 +1828,16 @@ export class BaileysEvents {
     return jid => pairs.get(userPart(jid)) ?? null;
   }
 
+  /**
+   * Whether an edit or delete sent under `envelope` may change the stored message `target`. Baileys
+   * checks neither the chat nor the sender of either (Utils/process-message.js), so the stored copy
+   * changes only for one from the same chat and from the message's author. A group admin may delete
+   * anyone's message, so a group delete (`isDelete`) skips the author check; the caller passes `isDelete`
+   * false for one whose sender the roster shows is no admin, unless every copy it judges reads as the sender's
+   * (see judgeGroupDelete).
+   * Compare raw identities and incoming alt pairs. A stored LID/phone pair matches only through a
+   * reported directory lookup (`resolve`); own-message senderAlt is not proof of the recipient's phone.
+   */
   private mayChange(
     target: WAMessageKey,
     envelope: WAMessageKey,
@@ -1879,7 +1897,10 @@ export class BaileysEvents {
     const stored = await this.readStoredMessage(targetId, 'checking whose message a group delete names');
     const after = this.inboundInFlight.get(targetId);
     const copies = [before?.key, stored?.key, after?.key].filter((key): key is WAMessageKey => !!key);
-    const own = copies.length > 0 && copies.every(key => !this.readsAsForeign(key, envelope, true));
+    // A sender known by a lid and an author known by a number are the same person only if the gateway holds a reported
+    // pairing that says so: with one that names another number the copy is not theirs, and the roster is read.
+    const resolve = await this.reportedPhones(...copies, envelope);
+    const own = copies.length > 0 && copies.every(key => !this.readsAsForeign(key, envelope, true, undefined, resolve));
     // A delivery that reuses the id of a stored message of another chat or sender is stopped as a repeat before it
     // downloads or emits anything (see processInboundMessage), so it does not make that stored message one to judge
     // from the cache alone.

@@ -33,7 +33,10 @@ const roster: Roster = () =>
   ]);
 
 /** `peek` is the cached roster; `held` has the session keep every message it is handed without an outcome. */
-function build(readGroupMembers?: Roster, options: { peek?: () => GroupMember[] | null; held?: boolean } = {}) {
+function build(
+  readGroupMembers?: Roster,
+  options: { peek?: () => GroupMember[] | null; held?: boolean; pairs?: Record<string, string> } = {},
+) {
   const store = new BaileysSessionStore(undefined, 's1');
   store.upsertChats([{ id: GROUP }]);
   const raw = new Map<string, WAMessage>();
@@ -83,6 +86,8 @@ function build(readGroupMembers?: Roster, options: { peek?: () => GroupMember[] 
     getOnCallOutcome: noop,
     readGroupMembers: members,
     peekGroupMembers: options.peek,
+    // The pairings the gateway holds as reported, by the digits of the lid.
+    findPersistedLidPhone: (jid: string) => Promise.resolve(options.pairs?.[jid.split('@')[0]] ?? null),
   };
   const events = new BaileysEvents(host);
   const posted = (id: string, key: WAMessage['key'], text: string): void => {
@@ -155,6 +160,57 @@ describe('Baileys group delete of another member message', () => {
 
     expect(members).not.toHaveBeenCalled();
     expect(raw.get('A1')?.message).toBeNull();
+  });
+
+  // A sender known by a lid and an author known by a number are one person only if a reported pairing says so. With a
+  // pairing that names another number the copy is not the sender's, so the roster is read and settles it.
+  it('reads the roster when a reported pairing shows the sender lid is not the author', async () => {
+    const lidRoster: Roster = () =>
+      Promise.resolve([
+        { ids: [ALICE], admin: false },
+        { ids: [BOB, '900333@lid'], admin: false },
+        { ids: ['900444@lid', ADMIN], admin: true },
+      ]);
+    const { raw, revoked, members, posted, deleteOf, preview } = build(lidRoster, { pairs: { '900333': '628333' } });
+    posted('A1', { remoteJid: GROUP, fromMe: false, participant: ALICE }, 'meeting at 3');
+
+    await deleteOf('A1', { participant: '900333@lid' }, { fromMe: false, participant: ALICE });
+
+    expect(members).toHaveBeenCalledTimes(1);
+    expect(raw.get('A1')?.message).toEqual({ conversation: 'meeting at 3' });
+    expect(preview()).toBe('meeting at 3');
+    // The session is told the sender is no admin and judges the row it holds under that id itself.
+    expect(revoked).toHaveBeenCalledWith(expect.objectContaining({ id: 'A1' }), {
+      fromMe: false,
+      participant: '900333@lid',
+      admin: false,
+    });
+  });
+
+  it('reads no roster when a reported pairing shows the sender lid is the author', async () => {
+    const { raw, members, posted, deleteOf } = build(roster, { pairs: { '900111': '628111' } });
+    posted('A1', { remoteJid: GROUP, fromMe: false, participant: ALICE }, 'oops');
+
+    await deleteOf('A1', { participant: '900111@lid' }, { fromMe: false, participant: ALICE });
+
+    expect(members).not.toHaveBeenCalled();
+    expect(raw.get('A1')?.message).toBeNull();
+  });
+
+  // The roster may list a member by number only while the delete names its sender by lid with the number beside it.
+  it('matches the roster by the number the delete carries beside the sender lid', async () => {
+    const { raw, revoked, members, posted, deleteOf } = build(roster);
+    posted('A1', { remoteJid: GROUP, fromMe: false, participant: '900111@lid' }, 'meeting at 3');
+
+    await deleteOf(
+      'A1',
+      { participant: '900333@lid', participantAlt: BOB },
+      { fromMe: false, participant: '900111@lid' },
+    );
+
+    expect(members).toHaveBeenCalledTimes(1);
+    expect(raw.get('A1')?.message).toEqual({ conversation: 'meeting at 3' });
+    expect(revoked).not.toHaveBeenCalled();
   });
 
   it('reads no roster for a member deleting their own message', async () => {
