@@ -282,6 +282,39 @@ describe('a received status its poster deleted', () => {
       expect(await rowCount()).toBe(0);
     });
 
+    it('removes the story when a second ingest of it starts while the delete is still reading', async () => {
+      await receive(statusId, POSTER, false);
+      const repository = db.getRepository(StatusUpdate);
+      const findOne = repository.findOne.bind(repository);
+      const deleteRead = gate();
+      const ingestRead = gate();
+      jest.spyOn(repository, 'findOne').mockImplementation(async options => {
+        if (options.select) {
+          // The delete's own read: it has the row, and waits before it deletes it.
+          const row = await findOne(options);
+          deleteRead.reach();
+          await deleteRead.opened;
+          return row;
+        }
+        // The second ingest's lookup: it runs after the delete, so it finds no row to stop it.
+        ingestRead.reach();
+        await ingestRead.opened;
+        return findOne(options);
+      });
+
+      projector.handleMessageRevoked(SESSION, engine, revoked, actor);
+      await deleteRead.reached;
+      const second = projector.handleInboundMessage(SESSION, engine, story(statusId, POSTER, false));
+      await ingestRead.reached;
+      deleteRead.open();
+      await settle();
+      ingestRead.open();
+      await second?.settled;
+      await settle();
+
+      expect(await rowCount()).toBe(0);
+    });
+
     it('announces no status.received when its media write fails after the story was deleted', async () => {
       const writing = gate();
       jest.spyOn(storage, 'putFile').mockImplementation(async () => {

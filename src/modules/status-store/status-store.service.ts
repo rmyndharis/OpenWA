@@ -29,6 +29,8 @@ const PURGE_BATCH_SIZE = 500;
 const PURGE_MAX_BATCHES_PER_RUN = 200;
 /** Files the orphan sweep reconciles per reference lookup: bounds the keys it holds and each query's key list. */
 const SWEEP_CHUNK_SIZE = 500;
+/** Passes a delete of a story makes while ingests of it keep starting during them; it gives up after these. */
+const REMOVAL_MAX_PASSES = 5;
 /** Default per-file cap on persisted status media. Exported for the session service's seed, which
  * pre-gates history downloads at the same cap so over-cap blobs are never fetched. */
 export const DEFAULT_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
@@ -59,6 +61,8 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
   private purgeCursor?: string;
   /** Ingests whose row is not saved yet, by `${sessionId}:${waStatusId}`: the delete of the same story waits for them. */
   private readonly unsaved = new Map<string, Promise<void>>();
+  /** Deletes of a story in progress, by the same key: an ingest that starts meanwhile sets `joined` on each of them. */
+  private readonly removals = new Map<string, Set<{ joined: boolean }>>();
 
   constructor(
     @InjectRepository(StatusUpdate, 'data')
@@ -165,6 +169,7 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
   /** Mark a story's row as not saved yet until the returned function is called (calling it again does nothing). */
   private holdUnsaved(sessionId: string, waStatusId: string): () => void {
     const key = `${sessionId}:${waStatusId}`;
+    for (const removal of this.removals.get(key) ?? []) removal.joined = true;
     let release!: () => void;
     const mine = new Promise<void>(resolve => (release = resolve));
     // The same story may be ingested twice at once (the connect-time seed beside the live message): both are waited for.
@@ -382,10 +387,31 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
   async removeRevoked(sessionId: string, waStatusId: string, by?: { poster?: string }): Promise<boolean> {
     // An undefined value is dropped from a where clause, which would then match every row of the session.
     if (!waStatusId || (by && !by.poster)) return false;
-    // A second ingest of the story can join the wait while it lasts (the connect-time seed beside the live message),
-    // so the wait ends only when none is left: one that saved after the delete would put the story back.
+    // A second ingest of the story can start while the delete waits or reads (the connect-time seed beside the live
+    // message), and its lookup may run after the delete's: it would then save the story the delete just removed. So the
+    // delete waits for every ingest pending when it looks, and looks again when one started during its last pass.
     const key = `${sessionId}:${waStatusId}`;
-    for (let pending = this.unsaved.get(key); pending; pending = this.unsaved.get(key)) await pending;
+    const watch = { joined: false };
+    const watching = this.removals.get(key) ?? new Set<{ joined: boolean }>();
+    watching.add(watch);
+    this.removals.set(key, watching);
+    try {
+      let removed = false;
+      for (let pass = 0; pass < REMOVAL_MAX_PASSES; pass++) {
+        for (let pending = this.unsaved.get(key); pending; pending = this.unsaved.get(key)) await pending;
+        watch.joined = false;
+        removed = (await this.removeStored(sessionId, waStatusId, by)) || removed;
+        if (!watch.joined) break;
+      }
+      return removed;
+    } finally {
+      watching.delete(watch);
+      if (watching.size === 0) this.removals.delete(key);
+    }
+  }
+
+  /** One pass of {@link removeRevoked}: the row, then its media file. Resolves to whether a row was removed. */
+  private async removeStored(sessionId: string, waStatusId: string, by?: { poster?: string }): Promise<boolean> {
     const contactJid = by?.poster ? In(await this.contactCandidates(by.poster)) : undefined;
     const row = await this.repository.findOne({
       where: { sessionId, waStatusId, ...(contactJid ? { contactJid } : {}) },
