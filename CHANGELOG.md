@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
 - Ignore a Baileys group delete of another member's message, or of the account's, from a member the group roster shows is not an admin.
+- Keep the chat preview of a Baileys group message when a member known by a paired lid edits or deletes the message of a member known by a lid with no pairing.
 
 ### Documentation
 
