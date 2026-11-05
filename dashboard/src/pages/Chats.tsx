@@ -1407,6 +1407,8 @@ export function Chats() {
   // Bumped with every hit, so a hit in the chat already open still re-runs the scroll effect, where
   // every other state it sets is unchanged and React skips the render.
   const [hitSeq, setHitSeq] = useState(0);
+  // The click being handled: a newer hit replaces it, so a hit that waited for the session list can tell it was overtaken.
+  const hitClickRef = useRef<object | null>(null);
 
   // The listed chat a hit was found in. A stored row keeps the chat id it was written with, which can be another
   // spelling of a listed chat: an API send to the raw `@s.whatsapp.net` form, or to the phone of a contact the list
@@ -1457,6 +1459,14 @@ export function Chats() {
 
   const handleSearchHit = useCallback(
     async (hit: SearchHit) => {
+      // A newer hit, another session or another chat chosen while the session list is read takes over from this click.
+      const click = {};
+      hitClickRef.current = click;
+      const openAtClick = activeChatIdRef.current;
+      const overtaken = () =>
+        hitClickRef.current !== click ||
+        selectedSessionRef.current !== selectedSessionId ||
+        activeChatIdRef.current !== openAtClick;
       // Search covers stored messages of every session, but the page can only open a ready one, and
       // its list is read on mount. A session missing from it is looked up again, since it may have
       // connected since; one that still is not ready is refused rather than selected with no chats.
@@ -1465,9 +1475,10 @@ export function Chats() {
         try {
           listed = await readSessions();
         } catch (err) {
-          showLoadError('chats.errors.loadSessions', err);
+          if (!overtaken()) showLoadError('chats.errors.loadSessions', err);
           return;
         }
+        if (overtaken()) return;
         if (!listed.some(s => s.id === hit.sessionId && s.status === 'ready')) {
           pendingHitRef.current = null;
           showWarningToast(t('chats.errors.searchHitSessionNotReady'));
