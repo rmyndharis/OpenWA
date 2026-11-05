@@ -858,7 +858,7 @@ tier automatically. Key properties:
   resolves `{ continue: true }` (fail-open), so each sandboxed subscriber delays the hook chain by at most
   5 s per event. The same fail-open value drains in-flight hooks if the worker crashes. The timeout is
   logged at most once per event per minute and shows as the last hook error in plugin health.
-- A sandboxed **webhook** handler (`ctx.registerWebhook`) has a **5 s** inline budget (`INGRESS_DISPATCH_TIMEOUT_MS`). Queued dispatch gets `SIMULATE_TYPING_MAX_MS` plus 5 s, capped at 25 s (10 s by default). The host
+- A sandboxed **webhook** handler (`ctx.registerWebhook`) has a **5 s** inline budget (`INGRESS_DISPATCH_TIMEOUT_MS`), which is the budget of every dispatch without the queue, replays included. Queued dispatch gets `SIMULATE_TYPING_MAX_MS` plus 5 s, capped at 25 s (10 s by default). The host
   cannot cancel a handler that overruns it: the delivery is retried while the first run still lands, so a handler must key
   its side effects on `req.deliveryId` and hand slow work to a background task (docs/25, section 25.7).
 - After a hook, webhook or search dispatch times out, the host pings the worker. A worker whose event
