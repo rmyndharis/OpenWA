@@ -15,9 +15,13 @@ import { LoggerService, LogFormat } from '../common/services/logger.service';
 
 const MB = 1024 * 1024;
 
+/** Every request a case admitted: each is closed after its case, which ends the stall reaper the middleware armed for it. */
+const admitted: Array<Request & EventEmitter> = [];
+
 /** Minimal req/res doubles: real EventEmitters so the middleware's listener accounting runs as-is. */
 const makeReq = (headers: Record<string, string> = {}): Request & EventEmitter => {
   const req = new EventEmitter() as unknown as Request & EventEmitter;
+  admitted.push(req);
   (req as unknown as { headers: Record<string, string> }).headers = headers;
   (req as unknown as { socket: { bytesRead: number; remoteAddress: string } }).socket = {
     bytesRead: 0,
@@ -63,6 +67,9 @@ beforeEach(() => {
   warn = jest.spyOn(console, 'warn').mockImplementation();
 });
 afterEach(() => {
+  // A request left open keeps its unref'd 5 s reaper alive; when the pace check drops it later the warning is written
+  // outside any case, after the console spy is gone.
+  for (const req of admitted.splice(0)) req.emit('close');
   warn.mockRestore();
   LoggerService.setLogFormat(null);
 });
@@ -938,6 +945,18 @@ describe('a request the budget drops', () => {
     const text = JSON.stringify(warn.mock.calls);
     expect(text).not.toContain('stored-key-hash');
     expect(text).not.toContain('leaked');
+  });
+
+  // The limiter keys an IPv6 client by its /64; the log names the address the operator can act on.
+  it('logs the full address of an IPv6 client, not the /64 its limiter key is', () => {
+    const budget = createInflightBodyBudget(1000, { perClientShare: 1 });
+    const req = makeReq({ 'content-length': '400' });
+    (socketOf(req) as unknown as { remoteAddress: string }).remoteAddress = '2001:db8:1:2:3:4:5:6';
+    run(budget, req);
+
+    jest.advanceTimersByTime(60_000);
+
+    expect(dropLines()).toEqual([expect.objectContaining({ reason: 'stall', client: '2001:db8:1:2:3:4:5:6' })]);
   });
 
   it('names the pace when a body keeps trickling but falls too far behind to finish in time', () => {

@@ -285,10 +285,18 @@ const STRUCTURAL_KEYS = new Set(['timestamp', 'level', 'context', 'message', 'tr
 // sequence. Control characters are written as escapes; a tab stays, since it cannot start a line.
 // eslint-disable-next-line no-control-regex
 const PRETTY_CONTROLS = /[\x00-\x08\x0a-\x1f\x7f-\x9f]/g;
-const escapeControls = (text: string): string =>
-  text.replace(PRETTY_CONTROLS, char =>
-    char === '\n' ? '\\n' : char === '\r' ? '\\r' : `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`,
-  );
+const escapeControl = (char: string): string =>
+  char === '\n' ? '\\n' : char === '\r' ? '\\r' : `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`;
+const escapeControls = (text: string): string => text.replace(PRETTY_CONTROLS, escapeControl);
+
+// A stack trace opens with the error's message, which can be text the caller did not write, and its lines are the one
+// place the format keeps line breaks. So a trace is held to the same rule as the rest: the controls other than the
+// line break and the tab are written as escapes, and a line that would start at the left edge, where a record begins,
+// is indented. The lines of a real stack already start with spaces and are left as they are.
+// eslint-disable-next-line no-control-regex
+const PRETTY_TRACE_CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+const escapeTrace = (trace: string): string =>
+  trace.replace(PRETTY_TRACE_CONTROLS, escapeControl).replace(/\n(?=\S)/g, '\n    ');
 
 @Injectable({ scope: Scope.TRANSIENT })
 export class LoggerService implements NestLoggerService {
@@ -449,7 +457,7 @@ export class LoggerService implements NestLoggerService {
 
     // Error stack traces print on their own line(s), like NestJS.
     if (typeof entry.trace === 'string' && entry.trace) {
-      line += `\n${paint(levelColor, entry.trace)}`;
+      line += `\n${paint(levelColor, escapeTrace(entry.trace))}`;
     }
 
     return line;

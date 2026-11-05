@@ -233,7 +233,7 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
 
   /**
    * Cut the connection of a request this budget gives up on, and leave a trace of it: a rate-limited warning with
-   * the reason, the client's limiter key, whether the request carried a recognised API key (never the key or its
+   * the reason, the client address, whether the request carried a recognised API key (never the key or its
    * hash), the declared and received sizes and the path without its query, and the status the HTTP metrics count the
    * request under. Nothing is written to the socket. Received bytes are counted from admission, so they leave out
    * whatever arrived in the read that carried the headers.
@@ -248,7 +248,7 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
     if (dropLogLimiter.allow('drop')) {
       logger.warn(`Dropped a request body in flight: ${text}`, {
         reason,
-        client: limiterKeyForIp(resolveClientIp(req, trustedProxies)),
+        client: resolveClientIp(req, trustedProxies),
         keyed: seen?.keyed,
         declaredBytes: parseDeclaredLength(req.headers['content-length']),
         receivedBytes: seen?.receivedBytes,

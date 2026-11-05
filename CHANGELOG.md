@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Metrics scrapes that arrive together share one render, so the cached event-loop delay no longer reads zero after an overlap.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
-- A request body with an array of more than 10,000 items, an object of more than 1,000 keys or more than 250,000 items and keys in all is refused with 400 before validation instead of holding the process for seconds to minutes.
+- A request body with an array of more than 10,000 items, an object of more than 1,000 keys or more than 250,000 items and keys in all is refused with 400 before validation instead of holding the process for seconds to minutes; the data restore and routes that read the body without a DTO are exempt.
 - An upload the in-flight body budget drops mid-stream is logged with its reason and counted as 408 or 503 in `http_requests_total`.
 - Pretty log output escapes control characters, so a value holding a newline cannot start a forged log record.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.

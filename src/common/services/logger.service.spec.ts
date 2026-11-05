@@ -809,6 +809,22 @@ describe('LoggerService', () => {
         expect(output).toContain('nested={"a":"b\\nc"}');
       });
 
+      // An error's stack opens with its message, and Nest logs every unhandled error with that stack as the trace.
+      it('for a newline or an escape sequence in the message of a stack trace', () => {
+        const errorSpy = jest.spyOn(console, 'error');
+        const hostile = new Error(`bad id\n${FORGED.split('\n')[1]}\x1b[31m`);
+        logger.error('failed', hostile.stack);
+
+        const output = getRawOutput(errorSpy);
+        // The record line alone starts at the left edge as a record; the forged line is indented, not removed.
+        expect(output.split('\n').filter(line => line.startsWith('[OpenWA]'))).toHaveLength(1);
+        expect(output).toContain('    [OpenWA] 1  - 1/1/2026');
+        // eslint-disable-next-line no-control-regex
+        expect(output).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+        expect(output).toContain('\\x1b[31m');
+        expect(output).toMatch(/\n\s+at /);
+      });
+
       it('while a stack trace keeps the lines it has', () => {
         const errorSpy = jest.spyOn(console, 'error');
         logger.error('failed', 'Error: boom\n    at first (a.ts:1:1)\n    at second (b.ts:2:2)');
