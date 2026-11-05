@@ -71,6 +71,10 @@ it('returns null when the message has no id', () => {
   expect(buildIncomingStatus({ ...base, id: '' })).toBeNull();
 });
 
+it('returns null for a story that arrived already deleted, rather than an empty text story', () => {
+  expect(buildIncomingStatus({ ...base, type: 'revoked', body: '' })).toBeNull();
+});
+
 /**
  * Both engines map a PTT message to `voice`, and everything that was not an image or a video used to
  * collapse into `text`. That silently turned an incoming voice status into a text one — a status with
