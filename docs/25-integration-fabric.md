@@ -240,9 +240,11 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   `dedupBodyMismatchAsNew: true`. A different body under an existing id then becomes a new delivery
   with a deterministic body-specific row and queue key; its retries still collapse. The handler and
   the `{id}` ack token retain the provider delivery id, including on queued retries, reconciliation
-  and redrive. The flag defaults to false. Enabling it for a provider whose retries change bytes can
-  send duplicate WhatsApp messages; it does not authenticate the delivery header or replace handler
-  idempotency.
+  and redrive, so the handler sees the same `req.deliveryId` for both bodies: a handler of such a
+  route keys its side effects on the delivery id together with the body (for example `req.deliveryId`
+  plus a hash of `req.rawBody`), or it treats the new body as a repeat (section 25.7). The flag
+  defaults to false. Enabling it for a provider whose retries change bytes can send duplicate
+  WhatsApp messages; it does not authenticate the delivery header or replace handler idempotency.
   The value of a route's declared signature header (hmac-sha256 or shared-secret) is redacted from the
   persisted and enqueued payload, like the well-known signature headers, so the plugin's handler sees
   `[redacted]` in its place.
