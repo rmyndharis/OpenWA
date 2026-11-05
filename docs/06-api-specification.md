@@ -5390,7 +5390,7 @@ System endpoints expose operational status, Prometheus metrics, aggregate statis
 
 #### GET /api/health
 
-Basic health check returning status and the current timestamp; the running app version is disclosed only to authenticated callers.
+Basic health check returning status and the current timestamp, and the running app version to an authenticated caller.
 
 **Auth:** public — the check itself needs no credentials, so uptime probes keep working. The `version` field is added only when the request carries a valid API key (`X-API-Key` header or `Authorization: Bearer`); an absent or invalid key still answers `200` without it.
 
@@ -5400,7 +5400,7 @@ Basic health check returning status and the current timestamp; the running app v
 { "status": "ok", "timestamp": "2026-06-25T12:34:56.789Z", "version": "0.7.3" }
 ```
 
-Notes: `timestamp` is an ISO-8601 string (`new Date().toISOString()`). `version` is read from `package.json` at module load and present only on an authenticated request. Exempt from rate limiting (`@SkipThrottle`).
+Notes: `timestamp` is an ISO-8601 string (`new Date().toISOString()`). `version` is read from `package.json` at module load and present only on an authenticated request. That keeps the version out of anonymous health answers; it does not make it private where the gateway serves the dashboard (the image default), because the sign-in page and the public bundle show the version the dashboard was built from, nor where Swagger UI is on (`ENABLE_SWAGGER`; off by default under `NODE_ENV=production`), which publishes it as the API version. To keep the version from anonymous callers altogether, set `SERVE_DASHBOARD=false` and leave Swagger off. Exempt from rate limiting (`@SkipThrottle`).
 
 #### GET /api/health/live
 
