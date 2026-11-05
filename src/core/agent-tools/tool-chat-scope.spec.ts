@@ -14,6 +14,7 @@ import { contactTools } from './tools/contact.tools';
 import { groupTools } from './tools/group.tools';
 import { labelTools } from './tools/label.tools';
 import { invokeTool } from './tool-invoker';
+import * as chatScopeModule from '../../common/security/chat-scope';
 import { defineTool, type AnyToolDescriptor } from './tool-descriptor';
 
 const CHAT = '628111000111@c.us';
@@ -121,6 +122,16 @@ describe('chat-restricted tool calls', () => {
     await expect(
       call(tool('MessageForward'), { sessionId: 's1', fromChatId: CHAT, toChatId: CHAT, messageId: 'm1' }),
     ).resolves.toEqual({ messageId: 'm2' });
+  });
+
+  it('compiles the allowlist once for a call that names two chats', async () => {
+    const compile = jest.spyOn(chatScopeModule, 'buildChatScope');
+    try {
+      await call(tool('MessageForward'), { sessionId: 's1', fromChatId: CHAT, toChatId: CHAT, messageId: 'm1' });
+      expect(compile).toHaveBeenCalledTimes(1);
+    } finally {
+      compile.mockRestore();
+    }
   });
 
   it('refuses ordinary send quotes but permits a reply bound to its allowed chat', async () => {

@@ -596,7 +596,7 @@ CREATE TABLE api_keys (
     id VARCHAR PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     "keyHash" VARCHAR(64) NOT NULL,                -- UNIQUE index
-    "keyPrefix" VARCHAR(12) NOT NULL,              -- shown in the UI; the full key is never stored
+    "keyPrefix" VARCHAR(12) NOT NULL,              -- shown in the UI; the full key is never stored ("(master key)" for the API_MASTER_KEY seed)
     role VARCHAR(20) NOT NULL DEFAULT 'operator',  -- admin | operator | viewer
     "allowedIps" TEXT,                             -- simple-array (comma-joined), null = any IP
     "allowedSessions" TEXT,                        -- simple-array, null = all sessions

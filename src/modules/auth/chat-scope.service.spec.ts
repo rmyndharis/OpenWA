@@ -42,6 +42,18 @@ describe('ChatScopeService', () => {
     expect(await svc.allows({ allowedChats: null }, '123@g.us')).toBe(true);
   });
 
+  it('checks a chat against the scope the caller compiled, and compiles the key only without one', async () => {
+    const svc = new ChatScopeService();
+    const key = { allowedChats: ['111@c.us'] };
+    const other = svc.scopeFor({ allowedChats: ['222@c.us'] });
+    expect(await svc.allows(key, '222@c.us', other)).toBe(true);
+    expect(await svc.allows(key, '111@c.us', other)).toBe(false);
+    expect(await svc.allows(key, '111@c.us', undefined)).toBe(true);
+    expect(await svc.allows(key, '222@c.us', undefined)).toBe(false);
+    // A null scope is an unrestricted key, not a missing one.
+    expect(await svc.allows(key, '222@c.us', null)).toBe(true);
+  });
+
   it('matches a phone entry to its lid through the persisted directory', async () => {
     const svc = new ChatScopeService(fakeStore());
     expect(svc.isRestricted({ allowedChats: [`${PHONE}@c.us`] })).toBe(true);

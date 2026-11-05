@@ -97,11 +97,18 @@ describe('bannerKeyLine (startup banner key masking)', () => {
   });
 
   it('masks the key on subsequent boots — the full secret is never re-logged', () => {
-    const line = bannerKeyLine(FULL, false);
+    const line = bannerKeyLine(FULL, false, FULL.slice(0, 12));
     expect(line).not.toContain('0123456789abcdef'); // the secret tail must not appear
     expect(line.startsWith('owa_k1_0')).toBe(true); // a short fingerprint is fine
     expect(line).toMatch(/data[\\/]\.api-key/); // points the operator to the real source
     expect(line).not.toContain('dashboard'); // the dashboard only ever shows a key's prefix
+  });
+
+  // The tag is only known to be a tag when the stored row says the key was generated.
+  it('prints no fingerprint unless the stored prefix says the key was generated', () => {
+    for (const stored of [undefined, null, '', '(master key)', 'Acme-Prod-Ga']) {
+      expect(bannerKeyLine(FULL, false, stored)).toMatch(/^\(full key in .*\.api-key\)$/);
+    }
   });
 
   it('names the bootstrap key file BOOTSTRAP_KEY_FILE points at', () => {
@@ -115,8 +122,16 @@ describe('bannerKeyLine (startup banner key masking)', () => {
     }
   });
 
-  it('passes a placeholder through unchanged', () => {
-    expect(bannerKeyLine('(check dashboard for keys)', false)).toBe('(check dashboard for keys)');
+  it('points at the dashboard when there is no key to name', () => {
+    expect(bannerKeyLine(null, false)).toBe('(check dashboard for keys)');
+  });
+
+  // A key is told from the placeholder by where it came from, not by how it starts: an API_MASTER_KEY may begin
+  // with any character, an opening parenthesis and the placeholder's own words included.
+  it('never takes a key for the placeholder by its first character', () => {
+    for (const key of ['(Acme-Prod-Gateway-Master-2026-Q4!', '(check dashboard for keys)']) {
+      expect(bannerKeyLine(key, false)).toMatch(/^\(full key in .*\.api-key\)$/);
+    }
   });
 
   // An API_MASTER_KEY is taken verbatim, so its first characters are part of the secret, not a fixed tag.

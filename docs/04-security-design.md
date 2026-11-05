@@ -68,8 +68,12 @@ Storage: SHA-256 hash only (never store plain key); `keyPrefix` keeps the first 
 Every key minted through the API-keys endpoints uses that format. The bootstrap seed key is the only
 exception: an explicit `API_MASTER_KEY` is taken verbatim (surrounding whitespace is stripped), and `ALLOW_DEV_API_KEY=true` opts into the
 fixed `dev-admin-key`; with neither set, the seed key is generated in the format above. The `keyPrefix` of a key seeded from
-`API_MASTER_KEY` is its first 12 characters, which every ADMIN key with no session or chat restriction can read in the key list, so replace it with a minted key
-(see the rotation note in §4.12) rather than keeping a chosen passphrase as the admin key.
+`API_MASTER_KEY` is the fixed text `(master key)`, because every character of a chosen key is secret. A key seeded by an earlier release
+keeps its first 12 characters as the prefix, which every ADMIN key with no session or chat restriction can read in the key list, and which
+the database and its backups hold: replace it with a minted key (see the rotation note in §4.12) rather than keeping a chosen passphrase
+as the admin key. The startup banner of a later boot prints the first 8 characters of a key only when its row says the key was generated.
+A chosen key in the `owa_k1_` shape that an earlier release seeded cannot be told from a generated one once `API_MASTER_KEY` is removed
+from the environment or set to another value, and still shows them until it is replaced.
 
 ### Permission Model
 
@@ -113,10 +117,11 @@ found where it was saved, or replaced. Try these in order. If every key stopped 
 1. **The bootstrap key file or `API_MASTER_KEY`.** Whenever `api_keys` is empty (first boot, or
    after step 4 or the §4.4 pepper reset), the gateway seeds an ADMIN key, set to `API_MASTER_KEY`
    when that is set, and keeps it in `data/.api-key` (or the `BOOTSTRAP_KEY_FILE` path) until that
-   key is no longer active (revoked, expired or deleted). While the file holds a live key, the
-   startup banner ends with `(full key in <path>)`. Read it with `cat data/.api-key`, with
-   `docker compose exec openwa-api cat /app/data/.api-key` on the compose deployment, or with
-   `kubectl exec openwa-0 -- cat /app/data/.api-key` on the Helm chart (release `openwa`). The file has no
+   key is no longer active (revoked, expired or deleted). The seeding boot prints a generated key once
+   in the startup banner and no part of an `API_MASTER_KEY`, for which the banner names the file when it could be written.
+   While the file holds a live key, the startup banner ends with `(full key in <path>)`. Read it with
+   `cat data/.api-key`, with `docker compose exec openwa-api cat /app/data/.api-key` on the compose
+   deployment, or with `kubectl exec openwa-0 -- cat /app/data/.api-key` on the Helm chart (release `openwa`). The file has no
    trailing newline, so the shell prompt follows the key on the same line: copy only the key. The key
    manages keys only while it still meets step 2's conditions. Once it is demoted from `admin`,
    given any `allowedSessions` or `allowedChats`, or given `allowedIps` that exclude your address,
@@ -165,8 +170,9 @@ found where it was saved, or replaced. Try these in order. If every key stopped 
    the API if it carried any. The old key no longer authenticates.
 
 4. **Reset the key table.** When no row is worth keeping, empty `api_keys` as the pepper recovery in
-   §4.4 describes: the next boot seeds a new ADMIN key (from `API_MASTER_KEY` when set) and prints
-   it once. Every other key must then be re-issued.
+   §4.4 describes: the next boot seeds a new ADMIN key (from `API_MASTER_KEY` when set), prints a
+   generated one once and never an `API_MASTER_KEY`, and writes either to the key file. Every other
+   key must then be re-issued.
 
 Keys live in each node's own main database ([13 - Horizontal Scaling](./13-horizontal-scaling.md)),
 so on a multi-node deployment the recovery applies only to the node it ran on.
@@ -267,7 +273,7 @@ OpenWA serves plain HTTP on its port; terminate **TLS at your reverse proxy / lo
 
 **Hardening you can apply today:** set `API_KEY_PEPPER`; restrict the data volume and database to the app's user; and encrypt at the infrastructure layer (LUKS / cloud-provider encrypted volumes / an encrypted managed Postgres) rather than relying on application-level field encryption, which is not implemented.
 
-**Setting or changing `API_KEY_PEPPER` on an existing install invalidates every key, the admin key included.** No stored hash matches any more, minting a key needs a valid ADMIN key, and a key is seeded only into an empty `api_keys` table, so nothing can be re-issued through the API. Set the pepper before first boot. On a running install: stop the instance, set the pepper, empty the table in the main database (the `MAIN_DATABASE_NAME` path, `data/main.sqlite` by default; on a source install `sqlite3 data/main.sqlite "DELETE FROM api_keys"`, on the compose deployment `docker compose run --rm --no-deps openwa-api sqlite3 /app/data/main.sqlite "DELETE FROM api_keys"`), start the instance, take the new ADMIN key from the startup banner or `data/.api-key` (or set `API_MASTER_KEY` beforehand to choose it), then re-issue the other keys. On the Helm chart, empty the table while the StatefulSet is at 0 from the `openwa-restore` helper pod of [11 - Runbook: Restore from Backup](./11-operational-runbooks.md#runbook-restore-from-backup) (`kubectl exec openwa-restore -- sqlite3 /app/data/main.sqlite "DELETE FROM api_keys"`), delete the pod, and only then set the pepper in the release's Secret (`secretEnv.API_KEY_PEPPER`, or the `existingSecret`) and scale back to 1; a `helm upgrade` that sets the pepper also scales back to `replicaCount`. Read the new key with `kubectl exec openwa-0 -- cat /app/data/.api-key`.
+**Setting or changing `API_KEY_PEPPER` on an existing install invalidates every key, the admin key included.** No stored hash matches any more, minting a key needs a valid ADMIN key, and a key is seeded only into an empty `api_keys` table, so nothing can be re-issued through the API. Set the pepper before first boot. On a running install: stop the instance, set the pepper, empty the table in the main database (the `MAIN_DATABASE_NAME` path, `data/main.sqlite` by default; on a source install `sqlite3 data/main.sqlite "DELETE FROM api_keys"`, on the compose deployment `docker compose run --rm --no-deps openwa-api sqlite3 /app/data/main.sqlite "DELETE FROM api_keys"`), start the instance, take the new ADMIN key from `data/.api-key`, or from the startup banner when the gateway generated it (or set `API_MASTER_KEY` beforehand to choose it; it is never printed), then re-issue the other keys. On the Helm chart, empty the table while the StatefulSet is at 0 from the `openwa-restore` helper pod of [11 - Runbook: Restore from Backup](./11-operational-runbooks.md#runbook-restore-from-backup) (`kubectl exec openwa-restore -- sqlite3 /app/data/main.sqlite "DELETE FROM api_keys"`), delete the pod, and only then set the pepper in the release's Secret (`secretEnv.API_KEY_PEPPER`, or the `existingSecret`) and scale back to 1; a `helm upgrade` that sets the pepper also scales back to `replicaCount`. Read the new key with `kubectl exec openwa-0 -- cat /app/data/.api-key`.
 
 ## 4.5 Input Validation
 

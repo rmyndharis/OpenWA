@@ -8,9 +8,10 @@ OpenWA has been installed as release "{{ .Release.Name }}".
 1. Wait for the pod:
      kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "openwa.fullname" . }}
 
-2. Get the API key. If secretEnv.API_MASTER_KEY was left empty, the app generated
-   one on first boot and stored it on the PVC (the file has no trailing newline, so copy only the key,
-   not the prompt after it):
+2. Get the API key. The app seeds a key only into an empty key table, on the first boot on this
+   volume or after the table was emptied: the value of secretEnv.API_MASTER_KEY if you had set one
+   then (the app never prints it), or a generated one. Either way it is stored on the PVC (the file
+   has no trailing newline, so copy only the key, not the prompt after it):
      kubectl -n {{ .Release.Namespace }} exec {{ include "openwa.fullname" . }}-0 -- cat {{ (.Values.env | default dict).BOOTSTRAP_KEY_FILE | default "/app/data/.api-key" }}
 
 3. Reach the API + dashboard:

@@ -160,10 +160,16 @@
 > connected to node A receives an event raised on node B. Scope honestly: this distributes event
 > **fan-out only**. The per-key WS rate-limit buckets (counted per replica) and the engine registry
 > are still process-local. Without `REDIS_ENABLED` the adapter is inert and delivery is single-node,
-> exactly as before. With it, every event of a one-to-one chat also costs the emitting node one or two
+> exactly as before. With it, an event of a one-to-one chat also costs the emitting node one or two
 > `lid_mappings` lookups (one for a `@lid` chat, none for a group), even when no chat-restricted key
 > exists: it cannot know whether another replica holds a restricted socket, so it names the chat in
-> every form for the rooms to match.
+> every form for the rooms to match. Events about one chat of one session that are raised together
+> share a lookup, and an answer that named the chat's other identity is reused for 5 seconds (for up to
+> 1,000 chats). That reuse applies whenever the gateway expands a chat for chat-restricted delivery: with
+> Redis fan-out on, or while a chat-restricted socket is connected to the node. A mapping that arrives can
+> be seen up to 5 seconds late, and after a mapping is removed or moved, events of that chat can keep
+> reaching sockets restricted to the old identity for up to 5 seconds. A chat the table has no other
+> identity for is read again by every event.
 >
 > **The fan-out to other replicas is best effort and keeps no replay queue.** A Redis that pauses for less
 > than 10 s (a snapshot fork, a slow fsync) answers afterwards, and every event raised meanwhile reaches the

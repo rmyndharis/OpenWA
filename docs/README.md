@@ -127,7 +127,7 @@ OpenWA seeds a default API key on first run and writes it to:
 
 With Docker, read it with `docker exec openwa-api cat /app/data/.api-key`. The file has no trailing newline, so copy only the key.
 
-The startup log prints the full key only on the boot that created it; later boots show a masked prefix. By default a cryptographically
+The startup log prints a generated key in full only on the boot that created it, and never an `API_MASTER_KEY`; later boots show a masked prefix of a generated key. By default a cryptographically
 random `owa_k1_...` admin key is generated on first run in all environments; set
 `ALLOW_DEV_API_KEY=true` to seed the well-known `dev-admin-key` for local
 development only. Use an admin key to create additional keys with

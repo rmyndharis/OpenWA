@@ -178,6 +178,16 @@ const EVICTION_MESSAGES: Record<ApiKeyEvictionReason, string> = {
  */
 export const WS_MAX_FRAME_BYTES = 8 * 1024;
 
+/**
+ * How long the lid table's answer for a chat is reused when it named another identity for it, so the acks of one
+ * message read the table once. A chat the table has no other identity for is read again by the next event, so a
+ * first mapping routes at once. A second identity arrives up to this long late, and after a mapping is removed or
+ * moved, events of the chat keep reaching sockets restricted to the old identity for up to this long.
+ */
+export const CHAT_IDS_MEMO_TTL_MS = 5_000;
+/** Most chats the answers are kept for; the oldest go first. */
+export const CHAT_IDS_MEMO_MAX = 1_000;
+
 @WebSocketGateway({
   cors: {
     origin: resolveWsCorsOrigin(),
@@ -198,6 +208,8 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
    */
   private readonly socketsByKeyId = new Map<string, Set<Socket>>();
   private readonly chatDeliveries = new Map<string, Promise<void>>();
+  // The identities of a chat as the lid table gives them, by session and chat. See chatIds.
+  private readonly chatIdsMemo = new Map<string, { ids: Promise<string[] | undefined>; expiresAt: number }>();
   // Subscribes still re-validating their key. An unsubscribe answered meanwhile cancels the ones it covers, so
   // they cannot join rooms after the client was told they were left.
   private readonly pendingSubscriptions = new WeakMap<Socket, Set<{ sessionId: string; cancelled: boolean }>>();
@@ -923,14 +935,11 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     ) {
       return;
     }
-    // Expand the emitted identity using current persisted mappings, so new LID mappings work
+    // Expand the emitted identity using persisted mappings, so new LID mappings work
     // without rejoining rooms. Literal allowlist rooms also enforce the fence across Redis nodes.
     // Resolve identities concurrently, but retain event order within each session, including
     // after a failed lookup. Other sessions and unrestricted broadcasts remain independent.
-    const delivery = Promise.allSettled([
-      this.chatDeliveries.get(sessionId),
-      this.chatScope.idsForFilter({ allowedChats: [chatId] }),
-    ])
+    const delivery = Promise.allSettled([this.chatDeliveries.get(sessionId), this.chatIds(sessionId, chatId)])
       .then(([, resolved]) => {
         if (resolved.status === 'rejected') throw resolved.reason;
         const ids = resolved.value;
@@ -952,6 +961,36 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         if (this.chatDeliveries.get(sessionId) === delivery) this.chatDeliveries.delete(sessionId);
       });
     this.chatDeliveries.set(sessionId, delivery);
+  }
+
+  /**
+   * Every identity of a chat that the lid table gives it: its own address forms plus the other dialect of a mapped
+   * phone or lid. Events about one chat of one session that are raised while a lookup is in flight share it, and a
+   * lookup that named another identity is reused for CHAT_IDS_MEMO_TTL_MS. One that named none, or failed, is dropped
+   * as soon as it settles, so the next event asks again and a failure still fails closed for every event that
+   * shared it. The key is the session as well as the chat so that a slow lookup never holds up another session.
+   */
+  private chatIds(sessionId: string, chatId: string): Promise<string[] | undefined> {
+    const memoKey = `${sessionId}\n${chatId}`;
+    const memoized = this.chatIdsMemo.get(memoKey);
+    if (memoized && memoized.expiresAt > Date.now()) return memoized.ids;
+
+    const ids = this.chatScope.idsForFilter({ allowedChats: [chatId] });
+    const entry = { ids, expiresAt: Date.now() + CHAT_IDS_MEMO_TTL_MS };
+    this.chatIdsMemo.delete(memoKey);
+    this.chatIdsMemo.set(memoKey, entry);
+    if (this.chatIdsMemo.size > CHAT_IDS_MEMO_MAX) {
+      const oldest = this.chatIdsMemo.keys().next().value;
+      if (oldest !== undefined) this.chatIdsMemo.delete(oldest);
+    }
+    const forget = () => {
+      if (this.chatIdsMemo.get(memoKey) === entry) this.chatIdsMemo.delete(memoKey);
+    };
+    ids.then(found => {
+      const literal = this.chatScope.scopeFor({ allowedChats: [chatId] });
+      if (!found?.some(id => !literal?.allowed.has(id))) forget();
+    }, forget);
+    return ids;
   }
 
   /**

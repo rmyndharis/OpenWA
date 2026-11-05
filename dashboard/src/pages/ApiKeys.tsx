@@ -58,10 +58,17 @@ const roleNames = ['admin', 'operator', 'viewer'] as const;
 
 const emptyKeyForm = { name: '', role: 'operator', allowedSessions: [] as string[], ips: '', chats: '', expires: '' };
 
+// What the gateway lists for the key seeded from API_MASTER_KEY: its first characters are secret, so none is shown.
+const MASTER_KEY_PREFIX = '(master key)';
+
 // The key this dashboard signed in with: the list only carries each key's prefix, which is the first
-// 12 characters of the raw key.
-function isSignedInKey(apiKey: ApiKey): boolean {
-  return !!apiKey.keyPrefix && !!sessionStorage.getItem('openwa_api_key')?.startsWith(apiKey.keyPrefix);
+// 12 characters of the raw key. The key seeded from API_MASTER_KEY lists a fixed marker instead, so it is the
+// one that no other key's prefix matches.
+function isSignedInKey(apiKey: ApiKey, keys: ApiKey[]): boolean {
+  const signedIn = sessionStorage.getItem('openwa_api_key');
+  if (!signedIn || !apiKey.keyPrefix) return false;
+  if (apiKey.keyPrefix !== MASTER_KEY_PREFIX) return signedIn.startsWith(apiKey.keyPrefix);
+  return !keys.some(other => other.id !== apiKey.id && !!other.keyPrefix && signedIn.startsWith(other.keyPrefix));
 }
 
 // The first IP or chat line the gateway would refuse, so the form can name it instead of the bare
@@ -696,7 +703,7 @@ export function ApiKeys() {
           <p className="session-scope-edit-name">
             <strong>{editingKey.name}</strong>
           </p>
-          {isSignedInKey(editingKey) && (
+          {isSignedInKey(editingKey, apiKeys) && (
             <p className="key-signed-in-warning" role="note">
               <AlertTriangle size={16} />
               {t('apiKeys.edit.signedIn')}

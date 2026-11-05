@@ -541,6 +541,51 @@ test('editing the key the dashboard is signed in with warns before saving', asyn
   assert.equal(rtl.screen.queryByText(/This dashboard is signed in with this key/) === null, true);
 });
 
+// The key seeded from API_MASTER_KEY lists a fixed marker, not its own first characters, so the row of the key the
+// dashboard signed in with is the one that no other prefix matches.
+const masterKey = {
+  ...billingBot,
+  id: 'key-master',
+  name: 'Default Admin Key',
+  keyPrefix: '(master key)',
+  role: 'admin',
+};
+
+async function openEditOf(list: Record<string, unknown>[], name: string): Promise<void> {
+  keyList = list;
+  renderApiKeys();
+  const row = (await rtl.screen.findByText(name)).closest('tr');
+  assert.ok(row, `no table row for ${name}`);
+  rtl.fireEvent.click(rtl.within(row).getByTitle('Edit access'));
+  await rtl.screen.findByRole('button', { name: 'Save' });
+}
+
+const signedInNote = () => rtl.screen.queryByText(/This dashboard is signed in with this key/);
+
+test('editing the key seeded from API_MASTER_KEY warns when the dashboard is signed in with it', async () => {
+  window.sessionStorage.setItem('openwa_api_key', 'Acme-Prod-Gateway-Master-2026-Q4!');
+  await openEditOf([masterKey, billingBot], 'Default Admin Key');
+  assert.notEqual(signedInNote(), null);
+  rtl.cleanup();
+  await openEditOf([masterKey, billingBot], 'billing-bot');
+  assert.equal(signedInNote(), null);
+});
+
+test('the warning also finds a seeded key that looks like a generated one', async () => {
+  window.sessionStorage.setItem('openwa_api_key', `owa_k1_${'ab12'.repeat(16)}`);
+  await openEditOf([masterKey, billingBot], 'Default Admin Key');
+  assert.notEqual(signedInNote(), null);
+});
+
+test('editing the key seeded from API_MASTER_KEY does not warn when the dashboard is signed in with another key', async () => {
+  window.sessionStorage.setItem('openwa_api_key', 'owa_k1abXXXXYYYYZZZZ');
+  await openEditOf([masterKey, billingBot], 'Default Admin Key');
+  assert.equal(signedInNote(), null);
+  rtl.cleanup();
+  await openEditOf([masterKey, billingBot], 'billing-bot');
+  assert.notEqual(signedInNote(), null);
+});
+
 // A datetime-local with a blank segment reports value '' (as an empty field does) and sets badInput.
 // jsdom never sets badInput, so it is stubbed on the element. As in a browser, assigning the element's
 // value from code wipes the leftover segments; the value fireEvent.change types goes through the
