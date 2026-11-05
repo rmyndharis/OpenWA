@@ -33,7 +33,8 @@ import { chatKind, userPart } from '../identity/wa-id';
 
 /**
  * How long a start waits for the stored chats. They serve the listing only, so a read that is slower than
- * this (a very large table, a busy database) is given up rather than holding the session's start.
+ * this (a very large table, a busy database) is given up rather than holding the session's start. On SQLite
+ * the read is one synchronous statement, so this clock cannot fire until it has ended.
  */
 const STORED_PREVIEWS_READ_TIMEOUT_MS = 10_000;
 
@@ -1241,7 +1242,8 @@ export class BaileysLifecycle {
    * an API send stored before 0.27.0. A send stored before the number was known names no account and does
    * not count. A read that fails, or that takes longer than {@link STORED_PREVIEWS_READ_TIMEOUT_MS}, leaves
    * the listing as it was before chats were seeded: it fills from live traffic, and a late answer is
-   * dropped, since the seed is only safe before the socket opens.
+   * dropped, since the seed is only safe before the socket opens. On SQLite the read blocks the event loop
+   * until it ends, so only a failure leaves the listing unseeded there.
    */
   private async seedStoredPreviews(phone: string): Promise<void> {
     const source = this.host.config.storedChatPreviews;
