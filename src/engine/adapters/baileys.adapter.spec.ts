@@ -456,6 +456,40 @@ describe('BaileysAdapter lifecycle & status', () => {
     }
   });
 
+  it('refuses a retry from another phone number chat for a message received under a lid with its sender phone', async () => {
+    await newAdapter().initialize(noopCallbacks({}));
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const makeWASocket = jest.requireMock('@whiskeysockets/baileys').default as jest.Mock;
+    const [[{ getMessage }]] = makeWASocket.mock.calls as Array<
+      [{ getMessage: (key: { remoteJid?: string; id?: string }) => Promise<unknown> }]
+    >;
+    const content = { conversation: 'private' };
+    fakeStore.getMessage.mockResolvedValue({
+      key: { remoteJid: '44556677@lid', remoteJidAlt: '628444@s.whatsapp.net', fromMe: false, id: 'M2' },
+      message: content,
+    });
+
+    await expect(getMessage({ remoteJid: '628555@s.whatsapp.net', id: 'M2' })).resolves.toBeUndefined();
+    await expect(getMessage({ remoteJid: '628444@s.whatsapp.net', id: 'M2' })).resolves.toBe(content);
+  });
+
+  it("answers a retry by phone number for a phone-typed own message stored with the account's number beside the lid", async () => {
+    await newAdapter().initialize(noopCallbacks({}));
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const makeWASocket = jest.requireMock('@whiskeysockets/baileys').default as jest.Mock;
+    const [[{ getMessage }]] = makeWASocket.mock.calls as Array<
+      [{ getMessage: (key: { remoteJid?: string; id?: string }) => Promise<unknown> }]
+    >;
+    const content = { conversation: 'hi' };
+    // On the account's own key Baileys files the sender's other id, the account's own number, as remoteJidAlt.
+    fakeStore.getMessage.mockResolvedValue({
+      key: { remoteJid: '44556677@lid', remoteJidAlt: '628999@s.whatsapp.net', fromMe: true, id: 'M1' },
+      message: content,
+    });
+
+    await expect(getMessage({ remoteJid: '628444@s.whatsapp.net', id: 'M1' })).resolves.toBe(content);
+  });
+
   it("answers an RSVP's lookup of the account's own 1:1 event under the account's own jid", async () => {
     await newAdapter().initialize(noopCallbacks({}));
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -6634,11 +6668,11 @@ describe('BaileysAdapter group events (group-participants.update / groups.update
   });
 
   it('retains a lid actor when the credentials cannot identify it as this account', async () => {
-    // Without `user.lid` every lid comparison answered false, so the group this session had just
-    // created was reported as a join of itself. The store's own lid mapping settles it instead.
+    // Identity is not derived from the session's lid mapping: without `user.lid` no lid is recognised as
+    // this account, so the group it created, named by lid alone, is reported as a join.
     fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' }; // no lid on the creds
     const { onGroupEvent } = await readyWithGroupEvents();
-    // The session learns its own lid from ordinary traffic, the same way every other mapping arrives.
+    // Even once the session has learned its own lid from ordinary traffic.
     fakeSock.fire('lid-mapping.update', { lid: '999000@lid', pn: '628999@s.whatsapp.net' });
 
     fakeSock.fire('groups.upsert', [createdGroup({ author: '999000@lid', owner: '999000@lid', authorPn: undefined })]);
@@ -10712,6 +10746,69 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
     });
     fakeSock.fire('messages.upsert', { type: 'notify', messages: [delivery()] });
     fakeSock.fire('messages.upsert', { type: 'notify', messages: [delivery()] });
+    for (let i = 0; i < 5; i++) await settle();
+    release();
+    for (let i = 0; i < 5; i++) await settle();
+
+    expect(warn).not.toHaveBeenCalledWith(
+      'Dropping a message that reuses the id of one still being processed',
+      expect.anything(),
+    );
+    expect(fakeStore.put).toHaveBeenCalledTimes(2);
+  });
+
+  it('still takes a repeat delivery of an own message still downloading under the other id of its chat', async () => {
+    let release!: () => void;
+    baileys.downloadMediaMessage
+      .mockReturnValueOnce(
+        new Promise(resolve => {
+          release = () => resolve(streamOf(Buffer.from('JPEG')));
+        }),
+      )
+      .mockReturnValueOnce(Promise.resolve(streamOf(Buffer.from('JPEG'))));
+    const warn = jest.spyOn(loggerOf(await started()), 'warn').mockImplementation(() => undefined);
+    const delivery = (key: Record<string, unknown>) => ({
+      key: { fromMe: true, id: 'OWN_TWICE', ...key },
+      message: { imageMessage: { mimetype: 'image/jpeg', caption: 'typed on the phone' } },
+      messageTimestamp: 1700000099,
+    });
+    // Typed on the phone in a chat addressed by lid there: Baileys files the account's own number beside it.
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [delivery({ remoteJid: '44556677@lid', remoteJidAlt: '628999@s.whatsapp.net' })],
+    });
+    fakeSock.fire('messages.upsert', { type: 'notify', messages: [delivery({ remoteJid: PEER })] });
+    for (let i = 0; i < 5; i++) await settle();
+    release();
+    for (let i = 0; i < 5; i++) await settle();
+
+    expect(warn).not.toHaveBeenCalledWith(
+      'Dropping a message that reuses the id of one still being processed',
+      expect.anything(),
+    );
+    expect(fakeStore.put).toHaveBeenCalledTimes(2);
+  });
+
+  it('still takes a repeat delivery of an own message under the lid of its chat after the one under its number', async () => {
+    let release!: () => void;
+    baileys.downloadMediaMessage
+      .mockReturnValueOnce(
+        new Promise(resolve => {
+          release = () => resolve(streamOf(Buffer.from('JPEG')));
+        }),
+      )
+      .mockReturnValueOnce(Promise.resolve(streamOf(Buffer.from('JPEG'))));
+    const warn = jest.spyOn(loggerOf(await started()), 'warn').mockImplementation(() => undefined);
+    const delivery = (key: Record<string, unknown>) => ({
+      key: { fromMe: true, id: 'OWN_TWICE_REVERSED', ...key },
+      message: { imageMessage: { mimetype: 'image/jpeg', caption: 'typed on the phone' } },
+      messageTimestamp: 1700000099,
+    });
+    fakeSock.fire('messages.upsert', { type: 'notify', messages: [delivery({ remoteJid: PEER })] });
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [delivery({ remoteJid: '44556677@lid', remoteJidAlt: '628999@s.whatsapp.net' })],
+    });
     for (let i = 0; i < 5; i++) await settle();
     release();
     for (let i = 0; i < 5; i++) await settle();

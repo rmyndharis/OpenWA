@@ -117,11 +117,15 @@ const PROTOCOL_NOISE_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether two ids provably name different chats or people. Each side is a jid plus the other-dialect
- * twin WhatsApp may send beside it (`remoteJidAlt`, `participantAlt`), compared neutralised, so a lid
- * the session can resolve matches its phone number. A lid it cannot resolve may still be the phone
- * number on the other side, so that pair is never called different, and neither is a side with no id:
- * a caller that drops on a mismatch fails open.
+ * Whether two ids provably name different chats or people. Each side is a jid plus the other-dialect twin WhatsApp may
+ * send beside it (`remoteJidAlt`, `participantAlt`), compared as `toNeutralJid` writes them, so a lid that function
+ * resolves matches its phone number. The adapter's own resolves only the account's lid. A side that carries a phone
+ * number of its own is compared by it: a lid sent with its sender's number differs from another number exactly as that
+ * number would, so a contact whose number changed, sending its lid and the new number against a message kept under the
+ * old number only, reads as somebody else, as the same change sent by number does. A lid with no number beside it that
+ * `toNeutralJid` cannot resolve may still be the phone number on the other side, so that pair is never called
+ * different, and neither is a side with no id: a caller that drops on a mismatch fails open there, which still lets a
+ * sender known only by such a lid through.
  */
 export function differentWaIds(
   a: ReadonlyArray<string | null | undefined>,
@@ -132,8 +136,24 @@ export function differentWaIds(
   const y = b.filter((j): j is string => !!j).map(toNeutralJid);
   if (!x.length || !y.length || x.some(j => y.includes(j))) return false;
   const lidGap = (p: string[], q: string[]): boolean =>
-    p.some(j => j.endsWith('@lid')) && !q.some(j => j.endsWith('@lid')) && q.some(j => j.endsWith('@c.us'));
+    p.some(j => j.endsWith('@lid')) &&
+    !p.some(j => j.endsWith('@c.us')) &&
+    !q.some(j => j.endsWith('@lid')) &&
+    q.some(j => j.endsWith('@c.us'));
   return !lidGap(x, y) && !lidGap(y, x);
+}
+
+/**
+ * The ids a message key names its chat by, for {@link differentWaIds}. On a key of the account's own
+ * message Baileys fills `remoteJidAlt` from the sender's addressing, which is the account itself rather
+ * than the chat, so it is left out there (as mayChange and recordKeyLidMappings leave it out).
+ */
+export function keyChatIds(key: {
+  remoteJid?: string | null;
+  remoteJidAlt?: string | null;
+  fromMe?: boolean | null;
+}): Array<string | null | undefined> {
+  return [key.remoteJid, key.fromMe === true ? undefined : key.remoteJidAlt];
 }
 
 /**
@@ -463,8 +483,8 @@ export class BaileysEvents {
   /**
    * The members of a group other than this account, or null when the roster is unavailable. A row is this
    * account's when any of its ids is, or when a lid in it is one the session knows the account's phone number
-   * for (the lid fallback of {@link selfMatcher} resolves nothing in the adapter, and credentials without a
-   * `user.lid` leave a lid-only row with nothing else to be recognised by).
+   * for ({@link selfMatcher} matches a lid only against the credentials' own `user.lid`, so credentials without
+   * one leave a lid-only row with nothing else to be recognised by).
    */
   private async readMemberRoster(groupId: string): Promise<string[][] | null> {
     const roster = await this.host.readGroupRoster?.(groupId);
@@ -665,7 +685,7 @@ export class BaileysEvents {
     const neutral = (jid: string): string => this.host.toNeutralJid(jid);
     return (
       (first.fromMe === true) !== (key.fromMe === true) ||
-      differentWaIds([first.remoteJid, first.remoteJidAlt], [key.remoteJid, key.remoteJidAlt], neutral) ||
+      differentWaIds(keyChatIds(first), keyChatIds(key), neutral) ||
       (key.fromMe !== true &&
         differentWaIds([first.participant, first.participantAlt], [key.participant, key.participantAlt], neutral))
     );
@@ -1697,11 +1717,11 @@ export class BaileysEvents {
   private readsAsForeign(original: WAMessageKey, key: WAMessageKey, checkAuthor: boolean, kind?: 'reaction'): boolean {
     const broadcast = kind === 'reaction' && !!original.remoteJid?.endsWith('@broadcast');
     if (broadcast && original.fromMe === true) return false;
-    const originalChats = [original.remoteJid, original.remoteJidAlt];
+    const originalChats = keyChatIds(original);
     if (broadcast && original.remoteJid !== 'status@broadcast') originalChats.push(original.participant);
     const neutral = (jid: string): string => this.host.toNeutralJid(jid);
     return (
-      differentWaIds(originalChats, [key.remoteJid, key.remoteJidAlt], neutral) ||
+      differentWaIds(originalChats, keyChatIds(key), neutral) ||
       (checkAuthor &&
         ((original.fromMe === true) !== (key.fromMe === true) ||
           (key.fromMe !== true &&
@@ -1885,7 +1905,10 @@ export class BaileysEvents {
 
   /**
    * Matches any jid of this account, in either dialect and from any of its devices (user parts are
-   * compared). Answers false for everything while the account's own id is unknown.
+   * compared). Answers false for everything while the account's own id is unknown. A lid matches only the
+   * credentials' own `user.lid`: identity is not derived from the session's lid mapping, so credentials
+   * without one match no lid, and a caller that must still recognise the account's lid checks the reported
+   * pairs itself (see readMemberRoster).
    */
   private selfMatcher(): (jid: string | null | undefined) => boolean {
     const selfJid = this.host.normalizedSelfJid();
@@ -1899,12 +1922,7 @@ export class BaileysEvents {
       if (!jid) return false;
       const { kind, userPart: user } = parseWaId(jid);
       if (kind === 'user') return user === phone;
-      if (kind !== 'lid') return false;
-      if (lidUser !== undefined) return user === lidUser;
-      // Creds carrying no `user.lid` leave nothing to compare a lid-addressed jid against, and every
-      // such comparison would answer false. Fall back to the session's own lid to phone mapping,
-      // which the store learns from the same traffic.
-      return userPart(this.host.toNeutralJid(jid)) === phone;
+      return kind === 'lid' && user === lidUser;
     };
   }
 
@@ -1929,14 +1947,7 @@ export class BaileysEvents {
     // revoke or reaction aimed at a message of another chat is. Fails open like those: a store that
     // cannot be read, or ids that cannot be compared, report the RSVP as before.
     const stored = await this.readStoredMessage(eventKey.id, 'reading the event an RSVP answers');
-    if (
-      stored &&
-      differentWaIds(
-        [stored.key.remoteJid, stored.key.remoteJidAlt],
-        [envelope.remoteJid, envelope.remoteJidAlt],
-        jid => this.host.toNeutralJid(jid),
-      )
-    ) {
+    if (stored && differentWaIds(keyChatIds(stored.key), keyChatIds(envelope), jid => this.host.toNeutralJid(jid))) {
       this.host.logger.warn('Dropping an event response sent in a chat other than its event', {
         msgId: eventKey.id,
         responseMessageId: envelope.id,
@@ -2056,8 +2067,8 @@ export class BaileysEvents {
     if (!selfJid) {
       return; // no own id to report as the joining participant
     }
-    // Without the lid fallback inside selfMatcher, a group this session created by a lid-addressed
-    // actor would be reported as a join of itself.
+    // With credentials that carry no `user.lid`, selfMatcher matches no lid, so a group this session
+    // created that names it by lid alone is reported as a join of itself.
     const isSelf = this.selfMatcher();
     for (const group of Array.isArray(groups) ? groups : []) {
       // Live, whatsapp-web.js emits no group.join when the session created the group, so that entry is
