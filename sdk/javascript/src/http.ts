@@ -21,7 +21,7 @@ export interface RequestOptions {
   method: HttpMethod;
   /** Full path beginning with `/`, e.g. `/api/sessions`; any other path is refused and nothing is sent. */
   path: string;
-  /** Query parameters, serialized into the URL. */
+  /** Query parameters, serialized into the URL: a plain object, a `URLSearchParams` or a `Map`. */
   query?: object;
   /** JSON-serializable request body. */
   body?: unknown;
@@ -72,12 +72,16 @@ export function encodeSegment(segment: string | number): string {
   }
 }
 
-/** Build a URL with serialized query params, omitting `undefined`/`null` values. */
+/**
+ * Build a URL with serialized query params, omitting `undefined`/`null` values. `query` is a plain object, a
+ * `URLSearchParams` or a `Map`; the last two are iterated, since `Object.entries` lists none of their entries.
+ */
 export function buildUrl(baseUrl: string, path: string, query?: object): string {
   const base = baseUrl.replace(/\/$/, '');
   if (!query) return `${base}${path}`;
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
+  const entries = query instanceof URLSearchParams || query instanceof Map ? query : Object.entries(query);
+  for (const [key, value] of entries) {
     if (value === undefined || value === null) continue;
     params.append(key, String(value));
   }
