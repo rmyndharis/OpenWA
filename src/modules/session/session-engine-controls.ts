@@ -181,6 +181,16 @@ export interface SessionEngineControlsHost {
   hookManager: HookManager;
   configService?: ConfigService;
   nodeId?: string;
+  /** Same contract as SessionEngineWiringHost.bindingEpoch. */
+  bindingEpoch(id: string): number;
+  forgetBindingEpoch?(id: string): void;
+  /**
+   * `read`, once the phone writes this process issued (an unlink's clear, the number and push name a READY links, the
+   * clear of a logout) have been answered: a row read that overlaps one can return the binding it replaces.
+   */
+  readAfterPhoneWrites?<T>(id: string, read: () => Promise<T>): Promise<T>;
+  /** `write`, a change to the session's phone, issued in order with those writes. The caller awaits its answer. */
+  writePhone?<T>(id: string, write: () => Promise<T>): Promise<T>;
   logger: ReturnType<typeof createLogger>;
   /** LIVE closure — read at call time, never captured (specs replace lifecycle.dataSource at runtime). */
   dataSource(): DataSource;
@@ -329,6 +339,8 @@ export class SessionEngineControls {
     // above all, which writes nothing else this start could read and counts on it aborting. That
     // includes a mark set again on top of a stale one, which only its stamp tells apart.
     const markAtEntry = this.stoppingSessions.stamp(id);
+    // A WhatsApp unlink recorded after this point clears the binding either read below may still return.
+    const bindingEpoch = this.host.bindingEpoch(id);
 
     try {
       const session = await this.requireSession(id);
@@ -404,7 +416,11 @@ export class SessionEngineControls {
       // mark again and retires this start after its init. A launch that fails after the clear still
       // counts as the start the operator asked for. A delete issued since this start began that failed once it
       // began removing has dropped its mark and left a record this start may have read too: it still stands.
-      const { desiredState } = await this.requireSession(id);
+      // It also supplies the binding the engine checks, so it is read once the phone writes of an unlink, a READY or a
+      // logout have been answered, and again when one is issued while it runs.
+      const readCurrent = (): Promise<Session> => this.requireSession(id);
+      const current = await (this.host.readAfterPhoneWrites?.(id, readCurrent) ?? readCurrent());
+      const { desiredState } = current;
       if ((desiredState && (!explicit || desiredState !== session.desiredState)) || stoppedSince?.()) {
         this.stoppingSessions.add(id);
         throw new SessionStoppedException(`Session ${id} was stopped`);
@@ -475,7 +491,10 @@ export class SessionEngineControls {
       // The catch must use this capture, not a later lookup: a disconnect of this engine mid-init can
       // schedule a reconnect that registers a replacement before initialize() rejects.
       const before = this.engines.get(id);
-      const init = this.host.initializeEngine(id, session);
+      // The binding the engine checks comes from the read past the teardown fence, and none at all once a WhatsApp
+      // unlink was recorded since this start began: the number that scans next must not be refused as a rebind.
+      const phone = this.host.bindingEpoch(id) === bindingEpoch ? current.phone : null;
+      const init = this.host.initializeEngine(id, { ...session, phone });
       const registered = this.engines.get(id);
       const mine = registered !== before ? registered : undefined;
       let failedWritten = false;
@@ -785,7 +804,10 @@ export class SessionEngineControls {
       // incomplete one tore the local credentials down, so re-entering auto-start would only wedge it.
       // Before the status write, so a failed status write cannot leave the flag behind and resurrect
       // the session into a QR it can never pass on every restart. onReady rewrites it on the next link.
-      await this.sessionRepository.update(id, { phone: null });
+      // Issued in the step that evicts the engine: a start that finds none registered reads the row only once this
+      // clear has been answered, and a READY's number still waiting on an earlier write goes in before it.
+      const clearPhone = (): Promise<unknown> => this.sessionRepository.update(id, { phone: null });
+      await (this.host.writePhone?.(id, clearPhone) ?? clearPhone());
       await this.host.updateStatus(id, SessionStatus.DISCONNECTED);
     } finally {
       if (!teardownLaunched) {
@@ -1072,6 +1094,7 @@ export class SessionEngineControls {
         // session under the same name gets a fresh UUID + fresh budget). Left only on a committed
         // delete so a failed/409 delete — the session still exists — keeps the budget intact.
         this.stuckAuthRecoveryUsed.delete(id);
+        this.host.forgetBindingEpoch?.(id);
       }
       // NOTE: pendingTeardowns is intentionally NOT cleared here. It is keyed by session NAME and
       // its entries self-remove on settlement (identity-checked). A delete that refused at either

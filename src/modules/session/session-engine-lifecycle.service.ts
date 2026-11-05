@@ -17,7 +17,7 @@ import { AuditAction } from '../audit/entities/audit-log.entity';
 import { resolveEngineInitTimeoutMs } from '../../engine/engine-init-timeout';
 import { isKnownTerminalEngineFailure } from '../../engine/terminal-engine-failure';
 import { StatusStoreService } from '../status-store/status-store.service';
-import { IWhatsAppEngine, AccountRestriction } from '../../engine/interfaces/whatsapp-engine.interface';
+import { IWhatsAppEngine, AccountRestriction, EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import {
@@ -42,6 +42,7 @@ import {
   type StopHooks,
 } from './session-engine-controls';
 import { SessionOwnershipService, nodeOwnsSession } from './session-ownership.service';
+import { PhoneWrites } from './session-phone-writes';
 
 /**
  * Eager status-history reads are opt-in. On affected freshly paired whatsapp-web.js accounts,
@@ -323,6 +324,13 @@ export class SessionEngineLifecycle {
   // successful); and a COMMITTED delete (after the parent transaction). NOT cleared on a rejected
   // start, executeReconnect, disconnect, QR, auth failure, engine replacement, or a failed/409 delete.
   private readonly stuckAuthRecoveryUsed = new Set<string>();
+  // Moved each time this node records a terminal unlink of a session it owns. A start or an engine holding the
+  // binding it read before the move treats it as gone, instead of depending on when the row write lands.
+  private readonly bindingEpochs = new Map<string, number>();
+  // The writes of a session's phone binding (an unlink's clear, the number and push name a READY links, the synced push
+  // name, a logout's clear) are issued in order, and a row read that acts on the phone waits for them, so it cannot
+  // return the binding they replace.
+  private readonly phoneWrites = new PhoneWrites();
 
   constructor(
     @InjectRepository(Session, 'data')
@@ -409,6 +417,8 @@ export class SessionEngineLifecycle {
       rejectRebind: (id, engine, sessionName, previousPhone, incomingPhone) =>
         this.rejectRebind(id, engine, sessionName, previousPhone, incomingPhone),
       handleEngineDisconnected: (id, engine, reason) => this.handleEngineDisconnected(id, engine, reason),
+      reportDroppedUnlink: (id, reason) => this.reportDroppedUnlink(id, reason),
+      bindingEpoch: id => this.bindingEpochs.get(id) ?? 0,
       updateStatus: (id, status) => this.updateStatus(id, status),
       cancelReconnect: id => this.cancelReconnect(id),
       endReadyStretch: id => this.endReadyStretch(id),
@@ -465,6 +475,13 @@ export class SessionEngineLifecycle {
       initializeEngine: (id, session) => this.initializeEngine(id, session),
       isSessionRetired: id => this.isSessionRetired(id),
       nodeId: this.ownership?.nodeId,
+      bindingEpoch: id => this.bindingEpochs.get(id) ?? 0,
+      forgetBindingEpoch: id => {
+        this.bindingEpochs.delete(id);
+        this.phoneWrites.forget(id);
+      },
+      readAfterPhoneWrites: (id, read) => this.phoneWrites.readSettled(id, read),
+      writePhone: (id, write) => this.phoneWrites.run(id, write),
       prepareStart: (id, desiredState) => this.prepareStart(id, desiredState),
       purgeAuthDirsIfDeleted: id => this.purgeAuthDirsIfDeleted(id),
       updateStatus: (id, status) => this.updateStatus(id, status),
@@ -684,6 +701,7 @@ export class SessionEngineLifecycle {
   }
 
   private async initializeEngine(id: string, session: Session): Promise<void> {
+    const bindingEpoch = this.bindingEpochs.get(id) ?? 0;
     // A stop that landed before this engine exists had nothing to tear down and already wrote its
     // DISCONNECTED; registering now would overwrite it with INITIALIZING and then retire. start()
     // clears its own mark and executeReconnect checks it on entry, so a mark seen here always came
@@ -776,8 +794,10 @@ export class SessionEngineLifecycle {
     // order, and the synchronous one-shot stuck-auth claim are preserved there, reaching the
     // lifecycle's live methods/state through the wiringHost built in the constructor.
     // `session.name` is handed over as the immutable snapshot onCredentialTeardownStarted keys on.
+    // An unlink recorded while the INITIALIZING write was pending cleared the binding this snapshot still carries.
+    const previousPhone = (this.bindingEpochs.get(id) ?? 0) === bindingEpoch ? (session.phone ?? null) : null;
     const initPromise = engine.initialize(
-      this.eventWiring.buildCallbacks(id, engine, session.name, this.wiringHost, session.phone ?? null),
+      this.eventWiring.buildCallbacks(id, engine, session.name, this.wiringHost, previousPhone),
     );
 
     // engine.initialize() launches Chromium and navigates to WhatsApp Web with no internal timeout:
@@ -985,6 +1005,8 @@ export class SessionEngineLifecycle {
     // is not counted as READY time.
     const reconnectState = this.reconnectStates.get(id);
     if (reconnectState) {
+      // The binding this READY writes is the one the episode's next attempt starts from, as the clear of an unlink is.
+      if (phone && reconnectState.session) reconnectState.session = { ...reconnectState.session, phone };
       if (this.readyStretchHeld(reconnectState)) reconnectState.attempts = 0;
       reconnectState.readyAt = Date.now();
       reconnectState.readyEndedAt = undefined;
@@ -1008,12 +1030,19 @@ export class SessionEngineLifecycle {
     // one-shot recovery budget is re-armed for a future episode.
     this.stuckAuthRecoveryUsed.delete(id);
 
-    void this.sessionRepository.update(id, readyRowUpdate(phone, pushName, new Date())).catch(err =>
+    // The status and times of a READY are written at once. Only the number it links waits behind the phone writes of the
+    // session: held with it, the status could land after a stop or a failure that followed this READY and put the
+    // session back to READY with no engine.
+    const { status, connectedAt, lastActiveAt, ...binding } = readyRowUpdate(phone, pushName, new Date());
+    const persistFailed = (err: unknown): void =>
       this.logger.warn('Failed to persist session ready state', {
         sessionId: id,
         error: err instanceof Error ? err.message : String(err),
-      }),
-    );
+      });
+    void this.sessionRepository.update(id, { status, connectedAt, lastActiveAt }).catch(persistFailed);
+    if (binding.phone) {
+      void this.phoneWrites.run(id, () => this.sessionRepository.update(id, binding)).catch(persistFailed);
+    }
 
     // Re-apply a prior PUT /presence once per open. Baileys' markOnlineOnConnect has already
     // broadcast `available` during this handshake; without this, an `available: false` the caller
@@ -1039,17 +1068,20 @@ export class SessionEngineLifecycle {
    * Store the account's push name an engine learned after its ready event (Baileys syncs a newly linked
    * account's name only once the connection opened, so the ready row got an empty one). The row alone:
    * session.authenticated went out at ready and is not sent again. Fenced like the other engine-driven row
-   * writes, and by id, so a session deleted meanwhile has no row to change.
+   * writes, and by id, so a session deleted meanwhile has no row to change. Issued with the phone writes: the
+   * ready row's own (empty) name may still be waiting behind one, and must not land after this one.
    */
   private handleEnginePushName(id: string, engine: IWhatsAppEngine, pushName: string): void {
     if (!pushName || !this.isLiveEngine(id, engine) || !this.ownsSession(id)) return;
-    void this.sessionRepository.update(id, { pushName }).catch(err =>
-      this.logger.warn('Failed to store the synced push name', {
-        sessionId: id,
-        error: String(err),
-        action: 'push_name_store_failed',
-      }),
-    );
+    void this.phoneWrites
+      .run(id, () => this.sessionRepository.update(id, { pushName }))
+      .catch(err =>
+        this.logger.warn('Failed to store the synced push name', {
+          sessionId: id,
+          error: String(err),
+          action: 'push_name_store_failed',
+        }),
+      );
   }
 
   /**
@@ -1112,7 +1144,8 @@ export class SessionEngineLifecycle {
    * reconnect. The session row is re-read here rather than trusting a caller-held snapshot (the
    * watchdog detects death long after the last state change, and even the callback's closure
    * snapshot can be stale), so the reconnect re-initializes from the row read here, with the phone
-   * a terminal unlink clears already cleared. A later report while that reconnect is armed leaves its
+   * a terminal unlink clears already cleared: the read waits for the phone writes this process has
+   * issued, and is repeated when one is issued while it runs. A later report while that reconnect is armed leaves its
    * timer and snapshot alone, except that a terminal unlink clears the phone on the armed snapshot
    * too. Never throws: a DB hiccup must not turn a disconnect into an unhandled rejection.
    *
@@ -1124,7 +1157,7 @@ export class SessionEngineLifecycle {
    * reconnect scheduling are gated on `engine` STILL being the live owner at the point they run.
    * A stale disconnect handler must not publish disconnect side effects for a session that now
    * belongs to a different engine, nor schedule a reconnect whose timer would later destroy the
-   * replacement engine.
+   * replacement engine. A terminal unlink is the exception: it needs neither, see reportDroppedUnlink.
    */
   async handleEngineDisconnected(
     id: string,
@@ -1134,11 +1167,26 @@ export class SessionEngineLifecycle {
   ): Promise<void> {
     // Entry fence: the caller already checked liveness, but the gap between that check and this
     // call site is enough for a stop()/reconnect to swap the engine. Re-verify before doing work.
-    if (!this.isLiveEngine(id, engine) || retry?.ended) return;
+    if (retry?.ended) return;
+    if (!this.isLiveEngine(id, engine)) {
+      this.reportDroppedUnlink(id, reason, retry);
+      return;
+    }
 
+    // An unlink recorded after this point clears the binding the read below may still return, whenever the row is used.
+    const bindingEpoch = this.bindingEpochs.get(id) ?? 0;
     let session: Session | null;
     try {
-      session = await this.sessionRepository.findOne({ where: { id } });
+      const read = (): Promise<Session | null> => this.sessionRepository.findOne({ where: { id } });
+      // After the phone writes this process issued have been answered, and again if another was issued meanwhile:
+      // a read that overlaps an unlink's clear or the number a READY links can return the binding the write replaces.
+      if (this.phoneWrites.hasPending(id)) {
+        session = await this.phoneWrites.readSettled(id, read);
+      } else {
+        const mark = this.phoneWrites.mark(id);
+        session = await read();
+        if (this.phoneWrites.overlapped(id, mark)) session = await this.phoneWrites.readSettled(id, read);
+      }
     } catch (err) {
       this.logger.error('Failed to reload the session for reconnect scheduling', String(err), {
         sessionId: id,
@@ -1151,12 +1199,19 @@ export class SessionEngineLifecycle {
     }
     // A session deleted just before this ran has nothing left to reconnect; skip it.
     if (!session) return;
+    // The check that no phone write overlapped the read was made where it ended; the report of a retired engine can
+    // record its unlink between that check and this continuation, and nothing here awaits until the reconnect is armed.
+    if ((this.bindingEpochs.get(id) ?? 0) !== bindingEpoch) session = { ...session, phone: null };
 
     // Post-await fence: the findOne yield above is the window in which a stop()/reconnect can
     // replace the engine for this id. Only a STILL-live owner may publish disconnect side effects
     // or change the persisted status - otherwise a stale disconnect would (e.g.) clobber a
     // replacement engine that is already READY.
-    if (!this.isLiveEngine(id, engine) || retry?.ended) return;
+    if (retry?.ended) return;
+    if (!this.isLiveEngine(id, engine)) {
+      this.reportDroppedUnlink(id, reason, retry);
+      return;
+    }
 
     if (retry && TERMINAL_UNLINK_REASONS.has(retry.reason) && !TERMINAL_UNLINK_REASONS.has(reason)) {
       reason = retry.reason;
@@ -1222,10 +1277,14 @@ export class SessionEngineLifecycle {
     callerRetry?: { reason: string; ended?: boolean },
   ): void {
     const state = this.reconnectStates.get(id);
-    if (!state || this.closed || this.shutdownService?.isShuttingDown()) return;
-    // The read failed across an await, so a reconnect may have replaced this engine meanwhile. A retry armed
-    // for it would hold the episode's timer, and the live engine's own drop would then find the slot taken.
-    if (!this.isLiveEngine(id, engine)) return;
+    // No retry can be armed once a control or shutdown dropped the episode or the gateway drains, nor once a
+    // reconnect replaced this engine across the failed read: a retry armed for it would hold the episode's timer,
+    // and the live engine's own drop would then find the slot taken. A first read's unlink is reported now; a
+    // retry's is reported by the control or shutdown that ends it.
+    if (!state || this.closed || this.shutdownService?.isShuttingDown() || !this.isLiveEngine(id, engine)) {
+      if (!callerRetry) this.reportDroppedUnlink(id, reason);
+      return;
+    }
     if (state.timer) {
       // An unlink must not be lost behind the drop reported before it. A pending read retry re-runs with the
       // unlink's reason once the row reads; an armed reconnect needs no row for it, so it is reported now.
@@ -1264,25 +1323,40 @@ export class SessionEngineLifecycle {
    * phone on the next successful link. Fenced on ownership, unlike the DISCONNECTED write: a wrongly nulled
    * phone does not self-heal until the owner's next READY, the same reason the exhausted-reconnect FAILED
    * write is fenced. Fire-and-forget: no await may sit between the callers' identity fences.
+   * Reported without the live engine (`ownRowsOnly`), the in-memory ownership can outlast the claim (a launch
+   * retired for a lost claim), so the clear lands only on a row that is still this node's or unowned, the
+   * predicate retireLaunchedEngine writes under.
    */
-  private recordTerminalUnlink(id: string, reason: string): boolean {
+  private recordTerminalUnlink(id: string, reason: string, ownRowsOnly = false): boolean {
     void this.auditService?.logWarn(AuditAction.SESSION_DISCONNECTED, {
       sessionId: id,
       metadata: { reason },
       errorMessage: `WhatsApp unlinked this device (${reason}); the session must be re-paired with a fresh QR`,
     });
     if (!this.ownsSession(id)) return false;
-    void this.sessionRepository.update(id, { phone: null }).catch((err: unknown) =>
-      this.logger.warn('Failed to clear phone after a terminal unlink', {
-        sessionId: id,
-        error: String(err),
-        action: 'unlink_phone_clear_failed',
-      }),
-    );
-    // A reconnect already armed keeps its own snapshot (scheduleReconnect leaves it alone), so the clear
-    // reaches that one too. Only the phone: the rest is what the report that armed it read.
+    this.bindingEpochs.set(id, (this.bindingEpochs.get(id) ?? 0) + 1);
+    const nodeId = this.ownership?.nodeId;
+    const where =
+      ownRowsOnly && nodeId !== undefined
+        ? [
+            { id, nodeId },
+            { id, nodeId: IsNull() },
+          ]
+        : id;
+    void this.phoneWrites
+      .run(id, () => this.sessionRepository.update(where, { phone: null }))
+      .catch((err: unknown) =>
+        this.logger.warn('Failed to clear phone after a terminal unlink', {
+          sessionId: id,
+          error: String(err),
+          action: 'unlink_phone_clear_failed',
+        }),
+      );
+    // A reconnect episode keeps its own snapshot (scheduleReconnect leaves it alone), so the clear reaches that one
+    // too, whatever the episode is doing: an attempt that is initializing its replacement re-arms the next attempt
+    // from the snapshot when it fails. Only the phone: the rest is what the report that armed it read.
     const armed = this.reconnectStates.get(id);
-    if ((armed?.timer || armed?.teardownInFlight) && armed.session) armed.session = { ...armed.session, phone: null };
+    if (armed?.session) armed.session = { ...armed.session, phone: null };
     return true;
   }
 
@@ -1298,9 +1372,38 @@ export class SessionEngineLifecycle {
    * re-runs it, so it is announced once. Returns whether the phone was cleared.
    */
   private reportUnlinkWithoutRow(id: string, reason: string): boolean {
-    const cleared = this.recordTerminalUnlink(id, reason);
+    const cleared = this.recordTerminalUnlink(id, reason, true);
     this.announceDisconnected(id, reason);
     return cleared;
+  }
+
+  /**
+   * A disconnect a fence drops: its engine is no longer the live one, or no read retry can be armed for it. A
+   * terminal unlink needs neither the engine nor the row, so it is reported without the row, and the retry that
+   * carried it ends, so no flush reports it again. Any other reason is dropped. A replacement already READY has
+   * linked an account since, and the binding is its own: a late unlink leaves it alone.
+   */
+  private reportDroppedUnlink(id: string, reason: string, retry?: { reason: string; ended?: boolean }): void {
+    // Defensive, matching the live path: a fired retry carries an unlink only when a later report folded one into it.
+    const unlink = retry && TERMINAL_UNLINK_REASONS.has(retry.reason) ? retry.reason : reason;
+    if (!TERMINAL_UNLINK_REASONS.has(unlink)) return;
+    if (retry) {
+      retry.ended = true;
+      const state = this.reconnectStates.get(id);
+      if (state?.readRetry === retry) state.readRetry = undefined;
+    }
+    // The audit trail names no engine generation, so a record written now would read as the READY session unlinked.
+    const replacementStatus = this.engines.get(id)?.getStatus?.();
+    if (replacementStatus === EngineStatus.READY) {
+      this.logger.log('Skipped the late unlink of a retired engine: a replacement engine is ready', {
+        sessionId: id,
+        reason: unlink,
+        replacementStatus,
+        action: 'retired_unlink_skipped',
+      });
+      return;
+    }
+    this.reportUnlinkWithoutRow(id, unlink);
   }
 
   /**
@@ -1574,7 +1677,7 @@ export class SessionEngineLifecycle {
       // Another attempt can finish tearing down this same engine first while sharing the episode.
       if (state.started !== attempt) return;
       // An unlink the old engine reported during the teardown re-armed the state with the binding it cleared.
-      if (state.session && state.session.phone == null && session.phone) session = { ...session, phone: null };
+      session = this.withEpisodeBinding(state, session);
 
       // Re-initialize. An engine failure reported inside this window is parked (see
       // parkReconnectInitFailure): a failed launch must retry, not land FAILED and strand the session.
@@ -1664,10 +1767,20 @@ export class SessionEngineLifecycle {
       // now: it would hold the timer the next attempt needs, then fire against the evicted engine and
       // end at its fence, leaving the session with no engine and nothing armed.
       if (this.endReadRetryOfGoneEngine(id)) session = { ...session, phone: null };
+      // An unlink recorded while this attempt initialized cleared the episode's snapshot, and a READY it accepted set
+      // it, not the session this attempt started from.
+      session = this.withEpisodeBinding(state, session);
       // Schedule another attempt. The row stays INITIALIZING through the backoff (an active status, with
       // lastError still showing the reason), so a retryable failure writes nothing per attempt.
       this.scheduleReconnect(id, session);
     }
+  }
+
+  /** The attempt's session with the binding the episode's snapshot holds now: an unlink clears it, an accepted READY sets it. */
+  private withEpisodeBinding(state: ReconnectState, session: Session): Session {
+    return state.session && state.session.phone !== session.phone
+      ? { ...session, phone: state.session.phone }
+      : session;
   }
 
   /**

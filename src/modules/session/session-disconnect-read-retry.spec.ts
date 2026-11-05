@@ -364,7 +364,7 @@ describe('a WhatsApp unlink whose session read fails while the episode timer is 
     expect(f.reconnectState()?.session?.phone).toBe(BOUND);
   });
 
-  it('is ignored when its engine was replaced before the read failed', async () => {
+  it('is recorded without arming anything when its engine was replaced before the read failed', async () => {
     const f = fixture();
     await f.lifecycle.start(ID);
     const first = f.callbacksOf(0);
@@ -379,12 +379,15 @@ describe('a WhatsApp unlink whose session read fails while the episode timer is 
     await f.runReconnect(2);
     f.callbacksOf(1).onDisconnected?.('NAVIGATION');
     await until(() => f.reconnectState()?.timer != null, 'the next reconnect to be armed');
+    const armed = f.reconnectState()?.timer;
 
     fail(new Error('SQLITE_BUSY: database is locked'));
     await f.settled();
-    expect(f.unlinkAudits()).toHaveLength(0);
-    expect(f.stored.phone).toBe(BOUND);
-    expect(f.reconnectState()?.session?.phone).toBe(BOUND);
+    // The unlink needs neither its row nor its engine: the next reconnect links whichever number scans.
+    expect(f.unlinkAudits()).toHaveLength(1);
+    expect(f.stored.phone).toBeNull();
+    expect(f.reconnectState()?.session?.phone).toBeNull();
+    expect(f.reconnectState()?.timer).toBe(armed);
   });
 
   it('leaves the binding alone for a drop whose read was retried', async () => {
@@ -449,7 +452,7 @@ describe('a WhatsApp unlink whose session read fails while the episode timer is 
     expect(f.stored.phone).toBe(BOUND);
   });
 
-  it('arms nothing for a read that fails after the session was stopped', async () => {
+  it('arms nothing and records the unlink for a read that fails after the session was stopped', async () => {
     const f = fixture();
     await f.lifecycle.start(ID);
     const first = f.callbacksOf(0);
@@ -462,8 +465,8 @@ describe('a WhatsApp unlink whose session read fails while the episode timer is 
     await f.settled();
 
     expect(f.reconnectState()).toBeUndefined();
-    expect(f.unlinkAudits()).toHaveLength(0);
-    expect(f.stored.phone).toBe(BOUND);
+    expect(f.unlinkAudits()).toHaveLength(1);
+    expect(f.stored.phone).toBeNull();
   });
 });
 

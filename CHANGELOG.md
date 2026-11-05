@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Webhook writes refuse more than 27 events, and webhook and automation rule writes refuse id filter values over 128 characters.
 - Stored webhook rows and backups past these limits are kept as they are; an edit that resends them is refused until they fit.
 - Integration redrive reads one payload at a time, and an exhausted webhook replay budget keeps the event data on the failure row.
+- Stop announcing and storing `ready` for a link the session's account binding refuses; the session goes straight to `failed`.
+- Record a WhatsApp unlink that arrives after a stop, delete or shutdown retired the engine, or whose session read fails during shutdown, so another number can link the session.
+- Stop a start right after a logout, or a reconnect after a WhatsApp unlink, from keeping the old number and refusing the account that scans next.
+- Keep the account a reconnect attempt linked bound when that attempt then fails, so the retry refuses a different number.
 
 ### Documentation
 

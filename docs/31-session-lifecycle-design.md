@@ -50,9 +50,14 @@ pins the other half: a late INITIALIZING reply announces nothing once its engine
 **Interleaving:** control A starts engine #1; engine #1 fails and is destroyed; control B (a
 retry) starts engine #2; a stale callback from #1 arrives and mutates registry state owned by #2.
 **Defense:** `EngineRegistry` keys by session id but validates liveness by object identity
-(`isLive` / `deleteIfLive`) — a superseded engine's late callback cannot act.
+(`isLive` / `deleteIfLive`) — a superseded engine's late callback cannot act. One report is the
+exception: a superseded engine's terminal unlink (LOGOUT, UNPAIRED, UNPAIRED_IDLE, Baileys `logged out`)
+needs neither the engine nor the row, so it is still recorded (the audit row, the phone clear, the
+`session.disconnected` announcement). It changes no registry state, and it is skipped while a local
+replacement engine is READY.
 **Pinned by:** `engine-registry.service.spec.ts` (isLive / deleteIfLive cases); the registry
-is the single most repeated invariant in the module.
+is the single most repeated invariant in the module. The unlink exception is pinned by
+`session-unlink-retired-engine.spec.ts`.
 
 ### INV-4 — Init timeout evicts and 504s; init rejection propagates as FAILED
 
@@ -97,7 +102,7 @@ stop/delete lands during start() (no resurrection to READY)'.
 **Interleaving:** node A holds session X's lease; node B adopts it after A's lease lapses; a
 stale in-flight write from A would clobber B's status.
 **Defense:** on lease loss, `stopOrphanEngines` destroys local engines; the session row is the
-owning node's alone (`session.service.ts` boot path). Four writes are exceptions, each under a
+owning node's alone (`session.service.ts` boot path). Five writes are exceptions, each under a
 predicate. The takeover sweep's `markLapsedDisconnected` marks a row disconnected only under the
 predicate it read (same `nodeId`, same status, lease expired more than two TTLs ago, and for a
 `qr_ready` row still no phone), so a row B has claimed, or a pairing that completed meanwhile, matches
@@ -108,17 +113,37 @@ DISCONNECTED report is held back, because the in-memory ownership it is fenced o
 session until the next heartbeat, and the verb writes DISCONNECTED only on a row whose `nodeId` is this
 node's or empty, so a row B has claimed keeps B's status. The init deadline's DISCONNECTED (INV-4) is
 written under that same predicate: it can fire while `stopOrphanEngines` is still tearing the engine
-down, after B adopted the row. Last, a start that fails or is refused with no engine left here (a
+down, after B adopted the row. So is the phone clear of a WhatsApp unlink reported after its engine was
+retired (`reportUnlinkWithoutRow`): a launch retired for its lost claim can still report the unlink its
+cleanup was finishing, while the in-memory ownership that write is also fenced on has not caught up. Last,
+a start that fails or is refused with no engine left here (a
 takeover adoption whose launch fails, say) releases its claim and then writes DISCONNECTED only on a
 row that no node holds and that still has an active status: a row no node holds is revisited by
 neither `markLapsedDisconnected` nor the adoption sweep, so the READY a vanished node left on it would
 otherwise stand until a boot, and any claim since sets `nodeId`, so a row B claimed matches nothing.
+Four writes change the binding of a session: the unlink's clear, the number and push name a READY links, the
+push name an engine syncs after it, and the clear of a logout. The first three are not awaited by their issuer;
+the logout awaits its own. They are issued one after another per session, so the database receives them in the
+order they were issued, and a row read that acts on the session's phone (the disconnect handler's reload, the
+second read of a start) must not return the binding they replace: it starts once the writes this process issued
+have been answered and is repeated when another is issued while it runs (`session-phone-writes.ts`). A write
+that is not answered holds up the ones behind it for five seconds at most, and a read that finds them
+unanswered for that long fails: the disconnect handler reads again shortly, and a start fails with it. A READY writes its status and times at once and only its
+number and push name join this order, so a stop or a failure that follows it is not overwritten by a write
+that was waiting; the synced push name joins it too, so the empty name of the READY row cannot land after it.
+The logout issues its clear in the step that removes its engine from the registry, before a start can find
+the registry empty. Both readers also compare the binding epoch they took before reading with the one at the
+moment they use the row, since an unlink recorded in between clears a binding the row still shows. The snapshot
+a reconnect episode starts its next attempt from follows the binding in both directions: an unlink clears its
+phone, and an accepted READY sets it, so an attempt that linked an account and then failed is retried with it.
 **Pinned by:** `src/modules/takeover/session-takeover.service.spec.ts` +
 `session-ownership.service.spec.ts` + `session-ownership-status-fence.spec.ts` +
 `session-failed-write-ownership-fence.spec.ts` for the FAILED writers outside the wiring + the real-database
 predicate spec for `markLapsedDisconnected` in `src/modules/session/session.service.spec.ts` +
 `session-retired-start-leaves-peer-row.spec.ts` for the retired launch +
 `session-init-timeout-after-lease-loss.spec.ts` for the init deadline +
+`session-unlink-retired-engine.spec.ts` for the unlink's phone clear +
+`session-reconnect-stale-binding.spec.ts` for the reads that wait for it +
 `src/modules/takeover/session-takeover-failed-adoption.spec.ts` for the failed start. That
 `stopOrphanEngines` itself writes no row is pinned by `session-delete-claim.spec.ts` ('retires an old
 local engine after a peer takes over and a fresh claim fails with SQL error %s'), where the peer's
@@ -176,7 +201,7 @@ writer before anything else:
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | → `INITIALIZING`                | `initializeEngine` (persisted before `initialize()`), engine-reported `INITIALIZING` via `onStateChanged` (ownership-fenced; Baileys while connecting and through its own reconnect after a drop)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | → `QR_READY` / `AUTHENTICATING` | engine callbacks (wired in the lifecycle delegate), via the registry's liveness check                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| → `READY`                       | `handleEngineReady` (also drops a recorded failure reason, see INV-7's rationale comment), engine-reported `READY` via `onStateChanged` (ownership-fenced; both engines report it next to `onReady`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| → `READY`                       | `handleEngineReady` (also drops a recorded failure reason, see INV-7's rationale comment), engine-reported `READY` via `onStateChanged` (ownership-fenced; both engines report it next to `onReady`; skipped for a link the account binding refuses, which `rejectRebind` lands in `FAILED`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | → `DISCONNECTED`                | init-timeout eviction of a start (own or unowned row only, INV-4), graceful stop, logout, forceKill, a delete whose teardown fence times out, the engine `onDisconnected` callback and the liveness watchdog (`handleEngineDisconnected`), the boot reset, a backup import (active rows restored as disconnected), engine-reported `DISCONNECTED` via `onStateChanged`, the takeover sweep's `markLapsedDisconnected` (INV-6), a start or reconnect retiring the engine it launched (`retireLaunchedEngine`, own or unowned row only, INV-6), a failed or refused start that left no engine here, on the row it released (still-active status only, INV-6), a start whose transient-failure retry shutdown refused (`session.service.ts` hands a `FAILED` row it may claim back as `DISCONNECTED` for the next boot) |
 | → `ACTION_REQUIRED`             | engine-reported `ACTION_REQUIRED` via `onStateChanged` (ownership-fenced status write; the whatsapp-web.js onboarding-modal fallback), and `onActionRequired` records the reason                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | → `FAILED`                      | five terminal paths only, all ownership-fenced: see below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |

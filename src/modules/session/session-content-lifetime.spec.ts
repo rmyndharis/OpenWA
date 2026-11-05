@@ -68,11 +68,13 @@ describe('Session content lifetime', () => {
   let engines: EngineRegistry;
   let hooks: HookManager;
   let purgeSessionData: jest.Mock;
+  let forgetBindingEpoch: jest.Mock;
   const config = new ConfigService({});
   const logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
 
   beforeEach(async () => {
     purgeSessionData = jest.fn().mockResolvedValue(undefined);
+    forgetBindingEpoch = jest.fn();
     db = new DataSource(
       process.env.DATABASE_TYPE === 'postgres'
         ? {
@@ -122,6 +124,7 @@ describe('Session content lifetime', () => {
       operatorTeardowns: new Map(),
       reconnectStates: new Map(),
       stuckAuthRecoveryUsed: new Set(),
+      forgetBindingEpoch,
       initializingSessions: new Set(),
     } as unknown as ConstructorParameters<typeof SessionEngineControls>[0]);
   });
@@ -734,6 +737,28 @@ describe('Session content lifetime', () => {
       await controls.delete(session.id);
 
       expect(await statuses()).toEqual([]);
+    });
+
+    // The per-session binding epoch is keyed by the session id, which is never reused, so a committed delete has to
+    // drop it or the map grows by one entry for every session that ever saw an unlink. A refused delete leaves the
+    // session in place and keeps it.
+    it('forgets the binding epoch of a session whose delete committed', async () => {
+      const session = await createSession();
+
+      await controls.delete(session.id);
+
+      expect(forgetBindingEpoch).toHaveBeenCalledWith(session.id);
+    });
+
+    it('keeps the binding epoch of a session whose delete was refused', async () => {
+      const session = await createSession();
+      jest
+        .spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown')
+        .mockRejectedValueOnce(new ConflictException('a logout teardown is still running'));
+
+      await expect(controls.delete(session.id)).rejects.toThrow(ConflictException);
+
+      expect(forgetBindingEpoch).not.toHaveBeenCalled();
     });
   });
 

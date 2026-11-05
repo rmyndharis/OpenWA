@@ -2,9 +2,15 @@ import { SessionEngineLifecycle } from './session-engine-lifecycle.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import type { EngineEventCallbacks, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import type { PhoneWrites } from './session-phone-writes';
 
 const ID = '88888888-8888-4888-8888-888888888888';
 const PHONE = '628111';
+
+/** Lets the writes that wait behind an earlier one reach the repository. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+}
 
 /**
  * A newly linked Baileys account's ready event carries an empty push name: WhatsApp syncs the name only
@@ -66,8 +72,11 @@ function fixture() {
     {} as never,
   );
   const callbacks = (): EngineEventCallbacks => (engines[0].initialize.mock.calls as [EngineEventCallbacks][])[0][0];
+  // The ready event writes its number and push name together, apart from its status: only a write of the name alone counts.
   const pushNameWrites = (): number =>
-    repository.update.mock.calls.filter(([, patch]) => 'pushName' in patch && !('status' in patch)).length;
+    repository.update.mock.calls.filter(
+      ([, patch]) => 'pushName' in patch && !('status' in patch) && !('phone' in patch),
+    ).length;
   const authenticatedWebhooks = (): number =>
     webhooks.dispatch.mock.calls.filter(([, event]) => event === 'session.authenticated').length;
   return { lifecycle, registry, repository, stored, events, hooks, callbacks, pushNameWrites, authenticatedWebhooks };
@@ -82,6 +91,7 @@ describe('the push name an engine syncs after its ready event', () => {
     expect(f.stored.pushName).toBe('');
 
     f.callbacks().onPushNameChanged?.('Synced Later');
+    await settle();
 
     expect(f.stored.pushName).toBe('Synced Later');
     expect(f.stored.phone).toBe(PHONE);
@@ -113,9 +123,28 @@ describe('the push name an engine syncs after its ready event', () => {
     arrange(f);
 
     f.callbacks().onPushNameChanged?.(name);
+    await settle();
 
     expect(f.pushNameWrites()).toBe(0);
     expect(f.stored.pushName).toBe('At Ready');
+  });
+
+  // The number and name of the ready event wait behind a write issued earlier for the session (an unlink's clear whose answer
+  // is late); the name that arrives meanwhile has to land after them, or the empty one of the ready event replaces it.
+  it('is stored after the row of the ready event, when that row waits for an earlier write', async () => {
+    const f = fixture();
+    await f.lifecycle.start(ID);
+    let answer!: () => void;
+    const earlier = new Promise<void>(resolve => (answer = resolve));
+    void (f.lifecycle as unknown as { phoneWrites: PhoneWrites }).phoneWrites.run(ID, () => earlier);
+
+    f.callbacks().onReady?.(PHONE, '');
+    f.callbacks().onPushNameChanged?.('Synced Later');
+    expect(f.stored.phone).toBeNull(); // the number waits for the earlier write
+    answer();
+    await settle();
+
+    expect({ phone: f.stored.phone, pushName: f.stored.pushName }).toEqual({ phone: PHONE, pushName: 'Synced Later' });
   });
 
   it('is logged, not thrown, when the row cannot be written', async () => {
