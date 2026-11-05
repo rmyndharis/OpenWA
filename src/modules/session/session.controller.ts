@@ -362,9 +362,9 @@ export class SessionController {
   @ApiResponse({
     status: 503,
     description:
-      'The gateway is shutting down, the session could not be checked or claimed for this node (a database ' +
-      "error; nothing was launched), or the engine's browser or socket connection died during launch and the one " +
-      'automatic retry failed too (no engine is left running); the start can be retried.',
+      'The gateway is shutting down, the session could not be checked (the database could not serve the read) or ' +
+      "claimed for this node (nothing was launched), or the engine's browser or socket connection died during " +
+      'launch and the one automatic retry failed too (no engine is left running); the start can be retried.',
   })
   @ApiResponse({
     status: 504,
