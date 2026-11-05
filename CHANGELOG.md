@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Install Trivy for the release and scheduled image scans from its GitHub release against a pinned SHA-256, since the action's own installer needs a host that no longer resolves.
+- Hold Create and Save in the webhook form for a URL with whitespace, `<`, `>` or an underscore in the host name, which the gateway refuses, and show the standard URL hint.
+- Drop the 00 exit code from international numbers of any length in the Message Tester, Number Checker, bulk recipients, new chat and group member forms.
+- Stop the new-chat privacy-id lookup when the API key is removed or replaced or the selected session changes.
+- Report a Message Tester send that the gateway accepted with an empty message id as sent instead of failed.
+- Show a stored plugin choice that the field no longer lists as the selected option, and a null choice as a blank one, so the form saves what it shows.
+- Use the theme text and card colors for chart legends and tooltips so they stay readable in the light and dark themes.
+- Keep the Infrastructure Save Configuration button clear of the notification stack.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
