@@ -238,7 +238,7 @@ describe('WhatsAppWebJsAdapter initialize() failure reason (#1081)', () => {
 });
 
 // A WhatsApp Web page navigation during the FIRST inject rejects Client.initialize() before the
-// library's own framenavigated re-inject handler exists (Client.js:502 vs :504), so nothing upstream
+// library's own framenavigated re-inject handler exists (it is added after the first inject() resolves), so nothing upstream
 // retries it — and the adapter's onError channel is terminal. One in-adapter retry converts that
 // one-navigation death into a normal slow start (#1081).
 describe('WhatsAppWebJsAdapter initialize() retry on a navigation-killed first inject (#1081)', () => {
@@ -2179,9 +2179,10 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     expect(jest.getTimerCount()).toBe(0);
   });
 
-  // whatsapp-web.js sets `eventsAttached = false` in its constructor (Client.js:109) and flips it only
-  // after attachEventListeners() resolves (Client.js:373). Everything in between — LoadUtils, a poll of
-  // up to 30s for window.WWebJS (Client.js:334), ClientInfo, InterfaceController — is a legitimately
+  // whatsapp-web.js sets `eventsAttached = false` in its constructor (and, with the ready-sync patch, whenever its
+  // post-auth callback starts attaching for a page without the helpers) and flips it only after
+  // attachEventListeners() resolves. Everything in between — LoadUtils, a poll of
+  // up to 30s for window.WWebJS, ClientInfo, InterfaceController — is a legitimately
   // slow attach, not a dead bridge. Reloading inside that window navigates the page out from under the
   // in-flight inject(): the re-inject then dies at getWWebVersion before it re-exposes any of the
   // bridge, and the one-shot guard blocks a retry, so the session is doomed to the deadline (#1081).
@@ -2230,7 +2231,7 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
 
     expect(reload).toHaveBeenCalledTimes(1);
 
-    // Upstream's window.WWebJS poll alone is 30s (Client.js:334) and is only one stage of the attach.
+    // Upstream's window.WWebJS poll alone is 30s and is only one stage of the attach.
     // The grace has to outlast it, or we go back to aborting healthy attaches; and what remains before
     // the deadline has to outlast it too, or a warranted reload could never finish reinjecting.
     const UPSTREAM_WWEBJS_POLL_MS = 30_000;

@@ -30,9 +30,10 @@ const READY_RECONCILE_INTERVAL_MS = 2000;
 export const READY_RECONCILE_TIMEOUT_MS = 90_000;
 
 // How long after `authenticated` the event bridge is allowed to still be attaching before a reload is
-// considered. whatsapp-web.js clears `eventsAttached` in its constructor (Client.js:109) and sets it
-// only once attachEventListeners() resolves (Client.js:373); in between it evaluates LoadUtils, polls
-// up to 30s for window.WWebJS (Client.js:334), then builds ClientInfo and InterfaceController. So a
+// considered. whatsapp-web.js clears `eventsAttached` in its constructor (and, with the ready-sync patch, again
+// whenever its post-auth callback starts attaching for a page without the helpers) and sets it only once
+// attachEventListeners() resolves; in between it evaluates LoadUtils, polls up to 30s for window.WWebJS, then
+// builds ClientInfo and InterfaceController. So a
 // false flag is the NORMAL reading for most of a minute on a loaded host, and reloading on it aborts
 // a healthy attach — the page navigates out from under the in-flight inject(), which then dies before
 // re-exposing the bridge and cannot be retried (#1081). Must exceed upstream's own 30s poll with room

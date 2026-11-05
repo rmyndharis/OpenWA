@@ -22631,7 +22631,7 @@
           },
           "headless": {
             "type": "boolean",
-            "description": "Whether Chromium runs headless. Meaningful for whatsapp-web.js only.",
+            "description": "Whether Chromium runs headless, from `PUPPETEER_HEADLESS`. A stored whatsapp-web.js plugin config can override it for sessions, and is not reflected here. Meaningful for whatsapp-web.js only.",
             "example": true
           },
           "sessionDataPath": {
@@ -22640,7 +22640,7 @@
           },
           "browserArgs": {
             "type": "string",
-            "description": "Effective Chromium launch arguments: PUPPETEER_ARGS or the defaults, with --lang=en-US appended unless a --lang flag is already present.",
+            "description": "Chromium launch arguments from `PUPPETEER_ARGS` or the defaults, with --lang=en-US appended unless a --lang flag is already present. A stored whatsapp-web.js plugin config (`puppeteer.args`) takes precedence for sessions and is not reflected here.",
             "example": "--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --lang=en-US"
           },
           "webVersion": {

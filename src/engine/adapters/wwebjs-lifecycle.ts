@@ -44,7 +44,8 @@ export function isExecutionContextDestroyedError(reason: string): boolean {
  * for the window.require shape (see src/config/process-error-monitor.ts) — this predicate only
  * decides whether one in-place retry is worth it, both shapes being transient when a reload caused
  * them. whatsapp-web.js registers its own re-inject handler only AFTER the first inject succeeds
- * (Client.js:502 vs :504), so a navigation landing during it is caught by nothing upstream (#1081).
+ * (its framenavigated listener is added after the first inject() resolves), so a navigation landing during it is caught
+ * by nothing upstream (#1081).
  */
 function isNavigationShapedInitRejection(reason: string): boolean {
   return isExecutionContextDestroyedError(reason) || /window\.require is not a function/i.test(reason);
@@ -151,11 +152,11 @@ class PairingCodeAttemptTimeoutError extends Error {
 
 // A post-READY page navigation (WhatsApp Web's ~5-minute first reload on a fresh pairing, a
 // service-worker update, …) destroys the page's JS world; whatsapp-web.js re-injects on its own
-// framenavigated handler (Client.js:504-513), but until WA Web has booted again getState() REJECTS,
+// framenavigated handler, but until WA Web has booted again getState() REJECTS,
 // so the liveness probe reads a healing page as dead and every delegate evaluate dies as a raw
 // TypeError under a status that still says READY (#1081). Sizing — floor: the pre-boot phase alone
 // (page load + WA Web bundle boot, the stretch where getState() rejects) takes tens of seconds on a
-// slow host, and upstream's re-inject then polls up to 30s for window.WWebJS (Client.js:332-343);
+// slow host, and upstream's re-inject then polls up to 30s for window.WWebJS (in its post-auth callback);
 // ceiling: one watchdog interval (60s), so a page that navigates and then wedges loses at most one
 // probe to the grace and still dies within one extra interval. NOT a sibling of
 // READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS above: that one is capped by the 90s reconcile deadline,
@@ -176,8 +177,10 @@ const PREVIOUS_PAGE_READY_MS = 5_000;
 
 /**
  * Whether the patched whatsapp-web.js client says the page it has loaded has no event listeners attached yet
- * (scripts/patch-wwebjs-ready-sync.js): false from the start of a re-inject until its attach completes. A tree
- * without the patch has no marker (undefined) and cannot say, which keeps the helpers as the only evidence.
+ * (scripts/patch-wwebjs-ready-sync.js): false from the moment its post-auth callback finds a page without the helpers
+ * until the attach completes. Between a navigation and that moment the marker still holds the previous page's value,
+ * and the helpers are what is missing then, so the marker never stands in for them. A tree without the patch has no
+ * marker (undefined) and cannot say, which keeps the helpers as the only evidence.
  */
 function eventBridgeUnattached(client: Client): boolean {
   return (client as Client & { eventsAttached?: boolean }).eventsAttached === false;
@@ -764,9 +767,10 @@ export class WwebjsLifecycle {
       // (scripts/patch-wwebjs-ready-sync.js) distinguishes the cases: `false` → ignore this emit
       // and let the attach's own completion re-emit `ready` (it always does), with the readiness
       // reconciliation as the backstop when the attach failed instead. `undefined` (unpatched
-      // tree) keeps the legacy behaviour. The same holds for a page that reloaded: the flag is false
-      // again from the start of its re-inject, so this emit says nothing about the page now loaded,
-      // and it must not close the unverified reload or count as a re-inject of the page it replaced.
+      // tree) keeps the legacy behaviour. The same holds for a page that reloaded: once the callback has found the
+      // new page without the helpers the flag is false again until its attach completes, so an emit in that span says
+      // nothing about the page now loaded, and it must not close the unverified reload or count as a re-inject of the
+      // page it replaced.
       if (eventBridgeUnattached(source)) {
         this.host.logger.warn('Ignoring premature ready: the message event bridge is not attached yet', {
           sessionId: this.host.config.sessionId,
