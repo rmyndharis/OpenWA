@@ -928,6 +928,7 @@ export class SessionEngineControls {
 
     // Mark as tearing down BEFORE cleanup so an in-flight reconnect can't resurrect it.
     this.stoppingSessions.add(id);
+    const ownMark = this.stoppingSessions.stamp(id) as number;
     // Cancel any reconnection attempts
     this.host.cancelReconnect(id);
 
@@ -1066,11 +1067,14 @@ export class SessionEngineControls {
     } finally {
       writes.release();
       endDelete();
-      // Always clear the teardown mark so a later recreate/start with this id isn't suppressed. This
-      // stop mark was set after fence #1, so clearing it on a rejected 409 only undoes what THIS
-      // delete added — it does NOT touch reconnect timer / engine / last status / error / recovery
-      // state (those are gated on parentDeleted below).
-      this.stoppingSessions.delete(id);
+      // Clear the teardown mark so a later recreate/start with this id isn't suppressed. This stop mark
+      // was set after fence #1, so clearing it on a rejected 409 only undoes what THIS delete added — it
+      // does NOT touch reconnect timer / engine / last status / error / recovery state (those are gated
+      // on parentDeleted below). A delete that did not remove the row clears only the mark it set: a
+      // stop that began meanwhile has replaced it, and that mark still guards the stop. Once the row is
+      // gone nothing is left for a mark to guard, whoever set it.
+      if (parentDeleted) this.stoppingSessions.delete(id);
+      else this.stoppingSessions.deleteStamped(id, ownMark);
       if (parentDeleted) {
         this.broadcaster.clear(id);
         // Drop the FAILED-reason entry too: it's keyed by a now-deleted UUID that can never be read

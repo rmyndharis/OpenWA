@@ -3,7 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types';
-import { QueryFailedError } from 'typeorm';
+import { DataSource, QueryFailedError } from 'typeorm';
 import { SessionController } from './session.controller';
 import { SessionService } from './session.service';
 import { ServerShuttingDownException, SessionEngineControls, StopMarks } from './session-engine-controls';
@@ -396,5 +396,65 @@ describe('the stop mark of the lifecycle', () => {
 
     // Dropped for the stamp of the mark that stands and for no stamp; kept for the stamp of the one it replaced.
     expect(marks.has(ID)).toBe(earlierStamp);
+  });
+});
+
+describe('a delete refused at its second credential fence', () => {
+  let source: DataSource;
+
+  beforeAll(async () => {
+    source = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [Session], synchronize: true });
+    await source.initialize();
+    await source.getRepository(Session).save({ id: ID, name: 'fence-refusal' });
+  });
+
+  afterAll(async () => {
+    await source.destroy();
+  });
+
+  const controlsWith = (marks: StopMarks, secondFence: () => Promise<void>) => {
+    const store = { clear: jest.fn(), attachTo: (row: Session) => row };
+    return new SessionEngineControls({
+      sessionRepository: source.getRepository(Session),
+      engines: new EngineRegistry(),
+      sessionErrors: store,
+      sessionRestrictions: store,
+      presence: store,
+      hookManager: { execute: jest.fn().mockResolvedValue({ continue: true }) },
+      logger: { log() {}, warn() {}, error() {}, debug() {} },
+      dataSource: () => source,
+      fences: {
+        awaitPendingTeardown: jest.fn().mockResolvedValueOnce(undefined).mockImplementationOnce(secondFence),
+        awaitInitialStatus: async () => {},
+      },
+      broadcaster: store,
+      cancelReconnect() {},
+      stoppingSessions: marks,
+      operatorTeardowns: new Map(),
+      reconnectStates: new Map(),
+      stuckAuthRecoveryUsed: new Set(),
+      initializingSessions: new Set(),
+    } as never);
+  };
+
+  it('drops the mark it set itself', async () => {
+    const marks = new StopMarks();
+    const controls = controlsWith(marks, () => Promise.reject(new ConflictException('a logout is tearing it down')));
+
+    await expect(controls.delete(ID)).rejects.toBeInstanceOf(ConflictException);
+
+    expect(marks.has(ID)).toBe(false);
+  });
+
+  it('leaves the mark a stop set while the delete waited at the fence', async () => {
+    const marks = new StopMarks();
+    const controls = controlsWith(marks, () => {
+      marks.add(ID); // a stop of the same session begins while the delete waits
+      return Promise.reject(new ConflictException('a logout is tearing it down'));
+    });
+
+    await expect(controls.delete(ID)).rejects.toBeInstanceOf(ConflictException);
+
+    expect(marks.has(ID)).toBe(true);
   });
 });
