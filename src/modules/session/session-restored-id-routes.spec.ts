@@ -143,4 +143,11 @@ describe('an id the sessions importer keeps', () => {
     expect(skip?.({ id, name: 'sales', config: {} })).toEqual(expect.stringContaining('unsafe id'));
     expect(() => pipe.transform(id)).toThrow();
   });
+
+  // A session restored under an id the routes refuse could run with no way to stop or delete it.
+  it('is not one longer than the routes take', () => {
+    const id = 'a'.repeat(MAX_SESSION_ID_LENGTH + 1);
+    expect(skip?.({ id, name: 'sales', config: {} })).toEqual(expect.stringContaining('longer than'));
+    expect(() => pipe.transform(id)).toThrow();
+  });
 });

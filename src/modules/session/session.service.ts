@@ -117,7 +117,7 @@ export interface SessionListOptions extends ListOptions {
  */
 interface StopRequest {
   kind: 'stop' | 'delete';
-  /** The stamp of the stop mark set with this request; a later request of the session replaces the mark and its stamp. */
+  /** The stamp of the stop mark set with this request. Each request of a session holds a mark of its own. */
   mark?: number;
   /** From one sequence shared by every session, so a number is never issued twice. */
   seq: number;
@@ -1266,7 +1266,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return request;
   }
 
-  /** Drop the stop mark this request set, unless a later stop or delete of the session has replaced it. */
+  /** Drop the stop mark this request set. The marks of other stops and deletes of the session stay. */
   private dropStopMark(id: string, request: StopRequest): void {
     this.engineLifecycle.clearStopping(id, request.mark);
   }

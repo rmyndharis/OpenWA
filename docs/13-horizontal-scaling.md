@@ -124,6 +124,10 @@
 > may already have carried it out, so a non-idempotent call such as a message send must not
 > be repeated blindly on either.
 >
+> **The owner lookup can fail first.** A node with `NODE_URL` reads a session's owner before it routes any
+> request for the session. A lost or timed-out database connection there answers `503` and nothing was done, so
+> the request is safe to retry; any other failure of that read stays `500`.
+>
 > **A large answer is relayed as it arrives.** The forwarding node holds an answer of up to
 > 4 MiB whole: a read that fails answers `502` or `504`, and nothing of the owner's status
 > or headers is passed on. A larger answer, such as a media download, is passed on as it

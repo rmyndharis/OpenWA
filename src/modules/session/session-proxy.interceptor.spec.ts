@@ -136,6 +136,26 @@ describe('SessionProxyInterceptor', () => {
       expect(findOne).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'missing-session' } }));
     });
 
+    // The lookup is the first statement of every session request on a routed node, so a database failure there would
+    // answer 500 before the checks of a start, stop or delete that answer a retryable 503 were reached.
+    it.each([
+      ['a lost connection', new Error('Connection terminated unexpectedly')],
+      ['lock contention', Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' })],
+    ])('answers a retryable 503 when the owner lookup fails on %s', async (_label, failure) => {
+      const { interceptor, context, next, handle, findOne } = build({});
+      findOne.mockRejectedValueOnce(failure);
+      await expect(interceptor.intercept(context, next)).rejects.toMatchObject({ status: 503 });
+      expect(handle).not.toHaveBeenCalled();
+    });
+
+    it('lets a statement the database rejected through as it was', async () => {
+      const { interceptor, context, next, handle, findOne } = build({});
+      const rejected = new Error('column "nodeUrl" does not exist');
+      findOne.mockRejectedValueOnce(rejected);
+      await expect(interceptor.intercept(context, next)).rejects.toBe(rejected);
+      expect(handle).not.toHaveBeenCalled();
+    });
+
     it('handles an id containing NUL locally without querying its owner', async () => {
       const req = request({ params: { sessionId: 'session\0name' } });
       const { interceptor, context, next, findOne } = build({ req, row: null });

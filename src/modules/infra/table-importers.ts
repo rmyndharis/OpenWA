@@ -1,5 +1,6 @@
 import { NulFreeTransformer } from '../../common/transformers/nul-free.transformer';
 import { isSafeSessionName } from '../../common/utils/path-safety';
+import { MAX_SESSION_ID_LENGTH } from '../session/session-id.pipe';
 import { collectFilterErrors } from '../webhook/filters/filter-validation';
 import type {
   MigrationTables,
@@ -166,6 +167,11 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
     skip: (session: SessionRow) => {
       if (!isSafeSessionName(session.id)) {
         return `Skipped session ${JSON.stringify(session.id)}: unsafe id`;
+      }
+      // The session routes refuse a longer id (see SessionIdPipe), so a session restored under one could not be stopped
+      // or deleted. Refused like an unsafe id: a skip guard refuses the whole archive.
+      if (session.id.length > MAX_SESSION_ID_LENGTH) {
+        return `Skipped session ${session.id.slice(0, 40)}...: id longer than ${MAX_SESSION_ID_LENGTH} characters`;
       }
       if (isSafeSessionName(session.name)) return invalidJsonWarning('session', session.id, session, ['config']);
       return `Skipped session ${session.id}: unsafe name ${JSON.stringify(session.name)}`;

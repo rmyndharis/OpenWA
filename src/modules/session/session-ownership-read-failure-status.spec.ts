@@ -38,7 +38,7 @@ function fixture({ maxConcurrent = 0, id = ID }: { maxConcurrent?: number; id?: 
     findOne: jest.fn().mockResolvedValue({ ...row }),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
   };
-  // The marks are the lifecycle's own: each operation of a session sets one, and a later one replaces it.
+  // The marks are the lifecycle's own: each operation of a session sets one of its own, and a later one is kept beside it.
   const marks = new StopMarks();
   const lifecycle = {
     start: jest.fn().mockResolvedValue({ ...row }),
@@ -299,8 +299,8 @@ function deferred<T = void>() {
 
 const turn = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
-// Every stop and delete of a session sets a stop mark before it knows whether it may act, and a later one replaces the
-// mark of the earlier. An earlier operation that fails before it did anything drops the mark it set, and only that one.
+// Every stop and delete of a session sets a stop mark before it knows whether it may act, and a later one is kept beside
+// the mark of the earlier. An earlier operation that fails before it did anything drops the mark it set, and only that one.
 describe('a stop or delete that fails before it acts drops its own stop mark, not a later one', () => {
   it('delete() whose claim matched no row and whose row read then fails leaves the mark a later stop set', async () => {
     const f = fixture();
@@ -315,7 +315,7 @@ describe('a stop or delete that fails before it acts drops its own stop mark, no
     const deleteMark = f.marks.stamp(ID);
     const stopping = f.service.stop(ID);
     await turn();
-    expect(f.marks.stamp(ID)).not.toBe(deleteMark); // the stop's mark replaced the delete's
+    expect(f.marks.stamp(ID)).not.toBe(deleteMark); // the stop holds a newer mark beside the delete's
 
     deletionRead.reject(dropped());
     expect(await deleting).toBeInstanceOf(ServiceUnavailableException);

@@ -5,6 +5,7 @@ import {
   Injectable,
   NestInterceptor,
   Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
@@ -17,6 +18,7 @@ import { Session } from './entities/session.entity';
 import { SessionOwnershipService } from './session-ownership.service';
 import { SESSION_SCOPED_KEY } from '../auth/decorators/auth.decorators';
 import { createLogger } from '../../common/services/logger.service';
+import { isTransientDbError } from '../../common/utils/db-errors';
 import { normalizeIp } from '../../common/utils/ip';
 
 /**
@@ -179,10 +181,24 @@ export class SessionProxyInterceptor implements NestInterceptor {
     // PostgreSQL fail the query, and no id carries one.
     if (!sessionId || sessionId.includes('\0')) return next.handle();
 
-    const owner = await this.sessions.findOne({
-      where: { id: sessionId },
-      select: { id: true, nodeId: true, nodeUrl: true, leaseExpiresAt: true },
-    });
+    let owner: Pick<Session, 'id' | 'nodeId' | 'nodeUrl' | 'leaseExpiresAt'> | null;
+    try {
+      owner = await this.sessions.findOne({
+        where: { id: sessionId },
+        select: { id: true, nodeId: true, nodeUrl: true, leaseExpiresAt: true },
+      });
+    } catch (error) {
+      // This lookup is the first statement of every session request on a routed node. A lost or timed-out connection
+      // there has done nothing yet, so it answers the retryable 503 that a start, stop or delete answers for its own
+      // checks, which a 500 from here would hide. Any other failure is a fault and stays one.
+      if (!isTransientDbError(error)) throw error;
+      this.logger.warn('Could not look up the owner of a session; nothing was routed or run', {
+        sessionId,
+        action: 'session_owner_lookup_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new ServiceUnavailableException(`Session ${sessionId} could not be routed; nothing was done, retry`);
+    }
     if (!owner?.nodeId || owner.nodeId === this.ownership.nodeId) return next.handle();
     const leaseLive = owner.leaseExpiresAt != null && owner.leaseExpiresAt > new Date();
     if (!leaseLive) return next.handle();

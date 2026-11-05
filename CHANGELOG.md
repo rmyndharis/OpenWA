@@ -15,17 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Log the page visibility, the H.264/AAC playback answer and the browser version when a whatsapp-web.js video send or video status post times out in WhatsApp Web's 20 second video load, and document how to read that timeout (#1902). Thanks @benjaminb10 for the report.
 - Refuse `POST /api/sessions` with `400` for a `config` over 16384 bytes as JSON; the limit applies at creation, and a stored session above it still loads and takes `PATCH /api/sessions/{sessionId}/config`.
-- Answer `404`, not `400`, for a session id that is not a UUID and that no session has, including a session name, and say the routes take the id.
-- A relayed answer over 4 MiB is no longer cut by `SESSION_PROXY_TIMEOUT_MS` for a slow client, and an owner failure after its first byte cuts the connection instead of answering `502`.
+- Answer `404`, not `400`, for an id of letters, digits and hyphens (up to 128 characters) that is not a UUID and that no session has, including a session name, and say the routes take the id.
+- `SESSION_PROXY_TIMEOUT_MS` covers only the first 4 MiB of a session owner's answer, so a larger one is no longer cut by it, and an owner failure once the relay of such an answer has begun cuts the connection instead of answering `502`.
 - List a Baileys session's stored chats right after a restart, groups included, with their newest stored message as preview and time and the contact's pushname (#1978). Thanks @farresyh.
 
 ### Fixed
 
 - Install Trivy for the release and scheduled image scans from its GitHub release against a pinned SHA-256, since the action's own installer needs a host that no longer resolves.
-- Answer `503`, not `500`, when a database failure interrupts the check a start at `MAX_CONCURRENT_SESSIONS`, a stop or a delete makes before it acts; nothing was started, stopped or deleted.
+- Answer `503`, not `500`, when a lost or timed-out database connection interrupts a start's cap and claim checks, a stop's ownership check, a delete's row read, ownership check or claim, or the owner lookup of a request on a node with `NODE_URL`; nothing was started, stopped or deleted.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
-- Take any restored session id (letters, digits and hyphens, up to 128 characters) on the `/api/sessions/{sessionId}` routes, which answered `400` for a non-UUID id and left a restored session impossible to stop, log out or delete.
+- Take any restored session id (letters, digits and hyphens, up to 128 characters) on the `/api/sessions/{sessionId}` routes, which answered `400` for a non-UUID id and left a restored session impossible to stop, log out or delete; a restore refuses an archive whose session id is longer.
 - Relay a session owner's answer over 4 MiB as it arrives, so concurrent media downloads through another node no longer hold a full copy each in memory.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
 

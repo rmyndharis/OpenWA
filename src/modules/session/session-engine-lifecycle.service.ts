@@ -594,9 +594,10 @@ export class SessionEngineLifecycle {
    * The "harmless, cleared by the next start()" reasoning above holds only while a session row
    * exists. start() and delete() clear the mark after their own requireSession, so for an id that
    * has no row neither reclamation path is reachable and the entry would outlive the process. Used
-   * by SessionService for exactly that case; a refusal against a real session still leaves its mark.
-   * With the stamp markStopping() returned it drops the mark only while it is still that one: a later stop or
-   * delete of the same session has set its own, which this call must not take from it.
+   * by SessionService for that case and for a request that fails before it acts (a failed ownership read or claim,
+   * a failed stop record); a refusal against a real session still leaves its mark. With the stamp markStopping()
+   * returned it drops that mark alone: a later stop or delete of the same session holds a mark of its own, which
+   * this call must not take from it.
    */
   clearStopping(id: string, stamp?: number): void {
     if (stamp === undefined) this.stoppingSessions.delete(id);
