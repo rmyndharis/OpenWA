@@ -49,7 +49,8 @@ describe('plugin registry durability', () => {
     if (process.platform !== 'win32') {
       expect(sync.mock.invocationCallOrder[1]).toBeGreaterThan(rename.mock.invocationCallOrder[0]);
     }
-    expect(JSON.parse(fs.readFileSync(registryPath, 'utf8'))[0].config).toEqual({ mode: 'new' });
+    const entries = JSON.parse(fs.readFileSync(registryPath, 'utf8')) as { config: unknown }[];
+    expect(entries[0].config).toEqual({ mode: 'new' });
   });
 
   it('does not synchronize ordinary plugin key writes', async () => {
@@ -89,7 +90,8 @@ describe('plugin registry durability', () => {
 
       expect(() => service.setPluginConfig('relay', { mode: 'new' }, { mustPersist: true })).not.toThrow();
       expect(service.getPluginConfig('relay')).toEqual({ mode: 'new' });
-      expect(JSON.parse(fs.readFileSync(registryPath, 'utf8'))[0].config).toEqual({ mode: 'new' });
+      const entries = JSON.parse(fs.readFileSync(registryPath, 'utf8')) as { config: unknown }[];
+      expect(entries[0].config).toEqual({ mode: 'new' });
     },
   );
 });

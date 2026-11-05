@@ -62,7 +62,7 @@ describe('a built-in engine config stored as part of a nested object', () => {
 
   const launchedBrowser = (plugin: WhatsAppWebJsPlugin) => {
     plugin.createEngine({ sessionId: 'sess-1' });
-    const calls = (WhatsAppWebJsAdapter as unknown as jest.Mock).mock.calls;
+    const calls = (WhatsAppWebJsAdapter as unknown as jest.Mock).mock.calls as unknown[][];
     return (calls[calls.length - 1][0] as { puppeteer: Record<string, unknown> }).puppeteer;
   };
 

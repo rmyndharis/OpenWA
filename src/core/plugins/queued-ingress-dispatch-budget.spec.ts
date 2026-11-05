@@ -45,7 +45,7 @@ describe('queued ingress dispatch budgets', () => {
       createdAt: new Date(0),
       updatedAt: new Date(0),
     };
-    const instancePort = { resolve: async () => instance, list: async () => [instance] };
+    const instancePort = { resolve: () => Promise.resolve(instance), list: () => Promise.resolve([instance]) };
     const config = new ConfigService({
       features: {
         autoStartSessions: false,
