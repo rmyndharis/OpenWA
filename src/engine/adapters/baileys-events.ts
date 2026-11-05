@@ -119,13 +119,13 @@ const PROTOCOL_NOISE_KEYS: ReadonlySet<string> = new Set([
 /**
  * Whether two ids provably name different chats or people. Each side is a jid plus the other-dialect twin WhatsApp may
  * send beside it (`remoteJidAlt`, `participantAlt`), compared as `toNeutralJid` writes them, so a lid that function
- * resolves matches its phone number. The adapter's own resolves only the account's lid; a caller that holds reported
- * pairings for other lids maps them first. A side that carries a phone number of its own is compared by it: a lid sent
- * with its sender's number differs from another number exactly as that number would, so a contact whose number
- * changed, sending its lid and the new number against a message kept under the old number only, reads as somebody
- * else, as the same change sent by number does. A lid with no number beside it that `toNeutralJid` cannot resolve may
- * still be the phone number on the other side, so that pair is never called different, and neither is a side with no
- * id: a caller that drops on a mismatch fails open there, which still lets a sender known only by such a lid through.
+ * resolves matches its phone number. The adapter's own resolves only the account's lid. A side that carries a phone
+ * number of its own is compared by it: a lid sent with its sender's number differs from another number exactly as that
+ * number would, so a contact whose number changed, sending its lid and the new number against a message kept under the
+ * old number only, reads as somebody else, as the same change sent by number does. A lid with no number beside it that
+ * `toNeutralJid` cannot resolve may still be the phone number on the other side, so that pair is never called
+ * different, and neither is a side with no id: a caller that drops on a mismatch fails open there, which still lets a
+ * sender known only by such a lid through.
  */
 export function differentWaIds(
   a: ReadonlyArray<string | null | undefined>,
