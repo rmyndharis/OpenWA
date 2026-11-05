@@ -774,7 +774,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     if (claimed) return;
     this.withdrawStop(request);
     // The claim is a conditional UPDATE, so an id with no row matches nothing too: answer its 404.
-    await this.checkedBefore('delete', id, () => this.findOne(id));
+    try {
+      await this.checkedBefore('delete', id, () => this.findOne(id));
+    } catch (error) {
+      // The delete set its stop mark before it knew whether the row exists: a read that fails leaves nothing to guard.
+      this.engineLifecycle.clearStopping(id);
+      throw error;
+    }
     throw new ConflictException(`Session ${id} is running on another node`);
   }
 

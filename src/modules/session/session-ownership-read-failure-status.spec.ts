@@ -176,6 +176,17 @@ describe('a lifecycle route whose ownership bookkeeping cannot reach the databas
     expect(f.lifecycle.clearStopping).toHaveBeenCalledWith(ID);
     expect((f.service as unknown as { stopRequests: Map<string, unknown> }).stopRequests.size).toBe(0);
   });
+
+  it('delete() whose claim matched no row and whose row read then fails drops the stop mark and the stop request', async () => {
+    const f = fixture();
+    f.ownership.claim.mockResolvedValueOnce(false);
+    f.repository.findOne.mockRejectedValueOnce(dropped());
+
+    await expect(f.service.delete(ID)).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    expect(f.lifecycle.clearStopping).toHaveBeenCalledWith(ID);
+    expect((f.service as unknown as { stopRequests: Map<string, unknown> }).stopRequests.size).toBe(0);
+  });
 });
 
 describe('the refusals beside those reads keep their answers', () => {
