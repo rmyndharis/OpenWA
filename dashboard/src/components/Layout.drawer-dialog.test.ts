@@ -236,3 +236,23 @@ test('a dialog revealed after the drawer closes honors its initial field', async
   unmount();
   assert.equal(document.body.style.overflow, '');
 });
+
+// The page can have a dialog open before the menu button is pressed (the overlay covers the button for a pointer, not for
+// a script or an assistive technology). No later change of the page then wakes the observer, so the drawer closes at once.
+test('a dialog that is already open when the drawer opens closes the drawer and stays usable', async () => {
+  const container = renderPage(
+    createElement(Modal, {
+      open: true,
+      title: 'Already open',
+      onClose: () => {},
+      children: createElement('p', null, 'Body'),
+    }),
+  );
+  const dialog = await rtl.screen.findByRole('dialog');
+
+  rtl.fireEvent.click(container.querySelector('.mobile-menu-btn')!);
+
+  await rtl.waitFor(() => assert.equal(container.querySelector('aside.sidebar')!.classList.contains('open'), false));
+  assert.equal(container.querySelector('main')!.hasAttribute('inert'), false);
+  assert.equal(dialog.closest('[inert]') === null, true);
+});
