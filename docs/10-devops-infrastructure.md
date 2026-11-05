@@ -909,10 +909,8 @@ export class HealthController {
     if (this.shutdownService.isShuttingDown()) {
       throw new ServiceUnavailableException({ status: 'error', details: { shutdown: { status: 'draining' } } });
     }
-    const [main, data] = await Promise.all([
-      this.probeDatabase(this.mainDataSource),
-      this.probeDatabase(this.dataDataSource),
-    ]);
+    // Both SELECT 1 probes run in parallel; requests that arrive together share them and the verdict answers the next second.
+    const { main, data } = await this.probeDatabases();
     const details = { mainDatabase: { status: main }, dataDatabase: { status: data } };
     if (main === 'down' || data === 'down') {
       throw new ServiceUnavailableException({ status: 'error', details });
@@ -921,6 +919,8 @@ export class HealthController {
   }
 }
 ```
+
+The readiness route is public and exempt from the throttler, so a flood of callers must not become a flood of queries: requests that arrive while the two probes run share them, and their verdict answers the next second. The draining check is made on every request and is never served from a verdict.
 
 ### Prometheus Metrics Implementation
 
@@ -1011,12 +1011,27 @@ export class MetricsService {
 | `openwa_session_reconnect_loop_alerts_total` | counter   | —                                   | Reconnect-loop alerts emitted since process start                                                                                                                                                  |
 | `openwa_sessions_restricted`                 | gauge     | —                                   | Sessions whose account WhatsApp is currently restricting                                                                                                                                           |
 | `openwa_send_pacing_refusals_total`          | counter   | `reason`                            | Sends refused by the pacing governor since process start                                                                                                                                           |
-| `http_requests_total`                        | counter   | `method`, `route`, `status`         | API (`/api`) requests answered, by method, route and status, including the ones answered before routing, such as refusals and CORS preflights (`(unmatched)`); the Bull Board mount is not counted |
+| `http_requests_total`                        | counter   | `method`, `route`, `status`         | API (`/api`) requests by method, route and status, refusals and preflights included (`(unmatched)`); `499` if the client left during handling, `408`/`503` for a dropped body; Bull Board excluded |
 | `http_request_duration_seconds`              | histogram | `method`, `route`                   | HTTP request duration (`_bucket` / `_sum` / `_count`)                                                                                                                                              |
 
 The last two are deliberately **unprefixed** so a generic RED dashboard or alert rule matches them
 without knowing anything about OpenWA. They come from `src/common/metrics/request-metrics.ts`, which
 `render()` splices into the same output.
+
+The `status` label is the status the gateway sent. A request that ends without one is counted under the status
+below, so a dropped upload is not mistaken for a success: `499` when the client closed the connection while the
+gateway was still working on the request and had sent nothing (this replaces the status that was set on the response
+before the handler ran, usually `200` or `201`), `408` when the gateway dropped a body that stalled or fell behind the
+pace `REQUEST_TIMEOUT_MS` allows, and `503` when it dropped a chunked body that outgrew its share of the in-flight body
+budget, the budget itself or the unkeyed pool. A drop is counted under its own status, not under the error the cut
+upload then raised (a multipart upload answers `500` on the dead connection). A drop cuts the connection, so the client
+sees it close, not these codes; the gateway also logs one warning naming the reason, the client address, the sizes and
+the path (at most ten a minute). A client that abandons a JSON or form body while it is still arriving is counted `400`,
+the answer the body parser writes for an aborted request; the same client leaving a multipart upload that a route is
+reading is counted `499`. A request that Node cuts at `REQUEST_TIMEOUT_MS` while its body is arriving is counted like a
+client that left, `400` or `499` by the same rule (the `408` Node writes goes straight to the socket, past these
+series). A request cut off before routing is counted under `(unmatched)`. A response that had already started when the
+request was cut keeps the status it sent.
 
 Not every row appears on every scrape, and the difference matters when you write alerts. The
 database-derived series (`openwa_sessions*`, `openwa_messages*`) are **omitted entirely** when the
@@ -1029,7 +1044,7 @@ correct alerting primitive.
 Two rows need care when aggregating. `openwa_queue_jobs` is read from the shared Redis, so every node
 reports the same cluster-wide value: aggregate it with `max`, not `sum`. The event-loop delay window
 runs from the previous uncached render (renders are cached for 5 s), so with several scrapers it is
-shared between them. `openwa_unhandled_rejections_total{kind="page_context_lost"}` counts the expected
+shared between them, and scrapes that arrive while a render is running share that render. `openwa_unhandled_rejections_total{kind="page_context_lost"}` counts the expected
 Puppeteer rejections a page navigation or an engine teardown leaves without an owner; alert on
 `kind="other"`. A whatsapp-web.js session reports a failed re-inject into its reloaded page itself, as a
 `page_reinject_failed` warning naming the session, so that one is not counted here. A re-inject that

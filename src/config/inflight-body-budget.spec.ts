@@ -11,12 +11,17 @@ import {
   resolveInflightBodyBudgetBytes,
   InflightBodyBudget,
 } from './inflight-body-budget';
+import { LoggerService, LogFormat } from '../common/services/logger.service';
 
 const MB = 1024 * 1024;
+
+/** Every request a case made: each is closed after the case, so the stall reaper armed for an admitted one ends with it. */
+const made: Array<Request & EventEmitter> = [];
 
 /** Minimal req/res doubles: real EventEmitters so the middleware's listener accounting runs as-is. */
 const makeReq = (headers: Record<string, string> = {}): Request & EventEmitter => {
   const req = new EventEmitter() as unknown as Request & EventEmitter;
+  made.push(req);
   (req as unknown as { headers: Record<string, string> }).headers = headers;
   (req as unknown as { socket: { bytesRead: number; remoteAddress: string } }).socket = {
     bytesRead: 0,
@@ -54,6 +59,22 @@ const run = (budget: InflightBodyBudget, req: Request & EventEmitter) => {
   budget.middleware(req, mock.res, next);
   return { ...mock, next };
 };
+
+// A dropped request leaves one warning. JSON output keeps the fields parseable, and the spy keeps the reaper tests quiet.
+let warn: jest.SpyInstance;
+beforeEach(() => {
+  LoggerService.setLogFormat(LogFormat.JSON);
+  warn = jest.spyOn(console, 'warn').mockImplementation();
+});
+afterEach(() => {
+  // A request left open keeps its unref'd 5 s reaper alive; when the pace check drops it later the warning is written
+  // outside any case, after the console spy is gone. Under fake timers the restored clock retires the reaper instead.
+  for (const req of made.splice(0)) req.emit('close');
+  warn.mockRestore();
+  LoggerService.setLogFormat(null);
+});
+const dropLines = (): Array<Record<string, unknown>> =>
+  (warn.mock.calls as unknown[][]).map(call => JSON.parse(String(call[0])) as Record<string, unknown>);
 
 describe('parseBodyLimitBytes', () => {
   it('parses the formats resolveBodyLimit accepts, using binary units like the body parser', () => {
@@ -889,6 +910,154 @@ describe('stall reaper', () => {
     jest.advanceTimersByTime(120_000);
     expect(destroyMock(getReq)).not.toHaveBeenCalled();
     expect(destroyMock(emptyReq)).not.toHaveBeenCalled();
+  });
+});
+
+describe('a request the budget drops', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  const socketOf = (req: Request): { bytesRead: number; remoteAddress: string } =>
+    (req as unknown as { socket: { bytesRead: number; remoteAddress: string } }).socket;
+  const destroyMock = (req: Request): jest.Mock => (req as unknown as { destroy: jest.Mock }).destroy;
+
+  it('logs why, for whom, how much and where, without the query string or the stored key', () => {
+    const budget = createInflightBodyBudget(1000, { perClientShare: 1, classify: () => 'stored-key-hash' });
+    const req = makeReq({ 'content-length': '400' });
+    (req as unknown as { originalUrl: string }).originalUrl = '/api/sessions/s1/messages/send-video?apiKey=leaked&x=1';
+    run(budget, req);
+
+    jest.advanceTimersByTime(60_000);
+
+    expect(destroyMock(req)).toHaveBeenCalledTimes(1);
+    expect(dropLines()).toEqual([
+      expect.objectContaining({
+        level: 'warn',
+        context: 'InflightBodyBudget',
+        reason: 'stall',
+        client: '203.0.113.7',
+        keyed: true,
+        declaredBytes: 400,
+        receivedBytes: 0,
+        path: '/api/sessions/s1/messages/send-video',
+      }),
+    ]);
+    const text = JSON.stringify(warn.mock.calls);
+    expect(text).not.toContain('stored-key-hash');
+    expect(text).not.toContain('leaked');
+  });
+
+  // The limiter keys an IPv6 client by its /64; the log names the address the operator can act on.
+  it('logs the full address of an IPv6 client, not the /64 its limiter key is', () => {
+    const budget = createInflightBodyBudget(1000, { perClientShare: 1 });
+    const req = makeReq({ 'content-length': '400' });
+    (socketOf(req) as unknown as { remoteAddress: string }).remoteAddress = '2001:db8:1:2:3:4:5:6';
+    run(budget, req);
+
+    jest.advanceTimersByTime(60_000);
+
+    expect(dropLines()).toEqual([expect.objectContaining({ reason: 'stall', client: '2001:db8:1:2:3:4:5:6' })]);
+  });
+
+  it('names the pace when a body keeps trickling but falls too far behind to finish in time', () => {
+    const budget = createInflightBodyBudget(1000, { perClientShare: 1 });
+    const req = makeReq({ 'content-length': '400' });
+    run(budget, req);
+
+    // One byte every 4 s: never idle long enough for the stall rule, far too slow to finish.
+    for (let seconds = 0; seconds < 20; seconds += 4) {
+      jest.advanceTimersByTime(4_000);
+      socketOf(req).bytesRead += 1;
+    }
+
+    expect(destroyMock(req)).toHaveBeenCalledTimes(1);
+    expect(dropLines().map(line => line.reason)).toEqual(['pace']);
+  });
+
+  describe('when a chunked body outgrows what it may hold', () => {
+    const grow = (req: Request, bytes: number): void => {
+      socketOf(req).bytesRead = bytes;
+      jest.advanceTimersByTime(5_000);
+    };
+
+    it('names the client share', () => {
+      const budget = createInflightBodyBudget(10 * MB); // share 5 MiB
+      const req = makeReq({ 'transfer-encoding': 'chunked' });
+      run(budget, req);
+
+      grow(req, 6 * MB);
+
+      expect(dropLines().map(line => line.reason)).toEqual(['share']);
+    });
+
+    it('names the aggregate budget when other bodies hold the rest of it', () => {
+      const budget = createInflightBodyBudget(4 * MB, { perClientShare: 1 });
+      const other = makeReq({ 'content-length': String(2 * MB) });
+      socketOf(other).remoteAddress = '198.51.100.9';
+      run(budget, other);
+      const req = makeReq({ 'transfer-encoding': 'chunked' });
+      run(budget, req);
+
+      grow(req, 2.5 * MB);
+
+      expect(destroyMock(req)).toHaveBeenCalledTimes(1);
+      expect(dropLines().map(line => line.reason)).toEqual(['budget']);
+    });
+
+    it('names the unkeyed pool', () => {
+      // Budget 8 MiB, body cap 2 MiB: the unkeyed pool is 4 MiB and one unkeyed address may hold 2 MiB.
+      const budget = createInflightBodyBudget(8 * MB, { classify: () => undefined, bodyLimitBytes: 2 * MB });
+      const req = makeReq({ 'transfer-encoding': 'chunked' });
+      run(budget, req);
+      for (const [ip, size] of [
+        ['198.51.100.2', 2 * MB],
+        ['198.51.100.3', MB],
+      ] as const) {
+        const other = makeReq({ 'content-length': String(size) });
+        socketOf(other).remoteAddress = ip;
+        run(budget, other);
+      }
+
+      grow(req, 1.5 * MB);
+
+      expect(destroyMock(req)).toHaveBeenCalledTimes(1);
+      expect(dropLines().map(line => line.reason)).toEqual(['pool']);
+    });
+  });
+
+  it('logs at most ten drops a minute, however many addresses they come from', () => {
+    const budget = createInflightBodyBudget(10_000, { perClientShare: 1 });
+    for (let i = 0; i < 12; i++) {
+      const req = makeReq({ 'content-length': '10' });
+      socketOf(req).remoteAddress = `198.51.100.${i + 1}`;
+      run(budget, req);
+    }
+
+    jest.advanceTimersByTime(30_000);
+    expect(budget.currentBytes()).toBe(0);
+    expect(dropLines()).toHaveLength(10);
+
+    // The window slides: a later drop is logged again.
+    jest.advanceTimersByTime(60_000);
+    run(budget, makeReq({ 'content-length': '10' }));
+    jest.advanceTimersByTime(30_000);
+    expect(dropLines()).toHaveLength(11);
+  });
+
+  it('logs the drop of a socket that could not be answered because a response had already started', () => {
+    const budget = createInflightBodyBudget(1000, { perClientShare: 1 });
+    run(budget, makeReq({ 'content-length': '800' }));
+    const req = makeReq({ 'content-length': '300' });
+    (req as unknown as { originalUrl: string }).originalUrl = '/api/upload';
+    const mock = makeRes();
+    (mock.res as unknown as { headersSent: boolean }).headersSent = true;
+
+    budget.middleware(req, mock.res, jest.fn());
+
+    expect(destroyMock(req)).toHaveBeenCalledTimes(1);
+    expect(dropLines()).toEqual([
+      expect.objectContaining({ reason: 'refused', client: '203.0.113.7', declaredBytes: 300, path: '/api/upload' }),
+    ]);
   });
 });
 

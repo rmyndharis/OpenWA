@@ -751,6 +751,149 @@ describe('LoggerService', () => {
       expect(output).toContain('stack trace line');
       expect(output).toMatch(/\n.*stack trace line/);
     });
+
+    // The format is read line by line, so text from a contact, a plugin or a request must not be able to start a
+    // line of its own that reads as another record.
+    describe('keeps a record on one physical line', () => {
+      const FORGED = 'Alice\n[OpenWA] 1  - 1/1/2026, 12:00:00 AM   ERROR [AuthService] Admin key rotated';
+      // The painted output carries escape codes of its own, so the assertions below read the plain text.
+      const previousNoColor = process.env.NO_COLOR;
+      beforeEach(() => {
+        process.env.NO_COLOR = '1';
+      });
+      afterEach(() => {
+        if (previousNoColor === undefined) delete process.env.NO_COLOR;
+        else process.env.NO_COLOR = previousNoColor;
+      });
+
+      it('for a newline in a metadata value', () => {
+        logger.log('Contact synced', { displayName: FORGED });
+
+        const output = getRawOutput(consoleSpy);
+        expect(output.split('\n')).toHaveLength(1);
+        expect(output).toContain('displayName=Alice\\n[OpenWA] 1  - 1/1/2026');
+      });
+
+      it('for a newline in the message', () => {
+        logger.log(`Message from ${FORGED}`);
+
+        const output = getRawOutput(consoleSpy);
+        expect(output.split('\n')).toHaveLength(1);
+        expect(output).toContain('Message from Alice\\n[OpenWA]');
+      });
+
+      it('for a newline in a metadata key and in the context name', () => {
+        logger.setContext(FORGED);
+        logger.log('hello', { [FORGED]: 'x' });
+
+        expect(getRawOutput(consoleSpy).split('\n')).toHaveLength(1);
+      });
+
+      it('for a carriage return and the other control characters, which are written as escapes', () => {
+        logger.log('a\rb', { note: 'esc\x1b[31m del\x7f nul\x00 end' });
+
+        const output = getRawOutput(consoleSpy);
+        // eslint-disable-next-line no-control-regex
+        expect(output).not.toMatch(/[\x00-\x08\x0a-\x1f\x7f-\x9f]/);
+        expect(output).toContain('a\\rb');
+        expect(output).toContain('note=esc\\x1b[31m del\\x7f nul\\x00 end');
+      });
+
+      it('and leaves plain text, quotes, tabs and non-ASCII letters as they were', () => {
+        logger.log('Dewi said "halo"\tapa kabar', { name: 'Zoë "Z" O\'Neil', nested: { a: 'b\nc' } });
+
+        const output = getRawOutput(consoleSpy);
+        expect(output).toContain('Dewi said "halo"\tapa kabar');
+        expect(output).toContain('name=Zoë "Z" O\'Neil');
+        // An object is written as JSON, which already escapes the newline.
+        expect(output).toContain('nested={"a":"b\\nc"}');
+      });
+
+      // An error's stack opens with its message, and Nest logs every unhandled error with that stack as the trace.
+      it('for a newline or an escape sequence in the message of a stack trace', () => {
+        const errorSpy = jest.spyOn(console, 'error');
+        const hostile = new Error(`bad id\n${FORGED.split('\n')[1]}\x1b[31m`);
+        logger.error('failed', hostile.stack);
+
+        const output = getRawOutput(errorSpy);
+        // The record line alone starts at the left edge as a record; the forged line is indented, not removed.
+        expect(output.split('\n').filter(line => line.startsWith('[OpenWA]'))).toHaveLength(1);
+        expect(output).toContain('    [OpenWA] 1  - 1/1/2026');
+        // eslint-disable-next-line no-control-regex
+        expect(output).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+        expect(output).toContain('\\x1b[31m');
+        expect(output).toMatch(/\n\s+at /);
+      });
+
+      it('while a stack trace keeps the lines it has', () => {
+        const errorSpy = jest.spyOn(console, 'error');
+        logger.error('failed', 'Error: boom\n    at first (a.ts:1:1)\n    at second (b.ts:2:2)');
+
+        // The record line and the three lines of the trace, the frames as they were.
+        const lines = getRawOutput(errorSpy).split('\n');
+        expect(lines).toHaveLength(4);
+        expect(lines.slice(2)).toEqual(['    at first (a.ts:1:1)', '    at second (b.ts:2:2)']);
+      });
+
+      // A promise rejected with a string, or an error thrown as one, is logged with that text as the whole trace, so its
+      // first line is as free as any other: it is indented too, and so is a line that starts with an invisible character.
+      it.each([
+        ['a trace that is a forged record', FORGED.split('\n')[1]],
+        ['a line that starts with a zero width character', `Error: boom\n\uFEFF${FORGED.split('\n')[1]}`],
+        ['a line that starts with a no-break space', `Error: boom\n\u00A0${FORGED.split('\n')[1]}`],
+      ])('for %s', (_how, trace) => {
+        const errorSpy = jest.spyOn(console, 'error');
+        logger.error('failed', trace);
+
+        const [record, ...rest] = getRawOutput(errorSpy).split('\n');
+        expect(record.startsWith('[OpenWA]')).toBe(true);
+        expect(rest.length).toBeGreaterThan(0);
+        expect(rest.every(line => line.startsWith(' '))).toBe(true);
+      });
+
+      // A reader that splits lines on the Unicode separators too breaks on these two as on a newline.
+      it.each([
+        ['in the message', 'log', () => logger.log(`Message from Alice\u2028${FORGED.split('\n')[1]}`)],
+        [
+          'in a metadata value',
+          'log',
+          () => logger.log('Contact synced', { displayName: `Alice\u2029${FORGED.split('\n')[1]}` }),
+        ],
+        ['in a trace', 'error', () => logger.error('failed', `Error: boom\u2028${FORGED.split('\n')[1]}`)],
+        [
+          'as a paragraph separator in a trace',
+          'error',
+          () => logger.error('failed', `Error: boom\u2029${FORGED.split('\n')[1]}`),
+        ],
+      ] as const)('for a Unicode line separator %s', (_where, method, write) => {
+        const spy = jest.spyOn(console, method);
+        write();
+
+        const output = getRawOutput(spy);
+        expect(output).not.toMatch(/[\u2028\u2029]/);
+        expect(output).toMatch(/\\u202[89]/);
+        expect(output.split(/\r\n|[\n\r\u2028\u2029]/).filter(line => line.startsWith('[OpenWA]'))).toHaveLength(1);
+      });
+
+      it('and leaves a line of a trace that starts with a tab as it was', () => {
+        const errorSpy = jest.spyOn(console, 'error');
+        logger.error('failed', 'Error: boom\n\tat first (a.ts:1:1)');
+
+        expect(getRawOutput(errorSpy).split('\n').slice(2)).toEqual(['\tat first (a.ts:1:1)']);
+      });
+
+      it('and leaves a blank line of a trace blank', () => {
+        const errorSpy = jest.spyOn(console, 'error');
+        logger.error('failed', 'Error: boom\n\n    at first (a.ts:1:1)\n');
+
+        expect(getRawOutput(errorSpy).split('\n').slice(1)).toEqual([
+          '    Error: boom',
+          '',
+          '    at first (a.ts:1:1)',
+          '',
+        ]);
+      });
+    });
   });
 
   describe('non-string input (the call shapes Nest uses)', () => {

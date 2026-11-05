@@ -35,6 +35,16 @@ interface HealthCheckResult {
 /** Bound each dependency probe so a hung connection can't stall the readiness check. */
 const READINESS_PROBE_TIMEOUT_MS = 3000;
 
+/** How long the verdict of one readiness probe answers the requests that follow it. */
+const READINESS_VERDICT_TTL_MS = 1000;
+
+interface ReadinessVerdict {
+  main: DependencyStatus['status'];
+  data: DependencyStatus['status'];
+  /** When the probe finished. */
+  at: number;
+}
+
 // Source the running version from package.json (same pattern as swagger.config.ts) so authenticated
 // callers (e.g. the dashboard) read it live and never show a stale build-time-baked version. Read
 // once at module load.
@@ -71,6 +81,9 @@ export class HealthController {
 
   // A key table that cannot be read fails every presentation the same way: log it once a minute, not once a probe.
   private readonly keyStoreFailureLogLimiter = new SlidingWindowLimiter(1, 60_000);
+
+  private verdict: ReadinessVerdict | null = null;
+  private pendingProbe: Promise<ReadinessVerdict> | null = null;
 
   @Get()
   @ApiOperation({ summary: 'Basic health check' })
@@ -159,10 +172,7 @@ export class HealthController {
       throw new ServiceUnavailableException({ status: 'error', details: { shutdown: { status: 'draining' } } });
     }
 
-    const [main, data] = await Promise.all([
-      this.probeDatabase(this.mainDataSource),
-      this.probeDatabase(this.dataDataSource),
-    ]);
+    const { main, data } = await this.probeDatabases();
 
     const details: Record<string, DependencyStatus> = {
       mainDatabase: { status: main },
@@ -175,6 +185,26 @@ export class HealthController {
     }
 
     return { status: 'ok', details };
+  }
+
+  /**
+   * The verdict on both databases. The route is public and exempt from the throttler, so a flood of callers would
+   * otherwise queue two queries each in the connection pools, ahead of the application's own and of the load
+   * balancer's probe. Requests that arrive while a probe runs share it, and its verdict answers the next second.
+   */
+  private probeDatabases(): Promise<ReadinessVerdict> {
+    // A verdict dated in the future (the clock was set back) is not reused: the probe runs again.
+    const age = this.verdict ? Date.now() - this.verdict.at : -1;
+    if (this.verdict && age >= 0 && age < READINESS_VERDICT_TTL_MS) return Promise.resolve(this.verdict);
+    this.pendingProbe ??= Promise.all([
+      this.probeDatabase(this.mainDataSource),
+      this.probeDatabase(this.dataDataSource),
+    ])
+      .then(([main, data]) => (this.verdict = { main, data, at: Date.now() }))
+      .finally(() => {
+        this.pendingProbe = null;
+      });
+    return this.pendingProbe;
   }
 
   private async probeDatabase(dataSource: DataSource): Promise<'up' | 'down'> {

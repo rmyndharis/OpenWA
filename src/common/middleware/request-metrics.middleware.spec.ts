@@ -19,7 +19,7 @@ interface ReqRes {
   next: jest.Mock;
 }
 
-function makeReqRes(opts: { method?: string; routePath?: string; statusCode?: number }): ReqRes {
+function makeReqRes(opts: { method?: string; routePath?: string; statusCode?: number; headersSent?: boolean }): ReqRes {
   const req: Record<string, unknown> = {
     method: opts.method ?? 'GET',
     route: opts.routePath ? { path: opts.routePath } : undefined,
@@ -27,6 +27,7 @@ function makeReqRes(opts: { method?: string; routePath?: string; statusCode?: nu
   const listeners: { finish?: () => void; close?: () => void } = {};
   const res = {
     statusCode: opts.statusCode ?? 200,
+    headersSent: opts.headersSent,
     on: (event: string, cb: () => void): void => {
       listeners[event as 'finish' | 'close'] = cb;
     },
@@ -87,6 +88,21 @@ describe('requestMetricsBoundaryMiddleware', () => {
     listeners.finish?.();
     listeners.close?.();
     expect(mockedRecord).toHaveBeenCalledTimes(1);
+  });
+
+  // Nothing was written when the connection went away, so the status still on the response is Node's default.
+  it('counts a request whose connection closed before any response as 499', () => {
+    const { listeners } = makeReqRes({ method: 'POST', routePath: undefined, statusCode: 200 });
+    listeners.close?.();
+    expect(mockedRecord).toHaveBeenCalledTimes(1);
+    expect(mockedRecord.mock.calls[0][1]).toBe('(unmatched)');
+    expect(mockedRecord.mock.calls[0][2]).toBe(499);
+  });
+
+  it('keeps the status of a response that had started sending when its connection closed', () => {
+    const { listeners } = makeReqRes({ routePath: '/api/sessions', statusCode: 401, headersSent: true });
+    listeners.close?.();
+    expect(mockedRecord.mock.calls[0][2]).toBe(401);
   });
 
   it('claim marker lives on the request object under the shared symbol', () => {

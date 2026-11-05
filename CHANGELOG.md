@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep the Infrastructure Save Configuration button clear of the notification stack.
 - whatsapp-web.js: a reloaded page whose event listeners fail to attach is no longer counted as recovered, so the watchdog restarts the session instead of leaving it READY without inbound messages.
 - whatsapp-web.js: an `auth timeout` or browser network error behind a SOCKS proxy URL with credentials now says in `lastError` that Chromium cannot send them.
+- Metrics scrapes that arrive together share one render, so the cached event-loop delay no longer reads zero after an overlap.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - List a key seeded from `API_MASTER_KEY` as `(master key)` instead of its first 12 characters; keys seeded by earlier releases keep their stored prefix until replaced.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
@@ -54,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Record a WhatsApp unlink that arrives after a stop, delete or shutdown retired the engine, or whose session read fails during shutdown, so another number can link the session.
 - Stop a start right after a logout, or a reconnect after a WhatsApp unlink, from keeping the old number and refusing the account that scans next.
 - Keep the account a reconnect attempt linked bound when that attempt then fails, so the retry refuses a different number.
+- A request body with an array of more than 10,000 items, an object of more than 1,000 keys or more than 250,000 items and keys in all is refused with 400 before validation instead of holding the process for seconds to minutes; the data restore and routes that read the body without a DTO are exempt.
+- An upload the in-flight body budget drops mid-stream is logged with its reason and counted as 408 or 503 in `http_requests_total`.
+- Pretty log output escapes control characters, so a value holding a newline cannot start a forged log record.
+- `GET /api/health/ready` shares its database probes between concurrent requests and reuses the verdict for one second, so a flood no longer queues probes ahead of application queries on PostgreSQL.
+- A request whose client left while the gateway was working on it is counted as 499 in `http_requests_total` instead of the status set before the handler ran.
 
 ### Documentation
 
@@ -65,6 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - API reference and troubleshooting guide: a SOCKS proxy cannot log in on whatsapp-web.js; use a proxy that admits the gateway by IP or an HTTP or HTTPS proxy with credentials.
 - `GET /api/infra/status`: `engine.webVersion` is the build the gateway resolves for sessions to pin, not the build every session ran.
 - `GET /api/infra/status`: `engine.headless` and `engine.browserArgs` are the environment values; a stored whatsapp-web.js plugin config overrides them for sessions.
+- The in-flight body budget reservation ends once the body has been read, and the status label of `http_requests_total` lists what a dropped or abandoned request counts as.
+- `.env.example` says pooled clients must expire idle connections before `KEEPALIVE_TIMEOUT_MS`.
 
 ### Dependencies
 

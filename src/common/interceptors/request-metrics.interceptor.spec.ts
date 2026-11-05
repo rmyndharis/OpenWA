@@ -21,6 +21,7 @@ function makeContext(opts: {
   method?: string;
   routePath?: string;
   statusCode?: number;
+  headersSent?: boolean;
   className?: string;
   handlerName?: string;
 }): Ctx {
@@ -28,6 +29,7 @@ function makeContext(opts: {
   const listeners: { finish?: () => void; close?: () => void } = {};
   const res = {
     statusCode: opts.statusCode ?? 200,
+    headersSent: opts.headersSent,
     on: (event: string, cb: () => void): void => {
       listeners[event as 'finish' | 'close'] = cb;
     },
@@ -91,6 +93,23 @@ describe('RequestMetricsInterceptor', () => {
     listeners.finish?.();
     listeners.close?.();
     expect(mockedRecord).toHaveBeenCalledTimes(1);
+  });
+
+  // Nest sets the route's status (200, 201) before the handler runs, so a connection that closes first
+  // would otherwise be counted as a success.
+  it('counts a response that closed before it finished as 499, whatever status was set on it', () => {
+    const { ctx, listeners } = makeContext({ method: 'POST', routePath: '/api/messages', statusCode: 201 });
+    new RequestMetricsInterceptor().intercept(ctx as never, noopHandler as never);
+    listeners.close?.();
+    expect(mockedRecord).toHaveBeenCalledTimes(1);
+    expect(mockedRecord.mock.calls[0][2]).toBe(499);
+  });
+
+  it('keeps the status of a response that had started sending when its connection closed', () => {
+    const { ctx, listeners } = makeContext({ routePath: '/api/media', statusCode: 206, headersSent: true });
+    new RequestMetricsInterceptor().intercept(ctx as never, noopHandler as never);
+    listeners.close?.();
+    expect(mockedRecord.mock.calls[0][2]).toBe(206);
   });
 
   it('claims the request so the boundary middleware does not record it a second time', () => {

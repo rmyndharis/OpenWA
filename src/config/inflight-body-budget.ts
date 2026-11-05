@@ -22,16 +22,23 @@
  * socket.bytesRead on the poll interval, so it can briefly under-report by the bytes that arrive
  * within one interval. Separately, and by design, an admitted identity body still costs a constant
  * multiple of its wire size once parsed (the raw Buffer pinned on rawBody, plus the decoded string
- * and the parsed object) — the budget bounds the input, not the parse.
+ * and the parsed object) — the budget bounds the input, not the parse. Nor does it follow the body
+ * into its handler: the request stream closes as soon as the whole body has been read, which releases
+ * the reservation, so what a running handler holds of the parsed body is not counted.
  *
  * A stalled sender (headers, then silence) holds its reservation only until the stall reaper drops
  * the socket after STALL_TIMEOUT_MS without any new body bytes. A body that keeps trickling is
  * dropped once it falls behind the pace needed to deliver its reservation (the declared size, or a
- * chunked body's placeholder) within Node's request timeout, after the same STALL_TIMEOUT_MS grace. The reservation is never lowered mid-stream,
- * only released with the request, so declared bodies that complete together stay within the
- * budget, and the per-client share bounds what one slow source can hold. The request
- * stream itself is never tapped — no 'data' listener — so downstream consumers (the body
- * parser, busboy) see every chunk exactly as it arrives, even when they attach late.
+ * chunked body's placeholder) within Node's request timeout, after the same STALL_TIMEOUT_MS grace.
+ * The reservation is never lowered mid-stream, only released once the body has been read or the
+ * request ends, so declared bodies that complete together stay within the budget, and the
+ * per-client share bounds what one slow source can hold. The request stream itself is never
+ * tapped — no 'data' listener — so downstream consumers (the body parser, busboy) see every chunk
+ * exactly as it arrives, even when they attach late.
+ *
+ * Every cut leaves a trace, since the client only sees its connection close: one rate-limited
+ * warning that names the reason, and a status the HTTP metrics count the request under (408 for a
+ * body that stalled or fell behind, 503 for one that outgrew the budget; see dropConnection).
  *
  * Extracted from main.ts so the accounting — notably the exactly-once release across every
  * terminal path — is unit-tested without booting the app.
@@ -39,6 +46,11 @@
 import { Request, Response, NextFunction } from 'express';
 import { resolveBodyLimit } from './bootstrap-security';
 import { limiterKeyForIp, resolveClientIp } from '../common/utils/ip';
+import { markDroppedResponse } from '../common/middleware/request-metrics.middleware';
+import { createLogger } from '../common/services/logger.service';
+import { SlidingWindowLimiter } from '../modules/events/ws-rate-limit';
+
+const logger = createLogger('InflightBodyBudget');
 
 /**
  * Default budget = 4 × the per-request body cap: a handful of concurrent full-size media uploads
@@ -60,10 +72,11 @@ const UNIT_BYTES: Record<string, number> = {
 const FALLBACK_LIMIT_BYTES = 25 * UNIT_BYTES.mb;
 
 /**
- * Stall reaper. A reservation is normally released when the response finishes or the connection
- * dies — but a socket that sends headers and then goes silent fires NEITHER, so without a reaper
- * it would hold its declared bytes until Node's requestTimeout (5 minutes by default), and four
- * such connections at the per-request cap would pin the entire default budget, renewable forever.
+ * Stall reaper. A reservation is normally released when the body has been read, when the response
+ * finishes or when the connection dies — but a socket that sends headers and then goes silent fires
+ * NONE of these, so without a reaper it would hold its declared bytes until Node's requestTimeout
+ * (5 minutes by default), and four such connections at the per-request cap would pin the entire
+ * default budget, renewable forever.
  * Any admitted request expecting a body is therefore polled: if no new body bytes arrive for
  * STALL_TIMEOUT_MS the socket is destroyed and the reservation released. Polling (rather than one
  * fixed deadline) lets any progress reset the clock, so slow-but-moving uploads are not dropped.
@@ -82,6 +95,22 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 300_000;
  * out of the budget.
  */
 const UNDECLARED_OPENING_RESERVATION_BYTES = 1024 * 1024;
+
+/**
+ * Why the budget cut a request off, in words for the log, and the status the HTTP metrics count it under (see
+ * markDroppedResponse). 408 is what Node's own request timeout means, for a body that stalled or fell behind;
+ * 503 is what admission answers a body that does not fit, for a chunked one that outgrew the budget later.
+ * A request refused after its response had started keeps the status already sent, so it has none here.
+ */
+const DROPS = {
+  stall: { text: `no body bytes for ${STALL_TIMEOUT_MS / 1000} s`, status: 408 },
+  pace: { text: 'behind the pace that lands the body within the request timeout', status: 408 },
+  share: { text: 'the body outgrew its client share', status: 503 },
+  budget: { text: 'the body outgrew the in-flight budget', status: 503 },
+  pool: { text: 'the body outgrew the unkeyed pool', status: 503 },
+  refused: { text: 'refused after a response had already started', status: undefined },
+} as const;
+type DropReason = keyof typeof DROPS;
 
 /**
  * Parse a body-limit string ('25mb', '1024', '1.5gb') into bytes. Only the formats
@@ -198,6 +227,38 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
   // senders — four 6-byte uploads would refuse every further body-carrying request.
   const undeclaredReservation = Math.max(1, Math.min(UNDECLARED_OPENING_RESERVATION_BYTES, budgetBytes));
 
+  // At most ten lines a minute for the whole budget: enough to name a cause, while the HTTP metrics carry the
+  // count. Not keyed on the client, so a flood from many addresses can neither widen it nor grow its map.
+  const dropLogLimiter = new SlidingWindowLimiter(10, 60_000);
+
+  /**
+   * Cut the connection of a request this budget gives up on, and leave a trace of it: a rate-limited warning with
+   * the reason, the client address, whether the request carried a recognised API key (never the key or its
+   * hash), the declared and received sizes and the path without its query, and the status the HTTP metrics count the
+   * request under. Nothing is written to the socket. Received bytes are counted from admission, so they leave out
+   * whatever arrived in the read that carried the headers.
+   */
+  const dropConnection = (
+    req: Request,
+    res: Response,
+    reason: DropReason,
+    seen?: { keyed: boolean; receivedBytes: number },
+  ): void => {
+    const { text, status } = DROPS[reason];
+    if (dropLogLimiter.allow('drop')) {
+      logger.warn(`Dropped a request body in flight: ${text}`, {
+        reason,
+        client: resolveClientIp(req, trustedProxies),
+        keyed: seen?.keyed,
+        declaredBytes: parseDeclaredLength(req.headers['content-length']),
+        receivedBytes: seen?.receivedBytes,
+        path: (req.originalUrl ?? '').split('?')[0],
+      });
+    }
+    if (status !== undefined) markDroppedResponse(res, status);
+    req.destroy();
+  };
+
   // The rejected request's body is deliberately NEVER read. 'Connection: close' tells the client
   // (and Node) this socket dies with the response, so the unread bytes are discarded with the
   // socket instead of being misread as the next pipelined request on a keep-alive connection.
@@ -206,7 +267,7 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
     // while the body still streams in); writing the 503 then throws ERR_HTTP_HEADERS_SENT from
     // inside a raw listener. Dropping the socket is the only safe rejection left.
     if (res.headersSent || res.writableEnded) {
-      req.destroy();
+      dropConnection(req, res, 'refused');
       return;
     }
     res.status(503).set('Retry-After', retryAfter).set('Connection', 'close').json({
@@ -219,7 +280,7 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
   /** Same never-read-the-body disposal as rejectBusy; only the reason and status differ. */
   const rejectCompressed = (req: Request, res: Response): void => {
     if (res.headersSent || res.writableEnded) {
-      req.destroy();
+      dropConnection(req, res, 'refused');
       return;
     }
     res.status(415).set('Connection', 'close').json({
@@ -232,7 +293,7 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
   /** Same disposal again, for a body that could not be admitted even with nothing else in flight. */
   const rejectTooLarge = (req: Request, res: Response): void => {
     if (res.headersSent || res.writableEnded) {
-      req.destroy();
+      dropConnection(req, res, 'refused');
       return;
     }
     res.status(413).set('Connection', 'close').json({
@@ -328,9 +389,10 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
       stallTimer = undefined;
     };
 
-    // Exactly-once release: the first terminal event wins: normal completion (res 'finish'),
-    // client/socket abort (req/res 'close'), stream failure (req/res 'error'). An aborted upload
-    // typically fires several of these; the flag guarantees the aggregate is decremented once.
+    // Exactly-once release: the first terminal event wins: the body has been read (req 'close', which
+    // Node emits as soon as the whole body is in), the response finishing (res 'finish'), the
+    // connection ending (req/res 'close') or a stream failing (req/res 'error'). Most requests fire
+    // several of these; the flag guarantees the aggregate is decremented once.
     const release = (): void => {
       if (released) return;
       released = true;
@@ -358,12 +420,18 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
     const admittedAt = Date.now();
     let lastProgress = admittedAt;
 
+    /** Release the reservation, then cut the connection (release first: the accounting must not wait on a log). */
+    const drop = (reason: DropReason): void => {
+      release();
+      dropConnection(req, res, reason, { keyed: keyId !== undefined, receivedBytes: socket.bytesRead - startBytes });
+    };
+
     // A declared body keeps its declared size until it is released. A chunked body is re-priced at
     // the bytes that have arrived, never below its opening placeholder: budget handed back mid-stream
     // would be taken back, unchecked, by a body that then completes between polls. The floor holds
-    // after completion too, because bytes that arrived in the same read as the headers were already
-    // counted in startBytes, so a small body sent with its headers measures as 0 while the handler
-    // still holds it. Growth that crosses the aggregate, the client share or the anonymous pool
+    // after completion too, until the reservation is released, because bytes that arrived in the same
+    // read as the headers were already counted in startBytes, so a small body sent with its headers
+    // measures as 0 while nothing has read it yet. Growth that crosses the aggregate, the client share or the anonymous pool
     // aborts the request mid-stream, the same bound a declared length gets at admission. A complete
     // body is never aborted: it is already buffered. reserved is updated BEFORE release() so the
     // exactly-once decrement subtracts the reconciled size.
@@ -379,8 +447,7 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
       clientInFlight.set(clientKey, busy);
       const overTier = anonymous && anonInFlight > anonPool;
       if (!complete && delta > 0 && (busy > shareCap || inFlightBytes > budgetBytes || overTier)) {
-        release();
-        req.destroy();
+        drop(busy > shareCap ? 'share' : inFlightBytes > budgetBytes ? 'budget' : 'pool');
       }
     };
     const settle = (): void => {
@@ -412,8 +479,7 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
         const target = declared ?? reserved;
         const paced = (target * (Date.now() - admittedAt - STALL_TIMEOUT_MS)) / requestTimeoutMs;
         if (readNow - startBytes < Math.min(target, paced)) {
-          release();
-          req.destroy();
+          drop('pace');
           return;
         }
       }
@@ -425,8 +491,7 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
         return;
       }
       if (Date.now() - lastProgress >= STALL_TIMEOUT_MS) {
-        release();
-        req.destroy();
+        drop('stall');
       }
     }, STALL_POLL_MS);
     stallTimer.unref();
