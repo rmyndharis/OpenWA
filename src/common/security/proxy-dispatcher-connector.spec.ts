@@ -64,7 +64,8 @@ describe('SOCKS connector callback', () => {
     expect(callback).toHaveBeenCalledTimes(1);
     expect(callback.mock.calls[0][0]).toBeNull();
     callback.mock.calls[0][1]?.destroy();
-  });
+    // The wait for the first answer may use five seconds, more than jest gives a case by default.
+  }, 15_000);
 
   it('answers once with the error when no address can be dialled', async () => {
     const callback = jest.fn<void, Parameters<Parameters<Connect>[1]>>();
