@@ -1,6 +1,7 @@
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { BaileysEvents, type BaileysEventsHost, type GroupMember } from './baileys-events';
 import { BaileysSessionStore } from './baileys-session-store';
+import { userPart } from '../identity/wa-id';
 import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 
@@ -29,6 +30,13 @@ const roster: Roster = () =>
   Promise.resolve([
     { ids: [ALICE], admin: false },
     { ids: [BOB], admin: false },
+    { ids: ['900444@lid', ADMIN], admin: true },
+  ]);
+/** The same members, with the ones the group addresses by lid listed under it as well. */
+const lidRoster: Roster = () =>
+  Promise.resolve([
+    { ids: [ALICE, '900111@lid'], admin: false },
+    { ids: [BOB, '900333@lid'], admin: false },
     { ids: ['900444@lid', ADMIN], admin: true },
   ]);
 
@@ -86,8 +94,8 @@ function build(
     getOnCallOutcome: noop,
     readGroupMembers: members,
     peekGroupMembers: options.peek,
-    // The pairings the gateway holds as reported, by the digits of the lid.
-    findPersistedLidPhone: (jid: string) => Promise.resolve(options.pairs?.[jid.split('@')[0]] ?? null),
+    // The pairings the gateway holds as reported, by the digits of the lid (the device suffix does not count).
+    findPersistedLidPhone: (jid: string) => Promise.resolve(options.pairs?.[userPart(jid)] ?? null),
   };
   const events = new BaileysEvents(host);
   const posted = (id: string, key: WAMessage['key'], text: string): void => {
@@ -165,12 +173,6 @@ describe('Baileys group delete of another member message', () => {
   // A sender known by a lid and an author known by a number are one person only if a reported pairing says so. With a
   // pairing that names another number the copy is not the sender's, so the roster is read and settles it.
   it('reads the roster when a reported pairing shows the sender lid is not the author', async () => {
-    const lidRoster: Roster = () =>
-      Promise.resolve([
-        { ids: [ALICE], admin: false },
-        { ids: [BOB, '900333@lid'], admin: false },
-        { ids: ['900444@lid', ADMIN], admin: true },
-      ]);
     const { raw, revoked, members, posted, deleteOf, preview } = build(lidRoster, { pairs: { '900333': '628333' } });
     posted('A1', { remoteJid: GROUP, fromMe: false, participant: ALICE }, 'meeting at 3');
 
@@ -197,9 +199,10 @@ describe('Baileys group delete of another member message', () => {
     expect(raw.get('A1')?.message).toBeNull();
   });
 
-  // The roster may list a member by number only while the delete names its sender by lid with the number beside it.
+  // The roster may list a member by number only while the delete names its sender by lid with the number beside it. The
+  // table holds that pairing too, as the gateway records it from the key, and it does not make the sender the author.
   it('matches the roster by the number the delete carries beside the sender lid', async () => {
-    const { raw, revoked, members, posted, deleteOf } = build(roster);
+    const { raw, revoked, members, posted, deleteOf } = build(roster, { pairs: { '900333': '628333' } });
     posted('A1', { remoteJid: GROUP, fromMe: false, participant: '900111@lid' }, 'meeting at 3');
 
     await deleteOf(
@@ -207,6 +210,23 @@ describe('Baileys group delete of another member message', () => {
       { participant: '900333@lid', participantAlt: BOB },
       { fromMe: false, participant: '900111@lid' },
     );
+
+    expect(members).toHaveBeenCalledTimes(1);
+    expect(raw.get('A1')?.message).toEqual({ conversation: 'meeting at 3' });
+    expect(revoked).not.toHaveBeenCalled();
+  });
+
+  // A reported pairing brings a lid and a number together, never two lids. A sender whose lid the table cannot place is
+  // not taken for the author because the author's lid, or the sender's own, is placed: two lids are two members.
+  it.each([
+    ['only the author lid is paired', { '900111': '628111' }],
+    ['only the sender lid is paired', { '900333': '628333' }],
+    ['both lids are paired to one number', { '900111': '628111', '900333': '628111' }],
+  ])('reads the roster for two different lids when %s', async (_how, pairs) => {
+    const { raw, revoked, members, posted, deleteOf } = build(lidRoster, { pairs });
+    posted('A1', { remoteJid: GROUP, fromMe: false, participant: '900111@lid', participantAlt: ALICE }, 'meeting at 3');
+
+    await deleteOf('A1', { participant: '900333@lid' }, { fromMe: false, participant: '900111@lid' });
 
     expect(members).toHaveBeenCalledTimes(1);
     expect(raw.get('A1')?.message).toEqual({ conversation: 'meeting at 3' });
@@ -302,5 +322,83 @@ describe('Baileys group delete of another member message', () => {
 
     expect(members).not.toHaveBeenCalled();
     expect(raw.get('A1')?.message).toBeNull();
+  });
+});
+
+// However the stored author and the sender of a delete are named, by lid, by number or by both, a reported pairing may
+// bring a lid and a number together but must never make two people read as one, nor one person as two: the roster is
+// read for every pair the names prove different, and for no other. A side named by number alone against one named by
+// both is left out, since the number beside the lid decides it without the table.
+describe('Baileys group delete judged by who the names say the author and the sender are', () => {
+  type How = 'lid' | 'number' | 'both';
+  const person = (n: number) => ({
+    lid: `9001${n}@lid`,
+    lidDigits: `9001${n}`,
+    number: `62811${n}@s.whatsapp.net`,
+    digits: `62811${n}`,
+  });
+  type Person = ReturnType<typeof person>;
+  const keyOf = (how: How, p: Person) =>
+    how === 'lid'
+      ? { participant: p.lid }
+      : how === 'number'
+        ? { participant: p.number }
+        : { participant: p.lid, participantAlt: p.number };
+  const carriesLid = (how: How) => how !== 'number';
+  const carriesNumber = (how: How) => how !== 'lid';
+
+  const rows: Array<[string, How, How, boolean, boolean, boolean]> = [];
+  for (const author of ['lid', 'number', 'both'] as const) {
+    for (const sender of ['lid', 'number', 'both'] as const) {
+      if ((author === 'number' && sender === 'both') || (author === 'both' && sender === 'number')) continue;
+      for (const same of [true, false]) {
+        for (const authorPaired of [false, true]) {
+          for (const senderPaired of same ? [authorPaired] : [false, true]) {
+            rows.push([
+              `${same ? 'the same member' : 'two members'}: author by ${author} (${authorPaired ? '' : 'not '}paired), sender by ${sender} (${senderPaired ? '' : 'not '}paired)`,
+              author,
+              sender,
+              same,
+              authorPaired,
+              senderPaired,
+            ]);
+          }
+        }
+      }
+    }
+  }
+
+  it.each(rows)('%s', async (_label, author, sender, same, authorPaired, senderPaired) => {
+    const a = person(1);
+    const s = same ? a : person(2);
+    const pairs: Record<string, string> = {};
+    if (authorPaired) pairs[a.lidDigits] = a.digits;
+    if (senderPaired) pairs[s.lidDigits] = s.digits;
+    // Whether the names prove them different: two lids, or two numbers, compare as they are; a lid against a number
+    // only through a reported pairing of that lid.
+    const provenDifferent =
+      !same &&
+      (carriesLid(author) && carriesLid(sender)
+        ? true
+        : carriesNumber(author) && carriesNumber(sender)
+          ? true
+          : author === 'lid'
+            ? authorPaired
+            : senderPaired);
+    // Both members are listed, by both names, and neither is an admin.
+    const both: Roster = () =>
+      Promise.resolve([
+        { ids: [a.lid, a.number], admin: false },
+        { ids: [person(2).lid, person(2).number], admin: false },
+        { ids: ['900444@lid', ADMIN], admin: true },
+      ]);
+    const { raw, members, posted, deleteOf } = build(both, { pairs });
+    posted('A1', { remoteJid: GROUP, fromMe: false, ...keyOf(author, a) }, 'meeting at 3');
+
+    await deleteOf('A1', keyOf(sender, s), { fromMe: false, ...keyOf(author, a) });
+
+    expect(members).toHaveBeenCalledTimes(provenDifferent ? 1 : 0);
+    // A delete the names prove foreign is refused, as a member who is no admin is held to the author; one they do not is let through.
+    expect(raw.get('A1')?.message).toEqual(provenDifferent ? { conversation: 'meeting at 3' } : null);
   });
 });

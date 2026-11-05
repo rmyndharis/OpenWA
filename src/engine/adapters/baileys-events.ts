@@ -1744,8 +1744,11 @@ export class BaileysEvents {
 
   /**
    * Whether a change arriving under `key` names a message other than the one `original` is. `resolve` maps a lid to the
-   * phone number the gateway holds a reported pairing for, so a lid that is provably another person's reads as such; a
-   * lid it cannot map stays unresolved, and the comparison fails open on it (see differentWaIds).
+   * phone number the gateway holds a reported pairing for, and is applied to the authors only. A pairing bridges a lid
+   * and a phone number, so a lid is resolved against a side that carries no lid: with the sender known by a number, a
+   * lid that is provably another person's reads as such. Two lids are compared as they are, whatever the table says of
+   * either, because resolving one of them would turn it into a number that the other, a lid with no number beside it,
+   * may still be (see differentWaIds). A lid the table cannot map stays unresolved, and the comparison fails open on it.
    */
   private readsAsForeign(
     original: WAMessageKey,
@@ -1758,20 +1761,21 @@ export class BaileysEvents {
     if (broadcast && original.fromMe === true) return false;
     const originalChats = [original.remoteJid, original.remoteJidAlt];
     if (broadcast && original.remoteJid !== 'status@broadcast') originalChats.push(original.participant);
-    const neutral = (jid: string): string => {
-      const phone = resolve && parseWaId(jid).kind === 'lid' ? resolve(jid) : null;
-      return phone ? `${phone}@c.us` : this.host.toNeutralJid(jid);
+    const neutral = (jid: string): string => this.host.toNeutralJid(jid);
+    const hasLid = (jids: Array<string | null | undefined>): boolean =>
+      jids.some(jid => !!jid && parseWaId(jid).kind === 'lid');
+    const authors = [original.participant, original.participantAlt];
+    const senders = [key.participant, key.participantAlt];
+    const bridge = resolve && !(hasLid(authors) && hasLid(senders)) ? resolve : undefined;
+    const neutralAuthor = (jid: string): string => {
+      const phone = bridge && parseWaId(jid).kind === 'lid' ? bridge(jid) : null;
+      return phone ? `${phone}@c.us` : neutral(jid);
     };
     return (
       differentWaIds(originalChats, [key.remoteJid, key.remoteJidAlt], neutral) ||
       (checkAuthor &&
         ((original.fromMe === true) !== (key.fromMe === true) ||
-          (key.fromMe !== true &&
-            differentWaIds(
-              [original.participant, original.participantAlt],
-              [key.participant, key.participantAlt],
-              neutral,
-            ))))
+          (key.fromMe !== true && differentWaIds(authors, senders, neutralAuthor))))
     );
   }
 
