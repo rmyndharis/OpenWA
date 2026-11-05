@@ -116,31 +116,46 @@ export class ServerShuttingDownException extends ServiceUnavailableException {
 }
 
 /**
+ * Stamps kept per session. Operations on one session overlap two or three at a time; a session stopped again and
+ * again must not make the list grow without end, so the oldest stamp goes first.
+ */
+const STOP_MARKS_KEPT = 4;
+
+/**
  * The stop marks. Each add() stamps the id afresh, even one already marked, so start() can tell a mark
- * set while it waited from one that was already there when it began.
+ * set while it waited from one that was already there when it began. An id stays marked while any stamp
+ * is left: an operation that fails before it acts drops only its own with deleteStamped(), and the mark
+ * stays for a stop or delete of the session that is still waiting on it.
  */
 export class StopMarks extends Set<string> {
   private seq = 0;
-  private readonly stamps = new Map<string, number>();
+  private readonly stamps = new Map<string, number[]>();
 
   override add(id: string): this {
-    this.stamps.set(id, ++this.seq);
+    const kept = [...(this.stamps.get(id) ?? []), ++this.seq].slice(-STOP_MARKS_KEPT);
+    this.stamps.set(id, kept);
     return super.add(id);
   }
 
+  /** Every mark of the id. */
   override delete(id: string): boolean {
     this.stamps.delete(id);
     return super.delete(id);
   }
 
-  /** Drops the id's mark only while it still has this stamp, so a mark a later operation set stays. */
+  /** Drops the mark with this stamp; the id is unmarked once none is left. False when no mark has the stamp. */
   deleteStamped(id: string, stamp: number): boolean {
-    return this.stamps.get(id) === stamp ? this.delete(id) : false;
+    const kept = this.stamps.get(id);
+    if (!kept?.includes(stamp)) return false;
+    const rest = kept.filter(other => other !== stamp);
+    if (rest.length === 0) return this.delete(id);
+    this.stamps.set(id, rest);
+    return true;
   }
 
-  /** The stamp of the id's current mark, undefined when it has none. */
+  /** The stamp of the id's newest mark, undefined when it has none. */
   stamp(id: string): number | undefined {
-    return this.stamps.get(id);
+    return this.stamps.get(id)?.at(-1);
   }
 }
 
@@ -1073,8 +1088,13 @@ export class SessionEngineControls {
       // on parentDeleted below). A delete that did not remove the row clears only the mark it set: a
       // stop that began meanwhile has replaced it, and that mark still guards the stop. Once the row is
       // gone nothing is left for a mark to guard, whoever set it.
-      if (parentDeleted) this.stoppingSessions.delete(id);
-      else this.stoppingSessions.deleteStamped(id, ownMark);
+      if (parentDeleted) {
+        this.stoppingSessions.delete(id);
+      } else {
+        // Both marks of this delete: the one its caller set before the call and the one it set itself.
+        this.stoppingSessions.deleteStamped(id, ownMark);
+        if (hooks.mark !== undefined) this.stoppingSessions.deleteStamped(id, hooks.mark);
+      }
       if (parentDeleted) {
         this.broadcaster.clear(id);
         // Drop the FAILED-reason entry too: it's keyed by a now-deleted UUID that can never be read

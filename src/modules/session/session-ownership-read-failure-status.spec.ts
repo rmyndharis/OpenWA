@@ -348,6 +348,62 @@ describe('a stop or delete that fails before it acts drops its own stop mark, no
   });
 });
 
+describe('a stop that is still checking ownership keeps its mark when a later operation fails first', () => {
+  it.each(['stop', 'delete'] as const)('the later %s fails its own ownership read', async newer => {
+    const f = fixture();
+    const olderCheck = deferred<boolean>();
+    f.ownership.isHeldByOtherNode.mockImplementationOnce(() => olderCheck.promise).mockRejectedValueOnce(dropped());
+
+    const older = f.service.stop(ID);
+    await turn();
+    const olderMark = f.marks.stamp(ID);
+    const later = newer === 'stop' ? f.service.stop(ID) : f.service.delete(ID);
+
+    await expect(later).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(f.marks.has(ID)).toBe(true); // the older stop has not acted yet and still needs its guard
+    expect(f.marks.stamp(ID)).toBe(olderMark);
+
+    olderCheck.resolve(false);
+    await older;
+  });
+});
+
+describe('the stop marks of a session', () => {
+  it('stay while any operation that set one still needs it, whichever of them drops its own first', () => {
+    const marks = new StopMarks();
+    marks.add(ID);
+    const first = marks.stamp(ID) as number;
+    marks.add(ID);
+    const second = marks.stamp(ID) as number;
+
+    marks.deleteStamped(ID, second);
+    expect(marks.has(ID)).toBe(true);
+    expect(marks.stamp(ID)).toBe(first);
+    marks.deleteStamped(ID, first);
+    expect(marks.has(ID)).toBe(false);
+
+    marks.add(ID);
+    const third = marks.stamp(ID) as number;
+    marks.add(ID);
+    marks.deleteStamped(ID, third);
+    expect(marks.has(ID)).toBe(true);
+    marks.delete(ID); // a clear that names no stamp takes them all
+    expect(marks.has(ID)).toBe(false);
+    expect(marks.stamp(ID)).toBeUndefined();
+  });
+
+  it('keep only the newest few stamps of a session that is stopped again and again', () => {
+    const marks = new StopMarks();
+    marks.add(ID);
+    const oldest = marks.stamp(ID) as number;
+    for (let i = 0; i < 20; i++) marks.add(ID);
+
+    // An operation that old no longer holds the mark, and the list does not grow with every stop.
+    expect(marks.deleteStamped(ID, oldest)).toBe(false);
+    expect(marks.has(ID)).toBe(true);
+  });
+});
+
 describe('the stop mark of the lifecycle', () => {
   const marksOf = (lifecycle: SessionEngineLifecycle): StopMarks =>
     (lifecycle as unknown as { stoppingSessions: StopMarks }).stoppingSessions;
@@ -378,24 +434,27 @@ describe('the stop mark of the lifecycle', () => {
   });
 
   it.each([
-    ['carries the stamp of its own call', true, false],
-    ['carries no stamp', false, false],
-    ['carries the stamp of an earlier call', true, true],
-  ])('stop() whose first read fails drops the mark when it %s', async (_name, stamped, earlierStamp) => {
+    ['its own mark, set alone', 1, 0, false],
+    ['its own mark, with the mark of another operation beside it', 2, 1, true],
+    ['its own mark, with the mark of an earlier operation beside it', 2, 0, true],
+    ['no stamp', 2, undefined, false],
+  ])('stop() whose first read fails drops %s', async (_name, count, owner, markedAfter) => {
     const marks = new StopMarks();
     const controls = new SessionEngineControls({
       sessionRepository: { findOne: jest.fn().mockRejectedValue(dropped()) },
       stoppingSessions: marks,
     } as never);
-    marks.add(ID);
-    const own = marks.stamp(ID);
-    marks.add(ID); // a later stop or delete of the session replaced it
-    const hooks = stamped ? { mark: earlierStamp ? own : marks.stamp(ID) } : {};
+    const stamps: number[] = [];
+    for (let i = 0; i < count; i++) {
+      marks.add(ID);
+      stamps.push(marks.stamp(ID) as number);
+    }
+    const hooks = owner === undefined ? {} : { mark: stamps[owner] };
 
     await expect(controls.stop(ID, hooks)).rejects.toBeInstanceOf(QueryFailedError);
 
-    // Dropped for the stamp of the mark that stands and for no stamp; kept for the stamp of the one it replaced.
-    expect(marks.has(ID)).toBe(earlierStamp);
+    // The call drops the mark it names and the id stays marked for the others; a clear naming none takes every mark.
+    expect(marks.has(ID)).toBe(markedAfter);
   });
 });
 
