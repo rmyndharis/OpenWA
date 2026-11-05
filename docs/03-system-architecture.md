@@ -791,9 +791,11 @@ flowchart TB
     SU --> F
     S --> F
 
-    F --> R["{ statusCode, message, error }"]
+    F --> R["{ statusCode, message, error? }"]
     S --> L[Log with stack]
 ```
+
+DTO validation with detail disabled (the production default) returns `{ statusCode: 400, message: "Bad Request" }` without an `error` field; see [Error Response](./06-api-specification.md#error-response).
 
 ## 3.11 Scalability Considerations
 
