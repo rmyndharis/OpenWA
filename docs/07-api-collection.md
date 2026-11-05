@@ -22,7 +22,7 @@ Every request carries the key in the `X-API-Key` header — REST auth is **heade
 
 ### Responses
 
-Responses are the **raw payload** — no `{ success, data }` envelope. A resource route returns the object directly; most list routes return a bare JSON array, and the object-shaped ones are messages (`{ messages, total, unknownTimestampTotal? }`), status (`{ statuses }`), search (`{ hits, total, tookMs, provider }`), catalog products (`{ products, pagination }`) and audit (`{ data, total }`). Errors return the NestJS default shape `{ "statusCode", "message", "error" }`. Add `Content-Type: application/json` only when sending a body.
+Responses are the **raw payload** — no `{ success, data }` envelope. A resource route returns the object directly; most list routes return a bare JSON array, and the object-shaped ones are messages (`{ messages, total, unknownTimestampTotal? }`), status (`{ statuses }`), search (`{ hits, total, tookMs, provider }`), catalog products (`{ products, pagination }`) and audit (`{ data, total }`). Errors return `{ "statusCode", "message", "error"? }`, where `error` is optional, unless a route defines its own error body (the readiness probe's `503` is `{ "status", "details" }`, some plugin ingress rejections use a short plain-text body and `/mcp` transport errors, with its `405` for `GET` and `DELETE`, use a JSON-RPC error); a DTO validation `400` with detail disabled (the production default) returns `{ "statusCode": 400, "message": "Bad Request" }` without it, as described in [Error Response](./06-api-specification.md#error-response). Add `Content-Type: application/json` only when sending a body.
 
 ### Sections
 

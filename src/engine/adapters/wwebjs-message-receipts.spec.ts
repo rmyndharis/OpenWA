@@ -86,6 +86,23 @@ describe('WwebjsMessaging.getMessageReceipts', () => {
     });
   });
 
+  it('preserves empty recipient lists for an own 1:1 message even when its aggregate ack is read', async () => {
+    const chat = '12025550100@c.us';
+    const id = `true_${chat}_EMPTY_out`;
+    const message = { ...ownMessage(id, chat, { delivery: [], read: [], played: [] }), ack: 3 };
+    const { messaging } = makeMessaging({ [id]: message });
+
+    await expect(messaging.getMessageReceipts(chat, id)).resolves.toEqual({
+      delivery: [],
+      deliveryRemaining: undefined,
+      read: [],
+      readRemaining: undefined,
+      played: [],
+      playedRemaining: undefined,
+    });
+    expect(message.getInfo).toHaveBeenCalledTimes(1);
+  });
+
   it('answers 404 for a message of another chat without reading it', async () => {
     const id = `true_${OTHER}_X`;
     const message = ownMessage(id, OTHER);

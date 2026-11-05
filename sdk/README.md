@@ -46,8 +46,9 @@ All five SDKs expose the same fluent resource surface:
 | `health`    | check, live, ready                                                                                                                                                                                                                                                                                         |
 | `auth`      | validate (`client.auth()`; `client.Auth.Validate` in Go)                                                                                                                                                                                                                                                   |
 
-> ⚠️ Endpoints requiring an `OPERATOR`-level API key are noted in the inline
-> docs. Deliberately **not** exposed, matching `docs/18-sdk-design.md` exactly:
+> ⚠️ Check the per-route **Auth** lines in the [API specification](../docs/06-api-specification.md) for the required API-key role in every SDK. The JavaScript, Python and PHP method tables in the [SDK design](../docs/18-sdk-design.md) also mark role requirements.
+>
+> Deliberately **not** exposed, matching `docs/18-sdk-design.md` exactly:
 > `auth/api-keys` (key validation itself is the `auth` row above), `audit`,
 > `settings`, `stats`, `automation`, `infra`,
 > `plugins`, the `integration` management routes, `metrics`, `mcp`, `ingress`

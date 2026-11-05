@@ -122,7 +122,7 @@ The constructor takes a single `OpenWAClientOptions` object. `baseUrl` and `apiK
 
 ### Resources & Methods
 
-All resources are accessed as properties on the client (`client.<resource>.<method>`). Every method returns a `Promise`. Methods marked **OPERATOR** require an `OPERATOR`-level API key (an `ADMIN` key satisfies it); a `VIEWER` key receives a `403` (`OpenWAForbiddenError`). Some methods are supported by one engine only and answer `501` on the other (a row says so where it matters; section [29.6 of the engine capability matrix](./29-engine-capability-matrix.md#296-the-28-not-available-cells-in-detail) lists them all).
+All resources are accessed as properties on the client (`client.<resource>.<method>`). Every method returns a `Promise`. Methods marked **OPERATOR** require an `OPERATOR`-level API key (an `ADMIN` key satisfies it); a `VIEWER` key receives a `403` (`OpenWAForbiddenError`). Some methods are supported by one engine only and answer `501` on the other (a row says so where it matters; section [29.6 of the engine capability matrix](./29-engine-capability-matrix.md#296-the-29-not-available-cells-in-detail) lists them all).
 
 The top-level client also exposes:
 
@@ -512,7 +512,7 @@ The client also exposes a few non-resource members:
 
 ### Resources & Methods
 
-Resources are accessed as properties on the client (e.g. `client.messages`). All methods are **snake_case**; `body`/`query` arguments are plain dicts. Methods marked **OPERATOR** require an `OPERATOR`-level API key. Some methods are supported by one engine only and answer `501` on the other (a row says so where it matters; section [29.6 of the engine capability matrix](./29-engine-capability-matrix.md#296-the-28-not-available-cells-in-detail) lists them all).
+Resources are accessed as properties on the client (e.g. `client.messages`). All methods are **snake_case**; `body`/`query` arguments are plain dicts. Methods marked **OPERATOR** require an `OPERATOR`-level API key. Some methods are supported by one engine only and answer `501` on the other (a row says so where it matters; section [29.6 of the engine capability matrix](./29-engine-capability-matrix.md#296-the-29-not-available-cells-in-detail) lists them all).
 
 #### `client.sessions`
 
@@ -868,7 +868,7 @@ Missing `baseUrl` or `apiKey`, a key or default header value with a control or n
 
 ### Resources & Methods
 
-All payloads are associative arrays; all listed methods are synchronous and return the decoded JSON (an `array`), except the `void` deletes. Methods marked **OPERATOR** require an operator-level API key. Some methods are supported by one engine only and answer `501` on the other (a row says so where it matters; section [29.6 of the engine capability matrix](./29-engine-capability-matrix.md#296-the-28-not-available-cells-in-detail) lists them all).
+All payloads are associative arrays; all listed methods are synchronous and return the decoded JSON (an `array`), except the `void` deletes. Methods marked **OPERATOR** require an operator-level API key. Some methods are supported by one engine only and answer `501` on the other (a row says so where it matters; section [29.6 of the engine capability matrix](./29-engine-capability-matrix.md#296-the-29-not-available-cells-in-detail) lists them all).
 
 #### `sessions`
 
@@ -1149,7 +1149,7 @@ try {
 - **Base-URL path prefix is preserved.** The base URL has its trailing `/` trimmed and requests are issued against an absolute `baseUrl . $path`; Guzzle's `base_uri` is intentionally unset, so a prefix like `/v1` behind a reverse proxy is retained.
 - **Null query values are dropped.** Absent optional query parameters (`null`) are filtered out before the request, so they are never sent.
 - **No automatic retries.** A failed request throws immediately; wrap calls in your own backoff if you need retries (notably for `429`). The injectable `httpClient` is the extension point for retry/observability middleware.
-- **Empty/204 responses return `null`.** A `204` or empty body decodes to `null`; resource methods that promise an `array` coalesce this to `[]` (or to the resource object for single-item gets).
+- **Empty/204 response handling depends on the method.** The HTTP executor and raw `request()` return `null` for a `204` or empty body. Methods with `?? []`, such as `contacts->list` and `messages->pin`, coalesce this to `[]`; `messages->list` returns `{ messages: [], total: 0 }` and `catalog->products` returns `{ products: [], pagination: [] }`. The nullable `catalog->info`, `catalog->product` and `chats->getPresence` methods return `null`, and `void` methods return nothing. Other JSON methods with a non-nullable `array` return type, including single-item gets and sends, require a response body: an empty response raises `TypeError`. The gateway supplies a body for those routes.
 - **Testing without the network.** Inject a Guzzle client built on a `GuzzleHttp\Handler\MockHandler` via the `httpClient` config key — no global state, no live calls. The shipped test suite asserts on the exact path, method, and body.
 - **PSR-4 autoloading.** Everything lives under the `OpenWA\` namespace mapped to `src/`; `composer require rmyndharis/openwa` wires up the autoloader.
 

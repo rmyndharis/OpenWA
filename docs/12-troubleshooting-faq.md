@@ -49,6 +49,14 @@ flowchart TD
     A3 -->|No| A3a[Check message format]
 ```
 
+### Issue: Source install fails with a `GLIBC_2.xx not found` error
+
+**Symptoms:** A Linux source install exits during startup with an error such as `version GLIBC_2.29 not found` or `version GLIBC_2.33 not found (required by .../better-sqlite3/prebuilds/linux-x64.node)` or `ERR_DLOPEN_FAILED` naming that prebuild.
+
+**Cause:** The shipped `better-sqlite3` Linux x64/arm64 glibc prebuilds require **glibc 2.34 or newer**. The main authentication database always uses SQLite, so selecting PostgreSQL does not avoid this requirement. Node.js can run on older glibc versions while this native driver cannot.
+
+**Solution:** Use a host with glibc 2.34+ (Ubuntu 22.04+, Debian 12+, RHEL 9+) or the published Docker image. `npm rebuild better-sqlite3 --build-from-source` does not help while the shipped prebuild exists: the package skips an ordinary rebuild when it finds a prebuild, and its loader chooses that file ahead of a local build.
+
 ## 12.2 Podman Compatibility
 
 ### Issue: `FileNotFoundError` / Docker socket missing
@@ -1018,6 +1026,14 @@ WEBHOOK_TIMEOUT=10000      # per-attempt HTTP timeout in ms (default 10000)
 WEBHOOK_RETRY_DELAY=5000   # base retry backoff in ms (default 5000)
 ```
 
+### Issue: A first outbound message appears under an unnamed id
+
+**Symptoms:** A first 1:1 message sent to an unsaved contact by phone number can appear under an unnamed id on the linked account's own phone, even after a successful number check.
+
+**Cause:** Both engines prefer the contact's `@lid` when it is known or returned by a lookup. This includes cold contacts: Baileys can query WhatsApp through `getLIDForPN`, and whatsapp-web.js resolves the send destination through `getNumberId`. The phone id returned by a number check does not override that send-time resolution. WhatsApp can reject phone-addressed sends to LID-migrated contacts with ack `463` (missing privacy token), so preferring the LID avoids that refusal. If the lookup resolves no LID, the engine retains its phone-addressed fallback.
+
+The unnamed chat display alone does not establish whether the message was delivered. Check `message.ack` for acknowledgement state. See [engine addressing caveats](./29-engine-capability-matrix.md#297-caveats-on-supported-rows).
+
 ### Issue: An inbound sender arrives as an `@lid` id instead of a phone number
 
 **Symptoms:**
@@ -1588,7 +1604,8 @@ A media message also carries `media: { mimetype, filename?, data?, omitted?, siz
 
 ### Error Body Shape
 
-There are no machine-readable WhatsApp error codes. Errors use the NestJS default shape, so match on
+There are no machine-readable WhatsApp error codes. Errors use the NestJS default shape (the readiness probe,
+the plugin ingress and the `/mcp` endpoint answer in their own, described with the route in docs/06), so match on
 `statusCode` (above) and read `message` for the human-readable cause. A few refusals also carry a stable
 `code` (see the error response section of docs/06):
 

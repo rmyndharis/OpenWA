@@ -82,7 +82,7 @@ Session `status` wire values are **lowercase**: `created | initializing | qr_rea
 
 ### Error Response
 
-Errors use the NestJS default shape, published in `openapi.json` as the `ErrorResponse` schema. The HTTP status is on the status line and mirrored in `statusCode`:
+Errors use the NestJS default shape, published in `openapi.json` as the `ErrorResponse` schema, unless a route defines its own error body: the readiness probe's `503`, the plugin ingress and the `/mcp` endpoint (whose transport refusals, including the `405` for `GET` and `DELETE`, carry a JSON-RPC error body) answer in the shape described with the route. The HTTP status is on the status line and mirrored in `statusCode`:
 
 ```json
 {
@@ -1530,7 +1530,9 @@ The message is looked up by its full serialized id, exactly as the send routes r
 
 **Response** `200`
 
-Returns a `MessageReceipts` object:
+This route maps the per-recipient lists WhatsApp Web supplies and returns `[]` for an empty or missing list. Per-recipient entries are not guaranteed for a 1:1 message, and no entries are inferred from the message's aggregate acknowledgement. Empty lists do not prove that nobody received or read it. Use `message.ack` for aggregate acknowledgement state; this route does not synthesize participants or timestamps from it.
+
+Returns a `MessageReceipts` object; this illustrative group-message response lists one recipient:
 
 ```json
 {
@@ -3669,6 +3671,8 @@ for every **named** requester is a `403`.
 
 Reject pending join requests. Same body, response shape, batch-guard contract and error map as
 `.../membership-requests/approve`; rejecting an empty queue is likewise a no-op.
+
+**Auth:** API key (OPERATOR)
 
 **Errors:** `400` validation / session not started / a body that is a JSON list, or one sent in a content type other than `application/json` or `application/x-www-form-urlencoded`, which would otherwise act on every pending request · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights / every named requester failed) · `404` no such group · `409` engine not ready · `503` WhatsApp did not answer within the request budget; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
@@ -7020,6 +7024,8 @@ including playlists and manifests, is refused with `400`.
 Convert video into an MP4 every WhatsApp client accepts: baseline H.264 with AAC audio, frame
 fitted inside 1280x720, or 720x1280 for portrait (never upscaled), frame rate capped at 30 fps, index moved to the front so playback can start before the whole
 file arrives.
+
+**Auth:** API key (OPERATOR)
 
 **Errors:** `400` neither field given, a `url` that is not an absolute http(s) URL or answers non-2xx, times out or cannot be reached, or ffmpeg refused the input (its reason is included) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role · `413` media above the size cap · `503` conversion is disabled, the ffmpeg binary is not runnable, the conversion queue is saturated, the gateway is shutting down, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault
 

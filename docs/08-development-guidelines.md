@@ -536,7 +536,11 @@ export class SessionController {
 
 There is **no custom exception base class and no global exception filter**. Handlers throw NestJS's
 built-in HTTP exceptions and NestJS's own `BaseExceptionFilter` renders them, so responses carry the
-framework default shape `{ statusCode, message, error }`.
+framework default shape `{ statusCode, message, error? }`. The `error` field is optional: DTO validation
+with detail disabled (the production default) returns `{ statusCode: 400, message: "Bad Request" }`
+without it. The `ErrorResponse` schema in `openapi.json` lists the other bodies that omit it. A handler
+that throws a built-in exception with an object body sends that object unchanged: the readiness probe's
+`503` is `{ status, details }`, with no `statusCode` or `message`.
 
 ```typescript
 throw new BadRequestException('Session is not started');
@@ -572,9 +576,12 @@ Add a new one only when the condition is engine-agnostic and recurs; a one-off s
 
 ### Prerequisites
 
+The shipped `better-sqlite3` Linux x64/arm64 glibc prebuild requires glibc 2.34+. Use a newer host (Ubuntu 22.04+, Debian 12+, RHEL 9+) or the published Docker image on an older host. `npm rebuild better-sqlite3 --build-from-source` does not help while the prebuild exists: the build skips it and the loader prefers that prebuild. See [startup troubleshooting](./12-troubleshooting-faq.md#issue-source-install-fails-with-a-glibc_2xx-not-found-error).
+
 ```bash
 # Required
 - Node.js 22.19 or newer (22 LTS)
+- glibc 2.34+ for Linux glibc source installs on x64/arm64 (including PostgreSQL deployments)
 - npm 10+
 - Docker & Docker Compose
 - Git

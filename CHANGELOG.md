@@ -87,6 +87,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` says pooled clients must expire idle connections before `KEEPALIVE_TIMEOUT_MS`.
 - The scaling guide says that a node booting while a peer's lease has just lapsed resets that peer's session, and that only one node is supported.
 - The operational runbooks list what each signal does to the gateway, the output directory Node's diagnostic flags need in the image, and the exit status a native crash leaves.
+- Describe VIEWER avatar and metadata lookups alongside OPERATOR number and LID checks.
+- Link SDK users to per-route role requirements and describe optional error fields.
+- Use stable dependency file and symbol references in engine capability evidence.
+- Explain resolved LID send addressing and limits of per-recipient receipt lists.
+- State the glibc 2.34 requirement and startup remedies for Linux glibc source installs on x64/arm64.
+- Describe PHP empty-response behavior for coalescing, nullable and required-body methods.
 
 ### Dependencies
 
