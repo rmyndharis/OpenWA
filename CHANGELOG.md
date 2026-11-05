@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Show a stored plugin choice that the field no longer lists as the selected option, and a null choice as a blank one, so the form saves what it shows.
 - Use the theme text and card colors for chart legends and tooltips so they stay readable in the light and dark themes.
 - Keep the Infrastructure Save Configuration button clear of the notification stack.
+- whatsapp-web.js: a reloaded page whose event listeners fail to attach is no longer counted as recovered, so the watchdog restarts the session instead of leaving it READY without inbound messages.
+- whatsapp-web.js: an `auth timeout` or browser network error behind a SOCKS proxy URL with credentials now says in `lastError` that Chromium cannot send them.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - List a key seeded from `API_MASTER_KEY` as `(master key)` instead of its first 12 characters; keys seeded by earlier releases keep their stored prefix until replaced.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
@@ -60,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Helm notes and the security guide say the admin key is read from the key file when `API_MASTER_KEY` is set.
 - The API reference says how to count the viewers of a Baileys status post from `message.receipt`, and that a status post reports no `delivered` or `read` ack.
 - Explain redirect and blocked-destination delivery errors in the n8n troubleshooting guide.
+- API reference and troubleshooting guide: a SOCKS proxy cannot log in on whatsapp-web.js; use a proxy that admits the gateway by IP or an HTTP or HTTPS proxy with credentials.
+- `GET /api/infra/status`: `engine.webVersion` is the build the gateway resolves for sessions to pin, not the build every session ran.
+- `GET /api/infra/status`: `engine.headless` and `engine.browserArgs` are the environment values; a stored whatsapp-web.js plugin config overrides them for sessions.
 
 ### Dependencies
 

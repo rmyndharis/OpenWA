@@ -429,6 +429,144 @@ describe('liveness of a ready page after a reload', () => {
     await expect(adapter.probeLiveness()).resolves.toBe(true);
     expect(client.pupPage.evaluate).not.toHaveBeenCalled();
   });
+
+  /**
+   * The patched client keeps `eventsAttached` for the page now loaded: false from the start of a re-inject until its
+   * event listeners are attached. A reload whose re-inject loaded the helpers but did not attach them is not recovered:
+   * sends work on it, but inbound events never arrive, which nothing else would show.
+   */
+  describe('when the patched client reports the event bridge of the loaded page', () => {
+    const bridge = (client: FakeClient, attached: boolean | undefined): void => {
+      (client as FakeClient & { eventsAttached?: boolean }).eventsAttached = attached;
+    };
+
+    it('does not count a reload as recovered while its helpers exist but the bridge is not attached', async () => {
+      const { adapter, client } = wire();
+      bridge(client, false);
+      reload(client);
+      later(NAVIGATION_REINJECT_GRACE_MS + 1_000);
+
+      await expect(adapter.probeLiveness()).resolves.toBe(true);
+      later(NAVIGATION_EPISODE_CAP_MS - NAVIGATION_REINJECT_GRACE_MS - 2_000);
+      await expect(adapter.probeLiveness()).resolves.toBe(true);
+      later(1_000);
+      await expect(adapter.probeLiveness()).resolves.toBe(false);
+    });
+
+    it('keeps asking the page while the bridge is not attached, and stops once it is', async () => {
+      const { adapter, client } = wire();
+      bridge(client, false);
+      reload(client);
+
+      await adapter.probeLiveness();
+      await adapter.probeLiveness();
+      expect(client.pupPage.evaluate).toHaveBeenCalledTimes(2);
+
+      bridge(client, true);
+      await expect(adapter.probeLiveness()).resolves.toBe(true);
+      later(NAVIGATION_EPISODE_CAP_MS);
+      client.pupPage.evaluate.mockResolvedValue(false);
+      await expect(adapter.probeLiveness()).resolves.toBe(true);
+      expect(client.pupPage.evaluate).toHaveBeenCalledTimes(3);
+    });
+
+    it('closes the reload when the attach that was pending completes and the page re-emits ready', async () => {
+      const { adapter, client } = wire();
+      bridge(client, false);
+      reload(client);
+      await expect(adapter.probeLiveness()).resolves.toBe(true);
+
+      bridge(client, true);
+      client.emit('ready');
+      await jest.advanceTimersByTimeAsync(0);
+      later(NAVIGATION_EPISODE_CAP_MS);
+      client.pupPage.evaluate.mockClear();
+
+      await expect(adapter.probeLiveness()).resolves.toBe(true);
+      expect(client.pupPage.evaluate).not.toHaveBeenCalled();
+    });
+
+    it('does not let a ready from a pass that has not attached the bridge close the reload', async () => {
+      const { adapter, client } = wire();
+      bridge(client, false);
+      reload(client);
+      client.emit('ready');
+      await jest.advanceTimersByTimeAsync(0);
+
+      later(NAVIGATION_EPISODE_CAP_MS);
+      await expect(adapter.probeLiveness()).resolves.toBe(false);
+    });
+
+    it('does not take a ready it ignored as proof that the page it replaced re-injected', async () => {
+      const { adapter, client } = wire();
+      bridge(client, false);
+      reload(client);
+      later(7_000);
+      client.emit('ready');
+      await jest.advanceTimersByTimeAsync(0);
+      later(53_000);
+      reload(client);
+
+      // 180 s after the first reload, 120 s after the second: the episode began with the first.
+      later(NAVIGATION_EPISODE_CAP_MS - 60_000);
+      await expect(adapter.probeLiveness()).resolves.toBe(false);
+    });
+
+    it('warns about the ignored ready, as for the first page', () => {
+      const { adapter, client } = wire();
+      const warn = jest.spyOn((adapter as unknown as { logger: { warn: () => void } }).logger, 'warn');
+      bridge(client, false);
+      reload(client);
+      client.emit('ready');
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('premature ready'),
+        expect.objectContaining({ action: 'premature_ready_ignored' }),
+      );
+    });
+
+    // Late reads recycle only what in-budget reads recycle, and a page that never attaches is recycled on either.
+    it.each([
+      ['in budget', false],
+      ['late', true],
+    ])('recycles a page with helpers and no bridge on every watchdog probe, reads %s', async (_label, late) => {
+      const { adapter, client } = wire();
+      bridge(client, false);
+      client.getState.mockImplementation(() => delayed(WAState.CONNECTED, late ? 7_000 : 1_000));
+      client.pupPage.evaluate.mockImplementation(() => delayed(true, late ? 5_000 : 1_000));
+      reload(client);
+
+      const answers = await watchdogAnswers(adapter, 9);
+
+      expect(recycled(answers)).toBe(true);
+    });
+
+    it.each([
+      ['in budget', false],
+      ['late', true],
+    ])('keeps a page alive that has helpers and an attached bridge, reads %s', async (_label, late) => {
+      const { adapter, client } = wire();
+      bridge(client, true);
+      client.getState.mockImplementation(() => delayed(WAState.CONNECTED, late ? 7_000 : 1_000));
+      client.pupPage.evaluate.mockImplementation(() => delayed(true, late ? 5_000 : 1_000));
+      reload(client);
+
+      await expect(watchdogAnswers(adapter, 6)).resolves.toEqual([true, true, true, true, true, true]);
+    });
+
+    // A false marker is not a missing helper: the page can still send, so no operation is refused for it.
+    it('does not mark the page as lacking its helpers', async () => {
+      const { adapter, client } = wire();
+      bridge(client, false);
+      reload(client);
+      later(NAVIGATION_REINJECT_GRACE_MS + 1_000);
+
+      await adapter.probeLiveness();
+
+      const lifecycle = (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle;
+      expect(lifecycle.isPageWithoutHelpers()).toBe(false);
+    });
+  });
 });
 
 describe('a re-inject that throws in a reloaded page', () => {

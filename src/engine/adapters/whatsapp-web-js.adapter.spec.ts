@@ -27,6 +27,7 @@ import {
 import { READY_RECONCILE_TIMEOUT_MS, READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS } from './wwebjs-reconcile';
 import { DEFAULT_PUPPETEER_ARGS, PINNED_BROWSER_LOCALE } from '../../config/configuration';
 import { type WwebjsCalls } from './wwebjs-calls';
+import * as patchStatus from './engine-patch-status';
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import * as fs from 'fs';
@@ -237,8 +238,8 @@ describe('WhatsAppWebJsAdapter initialize() failure reason (#1081)', () => {
 });
 
 // A WhatsApp Web page navigation during the FIRST inject rejects Client.initialize() before the
-// library's own framenavigated re-inject handler exists (Client.js:502 vs :504), so nothing upstream
-// retries it — and the adapter's onError channel is terminal. One in-adapter retry converts that
+// library's own framenavigated re-inject handler exists (it is added after the first inject() resolves), so
+// nothing upstream retries it — and the adapter's onError channel is terminal. One in-adapter retry converts that
 // one-navigation death into a normal slow start (#1081).
 describe('WhatsAppWebJsAdapter initialize() retry on a navigation-killed first inject (#1081)', () => {
   const newAdapter = (): WhatsAppWebJsAdapter =>
@@ -2178,9 +2179,10 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     expect(jest.getTimerCount()).toBe(0);
   });
 
-  // whatsapp-web.js sets `eventsAttached = false` in its constructor (Client.js:109) and flips it only
-  // after attachEventListeners() resolves (Client.js:373). Everything in between — LoadUtils, a poll of
-  // up to 30s for window.WWebJS (Client.js:334), ClientInfo, InterfaceController — is a legitimately
+  // whatsapp-web.js sets `eventsAttached = false` in its constructor (and, with the ready-sync patch, whenever its
+  // post-auth callback starts attaching for a page without the helpers) and flips it only after
+  // attachEventListeners() resolves. Everything in between — LoadUtils, a poll of
+  // up to 30s for window.WWebJS, ClientInfo, InterfaceController — is a legitimately
   // slow attach, not a dead bridge. Reloading inside that window navigates the page out from under the
   // in-flight inject(): the re-inject then dies at getWWebVersion before it re-exposes any of the
   // bridge, and the one-shot guard blocks a retry, so the session is doomed to the deadline (#1081).
@@ -2229,7 +2231,7 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
 
     expect(reload).toHaveBeenCalledTimes(1);
 
-    // Upstream's window.WWebJS poll alone is 30s (Client.js:334) and is only one stage of the attach.
+    // Upstream's window.WWebJS poll alone is 30s and is only one stage of the attach.
     // The grace has to outlast it, or we go back to aborting healthy attaches; and what remains before
     // the deadline has to outlast it too, or a warranted reload could never finish reinjecting.
     const UPSTREAM_WWEBJS_POLL_MS = 30_000;
@@ -2964,6 +2966,9 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
   // an `.on` method, and the rest of its evaluate completes either way. The page read that settles
   // it is one line, so ready says it instead of staying quiet.
   it('warns at ready when the page carries no call hook', async () => {
+    // The probe only runs on a tree that carries the ready-sync patch; what the installed tree carries is not this
+    // test's concern.
+    const patches = jest.spyOn(patchStatus, 'unappliedPatches').mockReturnValue([]);
     const adapter = newAdapter();
     const logger = (adapter as unknown as { logger: { warn: jest.Mock } }).logger;
     const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
@@ -2989,6 +2994,7 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     expect(missing).toBeDefined();
     expect(missing?.[1]).toMatchObject({ sessionId: 'sess-1' });
     warnSpy.mockRestore();
+    patches.mockRestore();
   });
 
   it('stays quiet at ready when the call hook is installed', async () => {

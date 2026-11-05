@@ -124,6 +124,20 @@ describe('operations on a reloaded page the probe found without its helpers', ()
     await expect(adapter.sendTextMessage(GROUP, 'hello')).resolves.toEqual({ id: 'true_x@g.us_DEF', timestamp: 2 });
   });
 
+  // A page whose helpers exist can send even while its event bridge is not attached yet: the probe does not count
+  // that reload as recovered, but refusing operations on it would be a 409 for a page that works.
+  it('sends normally after the grace on a page that has its helpers while the event bridge is not attached', async () => {
+    const { adapter, client } = wire();
+    client.pupPage.evaluate.mockResolvedValue(true);
+    (client as unknown as { eventsAttached: boolean }).eventsAttached = false;
+    reload(client);
+    jest.setSystemTime(Date.now() + NAVIGATION_REINJECT_GRACE_MS + 5_000);
+    await expect(adapter.probeLiveness()).resolves.toBe(true);
+    client.sendMessage.mockResolvedValue({ id: { _serialized: 'true_x@g.us_STU' }, timestamp: 7 });
+
+    await expect(adapter.sendTextMessage(GROUP, 'hello')).resolves.toEqual({ id: 'true_x@g.us_STU', timestamp: 7 });
+  });
+
   // A protocol timeout on a busy page is no answer about the helpers: refusing on it would turn a healthy page away
   // until the next probe, a minute later.
   it('sends normally after the grace when the probe could not read the helpers, on a page that has them', async () => {

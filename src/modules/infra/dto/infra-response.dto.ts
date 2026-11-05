@@ -129,7 +129,12 @@ export class InfraEngineStatusDto {
   @ApiProperty({ description: 'Active engine.', example: 'baileys' })
   type!: string;
 
-  @ApiProperty({ description: 'Whether Chromium runs headless. Meaningful for whatsapp-web.js only.', example: true })
+  @ApiProperty({
+    description:
+      'Whether Chromium runs headless, from `PUPPETEER_HEADLESS`. A stored whatsapp-web.js plugin config can override ' +
+      'it for sessions, and is not reflected here. Meaningful for whatsapp-web.js only.',
+    example: true,
+  })
   headless!: boolean;
 
   @ApiProperty({ example: './data/sessions' })
@@ -137,8 +142,9 @@ export class InfraEngineStatusDto {
 
   @ApiProperty({
     description:
-      'Effective Chromium launch arguments: PUPPETEER_ARGS or the defaults, with --lang=en-US appended unless a ' +
-      '--lang flag is already present.',
+      'Chromium launch arguments from `PUPPETEER_ARGS` or the defaults, with --lang=en-US appended unless a ' +
+      '--lang flag is already present. A stored whatsapp-web.js plugin config (`puppeteer.args`) takes precedence ' +
+      'for sessions and is not reflected here.',
     example: '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --lang=en-US',
   })
   browserArgs!: string;
@@ -147,9 +153,10 @@ export class InfraEngineStatusDto {
     type: String,
     nullable: true,
     description:
-      'whatsapp-web.js only: the WhatsApp Web build sessions request as their pin, which is distinct from the ' +
-      'library version. A page can still run another build; each session logs the one it runs when it reaches ' +
-      'ready. Omitted for other engines.',
+      'whatsapp-web.js only: the WhatsApp Web build the gateway resolves for sessions to pin, which is distinct ' +
+      'from the library version. It is not read back from a page. A session whose pinned page cannot be ' +
+      'downloaded or written starts unpinned and logs `web_version_html_unavailable`, and a page can still run ' +
+      'another build; each session logs the one it runs when it reaches ready. Omitted for other engines.',
     example: '2.3000.1234567890',
   })
   webVersion?: string | null;

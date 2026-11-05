@@ -654,8 +654,9 @@ export interface InfraStatus {
   engine: {
     type: string;
     headless: boolean;
-    // whatsapp-web.js only: the WhatsApp Web build sessions request as their pin (distinct from the
-    // library version, and not necessarily the build a page runs) and how it was chosen. (#488)
+    // whatsapp-web.js only: the WhatsApp Web build the gateway resolves for sessions to pin (distinct from the
+    // library version, and not necessarily the build a page runs: a session whose pinned page cannot be
+    // downloaded or written starts unpinned) and how it was chosen. (#488)
     webVersion?: string | null;
     webVersionSource?: 'pinned' | 'auto' | 'native';
   };

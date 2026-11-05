@@ -11,15 +11,23 @@
  *    swallowed inside the exposed-function binding, `ready` never fires, and nothing records that
  *    the message bridge is dead — while sends still work, so the session looks merely quiet.
  *
- * Three transforms, one group (all-or-nothing):
+ * Four transforms, one group (all-or-nothing):
  *  - initialize `eventsAttached = false` on the client, so the flag's absence (an unpatched tree)
  *    is distinguishable from "attach has not completed";
  *  - set `eventsAttached = true` only AFTER attachEventListeners resolves, giving the adapter a
  *    truthful completion marker (the adapter treats `undefined` as "marker unsupported" and keeps
  *    its old behaviour);
+ *  - reset `eventsAttached = false` when the callback starts attaching for a page that does not
+ *    have the helpers yet. The library re-runs inject() on every main-frame navigation and the new
+ *    page walks the whole pipeline again, so without the reset a re-attach that fails would leave
+ *    the previous page's `true` and the marker would vouch for a bridge the page does not have;
  *  - after subscribing to `change:hasSynced`, fire the handler once when the level is already
  *    true, closing the missed-edge race. A double fire is tolerated upstream: the callback's
  *    `injected` check makes the second pass a bare re-emit of `ready`, which the adapter dedupes.
+ *
+ * A tree an earlier release of this patcher finished carries the first three edits only. It is
+ * upgraded by adding the reset, so an install over an already patched tree does not read as
+ * half-patched.
  *
  * The source transform is deliberately exact and self-disabling: an unknown shape fails the build
  * instead of silently shipping without the fix, matching the sibling patchers. The file is written
@@ -50,6 +58,13 @@ const ATTACH_MARK_REPLACE = `                    await this.attachEventListeners
                     this.eventsAttached = true;
                 }`;
 
+const PAGE_RESET_FIND = `                if (!injected) {`;
+
+const PAGE_RESET_REPLACE = `                if (!injected) {
+                    // A page without the helpers walks the pipeline from the start: what the previous page
+                    // attached says nothing about this one. True again only once this attach resolves.
+                    this.eventsAttached = false;`;
+
 const HAS_SYNCED_FIND = `            window
                 .require('WAWebSocketModel')
                 .Socket.on('change:hasSynced', () => {
@@ -71,7 +86,11 @@ const EDITS = [
   { find: FLAG_INIT_FIND, replace: FLAG_INIT_REPLACE },
   { find: ATTACH_MARK_FIND, replace: ATTACH_MARK_REPLACE },
   { find: HAS_SYNCED_FIND, replace: HAS_SYNCED_REPLACE },
+  { find: PAGE_RESET_FIND, replace: PAGE_RESET_REPLACE },
 ];
+
+// The edits earlier releases of this patcher made, which a tree installed against one of them carries.
+const EARLIER_RELEASE_EDITS = 3;
 
 function occurrences(source, needle) {
   return source.split(needle).length - 1;
@@ -112,12 +131,22 @@ function applyReadySyncPatch(wwjsDir = DEFAULT_WWJS) {
   if (finds.every(count => count === 0) && replaces.every(count => count === 1)) {
     return { skipped: true, reason: 'installed whatsapp-web.js already carries the ready-sync repair' };
   }
-  if (finds.every(count => count === 1) && replaces.every(count => count === 0)) {
-    for (const edit of EDITS) {
+  // Applied from nothing, or from the edits an earlier release made: anything else is a shape this
+  // patcher was not written for.
+  const done = EDITS.map((_, i) => finds[i] === 0 && replaces[i] === 1);
+  const pending = EDITS.map((_, i) => finds[i] === 1 && replaces[i] === 0);
+  const from = [0, EARLIER_RELEASE_EDITS].find(
+    count => done.slice(0, count).every(Boolean) && pending.slice(count).every(Boolean),
+  );
+  if (from !== undefined) {
+    for (const edit of EDITS.slice(from)) {
       source = source.replace(edit.find, edit.replace);
     }
     writeFileAtomic(clientFile, source);
-    return { skipped: false, note: 'readiness marker and hasSynced level-check applied' };
+    return {
+      skipped: false,
+      note: from === 0 ? 'readiness marker and hasSynced level-check applied' : 'per-page marker reset applied',
+    };
   }
   throw new Error(
     `unsupported Client.js shape (unpatched: ${finds.join(',')}, patched: ${replaces.join(',')}); ` +
@@ -152,4 +181,6 @@ module.exports = {
   ATTACH_MARK_REPLACE,
   HAS_SYNCED_FIND,
   HAS_SYNCED_REPLACE,
+  PAGE_RESET_FIND,
+  PAGE_RESET_REPLACE,
 };

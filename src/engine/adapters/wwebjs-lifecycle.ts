@@ -44,7 +44,8 @@ export function isExecutionContextDestroyedError(reason: string): boolean {
  * for the window.require shape (see src/config/process-error-monitor.ts) — this predicate only
  * decides whether one in-place retry is worth it, both shapes being transient when a reload caused
  * them. whatsapp-web.js registers its own re-inject handler only AFTER the first inject succeeds
- * (Client.js:502 vs :504), so a navigation landing during it is caught by nothing upstream (#1081).
+ * (its framenavigated listener is added after the first inject() resolves), so a navigation landing during it is caught
+ * by nothing upstream (#1081).
  */
 function isNavigationShapedInitRejection(reason: string): boolean {
   return isExecutionContextDestroyedError(reason) || /window\.require is not a function/i.test(reason);
@@ -151,11 +152,11 @@ class PairingCodeAttemptTimeoutError extends Error {
 
 // A post-READY page navigation (WhatsApp Web's ~5-minute first reload on a fresh pairing, a
 // service-worker update, …) destroys the page's JS world; whatsapp-web.js re-injects on its own
-// framenavigated handler (Client.js:504-513), but until WA Web has booted again getState() REJECTS,
+// framenavigated handler, but until WA Web has booted again getState() REJECTS,
 // so the liveness probe reads a healing page as dead and every delegate evaluate dies as a raw
 // TypeError under a status that still says READY (#1081). Sizing — floor: the pre-boot phase alone
 // (page load + WA Web bundle boot, the stretch where getState() rejects) takes tens of seconds on a
-// slow host, and upstream's re-inject then polls up to 30s for window.WWebJS (Client.js:332-343);
+// slow host, and upstream's re-inject then polls up to 30s for window.WWebJS (in its post-auth callback);
 // ceiling: one watchdog interval (60s), so a page that navigates and then wedges loses at most one
 // probe to the grace and still dies within one extra interval. NOT a sibling of
 // READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS above: that one is capped by the 90s reconcile deadline,
@@ -173,6 +174,33 @@ export const NAVIGATION_EPISODE_CAP_MS = 3 * NAVIGATION_REINJECT_GRACE_MS;
 // re-inject faster than this is not credited by its delay but by the helpers read that every 'ready' of an unverified
 // reload triggers.
 const PREVIOUS_PAGE_READY_MS = 5_000;
+
+/**
+ * Whether the patched whatsapp-web.js client says the page it has loaded has no event listeners attached yet
+ * (scripts/patch-wwebjs-ready-sync.js): false from the moment its post-auth callback finds a page without the helpers
+ * until the attach completes. Between a navigation and that moment the marker still holds the previous page's value,
+ * and the helpers are what is missing then, so the marker never stands in for them. A tree without the patch has no
+ * marker (undefined) and cannot say, which keeps the helpers as the only evidence.
+ */
+function eventBridgeUnattached(client: Client): boolean {
+  return (client as Client & { eventsAttached?: boolean }).eventsAttached === false;
+}
+
+/**
+ * Appended to the reason of a start that failed behind a SOCKS proxy URL carrying credentials. Chromium never sends
+ * them, so a proxy that requires a login refuses the browser, and what the start reports for that names no cause.
+ */
+const SOCKS_CREDENTIALS_ADVICE =
+  'The session proxy URL carries credentials for a SOCKS proxy, which Chromium cannot send. If the proxy requires a ' +
+  'login it refuses the connection: use an IP-authorized proxy or an HTTP/HTTPS proxy.';
+
+/**
+ * The two failures a proxy that refuses the browser produces: whatsapp-web.js's own `auth timeout`, thrown as a bare
+ * string when the pinned page boots from the local cache but its other requests are refused, and Chromium's
+ * navigation error when the main document itself cannot be fetched. Any other failure (a browser that did not
+ * launch, a page context destroyed under the inject) says nothing about the proxy.
+ */
+const PROXY_REFUSAL_REASON = /^(?:auth timeout$|net::ERR_)/;
 
 // The single in-adapter retry of a navigation-killed first inject only runs while at least this much
 // of the lifecycle's outer init deadline remains — a retry the outer race SIGKILLs mid-launch would
@@ -281,7 +309,9 @@ export class WwebjsLifecycle {
    * When the navigation that began the current unverified episode of a ready page happened, 0 when there is none.
    * The library's re-emitted 'ready' closes the grace window but proves nothing about the page now loaded: it can
    * come from a run that started in the previous document, and a re-inject that threw emits nothing at all. Only a
-   * read of whatsapp-web.js's helpers in the current page clears it, by a probe or on a 'ready'. A 'ready' that came
+   * read of whatsapp-web.js's helpers in the current page clears it, by a probe or on a 'ready', and only while the
+   * patched client does not report the page's event bridge as unattached: the helpers are defined before the
+   * listeners are attached, so a page with them can still have no way to deliver an inbound event. A 'ready' that came
    * well after its own navigation does say that page re-injected, so the next navigation starts an episode of its own
    * instead of inheriting this one's anchor; a page that never re-injects keeps the anchor of its first reload.
    */
@@ -291,10 +321,10 @@ export class WwebjsLifecycle {
   /** When the live client last re-emitted 'ready'. */
   private lastReadyAt = 0;
   /**
-   * When the probe whose helpers read last answered no, or failed, started (Date.now()), 0 when none. Kept across the
-   * navigations of an episode, so a page stuck reloading still counts its answers. A read is kept only if no
-   * navigation landed while its probe ran, so one kept from an earlier episode predates the navigation that began the
-   * current one.
+   * When the probe whose read last did not verify the page (the helpers answered no, or failed, or exist with the event
+   * bridge unattached) started (Date.now()), 0 when none. Kept across the navigations of an episode, so a page stuck
+   * reloading still counts its answers. A read is kept only if no navigation landed while its probe ran, so one kept
+   * from an earlier episode predates the navigation that began the current one.
    */
   private helpersMissingProbeAt = 0;
   /**
@@ -325,6 +355,8 @@ export class WwebjsLifecycle {
       this.host.logger.error(unappliedPatchesMessage('wwebjs', unapplied));
     }
 
+    // Set once the launch is known to drop the credentials of a SOCKS proxy URL, for the reason a failed start reports.
+    let socksCredentialsDropped = false;
     try {
       // Build puppeteer args, including proxy if configured
       // Pinned on configured args too: a plugin config stored through the API replaces the whole puppeteer object
@@ -346,6 +378,7 @@ export class WwebjsLifecycle {
           puppeteerArgs.push(`--proxy-server=${proxyLaunch.serverArg}`);
           proxyAuthentication = proxyLaunch.proxyAuthentication;
           if (proxyLaunch.socksAuthUnsupported) {
+            socksCredentialsDropped = true;
             this.host.logger.warn(
               `Proxy for session ${this.host.config.sessionId} has credentials on a SOCKS proxy, but Chromium ` +
                 `cannot authenticate SOCKS proxies. Use an IP-authorized proxy or an HTTP/HTTPS proxy instead.`,
@@ -470,6 +503,8 @@ export class WwebjsLifecycle {
           `${reason} ${STALE_PROFILE_ADVICE} If this followed an ` +
           `upgrade, the session's browser profile is likely stale — see docs/12-troubleshooting-faq.md.`;
       }
+      if (socksCredentialsDropped && PROXY_REFUSAL_REASON.test(reason))
+        surfacedReason += ` ${SOCKS_CREDENTIALS_ADVICE}`;
       this.host.getCallbacks().onError?.(surfacedReason);
       throw error;
     }
@@ -724,6 +759,25 @@ export class WwebjsLifecycle {
       // navigation window HERE, before the guards below: markReadyFromClientInfo early-returns while
       // already READY, so a clear behind it would never run for the re-inject case (#1081).
       this.clearNavigationReinjectWindow();
+      // whatsapp-web.js can emit `ready` BEFORE its message listeners are attached: its post-auth
+      // callback runs once per hasSynced trigger, and any run that finds `window.WWebJS` already
+      // defined skips the attach and bare-emits `ready` — including while the first run's attach is
+      // still in flight (observed live). Promoting on that premature emit binds READY to a session
+      // whose inbound bridge may never come up. The patched client's `eventsAttached` flag
+      // (scripts/patch-wwebjs-ready-sync.js) distinguishes the cases: `false` → ignore this emit
+      // and let the attach's own completion re-emit `ready` (it always does), with the readiness
+      // reconciliation as the backstop when the attach failed instead. `undefined` (unpatched
+      // tree) keeps the legacy behaviour. The same holds for a page that reloaded: once the callback has found the
+      // new page without the helpers the flag is false again until its attach completes, so an emit in that span says
+      // nothing about the page now loaded, and it must not close the unverified reload or count as a re-inject of the
+      // page it replaced.
+      if (eventBridgeUnattached(source)) {
+        this.host.logger.warn('Ignoring premature ready: the message event bridge is not attached yet', {
+          sessionId: this.host.config.sessionId,
+          action: 'premature_ready_ignored',
+        });
+        return;
+      }
       this.lastReadyAt = Date.now();
       // While a reload is unverified, ask the page now loaded for the helpers, as a probe would: a yes closes the episode
       // only when no navigation landed since it was asked, so it speaks for the page it read and nothing later.
@@ -737,22 +791,6 @@ export class WwebjsLifecycle {
           },
           () => undefined,
         );
-      }
-      // whatsapp-web.js can emit `ready` BEFORE its message listeners are attached: its post-auth
-      // callback runs once per hasSynced trigger, and any run that finds `window.WWebJS` already
-      // defined skips the attach and bare-emits `ready` — including while the first run's attach is
-      // still in flight (observed live). Promoting on that premature emit binds READY to a session
-      // whose inbound bridge may never come up. The patched client's `eventsAttached` flag
-      // (scripts/patch-wwebjs-ready-sync.js) distinguishes the cases: `false` → ignore this emit
-      // and let the attach's own completion re-emit `ready` (it always does), with the readiness
-      // reconciliation as the backstop when the attach failed instead. `undefined` (unpatched
-      // tree) keeps the legacy behaviour.
-      if ((source as Client & { eventsAttached?: boolean }).eventsAttached === false) {
-        this.host.logger.warn('Ignoring premature ready: the message event bridge is not attached yet', {
-          sessionId: this.host.config.sessionId,
-          action: 'premature_ready_ignored',
-        });
-        return;
       }
       this.markReadyFromClientInfo();
     });
@@ -1306,13 +1344,18 @@ export class WwebjsLifecycle {
       helpersPending = true;
       // Undefined while the read is pending, and after it failed.
       let found: boolean | undefined;
+      let verified = false;
       try {
         found = await this.pageHasWwebjsHelpers(client);
-        return found;
+        // The helpers exist before the listeners are attached, so they alone do not show that a reload recovered.
+        // Read after the page answered: a page whose attach completed meanwhile is verified. A page with the helpers
+        // and no bridge can still send, so it is not marked as lacking them (found, not verified, feeds that latch).
+        verified = found && !eventBridgeUnattached(client);
+        return verified;
       } finally {
         helpersPending = false;
-        // A no or a failure answers for the page now loaded even when it lands after the deadline, so it is kept.
-        if (found !== true && this.client === client && navigationsBefore === this.navigationCount) {
+        // An answer that did not verify the page now loaded counts even when it lands after the deadline, so it is kept.
+        if (!verified && this.client === client && navigationsBefore === this.navigationCount) {
           this.helpersMissingProbeAt = startedAt;
           if (found === false) this.pageWithoutHelpers = true;
         }
