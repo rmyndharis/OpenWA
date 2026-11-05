@@ -1598,7 +1598,8 @@ A media message also carries `media: { mimetype, filename?, data?, omitted?, siz
 
 ### Error Body Shape
 
-There are no machine-readable WhatsApp error codes. Errors use the NestJS default shape, so match on
+There are no machine-readable WhatsApp error codes. Errors use the NestJS default shape (the readiness probe,
+the plugin ingress and `POST /mcp` answer in their own, described with the route in docs/06), so match on
 `statusCode` (above) and read `message` for the human-readable cause. A few refusals also carry a stable
 `code` (see the error response section of docs/06):
 

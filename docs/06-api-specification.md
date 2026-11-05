@@ -82,7 +82,7 @@ Session `status` wire values are **lowercase**: `created | initializing | qr_rea
 
 ### Error Response
 
-Errors use the NestJS default shape, published in `openapi.json` as the `ErrorResponse` schema. The HTTP status is on the status line and mirrored in `statusCode`:
+Errors use the NestJS default shape, published in `openapi.json` as the `ErrorResponse` schema, unless a route defines its own error body: the readiness probe's `503`, the plugin ingress and `POST /mcp` answer in the shape described with the route. The HTTP status is on the status line and mirrored in `statusCode`:
 
 ```json
 {

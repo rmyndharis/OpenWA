@@ -715,7 +715,8 @@ flowchart LR
 
 Responses are the **raw handler payload** — there is no `{success, data, meta}` envelope.
 A controller that returns an object sends exactly that object; a list endpoint returns a bare array.
-Errors use the NestJS default shape.
+Errors use the NestJS default shape, except on the few routes that define their own error body (the readiness
+probe, the plugin ingress and `POST /mcp`).
 
 ```typescript
 // Success Response — the resource itself
