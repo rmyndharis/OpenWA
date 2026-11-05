@@ -15,6 +15,13 @@ const imageNotCached = () => ({
   inspect: jest.fn().mockRejectedValue(Object.assign(new Error('no such image'), { statusCode: 404 })),
 });
 
+/** The lookup a stop uses: unlike getContainerByService it throws when the daemon could not answer. */
+const spyOnStopLookup = (service: DockerService) =>
+  jest.spyOn(
+    service as unknown as { findContainerByService: DockerService['getContainerByService'] },
+    'findContainerByService',
+  );
+
 describe('DockerService.getRunningBuiltinServices', () => {
   const container = (name: string, service: string, state: string, labels: Record<string, string> = {}) => ({
     id: name,
@@ -102,8 +109,8 @@ describe('DockerService.stopManagedService (stop-only teardown)', () => {
   // method gate), so the code must not depend on container.remove() at all.
   const makeService = (container: unknown) => {
     const service = new DockerService();
-    const getContainerByService = jest.spyOn(service, 'getContainerByService').mockResolvedValue(container as never);
-    return { service, getContainerByService };
+    const lookup = spyOnStopLookup(service).mockResolvedValue(container as never);
+    return { service, lookup };
   };
 
   it('maps the profile to its service label and stops a running container without removing it', async () => {
@@ -112,11 +119,11 @@ describe('DockerService.stopManagedService (stop-only teardown)', () => {
       stop: jest.fn().mockResolvedValue(undefined),
       remove: jest.fn(),
     };
-    const { service, getContainerByService } = makeService(container);
+    const { service, lookup } = makeService(container);
 
     await expect(service.stopManagedService('postgres')).resolves.toBe(true);
 
-    expect(getContainerByService).toHaveBeenCalledWith('database');
+    expect(lookup).toHaveBeenCalledWith('database');
     expect(container.stop).toHaveBeenCalledTimes(1);
     expect(container.remove).not.toHaveBeenCalled();
   });
@@ -399,6 +406,18 @@ describe('prestartBuiltinDatabase', () => {
     const service = { startBuiltinDatabase: jest.fn().mockRejectedValue(new Error('boom')) };
     await expect(prestartBuiltinDatabase(builtin, service)).resolves.toBeUndefined();
   });
+
+  it('never throws when Docker cannot list the containers', async () => {
+    const docker = {
+      ping: jest.fn().mockResolvedValue(undefined),
+      listContainers: jest.fn().mockRejectedValue(new Error('socket hang up')),
+    };
+    DockerMock.mockImplementation(() => docker);
+
+    await expect(prestartBuiltinDatabase(builtin, new DockerService())).resolves.toBeUndefined();
+
+    expect(docker.listContainers).toHaveBeenCalled();
+  });
 });
 
 describe('DockerService.isDockerAvailable', () => {
@@ -638,6 +657,18 @@ describe('DockerService.createService', () => {
 });
 
 describe('DockerService.startService', () => {
+  it('goes on to create the container when the container list fails', async () => {
+    const service = new DockerService();
+    Object.assign(service as unknown as Record<string, unknown>, {
+      docker: { listContainers: jest.fn().mockRejectedValue(new Error('socket hang up')) },
+      isAvailable: true,
+    });
+    const createService = jest.spyOn(service, 'createService').mockResolvedValue(true);
+
+    await expect(service.startService('database')).resolves.toBe(true);
+    expect(createService).toHaveBeenCalledWith('postgres');
+  });
+
   it('creates the mapped profile when no container exists yet', async () => {
     const service = new DockerService();
     jest.spyOn(service, 'getContainerByService').mockResolvedValue(null);
@@ -784,7 +815,7 @@ describe('DockerService image drift warning', () => {
 describe('DockerService.stopService', () => {
   const makeService = (container: unknown) => {
     const service = new DockerService();
-    jest.spyOn(service, 'getContainerByService').mockResolvedValue(container as never);
+    spyOnStopLookup(service).mockResolvedValue(container as never);
     return service;
   };
 
@@ -1105,6 +1136,7 @@ describe('DockerService existing container inspection deadlines', () => {
         stop: jest.fn(),
       };
       jest.spyOn(service, 'getContainerByService').mockResolvedValue(container as never);
+      spyOnStopLookup(service).mockResolvedValue(container as never);
       jest.useFakeTimers();
       let settled: boolean | undefined;
       const action =
