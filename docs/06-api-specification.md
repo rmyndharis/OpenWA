@@ -2962,7 +2962,7 @@ No `@HttpCode` override is present, so this DELETE returns the NestJS default `2
 
 ### 6.4.4 Groups
 
-All group routes are nested under a session: base path `/api/sessions/:sessionId/groups`. Reads (`GET`) require a plain API key, except the invite-code read (`GET .../:groupId/invite-code`), which requires an `OPERATOR` role key because the code is a join capability rather than data; writes (create/modify/leave/revoke) require an `OPERATOR` role key. All routes resolve the engine for the session first, so a session that is not started yields `400 Session is not started`.
+All group routes are nested under a session: base path `/api/sessions/:sessionId/groups`. Reads (`GET`) require a plain API key, except the invite-code read (`GET .../:groupId/invite-code`), which requires an `OPERATOR` role key because the code is a join capability rather than data; writes (create/modify/leave/revoke) require an `OPERATOR` role key. A route that takes a `:groupId` first refuses, with `400`, an id that does not name a group (a person's id, a privacy id, a channel, or an id with a second `@`), before the engine is looked up or WhatsApp is asked; a group id in another letter case is used as `<id>@g.us`. Every route then resolves the engine for the session, so a session that is not started yields `400 Session is not started`.
 
 #### GET /api/sessions/:sessionId/groups
 
@@ -3042,7 +3042,7 @@ A participant's `number` is MSISDN digits for a `<phone>@c.us` id. For a `<lid>@
 
 On whatsapp-web.js `owner` is `<lid>@lid` on a LID-addressed group even when `participants` shows the same person as `<phone>@c.us`, and the actor and participant ids of that engine's group events can be lids too. Baileys answers the phone form wherever it knows the phone.
 
-**Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `403` a key restricted to selected chats names a group outside its allowlist · `404` `Group <groupId> not found` · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` a key restricted to selected chats names a group outside its allowlist · `404` `Group <groupId> not found` · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### GET /api/sessions/:sessionId/groups/:groupId/picture
 
@@ -3107,7 +3107,7 @@ Get the group invite code and full invite link. The code is a transferable join 
 }
 ```
 
-**Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### POST /api/sessions/:sessionId/groups
 
@@ -3193,7 +3193,7 @@ Each entry is a `ParticipantOperationResult`: `id` (the participant the outcome 
 
 A participant whose privacy settings allow joining only by invitation is answered differently by the engines: whatsapp-web.js sends that person a private group invite message when WhatsApp allows one and, once it went out, reports `success: true` with a message saying the invite was sent (otherwise `success: false, status: 403`), while Baileys sends nothing and reports `success: false, status: 403`. A batch made only of such participants therefore answers `200` on whatsapp-web.js when every invite went out and `403` on Baileys.
 
-**Errors:** `400` validation / session not started, or a participant does not name an individual (phone, `<phone>@c.us` or `<lid>@lid`), or (send pacing on) the request names more new contacts than the whole day's cold-reachout allowance (no `retryAfterSeconds`; split the batch, see Send pacing) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or WhatsApp refused every listed participant (a partial refusal still returns `200`) · `404` group not found · `409` conflict or engine not ready (retryable) · `429` `SEND_PACING_LIMITED` when send pacing is enabled (cold-reachout cap reached for today, see Send pacing) · `503` session not ready or dependency unavailable (retryable), or WhatsApp did not answer within the request budget, so no per-participant outcome was read; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation / session not started, the id does not name a group, or a participant does not name an individual (phone, `<phone>@c.us` or `<lid>@lid`), or (send pacing on) the request names more new contacts than the whole day's cold-reachout allowance (no `retryAfterSeconds`; split the batch, see Send pacing) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or WhatsApp refused every listed participant (a partial refusal still returns `200`) · `404` group not found · `409` conflict or engine not ready (retryable) · `429` `SEND_PACING_LIMITED` when send pacing is enabled (cold-reachout cap reached for today, see Send pacing) · `503` session not ready or dependency unavailable (retryable), or WhatsApp did not answer within the request budget, so no per-participant outcome was read; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### DELETE /api/sessions/:sessionId/groups/:groupId/participants
 
@@ -3230,7 +3230,7 @@ No `@HttpCode`, so NestJS uses the DELETE default of `200`. `results` carries th
 }
 ```
 
-**Errors:** `400` validation / session not started, or a participant does not name an individual (phone, `<phone>@c.us` or `<lid>@lid`) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or WhatsApp refused every listed participant (a partial refusal still returns `200`) · `404` group not found · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable), or WhatsApp did not answer within the request budget, so no per-participant outcome was read; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation / session not started, the id does not name a group, or a participant does not name an individual (phone, `<phone>@c.us` or `<lid>@lid`) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or WhatsApp refused every listed participant (a partial refusal still returns `200`) · `404` group not found · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable), or WhatsApp did not answer within the request budget, so no per-participant outcome was read; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### POST /api/sessions/:sessionId/groups/:groupId/participants/promote
 
@@ -3265,7 +3265,7 @@ Promote participants to group admin.
 }
 ```
 
-**Errors:** `400` validation / session not started, or a participant does not name an individual (phone, `<phone>@c.us` or `<lid>@lid`) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or WhatsApp refused every listed participant (a partial refusal still returns `200`) · `404` group not found · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable), or WhatsApp did not answer within the request budget, so no per-participant outcome was read; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation / session not started, the id does not name a group, or a participant does not name an individual (phone, `<phone>@c.us` or `<lid>@lid`) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or WhatsApp refused every listed participant (a partial refusal still returns `200`) · `404` group not found · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable), or WhatsApp did not answer within the request budget, so no per-participant outcome was read; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### POST /api/sessions/:sessionId/groups/:groupId/participants/demote
 
@@ -3300,7 +3300,7 @@ Demote participants from group admin.
 }
 ```
 
-**Errors:** `400` validation / session not started, or a participant does not name an individual (phone, `<phone>@c.us` or `<lid>@lid`) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or WhatsApp refused every listed participant (a partial refusal still returns `200`) · `404` group not found · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable), or WhatsApp did not answer within the request budget, so no per-participant outcome was read; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation / session not started, the id does not name a group, or a participant does not name an individual (phone, `<phone>@c.us` or `<lid>@lid`) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or WhatsApp refused every listed participant (a partial refusal still returns `200`) · `404` group not found · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable), or WhatsApp did not answer within the request budget, so no per-participant outcome was read; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### PUT /api/sessions/:sessionId/groups/:groupId/subject
 
@@ -3333,7 +3333,7 @@ No `@HttpCode`; PUT default is `200`.
 { "success": true, "message": "Group subject updated" }
 ```
 
-**Errors:** `400` validation (empty `subject`) / session not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation (empty `subject`) / session not started, or the id does not name a group · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### PUT /api/sessions/:sessionId/groups/:groupId/description
 
@@ -3366,7 +3366,7 @@ No `@HttpCode`; PUT default is `200`.
 { "success": true, "message": "Group description updated" }
 ```
 
-**Errors:** `400` validation (`description` missing / not a string) / session not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation (`description` missing / not a string) / session not started, or the id does not name a group · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### PUT /api/sessions/:sessionId/groups/:groupId/member-label
 
@@ -3430,7 +3430,7 @@ Leave a group.
 { "success": true, "message": "Left the group" }
 ```
 
-**Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### POST /api/sessions/:sessionId/groups/:groupId/invite-code/revoke
 
@@ -3459,7 +3459,7 @@ Revoke the current invite code and generate a new one.
 }
 ```
 
-**Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### GET /api/sessions/:sessionId/groups/join-info
 
@@ -3552,7 +3552,7 @@ accept it, but they encode it differently underneath — Baileys as a boolean wh
 _everyone_, whatsapp-web.js as WhatsApp's own `all_member_add`/`admin_add` strings (its typings claim
 a boolean with the opposite sense). The adapters normalise both to these two values.
 
-**Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `403` a key restricted to selected chats names a group outside its allowlist · `404` group not found · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` a key restricted to selected chats names a group outside its allowlist · `404` group not found · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### PUT /api/sessions/:sessionId/groups/:groupId/settings
 
@@ -3598,7 +3598,7 @@ Update group settings. Each present field maps to one engine call; absent fields
 { "success": true, "message": "Group settings updated" }
 ```
 
-**Errors:** `400` session is not started / empty patch / unknown body field / a value outside its constraints in the table above, or `null` · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, the account is not a group admin (`memberAddMode` on whatsapp-web.js), or a key restricted to selected chats names a group outside its allowlist · `404` group not found · `501` `ephemeralSeconds` on the whatsapp-web.js engine (library limitation) · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` session is not started / the id does not name a group / empty patch / unknown body field / a value outside its constraints in the table above, or `null` · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, the account is not a group admin (`memberAddMode` on whatsapp-web.js), or a key restricted to selected chats names a group outside its allowlist · `404` group not found · `501` `ephemeralSeconds` on the whatsapp-web.js engine (library limitation) · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### GET /api/sessions/:sessionId/groups/:groupId/membership-requests
 
@@ -3633,7 +3633,7 @@ Each entry is a `GroupMembershipRequest`: `participantId` (the user asking to jo
 `method` (`invite_link` | `non_admin_add` | `linked_group_join`), optional `requestedAt` (unix
 seconds).
 
-**Errors:** `400` session is not started · `401` missing/invalid `X-API-Key` · `403` the engine refused the read — admin rights required · `404` no such group · `409` engine not ready · `503` WhatsApp did not answer within the request budget; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, or session is not started · `401` missing/invalid `X-API-Key` · `403` the engine refused the read — admin rights required · `404` no such group · `409` engine not ready · `503` WhatsApp did not answer within the request budget; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### POST /api/sessions/:sessionId/groups/:groupId/membership-requests/approve
 
@@ -3677,7 +3677,7 @@ for every **named** requester is a `403`.
 }
 ```
 
-**Errors:** `400` validation / session not started / a body that is a JSON list, or one sent in a content type other than `application/json` or `application/x-www-form-urlencoded`, which would otherwise act on every pending request · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights / every named requester failed) · `404` no such group · `409` engine not ready · `503` WhatsApp did not answer within the request budget; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation / session not started / the id does not name a group / a body that is a JSON list, or one sent in a content type other than `application/json` or `application/x-www-form-urlencoded`, which would otherwise act on every pending request · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights / every named requester failed) · `404` no such group · `409` engine not ready · `503` WhatsApp did not answer within the request budget; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### POST /api/sessions/:sessionId/groups/:groupId/membership-requests/reject
 
@@ -3686,7 +3686,7 @@ Reject pending join requests. Same body, response shape, batch-guard contract an
 
 **Auth:** API key (OPERATOR)
 
-**Errors:** `400` validation / session not started / a body that is a JSON list, or one sent in a content type other than `application/json` or `application/x-www-form-urlencoded`, which would otherwise act on every pending request · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights / every named requester failed) · `404` no such group · `409` engine not ready · `503` WhatsApp did not answer within the request budget; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation / session not started / the id does not name a group / a body that is a JSON list, or one sent in a content type other than `application/json` or `application/x-www-form-urlencoded`, which would otherwise act on every pending request · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights / every named requester failed) · `404` no such group · `409` engine not ready · `503` WhatsApp did not answer within the request budget; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 ```json
 {

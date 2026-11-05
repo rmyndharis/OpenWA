@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refuse `POST /api/sessions` with `400` for a `config` over 16384 bytes as JSON; the limit applies at creation, and a stored session above it still loads and takes `PATCH /api/sessions/{sessionId}/config`.
 - Answer `404`, not `400`, for an id of letters, digits and hyphens (up to 128 characters) that is not a UUID and that no session has, including a session name, and say the routes take the id.
 - `SESSION_PROXY_TIMEOUT_MS` covers only the first 4 MiB of a session owner's answer, so a larger one is no longer cut by it, and an owner failure once the relay of such an answer has begun cuts the connection instead of answering `502`.
+- Answer 400, before the session's engine is looked up, for an id that names no group on the group read, settings, subject, description, leave, invite code, participants and membership request routes and their MCP tools (such an id reached the engine and was reported as its refusal, 403 or 404), and give the engine the id as `<id>@g.us`.
 - List a Baileys session's stored chats right after a restart, groups included, with their newest stored message as preview and time and the contact's pushname (#1978). Thanks @farresyh.
 - Record a session's `lastActive` at most once every 30 seconds instead of on every message, so it can lag the latest message by up to that long.
 - A `PUT /api/plugins/{id}/config` write to a built-in plugin merges nested objects into the stored config instead of replacing them, and a `null` clears a key at any depth.

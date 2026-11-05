@@ -85,6 +85,9 @@ const PACED_PARTICIPANT_400 =
 // an engine that exists but is not ready. The body variant is for routes that also validate a DTO.
 const BODY_OR_SESSION_400 = 'The body failed validation, or the session is not started (no engine is running for it).';
 
+// Every route that takes a groupId refuses an id that names no group before an engine is asked.
+const NOT_A_GROUP_400 = ' Also answered when the group id in the path does not name a group.';
+
 /**
  * Approve and reject act on EVERY pending request when `participants` is absent, so a body that was sent but
  * never became the DTO must not pass for an absent one. The parsers read only application/json and
@@ -163,7 +166,7 @@ export class GroupController {
       THROTTLED_503,
   })
   @ApiResponse({ status: 404, description: 'Group not found' })
-  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async findOne(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
     return this.groupService.getGroupInfo(sessionId, groupId);
@@ -205,7 +208,7 @@ export class GroupController {
     status: 503,
     description: 'WhatsApp did not answer within the request budget — nothing could be read.' + THROTTLED_503,
   })
-  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async getSettings(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
     return this.groupService.getGroupSettings(sessionId, groupId);
@@ -224,7 +227,8 @@ export class GroupController {
     description:
       'No setting provided, an unknown body field, or an invalid value: `announce` and `locked` take a boolean, ' +
       '`ephemeralSeconds` an integer of 0 or more, `memberAddMode` `all` or `admins`, and `null` is refused. ' +
-      'Also answered when the session is not started (no engine is running for it).',
+      'Also answered when the session is not started (no engine is running for it), or the group id in the path ' +
+      'does not name a group.',
   })
   @ApiResponse({ status: 403, description: 'The engine refused the change (the account is not a group admin)' })
   @ApiResponse({ status: 404, description: 'Group not found' })
@@ -285,7 +289,7 @@ export class GroupController {
   @ApiResponse({ status: 503, description: PARTICIPANTS_503 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
-  @ApiResponse({ status: 400, description: PACED_PARTICIPANT_400 })
+  @ApiResponse({ status: 400, description: PACED_PARTICIPANT_400 + NOT_A_GROUP_400 })
   @HttpCode(HttpStatus.OK)
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   async addParticipants(
@@ -312,7 +316,7 @@ export class GroupController {
   @ApiResponse({ status: 503, description: PARTICIPANTS_503 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
-  @ApiResponse({ status: 400, description: PARTICIPANT_ID_400 })
+  @ApiResponse({ status: 400, description: PARTICIPANT_ID_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   async removeParticipants(
     @Param('sessionId') sessionId: string,
@@ -339,7 +343,7 @@ export class GroupController {
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
   @HttpCode(HttpStatus.OK)
-  @ApiResponse({ status: 400, description: PARTICIPANT_ID_400 })
+  @ApiResponse({ status: 400, description: PARTICIPANT_ID_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   async promoteParticipants(
     @Param('sessionId') sessionId: string,
@@ -366,7 +370,7 @@ export class GroupController {
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
   @HttpCode(HttpStatus.OK)
-  @ApiResponse({ status: 400, description: PARTICIPANT_ID_400 })
+  @ApiResponse({ status: 400, description: PARTICIPANT_ID_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   async demoteParticipants(
     @Param('sessionId') sessionId: string,
@@ -392,7 +396,7 @@ export class GroupController {
     status: 503,
     description: 'WhatsApp did not answer within the request budget — retry shortly.' + THROTTLED_503,
   })
-  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
@@ -421,7 +425,7 @@ export class GroupController {
     type: ParticipantsOperationResponseDto,
   })
   @ApiResponse({ status: 503, description: PARTICIPANTS_503 })
-  @ApiResponse({ status: 400, description: BODY_OR_SESSION_400 })
+  @ApiResponse({ status: 400, description: BODY_OR_SESSION_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
@@ -457,7 +461,7 @@ export class GroupController {
     type: ParticipantsOperationResponseDto,
   })
   @ApiResponse({ status: 503, description: PARTICIPANTS_503 })
-  @ApiResponse({ status: 400, description: BODY_OR_SESSION_400 })
+  @ApiResponse({ status: 400, description: BODY_OR_SESSION_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 403, description: ENGINE_REFUSED_403 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
@@ -488,7 +492,7 @@ export class GroupController {
       'the gateway stopped waiting for a confirmation that never came.' +
       THROTTLED_503,
   })
-  @ApiResponse({ status: 400, description: BODY_OR_SESSION_400 })
+  @ApiResponse({ status: 400, description: BODY_OR_SESSION_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   async setSubject(
@@ -516,7 +520,7 @@ export class GroupController {
       'the gateway stopped waiting for a confirmation that never came.' +
       THROTTLED_503,
   })
-  @ApiResponse({ status: 400, description: BODY_OR_SESSION_400 })
+  @ApiResponse({ status: 400, description: BODY_OR_SESSION_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   async setDescription(
@@ -597,7 +601,7 @@ export class GroupController {
       'the gateway stopped waiting for a confirmation that never came.' +
       THROTTLED_503,
   })
-  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   async leave(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
@@ -701,7 +705,7 @@ export class GroupController {
   @ApiResponse({ status: 200, description: 'Group invite code', type: GroupInviteCodeResponseDto })
   @ApiResponse({ status: 403, description: INVITE_CODE_403 })
   @ApiResponse({ status: 503, description: INVITE_CODE_503 })
-  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   async getInviteCode(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
@@ -721,7 +725,7 @@ export class GroupController {
   @ApiResponse({ status: 200, description: 'New invite code generated', type: GroupInviteCodeRevokedResponseDto })
   @ApiResponse({ status: 403, description: INVITE_CODE_403 })
   @ApiResponse({ status: 503, description: INVITE_CODE_503 })
-  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 })
+  @ApiResponse({ status: 400, description: SESSION_NOT_STARTED_400 + NOT_A_GROUP_400 })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
   async revokeInviteCode(@Param('sessionId') sessionId: string, @Param('groupId') groupId: string) {
