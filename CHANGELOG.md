@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Log the page visibility, the H.264/AAC playback answer and the browser version when a whatsapp-web.js video send or video status post times out in WhatsApp Web's 20 second video load, and document how to read that timeout (#1902). Thanks @benjaminb10 for the report.
+- Answer 400, before the session's engine is looked up, for an id that names no group on the group read, settings, subject, description, leave, invite code, participants and membership request routes and their MCP tools (such an id reached the engine and was reported as its refusal, 403 or 404), and give the engine the id as `<id>@g.us`.
 - List a Baileys session's stored chats right after a restart, groups included, with their newest stored message as preview and time and the contact's pushname (#1978). Thanks @farresyh.
 
 ### Fixed
