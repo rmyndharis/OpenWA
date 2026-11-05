@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Log the page visibility, the H.264/AAC playback answer and the browser version when a whatsapp-web.js video send or video status post times out in WhatsApp Web's 20 second video load, and document how to read that timeout (#1902). Thanks @benjaminb10 for the report.
+- The Docker image no longer ships the TypeScript compiler and ts-node, about 24 MiB less per architecture; nothing loads them at run time.
 - List a Baileys session's stored chats right after a restart, groups included, with their newest stored message as preview and time and the contact's pushname (#1978). Thanks @farresyh.
 
 ### Fixed
@@ -21,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Install Trivy for the release and scheduled image scans from its GitHub release against a pinned SHA-256, since the action's own installer needs a host that no longer resolves.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
+- JavaScript SDK: `client.request()`, `requestBytes()` and `buildUrl()` send the entries of a `URLSearchParams` or `Map` query instead of sending the request without them.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
 
 ### Documentation
@@ -38,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Upgrade notes (behavior changes)
 
 - A Baileys group message now produces `message.ack` events (`delivered`, then `read`) and advances its stored status, which stayed at `sent` before; a webhook or socket client that expected no ack for a group message will receive them. The ack payload carries no `isGroup`, so a webhook filter on `isGroup` cannot tell them from direct ones; filter on `kind` or `chatId` instead.
+- The Docker image no longer contains `typescript` or `ts-node`. A plugin that required either from the gateway's `node_modules` without bundling it must now ship its own copy.
 - After a restart, Baileys `GET /api/sessions/{sessionId}/chats` also returns the chats with stored messages, and groups carry their newest message's time instead of `0`, so the list is longer and its pages change; a chat deleted on the phone before 0.27.0 or before an unlink is listed again while its messages are stored.
 
 ## [0.27.1] - 2026-11-02
