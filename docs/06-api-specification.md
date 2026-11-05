@@ -4302,7 +4302,7 @@ create and update are the same operation and there is no server-assigned id to h
 why the route is `PUT /labels/:labelId` rather than `POST /labels`. Reusing an existing id **rewrites
 that label** instead of failing, because the protocol has no create-only form.
 
-**Reads are store-backed, not engine-direct.** `GET /status` and `GET /status/:id` no longer call the engine — they read from an OpenWA-side store that ingests inbound status/story broadcasts as they arrive (plus a best-effort backfill of currently-active stories on session connect), with a 24h TTL matching WhatsApp's own story expiry. This makes reads **identical on both engines**: `whatsapp-web.js` (which had a native `getBroadcasts()`/`getBroadcastById()` path) and Baileys (which never had one — `fetchStatus` only returns the _about_ text, not stories, so the raw engine methods still throw `501` if called directly, they're just no longer on the read path) now return the same shape from the same source. A status older than 24h, or received before the store existed, will not appear. A status its poster deletes leaves the store, and its media file is deleted, once the delete reaches the session: it is no longer listed and its media route answers `404`.
+**Reads are store-backed, not engine-direct.** `GET /status` and `GET /status/:id` no longer call the engine — they read from an OpenWA-side store that ingests inbound status/story broadcasts as they arrive (plus a best-effort backfill of currently-active stories on session connect), with a 24h TTL matching WhatsApp's own story expiry. This makes reads **identical on both engines**: `whatsapp-web.js` (which had a native `getBroadcasts()`/`getBroadcastById()` path) and Baileys (which never had one — `fetchStatus` only returns the _about_ text, not stories, so the raw engine methods still throw `501` if called directly, they're just no longer on the read path) now return the same shape from the same source. A status older than 24h, or received before the store existed, will not appear. A status its poster deletes leaves the store, and its media file is deleted, once the delete reaches the session: it is no longer listed and its media route answers `404`. Three cases leave it: on Baileys a delete that names no sender, or a sender whose lid has no reported pairing to the poster's number, is not applied and the story stays until it expires; a delete that arrives before the story is stored does not remove it; and a media file that cannot be deleted is left for the orphan sweep, while the story is gone.
 
 #### GET /api/sessions/:sessionId/labels
 
@@ -4493,7 +4493,7 @@ The handler always returns `{ "success": true }`. DELETE default status is `200`
 
 #### GET /api/sessions/:sessionId/status
 
-Get all contact status updates (stories) visible to the session, read from the store (24h TTL, both engines — see the note above). A status its poster has deleted is no longer listed.
+Get all contact status updates (stories) visible to the session, read from the store (24h TTL, both engines — see the note above). A status its poster has deleted is no longer listed, with the exceptions in the note above.
 
 **Auth:** API key
 
@@ -4529,7 +4529,7 @@ The controller wraps the store array in `{ statuses }`, ordered newest-first. `t
 
 #### GET /api/sessions/:sessionId/status/:id
 
-Get status updates posted by a specific contact, read from the store (24h TTL, both engines). A status its poster has deleted is no longer listed.
+Get status updates posted by a specific contact, read from the store (24h TTL, both engines). A status its poster has deleted is no longer listed, with the exceptions in the note above.
 
 **Auth:** API key
 

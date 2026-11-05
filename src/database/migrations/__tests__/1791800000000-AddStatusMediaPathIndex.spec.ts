@@ -34,6 +34,11 @@ describe('AddStatusMediaPathIndex migration', () => {
     await new AddStatusMediaPathIndex1791800000000().up(runner);
 
     expect(await indexNames()).toContain('IDX_status_updates_mediaPath');
+    // Partial: the column is NULL for every story without stored media, which a full index would carry for nothing.
+    const [created] = await ds.query<{ sql: string }[]>(
+      `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'IDX_status_updates_mediaPath'`,
+    );
+    expect(created.sql).toContain('WHERE "mediaPath" IS NOT NULL');
   });
 
   it('is idempotent (re-running up is a no-op) and down() drops the index', async () => {
