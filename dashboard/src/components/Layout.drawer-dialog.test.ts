@@ -258,7 +258,7 @@ test('a dialog that is already open when the drawer opens closes the drawer and 
 
   rtl.fireEvent.click(menuButton);
 
-  await rtl.waitFor(() => assert.equal(container.querySelector('aside.sidebar')!.classList.contains('open'), false));
+  assert.equal(container.querySelector('aside.sidebar')!.classList.contains('open'), false);
   previous.push(...watcher.takeRecords().map(record => record.oldValue));
   watcher.disconnect();
   assert.equal(previous.includes('true'), true, 'the drawer opened before it closed');
