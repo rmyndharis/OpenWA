@@ -1345,13 +1345,14 @@ export function Chats() {
 
   // The number check answers a phone id, while a contact that moved to privacy-id addressing keeps its conversation
   // under its @lid. Finds the id the list holds that conversation under: the same phone spelled another way, else
-  // the @lid chat the engine resolves to that phone. The engine's answers share the room header's cache.
+  // the @lid chat the engine resolves to that phone. The engine's answers share the room header's cache. The search
+  // ends, with no further request, once the key or the session changes or the caller no longer wants the answer.
   const findListedChat = useCallback(
-    async (phoneId: string): Promise<string | null> => {
+    async (phoneId: string, isWanted: () => boolean = () => true): Promise<string | null> => {
       const sessionId = selectedSessionRef.current;
       const sameKey = keepsSameKey();
       const isCurrent = () =>
-        sameKey() && selectedSessionRef.current === sessionId && listedSessionRef.current === sessionId;
+        sameKey() && selectedSessionRef.current === sessionId && listedSessionRef.current === sessionId && isWanted();
       if (!isCurrent()) return null;
       const spelled = chatsRef.current.find(c => contactKey(c.id) === contactKey(phoneId));
       if (spelled) return spelled.id;
