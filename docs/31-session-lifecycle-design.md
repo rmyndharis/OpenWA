@@ -133,7 +133,9 @@ number and push name join this order, so a stop or a failure that follows it is 
 that was waiting; the synced push name joins it too, so the empty name of the READY row cannot land after it.
 The logout issues its clear in the step that removes its engine from the registry, before a start can find
 the registry empty. Both readers also compare the binding epoch they took before reading with the one at the
-moment they use the row, since an unlink recorded in between clears a binding the row still shows.
+moment they use the row, since an unlink recorded in between clears a binding the row still shows. The snapshot
+a reconnect episode starts its next attempt from follows the binding in both directions: an unlink clears its
+phone, and an accepted READY sets it, so an attempt that linked an account and then failed is retried with it.
 **Pinned by:** `src/modules/takeover/session-takeover.service.spec.ts` +
 `session-ownership.service.spec.ts` + `session-ownership-status-fence.spec.ts` +
 `session-failed-write-ownership-fence.spec.ts` for the FAILED writers outside the wiring + the real-database

@@ -693,3 +693,55 @@ describe('a disconnect read that is used after an unlink was recorded', () => {
     },
   );
 });
+
+// A READY accepted while a reconnect attempt is still initializing writes the binding; the attempt may then fail and be
+// retried, and the retry has to start from that binding, as a start that reads the row does.
+describe('an account linked while a reconnect initializes', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it.each([
+    [false, OTHER, 0, SessionStatus.READY],
+    [false, THIRD, 1, SessionStatus.FAILED],
+    [true, OTHER, 0, SessionStatus.READY],
+    [true, THIRD, 1, SessionStatus.FAILED],
+  ])(
+    'keeps its binding when the initialization then fails (explicit start: %s; next number: %s)',
+    async (explicit, phone, logouts, status) => {
+      const f = fixture();
+      f.stored.phone = null;
+      await f.lifecycle.start(ID);
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask', 'Date'] });
+      const pending = f.holdInit();
+      try {
+        disconnect(f, 0);
+        await f.settled();
+        await jest.advanceTimersByTimeAsync(2_000);
+        await until(() => Boolean(f.engines[1]?.initialize.mock.calls.length), 'the pending initialization');
+        f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
+        await f.linkOther(1);
+        expect(f.stored.phone).toBe(OTHER);
+        expect(f.engines[1].logout).not.toHaveBeenCalled();
+
+        f.engines[1].getStatus.mockReturnValue(EngineStatus.FAILED);
+        f.callbacksOf(1).onStateChanged?.(EngineStatus.FAILED);
+        f.callbacksOf(1).onError?.('temporary connection failure');
+        pending.reject(new Error('temporary connection failure'));
+        await until(() => !f.registry.has(ID), 'the failed attempt eviction');
+        for (let i = 0; i < 20; i++) await tick();
+        expect(f.stored.phone).toBe(OTHER);
+        if (explicit) await f.lifecycle.start(ID, { explicit: true });
+        else await jest.advanceTimersByTimeAsync(10_000);
+        await until(() => Boolean(f.engines[2]?.initialize.mock.calls.length), 'the next initialized engine');
+        f.engines[2].getPhoneNumber = jest.fn(() => phone);
+        f.engines[2].getStatus.mockReturnValue(EngineStatus.READY);
+        f.callbacksOf(2).onStateChanged?.(EngineStatus.READY);
+        f.callbacksOf(2).onReady?.(phone, 'Next');
+        for (let i = 0; i < 20; i++) await tick();
+
+        expect(outcome(f, 2)).toEqual({ logouts, status, phone: OTHER });
+      } finally {
+        await f.lifecycle.shutdown();
+      }
+    },
+  );
+});

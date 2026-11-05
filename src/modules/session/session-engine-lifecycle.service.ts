@@ -1005,6 +1005,8 @@ export class SessionEngineLifecycle {
     // is not counted as READY time.
     const reconnectState = this.reconnectStates.get(id);
     if (reconnectState) {
+      // The binding this READY writes is the one the episode's next attempt starts from, as the clear of an unlink is.
+      if (phone && reconnectState.session) reconnectState.session = { ...reconnectState.session, phone };
       if (this.readyStretchHeld(reconnectState)) reconnectState.attempts = 0;
       reconnectState.readyAt = Date.now();
       reconnectState.readyEndedAt = undefined;
@@ -1675,7 +1677,7 @@ export class SessionEngineLifecycle {
       // Another attempt can finish tearing down this same engine first while sharing the episode.
       if (state.started !== attempt) return;
       // An unlink the old engine reported during the teardown re-armed the state with the binding it cleared.
-      if (state.session && state.session.phone == null && session.phone) session = { ...session, phone: null };
+      session = this.withEpisodeBinding(state, session);
 
       // Re-initialize. An engine failure reported inside this window is parked (see
       // parkReconnectInitFailure): a failed launch must retry, not land FAILED and strand the session.
@@ -1765,13 +1767,20 @@ export class SessionEngineLifecycle {
       // now: it would hold the timer the next attempt needs, then fire against the evicted engine and
       // end at its fence, leaving the session with no engine and nothing armed.
       if (this.endReadRetryOfGoneEngine(id)) session = { ...session, phone: null };
-      // An unlink recorded while this attempt initialized cleared the episode's snapshot, not the session this
-      // attempt started from.
-      if (state.session && state.session.phone == null && session.phone) session = { ...session, phone: null };
+      // An unlink recorded while this attempt initialized cleared the episode's snapshot, and a READY it accepted set
+      // it, not the session this attempt started from.
+      session = this.withEpisodeBinding(state, session);
       // Schedule another attempt. The row stays INITIALIZING through the backoff (an active status, with
       // lastError still showing the reason), so a retryable failure writes nothing per attempt.
       this.scheduleReconnect(id, session);
     }
+  }
+
+  /** The attempt's session with the binding the episode's snapshot holds now: an unlink clears it, an accepted READY sets it. */
+  private withEpisodeBinding(state: ReconnectState, session: Session): Session {
+    return state.session && state.session.phone !== session.phone
+      ? { ...session, phone: state.session.phone }
+      : session;
   }
 
   /**
