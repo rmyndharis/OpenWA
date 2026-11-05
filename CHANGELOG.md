@@ -19,14 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Install Trivy for the release and scheduled image scans from its GitHub release against a pinned SHA-256, since the action's own installer needs a host that no longer resolves.
+- Ignore a SIGHUP that arrives while a stop is already running, so a terminal closing during the teardown no longer cuts it short.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
+- Drain on SIGHUP like on SIGTERM and SIGINT, with the readiness 503, the request gate and the force-exit budget, also when the terminal that sent it has closed.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
+- Raise a WebAssembly out-of-bounds access as a catchable error instead of spinning the process.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
+- End the process on a crash in native code instead of leaving the gateway spinning at full CPU and answering nothing, so a restart policy brings it back.
+- Leave SIGQUIT and SIGABRT to their default action, so they can take a core dump of a gateway whose event loop is blocked.
+- Leave SIGUSR2 to Node, so `--report-on-signal` and `--heapsnapshot-signal=SIGUSR2` write their file and no longer stop the gateway; name a writable directory such as `/app/data` with `--report-directory` or `--diagnostic-dir`.
 
 ### Documentation
 
 - The community integrations page lists `openwa-n8n-workflows`, an import-ready n8n workflow that answers `message.received` webhooks with a local AI model. Thanks @Abhishekrajpurohit.
 - The API reference says how to count the viewers of a Baileys status post from `message.receipt`, and that a status post reports no `delivered` or `read` ack.
+- The operational runbooks list what each signal does to the gateway, the output directory Node's diagnostic flags need in the image, and the exit status a native crash leaves.
 
 ### Dependencies
 
@@ -39,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A Baileys group message now produces `message.ack` events (`delivered`, then `read`) and advances its stored status, which stayed at `sent` before; a webhook or socket client that expected no ack for a group message will receive them. The ack payload carries no `isGroup`, so a webhook filter on `isGroup` cannot tell them from direct ones; filter on `kind` or `chatId` instead.
 - After a restart, Baileys `GET /api/sessions/{sessionId}/chats` also returns the chats with stored messages, and groups carry their newest message's time instead of `0`, so the list is longer and its pages change; a chat deleted on the phone before 0.27.0 or before an unlink is listed again while its messages are stored.
+- SIGQUIT, SIGABRT and a bare SIGUSR2 now end the process at once with no teardown; a process manager that restarts with SIGUSR2, such as nodemon's default, should send SIGTERM.
+- SIGHUP now drains and exits 0 (1 on a failed or overrun teardown) instead of dying by SIGHUP, so Docker's on-failure restart policy no longer restarts after `docker kill -s HUP`.
 
 ## [0.27.1] - 2026-11-02
 
