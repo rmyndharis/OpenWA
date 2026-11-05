@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
-- Webhook and automation rule writes refuse more than 27 events and id filter values over 128 characters.
+- Webhook writes refuse more than 27 events, and webhook and automation rule writes refuse id filter values over 128 characters.
 - Stored webhook rows and backups past these limits are kept as they are; an edit that resends them is refused until they fit.
 - Integration redrive reads one payload at a time, and an exhausted webhook replay budget keeps the event data on the failure row.
 
