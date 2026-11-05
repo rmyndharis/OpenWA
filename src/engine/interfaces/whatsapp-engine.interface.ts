@@ -1018,9 +1018,10 @@ export interface EngineEventCallbacks {
   onMessageReceipt?: (event: MessageReceiptEvent) => void;
   /**
    * `actor.fromMe` says whether the account itself made the revoke (from its phone). Only an engine that
-   * receives the raw protocol message can say; whatsapp-web.js leaves it out.
+   * receives the raw protocol message can say; whatsapp-web.js leaves it out. The payload of a status post's
+   * delete names no sender, so there `actor.participant` is the neutral id of the contact who sent it.
    */
-  onMessageRevoked?: (message: RevokedMessage, actor?: { fromMe: boolean }) => void;
+  onMessageRevoked?: (message: RevokedMessage, actor?: { fromMe: boolean; participant?: string }) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
   /**
