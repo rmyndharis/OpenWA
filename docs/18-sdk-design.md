@@ -122,7 +122,7 @@ The constructor takes a single `OpenWAClientOptions` object. `baseUrl` and `apiK
 
 ### Resources & Methods
 
-All resources are accessed as properties on the client (`client.<resource>.<method>`). Every method returns a `Promise`. Methods marked **OPERATOR** require an `OPERATOR`-level API key (an `ADMIN` key satisfies it); a `VIEWER` key receives a `403` (`OpenWAForbiddenError`). Some methods are supported by one engine only and answer `501` on the other (a row says so where it matters; section [29.6 of the engine capability matrix](./29-engine-capability-matrix.md#296-the-28-not-available-cells-in-detail) lists them all).
+All resources are accessed as properties on the client (`client.<resource>.<method>`). Every method returns a `Promise`. Methods marked **OPERATOR** require an `OPERATOR`-level API key (an `ADMIN` key satisfies it); a `VIEWER` key receives a `403` (`OpenWAForbiddenError`). Some methods are supported by one engine only and answer `501` on the other (a row says so where it matters; section [29.6 of the engine capability matrix](./29-engine-capability-matrix.md#296-the-29-not-available-cells-in-detail) lists them all).
 
 The top-level client also exposes:
 
@@ -512,7 +512,7 @@ The client also exposes a few non-resource members:
 
 ### Resources & Methods
 
-Resources are accessed as properties on the client (e.g. `client.messages`). All methods are **snake_case**; `body`/`query` arguments are plain dicts. Methods marked **OPERATOR** require an `OPERATOR`-level API key. Some methods are supported by one engine only and answer `501` on the other (a row says so where it matters; section [29.6 of the engine capability matrix](./29-engine-capability-matrix.md#296-the-28-not-available-cells-in-detail) lists them all).
+Resources are accessed as properties on the client (e.g. `client.messages`). All methods are **snake_case**; `body`/`query` arguments are plain dicts. Methods marked **OPERATOR** require an `OPERATOR`-level API key. Some methods are supported by one engine only and answer `501` on the other (a row says so where it matters; section [29.6 of the engine capability matrix](./29-engine-capability-matrix.md#296-the-29-not-available-cells-in-detail) lists them all).
 
 #### `client.sessions`
 
@@ -868,7 +868,7 @@ Missing `baseUrl` or `apiKey`, a key or default header value with a control or n
 
 ### Resources & Methods
 
-All payloads are associative arrays; all listed methods are synchronous and return the decoded JSON (an `array`), except the `void` deletes. Methods marked **OPERATOR** require an operator-level API key. Some methods are supported by one engine only and answer `501` on the other (a row says so where it matters; section [29.6 of the engine capability matrix](./29-engine-capability-matrix.md#296-the-28-not-available-cells-in-detail) lists them all).
+All payloads are associative arrays; all listed methods are synchronous and return the decoded JSON (an `array`), except the `void` deletes. Methods marked **OPERATOR** require an operator-level API key. Some methods are supported by one engine only and answer `501` on the other (a row says so where it matters; section [29.6 of the engine capability matrix](./29-engine-capability-matrix.md#296-the-29-not-available-cells-in-detail) lists them all).
 
 #### `sessions`
 
