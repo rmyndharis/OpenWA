@@ -76,14 +76,17 @@ fixed `dev-admin-key`; with neither set, the seed key is generated in the format
 API keys carry **no permission strings**. Authorization is a role hierarchy on the key itself, plus
 three scoping dimensions enforced by `ApiKeyGuard`.
 
-| Role       | Rank | Meaning                                                              |
-| ---------- | ---- | -------------------------------------------------------------------- |
-| `admin`    | 3    | Satisfies every `@RequireRole` level, including API-key management   |
-| `operator` | 2    | Satisfies `operator` and `viewer` routes — the default for a new key |
-| `viewer`   | 1    | Satisfies `viewer` routes only                                       |
+| Role       | Rank | Meaning                                                                                             |
+| ---------- | ---- | --------------------------------------------------------------------------------------------------- |
+| `admin`    | 3    | Satisfies every `@RequireRole` level, including API-key management                                  |
+| `operator` | 2    | Satisfies `operator` and `viewer` routes — the default for a new key                                |
+| `viewer`   | 1    | Satisfies `viewer` routes only; includes avatar lookups, channel metadata and group invite previews |
 
 A route declares its minimum level with `@RequireRole(...)`; a key passes when its role ranks at or
 above that level (`AuthService.hasPermission`). A key below it is rejected with `403 Forbidden`.
+Profile-picture and phone-resolution reads are open to VIEWER keys; the dashboard uses them for avatars and
+contact phone labels. Channel metadata and group invite previews are also readable. Number-existence checks and phone-to-LID
+lookups require OPERATOR. These permissions still apply within the key's IP, session and chat scopes.
 
 | Scope     | Field             | Effect                                                                                                                                                                                                              |
 | --------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
