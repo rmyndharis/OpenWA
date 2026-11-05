@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop announcing `message.ack` for the acks of whatsapp-web.js system notices, which are no longer delivered as messages.
 - Stop delivering whatsapp-web.js system notices (a changed security code, the encryption notice, business and broadcast notices) as `unknown` messages on `message.received` and `message.sent`, so they are no longer stored, passed to the message hooks or answered by automation rules (#1864). Thanks @dwimnofan.
 - Compile a chat-restricted key's allowlist once per request instead of once per chat id.
+- Return keyboard focus to the chat list row, or the search field, when the open chat, channel or status is closed.
+- Keep focus in the Number Checker phone field during and after a single check.
+- Keep dialogs that open over the phone navigation drawer usable and release the page scroll lock when they close.
+- Return keyboard focus to Save Configuration after the restart prompt is put off or a save is refused.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
 - Refuse a Baileys retry receipt from another chat for a message received under a lid with its sender's number.
 - Webhook writes refuse more than 27 events, and webhook and automation rule writes refuse id filter values over 128 characters.

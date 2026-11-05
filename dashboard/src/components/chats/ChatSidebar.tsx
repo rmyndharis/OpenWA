@@ -114,6 +114,7 @@ const ChatListRow = memo(
       <div
         role="button"
         tabIndex={0}
+        data-chat-id={chat.id}
         aria-current={active ? 'true' : undefined}
         className={`chat-item-card ${active ? 'active' : ''} ${chat.unreadCount !== 0 ? 'unread' : ''}`}
         onClick={() => onSelectChat(chat)}
@@ -263,6 +264,7 @@ function ChatSidebar({
             <button
               type="button"
               className="icon-btn"
+              data-new-chat
               onClick={onNewChat}
               title={t('chats.newChat.title')}
               aria-label={t('chats.newChat.title')}
@@ -448,6 +450,7 @@ function ChatSidebar({
                 key={ch.id}
                 role="button"
                 tabIndex={0}
+                data-chat-id={ch.id}
                 aria-current={channelsTab.activeChannelId === ch.id ? 'true' : undefined}
                 className={`chat-item-card ${channelsTab.activeChannelId === ch.id ? 'active' : ''}`}
                 onClick={() => channelsTab.onSelectChannel(ch)}
@@ -502,6 +505,7 @@ function ChatSidebar({
                 key={group.contact.id}
                 role="button"
                 tabIndex={0}
+                data-chat-id={group.contact.id}
                 aria-current={statusTab.activeContactId === group.contact.id ? 'true' : undefined}
                 className={`chat-item-card ${statusTab.activeContactId === group.contact.id ? 'active' : ''}`}
                 onClick={() => statusTab.onSelectContact(group.contact.id)}

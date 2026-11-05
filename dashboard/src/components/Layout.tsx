@@ -96,6 +96,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   const languageMenuRef = useRef<HTMLDivElement>(null);
   const languageButtonRef = useRef<HTMLButtonElement>(null);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const phone = window.matchMedia(MOBILE_QUERY);
@@ -145,10 +146,17 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   };
 
   useEffect(() => {
-    document.body.style.overflow = isMobileOpen ? 'hidden' : '';
-    return () => {
-      document.body.style.overflow = '';
+    if (!isMobileOpen || !mainRef.current) return;
+    const main = mainRef.current;
+    const closeForDialog = () => {
+      if (!main.querySelector('[role="dialog"]')) return;
+      setIsMobileOpen(false);
+      mobileMenuButtonRef.current?.focus();
     };
+    const observer = new MutationObserver(closeForDialog);
+    observer.observe(main, { childList: true, subtree: true });
+    closeForDialog();
+    return () => observer.disconnect();
   }, [isMobileOpen]);
 
   // Escape dismisses the innermost overlay: while the language menu is open it takes the key, then the drawer does.
@@ -350,6 +358,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
 
       {/* The open drawer covers the page, so the page leaves the tab and reading order until it closes. */}
       <main
+        ref={mainRef}
         className={`main-content ${collapsed ? 'expanded' : ''} ${isMobile ? 'mobile' : ''}`}
         inert={isMobile && isMobileOpen}
       >

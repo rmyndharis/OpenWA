@@ -72,6 +72,7 @@ export function NumberChecker() {
 
   // Single Check State
   const [phoneNumber, setPhoneNumber] = useState('');
+  const singlePhoneRef = useRef<HTMLInputElement>(null);
   const [isCheckingSingle, setIsCheckingSingle] = useState(false);
   const [singleResult, setSingleResult] = useState<CheckResultItem | null>(null);
   const [copiedId, setCopiedId] = useState(false);
@@ -234,7 +235,12 @@ export function NumberChecker() {
         err instanceof Error ? err.message : t('numberChecker.toast.unknownError'),
       );
     } finally {
-      if (singleRun.current === request) setIsCheckingSingle(false);
+      if (singleRun.current === request) {
+        setIsCheckingSingle(false);
+        if (isCurrent() && (document.activeElement === null || document.activeElement === document.body)) {
+          singlePhoneRef.current?.focus({ preventScroll: true });
+        }
+      }
     }
   };
 
@@ -395,6 +401,7 @@ export function NumberChecker() {
                 </label>
                 <div className="nc-input-row">
                   <input
+                    ref={singlePhoneRef}
                     id="nc-single-phone"
                     type="text"
                     dir="ltr"
@@ -405,7 +412,7 @@ export function NumberChecker() {
                     onKeyDown={e => {
                       if (e.key === 'Enter' && !isComposingKey(e.nativeEvent)) handleSingleCheck();
                     }}
-                    disabled={isCheckingSingle}
+                    readOnly={isCheckingSingle}
                   />
                   <button
                     className="nc-btn nc-btn-primary"

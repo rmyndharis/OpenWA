@@ -246,6 +246,16 @@ export function Infrastructure() {
     },
   });
 
+  const saveButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreSaveFocus = useRef(false);
+  useEffect(() => {
+    if (configSave.saving || restartFlow.showRestartModal || !restoreSaveFocus.current) return;
+    restoreSaveFocus.current = false;
+    if (document.activeElement === null || document.activeElement === document.body) {
+      saveButtonRef.current?.focus({ preventScroll: true });
+    }
+  }, [configSave.saving, restartFlow.showRestartModal]);
+
   const [queueStats, setQueueStats] = useState({
     webhooks: { pending: 0, completed: 0, failed: 0 } as QueueStats,
   });
@@ -1199,7 +1209,15 @@ export function Infrastructure() {
       )}
 
       <footer className="page-footer">
-        <button className="btn-primary large" onClick={configSave.saveConfig} disabled={configSave.saving}>
+        <button
+          ref={saveButtonRef}
+          className="btn-primary large"
+          onClick={event => {
+            restoreSaveFocus.current = document.activeElement === event.currentTarget;
+            void configSave.saveConfig();
+          }}
+          disabled={configSave.saving}
+        >
           {configSave.saving ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />}
           {configSave.saving ? t('infrastructure.saving') : t('infrastructure.saveConfig')}
         </button>
