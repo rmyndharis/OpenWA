@@ -860,6 +860,11 @@ describe('LoggerService', () => {
           () => logger.log('Contact synced', { displayName: `Alice\u2029${FORGED.split('\n')[1]}` }),
         ],
         ['in a trace', 'error', () => logger.error('failed', `Error: boom\u2028${FORGED.split('\n')[1]}`)],
+        [
+          'as a paragraph separator in a trace',
+          'error',
+          () => logger.error('failed', `Error: boom\u2029${FORGED.split('\n')[1]}`),
+        ],
       ] as const)('for a Unicode line separator %s', (_where, method, write) => {
         const spy = jest.spyOn(console, method);
         write();
