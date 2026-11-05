@@ -83,8 +83,9 @@ describe('loadEnvironment', () => {
     expect(process.env.REDIS_HOST).toBeUndefined();
   });
 
-  // Running as root bypasses permission bits, so the refusal is unprovable there.
-  (process.getuid?.() === 0 ? it.skip : it)('fails the load, naming the file, when .env has no read permission', () => {
+  // Root bypasses permission bits and Windows has no read bit to clear, so the refusal is unprovable on either.
+  const readCanBeDenied = process.getuid?.() !== 0 && process.platform !== 'win32';
+  (readCanBeDenied ? it : it.skip)('fails the load, naming the file, when .env has no read permission', () => {
     const dir = makeTempCwd({ '.env': 'REDIS_HOST=redis.internal\n', 'data/.env.generated': '' });
     const file = path.join(dir, '.env');
     fs.chmodSync(file, 0o000);
