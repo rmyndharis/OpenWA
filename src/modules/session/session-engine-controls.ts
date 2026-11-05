@@ -133,6 +133,11 @@ export class StopMarks extends Set<string> {
     return super.delete(id);
   }
 
+  /** Drops the id's mark only while it still has this stamp, so a mark a later operation set stays. */
+  deleteStamped(id: string, stamp: number): boolean {
+    return this.stamps.get(id) === stamp ? this.delete(id) : false;
+  }
+
   /** The stamp of the id's current mark, undefined when it has none. */
   stamp(id: string): number | undefined {
     return this.stamps.get(id);
@@ -141,6 +146,8 @@ export class StopMarks extends Set<string> {
 
 /** Caller callbacks for stop(), delete(), forceKill() and logout(), run around the session read that opens each verb. */
 export interface StopHooks {
+  /** stop() and delete(): the stamp of the stop mark the caller set for this call, which a failed first read drops. */
+  mark?: number;
   /** delete() only: the ownership captured by its caller still covers this operation. */
   ownsClaim?: () => boolean;
   /** stop() only: runs once the session read succeeds and before any teardown; records the stop. */
@@ -293,11 +300,17 @@ export class SessionEngineControls {
    * that fails has retired nothing, so the mark must not outlive it: left on a running session, its
    * next disconnect would never reconnect and start() would keep refusing it as already started.
    */
-  private async requireSessionOrDropStopMark(id: string, onReadFailed?: () => void): Promise<Session> {
+  private async requireSessionOrDropStopMark(
+    id: string,
+    mark: number | undefined,
+    onReadFailed?: () => void,
+  ): Promise<Session> {
     try {
       return await this.requireSession(id);
     } catch (error) {
-      this.stoppingSessions.delete(id);
+      // Only the mark this call's caller set: one a later stop or delete set meanwhile still guards its own operation.
+      if (mark === undefined) this.stoppingSessions.delete(id);
+      else this.stoppingSessions.deleteStamped(id, mark);
       onReadFailed?.();
       throw error;
     }
@@ -620,7 +633,7 @@ export class SessionEngineControls {
   }
 
   async stop(id: string, hooks: StopHooks = {}): Promise<Session> {
-    const session = await this.requireSessionOrDropStopMark(id, hooks.onReadFailed);
+    const session = await this.requireSessionOrDropStopMark(id, hooks.mark, hooks.onReadFailed);
     // Recorded only once the row is known to exist, and before anything is torn down.
     await hooks.afterRead?.();
 
@@ -902,7 +915,7 @@ export class SessionEngineControls {
   }
 
   async delete(id: string, hooks: StopHooks = {}): Promise<void> {
-    const session = await this.requireSessionOrDropStopMark(id, hooks.onReadFailed);
+    const session = await this.requireSessionOrDropStopMark(id, hooks.mark, hooks.onReadFailed);
 
     // FENCE #1 — fail-fast on an ALREADY-PENDING credential teardown for this session NAME, BEFORE
     // any lifecycle mutation. A logout teardown that lost its deadline race is still running and ends

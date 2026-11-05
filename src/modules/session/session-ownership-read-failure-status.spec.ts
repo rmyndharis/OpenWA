@@ -6,7 +6,8 @@ import type { App } from 'supertest/types';
 import { QueryFailedError } from 'typeorm';
 import { SessionController } from './session.controller';
 import { SessionService } from './session.service';
-import { ServerShuttingDownException } from './session-engine-controls';
+import { ServerShuttingDownException, SessionEngineControls, StopMarks } from './session-engine-controls';
+import { SessionEngineLifecycle } from './session-engine-lifecycle.service';
 import { SessionErrorStore } from './session-error-store.service';
 import { SessionRestrictionStore } from './session-restriction-store.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -37,6 +38,8 @@ function fixture({ maxConcurrent = 0, id = ID }: { maxConcurrent?: number; id?: 
     findOne: jest.fn().mockResolvedValue({ ...row }),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
   };
+  // The marks are the lifecycle's own: each operation of a session sets one, and a later one replaces it.
+  const marks = new StopMarks();
   const lifecycle = {
     start: jest.fn().mockResolvedValue({ ...row }),
     stop: jest.fn().mockResolvedValue({ ...row }),
@@ -44,8 +47,14 @@ function fixture({ maxConcurrent = 0, id = ID }: { maxConcurrent?: number; id?: 
     // Another session holds the only slot when the cap is 1.
     startSlotHolders: jest.fn(() => new Set(['another-session'])),
     isEngineActive: jest.fn(() => false),
-    markStopping: jest.fn(),
-    clearStopping: jest.fn(),
+    markStopping: jest.fn((markedId: string) => {
+      marks.add(markedId);
+      return marks.stamp(markedId);
+    }),
+    clearStopping: jest.fn((markedId: string, stamp?: number) => {
+      if (stamp === undefined) marks.delete(markedId);
+      else marks.deleteStamped(markedId, stamp);
+    }),
     holdDelete: jest.fn(() => () => undefined),
     announceStatus: jest.fn(),
   };
@@ -76,7 +85,7 @@ function fixture({ maxConcurrent = 0, id = ID }: { maxConcurrent?: number; id?: 
     configService as never,
     ownership as never,
   );
-  return { service, repository, lifecycle, ownership };
+  return { service, repository, lifecycle, ownership, marks };
 }
 
 describe('a lifecycle route whose ownership bookkeeping cannot reach the database launches nothing and answers 503', () => {
@@ -173,7 +182,7 @@ describe('a lifecycle route whose ownership bookkeeping cannot reach the databas
 
     await expect(f.service.stop(ID)).rejects.toBeInstanceOf(ServiceUnavailableException);
 
-    expect(f.lifecycle.clearStopping).toHaveBeenCalledWith(ID);
+    expect(f.lifecycle.clearStopping).toHaveBeenCalledWith(ID, expect.any(Number));
     expect((f.service as unknown as { stopRequests: Map<string, unknown> }).stopRequests.size).toBe(0);
   });
 
@@ -184,7 +193,7 @@ describe('a lifecycle route whose ownership bookkeeping cannot reach the databas
 
     await expect(f.service.delete(ID)).rejects.toBeInstanceOf(ServiceUnavailableException);
 
-    expect(f.lifecycle.clearStopping).toHaveBeenCalledWith(ID);
+    expect(f.lifecycle.clearStopping).toHaveBeenCalledWith(ID, expect.any(Number));
     expect((f.service as unknown as { stopRequests: Map<string, unknown> }).stopRequests.size).toBe(0);
   });
 });
@@ -273,5 +282,119 @@ describe('DELETE /sessions/:sessionId when the database fails the first read', (
     expect(f.ownership.claim).not.toHaveBeenCalled();
     expect(f.lifecycle.delete).not.toHaveBeenCalled();
     expect(audit.logInfo).not.toHaveBeenCalled();
+  });
+});
+
+/** A promise a case settles by hand. */
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+const turn = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+// Every stop and delete of a session sets a stop mark before it knows whether it may act, and a later one replaces the
+// mark of the earlier. An earlier operation that fails before it did anything drops the mark it set, and only that one.
+describe('a stop or delete that fails before it acts drops its own stop mark, not a later one', () => {
+  it('delete() whose claim matched no row and whose row read then fails leaves the mark a later stop set', async () => {
+    const f = fixture();
+    f.ownership.claim.mockResolvedValueOnce(false);
+    const deletionRead = deferred<Session>();
+    f.repository.findOne.mockImplementationOnce(() => deletionRead.promise);
+    const stopCheck = deferred<boolean>();
+    f.ownership.isHeldByOtherNode.mockResolvedValueOnce(false).mockImplementationOnce(() => stopCheck.promise);
+
+    const deleting = f.service.delete(ID).catch((error: unknown) => error);
+    await turn();
+    const deleteMark = f.marks.stamp(ID);
+    const stopping = f.service.stop(ID);
+    await turn();
+    expect(f.marks.stamp(ID)).not.toBe(deleteMark); // the stop's mark replaced the delete's
+
+    deletionRead.reject(dropped());
+    expect(await deleting).toBeInstanceOf(ServiceUnavailableException);
+    expect(f.marks.has(ID)).toBe(true);
+
+    stopCheck.resolve(false);
+    await stopping;
+  });
+
+  it('stop() whose ownership read fails leaves the mark a later delete set', async () => {
+    const f = fixture();
+    const stopCheck = deferred<boolean>();
+    f.ownership.isHeldByOtherNode.mockImplementationOnce(() => stopCheck.promise);
+    const claim = deferred<boolean>();
+    f.ownership.claim.mockImplementationOnce(() => claim.promise);
+
+    const stopping = f.service.stop(ID).catch((error: unknown) => error);
+    await turn();
+    const stopMark = f.marks.stamp(ID);
+    const deleting = f.service.delete(ID).catch((error: unknown) => error);
+    await turn();
+    expect(f.marks.stamp(ID)).not.toBe(stopMark);
+
+    stopCheck.reject(dropped());
+    expect(await stopping).toBeInstanceOf(ServiceUnavailableException);
+    expect(f.marks.has(ID)).toBe(true);
+
+    claim.reject(dropped());
+    expect(await deleting).toBeInstanceOf(ServiceUnavailableException);
+    expect(f.marks.has(ID)).toBe(false); // the delete drops the mark it set itself
+  });
+});
+
+describe('the stop mark of the lifecycle', () => {
+  const marksOf = (lifecycle: SessionEngineLifecycle): StopMarks =>
+    (lifecycle as unknown as { stoppingSessions: StopMarks }).stoppingSessions;
+  const bare = (): SessionEngineLifecycle =>
+    Object.assign(Object.create(SessionEngineLifecycle.prototype) as SessionEngineLifecycle, {
+      stoppingSessions: new StopMarks(),
+    });
+
+  it('is dropped by the stamp of the operation that set it, and kept for a later one', () => {
+    const lifecycle = bare();
+    const earlier = lifecycle.markStopping(ID);
+    const later = lifecycle.markStopping(ID);
+
+    lifecycle.clearStopping(ID, earlier);
+    expect(marksOf(lifecycle).has(ID)).toBe(true);
+    lifecycle.clearStopping(ID, later);
+    expect(marksOf(lifecycle).has(ID)).toBe(false);
+  });
+
+  it('is dropped by a clear that names no stamp, as before', () => {
+    const lifecycle = bare();
+    lifecycle.markStopping(ID);
+    lifecycle.markStopping(ID);
+
+    lifecycle.clearStopping(ID);
+
+    expect(marksOf(lifecycle).has(ID)).toBe(false);
+  });
+
+  it.each([
+    ['carries the stamp of its own call', true, false],
+    ['carries no stamp', false, false],
+    ['carries the stamp of an earlier call', true, true],
+  ])('stop() whose first read fails drops the mark when it %s', async (_name, stamped, earlierStamp) => {
+    const marks = new StopMarks();
+    const controls = new SessionEngineControls({
+      sessionRepository: { findOne: jest.fn().mockRejectedValue(dropped()) },
+      stoppingSessions: marks,
+    } as never);
+    marks.add(ID);
+    const own = marks.stamp(ID);
+    marks.add(ID); // a later stop or delete of the session replaced it
+    const hooks = stamped ? { mark: earlierStamp ? own : marks.stamp(ID) } : {};
+
+    await expect(controls.stop(ID, hooks)).rejects.toBeInstanceOf(QueryFailedError);
+
+    // Dropped for the stamp of the mark that stands and for no stamp; kept for the stamp of the one it replaced.
+    expect(marks.has(ID)).toBe(earlierStamp);
   });
 });
