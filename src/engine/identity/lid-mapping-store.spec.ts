@@ -2498,7 +2498,7 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
 describe('LidMappingStoreService: a phone reported under a second lid', () => {
   type Report = Parameters<Parameters<LidMappingStoreService['onSecondLid']>[0]>[0];
 
-  /** Checks are collected over a window; these cases run it at once and wait it out with {@link settle}. */
+  /** Checks are collected over a window; these cases run it at once, so a wait is for the check itself. */
   const noWindow = (store: LidMappingStoreService) =>
     ((store as unknown as { secondLidWindowMs: number }).secondLidWindowMs = 0);
 
@@ -2515,7 +2515,28 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     return { repo, store, reports, warn };
   }
 
-  const settle = () => new Promise(resolve => setTimeout(resolve, 5));
+  /** Let the pending microtasks run: a read's continuation and the report listener are microtask-only. */
+  const flushed = () => new Promise(resolve => setImmediate(resolve));
+  /**
+   * Run out the checks queued so far: each window timer fires (it was set inside a remembered write),
+   * its table reads answer and the reports land. Only where no read is held open on purpose; the
+   * deadline keeps a window that never fires a fast failure.
+   */
+  const checksRun = async (store: LidMappingStoreService, repo: ReturnType<typeof makeFakeRepo>): Promise<void> => {
+    const timers = store as unknown as { secondLidTimer?: unknown };
+    for (const end = Date.now() + 2000; Date.now() < end;) {
+      while (timers.secondLidTimer !== undefined && Date.now() < end)
+        await new Promise(resolve => setTimeout(resolve, 1));
+      await Promise.allSettled(repo.find.mock.results.map(result => result.value as unknown));
+      await flushed();
+      if (timers.secondLidTimer === undefined) return;
+    }
+  };
+  /** A failed read's warning gate: a rate-limited step logs no line, so only its held count moves. */
+  const readGate = (store: LidMappingStoreService) =>
+    (store as unknown as { secondLidReadWarning: { at: number; held: number } }).secondLidReadWarning;
+  /** One later turn of the same timer delay: same-delay timers fire in the order they were set. */
+  const aTick = () => new Promise(resolve => setTimeout(resolve, 0));
   /** Wait for a condition, up to a deadline; the expectations after it then show what is missing. */
   const until = async (done: () => boolean, ms = 2000): Promise<void> => {
     for (const end = Date.now() + ms; !done() && Date.now() < end;)
@@ -2530,7 +2551,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     const { store, reports, warn } = await watched([{ lid: '111', phone: '628999', sessionId: 's1' }]);
 
     await expect(store.remember('222', '628999', 's2')).resolves.toBe(true);
-    await settle();
+    await until(() => reports.length > 0);
 
     expect(reports).toEqual([{ phone: '628999', previousLid: '111', newLid: '222', sessionId: 's2' }]);
     expect(warn).toHaveBeenCalledWith(
@@ -2548,23 +2569,23 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
   });
 
   it('reports nothing for a phone first reported, or the same lid reported again', async () => {
-    const { store, reports, warn } = await watched();
+    const { repo, store, reports, warn } = await watched();
 
     await store.remember('111', '628999', 's1');
     await store.remember('111', '628999', 's1');
     await store.remember('111', '628999', 's2');
-    await settle();
+    await checksRun(store, repo);
 
     expect(reports).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
   });
 
   it('counts neither an inferred row nor an inferred lookup as an engine report', async () => {
-    const { store, reports } = await watched([{ lid: '111', phone: '628999', isReported: false }]);
+    const { repo, store, reports } = await watched([{ lid: '111', phone: '628999', isReported: false }]);
 
     await store.remember('222', '628999', 's1'); // the earlier row is display data only
     await store.rememberIfUnknown('333', '628999', 's1'); // a cached lookup is no report
-    await settle();
+    await checksRun(store, repo);
 
     expect(reports).toEqual([]);
   });
@@ -2576,7 +2597,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     await store.remember('222', '628999', 's2');
     await store.remember('222', '628999', 's3');
     await store.remember('111', '628999', 's1'); // a history sync replaying the earlier pairing
-    await settle();
+    await until(() => reports.length > 0);
 
     expect(reports).toHaveLength(1);
   });
@@ -2589,11 +2610,11 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     store.onSecondLid(throwing);
     await expect(store.remember('222', '628999', 's2')).resolves.toBe(true);
     await expect(store.remember('333', '628999', 's2')).resolves.toBe(true);
-    await settle();
+    await until(() => throwing.mock.calls.length >= 3); // all three pairs reached the old listener
     const rejecting = jest.fn(() => Promise.reject(new Error('listener down')));
     store.onSecondLid(rejecting);
     await expect(store.remember('444', '628999', 's2')).resolves.toBe(true);
-    await settle();
+    await until(() => rejecting.mock.calls.length >= 3);
 
     // 222 and 333 were checked together: 111-222, 111-333 and 222-333.
     expect(throwing).toHaveBeenCalledTimes(3);
@@ -2609,7 +2630,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     ]);
 
     await store.remember('222', '628999', 's2');
-    await settle();
+    await until(() => reports.length > 0);
 
     expect(reports).toEqual([{ phone: '628999', previousLid: '111', newLid: '222', sessionId: 's2' }]);
   });
@@ -2619,11 +2640,11 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     repo.upsert.mockRejectedValueOnce(new Error('disk full'));
 
     await expect(store.remember('222', '628999', 's2')).resolves.toBe(false);
-    await settle();
+    await checksRun(store, repo);
     expect(reports).toEqual([]);
 
     await store.remember('222', '628999', 's2');
-    await settle();
+    await until(() => reports.length > 0);
     expect(reports).toHaveLength(1);
   });
 
@@ -2646,7 +2667,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
       expect(store.lidsForPhone('628999')).toEqual([]);
 
       await store.remember('222', '628999', 's2');
-      await settle();
+      await until(() => reports.length > 0);
 
       expect((await store.findLidsForPhone('628999')).sort()).toEqual(['111', '222']);
       expect(reports).toEqual([{ phone: '628999', previousLid: '111', newLid: '222', sessionId: 's2' }]);
@@ -2654,29 +2675,29 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
   });
 
   it('reports nothing when the reported pairs are replayed', async () => {
-    const { store, reports } = await watched();
+    const { repo, store, reports } = await watched();
     for (let i = 0; i < 1001; i++) {
       await store.remember(`1${i}`, `62800${i}`, 's1');
       await store.remember(`2${i}`, `62800${i}`, 's2');
     }
-    await settle();
+    await until(() => reports.length >= 1001);
     expect(reports).toHaveLength(1001);
 
     for (let i = 0; i < 1001; i++) await store.remember(`2${i}`, `62800${i}`, 's2');
-    await settle();
+    await checksRun(store, repo);
     expect(reports).toHaveLength(1001);
   });
 
   it('reports nothing again after a restart for a pair it already reported', async () => {
     const first = await watched([{ lid: '111', phone: '628999', sessionId: 's1' }]);
     await first.store.remember('222', '628999', 's2');
-    await settle();
+    await until(() => first.reports.length > 0);
 
     const second = await newStore(first.repo); // same table, new process
     const reports: Report[] = [];
     second.onSecondLid(report => void reports.push(report));
     await second.remember('222', '628999', 's2');
-    await settle();
+    await checksRun(second, first.repo);
 
     expect(first.reports).toHaveLength(1);
     expect(reports).toEqual([]);
@@ -2686,7 +2707,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     const { store, reports } = await watched();
 
     await Promise.all([store.remember('111', '628999', 's1'), store.remember('222', '628999', 's2')]);
-    await settle();
+    await until(() => reports.length > 0);
 
     expect(reports).toEqual([{ phone: '628999', previousLid: '111', newLid: '222', sessionId: 's2' }]);
   });
@@ -2702,10 +2723,10 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
       return new Promise<object>(resolve => (release = () => resolve({})));
     });
     const second = store.remember('222', '628999', 's2');
-    await settle();
+    await checksRun(store, repo); // the first check reads the second lid's row before its write returns
     release();
     await second;
-    await settle();
+    await checksRun(store, repo);
 
     expect(reports).toEqual([expect.objectContaining({ previousLid: '222', newLid: '111' })]);
   });
@@ -2719,9 +2740,9 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     await expect(store.remember('222', '628999', 's2')).resolves.toBe(true);
     fail(new Error('SQLITE_BUSY: database is locked'));
     await expect(first).resolves.toBe(false);
-    await settle();
+    await checksRun(store, repo);
     await expect(store.remember('222', '628999', 's2')).resolves.toBe(true);
-    await settle();
+    await until(() => reports.length > 0);
 
     expect(reports).toEqual([expect.objectContaining({ phone: '628999', previousLid: '111', newLid: '222' })]);
   });
@@ -2763,10 +2784,10 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     );
 
     await store.remember('222', '628999', 's2');
-    await settle(); // the read is under way and does not answer
+    await until(() => phoneReads(repo) > 0); // the read is under way and does not answer
     store.onModuleDestroy();
     answer();
-    await settle();
+    await flushed(); // its continuation only has to notice the stop
 
     expect(reports).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
@@ -2783,7 +2804,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
         store.remember('902', '628002', 's2'),
         store.remember('903', '628003', 's2'),
       ]);
-      await settle();
+      await until(() => reports.length > 0);
 
       expect(reports).toEqual([expect.objectContaining({ phone: '628999', previousLid: '111', newLid: '222' })]);
     } finally {
@@ -2803,10 +2824,10 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
 
     const earlier = store.remember('111', '628999', 's1'); // counts as new, held open
     await store.remember('222', '628999', 's2');
-    await settle();
+    await until(() => reports.length > 0); // the new lid was checked while the earlier write waited
     fail(new Error('Connection terminated unexpectedly'));
     await expect(earlier).resolves.toBe(false);
-    await settle();
+    await checksRun(store, repo);
 
     expect(reports).toEqual([expect.objectContaining({ phone: '628999', previousLid: '111', newLid: '222' })]);
   });
@@ -2816,41 +2837,41 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     repo.find.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
 
     await store.remember('111', '628999', 's1'); // its check's read fails: owed again
-    await settle();
+    await until(() => owedChecks(store).has('111'));
     await store.remember('222', '628999', 's2');
-    await settle();
+    await checksRun(store, repo);
     await store.remember('111', '628999', 's1'); // lands and runs 111's owed check
-    await settle();
+    await checksRun(store, repo);
 
     expect(reports.map(report => `${report.previousLid}>${report.newLid}`)).toEqual(['111>222']);
   });
 
   it('names no pair for a phone its lid left again within the window', async () => {
-    const { store, reports } = await watched([{ lid: '111', phone: '628999' }]);
+    const { repo, store, reports } = await watched([{ lid: '111', phone: '628999' }]);
 
     await store.remember('222', '628999', 's2');
     await store.remember('222', '628888', 's2');
-    await settle();
+    await checksRun(store, repo);
 
     expect(reports).toEqual([]);
   });
 
   it('reports a pair again once the time it is remembered for has passed', async () => {
-    const { store, reports } = await watched([{ lid: '111', phone: '628999' }]);
+    const { repo, store, reports } = await watched([{ lid: '111', phone: '628999' }]);
     let clock = 0;
     (store as unknown as { now: () => number }).now = () => clock;
 
     await store.remember('222', '628999', 's2');
-    await settle();
+    await until(() => reports.length > 0);
     await store.remember('222', '628888', 's2'); // the lid moves away and back: a change each time
     await store.remember('222', '628999', 's2');
-    await settle();
+    await checksRun(store, repo);
     expect(reports).toHaveLength(1);
 
     clock += 10 * 60_000;
     await store.remember('222', '628888', 's2');
     await store.remember('222', '628999', 's2');
-    await settle();
+    await until(() => reports.length >= 2);
     expect(reports).toHaveLength(2);
   });
 
@@ -2865,7 +2886,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
       store.remember('222', '628999', 's2'),
       ...Array.from({ length: 10_001 }, (_, i) => store.remember(`5${i}`, `62700${i}`, 's1')),
     ]);
-    await settle();
+    await until(() => reports.length > 0);
 
     expect(reports).toEqual([expect.objectContaining({ phone: '628999', previousLid: '111', newLid: '222' })]);
     expect(capLines(warn)).toEqual([]);
@@ -2929,7 +2950,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
 
     await store.remember('222', '628999', 's2');
     dataSource.isInitialized = false;
-    await settle();
+    await checksRun(store, repo); // the window ran into the closed source and read nothing
 
     expect(phoneReads(repo)).toBe(0);
     expect(reports).toEqual([]);
@@ -2941,10 +2962,10 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     repo.find.mockRejectedValueOnce(new Error('connection reset'));
 
     await store.remember('222', '628999', 's2');
-    await settle();
+    await until(() => owedChecks(store).has('222')); // the read failed: owed again
     expect(reports).toEqual([]);
     await store.remember('222', '628999', 's3');
-    await settle();
+    await until(() => reports.length > 0);
 
     expect(reports).toEqual([expect.objectContaining({ previousLid: '111', newLid: '222', sessionId: 's2' })]);
   });
@@ -2998,13 +3019,13 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     const { fail } = holdPhoneReads(repo, '628111');
 
     await store.remember('222', '628111', 's2'); // lands; its check's read is held open
-    await settle();
+    await until(() => fail.length > 0);
     repo.upsert.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
     await expect(store.remember('222', '628777', 's2')).resolves.toBe(false);
     fail[0](new Error('Connection terminated unexpectedly'));
-    await settle();
+    await flushed(); // the held read's failure was handled
     await expect(store.remember('222', '628777', 's2')).resolves.toBe(true);
-    await settle();
+    await until(() => reports.length > 0);
 
     expect(repo.rows.filter(row => row.phone === '628777').map(row => row.lid)).toEqual(['333', '222']);
     expect(reports).toEqual([{ phone: '628777', previousLid: '333', newLid: '222', sessionId: 's2' }]);
@@ -3015,16 +3036,16 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     const { read, fail } = holdPhoneReads(repo);
 
     await store.remember('222', '628111', 's2'); // lands; read held open
-    await settle();
+    await until(() => fail.length > 0);
     await store.remember('222', '628777', 's2'); // the number changed: lands; read held open
-    await settle();
+    await until(() => fail.length > 1);
     fail[0](new Error('connection reset')); // the older read fails first
-    await settle();
+    await flushed(); // its failure was handled
     fail[1](new Error('connection reset'));
-    await settle();
+    await until(() => owedChecks(store).has('222')); // the newer read failed: owed again
     repo.find.mockImplementation(read);
     await store.remember('222', '628777', 's2');
-    await settle();
+    await until(() => reports.length > 0);
 
     expect(reports).toEqual([{ phone: '628777', previousLid: '333', newLid: '222', sessionId: 's2' }]);
   });
@@ -3062,12 +3083,12 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     repo.find.mockRejectedValue(new Error('connection reset'));
 
     await store.remember('222', '628999', 's2');
-    await settle();
+    await until(() => warn.mock.calls.length > 0);
     await store.remember('333', '628999', 's2');
-    await settle();
+    await until(() => readGate(store).held === 1); // rate-limited: no line, only the count
     clock += 60_000;
     await store.remember('444', '628999', 's2');
-    await settle();
+    await until(() => warn.mock.calls.length > 1);
 
     expect(warn.mock.calls.map(call => String((call as unknown[])[0]))).toEqual([
       'Could not check for a second lid: connection reset',
@@ -3085,8 +3106,8 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     });
 
     await store.remember('222', '628999', 's2');
-    await settle();
-    await settle();
+    await until(() => owedChecks(store).has('222')); // the failed read was handled
+    await aTick(); // its warning ran and stayed silent
 
     expect(warn).not.toHaveBeenCalled();
   });
@@ -3100,10 +3121,10 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     });
     const first = store.remember('222', '628999', 's2');
     await store.remember('222', '628999', 's3');
-    await settle();
+    await until(() => reports.length > 0);
     release();
     await first;
-    await settle();
+    await checksRun(store, repo);
 
     expect(reports).toEqual([expect.objectContaining({ previousLid: '111', newLid: '222' })]);
   });
@@ -3114,10 +3135,10 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     repo.upsert.mockImplementationOnce(() => new Promise((_resolve, reject) => (fail = reject)));
     const first = store.remember('111', '628999', 's1'); // held open
     await store.remember('222', '628999', 's2');
-    await settle();
+    await checksRun(store, repo); // its check read the table without the held write's row
     fail(new Error('disk full'));
     await expect(first).resolves.toBe(false);
-    await settle();
+    await checksRun(store, repo);
 
     expect(repo.rows.filter(row => row.phone === '628999').map(row => row.lid)).toEqual(['222']);
     expect(reports).toEqual([]);
@@ -3128,7 +3149,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     repo.find.mockRejectedValueOnce(new Error('connection reset'));
 
     await expect(store.remember('222', '628999', 's2')).resolves.toBe(true);
-    await settle();
+    await until(() => warn.mock.calls.length > 0);
 
     expect(reports).toEqual([]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('connection reset'));
