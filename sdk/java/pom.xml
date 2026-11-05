@@ -6,7 +6,7 @@
 
   <groupId>com.rmyndharis</groupId>
   <artifactId>openwa</artifactId>
-  <version>0.9.0</version>
+  <version>0.10.0</version>
   <packaging>jar</packaging>
 
   <name>OpenWA Java SDK</name>

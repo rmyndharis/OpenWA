@@ -10,7 +10,7 @@ const DefaultTimeout = 30 * time.Second
 
 // DefaultUserAgent is sent on every request unless overridden with
 // WithUserAgent or a caller-supplied User-Agent header.
-const DefaultUserAgent = "openwa-go/0.9.0"
+const DefaultUserAgent = "openwa-go/0.10.0"
 
 // config is the resolved, internal configuration assembled from the options.
 type config struct {
