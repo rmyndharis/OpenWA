@@ -136,6 +136,9 @@ function chainableQuery(): Record<string, jest.Mock> {
   return query;
 }
 
+/** The number the mock engine is linked to; the stored-message lookups keep only the rows that name it. */
+const OWN_PHONE = '628444';
+
 describe('SessionService', () => {
   let service: SessionService;
   // The engine-lifecycle verbs/state moved out of SessionService (god-object split); the white-box
@@ -256,6 +259,7 @@ describe('SessionService', () => {
       getContactStatuses: jest.fn().mockResolvedValue([]),
       getChatHistory: jest.fn().mockResolvedValue([]),
       getContactById: jest.fn().mockResolvedValue(null),
+      getPhoneNumber: jest.fn().mockReturnValue(OWN_PHONE),
     };
 
     engineFactory = {
@@ -9457,6 +9461,9 @@ describe('SessionService', () => {
   // ── the stored newest message a chat write falls back to (#1891) ──
 
   describe('stored last message lookup', () => {
+    /** The spellings of the engine's number a stored row can name its own side by. */
+    const ownIds = [`${OWN_PHONE}@c.us`, `${OWN_PHONE}@s.whatsapp.net`, OWN_PHONE];
+
     beforeEach(async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
@@ -9500,7 +9507,10 @@ describe('SessionService', () => {
         waMessageId: Not(IsNull()),
         timestamp: Not(IsNull()),
       };
-      expect(whereOf()).toEqual([base]);
+      expect(whereOf()).toEqual([
+        { ...base, direction: MessageDirection.INCOMING, to: In(ownIds) },
+        { ...base, direction: MessageDirection.OUTGOING, from: In(ownIds) },
+      ]);
       expect(messageRepository.findOne).toHaveBeenCalledWith(
         expect.objectContaining({ order: { timestamp: 'DESC', createdAt: 'DESC' } }),
       );
@@ -9535,8 +9545,8 @@ describe('SessionService', () => {
         timestamp: Not(IsNull()),
       };
       expect(whereOf()).toEqual([
-        { ...base, direction: MessageDirection.INCOMING, author: Not(IsNull()) },
-        { ...base, direction: MessageDirection.OUTGOING },
+        { ...base, direction: MessageDirection.INCOMING, to: In(ownIds), author: Not(IsNull()) },
+        { ...base, direction: MessageDirection.OUTGOING, from: In(ownIds) },
       ]);
     });
 
@@ -9587,7 +9597,7 @@ describe('SessionService', () => {
 
     it('for a read receipt, takes only a received message', async () => {
       await expect(lookupOf('sendSeen', () => service.sendSeen('sess-uuid-1', '123@c.us'))).resolves.toBeNull();
-      expect(whereOf()).toEqual([expect.objectContaining({ direction: MessageDirection.INCOMING })]);
+      expect(whereOf()).toEqual([expect.objectContaining({ direction: MessageDirection.INCOMING, to: In(ownIds) })]);
     });
 
     // The query itself, on a real database: the id-form `In`, the group sender rule and the ordering.
@@ -9605,7 +9615,19 @@ describe('SessionService', () => {
           direction: MessageDirection,
           timestamp: number,
           author?: string,
-        ) => ({ sessionId: 'sess-uuid-1', chatId, waMessageId, direction, timestamp, author, from: 'a', to: 'b' });
+        ) => {
+          const sent = direction === MessageDirection.OUTGOING;
+          return {
+            sessionId: 'sess-uuid-1',
+            chatId,
+            waMessageId,
+            direction,
+            timestamp,
+            author,
+            from: sent ? `${OWN_PHONE}@c.us` : chatId,
+            to: sent ? chatId : `${OWN_PHONE}@c.us`,
+          };
+        };
         await messages.insert([
           row('123@c.us', 'OUT', MessageDirection.OUTGOING, 100),
           row('999@lid', 'IN', MessageDirection.INCOMING, 200),

@@ -9,8 +9,9 @@
 > (`leaseExpiresAt`). A process claims a session before starting its engine and refuses
 > when another node holds a live claim, so two replicas can no longer both launch the same
 > session — which is what corrupted the shared LocalAuth directory. A booting process also
-> resets only the sessions it may claim, instead of reporting a live peer's sessions as
-> disconnected. Claims are released on a clean shutdown and expire otherwise, so failover
+> resets only the sessions it may claim (its own, unowned ones, and those whose holder's lease
+> has lapsed), instead of reporting a peer's sessions as disconnected while its lease is live.
+> Claims are released on a clean shutdown and expire otherwise, so failover
 > does not depend on one. `NODE_ID` names the process; it defaults to the hostname and must
 > be stable across restarts and unique per running process: two processes sharing a hostname
 > (host networking, pm2 cluster mode) must each set it, and a node that sees another process
@@ -70,6 +71,20 @@
 > TTLs minus one heartbeat (160s at defaults) is marked disconnected by a peer too, and does not write its status back when it reconnects. Its
 > renewal still finds its own claim, so it detects no loss, and a steadily connected engine emits no
 > new status. The row reads `disconnected` until that engine's status next changes.
+>
+> Known limitation: the boot reset takes a lease that lapsed by any amount, where the sweep's status
+> correction above waits for more than two TTLs. A healthy peer's lease can lapse for a second, so a node
+> that boots in that moment marks the peer's `ready` session `disconnected`. With `AUTO_START_SESSIONS` on,
+> that node then claims the session, when the row has a phone, carries no operator stop or delete marker and the
+> node passes the normal capacity and lease checks, and the peer gives up its engine at its next heartbeat, as in an
+> adoption. When it does not (auto-start off, the node at its session cap, or the peer renewing first),
+> nothing writes the status back while the peer keeps renewing: the row reads `disconnected` until that
+> engine's status next changes. A peer's `qr_ready` session that has a phone is reset the same way, and
+> with auto-start on boot launches it under the same conditions, a start the sweep avoids by leaving such a row as it is. The reset
+> stays this broad because a single node recreated under a new hostname (`NODE_ID` unset) finds its
+> previous identity's rows foreign: narrower, a `qr_ready` row with a phone would keep its status with no
+> engine behind it, and `ready` rows would read active until the sweep corrects them minutes later. More
+> than one node is not a supported topology (see above), and the shipped chart keeps `replicaCount: 1`.
 >
 > **Request routing now exists, opt-in via `NODE_URL`.** When every node sets its own
 > reachable URL (e.g. `NODE_URL=http://10.0.0.5:2785`), a session-scoped request landing on

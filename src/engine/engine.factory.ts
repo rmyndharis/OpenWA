@@ -166,6 +166,10 @@ export class EngineFactory implements OnModuleInit {
    * backups). Each rm is isolated best-effort: an unsafe key is refused up front, and one engine's
    * rm failure is logged per-engine — it neither fails the delete nor skips the other engine's purge.
    *
+   * A directory that is a symbolic link (a profile relocated onto another volume) is unlinked, never
+   * followed: the link goes and its target stays, with any WhatsApp login stored there. That is logged
+   * as a warning naming the target instead of as a purge, since removing the target is the operator's.
+   *
    * Note: session START deliberately does NOT purge the inactive engine's residue. An operator
    * trialling the other engine keeps the previous engine's link so switching back doesn't force a
    * re-pair; the residue is removed only when the session itself is deleted.
@@ -204,8 +208,24 @@ export class EngineFactory implements OnModuleInit {
     }
     for (const { engine, dir } of dirs) {
       try {
+        // readlink answers only for a symbolic link: a real directory or a missing one throws, and the rm
+        // below treats it exactly as before.
+        const linkedTo = await fs.promises.readlink(dir).then(
+          target => path.resolve(path.dirname(dir), target),
+          () => null,
+        );
         await fs.promises.rm(dir, { recursive: true, force: true });
-        this.logger.log('Purged session auth directory', { action: 'engine_purge', engine, sessionId, dir });
+        if (linkedTo) {
+          this.logger.warn('Removed a symlinked session auth directory; its target was left in place', {
+            action: 'engine_purge_link',
+            engine,
+            sessionId,
+            dir,
+            target: linkedTo,
+          });
+        } else {
+          this.logger.log('Purged session auth directory', { action: 'engine_purge', engine, sessionId, dir });
+        }
       } catch (error) {
         this.logger.warn('Failed to purge session auth directory', {
           action: 'engine_purge_failed',

@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Metrics scrapes that arrive together share one render, so the cached event-loop delay no longer reads zero after an overlap.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - List a key seeded from `API_MASTER_KEY` as `(master key)` instead of its first 12 characters; keys seeded by earlier releases keep their stored prefix until replaced.
+- Key Baileys chat writes and read receipts to the newest stored message of the account the session is linked to, so a session relinked to another number no longer names the previous account's messages.
+- Warn when a session delete removes only a symlinked auth directory and leaves the WhatsApp login at its target, instead of logging it as purged.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Stop announcing `message.ack` for the acks of whatsapp-web.js system notices, which are no longer delivered as messages.
 - Stop delivering whatsapp-web.js system notices (a changed security code, the encryption notice, business and broadcast notices) as `unknown` messages on `message.received` and `message.sent`, so they are no longer stored, passed to the message hooks or answered by automation rules (#1864). Thanks @dwimnofan.
@@ -73,6 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GET /api/infra/status`: `engine.headless` and `engine.browserArgs` are the environment values; a stored whatsapp-web.js plugin config overrides them for sessions.
 - The in-flight body budget reservation ends once the body has been read, and the status label of `http_requests_total` lists what a dropped or abandoned request counts as.
 - `.env.example` says pooled clients must expire idle connections before `KEEPALIVE_TIMEOUT_MS`.
+- The scaling guide says that a node booting while a peer's lease has just lapsed resets that peer's session, and that only one node is supported.
 
 ### Dependencies
 

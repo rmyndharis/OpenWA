@@ -69,6 +69,7 @@ import { chatKind, parseWaId } from '../../engine/identity/wa-id';
 import { Message, MessageDirection } from '../message/entities/message.entity';
 import { ServerShuttingDownException, SessionStoppedException } from './session-engine-controls';
 import { phoneKey } from './message-mutation-guard';
+import { ownAccountIds } from '../../engine/adapters/baileys-stored-chat-previews.service';
 // Type-only: the module binds this class to PLUGIN_SESSION_PORT with a `useExisting` alias, which
 // TypeScript does not check, so `implements` is what keeps the two in step.
 import type { PluginSessionPort } from '../../core/plugins/plugin-host-ports';
@@ -1529,7 +1530,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     const authors = await this.groupAuthors(id, chatId, messageIds);
     return engine
-      .sendSeen(chatId, messageIds, authors, this.storedLastMessage(id, chatId, { receivedOnly: true }))
+      .sendSeen(chatId, messageIds, authors, this.storedLastMessage(id, chatId, engine, { receivedOnly: true }))
       .finally(() => this.chatListings.drop(id));
   }
 
@@ -1564,7 +1565,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
-    return engine.markUnread(chatId, this.storedLastMessage(id, chatId)).finally(() => this.chatListings.drop(id));
+    return engine
+      .markUnread(chatId, this.storedLastMessage(id, chatId, engine))
+      .finally(() => this.chatListings.drop(id));
   }
 
   /**
@@ -1572,15 +1575,26 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * holds none for the chat itself (Baileys after a restart, #1891). The lookup runs only when the
    * engine calls it, and covers every id form of the chat (the GET messages filter's rules).
    *
+   * Only the account `engine` is linked to counts, as in the chat list: the table outlives an unlink, so
+   * a session linked to another number still holds the rows of the one before, and a key naming one of
+   * those names a message the linked phone never held. The engine knows the account from its credentials
+   * (`sessions.phone` is a control flag that an unlink clears), and it is the engine that builds the
+   * write from the answer, so it is asked, not whichever engine the registry holds by then. A received
+   * message names the account in `to`, a sent one in `from`; with no account known, none is answered.
+   *
    * A received group message counts only with its sender, which the key needs; `receivedOnly` asks
    * for the newest received message, the one a read receipt acknowledges.
    */
   private storedLastMessage(
     sessionId: string,
     chatId: string,
+    engine: IWhatsAppEngine,
     { receivedOnly = false }: { receivedOnly?: boolean } = {},
   ): StoredChatMessageLookup {
     return async () => {
+      const linkedPhone = engine.getPhoneNumber();
+      if (!linkedPhone) return null;
+      const own = In(ownAccountIds(linkedPhone));
       const expanded = await resolveJidCandidates(chatId, {
         resolveLid: lid => this.lidMappingStore.findPhoneForLid(lid),
         lidsForPhone: phone => this.lidMappingStore.findLidsForPhone(phone),
@@ -1591,14 +1605,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         waMessageId: Not(IsNull()),
         timestamp: Not(IsNull()),
       };
-      const received = { ...base, direction: MessageDirection.INCOMING };
+      const received = { ...base, direction: MessageDirection.INCOMING, to: own };
+      const sent = { ...base, direction: MessageDirection.OUTGOING, from: own };
       const where: FindOptionsWhere<Message>[] =
         parseWaId(chatId).kind === 'group'
-          ? [
-              { ...received, author: Not(IsNull()) },
-              ...(receivedOnly ? [] : [{ ...base, direction: MessageDirection.OUTGOING }]),
-            ]
-          : [receivedOnly ? received : base];
+          ? [{ ...received, author: Not(IsNull()) }, ...(receivedOnly ? [] : [sent])]
+          : receivedOnly
+            ? [received]
+            : [received, sent];
       const row = await this.messageRepository.findOne({
         where,
         order: { timestamp: 'DESC', createdAt: 'DESC' },
@@ -1649,7 +1663,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     const cutoff = new Date();
     const ok = await engine
-      .clearChatMessages(chatId, this.storedLastMessage(id, chatId))
+      .clearChatMessages(chatId, this.storedLastMessage(id, chatId, engine))
       .finally(() => this.chatListings.drop(id));
     if (ok) await this.purgeStoredChat(id, chatId, cutoff);
     return ok;
@@ -1665,7 +1679,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     const engine = this.requireEngine(id);
 
     return engine
-      .archiveChat(chatId, archive, this.storedLastMessage(id, chatId))
+      .archiveChat(chatId, archive, this.storedLastMessage(id, chatId, engine))
       .finally(() => this.chatListings.drop(id));
   }
 
@@ -1699,7 +1713,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     const cutoff = new Date();
     const ok = await engine
-      .deleteChat(chatId, this.storedLastMessage(id, chatId))
+      .deleteChat(chatId, this.storedLastMessage(id, chatId, engine))
       .finally(() => this.chatListings.drop(id));
     if (ok) await this.purgeStoredChat(id, chatId, cutoff);
     return ok;
