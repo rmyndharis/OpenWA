@@ -20,13 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Install Trivy for the release and scheduled image scans from its GitHub release against a pinned SHA-256, since the action's own installer needs a host that no longer resolves.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
+- List a built-in Redis, MinIO or PostgreSQL under `removal.errors` instead of `removal.stopped` when a restart could not ask Docker for its container.
+- Keep a working directory `.env` out of the e2e and unit boots, which read the environment their harness sets; a `.env` that cannot be read still stops the boot, and the error names the file.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
 
 ### Documentation
 
 - The community integrations page lists `openwa-n8n-workflows`, an import-ready n8n workflow that answers `message.received` webhooks with a local AI model. Thanks @Abhishekrajpurohit.
+- The database design lists every step that still runs at boot on a SQLite database with `DATABASE_SYNCHRONIZE=true`.
+- The development guidelines list `SearchModule` among the global modules, and a check keeps the list equal to the source.
+- The API reference says where the app version is visible without a key.
 - The API reference says how to count the viewers of a Baileys status post from `message.receipt`, and that a status post reports no `delivered` or `read` ack.
+- The security design and architecture diagrams no longer show an encryption layer the gateway does not have.
 
 ### Dependencies
 
