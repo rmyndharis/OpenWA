@@ -13,7 +13,7 @@ flowchart TB
 
     subgraph Defense["Defense Layers"]
         D1[Authentication]
-        D2[Encryption]
+        D2[Key Hashing, TLS at the Proxy]
         D3[Rate Limiting]
         D4[Input Validation]
         D5[Audit Logging]

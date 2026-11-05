@@ -748,7 +748,7 @@ flowchart TB
     end
 
     subgraph Security["Security Layers"]
-        R --> HTTPS[HTTPS/TLS]
+        R --> HTTPS[HTTPS/TLS at the reverse proxy]
         HTTPS --> CORS[CORS Check]
         CORS --> RATE[Rate Limiter]
         RATE --> AUTH[API Key Auth]
@@ -757,10 +757,12 @@ flowchart TB
     end
 
     subgraph Internal["Internal Security"]
-        APP --> ENC[Data Encryption]
-        ENC --> LOG[Audit Logging]
+        APP --> LOG[Audit Logging]
     end
 ```
+
+The gateway serves plain HTTP, so TLS is terminated at the operator's reverse proxy, and the gateway does not
+encrypt stored data itself. See [04 - Security Design](./04-security-design.md#44-data-encryption).
 
 ## 3.10 Error Handling Architecture
 
