@@ -432,6 +432,29 @@ describe('a received status its poster deleted', () => {
     });
   });
 
+  // Each pass of the delete is joined by another ingest of the story (a redelivery beside the connect-time seed and the
+  // live message): the delete keeps looking until a pass starts none, however many that takes, because the last
+  // ingest to join would otherwise save the story after the delete had answered.
+  it('removes the story however many ingests of it join the delete one pass after another', async () => {
+    const incoming = { waStatusId: STORY, contactJid: POSTER, type: 'text' as const, postedAt: Date.now() };
+    await store.ingest(SESSION, incoming);
+    const repository = db.getRepository(StatusUpdate);
+    const remove = repository.delete.bind(repository);
+    const joiners: Array<Promise<unknown>> = [];
+    jest.spyOn(repository, 'delete').mockImplementation(async criteria => {
+      const result = await remove(criteria);
+      if (joiners.length < 20) joiners.push(store.ingest(SESSION, incoming));
+      return result;
+    });
+
+    await expect(store.removeRevoked(SESSION, STORY)).resolves.toBe(true);
+    await Promise.all(joiners);
+    await settle();
+
+    expect(await rowCount()).toBe(0);
+    expect(joiners).toHaveLength(20);
+  });
+
   it('ignores a revoke that names no story id', async () => {
     await receive(STORY, POSTER);
 

@@ -29,8 +29,6 @@ const PURGE_BATCH_SIZE = 500;
 const PURGE_MAX_BATCHES_PER_RUN = 200;
 /** Files the orphan sweep reconciles per reference lookup: bounds the keys it holds and each query's key list. */
 const SWEEP_CHUNK_SIZE = 500;
-/** Passes a delete of a story makes while ingests of it keep starting during them; it gives up after these. */
-const REMOVAL_MAX_PASSES = 5;
 /** Default per-file cap on persisted status media. Exported for the session service's seed, which
  * pre-gates history downloads at the same cap so over-cap blobs are never fetched. */
 export const DEFAULT_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
@@ -396,13 +394,14 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
     watching.add(watch);
     this.removals.set(key, watching);
     try {
+      // Only an ingest of this story starting during a pass sets `joined`, so the loop ends with the last such ingest:
+      // stopping earlier would let that one save the story after this delete had answered.
       let removed = false;
-      for (let pass = 0; pass < REMOVAL_MAX_PASSES; pass++) {
+      do {
         for (let pending = this.unsaved.get(key); pending; pending = this.unsaved.get(key)) await pending;
         watch.joined = false;
         removed = (await this.removeStored(sessionId, waStatusId, by)) || removed;
-        if (!watch.joined) break;
-      }
+      } while (watch.joined);
       return removed;
     } finally {
       watching.delete(watch);
