@@ -116,10 +116,10 @@ export class ServerShuttingDownException extends ServiceUnavailableException {
 }
 
 /**
- * Stamps kept per session. Operations on one session overlap two or three at a time; a session stopped again and
- * again must not make the list grow without end, so the oldest stamp goes first.
+ * Stamps kept per session. Operations on one session overlap a few at a time; a session stopped again and again
+ * must not make the list grow without end, so the oldest stamp goes first.
  */
-const STOP_MARKS_KEPT = 4;
+const STOP_MARKS_KEPT = 8;
 
 /**
  * The stop marks. Each add() stamps the id afresh, even one already marked, so start() can tell a mark
@@ -156,6 +156,15 @@ export class StopMarks extends Set<string> {
   /** The stamp of the id's newest mark, undefined when it has none. */
   stamp(id: string): number | undefined {
     return this.stamps.get(id)?.at(-1);
+  }
+
+  /**
+   * Whether the id has a mark newer than `seen`, the newest stamp the caller saw when it began (undefined: none). A mark
+   * that was there then and still is does not count, nor does one that remains after a newer mark was dropped.
+   */
+  markedSince(id: string, seen: number | undefined): boolean {
+    const newest = this.stamp(id);
+    return newest !== undefined && (seen === undefined || newest > seen);
   }
 }
 
@@ -415,7 +424,7 @@ export class SessionEngineControls {
 
       // A fresh start intentionally (re-)creates the engine — clear any stale stop/delete mark, but
       // yield to one set after this start began, leaving it in place.
-      if (this.stoppingSessions.has(id) && this.stoppingSessions.stamp(id) !== markAtEntry) {
+      if (this.stoppingSessions.markedSince(id, markAtEntry)) {
         throw new SessionStoppedException(`Session ${id} was stopped`);
       }
       this.stoppingSessions.delete(id);

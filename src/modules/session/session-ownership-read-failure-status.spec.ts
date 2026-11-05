@@ -392,11 +392,28 @@ describe('the stop marks of a session', () => {
     expect(marks.stamp(ID)).toBeUndefined();
   });
 
+  it('count as set after a look only when a newer mark exists, not when an older one is all that is left', () => {
+    const marks = new StopMarks();
+    expect(marks.markedSince(ID, undefined)).toBe(false);
+    marks.add(ID);
+    const completedStop = marks.stamp(ID);
+    expect(marks.markedSince(ID, completedStop)).toBe(false); // there when the caller began, and unchanged
+    expect(marks.markedSince(ID, undefined)).toBe(true); // the caller saw none
+    marks.add(ID);
+    const newer = marks.stamp(ID) as number;
+    expect(marks.markedSince(ID, completedStop)).toBe(true);
+
+    marks.deleteStamped(ID, newer); // the newer operation failed and dropped its own
+    expect(marks.has(ID)).toBe(true);
+    expect(marks.markedSince(ID, newer)).toBe(false); // a caller that saw the newer one is not refused for the older
+    expect(marks.markedSince(ID, completedStop)).toBe(false);
+  });
+
   it('keep only the newest few stamps of a session that is stopped again and again', () => {
     const marks = new StopMarks();
     marks.add(ID);
     const oldest = marks.stamp(ID) as number;
-    for (let i = 0; i < 20; i++) marks.add(ID);
+    for (let i = 0; i < 40; i++) marks.add(ID);
 
     // An operation that old no longer holds the mark, and the list does not grow with every stop.
     expect(marks.deleteStamped(ID, oldest)).toBe(false);
