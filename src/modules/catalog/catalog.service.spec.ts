@@ -3,6 +3,8 @@ import { CatalogService } from './catalog.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
 import type { SendPacingService } from '../message/send-pacing.service';
 import { HookManager } from '../../core/hooks';
 import type {
@@ -199,6 +201,16 @@ describe('CatalogService', () => {
       ['the session is not started', { noEngine: true }, true],
       ['the engine cannot send products', { engineError: new EngineNotSupportedError('sendProduct') }, true],
       ['the engine fails with an unknown outcome', { engineError: new Error('socket closed') }, false],
+      [
+        'the engine answers not-ready before it handed the message over',
+        { engineError: markNothingSent(new EngineNotReadyError()) },
+        true,
+      ],
+      [
+        'the engine answers not-ready after it attempted the send',
+        { engineError: markOutcomeUnknown(new EngineNotReadyError()) },
+        false,
+      ],
     ])('when %s, releases its pacing admission: %p', async (_label, setup, released) => {
       const {
         veto = false,

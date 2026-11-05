@@ -948,6 +948,9 @@ export class MessageSendService {
     if (result.id) message.waMessageId = result.id;
     message.status = MessageStatus.SENT;
     message.timestamp = result.timestamp;
+    // Set when the row was no longer PENDING at the first write: the pending reaper failed it while the engine answered.
+    // The reaper can also fail it later, while the echo merge below is tried; the recovery there covers both.
+    let reaped = false;
     try {
       // No transaction of its own, for the reason given at the first save of this message.
       const sent: QueryDeepPartialEntity<Message> = {
@@ -965,6 +968,7 @@ export class MessageSendService {
         sent,
       );
       if (!updated.affected) {
+        reaped = true;
         updated = await this.messageRepository.update(
           { id: message.id, sessionId: message.sessionId },
           { ...sent, metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>> },
@@ -1008,17 +1012,32 @@ export class MessageSendService {
         if (!metadataMerged) {
           // Keep the payload-bearing row when the echo merge fails. Mark it SENT without the
           // conflicting engine id so the pending reaper cannot strip successfully sent media. This is the
-          // row that survives, so it carries what the send resolved too (a clicked button's label).
-          await this.messageRepository
-            .update(
-              { id: message.id, status: MessageStatus.PENDING },
-              { status: MessageStatus.SENT, timestamp: result.timestamp, ...changed },
-            )
-            .catch(err =>
+          // row that survives, so it carries what the send resolved too (a clicked button's label). A row the
+          // reaper failed first, before the first write above or while the merge was tried, is FAILED and
+          // lost its payload: the write guarded on PENDING then matches nothing, and the row is marked SENT
+          // from the copy this send still holds instead.
+          const keep = (status: MessageStatus, payload: QueryDeepPartialEntity<Message>) =>
+            this.messageRepository.update({ id: message.id, status }, payload).catch(err => {
               this.logger.warn(`Preserving the sent media row failed (id=${message.id})`, {
                 error: err instanceof Error ? err.message : String(err),
-              }),
-            );
+              });
+              return undefined;
+            });
+          const kept = reaped
+            ? undefined
+            : await keep(MessageStatus.PENDING, {
+                status: MessageStatus.SENT,
+                timestamp: result.timestamp,
+                ...changed,
+              });
+          if (reaped || kept?.affected === 0) {
+            await keep(MessageStatus.FAILED, {
+              status: MessageStatus.SENT,
+              timestamp: result.timestamp,
+              ...changed,
+              metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>>,
+            });
+          }
           const retained = await this.messageRepository.findOne({ where: { id: message.id } }).catch(() => null);
           if (retained) this.emitPersisted(message.sessionId, retained);
           return { messageId: result.id, timestamp: result.timestamp };

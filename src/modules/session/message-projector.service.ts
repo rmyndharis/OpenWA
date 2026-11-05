@@ -21,7 +21,7 @@ import {
   type MutationSource,
   type StoredMessageRef,
 } from './message-mutation-guard';
-import { updateMessageMetadata } from '../message/message-metadata';
+import { mergeSentMetadata, updateMessageMetadata } from '../message/message-metadata';
 import { persistHistoryMessages } from './message-history-projector';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
 import { resolveFeatureFlags } from '../../config/feature-flags';
@@ -81,6 +81,13 @@ export const ACK_RECONCILE_DELAY_MS = 750;
  * one busy moment loses the row for good.
  */
 export const PERSIST_RETRY_DELAY_MS = 300;
+
+/**
+ * The most often one engine stamps its session's `lastActiveAt`. Its readers (the session response, the dashboard,
+ * the data export) need nothing near per-message precision, so a write per message cost a row version per message
+ * on the one session row for nothing. `lastActive` can therefore lag the latest message by up to this long.
+ */
+export const LAST_ACTIVE_WRITE_WINDOW_MS = 30_000;
 
 /** How many of its messages marked edited a session remembers as marked (see markedEdited). */
 const EDITED_MARKS_KEPT_PER_SESSION = 500;
@@ -287,6 +294,10 @@ export class MessageProjector {
   // EDITED_MARKS_KEPT_PER_SESSION the oldest is forgotten, and a repeat of it goes out unmarked.
   private readonly markedEdited = new Map<string, Set<string>>();
 
+  // When each engine last stamped its session's lastActiveAt. By engine, not session, so a replacement engine stamps
+  // with its first message and an entry goes with its engine.
+  private readonly lastActiveStamped = new WeakMap<IWhatsAppEngine, number>();
+
   // Reaction/edit applies, extracted to a plain collaborator. It shares this instance's
   // messageMutations queue, so the public enqueue path and the queued applies serialize on one chain.
   private readonly mutationProjector: MessageMutationProjector;
@@ -327,6 +338,19 @@ export class MessageProjector {
       for (const t of this.tickets.get(id) ?? []) if (t.engine === engine) t.drop();
       this.deleteRoomIfIdle(id);
       if (!this.engines.has(id)) this.markedEdited.delete(id);
+    });
+  }
+
+  /** Stamp the session's last-active time, at most once per {@link LAST_ACTIVE_WRITE_WINDOW_MS} for this engine. */
+  private touchLastActive(id: string, engine: IWhatsAppEngine): void {
+    const now = Date.now();
+    const stamped = this.lastActiveStamped.get(engine);
+    // A clock set back re-arms the stamp instead of silencing it until the old time comes round again.
+    if (stamped !== undefined && now >= stamped && now - stamped < LAST_ACTIVE_WRITE_WINDOW_MS) return;
+    this.lastActiveStamped.set(engine, now);
+    // A write that fails leaves the next message to try again, not the rest of the window without a stamp.
+    void this.sessionRepository.update(id, { lastActiveAt: new Date(now) }).catch(() => {
+      if (this.lastActiveStamped.get(engine) === now) this.lastActiveStamped.delete(engine);
     });
   }
 
@@ -484,8 +508,7 @@ export class MessageProjector {
       from: message.from,
       action: 'message_received',
     });
-    // Update last active timestamp
-    void this.sessionRepository.update(id, { lastActiveAt: new Date() }).catch(() => undefined);
+    this.touchLastActive(id, engine);
     // Convert IncomingMessage to plain object for dispatch. One delivered deleted reaches the hooks with no content,
     // whatever text the engine handed over with it.
     const messageData = message.type === 'revoked' ? deletedPlaceholder(message) : { ...message };
@@ -1085,6 +1108,54 @@ export class MessageProjector {
   }
 
   /**
+   * A forward of a message the gateway holds no row for stores a placeholder of type 'forward', the only writer of
+   * that type, because the send path has nothing but the engine id to go on. When that row takes the id first, the
+   * own-send echo, which carries the forwarded type, caption and media marker, loses its insert and lands here: its
+   * content replaces the placeholder and the row is announced again. Status is left alone, an ack may have advanced
+   * it, and so is an edit that reached the message while its insert was running. Must run on the message's mutation
+   * chain. Never rejects.
+   */
+  private async replaceForwardPlaceholder(
+    id: string,
+    echoRow: Message,
+    source: MutationSource,
+    entry: InFlightEntry,
+  ): Promise<void> {
+    const { waMessageId, type, metadata } = echoRow;
+    const body = entry.editedBody ?? echoRow.body;
+    if (!waMessageId || type === 'revoked') return;
+    try {
+      const placeholder = await this.messageRepository.findOne({
+        where: { sessionId: id, waMessageId, type: 'forward' },
+        select: { id: true },
+      });
+      if (!placeholder) return;
+      const reason = await this.mutationProjector.foreignRowReason(id, waMessageId, source);
+      if (reason) {
+        this.logger.warn('Not replacing the forward placeholder with a message that is not the one it holds', {
+          sessionId: id,
+          messageId: waMessageId,
+          reason,
+        });
+        return;
+      }
+      // Before the type flips, so a merge that fails leaves the placeholder as it was, not a typed row without its media.
+      if (metadata) {
+        await updateMessageMetadata(this.messageRepository, { sessionId: id, waMessageId }, current =>
+          mergeSentMetadata(current, metadata),
+        );
+      }
+      const replaced = await this.messageRepository.update(
+        { sessionId: id, waMessageId, type: 'forward' },
+        { type, body },
+      );
+      if (replaced?.affected) await this.announceChangedRow(id, waMessageId);
+    } catch (err) {
+      this.logger.error(`Failed to replace the forward placeholder of ${waMessageId}`, String(err));
+    }
+  }
+
+  /**
    * Hand a stored row whose text an edit changed to `message:persisted` again, as {@link revokeRow} does for a
    * cleared one, so a plugin keeping a copy keyed by the row id follows the edit. Re-read, so the payload carries
    * the edited marker. Never rejects.
@@ -1286,8 +1357,7 @@ export class MessageProjector {
       to: message.to,
       action: 'message_sent',
     });
-    // Update last active timestamp
-    void this.sessionRepository.update(id, { lastActiveAt: new Date() }).catch(() => undefined);
+    this.touchLastActive(id, engine);
     // As on the inbound path, one delivered deleted reaches the hooks with no content.
     const messageData = message.type === 'revoked' ? deletedPlaceholder(message) : { ...message };
     delete messageData.originalBody;
@@ -1403,6 +1473,7 @@ export class MessageProjector {
         // changes queued for the message have run, with the mark they left.
         rowMarked = await new Promise<boolean>(resolve =>
           this.enqueueMessageMutation(id, outgoing.id, async () => {
+            await this.replaceForwardPlaceholder(id, dbMessage, claimOf(outgoing), entry);
             const marked = this.markedEdited.get(id)?.has(outgoing.id) === true;
             const foreign =
               marked && (await this.mutationProjector.foreignRowReason(id, outgoing.id, claimOf(outgoing)));

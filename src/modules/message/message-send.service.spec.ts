@@ -2062,6 +2062,53 @@ describe('MessageSendService', () => {
         { status: MessageStatus.SENT, timestamp: 1706868000 },
       );
     });
+
+    // The pending reaper failed the row while the upload ran, which dropped its payload: the retained row is the one
+    // that is FAILED, and it has to get the payload back from the copy this send still holds.
+    it('retains a row the pending reaper failed first, payload included, when merging onto the echo fails', async () => {
+      (repository.update as jest.Mock)
+        .mockResolvedValueOnce({ affected: 0 }) // the SENT write guarded on PENDING: the row is FAILED now
+        .mockRejectedValueOnce(new Error('UNIQUE constraint failed: messages.sessionId, messages.waMessageId')) // the rewrite meets the echo's id
+        .mockRejectedValueOnce(new Error('SQLITE_BUSY')); // the metadata merge onto the echo row
+      (repository.findOne as jest.Mock).mockResolvedValue({ id: 'echo-row', metadata: {} });
+
+      const result = await service.sendImage('sess-1', { chatId: '621@c.us', base64: 'QUJD', mimetype: 'image/png' });
+
+      expect(result.messageId).toBe('wa-msg-1');
+      expect(repository.delete).not.toHaveBeenCalled();
+      const update = repository.update as jest.Mock<unknown, [unknown, Record<string, unknown>]>;
+      const [where, patch] = update.mock.calls.at(-1) ?? [];
+      expect(where).toEqual({ id: 'msg-uuid-1', status: MessageStatus.FAILED });
+      expect(patch).toMatchObject({ status: MessageStatus.SENT, timestamp: 1706868000 });
+      expect(patch).toMatchObject({ metadata: { media: { data: 'QUJD' } } });
+      expect(patch).not.toHaveProperty('waMessageId');
+    });
+
+    // The reaper can also fail the row after this send's first write found it PENDING and met the echo's id, while the
+    // merge onto the echo row is being tried. The write guarded on PENDING then matches nothing and the row is recovered
+    // the same way.
+    it('retains a row the pending reaper failed while the merge onto the echo was tried, payload included', async () => {
+      (repository.update as jest.Mock)
+        .mockRejectedValueOnce(new Error('UNIQUE constraint failed: messages.sessionId, messages.waMessageId'))
+        .mockRejectedValueOnce(new Error('SQLITE_BUSY')) // the metadata merge onto the echo row
+        .mockResolvedValueOnce({ affected: 0 }); // the write guarded on PENDING: the row is FAILED by now
+      (repository.findOne as jest.Mock).mockResolvedValue({ id: 'echo-row', metadata: {} });
+
+      const result = await service.sendImage('sess-1', { chatId: '621@c.us', base64: 'QUJD', mimetype: 'image/png' });
+
+      expect(result.messageId).toBe('wa-msg-1');
+      expect(repository.delete).not.toHaveBeenCalled();
+      const update = repository.update as jest.Mock<unknown, [unknown, Record<string, unknown>]>;
+      const [pendingWhere, pendingPatch] = update.mock.calls.at(-2) ?? [];
+      expect(pendingWhere).toEqual({ id: 'msg-uuid-1', status: MessageStatus.PENDING });
+      expect(pendingPatch).toEqual({ status: MessageStatus.SENT, timestamp: 1706868000 });
+      const [where, patch] = update.mock.calls.at(-1) ?? [];
+      expect(where).toEqual({ id: 'msg-uuid-1', status: MessageStatus.FAILED });
+      expect(patch).toMatchObject({ status: MessageStatus.SENT, timestamp: 1706868000 });
+      expect(patch).toMatchObject({ metadata: { media: { data: 'QUJD' } } });
+      expect(patch).not.toHaveProperty('waMessageId');
+    });
+
     it('merges state onto the echo row, then drops the redundant PENDING row', async () => {
       // The engine's message_create echo won the insert race, so the SENT-state update
       // collides on UNIQUE(sessionId, waMessageId). The echo row carries only what the engine reported

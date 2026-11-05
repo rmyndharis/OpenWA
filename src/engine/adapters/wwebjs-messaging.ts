@@ -32,7 +32,7 @@ import { buildVCard } from './vcard';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
-import { EngineNotSentError, markNothingSent } from '../../common/errors/engine-not-sent.error';
+import { EngineNotSentError, markNothingSent, markOutcomeUnknown } from '../../common/errors/engine-not-sent.error';
 import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
 import { PAGE_RELOADING_MESSAGE, isNavigationError, isProtocolTimeout, toCapturedPageError } from './wwebjs-lifecycle';
@@ -410,6 +410,18 @@ export class WwebjsMessaging {
     }
   }
 
+  /**
+   * The readiness check after a send attempt has run: its 409 does not prove the first attempt stayed off the wire,
+   * so it carries markOutcomeUnknown, and a paced send keeps its admission as a keyed send keeps its `Idempotency-Key`.
+   */
+  private ensureReadyAfterAttempt(): void {
+    try {
+      this.host.ensureReady();
+    } catch (error) {
+      throw markOutcomeUnknown(error);
+    }
+  }
+
   /** See {@link withPage} for what a dead page answers here. */
   private withPage<T>(context: string, op: () => Promise<T>): Promise<T> {
     return withPage(this.host, context, op);
@@ -499,7 +511,7 @@ export class WwebjsMessaging {
    * the send breaker does not count: it says nothing about the account.
    */
   private unansweredLookup(chatId: string, sendError: Error, failure: unknown): Error {
-    if (failure instanceof EngineNotReadyError) return failure;
+    if (failure instanceof EngineNotReadyError) return markOutcomeUnknown(failure);
     this.host.logger.warn('Could not re-resolve a recipient after "No LID for user": the lookup did not answer', {
       sessionId: this.host.config.sessionId,
       chatId,
@@ -557,6 +569,11 @@ export class WwebjsMessaging {
    * A re-resolution that threw established nothing, so it gets no such verdict and no retry: see
    * {@link unansweredLookup}.
    *
+   * The answers given once the first attempt failed with `No LID for user` (a not-ready 409, the unreachable
+   * recipient, a quote the retry cannot resolve) carry markOutcomeUnknown: the page can throw after the message is
+   * on the wire, so none of them proves the message stayed off it. An answer given before that attempt still
+   * carries markNothingSent.
+   *
    * `quotedMessageId` gets the same treatment for the same reason. Opting out of `ignoreQuoteErrors`
    * makes an id the page cannot resolve throw, but it throws a bare Error, and two things follow from
    * that: the caller receives a 500 for an id THEY supplied, where the Baileys adapter answers 404
@@ -598,12 +615,12 @@ export class WwebjsMessaging {
       const fresh = lookup.id;
       // Same gap as above, and before the comparison: a lookup that failed because the session went away
       // answers the unresolved id, which would read as an unreachable recipient.
-      this.host.ensureReady();
+      this.ensureReadyAfterAttempt();
       if (!lookup.answered) {
         throw this.unansweredLookup(chatId, err as Error, lookup.failure);
       }
       if (fresh === to) {
-        throw new RecipientUnreachableError(chatId);
+        throw markOutcomeUnknown(new RecipientUnreachableError(chatId));
       }
       // The first send threw, but wwjs can throw after the message is already on the wire — so this
       // retry may produce a duplicate. Log it: without this the second copy is invisible.
@@ -622,12 +639,12 @@ export class WwebjsMessaging {
         // is the same caller fault — without this it would be a 500 on the retry where the identical
         // failure on the first attempt was a 404.
         if (quotedMessageId && isQuoteUnresolvedError(retryErr)) {
-          throw new MessageNotFoundError(quotedMessageId);
+          throw markOutcomeUnknown(new MessageNotFoundError(quotedMessageId));
         }
         // The re-resolved id is no better than the stale one — same unreachable recipient, and the
         // raw error would 500 exactly as the first one did.
         if (isNoLidForUserError(retryErr)) {
-          throw new RecipientUnreachableError(chatId);
+          throw markOutcomeUnknown(new RecipientUnreachableError(chatId));
         }
         throw toCapturedPageError(retryErr);
       }

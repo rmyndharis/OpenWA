@@ -27,3 +27,21 @@ export function provesNothingSent(error: unknown): boolean {
     error instanceof EngineNotSentError || (error !== null && typeof error === 'object' && raisedBeforeSend.has(error))
   );
 }
+
+/** Errors an adapter marked as raised after a send was attempted, whatever their HTTP status. */
+const raisedAfterAttempt = new WeakSet<object>();
+
+/**
+ * Record that an error was raised after a send was attempted, keeping its own status and body: a not-ready 409 or an
+ * unreachable-recipient 400 an adapter answers once its write may have left proves nothing about the message, so a
+ * paced send keeps its admission, as a keyed send keeps its `Idempotency-Key`.
+ */
+export function markOutcomeUnknown<T>(error: T): T {
+  if (error !== null && typeof error === 'object') raisedAfterAttempt.add(error);
+  return error;
+}
+
+/** Whether markOutcomeUnknown recorded the error. */
+export function hasUnknownOutcome(error: unknown): boolean {
+  return error !== null && typeof error === 'object' && raisedAfterAttempt.has(error);
+}

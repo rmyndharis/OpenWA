@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { MessageProjector, PERSIST_RETRY_DELAY_MS } from './message-projector.service';
+import { LAST_ACTIVE_WRITE_WINDOW_MS, MessageProjector, PERSIST_RETRY_DELAY_MS } from './message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IsNull, Not, Or, type Repository } from 'typeorm';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
@@ -2146,6 +2146,232 @@ describe('MessageProjector (inbound projection)', () => {
       );
       expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.sent', sent);
       expect(eventsGateway.emitMessageSent).toHaveBeenCalledWith(SESSION_ID, sent);
+    });
+  });
+
+  // lastActive is read as minutes by the session response, so a session's busiest traffic stamps its row at most
+  // once per window and engine instead of once per message.
+  describe('the session activity stamp', () => {
+    let now: number;
+    let clock: jest.SpyInstance;
+
+    beforeEach(() => {
+      now = 1_700_000_000_000;
+      clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
+    });
+    afterEach(() => clock.mockRestore());
+
+    const stamps = (): unknown[] =>
+      sessionRepository.update.mock.calls.filter(([, patch]) => 'lastActiveAt' in (patch as object));
+    const inbound = (engine: IWhatsAppEngine, id: string): void =>
+      void projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id }));
+    const echo = (engine: IWhatsAppEngine, id: string): void =>
+      projector.handleOwnSendEcho(SESSION_ID, engine, makeIncoming({ id, fromMe: true }));
+
+    it('stamps once for a burst of inbound messages and own-send echoes', () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+
+      for (let i = 0; i < 5; i++) inbound(engine, `in-${i}`);
+      for (let i = 0; i < 5; i++) echo(engine, `out-${i}`);
+
+      expect(stamps()).toEqual([[SESSION_ID, { lastActiveAt: new Date(now) }]]);
+    });
+
+    it('stamps again once the window has passed, and not before', () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      inbound(engine, 'first');
+
+      now += LAST_ACTIVE_WRITE_WINDOW_MS - 1;
+      inbound(engine, 'inside');
+      expect(stamps()).toHaveLength(1);
+
+      now += 1;
+      echo(engine, 'after');
+      expect(stamps()).toHaveLength(2);
+      expect(stamps()[1]).toEqual([SESSION_ID, { lastActiveAt: new Date(now) }]);
+    });
+
+    it('lets the next message stamp again after a write that failed', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      sessionRepository.update.mockRejectedValueOnce(new Error('database is locked'));
+      inbound(engine, 'first');
+      await settle();
+
+      inbound(engine, 'second');
+
+      expect(stamps()).toHaveLength(2);
+    });
+
+    it('does not let a write that failed late undo the stamp of a newer one', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      let fail!: (error: Error) => void;
+      sessionRepository.update.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+      inbound(engine, 'first');
+      now += LAST_ACTIVE_WRITE_WINDOW_MS;
+      inbound(engine, 'second');
+
+      fail(new Error('database is locked'));
+      await settle();
+      inbound(engine, 'third');
+
+      expect(stamps()).toHaveLength(2);
+    });
+
+    it('stamps at once for the first message of a replacement engine', () => {
+      const first = makeEngine();
+      engines.set(SESSION_ID, first);
+      inbound(first, 'before');
+
+      const replacement = makeEngine();
+      engines.set(SESSION_ID, replacement);
+      inbound(replacement, 'after');
+
+      expect(stamps()).toHaveLength(2);
+    });
+
+    it('stamps again when the clock moved back instead of waiting out the difference', () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      inbound(engine, 'first');
+
+      now -= 3_600_000;
+      inbound(engine, 'later');
+
+      expect(stamps()).toHaveLength(2);
+    });
+
+    it('stamps nothing for an engine that is no longer the live one', () => {
+      const retired = makeEngine();
+      engines.set(SESSION_ID, makeEngine());
+
+      inbound(retired, 'late');
+      echo(retired, 'late-echo');
+
+      expect(stamps()).toHaveLength(0);
+    });
+  });
+
+  // A forward of a message the table holds no row for stores a placeholder of type 'forward'. When that row takes the
+  // engine id first, the own-send echo loses its insert, and its type, caption and media marker are the only copy of
+  // what was forwarded.
+  describe('an own-send echo that loses its id to a forward placeholder', () => {
+    const own = '15550001111@c.us';
+    const dup = (): Error => Object.assign(new Error('UNIQUE constraint failed'), { code: 'SQLITE_CONSTRAINT_UNIQUE' });
+    const flush = async (): Promise<void> => {
+      for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve));
+    };
+    const media = { mimetype: 'image/jpeg', omitted: true, sizeBytes: 10 };
+    const echo = (over: Partial<IncomingMessage> = {}): IncomingMessage =>
+      makeIncoming({ fromMe: true, chatId: own, to: own, type: 'image', body: 'the caption', media, ...over });
+    const placeholder = {
+      id: 'row-1',
+      type: 'forward',
+      chatId: own,
+      direction: 'outgoing',
+      author: null,
+      metadata: null,
+    };
+    const persisted = (): unknown[] => hookManager.execute.mock.calls.filter(([e]) => e === 'message:persisted');
+    const replaces = (): unknown[] =>
+      messageRepository.update.mock.calls.filter(([where]) => (where as { type?: unknown }).type === 'forward');
+
+    /** The table refuses the echo's insert; `row` is what it holds under the id, a placeholder unless `forward` is false. */
+    const deliver = async (
+      message: IncomingMessage,
+      row: Record<string, unknown> = placeholder,
+      forward = true,
+    ): Promise<void> => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      messageRepository.insert.mockRejectedValueOnce(dup());
+      messageRepository.update.mockResolvedValue({ affected: 1 });
+      messageRepository.findOne.mockImplementation((options: { where: { type?: unknown } }) =>
+        Promise.resolve(options.where.type === 'forward' && !forward ? null : row),
+      );
+      projector.handleOwnSendEcho(SESSION_ID, engine, message);
+      await flush();
+    };
+
+    it('replaces the placeholder with the type, caption and media marker the echo carries, and announces the row', async () => {
+      await deliver(echo());
+
+      expect(messageRepository.update).toHaveBeenCalledWith(expect.anything(), { metadata: { media } });
+      expect(replaces()).toEqual([
+        [
+          { sessionId: SESSION_ID, waMessageId: 'wamid.1', type: 'forward' },
+          { type: 'image', body: 'the caption' },
+        ],
+      ]);
+      expect(persisted()).toEqual([
+        ['message:persisted', { sessionId: SESSION_ID, message: placeholder }, expect.anything()],
+      ]);
+      // The webhook and the socket event carry the echo either way.
+      expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.sent', expect.anything());
+    });
+
+    it('keeps the text of an edit that reached the message while its insert was running', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      messageRepository.insert.mockImplementationOnce(() => {
+        projector.applyMessageEditQueued(SESSION_ID, {
+          messageId: 'wamid.1',
+          body: 'the edited caption',
+          chatId: own,
+          fromMe: true,
+        } as never);
+        return Promise.reject(dup());
+      });
+      messageRepository.update.mockResolvedValue({ affected: 1 });
+      messageRepository.findOne.mockResolvedValue(placeholder);
+
+      projector.handleOwnSendEcho(SESSION_ID, engine, echo());
+      await flush();
+
+      expect(replaces()).toEqual([
+        [
+          { sessionId: SESSION_ID, waMessageId: 'wamid.1', type: 'forward' },
+          { type: 'image', body: 'the edited caption' },
+        ],
+      ]);
+    });
+
+    it('leaves a row that is not a forward placeholder alone', async () => {
+      await deliver(echo(), { ...placeholder, type: 'image' }, false);
+
+      expect(messageRepository.update).not.toHaveBeenCalled();
+      expect(persisted()).toHaveLength(0);
+    });
+
+    it('leaves the placeholder alone when the row under the id is a message of another chat', async () => {
+      await deliver(echo(), { ...placeholder, chatId: '15559998888@c.us' });
+
+      expect(messageRepository.update).not.toHaveBeenCalled();
+      expect(persisted()).toHaveLength(0);
+    });
+
+    it('does not replace the placeholder with a message that came deleted', async () => {
+      await deliver(echo({ type: 'revoked', body: '', media: undefined }));
+
+      expect(replaces()).toEqual([]);
+    });
+
+    it('leaves the placeholder as it was when storing the media marker fails', async () => {
+      messageRepository.update.mockRejectedValueOnce(new Error('database is locked'));
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      messageRepository.insert.mockRejectedValueOnce(dup());
+      messageRepository.findOne.mockResolvedValue(placeholder);
+
+      projector.handleOwnSendEcho(SESSION_ID, engine, echo());
+      await flush();
+
+      expect(replaces()).toEqual([]);
+      expect(persisted()).toHaveLength(0);
+      expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.sent', expect.anything());
     });
   });
 

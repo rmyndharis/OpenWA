@@ -329,6 +329,43 @@ describe('the sender stored on an outgoing row', () => {
       ]);
     });
 
+    // The engine can forward a message the table holds no row for (pruned by retention, an ephemeral one that was not
+    // stored, a failed insert), and the echo then carries the only copy of what was forwarded.
+    it.each([
+      [
+        'while the echo still runs its hooks',
+        () => Promise.resolve(projector.handleOwnSendEcho(sessionId, engine, echo)),
+      ],
+      [
+        'before the echo arrives',
+        () => Promise.resolve(void setImmediate(() => projector.handleOwnSendEcho(sessionId, engine, echo))),
+      ],
+      [
+        'after the echo is stored',
+        () => Promise.resolve(projector.handleOwnSendEcho(sessionId, engine, echo)).then(flush),
+      ],
+    ])(
+      'stores what the echo carries when the source has no row and the engine answers %s',
+      async (_when, deliverEcho) => {
+        await forwardWith(deliverEcho);
+        await flush();
+        projector.handleMessageAck(sessionId, engine, 'WA_FORWARDED', 'delivered');
+        await flush();
+
+        await eventually(async () =>
+          expect(await forwardedRows()).toEqual([
+            {
+              waMessageId: 'WA_FORWARDED',
+              type: 'image',
+              body: 'the caption',
+              status: MessageStatus.DELIVERED,
+              metadata: { media: { mimetype: 'image/jpeg', omitted: true, sizeBytes: 10 } },
+            },
+          ]),
+        );
+      },
+    );
+
     it('copies nothing from a message stored under another chat', async () => {
       await storeSource('628333333333@c.us');
       // What either engine answers for an id that is not in the source chat.

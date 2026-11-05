@@ -690,7 +690,10 @@ describe.each([
 
     expect(events('message.sent')).toEqual([expect.objectContaining({ body: 'sent' })]);
     expect(events('message.sent')[0]).not.toHaveProperty('edited');
-    expect(findOne).toHaveBeenCalledTimes(1);
+    // The tombstone is read once; the only other read is the look for a forward placeholder the echo would replace.
+    const lookedUp = (findOne.mock.calls as Array<[{ where: Row }]>).map(([options]) => options.where.type);
+    expect(lookedUp.filter(type => type === 'revoked')).toHaveLength(1);
+    expect(lookedUp.filter(type => type !== 'revoked')).toEqual(['forward']);
     expect(findOne).toHaveBeenCalledWith(
       expect.objectContaining({ where: { sessionId: 's1', waMessageId: 'S', type: 'revoked' } }),
     );

@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Log the page visibility, the H.264/AAC playback answer and the browser version when a whatsapp-web.js video send or video status post times out in WhatsApp Web's 20 second video load, and document how to read that timeout (#1902). Thanks @benjaminb10 for the report.
 - List a Baileys session's stored chats right after a restart, groups included, with their newest stored message as preview and time and the contact's pushname (#1978). Thanks @farresyh.
+- Record a session's `lastActive` at most once every 30 seconds instead of on every message, so it can lag the latest message by up to that long.
 
 ### Fixed
 
@@ -37,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - whatsapp-web.js: an `auth timeout` or browser network error behind a SOCKS proxy URL with credentials now says in `lastError` that Chromium cannot send them.
 - Metrics scrapes that arrive together share one render, so the cached event-loop delay no longer reads zero after an overlap.
 - Treat the phone and lid forms of a chat as one contact in send pacing when the gateway holds a reported phone pairing for the lid, so replies and group adds for a contact known by its lid are no longer charged as new conversations.
+- Keep the payload of a media send the pending reaper failed while it was in flight when the own-send echo already holds its message id.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - List a key seeded from `API_MASTER_KEY` as `(master key)` instead of its first 12 characters; keys seeded by earlier releases keep their stored prefix until replaced.
 - Key Baileys chat writes and read receipts to the newest stored message of the account the session is linked to, so a session relinked to another number no longer names the previous account's messages.
@@ -73,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - End the process on a crash in native code instead of leaving the gateway spinning at full CPU and answering nothing, so a restart policy brings it back.
 - Leave SIGQUIT and SIGABRT to their default action, so they can take a core dump of a gateway whose event loop is blocked.
 - Leave SIGUSR2 to Node, so `--report-on-signal` and `--heapsnapshot-signal=SIGUSR2` write their file and no longer stop the gateway; name a writable directory such as `/app/data` with `--report-directory` or `--diagnostic-dir`.
+- Hold the pacing admission of a bulk item or product send for the usual window when the engine answers not-ready, unreachable or not found after the send may already have gone out, instead of handing it back at once.
+- Keep the forwarded type and caption of a forward of a message the gateway has no stored copy of, instead of the `[Forwarded]` placeholder.
 
 ### Documentation
 
