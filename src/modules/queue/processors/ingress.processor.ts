@@ -123,7 +123,7 @@ export class IngressProcessor extends WorkerHost {
       throw new DelayedError();
     }
     try {
-      await this.lock.run(orderingKeyFor(d), () => this.loader.dispatchWebhookForInstance(d));
+      await this.lock.run(orderingKeyFor(d), () => this.loader.dispatchWebhookForInstance(d, { queued: true }));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const isFinalAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);

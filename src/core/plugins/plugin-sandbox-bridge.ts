@@ -22,9 +22,12 @@ import { registerPluginSearchProvider, unregisterPluginSearchProvider } from './
 import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integration.constants';
 import { ingressDeliveryVerified, isQueryBorne } from '../../modules/integration/ingress-signature';
 import type { IngressJobData } from '../../modules/queue/processors/ingress.processor';
+import { resolveFeatureFlags } from '../../config/feature-flags';
 
 /** Time budget for a sandboxed plugin's hook handler before the chain proceeds without it. */
 const SANDBOX_HOOK_TIMEOUT_MS = 5000;
+/** Keep queued dispatch below BullMQ's default 30 s job lock. */
+const SANDBOX_QUEUED_WEBHOOK_MAX_MS = 25000;
 /** A sandboxed plugin's healthCheck must answer within this, else it's reported unhealthy (not hung). */
 const SANDBOX_HEALTH_TIMEOUT_MS = 5000;
 /** A sandboxed plugin's search handler must answer within this, else /search fails fast (not hung). */
@@ -190,7 +193,7 @@ export class PluginSandboxBridge {
    * since, or when the worker's handler itself reports
    * failure (`!result.ok`, e.g. a 502/504/500) — either way BullMQ's retry/DLQ machinery takes over.
    */
-  async dispatchWebhookForInstance(d: IngressJobData): Promise<void> {
+  async dispatchWebhookForInstance(d: IngressJobData, options?: { queued?: boolean }): Promise<void> {
     const host = this.sandboxHosts.get(d.pluginId);
     if (!host) {
       throw new Error('no live sandbox host for plugin ' + d.pluginId);
@@ -281,7 +284,12 @@ export class PluginSandboxBridge {
       deliveryId: d.payload.providerDeliveryId ?? d.deliveryId,
       sessionId: d.sessionId,
       config,
-      timeoutMs: INGRESS_DISPATCH_TIMEOUT_MS,
+      timeoutMs: options?.queued
+        ? Math.min(
+            SANDBOX_QUEUED_WEBHOOK_MAX_MS,
+            resolveFeatureFlags(this.configService).simulateTypingMaxMs + INGRESS_DISPATCH_TIMEOUT_MS,
+          )
+        : INGRESS_DISPATCH_TIMEOUT_MS,
     });
     if (!result.ok) {
       throw new Error(result.error ?? 'ingress dispatch failed with status ' + result.status);

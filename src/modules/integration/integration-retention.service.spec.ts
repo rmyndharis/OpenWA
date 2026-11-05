@@ -4,7 +4,7 @@ import { IntegrationDeliveryFailure } from './entities/integration-delivery-fail
 import { IntegrationRetentionService } from './integration-retention.service';
 import { IngressReconcilerService } from './ingress-reconciler.service';
 import { IngressEnqueueService } from './ingress-enqueue.service';
-import { INGRESS_DISPATCH_TIMEOUT_MS } from './integration.constants';
+import { INGRESS_SHUTDOWN_WAIT_MS } from './integration.constants';
 import { PluginInstanceService } from './plugin-instance.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { Session } from '../session/entities/session.entity';
@@ -900,7 +900,7 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
     jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
     try {
       void reconciler.onModuleDestroy().then(() => (destroyed = true));
-      await jest.advanceTimersByTimeAsync(INGRESS_DISPATCH_TIMEOUT_MS - 1);
+      await jest.advanceTimersByTimeAsync(INGRESS_SHUTDOWN_WAIT_MS - 1);
       await new Promise(setImmediate);
       destroyedBeforeDeadline = destroyed;
       await jest.advanceTimersByTimeAsync(1);

@@ -16,14 +16,36 @@ let tmpWriteSeq = 0;
  * same filesystem, so a crash (SIGKILL/OOM) mid-write can never leave a truncated/corrupt target —
  * a reader sees either the old complete file or the new complete file, never a partial one.
  */
-function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: number }): void {
+function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: number; durable?: boolean }): void {
   // Named by a hash of the target, not the target plus a suffix: that ran past the 255-byte name limit for a long
   // storage key, which then failed once the write counter grew a digit. Still one temp name space per target.
   const target = createHash('sha256').update(path.basename(filePath)).digest('hex').slice(0, 16);
   const tmp = path.join(path.dirname(filePath), `.${target}.${process.pid}.${tmpWriteSeq++}.tmp`);
   try {
-    fs.writeFileSync(tmp, data, options);
+    if (options?.durable) {
+      const fd = fs.openSync(tmp, 'w', options.mode);
+      try {
+        fs.writeFileSync(fd, data);
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else {
+      fs.writeFileSync(tmp, data, options);
+    }
     fs.renameSync(tmp, filePath);
+    if (options?.durable && process.platform !== 'win32') {
+      try {
+        const dir = fs.openSync(path.dirname(filePath), 'r');
+        try {
+          fs.fsyncSync(dir);
+        } finally {
+          fs.closeSync(dir);
+        }
+      } catch {
+        // Directory sync is best-effort: the target has already been replaced.
+      }
+    }
   } catch (err) {
     try {
       fs.rmSync(tmp, { force: true });
@@ -151,11 +173,17 @@ export class PluginStorageService {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
+      try {
+        // Preserve an intentionally owner-readonly directory while removing group/other access.
+        fs.chmodSync(dir, fs.statSync(dir).mode & 0o7700);
+      } catch {
+        /* best-effort hardening */
+      }
 
       const entries = Array.from(this.registry.values());
       // Owner-only: plugin config can hold secrets (e.g. an API key). writeFileSync's mode only
       // applies on CREATE, so chmod an already-existing, looser file too (best-effort).
-      atomicWriteFileSync(this.registryPath, JSON.stringify(entries, null, 2), { mode: 0o600 });
+      atomicWriteFileSync(this.registryPath, JSON.stringify(entries, null, 2), { mode: 0o600, durable: true });
       try {
         fs.chmodSync(this.registryPath, 0o600);
       } catch {
@@ -418,6 +446,11 @@ export class PluginStorageService {
     if (!fs.existsSync(pluginDataDir)) {
       fs.mkdirSync(pluginDataDir, { recursive: true, mode: 0o700 });
     }
+    try {
+      fs.chmodSync(pluginDataDir, fs.statSync(pluginDataDir).mode & 0o7700);
+    } catch {
+      /* best-effort hardening */
+    }
 
     const logger = this.logger;
 
@@ -468,6 +501,11 @@ export class PluginStorageService {
         const filePath = resolveKeyPath(key);
         if (!filePath) {
           return Promise.reject(new Error(`Unsafe plugin storage key: ${key}`));
+        }
+        if (Buffer.byteLength(path.basename(filePath), 'utf8') > 255) {
+          return Promise.reject(
+            new Error(`Plugin storage key exceeds 184 UTF-8 bytes (received ${Buffer.byteLength(key, 'utf8')})`),
+          );
         }
         try {
           const payload = JSON.stringify(value, null, 2);

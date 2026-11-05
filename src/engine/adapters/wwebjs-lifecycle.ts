@@ -359,8 +359,8 @@ export class WwebjsLifecycle {
     let socksCredentialsDropped = false;
     try {
       // Build puppeteer args, including proxy if configured
-      // Pinned on configured args too: a plugin config stored through the API replaces the whole puppeteer object
-      // (checked only to be an object), so the pin the env path applies never reaches it. A copy, never mutated.
+      // Pin stored argument overrides too: their array replaces the environment list and its locale pin.
+      // A copy, never mutated.
       const configuredArgs: unknown = this.host.config.puppeteer?.args;
       const puppeteerArgs = withPinnedBrowserLocale(
         Array.isArray(configuredArgs) ? (configuredArgs as string[]) : DEFAULT_PUPPETEER_ARGS,

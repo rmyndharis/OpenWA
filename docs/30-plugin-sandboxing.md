@@ -47,6 +47,7 @@ from disk is user-installed and sandboxed.
   (`SANDBOX_HOOK_TIMEOUT_MS`, a hardcoded 5s). A slow or wedged handler is skipped (`continue: true`)
   once the budget runs out, so each sandboxed subscriber can delay the hook chain by at most 5 s per
   event, never indefinitely.
+  A plain text send may wait up to `SIMULATE_TYPING_MAX_MS` (5 s by default) for typing simulation before the engine send. Do not await sends inside hooks or webhook handlers; start the promise with a `.catch` handler and return promptly. Webhook dispatch remains bounded at 5 s inline, which is every dispatch without the queue, replays included; queued dispatch gets the typing cap plus 5 s, capped at 25 s (10 s by default).
 - **Resource & runaway containment.** Each worker has a heap cap (`maxOldGenerationSizeMb`, a hardcoded
   256 MB). An OOM terminates the worker, not the host. A wedged **lifecycle** call (load/unload) times out
   and tears the worker down, and a crash rejects its in-flight calls — the host survives either way. A

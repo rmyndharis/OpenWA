@@ -82,9 +82,10 @@ export class PluginPackageScanner {
   scanAtBoot(): void {
     // Packages this scan found on disk but could not load, already logged with their reason.
     const failedLoads = new Set<string>();
+    const missingCode = new Map<string, string>();
     // User plugins, if the directory exists. Built-in plugins register themselves programmatically.
     if (fs.existsSync(this.pluginsDir)) {
-      this.loadPluginsFromDirectory(this.pluginsDir, failedLoads);
+      this.loadPluginsFromDirectory(this.pluginsDir, failedLoads, missingCode);
     }
 
     // COMPATIBILITY PATH — hosts that installed plugins before the package dir moved under <dataDir>.
@@ -104,7 +105,18 @@ export class PluginPackageScanner {
           `volume is destroyed on the next container recreate.`,
         { action: 'plugins_legacy_dir', legacyDir: this.legacyPluginsDir, pluginsDir: this.pluginsDir },
       );
-      this.loadPluginsFromDirectory(this.legacyPluginsDir, failedLoads);
+      this.loadPluginsFromDirectory(this.legacyPluginsDir, failedLoads, missingCode);
+    }
+
+    for (const [pluginId, pluginPath] of missingCode) {
+      if (this.plugins.has(pluginId) || failedLoads.has(pluginId)) continue;
+      this.logger.warn(
+        `Plugin ${pluginId} is installed but its code is missing from ${pluginPath} (no manifest.json) ` +
+          `while its stored data is still there. Reinstall it: its config and stored data are kept, unless ` +
+          `an uninstall stopped part-way and left the entry with no config, in which case repeat that uninstall. ` +
+          `Plugin code kept outside the data volume does not survive a container recreate.`,
+        { pluginPath, pluginId, action: 'plugin_code_missing' },
+      );
     }
 
     this.logger.log(`Loaded ${this.plugins.size} plugins`, {
@@ -142,7 +154,7 @@ export class PluginPackageScanner {
     );
   }
 
-  private loadPluginsFromDirectory(dir: string, failedLoads: Set<string>): void {
+  private loadPluginsFromDirectory(dir: string, failedLoads: Set<string>, missingCode: Map<string, string>): void {
     // Reconcile any interrupted-update leftovers BEFORE scanning, so a crash mid-swap can't make a
     // plugin silently vanish while its registry entry still claims it is installed.
     this.recoverInterruptedUpdates(dir);
@@ -203,13 +215,7 @@ export class PluginPackageScanner {
             action: 'builtin_storage_dir_skipped',
           });
         } else if (registryEntry) {
-          this.logger.warn(
-            `Plugin ${entry.name} is installed but its code is missing from ${pluginPath} (no manifest.json) ` +
-              `while its stored data is still there. Reinstall it: its config and stored data are kept, unless ` +
-              `an uninstall stopped part-way and left the entry with no config, in which case repeat that uninstall. ` +
-              `Plugin code kept outside the data volume does not survive a container recreate.`,
-            { pluginPath, pluginId: entry.name, action: 'plugin_code_missing' },
-          );
+          missingCode.set(entry.name, pluginPath);
         } else {
           // Operators do drop unrelated directories in here, and this fires on every boot for each one.
           // The old bare "missing manifest.json" wording read like an internal fault — #981's reporter

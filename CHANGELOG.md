@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Docker image no longer ships the TypeScript compiler and ts-node, about 24 MiB less per architecture; nothing loads them at run time.
 - List a Baileys session's stored chats right after a restart, groups included, with their newest stored message as preview and time and the contact's pushname (#1978). Thanks @farresyh.
 - Record a session's `lastActive` at most once every 30 seconds instead of on every message, so it can lag the latest message by up to that long.
+- A `PUT /api/plugins/{id}/config` write to a built-in plugin merges nested objects into the stored config instead of replacing them, and a `null` clears a key at any depth.
 
 ### Fixed
 
@@ -56,6 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep dialogs that open over the phone navigation drawer usable and release the page scroll lock when they close.
 - Return keyboard focus to Save Configuration after the restart prompt is put off or a save is refused.
 - JavaScript SDK: `client.request()`, `requestBytes()` and `buildUrl()` send the entries of a `URLSearchParams` or `Map` query instead of sending the request without them.
+- Allow typing time in queued plugin webhook dispatch while keeping inline and hook limits at five seconds.
+- Synchronize plugin registry replacements before acknowledging required writes.
+- Reject plugin storage keys longer than 184 UTF-8 bytes before writing files.
+- Delay plugin missing-code warnings until all package directories have been scanned.
+- Use .env PUPPETEER_HEADLESS and PUPPETEER_ARGS instead of defaults for omitted keys in existing partial puppeteer config on the next start after upgrade, without another save.
+- Remove group and other access from existing plugin directories without granting owner permissions.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
 - Refuse a Baileys retry receipt from another chat for a message received under a lid with its sender's number.
 - Webhook writes refuse more than 27 events, and webhook and automation rule writes refuse id filter values over 128 characters.
@@ -85,6 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The community integrations page lists `openwa-n8n-workflows`, an import-ready n8n workflow that answers `message.received` webhooks with a local AI model. Thanks @Abhishekrajpurohit.
 - The API reference says that whatsapp-web.js system notices are not messages.
 - The Helm notes and the security guide say the admin key is read from the key file when `API_MASTER_KEY` is set.
+- Explain that schema defaults remain stored across plugin updates.
+- Explain how hooks and webhook handlers can start reply sends without awaiting them, with error handling.
+- Describe plain-text storage and masked reads for retained integration instance secrets.
 - The API reference says how to count the viewers of a Baileys status post from `message.receipt`, and that a status post reports no `delivered` or `read` ack.
 - Explain redirect and blocked-destination delivery errors in the n8n troubleshooting guide.
 - API reference and troubleshooting guide: a SOCKS proxy cannot log in on whatsapp-web.js; use a proxy that admits the gateway by IP or an HTTP or HTTPS proxy with credentials.

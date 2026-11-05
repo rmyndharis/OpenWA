@@ -287,14 +287,16 @@ dispatch when Redis is unreachable. Before Redis has ever connected, queue calls
 connects. Providers already deliver over unordered, at-least-once HTTP, so plugin handlers must be
 idempotent and treat ingress as a reconciliation trigger.
 
-A plugin's webhook handler has **5 s** (`INGRESS_DISPATCH_TIMEOUT_MS`) to finish. The host cannot cancel a
+An inline plugin webhook handler has **5 s** (`INGRESS_DISPATCH_TIMEOUT_MS`) to finish. Queued dispatch gets `SIMULATE_TYPING_MAX_MS` plus 5 s, capped at 25 s (10 s by default), below the default 30 s BullMQ lock. The host cannot cancel a
 handler that overruns it: the attempt is recorded as failed, the conversation lock is released and the
 delivery is retried (queued) or dead-lettered (inline), while the first run goes on and its work still
 lands. A handler that calls a slow upstream, or sends media, can therefore run twice for one delivery.
 Key every side effect on the delivery id (`req.deliveryId`) and hand work that can outlast the budget to
-a background task instead of awaiting it in the handler. The budget is short because a queue-disabled
-deployment answers the provider only after the inline dispatch, and providers abandon a request within a
-few seconds.
+a background task instead of awaiting it in the handler. Even a plain text send may wait up to `SIMULATE_TYPING_MAX_MS` (5 s by default) for typing simulation before contacting the engine. Do not await message sends in hooks or webhook handlers: start the promise with a `.catch` handler and return promptly. Without the queue (`QUEUE_ENABLED` unset or false)
+every dispatch keeps the 5 s inline budget. A live delivery answers the provider only after the inline dispatch,
+and providers abandon a request within a few seconds; the replays of the reconciler and of a redrive, and the
+dispatch behind a route with a response contract, wait for no provider but run under the same budget. A handler
+that awaits a typing pause longer than that needs the queue.
 
 On a route that sets `dedupBodyMismatchAsNew` (section 25.6) the handler receives the same `req.deliveryId`
 for every body the host accepts under one provider delivery id. Key its side effects on a provider event
