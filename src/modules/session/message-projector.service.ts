@@ -792,6 +792,22 @@ export class MessageProjector {
     );
   }
 
+  /**
+   * Drop a story its poster deleted from the status store, with its media. An engine that passes an actor does not
+   * vouch for who sent the delete (Baileys), so the store holds the sender to the poster of the story, and removes
+   * nothing when the sender is unknown. One that passes none (whatsapp-web.js) reports a delete only after WhatsApp
+   * Web accepted it.
+   */
+  private removeDeletedStory(id: string, statusId: string, actor?: { participant?: string }): void {
+    void this.statusStore.removeRevoked(id, statusId, actor && { poster: actor.participant }).catch((err: unknown) =>
+      this.logger.warn('Failed to remove a status its poster deleted', {
+        sessionId: id,
+        statusId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
+
   /** Operator opt-out gate for disappearing messages: true when the message must be skipped entirely. */
   private shouldSkipEphemeralMessage(id: string, message: IncomingMessage): boolean {
     // Ephemeral/disappearing messages: skip persist + dispatch when the operator opted out.
@@ -1724,7 +1740,7 @@ export class MessageProjector {
     id: string,
     engine: IWhatsAppEngine,
     message: RevokedMessage,
-    actor?: { fromMe: boolean },
+    actor?: { fromMe: boolean; participant?: string },
   ): void {
     if (!this.engines.isLive(id, engine)) return;
     this.logger.debug(`Message revoked: ${message.id}`, {
@@ -1741,6 +1757,8 @@ export class MessageProjector {
     // `message.id` is the revocation notification, which never matches a stored row.
     // `revokedId` falls back to `id` (Baileys, where the two are the same).
     const revokedWaMessageId = message.revokedId ?? message.id;
+    // A story is not a row of `messages`: the status store drops it, and the rest of the revoke goes on as for any chat.
+    if (message.chatId === 'status@broadcast') this.removeDeletedStory(id, revokedWaMessageId, actor);
     const source = actor ? ({ kind: 'revoke', chatId: message.chatId, fromMe: actor.fromMe } as const) : undefined;
     const apply = (): void => {
       void this.recordRevoke(id, revokedWaMessageId, source, true);

@@ -1,6 +1,14 @@
 import { StorageService } from './storage.service';
 
 /**
+ * Most unreferenced files a sweep keeps a first-seen time for (about 135 bytes each). A session delete, or the first
+ * retention run over a large archive, can leave millions of files with no row, and tracking all of them would hold
+ * hundreds of megabytes until the deletes, one request each, caught up. A file met while the sweep is full is neither
+ * tracked nor deleted in that pass: it is met again once deletions have made room, which only delays its deletion.
+ */
+const MAX_TRACKED_ORPHANS = 100_000;
+
+/**
  * One reconciliation pass over a storage prefix: delete files no row references, but only after the
  * sweep has seen them unreferenced for at least the grace window. Shared by the stores that keep
  * media blobs alongside DB rows (status store, chat-media archive) and share one bucket — each
@@ -8,7 +16,8 @@ import { StorageService } from './storage.service';
  *
  * First-seen is tracked in the caller-owned `firstSeenAt` map (epoch ms per unreferenced key), so a
  * restart simply restarts the grace clock (fails safe) and a file mid-write is never reaped. The map
- * is pruned to the keys still orphaned at the end of the pass, so it cannot grow unbounded.
+ * is pruned to the keys still orphaned at the end of the pass and holds at most MAX_TRACKED_ORPHANS
+ * of them, so it cannot grow unbounded.
  *
  * Files are streamed from iterateFiles() under the sweep's prefix, so an orphan is found however
  * large the store is.
@@ -56,8 +65,10 @@ export async function sweepOrphanedFiles(options: {
         firstSeenAt.delete(file);
         continue;
       }
+      const known = firstSeenAt.get(file);
+      if (known === undefined && firstSeenAt.size >= MAX_TRACKED_ORPHANS) continue;
       stillOrphaned.add(file);
-      const firstSeen = firstSeenAt.get(file) ?? now;
+      const firstSeen = known ?? now;
       firstSeenAt.set(file, firstSeen);
       if (now - firstSeen < graceMs) continue;
       try {

@@ -955,7 +955,8 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1791300000000-BackfillLegacyMessageTypes.ts   # converts raw wwebjs message types to the neutral vocabulary, once
 ├── 1791400000000-AddLidMappingReportSource.ts   # distinguishes mapping reports from cached display data
 ├── 1791600000000-RepairSqliteMessageFts.ts   # rebuilds the SQLite full-text index when it no longer matches messages
-└── 1791700000000-AddChatStateDeletedAt.ts   # chat_states.deletedAt (when WhatsApp deleted the chat)
+├── 1791700000000-AddChatStateDeletedAt.ts   # chat_states.deletedAt (when WhatsApp deleted the chat)
+└── 1791800000000-AddStatusMediaPathIndex.ts   # partial index on status_updates.mediaPath (orphan sweep)
 ```
 
 > [!NOTE]

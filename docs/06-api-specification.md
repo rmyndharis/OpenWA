@@ -4322,7 +4322,7 @@ create and update are the same operation and there is no server-assigned id to h
 why the route is `PUT /labels/:labelId` rather than `POST /labels`. Reusing an existing id **rewrites
 that label** instead of failing, because the protocol has no create-only form.
 
-**Reads are store-backed, not engine-direct.** `GET /status` and `GET /status/:id` no longer call the engine — they read from an OpenWA-side store that ingests inbound status/story broadcasts as they arrive (plus a best-effort backfill of currently-active stories on session connect), with a 24h TTL matching WhatsApp's own story expiry. This makes reads **identical on both engines**: `whatsapp-web.js` (which had a native `getBroadcasts()`/`getBroadcastById()` path) and Baileys (which never had one — `fetchStatus` only returns the _about_ text, not stories, so the raw engine methods still throw `501` if called directly, they're just no longer on the read path) now return the same shape from the same source. A status older than 24h, or received before the store existed, will not appear.
+**Reads are store-backed, not engine-direct.** `GET /status` and `GET /status/:id` no longer call the engine — they read from an OpenWA-side store that ingests inbound status/story broadcasts as they arrive (plus a best-effort backfill of currently-active stories on session connect), with a 24h TTL matching WhatsApp's own story expiry. This makes reads **identical on both engines**: `whatsapp-web.js` (which had a native `getBroadcasts()`/`getBroadcastById()` path) and Baileys (which never had one — `fetchStatus` only returns the _about_ text, not stories, so the raw engine methods still throw `501` if called directly, they're just no longer on the read path) now return the same shape from the same source. A status older than 24h, or received before the store existed, will not appear. A status its poster deletes leaves the store, and its media file is deleted, once the delete reaches the session: it is no longer listed and its media route answers `404`. There are three exceptions. On Baileys a delete that names no sender, or whose sender and the poster are known one by a lid and the other by a number that no reported pairing ties together, is not applied, and the story stays until it expires. A delete that reaches the session before the story itself does removes nothing, so the story is stored when it arrives. On Baileys that is a delete made before the story was received, since one made while it is being received keeps it from being stored; on whatsapp-web.js it is also a delete made while the story's media is still downloading. One that arrives while the story is being stored does remove it. A media file that cannot be deleted is left for the orphan sweep, while the story itself is gone.
 
 #### GET /api/sessions/:sessionId/labels
 
@@ -4513,7 +4513,7 @@ The handler always returns `{ "success": true }`. DELETE default status is `200`
 
 #### GET /api/sessions/:sessionId/status
 
-Get all contact status updates (stories) visible to the session, read from the store (24h TTL, both engines — see the note above).
+Get all contact status updates (stories) visible to the session, read from the store (24h TTL, both engines — see the note above). A status its poster has deleted is no longer listed, with the exceptions in the note above.
 
 **Auth:** API key
 
@@ -4549,7 +4549,7 @@ The controller wraps the store array in `{ statuses }`, ordered newest-first. `t
 
 #### GET /api/sessions/:sessionId/status/:id
 
-Get status updates posted by a specific contact, read from the store (24h TTL, both engines).
+Get status updates posted by a specific contact, read from the store (24h TTL, both engines). A status its poster has deleted is no longer listed, with the exceptions in the note above.
 
 **Auth:** API key
 
@@ -4602,7 +4602,7 @@ The bytes are streamed from the store, with `Content-Length` when the store repo
 
 Only the essence of the stored mimetype is checked and served: the part before any `;`, trimmed and lowercased, since MIME types are case-insensitive. Parameters are dropped, and a value that is not a single well-formed type (a comma-joined list, for example) is served as `application/octet-stream`.
 
-**Errors:** `401` missing/invalid API key · `403` key not scoped to this session · `404` `Status media not found or expired` — the status is text-only, its media was omitted (e.g. over the configured size cap), or the 24h TTL has since purged the row · `503` with `Retry-After: 1` on S3, 50 media downloads already open
+**Errors:** `401` missing/invalid API key · `403` key not scoped to this session · `404` `Status media not found or expired` — the status is text-only, its media was omitted (e.g. over the configured size cap), the 24h TTL has since purged the row, or its poster deleted it · `503` with `Retry-After: 1` on S3, 50 media downloads already open
 
 Note: `:statusId/media` is a two-path-segment route, so it never collides with the single-segment `GET /status/:id` above regardless of declaration order.
 

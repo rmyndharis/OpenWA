@@ -32,7 +32,12 @@ export class StatusUpdate {
   @Column({ type: 'text', nullable: true, transformer: NulFreeTransformer })
   caption?: string;
 
-  /** Relative path under the media store; null for text or omitted media. */
+  /**
+   * Relative path under the media store; null for text or omitted media. The partial index serves the orphan
+   * sweep's per-chunk `mediaPath IN (...)` lookup; the name matches the migration that creates it, and the
+   * column is quoted in the predicate for the reason given on `Message.mediaPath`.
+   */
+  @Index('IDX_status_updates_mediaPath', { where: '"mediaPath" IS NOT NULL' })
   @Column({ nullable: true })
   mediaPath?: string;
 

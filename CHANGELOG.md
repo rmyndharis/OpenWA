@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - List a Baileys session's stored chats right after a restart, groups included, with their newest stored message as preview and time and the contact's pushname (#1978). Thanks @farresyh.
 - Record a session's `lastActive` at most once every 30 seconds instead of on every message, so it can lag the latest message by up to that long.
 - A `PUT /api/plugins/{id}/config` write to a built-in plugin merges nested objects into the stored config instead of replacing them, and a `null` clears a key at any depth.
+- Add a partial index on `status_updates.mediaPath`, created by a migration when the gateway starts, for the status orphan sweep's lookups.
 
 ### Fixed
 
@@ -48,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report the chat id of a whatsapp-web.js `message.reaction` as a string if WhatsApp Web sends it as an object.
 - Clear the stored body, media and metadata of a message deleted on whatsapp-web.js by its bare key id, which stayed in place before.
 - Fold a whatsapp-web.js mention given as a padded, upper-case, `@s.whatsapp.net`, `:device` or hosted id to the neutral id before it reaches WhatsApp Web, in text, media, sticker, reply and edit sends, as Baileys already does.
+- Cap the chat media and status orphan sweeps at 100,000 tracked files per pass, so a session delete or a retention run over a large archive no longer grows memory with the number of files left behind.
+- Remove a status, with its media file, from `GET /status`, `GET /status/:id` and the status media route when its poster deletes it, instead of serving it until it expires.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Stop announcing `message.ack` for the acks of whatsapp-web.js system notices, which are no longer delivered as messages.
 - Stop delivering whatsapp-web.js system notices (a changed security code, the encryption notice, business and broadcast notices) as `unknown` messages on `message.received` and `message.sent`, so they are no longer stored, passed to the message hooks or answered by automation rules (#1864). Thanks @dwimnofan.
@@ -110,6 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Explain resolved LID send addressing and limits of per-recipient receipt lists.
 - State the glibc 2.34 requirement and startup remedies for Linux glibc source installs on x64/arm64.
 - Describe PHP empty-response behavior for coalescing, nullable and required-body methods.
+- The FAQ says that a media send by `url` holds its download in memory until the send finishes, and that nothing limits how many run at once.
 
 ### Dependencies
 

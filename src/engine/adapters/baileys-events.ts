@@ -1172,12 +1172,19 @@ export class BaileysEvents {
         this.changeStoredMessage(pm.key?.id, stored =>
           this.mayChange(stored.key, msg.key, true, resolveStored) ? { ...stored, message: null } : null,
         );
+        // The payload of a status post's delete names no sender (its chat is the status chat), and the stored copy
+        // judged above may be gone, which lets any delete through: the session holds it to the poster of the story.
+        const sender = remoteJid === 'status@broadcast' ? keyParticipant(msg.key) : undefined;
         // Behind the reactions and edits of the message that wait for its emit, never for the message itself:
         // the delete keeps it from being emitted, and they were made before it.
         this.announceWhenHandedOn(
           revoked.id,
           opts.ticket,
-          () => this.host.getOnMessageRevoked()?.(revoked, { fromMe: msg.key.fromMe === true }),
+          () =>
+            this.host.getOnMessageRevoked()?.(revoked, {
+              fromMe: msg.key.fromMe === true,
+              ...(sender ? { participant: this.host.toNeutralJid(sender) } : {}),
+            }),
           true,
         );
         return;
