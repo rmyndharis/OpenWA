@@ -15,9 +15,10 @@ helm install openwa ./charts/openwa \
   --set secretEnv.API_MASTER_KEY=$(openssl rand -base64 32)
 ```
 
-The app stores the first admin key in `/app/data/.api-key` on the PVC: the `secretEnv.API_MASTER_KEY`
-you set, which it never prints, or a generated key when that is left empty. The post-install NOTES
-show how to read it.
+The app seeds the first admin key on the first boot on a volume, and stores it in `/app/data/.api-key` on
+the PVC: the `secretEnv.API_MASTER_KEY` you had set then, which it never prints, or a generated key when that
+was left empty. Setting it later, on a release that already has keys, changes nothing. The post-install NOTES
+show how to read the key.
 
 ## Configuration
 

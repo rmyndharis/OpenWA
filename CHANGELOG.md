@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Install Trivy for the release and scheduled image scans from its GitHub release against a pinned SHA-256, since the action's own installer needs a host that no longer resolves.
 - Share one lid table lookup between the events of a chat when the gateway expands it for chat-restricted delivery (Redis fan-out on, or a chat-restricted socket connected to the node), and reuse a lookup that found a mapping for 5 seconds.
-- Print no part of an `API_MASTER_KEY` in the startup banner: the first boot names the key file, and later boots show no fingerprint of a key this release seeded.
+- Print no part of an `API_MASTER_KEY` in the startup banner: the first boot names the key file, and later boots show no fingerprint of a key seeded from it by this release or still configured.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - List a key seeded from `API_MASTER_KEY` as `(master key)` instead of its first 12 characters; keys seeded by earlier releases keep their stored prefix until replaced.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
