@@ -19,13 +19,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Install Trivy for the release and scheduled image scans from its GitHub release against a pinned SHA-256, since the action's own installer needs a host that no longer resolves.
+- Allow typing time in queued plugin webhook dispatch while keeping inline and hook limits at five seconds.
+- Synchronize plugin registry replacements before acknowledging required writes.
+- Reject plugin storage keys longer than 184 UTF-8 bytes before writing files.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
+- Delay plugin missing-code warnings until all package directories have been scanned.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
+- Use .env PUPPETEER_HEADLESS and PUPPETEER_ARGS instead of defaults for omitted keys in existing partial puppeteer config on the next start after upgrade, without another save.
+- Remove group and other access from existing plugin directories without granting owner permissions.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
 
 ### Documentation
 
 - The community integrations page lists `openwa-n8n-workflows`, an import-ready n8n workflow that answers `message.received` webhooks with a local AI model. Thanks @Abhishekrajpurohit.
+- Explain that schema defaults remain stored across plugin updates.
+- Explain how hooks and webhook handlers can start reply sends without awaiting them, with error handling.
+- Describe plain-text storage and masked reads for retained integration instance secrets.
 - The API reference says how to count the viewers of a Baileys status post from `message.receipt`, and that a status post reports no `delivered` or `read` ack.
 
 ### Dependencies
