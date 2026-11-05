@@ -347,6 +347,40 @@ describe('governance docs match the repository', () => {
     expect(fabric).toContain('or whose pointer does not resolve in that delivery carries none');
   });
 
+  // docs/08 8.3 freezes the set of @Global() modules and says why each one is global. The table is what a contributor
+  // reads before adding one, so it has to name exactly the modules the source declares, with their paths.
+  it('lists in docs/08 exactly the modules the source declares global', () => {
+    const declared = new Map<string, string>();
+    let decoratorLines = 0;
+    const unread: string[] = [];
+    for (const file of readdirSync(join(root, 'src'), { recursive: true }) as string[]) {
+      if (!file.endsWith('.ts') || file.endsWith('.spec.ts')) continue;
+      const path = `src/${file.split('\\').join('/')}`;
+      const text = read(path);
+      const found = [...text.matchAll(/^@Global\(\)[^\n]*\n@Module\([\s\S]*?\nexport class (\w+)/gm)];
+      for (const match of found) declared.set(match[1], path);
+      const lines = text.match(/^\s*@Global\(/gm)?.length ?? 0;
+      decoratorLines += lines;
+      if (lines !== found.length) unread.push(path);
+    }
+    const documented = new Map<string, string>();
+    for (const line of between(read('docs/08-development-guidelines.md'), '### Global modules', '\n## ').split('\n')) {
+      const cells = line.split('|').map(cell => cell.trim());
+      const name = cells[1]?.match(/^`(\w+)`$/)?.[1];
+      const path = cells[2]?.match(/^`([^`]+)`$/)?.[1];
+      if (name && path) documented.set(name, path);
+    }
+    // Both readers must find a long-standing member, or the comparison below proves nothing.
+    expect(declared.get('AuthModule')).toBe('src/modules/auth/auth.module.ts');
+    expect(documented.get('AuthModule')).toBe('src/modules/auth/auth.module.ts');
+    // The reader above sees one shape: @Global() directly above @Module( of an exported class. A global module
+    // written any other way (a comment between the decorators, reversed decorators, both on one line, an unexported
+    // class) would pass unseen, so every line that starts with @Global( must be one it found; the files that hold the
+    // difference are named.
+    expect({ decoratorLines, unread }).toEqual({ decoratorLines: declared.size, unread: [] });
+    expect(Object.fromEntries([...documented].sort())).toEqual(Object.fromEntries([...declared].sort()));
+  });
+
   it('keeps the README non-affiliation disclaimer', () => {
     const section = between(read('README.md'), '## Disclaimer', '\n## ');
     expect(section).toMatch(/not affiliated/);
