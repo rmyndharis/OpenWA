@@ -74,7 +74,7 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
   let hookManager: { execute: jest.Mock };
   let webhookService: { dispatch: jest.Mock };
   let eventsGateway: Record<string, jest.Mock>;
-  let statusStore: { ingest: jest.Mock };
+  let statusStore: { ingest: jest.Mock; removeRevoked: jest.Mock };
   let engines: EngineRegistry;
   let engine: IWhatsAppEngine;
   let projector: MessageProjector;
@@ -118,7 +118,7 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
       emitMessageAck: jest.fn(),
       emitStatusReceived: jest.fn(),
     };
-    statusStore = { ingest: jest.fn() };
+    statusStore = { ingest: jest.fn(), removeRevoked: jest.fn().mockResolvedValue(false) };
     engines = new EngineRegistry();
     engine = { tag: 'one' } as unknown as IWhatsAppEngine;
     engines.set('s1', engine);

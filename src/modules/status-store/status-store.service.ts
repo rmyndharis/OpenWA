@@ -55,6 +55,8 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
   private readonly orphanFirstSeenAt = new Map<string, number>();
   /** Last row id the TTL purge walked past; the next run resumes after it. */
   private purgeCursor?: string;
+  /** Ingests whose row is not saved yet, by `${sessionId}:${waStatusId}`: the delete of the same story waits for them. */
+  private readonly unsaved = new Map<string, Promise<void>>();
 
   constructor(
     @InjectRepository(StatusUpdate, 'data')
@@ -107,6 +109,7 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
     lifetime?: SessionWriteScope,
   ): Promise<{ row: StatusUpdate; created: boolean }> {
     const scope = lifetime ?? this.captureWrites(sessionId);
+    const rowSaved = this.holdUnsaved(sessionId, s.waStatusId);
     try {
       const existing = await this.repository.findOne({ where: { sessionId, waStatusId: s.waStatusId } });
       if (existing) return { row: existing, created: false };
@@ -146,12 +149,29 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
         throw error;
       }
 
+      // The row is there for a delete of the story to find; its media is still to be written.
+      rowSaved();
       // A row removed while its media was being written (a purge, a session delete) was never stored.
       if (keepMedia && !(await this.attachMedia(saved, sessionId, s))) return { row: saved, created: false };
       return { row: saved, created: true };
     } finally {
+      rowSaved();
       if (!lifetime) scope.close();
     }
+  }
+
+  /** Mark a story's row as not saved yet until the returned function is called (calling it again does nothing). */
+  private holdUnsaved(sessionId: string, waStatusId: string): () => void {
+    const key = `${sessionId}:${waStatusId}`;
+    let release!: () => void;
+    const mine = new Promise<void>(resolve => (release = resolve));
+    // The same story may be ingested twice at once (the connect-time seed beside the live message): both are waited for.
+    const held = Promise.all([this.unsaved.get(key), mine]).then(() => undefined);
+    this.unsaved.set(key, held);
+    void held.then(() => {
+      if (this.unsaved.get(key) === held) this.unsaved.delete(key);
+    });
+    return release;
   }
 
   captureWrites(sessionId: string): SessionWriteScope {
@@ -265,7 +285,8 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
     return rows.map(row => this.toStatus(row));
   }
 
-  async listByContact(sessionId: string, contactJid: string): Promise<Status[]> {
+  /** Every id a contact's rows may be stored under, the contact's own first. */
+  private async contactCandidates(contactJid: string): Promise<string[]> {
     // The same person may hold rows under both a @lid and their @c.us (the mapping was learned
     // mid-window) — match every candidate so a resolved-form query doesn't silently miss lid rows.
     const candidates = new Set<string>([contactJid]);
@@ -285,8 +306,12 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
         for (const lid of await this.lidMappingStore.findLidsForPhone(phone)) candidates.add(`${lid}@lid`);
       }
     }
+    return [...candidates];
+  }
+
+  async listByContact(sessionId: string, contactJid: string): Promise<Status[]> {
     const rows = await this.repository.find({
-      where: { sessionId, contactJid: In([...candidates]), expiresAt: MoreThan(Date.now()) },
+      where: { sessionId, contactJid: In(await this.contactCandidates(contactJid)), expiresAt: MoreThan(Date.now()) },
       order: { postedAt: 'DESC' },
     });
     return rows.map(row => this.toStatus(row));
@@ -336,6 +361,41 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
     // reported none) is still served, as octet-stream.
     if (!row || row.mediaOmitted || !row.mediaPath) return null;
     return { path: row.mediaPath, mimetype: row.mediaMimetype || 'application/octet-stream' };
+  }
+
+  /**
+   * Remove a story its poster deleted, and its media file. The row goes first, so every read stops at once; a file that
+   * cannot be deleted is left to the orphan sweep. An ingest of the story that has not saved its row yet is waited for,
+   * or the story would be saved after its delete.
+   *
+   * `by` is given when the engine does not vouch for who sent the delete: Baileys passes a delete on unchecked once the
+   * story's copy has left its own message store. Then only a story of `by.poster` goes, under either of its ids (see
+   * contactCandidates), and none when the sender is unknown. Without it the engine did vouch: whatsapp-web.js reports
+   * a delete only after WhatsApp Web accepted it. Resolves to whether a story was removed.
+   */
+  async removeRevoked(sessionId: string, waStatusId: string, by?: { poster?: string }): Promise<boolean> {
+    // An undefined value is dropped from a where clause, which would then match every row of the session.
+    if (!waStatusId || (by && !by.poster)) return false;
+    await this.unsaved.get(`${sessionId}:${waStatusId}`);
+    const contactJid = by?.poster ? In(await this.contactCandidates(by.poster)) : undefined;
+    const row = await this.repository.findOne({
+      where: { sessionId, waStatusId, ...(contactJid ? { contactJid } : {}) },
+      select: { id: true, mediaPath: true },
+    });
+    if (!row) return false;
+    await this.repository.delete({ id: row.id, sessionId });
+    if (row.mediaPath) {
+      try {
+        await this.storageService.deleteFile(row.mediaPath);
+      } catch (err) {
+        this.logger.warn('Failed to delete the media of a deleted status; leaving it for the orphan sweep', {
+          mediaPath: row.mediaPath,
+          error: String(err),
+        });
+      }
+    }
+    this.logger.debug('Removed a status its poster deleted', { sessionId, statusId: waStatusId });
+    return true;
   }
 
   /**

@@ -82,6 +82,7 @@ function heldProjector(options: { unique?: boolean; sqlite?: boolean } = {}) {
       ingested.push(status.id);
       return Promise.resolve({ row: status, created: false });
     }),
+    removeRevoked: jest.fn().mockResolvedValue(false),
   };
   const gateway = new Proxy({}, { get: () => jest.fn() });
   const engines = new EngineRegistry();
