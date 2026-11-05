@@ -2759,7 +2759,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     await checksRun(store, repo); // the first check reads the second lid's row before its write returns
     release();
     await second;
-    await checksRun(store, repo);
+    await checksRun(store, repo, 2);
 
     expect(reports).toEqual([expect.objectContaining({ previousLid: '222', newLid: '111' })]);
   });
@@ -2872,9 +2872,9 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     await store.remember('111', '628999', 's1'); // its check's read fails: owed again
     await until(() => owedChecks(store).has('111'));
     await store.remember('222', '628999', 's2');
-    await checksRun(store, repo);
+    await checksRun(store, repo, 2);
     await store.remember('111', '628999', 's1'); // lands and runs 111's owed check
-    await checksRun(store, repo);
+    await checksRun(store, repo, 3);
 
     expect(reports.map(report => `${report.previousLid}>${report.newLid}`)).toEqual(['111>222']);
   });
@@ -2898,7 +2898,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     await until(() => reports.length > 0);
     await store.remember('222', '628888', 's2'); // the lid moves away and back: a change each time
     await store.remember('222', '628999', 's2');
-    await checksRun(store, repo);
+    await checksRun(store, repo, 2);
     expect(reports).toHaveLength(1);
 
     clock += 10 * 60_000;
