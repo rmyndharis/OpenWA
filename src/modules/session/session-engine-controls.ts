@@ -34,6 +34,7 @@ import { type createLogger } from '../../common/services/logger.service';
 import { HookManager } from '../../core/hooks';
 import { SessionLifecycleFences } from './session-lifecycle-fences';
 import { SessionStatusBroadcaster } from './session-status-broadcaster';
+import { sessionNotFound } from './session-id.pipe';
 // The two pure config resolvers stay exported from the lifecycle module (its export surface is
 // unchanged — session.service re-exports them from there), so this unit imports them back. The
 // resulting import cycle is deferred-usage only — the bindings are read inside method bodies,
@@ -115,31 +116,110 @@ export class ServerShuttingDownException extends ServiceUnavailableException {
 }
 
 /**
- * The stop marks. Each add() stamps the id afresh, even one already marked, so start() can tell a mark
- * set while it waited from one that was already there when it began.
+ * Finished marks kept per session. A session stopped again and again must not grow its list without end; the marks of
+ * operations still in flight are never counted against this, they go when their operation drops them.
+ */
+const FINISHED_MARKS_KEPT = 4;
+
+/** One mark of a session: its stamp, and whether the operation that set it is still in flight. */
+interface Mark {
+  stamp: number;
+  pending: boolean;
+}
+
+/**
+ * The stop marks. Each mark is stamped from one increasing sequence, so start() can tell a mark set while it waited from
+ * one that was already there when it began. An id stays marked while any mark is left:
+ *
+ *  - hold() is the mark of an operation in flight. The operation drops it with deleteStamped() when it fails before it
+ *    acts, or lets it stand with settle() once it is done;
+ *  - add() is a mark that stays by itself until a start or a committed delete clears it: a stop that finished, a
+ *    teardown, a refused rebind.
+ *
+ * An operation that fails therefore takes only its own mark, a stop that is still waiting keeps its guard however many
+ * later operations come and go, and a session found gone can be cleared of the marks of operations that ended.
  */
 export class StopMarks extends Set<string> {
   private seq = 0;
-  private readonly stamps = new Map<string, number>();
+  private readonly marks = new Map<string, Mark[]>();
 
   override add(id: string): this {
-    this.stamps.set(id, ++this.seq);
-    return super.add(id);
+    this.push(id, false);
+    return this;
   }
 
+  /** The mark of an operation in flight; returns its stamp. */
+  hold(id: string): number {
+    return this.push(id, true);
+  }
+
+  /** The operation that held this mark is done: the mark stays as finished state. */
+  settle(id: string, stamp: number): void {
+    const marks = this.marks.get(id);
+    const mark = marks?.find(other => other.stamp === stamp);
+    if (!marks || !mark) return;
+    mark.pending = false;
+    this.trim(id, marks);
+  }
+
+  /** Every mark of the id. */
   override delete(id: string): boolean {
-    this.stamps.delete(id);
+    this.marks.delete(id);
     return super.delete(id);
   }
 
-  /** The stamp of the id's current mark, undefined when it has none. */
+  /** Drops the mark with this stamp; the id is unmarked once none is left. False when no mark has the stamp. */
+  deleteStamped(id: string, stamp: number): boolean {
+    const marks = this.marks.get(id);
+    const index = marks?.findIndex(mark => mark.stamp === stamp) ?? -1;
+    if (!marks || index < 0) return false;
+    marks.splice(index, 1);
+    if (marks.length === 0) this.delete(id);
+    return true;
+  }
+
+  /** Drops the marks of operations that are done; the id stays marked for those still in flight. */
+  dropFinished(id: string): void {
+    const inFlight = this.marks.get(id)?.filter(mark => mark.pending) ?? [];
+    if (inFlight.length === 0) this.delete(id);
+    else this.marks.set(id, inFlight);
+  }
+
+  /** The stamp of the id's newest mark, undefined when it has none. */
   stamp(id: string): number | undefined {
-    return this.stamps.get(id);
+    return this.marks.get(id)?.at(-1)?.stamp;
+  }
+
+  /**
+   * Whether the id has a mark newer than `seen`, the newest stamp the caller saw when it began (undefined: none). A mark
+   * that was there then and still is does not count, nor does one that remains after a newer mark was dropped.
+   */
+  markedSince(id: string, seen: number | undefined): boolean {
+    const newest = this.stamp(id);
+    return newest !== undefined && (seen === undefined || newest > seen);
+  }
+
+  private push(id: string, pending: boolean): number {
+    const marks = this.marks.get(id) ?? [];
+    const stamp = ++this.seq;
+    marks.push({ stamp, pending });
+    this.trim(id, marks);
+    super.add(id);
+    return stamp;
+  }
+
+  /** Keeps every mark in flight and only the newest few that are done. */
+  private trim(id: string, marks: Mark[]): void {
+    let finished = marks.filter(mark => !mark.pending).length;
+    const kept = marks.filter(mark => mark.pending || finished-- <= FINISHED_MARKS_KEPT);
+    this.marks.set(id, kept);
   }
 }
 
 /** Caller callbacks for stop(), delete(), forceKill() and logout(), run around the session read that opens each verb. */
 export interface StopHooks {
+  /** stop() and delete(): the stamp of the stop mark the caller set for this call, which a failed first read drops. */
+  mark?: number;
   /** delete() only: the ownership captured by its caller still covers this operation. */
   ownsClaim?: () => boolean;
   /** stop() only: runs once the session read succeeds and before any teardown; records the stop. */
@@ -292,7 +372,7 @@ export class SessionEngineControls {
   private async requireSession(id: string): Promise<Session> {
     const session = await this.sessionRepository.findOne({ where: { id } });
     if (!session) {
-      throw new NotFoundException(`Session with id '${id}' not found`);
+      throw sessionNotFound(id);
     }
     return this.sessionRestrictions.attachTo(this.sessionErrors.attachTo(session));
   }
@@ -302,11 +382,19 @@ export class SessionEngineControls {
    * that fails has retired nothing, so the mark must not outlive it: left on a running session, its
    * next disconnect would never reconnect and start() would keep refusing it as already started.
    */
-  private async requireSessionOrDropStopMark(id: string, onReadFailed?: () => void): Promise<Session> {
+  private async requireSessionOrDropStopMark(
+    id: string,
+    mark: number | undefined,
+    onReadFailed?: () => void,
+  ): Promise<Session> {
     try {
       return await this.requireSession(id);
     } catch (error) {
-      this.stoppingSessions.delete(id);
+      // Only the mark this call's caller set: one a later stop or delete set meanwhile still guards its own operation.
+      if (mark === undefined) this.stoppingSessions.delete(id);
+      else this.stoppingSessions.deleteStamped(id, mark);
+      // A session with no row has nothing left for the marks of finished operations to guard.
+      if (error instanceof NotFoundException) this.stoppingSessions.dropFinished(id);
       onReadFailed?.();
       throw error;
     }
@@ -398,7 +486,7 @@ export class SessionEngineControls {
 
       // A fresh start intentionally (re-)creates the engine — clear any stale stop/delete mark, but
       // yield to one set after this start began, leaving it in place.
-      if (this.stoppingSessions.has(id) && this.stoppingSessions.stamp(id) !== markAtEntry) {
+      if (this.stoppingSessions.markedSince(id, markAtEntry)) {
         throw new SessionStoppedException(`Session ${id} was stopped`);
       }
       this.stoppingSessions.delete(id);
@@ -638,7 +726,7 @@ export class SessionEngineControls {
   }
 
   async stop(id: string, hooks: StopHooks = {}): Promise<Session> {
-    const session = await this.requireSessionOrDropStopMark(id, hooks.onReadFailed);
+    const session = await this.requireSessionOrDropStopMark(id, hooks.mark, hooks.onReadFailed);
     // Recorded only once the row is known to exist, and before anything is torn down.
     await hooks.afterRead?.();
 
@@ -923,7 +1011,7 @@ export class SessionEngineControls {
   }
 
   async delete(id: string, hooks: StopHooks = {}): Promise<void> {
-    const session = await this.requireSessionOrDropStopMark(id, hooks.onReadFailed);
+    const session = await this.requireSessionOrDropStopMark(id, hooks.mark, hooks.onReadFailed);
 
     // FENCE #1 — fail-fast on an ALREADY-PENDING credential teardown for this session NAME, BEFORE
     // any lifecycle mutation. A logout teardown that lost its deadline race is still running and ends
@@ -935,7 +1023,9 @@ export class SessionEngineControls {
     await this.fences.awaitPendingTeardown(session.name);
 
     // Mark as tearing down BEFORE cleanup so an in-flight reconnect can't resurrect it.
-    this.stoppingSessions.add(id);
+    // Held, not added: it goes with this delete unless the row is removed, and must not push a stop that finished out of
+    // the finished marks meanwhile.
+    const ownMark = this.stoppingSessions.hold(id);
     // Cancel any reconnection attempts
     this.host.cancelReconnect(id);
 
@@ -1074,11 +1164,19 @@ export class SessionEngineControls {
     } finally {
       writes.release();
       endDelete();
-      // Always clear the teardown mark so a later recreate/start with this id isn't suppressed. This
-      // stop mark was set after fence #1, so clearing it on a rejected 409 only undoes what THIS
-      // delete added — it does NOT touch reconnect timer / engine / last status / error / recovery
-      // state (those are gated on parentDeleted below).
-      this.stoppingSessions.delete(id);
+      // Clear the teardown mark so a later recreate/start with this id isn't suppressed. This stop mark
+      // was set after fence #1, so clearing it on a rejected 409 only undoes what THIS delete added — it
+      // does NOT touch reconnect timer / engine / last status / error / recovery state (those are gated
+      // on parentDeleted below). A delete that did not remove the row clears only the marks it set: a
+      // stop that began meanwhile holds a mark of its own, and that mark still guards the stop. Once the row
+      // is gone nothing is left for a mark to guard, whoever set it.
+      if (parentDeleted) {
+        this.stoppingSessions.delete(id);
+      } else {
+        // Both marks of this delete: the one its caller set before the call and the one it set itself.
+        this.stoppingSessions.deleteStamped(id, ownMark);
+        if (hooks.mark !== undefined) this.stoppingSessions.deleteStamped(id, hooks.mark);
+      }
       if (parentDeleted) {
         this.broadcaster.clear(id);
         // Drop the FAILED-reason entry too: it's keyed by a now-deleted UUID that can never be read

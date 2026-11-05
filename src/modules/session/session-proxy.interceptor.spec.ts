@@ -136,6 +136,26 @@ describe('SessionProxyInterceptor', () => {
       expect(findOne).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'missing-session' } }));
     });
 
+    // The lookup is the first statement of every session request on a routed node, so a database failure there would
+    // answer 500 before the checks of a start, stop or delete that answer a retryable 503 were reached.
+    it.each([
+      ['a lost connection', new Error('Connection terminated unexpectedly')],
+      ['lock contention', Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' })],
+    ])('answers a retryable 503 when the owner lookup fails on %s', async (_label, failure) => {
+      const { interceptor, context, next, handle, findOne } = build({});
+      findOne.mockRejectedValueOnce(failure);
+      await expect(interceptor.intercept(context, next)).rejects.toMatchObject({ status: 503 });
+      expect(handle).not.toHaveBeenCalled();
+    });
+
+    it('lets a statement the database rejected through as it was', async () => {
+      const { interceptor, context, next, handle, findOne } = build({});
+      const rejected = new Error('column "nodeUrl" does not exist');
+      findOne.mockRejectedValueOnce(rejected);
+      await expect(interceptor.intercept(context, next)).rejects.toBe(rejected);
+      expect(handle).not.toHaveBeenCalled();
+    });
+
     it('handles an id containing NUL locally without querying its owner', async () => {
       const req = request({ params: { sessionId: 'session\0name' } });
       const { interceptor, context, next, findOne } = build({ req, row: null });
@@ -424,6 +444,26 @@ describe('SessionProxyInterceptor', () => {
           expect(res.status).toHaveBeenCalledTimes(1);
           expect(res.status).toHaveBeenCalledWith(504);
           expect((res.json.mock.calls[0] as [{ error: string }])[0].error).toBe('Gateway Timeout');
+        },
+      );
+    });
+
+    // A setting past what a timer takes would fire after 1 ms and time every forwarded request out at once.
+    it('does not time requests out at once for a timeout setting beyond the timer ceiling', async () => {
+      await withOwner(
+        (_req, res) => {
+          setTimeout(() => res.end('{}'), 100);
+        },
+        async url => {
+          const { interceptor, context, next, res } = build({
+            row: row({ nodeUrl: url }),
+            req: sendRequest(),
+            timeoutMs: 5_000_000_000,
+          });
+          await interceptor.intercept(context, next);
+
+          expect(res.status).toHaveBeenCalledTimes(1);
+          expect(res.status).toHaveBeenCalledWith(200);
         },
       );
     });

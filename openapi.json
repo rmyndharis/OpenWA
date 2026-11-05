@@ -624,7 +624,7 @@
             }
           },
           "400": {
-            "description": "Validation failed, or the body carries a field the DTO does not declare.",
+            "description": "Validation failed, the body carries a field the DTO does not declare, or `config` is over 16384 bytes serialised as JSON.",
             "content": {
               "application/json": {
                 "schema": {
@@ -787,7 +787,7 @@
             }
           },
           "400": {
-            "description": "The session id is not a UUID",
+            "description": "The session id has characters other than letters, digits and hyphens, or is longer than 128 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -850,7 +850,7 @@
             "description": "Session deleted"
           },
           "400": {
-            "description": "The session id is not a UUID",
+            "description": "The session id has characters other than letters, digits and hyphens, or is longer than 128 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -900,7 +900,7 @@
             }
           },
           "503": {
-            "description": "The session could not be claimed for the delete because the database did not answer (nothing is deleted), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed). Retry the delete.",
+            "description": "The session could not be read, checked or claimed for the delete because the database did not answer (nothing is deleted), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed). Retry the delete.",
             "content": {
               "application/json": {
                 "schema": {
@@ -942,7 +942,7 @@
             }
           },
           "400": {
-            "description": "The session id is not a UUID",
+            "description": "The session id has characters other than letters, digits and hyphens, or is longer than 128 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -1105,7 +1105,7 @@
             }
           },
           "400": {
-            "description": "The session id is not a UUID",
+            "description": "The session id has characters other than letters, digits and hyphens, or is longer than 128 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -1308,7 +1308,7 @@
             }
           },
           "503": {
-            "description": "The gateway is shutting down, the session could not be claimed for this node (a database error; nothing was launched), or the engine's browser or socket connection died during launch and the one automatic retry failed too (no engine is left running); the start can be retried.",
+            "description": "The gateway is shutting down, the session could not be checked (the database could not serve the read) or claimed for this node (nothing was launched), or the engine's browser or socket connection died during launch and the one automatic retry failed too (no engine is left running); the start can be retried.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1360,7 +1360,7 @@
             }
           },
           "400": {
-            "description": "The session id is not a UUID",
+            "description": "The session id has characters other than letters, digits and hyphens, or is longer than 128 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -1411,6 +1411,16 @@
           },
           "502": {
             "description": "Session was stopped locally, but the engine teardown did not complete (the graceful disconnect and the force-destroy escalation both failed, so the engine process may still be running). Retryable — the body carries `code: 'SESSION_STOP_INCOMPLETE'`; the status is settled to `disconnected` and no success audit is written. Retry the stop; restart the node to reap a leaked process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database did not answer the check of whether another node holds the session, so nothing was stopped. Retry the stop.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2475,7 +2485,7 @@
             }
           },
           "400": {
-            "description": "The session id is not a UUID",
+            "description": "The session id has characters other than letters, digits and hyphens, or is longer than 128 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -19124,7 +19134,7 @@
           },
           "config": {
             "type": "object",
-            "description": "Session configuration. Only three keys are read: autoRejectCalls (boolean, default false, Baileys engine only) rejects incoming calls as soon as they ring, and the call.received event is still emitted first; maxReconnectAttempts (0-20, default unlimited) caps consecutive reconnects (the count restarts once the session has stayed READY for 5 minutes) and reconnectBaseDelay (1000-300000 ms, default 5000) sets the backoff base, both for the gateway's own reconnect only (on Baileys the engine retries a transient drop itself, with a fixed backoff and no cap). Anything else is stored but ignored. All three can be changed later with PATCH /api/sessions/{sessionId}/config without a restart: autoRejectCalls applies from the next incoming call, the two reconnect settings from the next session start.",
+            "description": "Session configuration. Only three keys are read: autoRejectCalls (boolean, default false, Baileys engine only) rejects incoming calls as soon as they ring, and the call.received event is still emitted first; maxReconnectAttempts (0-20, default unlimited) caps consecutive reconnects (the count restarts once the session has stayed READY for 5 minutes) and reconnectBaseDelay (1000-300000 ms, default 5000) sets the backoff base, both for the gateway's own reconnect only (on Baileys the engine retries a transient drop itself, with a fixed backoff and no cap). Anything else is stored but ignored, up to 16384 bytes for the whole object serialised as JSON (a larger one is refused with 400). All three can be changed later with PATCH /api/sessions/{sessionId}/config without a restart: autoRejectCalls applies from the next incoming call, the two reconnect settings from the next session start.",
             "example": {
               "autoRejectCalls": false,
               "maxReconnectAttempts": 5,

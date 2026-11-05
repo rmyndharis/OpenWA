@@ -10,7 +10,6 @@ import {
   Body,
   HttpCode,
   HttpStatus,
-  ParseUUIDPipe,
   BadRequestException,
   ForbiddenException,
   Res,
@@ -18,6 +17,8 @@ import {
 import type { Response } from 'express';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiExtraModels, getSchemaPath } from '@nestjs/swagger';
 import { SessionService } from './session.service';
+import { MAX_SESSION_ID_LENGTH, SessionIdPipe } from './session-id.pipe';
+import { MAX_SESSION_CONFIG_BYTES } from './dto/recognised-session-config.validator';
 import {
   CreateSessionDto,
   SessionConfigResponseDto,
@@ -65,6 +66,9 @@ import {
   SESSION_NOT_STARTED_400,
 } from '../../common/openapi/engine-status-responses';
 
+/** The 400 the `:sessionId` pipe answers, as the routes that list it word it. */
+const SESSION_ID_400 = `The session id has characters other than letters, digits and hyphens, or is longer than ${MAX_SESSION_ID_LENGTH} characters`;
+
 @ApiTags('sessions')
 @Controller('sessions')
 // The `:sessionId` route param here is a WhatsApp session id, so the ApiKeyGuard enforces a key's
@@ -100,7 +104,12 @@ export class SessionController {
     description:
       'Key lacks the OPERATOR role, is restricted to specific sessions, or set proxyUrl without the ADMIN role',
   })
-  @ApiResponse({ status: 400, description: 'Validation failed, or the body carries a field the DTO does not declare.' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Validation failed, the body carries a field the DTO does not declare, or `config` is over ' +
+      `${MAX_SESSION_CONFIG_BYTES} bytes serialised as JSON.`,
+  })
   @ApiResponse({ status: 409, description: 'Session name already exists' })
   @ApiResponse({
     status: 503,
@@ -179,9 +188,9 @@ export class SessionController {
     description: 'Session details',
     type: SessionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'The session id is not a UUID' })
+  @ApiResponse({ status: 400, description: SESSION_ID_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
-  async findOne(@Param('sessionId', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
+  async findOne(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.findOne(id);
     return this.transformSession(session);
   }
@@ -194,9 +203,9 @@ export class SessionController {
     description: 'Effective session configuration',
     type: SessionConfigResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'The session id is not a UUID' })
+  @ApiResponse({ status: 400, description: SESSION_ID_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
-  async getConfig(@Param('sessionId', ParseUUIDPipe) id: string): Promise<SessionConfigResponseDto> {
+  async getConfig(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionConfigResponseDto> {
     return this.sessionService.getConfig(id);
   }
 
@@ -220,7 +229,7 @@ export class SessionController {
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({ status: 409, description: 'The session config kept changing under concurrent requests; retry' })
   async updateConfig(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Body() dto: UpdateSessionConfigDto,
   ): Promise<SessionConfigResponseDto> {
     const config = await this.sessionService.updateConfig(id, dto);
@@ -241,9 +250,9 @@ export class SessionController {
     description: 'Effective proxy configuration',
     type: SessionProxyResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'The session id is not a UUID' })
+  @ApiResponse({ status: 400, description: SESSION_ID_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
-  async getProxy(@Param('sessionId', ParseUUIDPipe) id: string): Promise<SessionProxyResponseDto> {
+  async getProxy(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionProxyResponseDto> {
     return this.sessionService.getProxy(id);
   }
 
@@ -270,7 +279,7 @@ export class SessionController {
   @ApiResponse({ status: 403, description: 'Key lacks the ADMIN role, or is restricted to specific sessions' })
   @ApiResponse({ status: 404, description: 'Session not found' })
   async updateProxy(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Body() dto: UpdateSessionProxyDto,
   ): Promise<SessionProxyResponseDto> {
     const proxy = await this.sessionService.updateProxy(id, dto);
@@ -287,7 +296,7 @@ export class SessionController {
   @ApiOperation({ summary: 'Delete a session' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({ status: 204, description: 'Session deleted' })
-  @ApiResponse({ status: 400, description: 'The session id is not a UUID' })
+  @ApiResponse({ status: 400, description: SESSION_ID_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 409,
@@ -301,12 +310,12 @@ export class SessionController {
   @ApiResponse({
     status: 503,
     description:
-      'The session could not be claimed for the delete because the database did not answer (nothing is ' +
-      'deleted), or, on SQLite, another database transaction stayed open for 10 s before a delete ' +
+      'The session could not be read, checked or claimed for the delete because the database did not answer ' +
+      '(nothing is deleted), or, on SQLite, another database transaction stayed open for 10 s before a delete ' +
       'transaction (no further rows are removed). Retry the delete.',
   })
-  async delete(@Param('sessionId', ParseUUIDPipe) id: string): Promise<void> {
-    const session = await this.sessionService.findOne(id);
+  async delete(@Param('sessionId', SessionIdPipe) id: string): Promise<void> {
+    const session = await this.sessionService.findOneForDelete(id);
     await this.sessionService.delete(id);
     await this.auditService.logInfo(AuditAction.SESSION_DELETED, {
       sessionId: id,
@@ -353,9 +362,9 @@ export class SessionController {
   @ApiResponse({
     status: 503,
     description:
-      'The gateway is shutting down, the session could not be claimed for this node (a database error; ' +
-      "nothing was launched), or the engine's browser or socket connection died during launch and the one " +
-      'automatic retry failed too (no engine is left running); the start can be retried.',
+      'The gateway is shutting down, the session could not be checked (the database could not serve the read) or ' +
+      "claimed for this node (nothing was launched), or the engine's browser or socket connection died during " +
+      'launch and the one automatic retry failed too (no engine is left running); the start can be retried.',
   })
   @ApiResponse({
     status: 504,
@@ -364,7 +373,7 @@ export class SessionController {
       'a stalled browser or resource limit, or, on whatsapp-web.js, an unreachable proxyUrl or the auth ' +
       'timeout); the engine is torn down and the start can be retried.',
   })
-  async start(@Param('sessionId', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
+  async start(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.start(id, { explicit: true });
     await this.auditService.logInfo(AuditAction.SESSION_STARTED, {
       sessionId: session.id,
@@ -383,7 +392,7 @@ export class SessionController {
     description: 'Session stopped',
     type: SessionResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'The session id is not a UUID' })
+  @ApiResponse({ status: 400, description: SESSION_ID_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
     status: 409,
@@ -401,7 +410,13 @@ export class SessionController {
       'is settled to `disconnected` and no success audit is written. Retry the stop; restart the ' +
       'node to reap a leaked process.',
   })
-  async stop(@Param('sessionId', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
+  @ApiResponse({
+    status: 503,
+    description:
+      'The database did not answer the check of whether another node holds the session, so nothing was ' +
+      'stopped. Retry the stop.',
+  })
+  async stop(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.stop(id);
     await this.auditService.logInfo(AuditAction.SESSION_STOPPED, {
       sessionId: session.id,
@@ -475,7 +490,7 @@ export class SessionController {
       "body carries `code: 'SESSION_LOGOUT_INCOMPLETE'`; `phone` is cleared and no success audit " +
       'is written. Start the session again and retry the logout.',
   })
-  async logout(@Param('sessionId', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
+  async logout(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.logout(id);
     await this.auditService.logInfo(AuditAction.SESSION_LOGGED_OUT, {
       sessionId: session.id,
@@ -504,7 +519,7 @@ export class SessionController {
       "`code: 'SESSION_FORCE_KILL_INCOMPLETE'`; the status is settled to `disconnected` and no " +
       'success audit is written. Restart the node to reap a leaked process.',
   })
-  async forceKill(@Param('sessionId', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
+  async forceKill(@Param('sessionId', SessionIdPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.forceKill(id);
     await this.auditService.logInfo(AuditAction.SESSION_FORCE_KILLED, {
       sessionId: session.id,
@@ -527,7 +542,7 @@ export class SessionController {
     description: 'QR code not ready or session already authenticated',
   })
   @ApiResponse({ status: 404, description: 'Session not found' })
-  async getQRCode(@Param('sessionId', ParseUUIDPipe) id: string): Promise<QRCodeResponseDto> {
+  async getQRCode(@Param('sessionId', SessionIdPipe) id: string): Promise<QRCodeResponseDto> {
     const qrCode = await this.sessionService.getQRCode(id);
     await this.auditService.logInfo(AuditAction.SESSION_QR_GENERATED, {
       sessionId: id,
@@ -562,7 +577,7 @@ export class SessionController {
   })
   @ApiResponse({ status: 503, description: PAIRING_TRANSPORT_503 })
   async requestPairingCode(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Body() dto: RequestPairingCodeDto,
   ): Promise<PairingCodeResponseDto> {
     return this.sessionService.requestPairingCode(id, dto.phoneNumber);
@@ -598,7 +613,7 @@ export class SessionController {
   })
   @ApiQuery({ name: 'offset', required: false, type: 'integer', description: 'Number of groups to skip (for paging)' })
   async getGroups(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @CurrentApiKey() apiKey?: ApiKey,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
@@ -632,7 +647,7 @@ export class SessionController {
   })
   @ApiQuery({ name: 'offset', required: false, type: 'integer', description: 'Number of chats to skip (for paging)' })
   async getChats(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @CurrentApiKey() apiKey?: ApiKey,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
@@ -671,7 +686,7 @@ export class SessionController {
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async markChatRead(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Body() dto: MarkChatReadDto,
   ): Promise<{ success: boolean }> {
     const success = await this.sessionService.sendSeen(id, dto.chatId, dto.messageIds);
@@ -706,7 +721,7 @@ export class SessionController {
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 503, description: RECIPIENT_LOOKUP_503 })
   async subscribeToPresence(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Body() dto: SubscribePresenceDto,
   ): Promise<{ success: boolean }> {
     await this.sessionService.subscribeToPresence(id, dto.chatId);
@@ -749,7 +764,7 @@ export class SessionController {
       'timeout. Nothing was confirmed; setting presence converges when repeated, so a retry is safe.',
   })
   async setOnlinePresence(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Body() dto: SetOwnPresenceDto,
   ): Promise<{ success: boolean }> {
     await this.sessionService.setOnlinePresence(id, dto.available);
@@ -777,10 +792,10 @@ export class SessionController {
     description: 'Last reported presence, or null',
     schema: { nullable: true, allOf: [{ $ref: getSchemaPath(ChatPresenceResponseDto) }] },
   })
-  @ApiResponse({ status: 400, description: 'The session id is not a UUID' })
+  @ApiResponse({ status: 400, description: SESSION_ID_400 })
   @ApiResponse({ status: 404, description: 'Session not found' })
   async getPresence(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Param('chatId') chatId: string,
     @Res() res: Response,
   ): Promise<void> {
@@ -817,7 +832,7 @@ export class SessionController {
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async markChatUnread(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Body() dto: MarkChatUnreadDto,
   ): Promise<{ success: boolean }> {
     const success = await this.sessionService.markUnread(id, dto.chatId);
@@ -854,7 +869,7 @@ export class SessionController {
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async clearChatMessages(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Param('chatId') chatId: string,
   ): Promise<{ success: boolean }> {
     const success = await this.sessionService.clearChatMessages(id, chatId);
@@ -886,7 +901,7 @@ export class SessionController {
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async archiveChat(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Body() dto: ArchiveChatDto,
   ): Promise<{ success: boolean }> {
     const success = await this.sessionService.archiveChat(id, dto.chatId, dto.archive);
@@ -923,7 +938,7 @@ export class SessionController {
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async muteChat(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Body() dto: MuteChatDto,
   ): Promise<{ success: boolean }> {
     await this.sessionService.muteChat(id, dto.chatId, dto.muteUntil);
@@ -960,7 +975,7 @@ export class SessionController {
       'the gateway stopped waiting for a confirmation that never came.',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  async pinChat(@Param('sessionId', ParseUUIDPipe) id: string, @Body() dto: PinChatDto): Promise<{ success: boolean }> {
+  async pinChat(@Param('sessionId', SessionIdPipe) id: string, @Body() dto: PinChatDto): Promise<{ success: boolean }> {
     const success = await this.sessionService.pinChat(id, dto.chatId, dto.pin);
     return { success };
   }
@@ -994,7 +1009,7 @@ export class SessionController {
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async deleteChat(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Body() dto: DeleteChatDto,
   ): Promise<{ success: boolean }> {
     const success = await this.sessionService.deleteChat(id, dto.chatId);
@@ -1017,7 +1032,7 @@ export class SessionController {
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async sendChatState(
-    @Param('sessionId', ParseUUIDPipe) id: string,
+    @Param('sessionId', SessionIdPipe) id: string,
     @Body() dto: SendChatStateDto,
   ): Promise<{ success: boolean }> {
     await this.sessionService.sendChatState(id, dto.chatId, dto.state);

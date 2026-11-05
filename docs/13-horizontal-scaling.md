@@ -139,6 +139,22 @@
 > may already have carried it out, so a non-idempotent call such as a message send must not
 > be repeated blindly on either.
 >
+> **The owner lookup can fail first.** A node with `NODE_URL` reads a session's owner before it routes any
+> request for the session. When the database cannot serve that read for the moment (a dropped, refused or timed-out
+> connection, a connection limit, a locked SQLite file, a database starting up or shutting down), the node answers
+> `503` and nothing was done, so the request is safe to retry; a statement the database rejects stays `500`.
+>
+> **A large answer is relayed as it arrives.** The forwarding node holds an answer of up to
+> 4 MiB whole: a read that fails answers `502` or `504`, and nothing of the owner's status
+> or headers is passed on. A larger answer, such as a media download, is passed on as it
+> arrives instead, so that concurrent downloads through a node that does not own the session
+> do not each hold a copy in its memory. It carries the owner's `Content-Length` when the
+> owner sent one and the body was not encoded. `SESSION_PROXY_TIMEOUT_MS` then covers the owner's reply up to those first
+> 4 MiB and no more, so a slow client is not cut by it, and an owner that stops sending is
+> ended by the HTTP client's own limit of 5 minutes without data. A failure once the relay has
+> begun can no longer answer `502`: the connection to the client is cut, so a short body
+> cannot pass for the whole one, and the client should repeat the download.
+>
 > **The lease compares timestamps written by different nodes, so their clocks must agree.** Each
 > node writes `leaseExpiresAt` from its own clock and reads every other node's the same way. Just
 > before each renewal the holder's lease is only one TTL minus one heartbeat ahead, so a node whose

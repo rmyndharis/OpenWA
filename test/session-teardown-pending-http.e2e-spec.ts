@@ -48,9 +48,13 @@ describe('Session name-scoped teardown fence: 409 code survives HTTP serializati
         // a still-pending teardown makes the first fence throw this ConflictException.
         start: jest.fn().mockRejectedValue(teardownPending),
         delete: jest.fn().mockRejectedValue(teardownPending),
-        // findOne() is called by the controller before start()/delete(); return a minimal session so the
-        // route reaches the service method under test (delete() also calls findOne() itself).
+        // The controller reads the session before start()/delete() (findOneForDelete() for the delete); return a
+        // minimal session so the route reaches the service method under test (delete() also calls findOne() itself).
         findOne: jest.fn().mockResolvedValue({
+          id: 'sess-teardown-pending',
+          name: 'teardown-pending',
+        }),
+        findOneForDelete: jest.fn().mockResolvedValue({
           id: 'sess-teardown-pending',
           name: 'teardown-pending',
         }),
@@ -62,7 +66,7 @@ describe('Session name-scoped teardown fence: 409 code survives HTTP serializati
 
     const authService = app.get(AuthService);
     adminKey = (await authService.createApiKey({ name: 'e2e-teardown-admin', role: ApiKeyRole.ADMIN })).rawKey;
-    // A ParseUUIDPipe-valid session id for the route param; the overridden findOne() ignores it but the
+    // A session id the route's id pipe accepts; the overridden findOne() ignores it but the
     // pipe still validates the shape before the handler runs.
     sessionId = '00000000-0000-4000-8000-000000000000';
   });

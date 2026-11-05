@@ -433,6 +433,10 @@ Set them at creation with `POST /api/sessions`, or on an existing session with
 it does not mention keeps its stored value, and an explicit `null` clears a key back to the default
 above (the only way back to unlimited reconnect attempts once a cap is set).
 
+Anything else in `config` is stored as sent and never read, but `POST /api/sessions` refuses a `config` over
+16384 bytes as JSON, because every read of a session loads the whole column. The limit applies at creation: a
+stored row above it, restored or created earlier, still loads and still takes the patch.
+
 When each takes effect differs, because each is read at a different moment: `autoRejectCalls` is
 re-read from this row on every incoming call, so a patch applies to the next call. The two reconnect
 keys are read once per `start()` into the in-memory reconnect state, so a patch applies on the next

@@ -4,7 +4,11 @@ import { IsIn, IsObject, IsOptional, IsString, IsUrl, Matches, MaxLength, MinLen
 import { ToStrictString } from '../../../common/utils/strict-boolean';
 import { MaxCodePoints } from '../../../common/validation/max-code-points';
 import { HasDecodableProxyCredentialsConstraint } from './has-decodable-proxy-credentials.validator';
-import { normaliseSessionConfig, RecognisedSessionConfigConstraint } from './recognised-session-config.validator';
+import {
+  MAX_SESSION_CONFIG_BYTES,
+  normaliseSessionConfig,
+  RecognisedSessionConfigConstraint,
+} from './recognised-session-config.validator';
 
 export class CreateSessionDto {
   @ApiProperty({
@@ -31,7 +35,9 @@ export class CreateSessionDto {
       'reconnectBaseDelay (1000-300000 ms, default 5000) sets the backoff base, both for the ' +
       "gateway's own reconnect only (on Baileys the engine retries a transient drop itself, with a " +
       'fixed backoff and no cap). Anything else is ' +
-      'stored but ignored. All three can be changed later with PATCH /api/sessions/{sessionId}/config ' +
+      'stored but ignored, up to ' +
+      `${MAX_SESSION_CONFIG_BYTES} bytes for the whole object serialised as JSON (a larger one is refused with 400). ` +
+      'All three can be changed later with PATCH /api/sessions/{sessionId}/config ' +
       'without a restart: autoRejectCalls applies from the next incoming call, the two reconnect settings ' +
       'from the next session start.',
     example: { autoRejectCalls: false, maxReconnectAttempts: 5, reconnectBaseDelay: 5000 },

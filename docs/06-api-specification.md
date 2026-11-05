@@ -222,6 +222,8 @@ Every path below is prefixed with `/api`. Unless marked **public**, send `X-API-
 
 Base path `/api/sessions`. All routes that return a session return data shaped by `SessionResponseDto.fromEntity` (via `transformSession`), which **strips** `config` and the raw credential-bearing `proxyUrl` / `proxyType` columns and renames the entity field `lastActiveAt` to `lastActive`. Masked proxy details are available from `GET/PATCH /api/sessions/:sessionId/proxy` only. Session `status` wire values are lowercase: `created | initializing | qr_ready | authenticating | ready | disconnected | action_required | failed`.
 
+`:sessionId` is the session's id, not its name. A session created through the API always has a UUID. A session restored from a backup keeps the id its archive held, so every session route also takes any id of letters, digits and hyphens up to 128 characters; a restore refuses an archive holding any other id. An id with other characters, or a longer one, answers `400`. An id no session has answers `404`; for an id that is not a UUID the message adds that the routes take the id, not the name.
+
 #### GET /api/sessions
 
 List all sessions, scoped to the API key's `allowedSessions`, ordered `createdAt` DESC.
@@ -306,7 +308,7 @@ Get a single session by ID.
 }
 ```
 
-**Errors:** `400` the session id is not a UUID · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
 
 #### GET /api/sessions/:sessionId/config
 
@@ -319,9 +321,9 @@ in it is stored but ignored).
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Response** `200`
 
@@ -336,7 +338,7 @@ Baileys that covers only the reconnect after a logged-out close: that engine ret
 internally, with a fixed 1s to 60s backoff and no attempt cap. See §5 (Database Design) for what each
 key does and the moment it is read.
 
-**Errors:** `400` the session id is not a UUID · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
 
 #### PATCH /api/sessions/:sessionId/config
 
@@ -350,9 +352,9 @@ and therefore apply on the next start, leaving a reconnect sequence already in f
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `UpdateSessionConfigDto` (any subset; each key also accepts `null`)
 
@@ -378,9 +380,9 @@ Read a session's masked proxy configuration. Credentials embedded in the stored 
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Response** `200` — `SessionProxyResponseDto`
 
@@ -395,7 +397,7 @@ Read a session's masked proxy configuration. Credentials embedded in the stored 
 
 When no proxy is configured, `enabled` is `false` and the other fields are `null`/`false`.
 
-**Errors:** `400` the session id is not a UUID · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
 
 #### PATCH /api/sessions/:sessionId/proxy
 
@@ -405,9 +407,9 @@ Update per-session proxy settings. No restart is required or performed — chang
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `UpdateSessionProxyDto` (any subset; each key also accepts `null`)
 
@@ -431,9 +433,9 @@ Get the QR code (PNG data URL) for session authentication.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Response** `200` — `QRCodeResponseDto`
 
@@ -456,9 +458,9 @@ Get all groups the session is a member of (paginated).
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Query parameters**
 
@@ -485,9 +487,9 @@ Get active chats for a session, most-recent first (paginated).
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Query parameters**
 
@@ -580,6 +582,8 @@ Create a new WhatsApp session.
 
 Minimal: `{ "name": "my-bot" }`.
 
+The limit on `config` applies when a session is created: its serialised form may be at most 16384 bytes, unrecognised keys included, and a larger one answers `400`. The three recognised keys take under 100 of them; the rest is room for keys of your own, which are stored and ignored. A session that already holds more, restored from a backup or stored by an earlier version, keeps working: reading it and `PATCH /api/sessions/:sessionId/config` are not bounded.
+
 **Optional — per-session egress proxy.** Route a session's traffic through a proxy only if your
 network cannot reach WhatsApp directly. Set `proxyUrl` on the same request:
 
@@ -649,7 +653,7 @@ whichever proxy they go through.
 
 Like every other session route, this returns the `SessionResponseDto` shape (via `fromEntity`), so `config`, `proxyUrl` and `proxyType` are stripped and `lastActiveAt` appears as `lastActive`. Newly created `status` is `created`. Masked proxy details come only from `GET /api/sessions/{sessionId}/proxy`.
 
-**Errors:** `400` validation (bad `name`/`proxyUrl`/`proxyType`, or an extra non-whitelisted field) · `401` · `403` key lacks OPERATOR role, `proxyUrl` set by a key below ADMIN, or the key is restricted to specific sessions · `409` session name already exists · `503` on SQLite, another database transaction stayed open for 10 s (nothing is stored; retry)
+**Errors:** `400` validation (bad `name`/`proxyUrl`/`proxyType`, an extra non-whitelisted field, or a `config` over 16384 bytes serialised as JSON) · `401` · `403` key lacks OPERATOR role, `proxyUrl` set by a key below ADMIN, or the key is restricted to specific sessions · `409` session name already exists · `503` on SQLite, another database transaction stayed open for 10 s (nothing is stored; retry)
 
 #### POST /api/sessions/:sessionId/start
 
@@ -659,9 +663,9 @@ Start a session and initialize the WhatsApp connection.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 No request body.
 
@@ -690,7 +694,7 @@ A session stopped with `POST /stop` or `POST /force-kill` is marked to run again
 
 On multiple nodes, an explicit start may clear a peer's stop recorded before it successfully claimed ownership. It checks ownership and the stop record again after the start hook, before creating an engine; a lost claim or failed renewal answers `409` with no engine launched. A stop or claim loss during engine initialization retires that engine when initialization finishes.
 
-**Errors:** `400` session already started / already starting, or this node already holds `MAX_CONCURRENT_SESSIONS` slots, counting running and starting engines and sessions waiting to relaunch after a failed reconnect (`Maximum concurrent sessions reached (N)`, answered only after the `404` and the `409` for a session running on another node; the session is not started, so retry once a slot frees or on a node with room) · `401` · `403` · `404` not found · `409` credential teardown for the same session name still in flight (retryable; body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; no destructive side effect runs before the refusal — a retry after cleanup settles proceeds), or another node currently holds this session's engine (refused before any engine is launched), or, with no `code`, a `POST /stop`, a `POST /logout` or `POST /force-kill` that found a running engine, or a data import (`stopOrphans`) of this session that began or finished while the start was waiting, or a delete of it still running or sent while the start was waiting and failed once it began removing (the start yields and launches nothing; after a stop, a force-kill or a delete that failed part-way a new `POST /start` clears it and starts the session, after a delete or an import that removed the session the retry answers `404`) · `503` the gateway is shutting down, the session could not be claimed for this node (a database error; nothing was launched), or the engine's browser or socket connection died during launch and the one automatic retry failed too (no engine is left running); the start can be retried · `504` the engine did not finish starting within its timeout (WhatsApp Web or the network unreachable, a stalled browser or resource limit, or, on whatsapp-web.js, an unreachable `proxyUrl`); the engine is torn down, so the start can be retried once the cause is addressed
+**Errors:** `400` session already started / already starting, or this node already holds `MAX_CONCURRENT_SESSIONS` slots, counting running and starting engines and sessions waiting to relaunch after a failed reconnect (`Maximum concurrent sessions reached (N)`, answered only after the `404` and the `409` for a session running on another node; the session is not started, so retry once a slot frees or on a node with room) · `401` · `403` · `404` not found · `409` credential teardown for the same session name still in flight (retryable; body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; no destructive side effect runs before the refusal — a retry after cleanup settles proceeds), or another node currently holds this session's engine (refused before any engine is launched), or, with no `code`, a `POST /stop`, a `POST /logout` or `POST /force-kill` that found a running engine, or a data import (`stopOrphans`) of this session that began or finished while the start was waiting, or a delete of it still running or sent while the start was waiting and failed once it began removing (the start yields and launches nothing; after a stop, a force-kill or a delete that failed part-way a new `POST /start` clears it and starts the session, after a delete or an import that removed the session the retry answers `404`) · `503` the gateway is shutting down, the session could not be checked (the database could not serve the read) or claimed for this node (nothing was launched), or the engine's browser or socket connection died during launch and the one automatic retry failed too (no engine is left running); the start can be retried · `504` the engine did not finish starting within its timeout (WhatsApp Web or the network unreachable, a stalled browser or resource limit, or, on whatsapp-web.js, an unreachable `proxyUrl`); the engine is torn down, so the start can be retried once the cause is addressed
 
 #### POST /api/sessions/:sessionId/stop
 
@@ -700,9 +704,9 @@ Stop a session and disconnect WhatsApp.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 No request body.
 
@@ -731,7 +735,7 @@ A stopped session stays down: boot auto-start (`AUTO_START_SESSIONS`) and the mu
 
 An accepted stop on an expired or missing foreign lease clears that claim in the same write, except while a delete holds it. Repeated stops during a delete preserve every claim field so the deleting node can renew; an independent stop remains if that delete is refused. If the former owner still runs, its next successful heartbeat detects lease loss and retires its engine. The stop response does not wait for that remote teardown.
 
-**Errors:** `400` the session id is not a UUID · `401` · `403` · `404` not found · `409` another node currently holds this session's live engine (multi-node deployments) · `502` `SESSION_STOP_INCOMPLETE` — session stopped locally but the engine teardown did not complete (retryable; the graceful disconnect and the force-destroy escalation both failed, status `disconnected`, no success audit)
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` · `403` · `404` not found · `409` another node currently holds this session's live engine (multi-node deployments) · `502` `SESSION_STOP_INCOMPLETE` — session stopped locally but the engine teardown did not complete (retryable; the graceful disconnect and the force-destroy escalation both failed, status `disconnected`, no success audit) · `503` the database did not answer the check of whether another node holds the session (nothing was stopped; retry)
 
 #### POST /api/sessions/:sessionId/logout
 
@@ -780,9 +784,9 @@ session must be started explicitly and the logout retried by hand. A session sto
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 No request body.
 
@@ -819,9 +823,9 @@ Force-kill a stuck session (SIGKILL the wedged engine, then tear it down).
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 No request body.
 
@@ -860,9 +864,9 @@ Request an 8-char pairing code to link via phone number (alternative to QR).
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `RequestPairingCodeDto`
 
@@ -907,9 +911,9 @@ Two properties to design around:
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `SubscribePresenceDto`
 
@@ -957,7 +961,7 @@ changed since. That is a normal state rather than a missing resource, so it is `
 body, not a `404`. Presence is held in memory and never persisted: answering "typing" from before a
 restart would be worse than answering nothing.
 
-**Errors:** `400` the session id is not a UUID · `401` · `403` · `404` session not found
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` · `403` · `404` session not found
 
 #### PUT /api/sessions/:sessionId/presence
 
@@ -1007,9 +1011,9 @@ Mark a chat as read/seen.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `MarkChatReadDto`
 
@@ -1048,9 +1052,9 @@ Mark a chat as unread.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `MarkChatUnreadDto`
 
@@ -1086,7 +1090,7 @@ Delete every message in a chat, keeping the chat itself in the list.
 
 | Name        | Type   | Description                                                                                                                           |
 | ----------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `sessionId` | string | Session UUID                                                                                                                          |
+| `sessionId` | string | Session id                                                                                                                            |
 | `chatId`    | string | Chat ID in the neutral form the gateway returns, on either engine, e.g. `1234567890-123@g.us`. URL-encode it if your client does not. |
 
 **Response** `200`
@@ -1111,9 +1115,9 @@ Archive or unarchive a chat.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `ArchiveChatDto`
 
@@ -1153,9 +1157,9 @@ Mute a chat's notifications until a given moment, or unmute it.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `MuteChatDto`
 
@@ -1206,9 +1210,9 @@ Pin a chat to the top of the chat list, or unpin it. Chat-level — distinct fro
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `PinChatDto`
 
@@ -1247,9 +1251,9 @@ Delete a chat from the chat list (e.g. a group you have left).
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `DeleteChatDto`
 
@@ -1284,9 +1288,9 @@ Send a typing/recording presence indicator to a chat (or clear it with `paused`)
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Request body** — `SendChatStateDto`
 
@@ -1317,9 +1321,9 @@ Delete a session.
 
 **Path parameters**
 
-| Name        | Type   | Description  |
-| ----------- | ------ | ------------ |
-| `sessionId` | string | Session UUID |
+| Name        | Type   | Description |
+| ----------- | ------ | ----------- |
+| `sessionId` | string | Session id  |
 
 **Response** `204` — empty body (`@HttpCode(204)`, returns void). A `findOne` lookup runs first, so a missing id yields `404`.
 
@@ -1329,7 +1333,7 @@ The delete first removes the session's messages, webhook outbox rows and webhook
 
 An auth directory that is a symbolic link (a profile relocated onto another volume) is removed as a link only: what it points to stays in place, with any WhatsApp login stored there, and a warning in the log names it (`action=engine_purge_link`). Remove that directory by hand to destroy the login.
 
-**Errors:** `400` the session id is not a UUID · `401` missing/invalid key · `403` key not scoped to this session, or key role below OPERATOR · `404` session not found · `409` credential teardown for the same session name still in flight (retryable; body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; on a `409` the row is **not** deleted and no hook/auth-purge runs — retry after cleanup settles), or, on a multi-node deployment, another node currently holds this session's live engine (no `code`; nothing is deleted; send the delete to the owning node), or ownership changed during removal (earlier batches may already be removed) · `503` the session could not be claimed for the delete because the database did not answer (nothing is deleted; retry), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed; retry)
+**Errors:** `400` the session id has characters other than letters, digits and hyphens, or is longer than 128 characters · `401` missing/invalid key · `403` key not scoped to this session, or key role below OPERATOR · `404` session not found · `409` credential teardown for the same session name still in flight (retryable; body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; on a `409` the row is **not** deleted and no hook/auth-purge runs — retry after cleanup settles), or, on a multi-node deployment, another node currently holds this session's live engine (no `code`; nothing is deleted; send the delete to the owning node), or ownership changed during removal (earlier batches may already be removed) · `503` the session could not be read, checked or claimed for the delete because the database did not answer (nothing is deleted; retry), or, on SQLite, another database transaction stayed open for 10 s before a delete transaction (no further rows are removed; retry)
 
 ### 6.4.2 Messages
 
@@ -6186,7 +6190,7 @@ Replace all Data DB rows with the supplied export. **Destructive and transaction
 
 `warnings` are per-row import failures — they force a **rollback** and `imported:false`. On PostgreSQL the import stops at the first row the database rejects, so `warnings` holds that one failure; SQLite lists every rejected row. `notices` are non-fatal operator messages (orphan-engine reconciliation detail, sessions restored as disconnected, a failed plugin binding re-sync) and never roll anything back. `restartRequired` is `true` from any of four causes: engines left pointing at sessions the restore removed (`force`), an orphan teardown that failed, sessions running on another node, which this request has no channel to stop, or plugin instance bindings that could not be re-synced after the commit. `orphanedEngines` lists the orphaned session ids the restored data no longer contains; `stoppedOrphanEngines`/`failedOrphanEngines` report how `stopOrphans` went.
 
-**Orphan-engine pre-flight.** An archive with no rows in any table never reaches it: it is refused first with `200`, `imported:false` and the warning `Backup contained no rows to restore; refused to replace existing data. Check the file.`, so no `409` is raised, no engine is stopped and no transaction opens, whatever `force` or `stopOrphans` say. An archive holding a row the import would refuse (an unsafe session id or name, malformed webhook events or filters, malformed automation-rule conditions, two templates of one session whose names match once NUL characters are dropped, or JSON text that does not parse in a session `config`, webhook `headers`, plugin instance `config`, conversation mapping `metadata` or message batch `messages`/`options`/`progress`/`results`, which every later read of the row would fail on) is refused the same way, with each such row named in `warnings`. For any other archive, before the transaction opens, any session whose id is absent from `tables.sessions` and that has a running or starting engine on this node, or is waiting to relaunch after a failed reconnect, is an orphan (the replace would delete its DB row, leaving an unstoppable engine writing into freshly restored tables). Default behaviour is to refuse with `409` listing those ids; `stopOrphans: true` stops them in-request and proceeds (a session with no engine yet has its start aborted or its pending relaunch cancelled, and is named in `notices` rather than `stoppedOrphanEngines`); `force: true` proceeds and leaves them running until restart.
+**Orphan-engine pre-flight.** An archive with no rows in any table never reaches it: it is refused first with `200`, `imported:false` and the warning `Backup contained no rows to restore; refused to replace existing data. Check the file.`, so no `409` is raised, no engine is stopped and no transaction opens, whatever `force` or `stopOrphans` say. An archive holding a row the import would refuse (an unsafe session id or name, or a session id of more than 128 characters, which no session route takes, malformed webhook events or filters, malformed automation-rule conditions, two templates of one session whose names match once NUL characters are dropped, or JSON text that does not parse in a session `config`, webhook `headers`, plugin instance `config`, conversation mapping `metadata` or message batch `messages`/`options`/`progress`/`results`, which every later read of the row would fail on) is refused the same way, with each such row named in `warnings`. For any other archive, before the transaction opens, any session whose id is absent from `tables.sessions` and that has a running or starting engine on this node, or is waiting to relaunch after a failed reconnect, is an orphan (the replace would delete its DB row, leaving an unstoppable engine writing into freshly restored tables). Default behaviour is to refuse with `409` listing those ids; `stopOrphans: true` stops them in-request and proceeds (a session with no engine yet has its start aborted or its pending relaunch cancelled, and is named in `notices` rather than `stoppedOrphanEngines`); `force: true` proceeds and leaves them running until restart.
 
 Because that pre-flight runs _before_ the transaction, its teardown is not covered by the rollback. A response with `imported:false` therefore still reports the engines it really stopped, and `restartRequired` on that path means only that a teardown **failed** — a cleanly stopped orphan leaves its session row intact (restart it with `POST /sessions/{sessionId}/start`), and an engine `force` left running was never orphaned after all, since the data that would have orphaned it was not replaced.
 

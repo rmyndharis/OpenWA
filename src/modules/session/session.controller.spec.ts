@@ -622,13 +622,13 @@ describe('SessionController: chat actions map the request to the service', () =>
 // config patch is only meaningful next to the state it merged into.
 describe('SessionController: delete, QR and config routes write their record', () => {
   const ID = 'sess-uuid-1';
-  let sessionService: { findOne: jest.Mock; delete: jest.Mock; getQRCode: jest.Mock; updateConfig: jest.Mock };
+  let sessionService: { findOneForDelete: jest.Mock; delete: jest.Mock; getQRCode: jest.Mock; updateConfig: jest.Mock };
   let auditService: { logInfo: jest.Mock };
   let controller: SessionController;
 
   beforeEach(() => {
     sessionService = {
-      findOne: jest.fn().mockResolvedValue({ id: ID, name: 'my-bot' }),
+      findOneForDelete: jest.fn().mockResolvedValue({ id: ID, name: 'my-bot' }),
       delete: jest.fn().mockResolvedValue(undefined),
       getQRCode: jest.fn(),
       updateConfig: jest.fn(),
@@ -650,7 +650,7 @@ describe('SessionController: delete, QR and config routes write their record', (
       sessionId: ID,
       sessionName: 'my-bot',
     });
-    expect(sessionService.findOne.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(sessionService.findOneForDelete.mock.invocationCallOrder[0]).toBeLessThan(
       sessionService.delete.mock.invocationCallOrder[0],
     );
   });

@@ -591,8 +591,18 @@ export class SessionEngineLifecycle {
    * with nothing awaited in between; a mark left behind by a request that then refuses (a 409) is
    * harmless and is cleared by the next start(), which is what the mark is designed for.
    */
-  markStopping(id: string): void {
-    this.stoppingSessions.add(id);
+  markStopping(id: string): number {
+    return this.stoppingSessions.hold(id);
+  }
+
+  /** The operation that held the mark markStopping() returned is done: the mark stays as finished state. */
+  settleStopping(id: string, stamp: number | undefined): void {
+    if (stamp !== undefined) this.stoppingSessions.settle(id, stamp);
+  }
+
+  /** Drop the marks of operations that are done on a session with no row; marks of operations in flight stay. */
+  clearFinishedStops(id: string): void {
+    this.stoppingSessions.dropFinished(id);
   }
 
   /**
@@ -601,10 +611,14 @@ export class SessionEngineLifecycle {
    * The "harmless, cleared by the next start()" reasoning above holds only while a session row
    * exists. start() and delete() clear the mark after their own requireSession, so for an id that
    * has no row neither reclamation path is reachable and the entry would outlive the process. Used
-   * by SessionService for exactly that case; a refusal against a real session still leaves its mark.
+   * by SessionService for that case and for a request that fails before it acts (a failed ownership read or claim,
+   * a failed stop record); a refusal against a real session still leaves its mark. With the stamp markStopping()
+   * returned it drops that mark alone: a later stop or delete of the same session holds a mark of its own, which
+   * this call must not take from it.
    */
-  clearStopping(id: string): void {
-    this.stoppingSessions.delete(id);
+  clearStopping(id: string, stamp?: number): void {
+    if (stamp === undefined) this.stoppingSessions.delete(id);
+    else this.stoppingSessions.deleteStamped(id, stamp);
   }
 
   /**
