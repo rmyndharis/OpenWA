@@ -249,10 +249,19 @@ test('a dialog that is already open when the drawer opens closes the drawer and 
     }),
   );
   const dialog = await rtl.screen.findByRole('dialog');
+  // The drawer ends up closed whether it opened and closed again or never opened, so the button is watched for the state
+  // it had before each change: a record that held "true" shows the drawer did open.
+  const menuButton = container.querySelector('.mobile-menu-btn')!;
+  const previous: Array<string | null> = [];
+  const watcher = new MutationObserver(records => previous.push(...records.map(record => record.oldValue)));
+  watcher.observe(menuButton, { attributes: true, attributeFilter: ['aria-expanded'], attributeOldValue: true });
 
-  rtl.fireEvent.click(container.querySelector('.mobile-menu-btn')!);
+  rtl.fireEvent.click(menuButton);
 
   await rtl.waitFor(() => assert.equal(container.querySelector('aside.sidebar')!.classList.contains('open'), false));
+  previous.push(...watcher.takeRecords().map(record => record.oldValue));
+  watcher.disconnect();
+  assert.equal(previous.includes('true'), true, 'the drawer opened before it closed');
   assert.equal(container.querySelector('main')!.hasAttribute('inert'), false);
   assert.equal(dialog.closest('[inert]') === null, true);
 });
