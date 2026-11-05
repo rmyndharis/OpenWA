@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   OpenWAClient,
+  buildUrl,
   OpenWAApiError,
   OpenWAAuthError,
   OpenWAForbiddenError,
@@ -221,6 +222,76 @@ describe('OpenWAClient', () => {
       expect(t.lastCall!.url).toBe(`http://localhost:2785${expected}`);
       expect(new URL(t.lastCall!.url).searchParams.get('name')).toBe('x');
     }
+  });
+
+  // A URLSearchParams and a Map are objects too, so the raw request accepts them as a query. Their entries
+  // are not own properties; read as such, they sent the call unfiltered.
+  it('serializes a URLSearchParams query', async () => {
+    const t = new MockTransport().passthrough({ status: 200, body: [] });
+    await client(t).request({
+      method: 'GET',
+      path: '/api/sessions/s1/messages',
+      query: new URLSearchParams({ chatId: '628123@c.us', limit: '10' }),
+    });
+    expect(t.lastCall!.url).toBe('http://localhost:2785/api/sessions/s1/messages?chatId=628123%40c.us&limit=10');
+  });
+
+  it('sends every value of a repeated URLSearchParams key', async () => {
+    const t = new MockTransport().passthrough({ status: 200, body: [] });
+    const query = new URLSearchParams();
+    query.append('type', 'text');
+    query.append('type', 'image');
+    await client(t).request({ method: 'GET', path: '/api/sessions/s1/messages', query });
+    expect(t.lastCall!.url).toBe('http://localhost:2785/api/sessions/s1/messages?type=text&type=image');
+  });
+
+  it('serializes a Map query like the same plain object', async () => {
+    const t = new MockTransport().passthrough({ status: 200, body: [] });
+    const query = new Map<string, unknown>([
+      ['chatId', 'a@c.us'],
+      ['limit', 10],
+      ['from', undefined],
+      ['to', null],
+      ['fromMe', false],
+      ['types', ['text', 'image']],
+    ]);
+    const c = client(t);
+    await c.request({ method: 'GET', path: '/api/sessions/s1/messages', query });
+    await c.request({ method: 'GET', path: '/api/sessions/s1/messages', query: Object.fromEntries(query) });
+    expect(t.calls[0].url).toBe(
+      'http://localhost:2785/api/sessions/s1/messages?chatId=a%40c.us&limit=10&fromMe=false&types=text%2Cimage',
+    );
+    expect(t.calls[1].url).toBe(t.calls[0].url);
+  });
+
+  it('puts a URLSearchParams query after the query string of a raw path and before its fragment', async () => {
+    const t = new MockTransport().passthrough({ status: 200, body: [] });
+    await client(t).request({
+      method: 'GET',
+      path: '/api/sessions?limit=5#tab',
+      query: new URLSearchParams({ name: 'x' }),
+    });
+    expect(t.lastCall!.url).toBe('http://localhost:2785/api/sessions?limit=5&name=x#tab');
+  });
+
+  it('adds no query string for an empty URLSearchParams or Map', async () => {
+    const t = new MockTransport().passthrough({ status: 200, body: [] });
+    const c = client(t);
+    await c.request({ method: 'GET', path: '/api/sessions', query: new URLSearchParams() });
+    await c.request({ method: 'GET', path: '/api/sessions', query: new Map() });
+    expect(t.calls.map(call => call.url)).toEqual([
+      'http://localhost:2785/api/sessions',
+      'http://localhost:2785/api/sessions',
+    ]);
+  });
+
+  it('serializes a Map query for requestBytes and a URLSearchParams query for buildUrl', async () => {
+    const t = new MockTransport().passthrough({ status: 200, body: [] });
+    await client(t).requestBytes({ method: 'GET', path: '/api/search/', query: new Map([['q', 'x']]) });
+    expect(t.lastCall!.url).toBe('http://localhost:2785/api/search/?q=x');
+    expect(buildUrl('http://localhost:2785/', '/api/search', new URLSearchParams({ q: 'a b' }))).toBe(
+      'http://localhost:2785/api/search?q=a+b',
+    );
   });
 
   it('maps a 404 to OpenWANotFoundError with parsed body', async () => {

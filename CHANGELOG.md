@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Log the page visibility, the H.264/AAC playback answer and the browser version when a whatsapp-web.js video send or video status post times out in WhatsApp Web's 20 second video load, and document how to read that timeout (#1902). Thanks @benjaminb10 for the report.
+- The Docker image no longer ships the TypeScript compiler and ts-node, about 24 MiB less per architecture; nothing loads them at run time.
 - List a Baileys session's stored chats right after a restart, groups included, with their newest stored message as preview and time and the contact's pushname (#1978). Thanks @farresyh.
 - Record a session's `lastActive` at most once every 30 seconds instead of on every message, so it can lag the latest message by up to that long.
 
@@ -54,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep focus in the Number Checker phone field during and after a single check.
 - Keep dialogs that open over the phone navigation drawer usable and release the page scroll lock when they close.
 - Return keyboard focus to Save Configuration after the restart prompt is put off or a save is refused.
+- JavaScript SDK: `client.request()`, `requestBytes()` and `buildUrl()` send the entries of a `URLSearchParams` or `Map` query instead of sending the request without them.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
 - Refuse a Baileys retry receipt from another chat for a message received under a lid with its sender's number.
 - Webhook writes refuse more than 27 events, and webhook and automation rule writes refuse id filter values over 128 characters.
@@ -109,6 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Upgrade notes (behavior changes)
 
 - A Baileys group message now produces `message.ack` events (`delivered`, then `read`) and advances its stored status, which stayed at `sent` before; a webhook or socket client that expected no ack for a group message will receive them. The ack payload carries no `isGroup`, so a webhook filter on `isGroup` cannot tell them from direct ones; filter on `kind` or `chatId` instead.
+- The Docker image no longer contains `typescript` or `ts-node`. A plugin that required either from the gateway's `node_modules` without bundling it must now ship its own copy.
 - After a restart, Baileys `GET /api/sessions/{sessionId}/chats` also returns the chats with stored messages, and groups carry their newest message's time instead of `0`, so the list is longer and its pages change; a chat deleted on the phone before 0.27.0 or before an unlink is listed again while its messages are stored.
 - SIGQUIT, SIGABRT and a bare SIGUSR2 now end the process at once with no teardown; a process manager that restarts with SIGUSR2, such as nodemon's default, should send SIGTERM.
 - SIGHUP now drains and exits 0 (1 on a failed or overrun teardown) instead of dying by SIGHUP, so Docker's on-failure restart policy no longer restarts after `docker kill -s HUP`.

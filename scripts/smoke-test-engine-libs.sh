@@ -9,6 +9,9 @@
 # browser it drives is launched per session and differs by architecture (Chrome for Testing on
 # amd64, Debian's chromium on arm64). Each probe runs through the real entrypoint, so it executes
 # as the openwa user with the directories the entrypoint prepares.
+#
+# Two more checks close the script: the image carries no TypeScript toolchain, and the migration CLI
+# the runbooks drive still runs without one.
 set -e
 
 IMAGE="${OPENWA_SMOKE_IMAGE:?set OPENWA_SMOKE_IMAGE to the image under test}"
@@ -67,6 +70,30 @@ else
     .catch(error => { console.error('FAIL:', error); process.exit(1); });
   "
 fi
+
+echo "==> [$LABEL] Checking the image carries no TypeScript toolchain..."
+# npm ci --omit=dev keeps typescript and ts-node, which are devDependencies and also optional peers of
+# typeorm and valibot, so the Dockerfile removes them with their bin links. Nothing loads either at run
+# time. find lists a bin link that a removal left dangling, which a test for existence would call absent.
+LEFTOVER=$(docker run --rm "$@" "$IMAGE" find node_modules node_modules/.bin -maxdepth 1 \
+  '(' -name typescript -o -name 'ts-node*' -o -name ts-script -o -name tsc -o -name tsserver ')')
+if [ -n "$LEFTOVER" ]; then
+  echo "FAIL: the image still carries the TypeScript toolchain:" >&2
+  printf '%s\n' "$LEFTOVER" >&2
+  exit 1
+fi
+echo "PASS: no typescript or ts-node in the image"
+
+echo "==> [$LABEL] Running the migration CLI the runbooks use (npm run migration:show:prod)..."
+# The plain typeorm CLI on the compiled data source. An empty database lists every migration as pending.
+# The pattern is not anchored: the CLI underlines each line where the environment advertises color.
+MIGRATIONS=$(docker run --rm "$@" "$IMAGE" npm run --silent migration:show:prod)
+if ! printf '%s\n' "$MIGRATIONS" | grep -q '\[ \] '; then
+  echo "FAIL: npm run migration:show:prod listed no pending migration on an empty database:" >&2
+  printf '%s\n' "$MIGRATIONS" >&2
+  exit 1
+fi
+echo "PASS: the migration CLI lists the compiled migrations without ts-node"
 
 echo ""
 echo "Engine library smoke passed on $LABEL"
