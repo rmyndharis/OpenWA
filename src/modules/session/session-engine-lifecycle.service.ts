@@ -323,8 +323,8 @@ export class SessionEngineLifecycle {
   // successful); and a COMMITTED delete (after the parent transaction). NOT cleared on a rejected
   // start, executeReconnect, disconnect, QR, auth failure, engine replacement, or a failed/409 delete.
   private readonly stuckAuthRecoveryUsed = new Set<string>();
-  // Moved each time this node clears a session's phone binding for a terminal unlink. A start or an engine holding
-  // the binding it read before the move treats it as gone, instead of depending on when the row write lands.
+  // Moved each time this node records a terminal unlink of a session it owns. A start or an engine holding the
+  // binding it read before the move treats it as gone, instead of depending on when the row write lands.
   private readonly bindingEpochs = new Map<string, number>();
 
   constructor(
@@ -1313,10 +1313,11 @@ export class SessionEngineLifecycle {
         action: 'unlink_phone_clear_failed',
       }),
     );
-    // A reconnect already armed keeps its own snapshot (scheduleReconnect leaves it alone), so the clear
-    // reaches that one too. Only the phone: the rest is what the report that armed it read.
+    // A reconnect episode keeps its own snapshot (scheduleReconnect leaves it alone), so the clear reaches that one
+    // too, whatever the episode is doing: an attempt that is initializing its replacement re-arms the next attempt
+    // from the snapshot when it fails. Only the phone: the rest is what the report that armed it read.
     const armed = this.reconnectStates.get(id);
-    if ((armed?.timer || armed?.teardownInFlight) && armed.session) armed.session = { ...armed.session, phone: null };
+    if (armed?.session) armed.session = { ...armed.session, phone: null };
     return true;
   }
 
@@ -1727,6 +1728,9 @@ export class SessionEngineLifecycle {
       // now: it would hold the timer the next attempt needs, then fire against the evicted engine and
       // end at its fence, leaving the session with no engine and nothing armed.
       if (this.endReadRetryOfGoneEngine(id)) session = { ...session, phone: null };
+      // An unlink recorded while this attempt initialized cleared the episode's snapshot, not the session this
+      // attempt started from.
+      if (state.session && state.session.phone == null && session.phone) session = { ...session, phone: null };
       // Schedule another attempt. The row stays INITIALIZING through the backoff (an active status, with
       // lastError still showing the reason), so a retryable failure writes nothing per attempt.
       this.scheduleReconnect(id, session);

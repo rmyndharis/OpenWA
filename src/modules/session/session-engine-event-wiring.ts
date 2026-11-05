@@ -79,8 +79,8 @@ export interface SessionEngineWiringHost {
    */
   reportDroppedUnlink(id: string, reason: string): void;
   /**
-   * Moves each time this node clears the session's phone binding for a terminal unlink: a binding read before it
-   * moved is gone. Optional: a host without it keeps every binding.
+   * Moves each time this node records a terminal unlink of a session it owns: a binding read before it moved is
+   * gone. Optional: a host without it keeps every binding.
    */
   bindingEpoch?(id: string): number;
   updateStatus(id: string, status: SessionStatus): Promise<void>;
