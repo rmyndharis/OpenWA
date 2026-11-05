@@ -1520,7 +1520,9 @@ The message is looked up by its full serialized id, exactly as the send routes r
 
 **Response** `200`
 
-Returns a `MessageReceipts` object:
+This route maps the per-recipient lists WhatsApp Web supplies and returns `[]` for an empty or missing list. Per-recipient entries are not guaranteed for a 1:1 message, and no entries are inferred from the message's aggregate acknowledgement. Empty lists do not prove that nobody received or read it. Use `message.ack` for aggregate acknowledgement state; this route does not synthesize participants or timestamps from it.
+
+Returns a `MessageReceipts` object; this illustrative group-message response lists one recipient:
 
 ```json
 {
