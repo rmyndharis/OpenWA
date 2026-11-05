@@ -1,6 +1,6 @@
 # rmyndharis/openwa
 
-This document describes `main`. `messages->receipts` is an unreleased addition after SDK 0.9.0 and requires the corresponding server change after OpenWA 0.27.1. `contacts->lid` requires OpenWA 0.27.1 or later. `groups->setMemberLabel` and the `match` search key require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
+This document describes `main`. `messages->receipts` is an unreleased addition after SDK 0.9.0 and requires OpenWA 0.28.0 or later. `contacts->lid` requires OpenWA 0.27.1 or later. `groups->setMemberLabel` and the `match` search key require OpenWA 0.27.0 or later. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
 
 Official PHP SDK for [OpenWA](https://github.com/rmyndharis/OpenWA), the open-source WhatsApp API Gateway. OpenWA is an independent project, not affiliated with or endorsed by WhatsApp or Meta.
 
