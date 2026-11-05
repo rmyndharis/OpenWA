@@ -57,7 +57,11 @@ describe('a custom link preview image on a Baileys text send', () => {
     const host = {
       ensureReady: () => undefined,
       sessionProxyUrl: () => proxyUrl,
-      getSocket: () => sock as unknown as WASocket,
+      // As the session's own host does: a socket that was torn down is not ready.
+      getSocket: () => {
+        if (!current) throw new EngineNotReadyError();
+        return current;
+      },
       getSocketOrNull: () => current,
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
       toNeutralJid: (j: string) => j.replace('@s.whatsapp.net', '@c.us'),

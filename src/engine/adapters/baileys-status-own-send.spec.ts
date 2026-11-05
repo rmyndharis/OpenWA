@@ -22,10 +22,13 @@ function makeStatus(
   // Records the argument verbatim, with no guard of its own: OwnSendRegistry.remember is what
   // ignores a nullish id (see baileys-own-sends.spec.ts), and a guard here would test the stub.
   const remembered: Array<string | null | undefined> = [];
+  // One socket for the whole session, as the production host holds one: a post is written to the socket it started on.
+  const socket = { sendMessage } as unknown as WASocket;
   const host = {
     sessionProxyUrl: () => proxyUrl,
     ensureReady: () => undefined,
-    getSocket: () => ({ sendMessage }) as unknown as WASocket,
+    getSocket: () => socket,
+    getSocketOrNull: () => socket,
     toEngineJid: (jid: string) => jid,
     normalizedSelfJid: () => '628999@s.whatsapp.net',
     toUnixSeconds: () => 1700000000,

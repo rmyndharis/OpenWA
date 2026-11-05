@@ -41,10 +41,7 @@ export class BaileysStatus {
   private sock(expected?: WASocket): WASocket {
     this.host.ensureReady();
     const socket = this.host.getSocket();
-    const current = this.host.getSocketOrNull?.() ?? socket;
-    if (expected && (current !== expected || socket !== expected) && socket.sendMessage !== expected.sendMessage) {
-      throw new EngineNotReadyError();
-    }
+    if (expected && socket !== expected) throw new EngineNotReadyError();
     return socket;
   }
 

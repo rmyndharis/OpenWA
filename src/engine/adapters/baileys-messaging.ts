@@ -376,13 +376,7 @@ export class BaileysMessaging {
     } catch (error) {
       throw markNothingSent(error);
     }
-    if (
-      expected &&
-      (socket !== expected ||
-        (typeof this.host.getSocketOrNull === 'function' && this.host.getSocketOrNull() !== expected))
-    ) {
-      throw markNothingSent(new EngineNotReadyError());
-    }
+    if (expected && socket !== expected) throw markNothingSent(new EngineNotReadyError());
     return socket;
   }
 
