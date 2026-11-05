@@ -829,8 +829,38 @@ describe('LoggerService', () => {
         const errorSpy = jest.spyOn(console, 'error');
         logger.error('failed', 'Error: boom\n    at first (a.ts:1:1)\n    at second (b.ts:2:2)');
 
-        // The record line and the three lines of the trace.
-        expect(getRawOutput(errorSpy).split('\n')).toHaveLength(4);
+        // The record line and the three lines of the trace, the frames as they were.
+        const lines = getRawOutput(errorSpy).split('\n');
+        expect(lines).toHaveLength(4);
+        expect(lines.slice(2)).toEqual(['    at first (a.ts:1:1)', '    at second (b.ts:2:2)']);
+      });
+
+      // A promise rejected with a string, or an error thrown as one, is logged with that text as the whole trace, so its
+      // first line is as free as any other: it is indented too, and so is a line that starts with an invisible character.
+      it.each([
+        ['a trace that is a forged record', FORGED.split('\n')[1]],
+        ['a line that starts with a zero width character', `Error: boom\n\uFEFF${FORGED.split('\n')[1]}`],
+        ['a line that starts with a no-break space', `Error: boom\n\u00A0${FORGED.split('\n')[1]}`],
+      ])('for %s', (_how, trace) => {
+        const errorSpy = jest.spyOn(console, 'error');
+        logger.error('failed', trace);
+
+        const [record, ...rest] = getRawOutput(errorSpy).split('\n');
+        expect(record.startsWith('[OpenWA]')).toBe(true);
+        expect(rest.length).toBeGreaterThan(0);
+        expect(rest.every(line => line.startsWith(' '))).toBe(true);
+      });
+
+      it('and leaves a blank line of a trace blank', () => {
+        const errorSpy = jest.spyOn(console, 'error');
+        logger.error('failed', 'Error: boom\n\n    at first (a.ts:1:1)\n');
+
+        expect(getRawOutput(errorSpy).split('\n').slice(1)).toEqual([
+          '    Error: boom',
+          '',
+          '    at first (a.ts:1:1)',
+          '',
+        ]);
       });
     });
   });

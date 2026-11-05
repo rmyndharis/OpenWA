@@ -291,12 +291,13 @@ const escapeControls = (text: string): string => text.replace(PRETTY_CONTROLS, e
 
 // A stack trace opens with the error's message, which can be text the caller did not write, and its lines are the one
 // place the format keeps line breaks. So a trace is held to the same rule as the rest: the controls other than the
-// line break and the tab are written as escapes, and a line that would start at the left edge, where a record begins,
-// is indented. The lines of a real stack already start with spaces and are left as they are.
+// line break and the tab are written as escapes, and every line that would start at the left edge, where a record
+// begins, the first one included, is indented. The frames of a real stack already start with spaces and are left as
+// they are, and a blank line stays blank.
 // eslint-disable-next-line no-control-regex
 const PRETTY_TRACE_CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
 const escapeTrace = (trace: string): string =>
-  trace.replace(PRETTY_TRACE_CONTROLS, escapeControl).replace(/\n(?=\S)/g, '\n    ');
+  trace.replace(PRETTY_TRACE_CONTROLS, escapeControl).replace(/(^|\n)(?=[^ \t\n])/g, '$1    ');
 
 @Injectable({ scope: Scope.TRANSIENT })
 export class LoggerService implements NestLoggerService {

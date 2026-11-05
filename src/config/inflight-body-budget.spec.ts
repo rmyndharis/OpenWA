@@ -15,7 +15,7 @@ import { LoggerService, LogFormat } from '../common/services/logger.service';
 
 const MB = 1024 * 1024;
 
-/** Every request a case admitted: each is closed after its case, which ends the stall reaper the middleware armed for it. */
+/** Every request a case made: each is closed after the case, so the stall reaper armed for an admitted one ends with it. */
 const admitted: Array<Request & EventEmitter> = [];
 
 /** Minimal req/res doubles: real EventEmitters so the middleware's listener accounting runs as-is. */
@@ -68,7 +68,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   // A request left open keeps its unref'd 5 s reaper alive; when the pace check drops it later the warning is written
-  // outside any case, after the console spy is gone.
+  // outside any case, after the console spy is gone. Under fake timers the restored clock retires the reaper instead.
   for (const req of admitted.splice(0)) req.emit('close');
   warn.mockRestore();
   LoggerService.setLogFormat(null);

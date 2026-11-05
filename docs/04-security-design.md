@@ -394,7 +394,7 @@ The windows above run at the routing layer, after a request body has been buffer
 
 The validation pipe copies a whole body before any validator can refuse it, and it scans the keys of each object once per key, so a body padded with array items or object keys can hold the process for seconds to minutes. A step ahead of that pipe refuses such a body with `400`, naming the limit it exceeded, for about the cost of reading it:
 
-- an array of more than 10,000 items (the longest list a request field caps is 2,000, the allowed chats of an API key; the allowed IPs and sessions, the restart profiles and a plugin's sessions have no cap of their own and stop at this limit);
+- an array of more than 10,000 items (the longest list a request field caps is 2,000, the allowed chats of an API key; the allowed IPs and sessions, the restart profiles, a plugin's sessions and any list inside a config object have no cap of their own and stop at this limit);
 - an object of more than 1,000 keys (the scan makes an object quadratic in its keys; the free-form maps a request carries are a message's template variables, limited by the 4,096 characters of its text, a webhook's headers, at most 50, and the config objects of plugins, integration instances and sessions, whose keys are the ones their schema declares);
 - more than 250,000 array items and object keys in the whole body (the largest documented request, a bulk send of 100 messages that each tag 1,024 mentions, holds about 104,000).
 
