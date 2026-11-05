@@ -185,10 +185,12 @@ export interface SessionEngineControlsHost {
   bindingEpoch(id: string): number;
   forgetBindingEpoch?(id: string): void;
   /**
-   * `read`, once the phone writes the lifecycle issued without waiting for them (an unlink's clear, a READY's row) have
-   * been answered: a row read that overlaps one can return the binding it replaces.
+   * `read`, once the phone writes the lifecycle issued without waiting for them (an unlink's clear, the number a READY
+   * links) have been answered: a row read that overlaps one can return the binding it replaces.
    */
   readAfterPhoneWrites?<T>(id: string, read: () => Promise<T>): Promise<T>;
+  /** `write`, a change to the session's phone, issued in order with those writes. The caller awaits its answer. */
+  writePhone?<T>(id: string, write: () => Promise<T>): Promise<T>;
   logger: ReturnType<typeof createLogger>;
   /** LIVE closure — read at call time, never captured (specs replace lifecycle.dataSource at runtime). */
   dataSource(): DataSource;
@@ -802,7 +804,10 @@ export class SessionEngineControls {
       // incomplete one tore the local credentials down, so re-entering auto-start would only wedge it.
       // Before the status write, so a failed status write cannot leave the flag behind and resurrect
       // the session into a QR it can never pass on every restart. onReady rewrites it on the next link.
-      await this.sessionRepository.update(id, { phone: null });
+      // Issued in the step that evicts the engine: a start that finds none registered reads the row only once this
+      // clear has been answered, and a READY's number still waiting on an earlier write goes in before it.
+      const clearPhone = (): Promise<unknown> => this.sessionRepository.update(id, { phone: null });
+      await (this.host.writePhone?.(id, clearPhone) ?? clearPhone());
       await this.host.updateStatus(id, SessionStatus.DISCONNECTED);
     } finally {
       if (!teardownLaunched) {

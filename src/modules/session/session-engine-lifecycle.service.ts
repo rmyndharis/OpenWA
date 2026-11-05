@@ -480,6 +480,7 @@ export class SessionEngineLifecycle {
         this.phoneWrites.forget(id);
       },
       readAfterPhoneWrites: (id, read) => this.phoneWrites.readSettled(id, read),
+      writePhone: (id, write) => this.phoneWrites.run(id, write),
       prepareStart: (id, desiredState) => this.prepareStart(id, desiredState),
       purgeAuthDirsIfDeleted: id => this.purgeAuthDirsIfDeleted(id),
       updateStatus: (id, status) => this.updateStatus(id, status),
@@ -1026,15 +1027,19 @@ export class SessionEngineLifecycle {
     // one-shot recovery budget is re-armed for a future episode.
     this.stuckAuthRecoveryUsed.delete(id);
 
-    const readyAt = new Date();
-    void this.phoneWrites
-      .run(id, () => this.sessionRepository.update(id, readyRowUpdate(phone, pushName, readyAt)))
-      .catch(err =>
-        this.logger.warn('Failed to persist session ready state', {
-          sessionId: id,
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
+    // The status and times of a READY are written at once. Only the number it links waits behind the phone writes of the
+    // session: held with it, the status could land after a stop or a failure that followed this READY and put the
+    // session back to READY with no engine.
+    const { status, connectedAt, lastActiveAt, ...binding } = readyRowUpdate(phone, pushName, new Date());
+    const persistFailed = (err: unknown): void =>
+      this.logger.warn('Failed to persist session ready state', {
+        sessionId: id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    void this.sessionRepository.update(id, { status, connectedAt, lastActiveAt }).catch(persistFailed);
+    if (binding.phone) {
+      void this.phoneWrites.run(id, () => this.sessionRepository.update(id, binding)).catch(persistFailed);
+    }
 
     // Re-apply a prior PUT /presence once per open. Baileys' markOnlineOnConnect has already
     // broadcast `available` during this handshake; without this, an `available: false` the caller
@@ -1060,17 +1065,20 @@ export class SessionEngineLifecycle {
    * Store the account's push name an engine learned after its ready event (Baileys syncs a newly linked
    * account's name only once the connection opened, so the ready row got an empty one). The row alone:
    * session.authenticated went out at ready and is not sent again. Fenced like the other engine-driven row
-   * writes, and by id, so a session deleted meanwhile has no row to change.
+   * writes, and by id, so a session deleted meanwhile has no row to change. Issued with the phone writes: the
+   * ready row's own (empty) name may still be waiting behind one, and must not land after this one.
    */
   private handleEnginePushName(id: string, engine: IWhatsAppEngine, pushName: string): void {
     if (!pushName || !this.isLiveEngine(id, engine) || !this.ownsSession(id)) return;
-    void this.sessionRepository.update(id, { pushName }).catch(err =>
-      this.logger.warn('Failed to store the synced push name', {
-        sessionId: id,
-        error: String(err),
-        action: 'push_name_store_failed',
-      }),
-    );
+    void this.phoneWrites
+      .run(id, () => this.sessionRepository.update(id, { pushName }))
+      .catch(err =>
+        this.logger.warn('Failed to store the synced push name', {
+          sessionId: id,
+          error: String(err),
+          action: 'push_name_store_failed',
+        }),
+      );
   }
 
   /**

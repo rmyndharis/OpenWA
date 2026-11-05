@@ -1,4 +1,5 @@
 import { SessionEngineLifecycle } from './session-engine-lifecycle.service';
+import type { PhoneWrites } from './session-phone-writes';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -125,6 +126,7 @@ function fixture() {
   };
   return {
     lifecycle,
+    registry,
     repository,
     stored,
     engines,
@@ -489,4 +491,159 @@ describe('a start that overlaps the phone writes of an unlink', () => {
       await f.lifecycle.shutdown();
     }
   });
+});
+
+// The row a READY writes is split: its status and times go to the database at once, and only the number it links takes its
+// place behind the clear of an earlier unlink. What a stop, a failure or a logout wrote after the READY therefore stands,
+// whatever the late answer of that clear does to the wait.
+describe('a READY that waits behind the clear of an unlink', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it('writes its status and times at once and only the number behind the clear', async () => {
+    const { f, oldRead } = await replacement();
+    try {
+      const clear = holdUpdates(f, clearsPhone, true);
+      oldRead.answer();
+      await f.handled.mock.results[1].value;
+      f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
+      const earlier = f.stored.connectedAt;
+      await f.linkOther(1);
+
+      expect(f.stored.status).toBe(SessionStatus.READY);
+      expect(f.stored.connectedAt).not.toBe(earlier); // written by this READY, not left from the first one
+      expect(f.stored.phone).toBeNull(); // the number waits for the answer of the clear
+      await clear.release();
+      await tick();
+      expect(f.stored.phone).toBe(OTHER);
+    } finally {
+      await f.lifecycle.shutdown();
+    }
+  });
+
+  it.each([
+    ['a stop', SessionStatus.DISCONNECTED],
+    ['a terminal failure', SessionStatus.FAILED],
+  ])('leaves the status %s wrote after it, and keeps the number it linked', async (ending, expected) => {
+    const { f, oldRead } = await replacement();
+    try {
+      const clear = holdUpdates(f, clearsPhone, true);
+      oldRead.answer();
+      await f.handled.mock.results[1].value;
+      f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
+      await f.linkOther(1);
+      if (ending === 'a stop') {
+        await f.lifecycle.stop(ID);
+        f.stored.desiredState = 'stopped';
+      } else {
+        f.engines[1].getStatus.mockReturnValue(EngineStatus.FAILED);
+        f.callbacksOf(1).onStateChanged?.(EngineStatus.FAILED);
+        f.callbacksOf(1).onError?.('engine failed');
+        for (let i = 0; i < 20; i++) await tick();
+      }
+      expect(f.stored.status).toBe(expected);
+      expect(f.registry.has(ID)).toBe(false);
+
+      await clear.release();
+      for (let i = 0; i < 20; i++) await tick();
+      expect({ status: f.stored.status, phone: f.stored.phone, engineLoaded: f.registry.has(ID) }).toEqual({
+        status: expected,
+        phone: OTHER,
+        engineLoaded: false,
+      });
+    } finally {
+      await f.lifecycle.shutdown();
+    }
+  });
+});
+
+describe('a logout that overlaps the phone writes of a session', () => {
+  afterEach(() => jest.useRealTimers());
+
+  // The clear a logout issues is one of the phone writes: it goes after the number a READY linked, which is still waiting
+  // for the answer of an earlier clear, so that number cannot come back once the logout has finished.
+  it('clears the number a READY linked after the clear of an earlier unlink', async () => {
+    const { f, oldRead } = await replacement();
+    let logout: Promise<Session> | undefined;
+    let holdingUnlink = true;
+    const clear = holdUpdates(f, patch => holdingUnlink && clearsPhone(patch), true);
+    try {
+      oldRead.answer();
+      await f.handled.mock.results[1].value;
+      f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
+      await f.linkOther(1);
+
+      holdingUnlink = false; // only the answer of the unlink's clear is late; the logout's own clear is answered at once
+      logout = f.lifecycle.logout(ID);
+      await until(() => !f.registry.has(ID), 'the engine retired by the logout');
+      await clear.release();
+      await logout;
+      for (let i = 0; i < 20; i++) await tick();
+      expect({ status: f.stored.status, phone: f.stored.phone }).toEqual({
+        status: SessionStatus.DISCONNECTED,
+        phone: null,
+      });
+    } finally {
+      await clear.release();
+      await Promise.allSettled([logout]);
+      await f.lifecycle.shutdown();
+    }
+  });
+
+  // A start sees the engine gone from the registry and reads the row in the next step: the clear has to be on record by then.
+  it('has its clear on record by the time the engine is gone from the registry', async () => {
+    const f = fixture();
+    await bound(f);
+    const writes = (f.lifecycle as unknown as { phoneWrites: PhoneWrites }).phoneWrites;
+    const evict = f.registry.deleteIfLive.bind(f.registry);
+    let pendingAfterEviction: boolean | undefined;
+    jest.spyOn(f.registry, 'deleteIfLive').mockImplementation((...args) => {
+      const evicted = evict(...args);
+      queueMicrotask(() => (pendingAfterEviction ??= writes.hasPending(ID)));
+      return evicted;
+    });
+    try {
+      await f.lifecycle.logout(ID);
+      expect(pendingAfterEviction).toBe(true);
+    } finally {
+      await f.lifecycle.shutdown();
+    }
+  });
+
+  // A start that reads the row while the clear is still being written would take the number the logout is removing, and
+  // refuse the next account as another one.
+  it.each([false, true])(
+    'is not outrun by a start that reads the row (clear answered before the start began: %s)',
+    async early => {
+      const f = fixture();
+      await bound(f);
+      const clear = holdUpdates(f, clearsPhone);
+      let logout: Promise<Session> | undefined;
+      let restart: Promise<Session> | undefined;
+      try {
+        logout = f.lifecycle.logout(ID);
+        await until(() => clear.count() === 1, 'the phone clear of the logout');
+        expect(f.registry.has(ID)).toBe(false);
+        if (early) {
+          await clear.release();
+          await logout;
+        }
+        restart = f.lifecycle.start(ID, { explicit: true });
+        await tick();
+        if (!early) {
+          expect(f.engines).toHaveLength(1); // the start waits for the clear: no engine yet
+          await clear.release();
+          await logout;
+        }
+        await restart;
+        expect(f.stored.phone).toBeNull();
+        await f.linkOther(1);
+
+        expect(outcome(f, 1)).toEqual({ ...ACCEPTED, phone: OTHER });
+      } finally {
+        await clear.release();
+        await Promise.allSettled([logout, restart]);
+        await f.lifecycle.shutdown();
+      }
+    },
+  );
 });
