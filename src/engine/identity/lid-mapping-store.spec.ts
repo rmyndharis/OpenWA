@@ -2515,42 +2515,61 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     return { repo, store, reports, warn };
   }
 
+  /**
+   * The work, or an error naming `what` once `end` has passed: a callback that never comes fails the case with a
+   * message of its own, not through the generic test timeout.
+   */
+  const within = async <T>(end: number, what: string, work: Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${what} did not finish within 2000 ms`)),
+        Math.max(0, end - Date.now()),
+      );
+    });
+    try {
+      return await Promise.race([work, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const deadline = () => Date.now() + 2000;
   /** Let the pending microtasks run: a read's continuation and the report listener are microtask-only. */
-  const flushed = () => new Promise(resolve => setImmediate(resolve));
+  const flushed = (end = deadline(), what = 'a turn of the event loop') =>
+    within(end, what, new Promise(resolve => setImmediate(resolve)));
   /**
    * Run out the checks queued so far: each window timer fires (it was set inside a remembered write),
-   * its table reads answer and the reports land. Only where no read is held open on purpose. It fails
-   * the case when that does not happen within two seconds, a window that never fires and a read that
-   * never answers included: an absence assertion after it would otherwise pass without the work it
-   * stands for having run.
+   * the table has been read by phone at least `reads` times (once by default, never where nothing is
+   * checked or the window runs into a closed source), every read answers, also one that only starts after
+   * another answered, and the reports land. Only where no read is held open on purpose. It fails the case
+   * when that does not happen within two seconds, a window that never fires, a read that never starts and a
+   * read that never answers included: an absence assertion after it would otherwise pass without the work
+   * it stands for having run.
    */
-  const checksRun = async (store: LidMappingStoreService, repo: ReturnType<typeof makeFakeRepo>): Promise<void> => {
+  const checksRun = async (
+    store: LidMappingStoreService,
+    repo: ReturnType<typeof makeFakeRepo>,
+    reads = 1,
+  ): Promise<void> => {
     const timers = store as unknown as { secondLidTimer?: unknown };
-    const end = Date.now() + 2000;
-    const notFinished = () => new Error('the second-lid checks did not finish within 2000 ms');
+    const end = deadline();
+    const what = 'the second-lid checks';
     for (;;) {
-      while (timers.secondLidTimer !== undefined) {
-        if (Date.now() >= end) throw notFinished();
+      while (timers.secondLidTimer !== undefined || phoneReads(repo) < reads) {
+        if (Date.now() >= end) throw new Error(`${what} did not finish within 2000 ms`);
         await new Promise(resolve => setTimeout(resolve, 1));
       }
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const late = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(notFinished()), Math.max(0, end - Date.now()));
-      });
-      try {
-        await Promise.race([Promise.allSettled(repo.find.mock.results.map(result => result.value as unknown)), late]);
-      } finally {
-        clearTimeout(timer);
-      }
-      await flushed();
-      if (timers.secondLidTimer === undefined) return;
+      const answered = repo.find.mock.results.map(result => result.value as unknown);
+      await within(end, what, Promise.allSettled(answered));
+      await flushed(end, what);
+      if (timers.secondLidTimer === undefined && repo.find.mock.results.length === answered.length) return;
     }
   };
   /** A failed read's warning gate: a rate-limited step logs no line, so only its held count moves. */
   const readGate = (store: LidMappingStoreService) =>
     (store as unknown as { secondLidReadWarning: { at: number; held: number } }).secondLidReadWarning;
   /** One later turn of the same timer delay: same-delay timers fire in the order they were set. */
-  const aTick = () => new Promise(resolve => setTimeout(resolve, 0));
+  const aTick = () => within(deadline(), 'a turn of the timers', new Promise(resolve => setTimeout(resolve, 0)));
   /** Wait for a condition, and fail the case when it does not hold within the deadline. */
   const until = async (done: () => boolean, ms = 2000): Promise<void> => {
     for (const end = Date.now() + ms; !done(); await new Promise(resolve => setTimeout(resolve, 2)))
@@ -2654,7 +2673,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
     repo.upsert.mockRejectedValueOnce(new Error('disk full'));
 
     await expect(store.remember('222', '628999', 's2')).resolves.toBe(false);
-    await checksRun(store, repo);
+    await checksRun(store, repo, 0); // a write that failed queues no check, so there is no table read to wait for
     expect(reports).toEqual([]);
 
     await store.remember('222', '628999', 's2');
@@ -2964,7 +2983,7 @@ describe('LidMappingStoreService: a phone reported under a second lid', () => {
 
     await store.remember('222', '628999', 's2');
     dataSource.isInitialized = false;
-    await checksRun(store, repo); // the window ran into the closed source and read nothing
+    await checksRun(store, repo, 0); // the window ran into the closed source and read nothing
 
     expect(phoneReads(repo)).toBe(0);
     expect(reports).toEqual([]);
