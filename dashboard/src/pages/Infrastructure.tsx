@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useRef } from 'react';
+import { Fragment, useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import {
@@ -85,6 +85,33 @@ export function Infrastructure() {
   const { data: engines = [] } = useEnginesQuery();
   const { data: currentEngineData } = useCurrentEngineQuery();
   const currentEngine = currentEngineData?.engineType ?? '';
+  const footerRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const footer = footerRef.current;
+    const stack = document.querySelector<HTMLElement>('.toast-container');
+    if (!footer || !stack) return;
+    const reserveSpace = () => {
+      const stackRect = stack.getBoundingClientRect();
+      const action = footer.querySelector('button')?.getBoundingClientRect();
+      const overlaps =
+        toast.toasts.length > 0 &&
+        action &&
+        action.bottom > stackRect.top &&
+        action.top < stackRect.bottom &&
+        action.right > stackRect.left &&
+        action.left < stackRect.right;
+      footer.style.setProperty(
+        '--toast-stack-height',
+        toast.toasts.length ? `${window.innerHeight - stackRect.top}px` : '0px',
+      );
+      // Extra scroll space alone would leave an already visible action under a newly added toast.
+      if (overlaps) footer.scrollIntoView({ block: 'end' });
+    };
+    reserveSpace();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(reserveSpace);
+    observer?.observe(stack);
+    return () => observer?.disconnect();
+  }, [loading, configLoading, infraStatus, savedConfig, toast.toasts.length]);
 
   const configForm = useInfraConfigForm(infraStatus, savedConfig);
   const queryClient = useQueryClient();
@@ -1208,7 +1235,7 @@ export function Infrastructure() {
         </Modal>
       )}
 
-      <footer className="page-footer">
+      <footer ref={footerRef} className="page-footer">
         <button
           ref={saveButtonRef}
           className="btn-primary large"

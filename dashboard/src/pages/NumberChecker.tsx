@@ -26,7 +26,7 @@ import { useToast } from '../hooks/useToast';
 import { useRole } from '../hooks/useRole';
 import { batchStopMessage, useNumberCheck, type CheckResultItem } from '../hooks/useNumberCheck';
 import { escapeCsvCell } from '../utils/csv';
-import { normalizePhoneText } from '../utils/phone';
+import { normalizePhoneDigits, normalizePhoneText } from '../utils/phone';
 import { keepsSameKey } from '../utils/authLifecycle';
 import { isComposingKey } from '../utils/composition';
 import './NumberChecker.css';
@@ -104,9 +104,7 @@ export function NumberChecker() {
       let digits = raw.replace(/[^0-9]/g, '');
       const isInternational = raw.trim().startsWith('+') || digits.startsWith('00');
       // 1. If international dial exit code 00 is present (e.g. 009196...), strip '00'
-      if (digits.startsWith('00') && digits.length >= 12) {
-        digits = digits.substring(2);
-      }
+      digits = normalizePhoneDigits(digits);
       // 2. If user entered +91 with domestic trunk 0 (e.g. +91 096... -> 13 digits), strip trunk 0
       if (applyPrefix && digits.length === 13 && digits.startsWith('910')) {
         digits = '91' + digits.substring(3);
@@ -155,7 +153,7 @@ export function NumberChecker() {
       }
       let d = raw.replace(/[^0-9]/g, '');
       const isInternational = raw.startsWith('+') || d.startsWith('00');
-      if (d.startsWith('00') && d.length >= 12) d = d.substring(2);
+      d = normalizePhoneDigits(d);
       if (autoPrefix91 && d.length === 13 && d.startsWith('910')) d = '91' + d.substring(3);
       if (autoPrefix91 && !isInternational && d.length === 11 && d.startsWith('0')) d = d.substring(1);
 

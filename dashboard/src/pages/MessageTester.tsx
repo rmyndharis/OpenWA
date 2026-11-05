@@ -30,7 +30,7 @@ import {
 import { PageHeader } from '../components/PageHeader';
 import { GroupPicker } from '../components/GroupPicker';
 import { groupLabel, isGatewayRefusal, planGroupSend } from '../utils/groupSelection';
-import { normalizePhoneText } from '../utils/phone';
+import { normalizePhoneDigits } from '../utils/phone';
 import { sendSequentially } from '../utils/sendSequentially';
 import { keepsSameKey } from '../utils/authLifecycle';
 import './MessageTester.css';
@@ -126,12 +126,12 @@ const TERMINAL_BATCH_STATUSES: readonly BatchStatus[] = ['completed', 'cancelled
 // A leading 00 is the international exit code (no number starts with 0): dropped before measuring, as the Number
 // Checker drops it.
 const PHONE_DIGITS_MAX = 15;
-// Whether a recipient field names anything: a digit to look up, or an @ of a chat id. With neither, the number check
-// went out as GET .../contacts/check/, which the gateway routes to the contact read of the id "check".
-const namesRecipient = (text: string): boolean => /[0-9@]/.test(normalizePhoneText(text));
+// Whether a recipient field names anything: a digit to look up once the exit code is dropped, or an @ of a chat id as
+// typed, which is how the send reads it. With neither, the number check went out as GET .../contacts/check/, which the
+// gateway routes to the contact read of the id "check".
+const namesRecipient = (text: string): boolean => text.includes('@') || normalizePhoneDigits(text) !== '';
 const phoneDigits = (text: string): string | null => {
-  let digits = normalizePhoneText(text).replace(/[^0-9]/g, '');
-  if (digits.startsWith('00') && digits.length >= 12) digits = digits.slice(2);
+  const digits = normalizePhoneDigits(text);
   return digits.length > PHONE_DIGITS_MAX ? null : digits;
 };
 
@@ -458,7 +458,7 @@ export function MessageTester() {
         chatIds,
         async chatId => {
           const result = await sendTo(chatId);
-          if (!result.messageId) throw new Error(t('messageTester.sendFailed'));
+          if (typeof result.messageId !== 'string') throw new Error(t('messageTester.sendFailed'));
         },
         {
           delayMs: GROUP_SEND_DELAY_MS,
@@ -646,7 +646,7 @@ export function MessageTester() {
       assertCurrent();
 
       setResponse({
-        success: !!result.messageId,
+        success: typeof result.messageId === 'string',
         messageId: result.messageId,
         timestamp: result.timestamp ? new Date(result.timestamp * 1000).toISOString() : new Date().toISOString(),
       });

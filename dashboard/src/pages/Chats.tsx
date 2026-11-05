@@ -28,6 +28,7 @@ import {
 import { useProfilePicture } from '../hooks/useProfilePicture';
 import { useProfilePictures } from '../hooks/useProfilePictures';
 import { useResolvedPhone, resolvedPhoneQuery, isResolvedPhoneHeld } from '../hooks/useResolvedPhone';
+import { keepsSameKey } from '../utils/authLifecycle';
 import { chatTitle, formatPhoneForDisplay } from '../utils/formatPhone';
 import {
   sessionApi,
@@ -778,9 +779,12 @@ export function Chats() {
   // Synced in a layout effect: a socket frame handled after the list commits but before passive
   // effects flush would otherwise see the previous list, miss the chat and refetch the whole list.
   const chatsRef = useRef(chats);
+  // The session whose rows chatsRef holds: listedSessionRef moves as soon as a list answers, a render before the rows do.
+  const chatsOwnerRef = useRef('');
   const activeChatIdRef = useRef<string | undefined>(undefined);
   useLayoutEffect(() => {
     chatsRef.current = chats;
+    chatsOwnerRef.current = listedSession;
     activeChatIdRef.current = activeChat?.id;
     selectedSessionRef.current = selectedSessionId;
   });
@@ -1344,10 +1348,19 @@ export function Chats() {
 
   // The number check answers a phone id, while a contact that moved to privacy-id addressing keeps its conversation
   // under its @lid. Finds the id the list holds that conversation under: the same phone spelled another way, else
-  // the @lid chat the engine resolves to that phone. The engine's answers share the room header's cache.
+  // the @lid chat the engine resolves to that phone. The engine's answers share the room header's cache. The search
+  // ends, with no further request, once the key or the session changes or the caller no longer wants the answer.
   const findListedChat = useCallback(
-    async (phoneId: string): Promise<string | null> => {
+    async (phoneId: string, isWanted: () => boolean = () => true): Promise<string | null> => {
       const sessionId = selectedSessionRef.current;
+      const sameKey = keepsSameKey();
+      const isCurrent = () =>
+        sameKey() &&
+        selectedSessionRef.current === sessionId &&
+        listedSessionRef.current === sessionId &&
+        chatsOwnerRef.current === sessionId &&
+        isWanted();
+      if (!isCurrent()) return null;
       const spelled = chatsRef.current.find(c => contactKey(c.id) === contactKey(phoneId));
       if (spelled) return spelled.id;
       const phone = phoneId.split('@')[0].replace(/\D/g, '');
@@ -1356,18 +1369,19 @@ export function Chats() {
         .slice(0, LID_CHATS_SEARCHED);
       let lastAskedAt = 0;
       for (let i = 0; i < privacyChats.length; i += LID_LOOKUPS_AT_ONCE) {
+        if (!isCurrent()) return null;
         const batch = privacyChats.slice(i, i + LID_LOOKUPS_AT_ONCE);
         // A group the page already holds answers for goes ahead at once; only one that reaches the gateway waits.
         if (batch.some(c => !isResolvedPhoneHeld(queryClient, sessionId, c.id))) {
           const wait = lastAskedAt + LID_LOOKUP_GAP_MS - Date.now();
           if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
-          if (selectedSessionRef.current !== sessionId) return null;
+          if (!isCurrent()) return null;
           lastAskedAt = Date.now();
         }
         const phones = await Promise.all(
           batch.map(c => queryClient.fetchQuery(resolvedPhoneQuery(sessionId, c.id)).catch(() => null)),
         );
-        if (selectedSessionRef.current !== sessionId) return null;
+        if (!isCurrent()) return null;
         const hit = batch.find((_, j) => phones[j]?.replace(/\D/g, '') === phone);
         if (hit) return hit.id;
       }
@@ -1393,15 +1407,32 @@ export function Chats() {
   // Bumped with every hit, so a hit in the chat already open still re-runs the scroll effect, where
   // every other state it sets is unchanged and React skips the render.
   const [hitSeq, setHitSeq] = useState(0);
+  // The click being handled: a newer hit replaces it, so a hit that waited for the session list can tell it was overtaken.
+  const hitClickRef = useRef<object | null>(null);
+  // Moves whenever another session or chat is chosen. A continuation of a hit that began before can tell it was overtaken,
+  // also when the choice came back to where it began: the ids alone would then look as if nothing had happened.
+  const hitContextRef = useRef(0);
+  useLayoutEffect(() => {
+    hitContextRef.current += 1;
+  }, [selectedSessionId, activeChat?.id]);
+  // A hit still looking up its chat when the page is left has nothing to open it in: ending it also ends its lookup, and
+  // the continuation of a click that waited for the session list says nothing on the page that replaced this one.
+  useEffect(
+    () => () => {
+      pendingHitRef.current = null;
+      hitClickRef.current = null;
+    },
+    [],
+  );
 
   // The listed chat a hit was found in. A stored row keeps the chat id it was written with, which can be another
   // spelling of a listed chat: an API send to the raw `@s.whatsapp.net` form, or to the phone of a contact the list
   // holds under its @lid. The thread read takes those as one chat, and so does this.
   const findHitChat = useCallback(
-    async (chatId: string): Promise<Chat | undefined> => {
+    async (chatId: string, isWanted?: () => boolean): Promise<Chat | undefined> => {
       const listed = chatsRef.current.find(c => c.id === chatId);
       if (listed || !phoneContactId(chatId)) return listed;
-      const id = await findListedChat(chatId).catch(() => null);
+      const id = await findListedChat(chatId, isWanted).catch(() => null);
       return id === null ? undefined : chatsRef.current.find(c => c.id === id);
     },
     [findListedChat],
@@ -1443,6 +1474,14 @@ export function Chats() {
 
   const handleSearchHit = useCallback(
     async (hit: SearchHit) => {
+      // A newer hit, another session or another chat chosen while the session list is read takes over from this click.
+      const click = {};
+      hitClickRef.current = click;
+      // The hit before it is over, wherever its own lookup has got: it must not open a room that this click would then
+      // take for the user's own choice.
+      pendingHitRef.current = null;
+      const contextAtClick = hitContextRef.current;
+      const overtaken = () => hitClickRef.current !== click || hitContextRef.current !== contextAtClick;
       // Search covers stored messages of every session, but the page can only open a ready one, and
       // its list is read on mount. A session missing from it is looked up again, since it may have
       // connected since; one that still is not ready is refused rather than selected with no chats.
@@ -1451,9 +1490,10 @@ export function Chats() {
         try {
           listed = await readSessions();
         } catch (err) {
-          showLoadError('chats.errors.loadSessions', err);
+          if (!overtaken()) showLoadError('chats.errors.loadSessions', err);
           return;
         }
+        if (overtaken()) return;
         if (!listed.some(s => s.id === hit.sessionId && s.status === 'ready')) {
           pendingHitRef.current = null;
           showWarningToast(t('chats.errors.searchHitSessionNotReady'));
@@ -1484,9 +1524,22 @@ export function Chats() {
       }
       if (!listReady) return;
       const openBefore = activeChatIdRef.current;
-      const chat = await findHitChat(hit.chatId);
-      // A newer hit, a session switch, or a chat the user opened while the lookup ran takes over from this one.
-      if (pendingHitRef.current !== pending || activeChatIdRef.current !== openBefore) return;
+      const contextBefore = hitContextRef.current;
+      // The lookup asks the gateway for the phones of privacy-id chats, so it ends, with no further request, as soon as the
+      // answer would be dropped below.
+      const chat = await findHitChat(
+        hit.chatId,
+        () => pendingHitRef.current === pending && hitContextRef.current === contextBefore,
+      );
+      // A newer hit, a session switch, or a chat the user opened while the lookup ran takes over from this one, also when
+      // a room was opened and closed again and the open chat is what it was.
+      if (
+        pendingHitRef.current !== pending ||
+        activeChatIdRef.current !== openBefore ||
+        hitContextRef.current !== contextBefore
+      ) {
+        return;
+      }
       openHitChat(pending, chat);
     },
     [
@@ -1525,8 +1578,18 @@ export function Chats() {
     const resolving = { ...pending, resolving: true };
     pendingHitRef.current = resolving;
     const openBefore = activeChatIdRef.current;
-    void findHitChat(pending.chatId).then(chat => {
-      if (pendingHitRef.current !== resolving || activeChatIdRef.current !== openBefore) return;
+    const contextBefore = hitContextRef.current;
+    void findHitChat(
+      pending.chatId,
+      () => pendingHitRef.current === resolving && hitContextRef.current === contextBefore,
+    ).then(chat => {
+      if (
+        pendingHitRef.current !== resolving ||
+        activeChatIdRef.current !== openBefore ||
+        hitContextRef.current !== contextBefore
+      ) {
+        return;
+      }
       openHitChat(pending, chat);
     });
   }, [chats, loadingChats, chatsFailure, activeChat, selectedSessionId, findHitChat, openHitChat]);
@@ -1625,11 +1688,15 @@ export function Chats() {
   // it is added to the sidebar locally until the first message, or the next list load, settles it.
   // The filter and search are cleared so the opened chat is visible in the list. A chat the panel found
   // through another session (a lookup that answered after a switch) is dropped: opening it here would
-  // send the next message through the wrong account.
+  // send the next message through the wrong account. Until the selected session's own list has committed the rows
+  // are still the previous session's, so the chat opens without being read from or added to them. A lookup that was
+  // pending when the list committed calls the handler of the render it began in: the rows are read from the ref that
+  // is paired with their owner, never from that render's `chats`.
   const handleOpenNewChat = (chat: Chat, sessionId: string) => {
     if (sessionId !== selectedSessionRef.current) return;
-    const existing = chats.find(c => c.id === chat.id);
-    if (!existing) setChats(prev => [chat, ...prev]);
+    const listed = chatsOwnerRef.current === sessionId;
+    const existing = listed ? chatsRef.current.find(c => c.id === chat.id) : undefined;
+    if (listed && !existing) setChats(prev => (prev.some(c => c.id === chat.id) ? prev : [chat, ...prev]));
     setActiveTab('chats');
     setActiveChannel(null);
     setActiveStatusContactId(null);

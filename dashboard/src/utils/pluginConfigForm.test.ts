@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { coerceFieldInput, emptyForField, fillClearedFields } from './pluginConfigForm.ts';
+import { coerceFieldInput, emptyForField, fillClearedFields, seedForField } from './pluginConfigForm.ts';
 import type { PluginConfigField } from '../services/api';
 
 const num: PluginConfigField = { type: 'number' };
@@ -64,4 +64,21 @@ test('fillClearedFields: a cleared field saves its default, or null when it had 
     retries: undefined, // never stored: nothing to clear, so nothing is written
     name: 'bot',
   });
+});
+
+// A field rendered as a select shows a stored null as a blank option, so the form keeps it; every other field reads
+// null as unset and starts from its default or its blank.
+test('seedForField: a stored null stays on a choice field and reads as unset on any other', () => {
+  const choice: PluginConfigField = { type: 'string', enum: ['fast', 'safe'], default: 'safe' };
+  assert.equal(seedForField(choice, { mode: null }, 'mode'), null);
+  assert.equal(seedForField(choice, { mode: 'legacy' }, 'mode'), 'legacy');
+  assert.equal(seedForField(choice, {}, 'mode'), 'safe');
+  assert.equal(seedForField({ type: 'number', default: 5 }, { n: null }, 'n'), 5);
+  assert.equal(seedForField({ type: 'string', default: 'x' }, { s: null }, 's'), 'x');
+  assert.equal(seedForField(str, { s: null }, 's'), '');
+  assert.equal(seedForField({ type: 'boolean' }, { b: null }, 'b'), false);
+  assert.deepEqual(seedForField({ type: 'array', items: str }, { l: null }, 'l'), []);
+  assert.deepEqual(seedForField({ type: 'object', properties: { a: str } }, { o: null }, 'o'), { a: '' });
+  // A boolean renders as a checkbox even when it lists choices.
+  assert.equal(seedForField({ type: 'boolean', enum: [true, false] }, { b: null }, 'b'), true);
 });

@@ -145,7 +145,7 @@ function groupJsonResponse(data: unknown, status = 200): Response {
 }
 
 // How the first text send fails: an HTTP status, a fetch that never gets an answer, or a 201 with no message id.
-type FirstSendFailure = number | 'unreachable' | 'unconfirmed' | 'vetoed';
+type FirstSendFailure = number | 'unreachable' | 'unconfirmed' | 'empty-id' | 'vetoed';
 
 function stubGroupGateway(
   groups: { id: string; name?: string }[],
@@ -173,6 +173,9 @@ function stubGroupGateway(
       if (refuseFirstWith && textSends.length === 1) {
         if (refuseFirstWith === 'unreachable') return Promise.reject(new TypeError('Failed to fetch'));
         if (refuseFirstWith === 'unconfirmed') return Promise.resolve(groupJsonResponse({ timestamp: 1 }, 201));
+        if (refuseFirstWith === 'empty-id') {
+          return Promise.resolve(groupJsonResponse({ messageId: '', timestamp: 1 }, 201));
+        }
         // A plugin that vetoes one chat's send: the gateway answers 400 for that chat alone.
         if (refuseFirstWith === 'vetoed') {
           return Promise.resolve(groupJsonResponse({ message: 'Message sending blocked by plugin' }, 400));
@@ -322,7 +325,7 @@ test('a gateway that does not answer stops the run, and the notice says so', asy
 });
 
 // The page's own "no message id" failure has no HTTP status either, but the gateway did answer.
-test('a send answered without a message id fails that group and the run goes on', async () => {
+test('a send answered without a messageId field fails that group and the run goes on', async () => {
   const gateway = stubGroupGateway(
     [
       { id: 'g1@g.us', name: 'Family' },
@@ -338,6 +341,23 @@ test('a send answered without a message id fails that group and the run goes on'
   assert.deepEqual(gateway.textSends, ['g1@g.us', 'g2@g.us']);
   assert.ok(rtl.screen.getByText(/Failed to send message/, { selector: 'li' }));
   assert.equal(rtl.screen.queryByText(/stopped/) === null, true);
+});
+
+test('an accepted group send with an empty message id counts as sent', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    'empty-id',
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  await rtl.screen.findByText('2/2 sent', {}, { timeout: 8000 });
+  assert.deepEqual(gateway.textSends, ['g1@g.us', 'g2@g.us']);
+  assert.ok(rtl.screen.getByText('Success'));
+  assert.equal(rtl.screen.queryByText('Failed'), null);
 });
 
 test('a 502 from a reverse proxy stops the run, since the gateway behind it is down', async () => {
@@ -1209,6 +1229,7 @@ for (const chatId of ['185290012345678@lid', '628123456789:5@s.whatsapp.net']) {
 // No phone number starts with 0, so `00` in front of one is the international exit code. Kept, it made a registered
 // number look unregistered, and a full-length number written with it read as more than one number.
 for (const [typed, number] of [
+  ['00376 612 345', '376612345'],
   ['00 49 151 2345 6789', '4915123456789'],
   ['00 123 456 789 012 345', '123456789012345'],
 ] as const) {
@@ -1231,28 +1252,32 @@ for (const [typed, number] of [
 
 // With no digit and no @ there is no number to check: the lookup went out as GET .../contacts/check/, which the gateway
 // routes to the contact read with the id "check", and the tester showed that answer instead of asking for a number.
-for (const field of ['recipient', 'forward target'] as const) {
-  test(`a ${field} with no digit and no @ holds Send`, async () => {
-    const { checked } = stubPersonalSend();
-    const { container, client } = renderTesterForKey();
-    try {
-      await rtl.screen.findByRole('option', { name: /Main/ });
-      type(container, '#mt-13', field === 'recipient' ? ' abc ' : '15550000001');
-      if (field === 'recipient') {
-        type(container, '#mt-2', 'hello');
-      } else {
-        rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
-        type(container, '#mt-9', 'abc');
-        type(container, '#mt-10', 'original-message');
+// The 00 exit code is no digit of a number, so a field holding only that names nothing either, however it is spaced.
+// A full-width @ (U+FF20) is no chat id: the send reads the text as typed and finds no number in it.
+for (const typed of [' abc ', '00', '+00', '0 0', String.fromCharCode(0xff20)]) {
+  for (const field of ['recipient', 'forward target'] as const) {
+    test(`a ${field} written as ${JSON.stringify(typed)} names no number and holds Send`, async () => {
+      const { checked } = stubPersonalSend();
+      const { container, client } = renderTesterForKey();
+      try {
+        await rtl.screen.findByRole('option', { name: /Main/ });
+        type(container, '#mt-13', field === 'recipient' ? typed : '15550000001');
+        if (field === 'recipient') {
+          type(container, '#mt-2', 'hello');
+        } else {
+          rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+          type(container, '#mt-9', typed);
+          type(container, '#mt-10', 'original-message');
+        }
+        assert.equal(sendButton().disabled, true, 'Send was offered for a field with no number in it');
+        rtl.fireEvent.click(sendButton());
+        assert.deepEqual(checked, []);
+      } finally {
+        client.clear();
+        sessionStorage.removeItem('openwa_api_key');
       }
-      assert.equal(sendButton().disabled, true, 'Send was offered for a field with no number in it');
-      rtl.fireEvent.click(sendButton());
-      assert.deepEqual(checked, []);
-    } finally {
-      client.clear();
-      sessionStorage.removeItem('openwa_api_key');
-    }
-  });
+    });
+  }
 }
 
 // The recipient is only the default chat a forward is taken from. With From Chat ID filled it goes unused, yet Send

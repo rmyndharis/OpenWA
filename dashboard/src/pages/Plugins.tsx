@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next';
 import { localizePlugin } from '../utils/localizePlugin';
 import { configUiSafeConfig, missingRequiredConfig, sparseSessionOverride } from '../utils/pluginConfigRules';
-import { coerceFieldInput, emptyForField, fillClearedFields } from '../utils/pluginConfigForm';
+import { coerceFieldInput, emptyForField, fillClearedFields, seedForField } from '../utils/pluginConfigForm';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Puzzle,
@@ -103,7 +103,7 @@ function ConfigField({
   }
 
   if (field.enum && field.enum.length > 0) {
-    const options = field.enum;
+    const options = field.enum.includes(value) ? field.enum : [value, ...field.enum];
     return (
       <div className="form-group">
         {labelEl}
@@ -111,11 +111,11 @@ function ConfigField({
           id={fieldId}
           value={String(value ?? '')}
           // Restore the option's original type (e.g. a number/boolean enum), not the raw string value.
-          onChange={e => onChange(options.find(o => String(o) === e.target.value) ?? e.target.value)}
+          onChange={e => onChange(options[e.target.selectedIndex])}
         >
-          {options.map(opt => (
-            <option key={String(opt)} value={String(opt)}>
-              {String(opt)}
+          {options.map((opt, index) => (
+            <option key={index} value={String(opt ?? '')}>
+              {String(opt ?? '')}
             </option>
           ))}
         </select>
@@ -440,7 +440,7 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
     const ov = plugin.sessionConfig?.[selSession] ?? {};
     const seeded: Record<string, unknown> = {};
     for (const [key, field] of Object.entries(props)) {
-      seeded[key] = key in ov ? ov[key] : (plugin.config[key] ?? emptyForField(field));
+      seeded[key] = key in ov ? ov[key] : seedForField(field, plugin.config, key);
     }
     setOverrideCfg(seeded);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -482,7 +482,7 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
       if (props && selSessionRef.current === sid) {
         setOverrideCfg(
           Object.fromEntries(
-            Object.entries(props).map(([key, field]) => [key, plugin.config[key] ?? emptyForField(field)]),
+            Object.entries(props).map(([key, field]) => [key, seedForField(field, plugin.config, key)]),
           ),
         );
       }
@@ -731,7 +731,7 @@ export default function Plugins() {
     if (plugin.configSchema?.properties) {
       const initial: Record<string, unknown> = {};
       for (const [key, field] of Object.entries(plugin.configSchema.properties)) {
-        initial[key] = plugin.config[key] ?? emptyForField(field);
+        initial[key] = seedForField(field, plugin.config, key);
       }
       setSchemaConfig(initial);
     }

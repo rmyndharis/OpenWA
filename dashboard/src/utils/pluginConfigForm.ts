@@ -25,6 +25,16 @@ export function emptyForField(field: PluginConfigField): unknown {
   }
 }
 
+/**
+ * The form value of a stored config key, or the field's blank when it holds none. A field rendered as a select (a
+ * choice list on any type but boolean) keeps a stored null, which the select shows as a blank option; every other
+ * field reads null as unset, so its default shows.
+ */
+export function seedForField(field: PluginConfigField, config: Record<string, unknown>, key: string): unknown {
+  const isSelect = field.type !== 'boolean' && !!field.enum?.length;
+  return isSelect && key in config ? config[key] : (config[key] ?? emptyForField(field));
+}
+
 /** Coerce a text-input value to the field's type. A cleared number becomes undefined (so the key is
  *  omitted) rather than '' — the inverse of {@link emptyForField} for number fields. A cleared secret
  *  does too: the gateway keeps a stored secret for an empty string, so the save sends null for it

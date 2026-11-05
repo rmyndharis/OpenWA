@@ -7,7 +7,7 @@ import { formatPhoneForDisplay, isolateNumber } from '../../utils/formatPhone';
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import ChatAvatar from './ChatAvatar';
-import { normalizePhoneText, phoneQueryDigits } from '../../utils/phone';
+import { normalizePhoneDigits, normalizePhoneText, phoneQueryDigits } from '../../utils/phone';
 import { isComposingKey } from '../../utils/composition';
 
 type Mode = 'chat' | 'group';
@@ -26,9 +26,10 @@ interface NewChatPanelProps {
   onOpenChat: (chat: Chat, sessionId: string) => void;
   /**
    * The id the chat list holds a phone-based id's conversation under when that is another id of the same contact
-   * (one that moved to privacy-id addressing keeps its chat under its @lid), or null when the list has none.
+   * (one that moved to privacy-id addressing keeps its chat under its @lid), or null when the list has none. The
+   * search ends, with no further request, once `isWanted` answers false.
    */
-  findListedChat?: (phoneId: string) => Promise<string | null>;
+  findListedChat?: (phoneId: string, isWanted?: () => boolean) => Promise<string | null>;
   onClose: () => void;
 }
 
@@ -44,8 +45,8 @@ const toInternationalDigits = (input: string): string | null => {
   const trimmed = input.trim();
   if (!trimmed || /[a-z]/i.test(trimmed)) return null;
   let digits = normalizePhoneText(trimmed).replace(/\D/g, '');
-  if (digits.startsWith('00')) digits = digits.slice(2);
-  else if (!trimmed.startsWith('+') && digits.startsWith('0')) return null;
+  if (!digits.startsWith('00') && !trimmed.startsWith('+') && digits.startsWith('0')) return null;
+  digits = normalizePhoneDigits(digits);
   return digits.length >= 7 && digits.length <= 15 ? digits : null;
 };
 
@@ -140,7 +141,7 @@ function NewChatPanel({ sessionId, onOpenChat, findListedChat, onClose }: NewCha
   const resolveNumber = async (
     digits: string,
     label: string,
-    listedAs?: (phoneId: string) => Promise<string | null>,
+    listedAs?: (phoneId: string, isWanted?: () => boolean) => Promise<string | null>,
   ): Promise<string | null> => {
     setChecking(true);
     try {
@@ -152,7 +153,7 @@ function NewChatPanel({ sessionId, onOpenChat, findListedChat, onClose }: NewCha
       }
       // A conversation the list keeps under another id of the same contact is the one to open. Failing to
       // find it is no reason to fail the number, which opens a new chat as it would for any other.
-      const listed = listedAs ? await listedAs(res.whatsappId).catch(() => null) : null;
+      const listed = listedAs ? await listedAs(res.whatsappId, () => openRef.current).catch(() => null) : null;
       return listed ?? res.whatsappId;
     } catch (err) {
       if (openRef.current) {
@@ -178,7 +179,7 @@ function NewChatPanel({ sessionId, onOpenChat, findListedChat, onClose }: NewCha
   const handleOpenContact = async (contact: Contact) => {
     if (openingContact !== null || checking) return;
     setOpeningContact(contact.id);
-    const listed = findListedChat ? await findListedChat(contact.id).catch(() => null) : null;
+    const listed = findListedChat ? await findListedChat(contact.id, () => openRef.current).catch(() => null) : null;
     if (!openRef.current) return;
     setOpeningContact(null);
     onOpenChat(draftChat(listed ?? contact.id, contact.name || '', 'individual'), sessionId);

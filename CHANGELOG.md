@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ignore a Baileys edit, delete, reaction or RSVP that carries a lid and the sender's own number when it names a message of another chat or author.
 - Share one lid table lookup between the events of a chat when the gateway expands it for chat-restricted delivery (Redis fan-out on, or a chat-restricted socket connected to the node), and reuse a lookup that found a mapping for 5 seconds.
 - Print no part of an `API_MASTER_KEY` in the startup banner: the first boot names the key file, and later boots show no fingerprint of a key seeded from it by this release or still configured.
+- Hold Create and Save in the webhook form for a URL with whitespace, `<`, `>` or an underscore in the host name, which the gateway refuses, and show the standard URL hint.
+- Drop the 00 exit code from international numbers of any length in the Message Tester, Number Checker and bulk recipients.
+- Stop the new-chat privacy-id lookup when the API key is removed or replaced, the selected session changes or the panel is closed.
+- Keep a search result that waits for the session list from overriding a session, chat or newer result chosen meanwhile, or from raising a notice after the page is left.
+- End a search result's privacy-id phone lookups when the page is left or another session, chat or result is chosen.
+- Report a Message Tester send that the gateway accepted with an empty message id as sent instead of failed.
+- Show a stored plugin choice that the field no longer lists as the selected option, and a null choice as a blank one, so the form saves what it shows.
+- Use the theme text and card colors for chart legends and tooltips so they stay readable in the light and dark themes.
+- Keep the Infrastructure Save Configuration button clear of the notification stack.
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - List a key seeded from `API_MASTER_KEY` as `(master key)` instead of its first 12 characters; keys seeded by earlier releases keep their stored prefix until replaced.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.

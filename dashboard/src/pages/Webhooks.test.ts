@@ -353,6 +353,9 @@ for (const [url, hint] of [
   ['example.com/hook', 'Use a full http:// or https:// address, like https://example.com/webhook.'],
   ['localhost:3000/hook', 'Use a full http:// or https:// address, like https://example.com/webhook.'],
   ['ftp://example.com/hook', 'Use a full http:// or https:// address, like https://example.com/webhook.'],
+  ['http://n8n_main:5678/webhook/x', 'Use a full http:// or https:// address, like https://example.com/webhook.'],
+  ['https://hooks.example.com/a b', 'Use a full http:// or https:// address, like https://example.com/webhook.'],
+  ['https://hooks.example.com/?x=<value>', 'Use a full http:// or https:// address, like https://example.com/webhook.'],
   [LONG_URL, `Limited to 2048 characters (${LONG_URL.length} now).`],
 ] as const) {
   test(`Create holds a URL the gateway refuses, and says why (${url.slice(0, 24)})`, async () => {
@@ -391,6 +394,25 @@ async function openEditModal(): Promise<HTMLButtonElement> {
   rtl.fireEvent.click(await rtl.screen.findByTitle('Edit'));
   return rtl.screen.getByRole<HTMLButtonElement>('button', { name: 'Save Changes' });
 }
+
+for (const url of ['http://n8n_main:5678/webhook/x', 'https://hooks.example.com/a b', 'https://example.test/?x=>']) {
+  test(`Save holds a URL the gateway refuses (${url})`, async () => {
+    const save = await openEditModal();
+    rtl.fireEvent.change(rtl.screen.getByLabelText('URL'), { target: { value: url } });
+    assert.equal(save.disabled, true);
+    rtl.screen.getByText('Use a full http:// or https:// address, like https://example.com/webhook.');
+  });
+}
+
+test('a webhook URL with underscores in its path and encoded spaces is sent unchanged', async () => {
+  const url = 'https://example.test/path_name?q=some%20text&other=a_b';
+  const save = await openEditModal();
+  rtl.fireEvent.change(rtl.screen.getByLabelText('URL'), { target: { value: url } });
+  assert.equal(save.disabled, false);
+  rtl.fireEvent.click(save);
+  await rtl.waitFor(() => assert.equal(updateCalls, 1));
+  assert.equal(updateBody?.url, url);
+});
 
 test('Save stays disabled with a hint while no event is selected', async () => {
   const { screen, fireEvent } = rtl;
