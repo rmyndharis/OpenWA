@@ -909,13 +909,6 @@ export class SendPacingService {
 const DAY_MS = 86_400_000;
 
 /**
- * Both spellings of a user id. Stored rows carry either dialect — inbound rows are neutralized to
- * `@c.us`, outbound rows keep the caller's raw form — so a byte-exact history probe misreads a
- * known contact addressed the other way as cold and over-draws the budget. Non-user ids (groups,
- * lids, …) pass through unchanged: a lid's phone, and a phone's lids, are not derivable from the id and
- * come from the lid table (see storedForms).
- */
-/**
  * SQL for both user-id spellings of `<alias>."chatId"`, for use as an `IN (…)` list. The same idea
  * as {@link dialectVariants}, expressed portably: REPLACE exists on SQLite and Postgres alike, and
  * for a non-user id (a group, a lid) both branches collapse to the raw value.
@@ -932,6 +925,13 @@ function coldChatKey(chatId: string): string {
   return chatId.replace('@s.whatsapp.net', '@c.us');
 }
 
+/**
+ * Both spellings of a user id. Stored rows carry either dialect — inbound rows are neutralized to
+ * `@c.us`, outbound rows keep the caller's raw form — so a byte-exact history probe misreads a
+ * known contact addressed the other way as cold and over-draws the budget. Non-user ids (groups,
+ * lids, …) pass through unchanged: a lid's phone, and a phone's lids, are not derivable from the id and
+ * come from the lid table (see storedForms).
+ */
 function dialectVariants(chatId: string): string[] {
   const lower = chatId.toLowerCase();
   if (lower.endsWith('@c.us')) {
