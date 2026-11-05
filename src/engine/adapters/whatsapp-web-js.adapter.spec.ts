@@ -239,8 +239,7 @@ describe('WhatsAppWebJsAdapter initialize() failure reason (#1081)', () => {
 
 // A WhatsApp Web page navigation during the FIRST inject rejects Client.initialize() before the
 // library's own framenavigated re-inject handler exists (it is added after the first inject() resolves), so
-// nothing upstream
-// retries it — and the adapter's onError channel is terminal. One in-adapter retry converts that
+// nothing upstream retries it — and the adapter's onError channel is terminal. One in-adapter retry converts that
 // one-navigation death into a normal slow start (#1081).
 describe('WhatsAppWebJsAdapter initialize() retry on a navigation-killed first inject (#1081)', () => {
   const newAdapter = (): WhatsAppWebJsAdapter =>
