@@ -647,3 +647,49 @@ describe('a logout that overlaps the phone writes of a session', () => {
     },
   );
 });
+
+// The read of a disconnect is checked against the writes issued meanwhile where it is made, and acted on a few ticks later. An
+// unlink recorded in between (the report of a retired engine whose own read failed) clears the binding the row still shows.
+describe('a disconnect read that is used after an unlink was recorded', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it.each([false, true])(
+    'does not bring the number back into the reconnect (results delivered together: %s)',
+    async together => {
+      const { f, oldRead } = await replacement();
+      const ready = holdUpdates(f, writesPhone(BOUND), true);
+      try {
+        f.engines[1].getStatus.mockReturnValue(EngineStatus.READY);
+        f.engines[1].getPhoneNumber = jest.fn(() => BOUND);
+        f.callbacksOf(1).onStateChanged?.(EngineStatus.READY);
+        f.callbacksOf(1).onReady?.(BOUND, 'Bound');
+        await tick();
+        let answer!: (row: Session) => void;
+        f.repository.findOne.mockImplementationOnce(() => new Promise<Session>(resolve => (answer = resolve)));
+        disconnect(f, 1);
+        await ready.release();
+        await until(() => answer !== undefined, 'the read after the answer of the READY row');
+        const row = { ...f.stored };
+
+        if (together) {
+          // Both results reach their callers in the same turn: the unlink is recorded between the check of the read and
+          // the continuation that arms the reconnect with its row.
+          answer(row);
+          oldRead.fail(new Error('the earlier session read failed'));
+        } else {
+          oldRead.fail(new Error('the earlier session read failed'));
+          await f.handled.mock.results[1].value;
+          answer(row);
+        }
+        await f.settled();
+        expect(f.recordedUnlinks()).toHaveLength(1);
+
+        await scan(f, OTHER);
+        expect(outcome(f, 2)).toEqual({ ...ACCEPTED, phone: OTHER });
+      } finally {
+        await ready.release();
+        await f.lifecycle.shutdown();
+      }
+    },
+  );
+});

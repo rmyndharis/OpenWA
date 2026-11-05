@@ -1170,6 +1170,8 @@ export class SessionEngineLifecycle {
       return;
     }
 
+    // An unlink recorded after this point clears the binding the read below may still return, whenever the row is used.
+    const bindingEpoch = this.bindingEpochs.get(id) ?? 0;
     let session: Session | null;
     try {
       const read = (): Promise<Session | null> => this.sessionRepository.findOne({ where: { id } });
@@ -1194,6 +1196,9 @@ export class SessionEngineLifecycle {
     }
     // A session deleted just before this ran has nothing left to reconnect; skip it.
     if (!session) return;
+    // The check that no phone write overlapped the read was made where it ended; the report of a retired engine can
+    // record its unlink between that check and this continuation, and nothing here awaits until the reconnect is armed.
+    if ((this.bindingEpochs.get(id) ?? 0) !== bindingEpoch) session = { ...session, phone: null };
 
     // Post-await fence: the findOne yield above is the window in which a stop()/reconnect can
     // replace the engine for this id. Only a STILL-live owner may publish disconnect side effects

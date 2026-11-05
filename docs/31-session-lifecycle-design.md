@@ -130,7 +130,8 @@ issued while it runs (`session-phone-writes.ts`). A write that is not answered h
 a read waits for it, for five seconds at most. A READY writes its status and times at once and only its
 number joins this order, so a stop or a failure that follows it is not overwritten by a write that was
 waiting. The logout issues its clear in the step that removes its engine from the registry, before a start
-can find the registry empty.
+can find the registry empty. Both readers also compare the binding epoch they took before reading with the
+one at the moment they use the row, since an unlink recorded in between clears a binding the row still shows.
 **Pinned by:** `src/modules/takeover/session-takeover.service.spec.ts` +
 `session-ownership.service.spec.ts` + `session-ownership-status-fence.spec.ts` +
 `session-failed-write-ownership-fence.spec.ts` for the FAILED writers outside the wiring + the real-database
