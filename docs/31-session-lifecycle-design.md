@@ -128,7 +128,7 @@ order they were issued, and a row read that acts on the session's phone (the dis
 second read of a start) must not return the binding they replace: it starts once the writes this process issued
 have been answered and is repeated when another is issued while it runs (`session-phone-writes.ts`). A write
 that is not answered holds up the ones behind it for five seconds at most, and a read that finds them
-unanswered for that long fails like any failed read. A READY writes its status and times at once and only its
+unanswered for that long fails: the disconnect handler reads again shortly, and a start fails with it. A READY writes its status and times at once and only its
 number and push name join this order, so a stop or a failure that follows it is not overwritten by a write
 that was waiting; the synced push name joins it too, so the empty name of the READY row cannot land after it.
 The logout issues its clear in the step that removes its engine from the registry, before a start can find

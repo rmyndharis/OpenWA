@@ -17,7 +17,8 @@ const MAX_READ_ATTEMPTS = 3;
  *
  * A write that is not answered holds up the ones behind it for {@link PHONE_WRITE_WAIT_MS} at most, and the order is then
  * best effort. A read that finds the writes unanswered for that long, counted over the whole call, or still being issued
- * after its attempts, rejects: its caller treats that as any failed read.
+ * after its attempts, rejects: the disconnect handler reads again shortly, as after any failed read, and a start fails
+ * with it (a failed read of its own kind, a dropped connection, is retried once; this rejection is not).
  */
 export class PhoneWrites {
   /** Settles once every write issued for a session so far has been answered, or has held things up for the limit. */
