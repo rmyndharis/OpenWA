@@ -68,13 +68,18 @@ describe('plugin storage directory permissions', () => {
     fs.chmodSync(registryDir, mode);
     fs.chmodSync(storageDir, mode);
 
+    // Some hosts ignore special bits in chmod (macOS drops setgid in tmpdir); whatever the
+    // platform actually stored is what the tightening must keep.
+    const platformSpecial = (fs.statSync(registryDir).mode | fs.statSync(storageDir).mode) & 0o7000;
+    const want = 0o700 | (expected & platformSpecial);
+
     writeRegistry();
     service.createPluginStorage('relay');
 
     expect({
       registry: fs.statSync(registryDir).mode & 0o7777,
       storage: fs.statSync(storageDir).mode & 0o7777,
-    }).toEqual({ registry: expected, storage: expected });
+    }).toEqual({ registry: want, storage: want });
   });
 
   (process.platform === 'win32' ? it.skip : it)('preserves an owner-readonly registry directory', () => {
