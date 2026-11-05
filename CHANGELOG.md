@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report `delivered` and then `read` through `message.ack` for a Baileys group message once every member has received or read it, instead of leaving it at `sent`; a status post still stays at `sent`.
 - List a built-in Redis, MinIO or PostgreSQL under `removal.errors` instead of `removal.stopped` when a restart could not ask Docker for its container.
 - Keep a working directory `.env` out of the e2e and unit boots, which read the environment their harness sets; a `.env` that cannot be read still stops the boot, and the error names the file.
+- Stop the boot, naming the file, when `data/.env.generated` exists but cannot be read (a directory where a bind mount found no file, or a file the app user cannot open), instead of starting on the defaults without the database and storage settings saved there.
 - Make the forwarded-message spec wait for the ack to be stored instead of a fixed pause, so it no longer fails intermittently on the PostgreSQL lane.
 - Make the dashboard restart-modal focus spec wait for the dialog to take focus and for the page to restore it instead of reading both at once, so it no longer fails intermittently.
 

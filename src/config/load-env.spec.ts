@@ -83,6 +83,19 @@ describe('loadEnvironment', () => {
     expect(process.env.REDIS_HOST).toBeUndefined();
   });
 
+  // The saved configuration is read by the same loader and fails the same way: a single-file bind mount of a host file
+  // that does not exist leaves a directory at this path, and skipping it would boot on the defaults, with another database.
+  it('fails the load, naming the file, when data/.env.generated is a directory', () => {
+    const dir = makeTempCwd({ '.env': 'REDIS_HOST=redis.internal\n' });
+    fs.mkdirSync(path.join(dir, 'data', '.env.generated'), { recursive: true });
+    delete process.env.REDIS_HOST;
+    delete process.env.DATABASE_TYPE;
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(runLoader).toThrow(path.join(dir, 'data', '.env.generated'));
+    expect(process.env.DATABASE_TYPE).toBeUndefined();
+  });
+
   // Root bypasses permission bits and Windows has no read bit to clear, so the refusal is unprovable on either.
   const readCanBeDenied = process.getuid?.() !== 0 && process.platform !== 'win32';
   (readCanBeDenied ? it : it.skip)('fails the load, naming the file, when .env has no read permission', () => {
