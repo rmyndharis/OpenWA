@@ -538,7 +538,9 @@ There is **no custom exception base class and no global exception filter**. Hand
 built-in HTTP exceptions and NestJS's own `BaseExceptionFilter` renders them, so responses carry the
 framework default shape `{ statusCode, message, error? }`. The `error` field is optional: DTO validation
 with detail disabled (the production default) returns `{ statusCode: 400, message: "Bad Request" }`
-without it. The `ErrorResponse` schema in `openapi.json` lists the other bodies that omit it.
+without it. The `ErrorResponse` schema in `openapi.json` lists the other bodies that omit it. A handler
+that throws a built-in exception with an object body sends that object unchanged: the readiness probe's
+`503` is `{ status, details }`, with no `statusCode` or `message`.
 
 ```typescript
 throw new BadRequestException('Session is not started');
