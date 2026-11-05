@@ -1409,6 +1409,11 @@ export function Chats() {
   const [hitSeq, setHitSeq] = useState(0);
   // The click being handled: a newer hit replaces it, so a hit that waited for the session list can tell it was overtaken.
   const hitClickRef = useRef<object | null>(null);
+  // Another session or chat chosen while a click waits ends the click, also when the choice later comes back to where it
+  // began: the values alone would then look as if nothing had happened.
+  useLayoutEffect(() => {
+    hitClickRef.current = null;
+  }, [selectedSessionId, activeChat?.id]);
 
   // The listed chat a hit was found in. A stored row keeps the chat id it was written with, which can be another
   // spelling of a listed chat: an API send to the raw `@s.whatsapp.net` form, or to the phone of a contact the list
@@ -1462,6 +1467,9 @@ export function Chats() {
       // A newer hit, another session or another chat chosen while the session list is read takes over from this click.
       const click = {};
       hitClickRef.current = click;
+      // The hit before it is over, wherever its own lookup has got: it must not open a room that this click would then
+      // take for the user's own choice.
+      pendingHitRef.current = null;
       const openAtClick = activeChatIdRef.current;
       const overtaken = () =>
         hitClickRef.current !== click ||
