@@ -79,7 +79,7 @@ describe('loadEnvironment', () => {
     delete process.env.REDIS_HOST;
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
 
-    expect(runLoader).toThrow(path.join(dir, '.env'));
+    expect(runLoader).toThrow(`Cannot read ${path.join(dir, '.env')}`);
     expect(process.env.REDIS_HOST).toBeUndefined();
   });
 
@@ -90,7 +90,7 @@ describe('loadEnvironment', () => {
     fs.mkdirSync(path.join(dir, 'data', '.env.generated'), { recursive: true });
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
 
-    expect(runLoader).toThrow(path.join(dir, 'data', '.env.generated'));
+    expect(runLoader).toThrow(`Cannot read ${path.join(dir, 'data', '.env.generated')}`);
   });
 
   // Root bypasses permission bits and Windows has no read bit to clear, so the refusal is unprovable on either.

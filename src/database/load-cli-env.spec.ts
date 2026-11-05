@@ -58,7 +58,25 @@ describe('loadCliEnv (migration CLI env precedence)', () => {
     const file = path.join(dir, ...parts);
     fs.mkdirSync(file, { recursive: true });
 
-    expect(() => loadCliEnv(dir)).toThrow(file);
+    expect(() => loadCliEnv(dir)).toThrow(`Cannot read ${file}`);
+  });
+
+  // Root bypasses permission bits and Windows has no read bit to clear, so a refused read is unprovable on either. This
+  // loader, unlike the app's, does not tighten the file first, so the refusal can be provoked here.
+  const readCanBeDenied = process.getuid?.() !== 0 && process.platform !== 'win32';
+  (readCanBeDenied ? it.each : it.skip.each)([
+    ['.env', ['.env']],
+    ['data/.env.generated', ['data', '.env.generated']],
+  ])('fails, naming the file, when %s has no read permission', (_name, parts) => {
+    const file = path.join(dir, ...parts);
+    fs.writeFileSync(file, 'DATABASE_TYPE=postgres\n');
+    fs.chmodSync(file, 0o000);
+
+    try {
+      expect(() => loadCliEnv(dir)).toThrow(`Cannot read ${file}`);
+    } finally {
+      fs.chmodSync(file, 0o600);
+    }
   });
 
   // dotenv writes its "injected env" banner to stdout up to dotenv 17 and to stderr (console.error) from 18,
