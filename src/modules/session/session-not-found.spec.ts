@@ -2,7 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { Session } from './entities/session.entity';
-import { SessionEngineControls } from './session-engine-controls';
+import { SessionEngineControls, StopMarks } from './session-engine-controls';
 import { SessionService } from './session.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 
@@ -37,7 +37,7 @@ describe('a request for a session id no row has', () => {
     );
     controls = new SessionEngineControls({
       sessionRepository: ds.getRepository(Session),
-      stoppingSessions: new Map(),
+      stoppingSessions: new StopMarks(),
     } as never);
   });
 

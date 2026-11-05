@@ -47,10 +47,11 @@ function fixture({ maxConcurrent = 0, id = ID }: { maxConcurrent?: number; id?: 
     // Another session holds the only slot when the cap is 1.
     startSlotHolders: jest.fn(() => new Set(['another-session'])),
     isEngineActive: jest.fn(() => false),
-    markStopping: jest.fn((markedId: string) => {
-      marks.add(markedId);
-      return marks.stamp(markedId);
+    markStopping: jest.fn((markedId: string) => marks.hold(markedId)),
+    settleStopping: jest.fn((markedId: string, stamp?: number) => {
+      if (stamp !== undefined) marks.settle(markedId, stamp);
     }),
+    clearFinishedStops: jest.fn((markedId: string) => marks.dropFinished(markedId)),
     clearStopping: jest.fn((markedId: string, stamp?: number) => {
       if (stamp === undefined) marks.delete(markedId);
       else marks.deleteStamped(markedId, stamp);
@@ -368,6 +369,51 @@ describe('a stop that is still checking ownership keeps its mark when a later op
   });
 });
 
+describe('the marks of stops and deletes that are still in flight or have finished', () => {
+  it('keep a stop that is still checking ownership guarded however many later operations fail first', async () => {
+    const f = fixture();
+    const checks = Array.from({ length: 12 }, () => deferred<boolean>());
+    for (const check of checks) f.ownership.isHeldByOtherNode.mockImplementationOnce(() => check.promise);
+    const stops = checks.map(() => f.service.stop(ID).catch((error: unknown) => error));
+    await turn();
+
+    // Every later stop fails its own ownership read while the first one is still waiting for its answer.
+    for (const check of checks.slice(1)) check.reject(dropped());
+    for (const stop of stops.slice(1)) expect(await stop).toBeInstanceOf(ServiceUnavailableException);
+
+    expect(f.marks.has(ID)).toBe(true);
+    checks[0].resolve(false);
+    await stops[0];
+  });
+
+  it('are reclaimed by a later stop that finds the session gone, while an operation in flight keeps its own', async () => {
+    const f = fixture();
+    f.ownership.isHeldByOtherNode.mockResolvedValueOnce(true);
+    await expect(f.service.stop(ID)).rejects.toBeInstanceOf(ConflictException); // a live peer holds it: the mark stays
+    expect(f.marks.has(ID)).toBe(true);
+
+    f.lifecycle.stop.mockRejectedValueOnce(new NotFoundException(`Session with id '${ID}' not found`));
+    await expect(f.service.stop(ID)).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(f.marks.has(ID)).toBe(false);
+  });
+
+  it('are not reclaimed from an operation still in flight when a later stop finds the session gone', async () => {
+    const f = fixture();
+    const olderCheck = deferred<boolean>();
+    f.ownership.isHeldByOtherNode.mockImplementationOnce(() => olderCheck.promise);
+    const older = f.service.stop(ID);
+    await turn();
+
+    f.lifecycle.stop.mockRejectedValueOnce(new NotFoundException(`Session with id '${ID}' not found`));
+    await expect(f.service.stop(ID)).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(f.marks.has(ID)).toBe(true); // the older stop has not acted yet
+    olderCheck.resolve(false);
+    await older;
+  });
+});
+
 describe('the stop marks of a session', () => {
   it('stay while any operation that set one still needs it, whichever of them drops its own first', () => {
     const marks = new StopMarks();
@@ -409,6 +455,30 @@ describe('the stop marks of a session', () => {
     expect(marks.markedSince(ID, completedStop)).toBe(false);
   });
 
+  it('never evict the mark of an operation in flight, however many marks finish around it', () => {
+    const marks = new StopMarks();
+    const held = Array.from({ length: 12 }, () => marks.hold(ID));
+    for (let i = 0; i < 40; i++) marks.add(ID); // stops that finished
+
+    for (const stamp of held.slice(1)) expect(marks.deleteStamped(ID, stamp)).toBe(true); // all but the first fail
+    expect(marks.deleteStamped(ID, held[0])).toBe(true); // the first one is still there to drop
+  });
+
+  it('drop the marks of finished operations and keep the ones in flight', () => {
+    const marks = new StopMarks();
+    marks.add(ID); // a stop that finished
+    const running = marks.hold(ID);
+    const done = marks.hold(ID);
+    marks.settle(ID, done);
+
+    marks.dropFinished(ID);
+
+    expect(marks.has(ID)).toBe(true);
+    expect(marks.stamp(ID)).toBe(running);
+    marks.deleteStamped(ID, running);
+    expect(marks.has(ID)).toBe(false);
+  });
+
   it('keep only the newest few stamps of a session that is stopped again and again', () => {
     const marks = new StopMarks();
     marks.add(ID);
@@ -448,6 +518,24 @@ describe('the stop mark of the lifecycle', () => {
     lifecycle.clearStopping(ID);
 
     expect(marksOf(lifecycle).has(ID)).toBe(false);
+  });
+
+  it('stop() of a session with no row drops the marks of finished operations and keeps those in flight', async () => {
+    const marks = new StopMarks();
+    const controls = new SessionEngineControls({
+      sessionRepository: { findOne: jest.fn().mockResolvedValue(null) },
+      stoppingSessions: marks,
+    } as never);
+    marks.add(ID); // an earlier stop that finished
+    const running = marks.hold(ID); // another operation still in flight
+    const own = marks.hold(ID);
+
+    await expect(controls.stop(ID, { mark: own })).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(marks.has(ID)).toBe(true);
+    expect(marks.stamp(ID)).toBe(running);
+    marks.deleteStamped(ID, running);
+    expect(marks.has(ID)).toBe(false);
   });
 
   it.each([

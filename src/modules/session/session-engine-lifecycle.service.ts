@@ -575,8 +575,17 @@ export class SessionEngineLifecycle {
    * harmless and is cleared by the next start(), which is what the mark is designed for.
    */
   markStopping(id: string): number {
-    this.stoppingSessions.add(id);
-    return this.stoppingSessions.stamp(id) as number;
+    return this.stoppingSessions.hold(id);
+  }
+
+  /** The operation that held the mark markStopping() returned is done: the mark stays as finished state. */
+  settleStopping(id: string, stamp: number | undefined): void {
+    if (stamp !== undefined) this.stoppingSessions.settle(id, stamp);
+  }
+
+  /** Drop the marks of operations that are done on a session with no row; marks of operations in flight stay. */
+  clearFinishedStops(id: string): void {
+    this.stoppingSessions.dropFinished(id);
   }
 
   /**

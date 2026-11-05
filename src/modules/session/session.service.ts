@@ -715,9 +715,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // adopt and restart the session the operator was deleting.
       if (claimed) await this.releaseAfterTeardown(id, ownsClaim);
       this.discardStopMarkForMissingSession(id, request, error);
+      this.engineLifecycle.settleStopping(id, request.mark);
       throw error;
     }
     await this.leaveDelete(id, request, ownsClaim);
+    this.engineLifecycle.settleStopping(id, request.mark);
   }
 
   /**
@@ -865,6 +867,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   private discardStopMarkForMissingSession(id: string, request: StopRequest, error: unknown): void {
     if (!(error instanceof NotFoundException)) return;
     this.dropStopMark(id, request);
+    this.engineLifecycle.clearFinishedStops(id);
   }
 
   /**
@@ -1124,6 +1127,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       throw error;
     } finally {
       this.endStop(id, request);
+      this.engineLifecycle.settleStopping(id, request.mark);
     }
     // Handed back on the way out so a peer can pick it up immediately rather than waiting for the
     // lease to lapse. Stop is the deliberate end of this process's ownership — but a start() that
