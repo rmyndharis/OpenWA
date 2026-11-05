@@ -238,6 +238,48 @@ describe('Baileys group delete of another member message', () => {
     expect(revoked).not.toHaveBeenCalled();
   });
 
+  // A lid in the alt of a stored key is still the author's lid: the sender's lid is a second lid, and a pairing of that
+  // lid to the number the stored key carries does not make the two one member.
+  it.each([
+    ['a lid', '900111@lid'],
+    ['a hosted lid', '900111@hosted.lid'],
+  ])(
+    'reads the roster for two lids when the stored key names its author by number with %s beside it',
+    async (_how, alt) => {
+      const { raw, members, posted, deleteOf } = build(lidRoster, { pairs: { '900333': '628111' } });
+      posted('A1', { remoteJid: GROUP, fromMe: false, participant: ALICE, participantAlt: alt }, 'meeting at 3');
+
+      await deleteOf('A1', { participant: '900333@lid' }, { fromMe: false, participant: ALICE });
+
+      expect(members).toHaveBeenCalledTimes(1);
+      expect(raw.get('A1')?.message).toEqual({ conversation: 'meeting at 3' });
+    },
+  );
+
+  // The author lid is looked up for the chat list preview as well as for the stored copy.
+  it('keeps the preview when the pairing of the author lid shows a sender by number is another member', async () => {
+    const { raw, members, posted, deleteOf, preview } = build(lidRoster, { pairs: { '900111': '628111' } });
+    posted('A1', { remoteJid: GROUP, fromMe: false, participant: '900111@lid' }, 'meeting at 3');
+
+    await deleteOf('A1', { participant: BOB }, { fromMe: false, participant: '900111@lid' });
+
+    expect(members).toHaveBeenCalledTimes(1);
+    expect(raw.get('A1')?.message).toEqual({ conversation: 'meeting at 3' });
+    expect(preview()).toBe('meeting at 3');
+  });
+
+  // The pairing, not the number beside the author lid, says who the lid is: a member whose number changed since the
+  // message was stored is still its author when the table has moved the lid to the new number.
+  it('takes the sender for the author when the pairing of the author lid names the sender number', async () => {
+    const { raw, members, posted, deleteOf } = build(lidRoster, { pairs: { '900111': '628555' } });
+    posted('A1', { remoteJid: GROUP, fromMe: false, participant: '900111@lid', participantAlt: ALICE }, 'meeting at 3');
+
+    await deleteOf('A1', { participant: '628555@s.whatsapp.net' }, { fromMe: false, participant: '900111@lid' });
+
+    expect(members).not.toHaveBeenCalled();
+    expect(raw.get('A1')?.message).toBeNull();
+  });
+
   // The table is trusted for the lid it names, so an author whose number changed after the message was stored is no
   // longer the sender it names: the delete reads as another member's, as an edit by that author does.
   it('reads the roster when the pairing names another number than the one the message was stored under', async () => {
@@ -349,7 +391,8 @@ describe('Baileys group delete of another member message', () => {
 // However the stored author and the sender of a delete are named, by lid, by number, or by both (either first), a
 // reported pairing may bring a lid and a number together but must never make two people read as one, nor one person
 // as two: the roster is read for every pair the names prove different, and for no other. Two members of whom one is
-// named by number alone and the other by both are left out: the number beside the lid decides that pair.
+// named by number alone and the other by both are left out of this table, which pairs every lid with its own number;
+// what a pairing that names another number does there is pinned by the cases above.
 describe('Baileys group delete judged by who the names say the author and the sender are', () => {
   type How = 'lid' | 'number' | 'both' | 'number first';
   const HOWS: How[] = ['lid', 'number', 'both', 'number first'];
