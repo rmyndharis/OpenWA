@@ -39,25 +39,34 @@ function patchesCarryingBreakingChanges(changelog: string): string[] {
   });
 }
 
+/** The expression without the parentheses around it. */
+const bare = (expression: ts.Expression): ts.Expression =>
+  ts.isParenthesizedExpression(expression) ? bare(expression.expression) : expression;
+
 /**
  * The classes a source file decorates with Nest's `@Global()`, read from the syntax tree so that how the decorator is
- * spelled does not matter: a comment inside it, an aliased or namespace import of `Global`, decorators in either order
- * or on one line, an unexported class. `unresolved` counts decorators called `Global` that do not trace to an import
- * from `@nestjs/common` (a re-export through a local file, a look-alike): the reader cannot say what those are, so the
- * caller must treat any as a gap.
+ * spelled does not matter: parentheses, a comment inside it, an aliased, namespace or `import =` binding of `Global`
+ * (also read by a quoted member name), decorators in either order or on one line, an unexported class. `unresolved`
+ * counts what the reader cannot classify: a decorator named `...Global` that does not trace to an import from
+ * `@nestjs/common`, and a `Global` imported from any other module (a look-alike, or a re-export of Nest's under any
+ * local name). The caller must treat any as a gap. Not followed: a re-export that renames `Global` itself, and a local
+ * declaration that shadows the import.
  */
 function globalModulesOf(text: string): { modules: string[]; unresolved: number } {
   const source = ts.createSourceFile('module.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const decorators = new Set<string>();
   const namespaces = new Set<string>();
+  let unresolved = 0;
   for (const statement of source.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
-      if (statement.moduleSpecifier.text !== '@nestjs/common') continue;
+      const fromNest = statement.moduleSpecifier.text === '@nestjs/common';
       const bindings = statement.importClause?.namedBindings;
-      if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
+      if (fromNest && bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
       if (bindings && ts.isNamedImports(bindings)) {
         for (const element of bindings.elements) {
-          if ((element.propertyName ?? element.name).text === 'Global') decorators.add(element.name.text);
+          if ((element.propertyName ?? element.name).text !== 'Global') continue;
+          if (fromNest) decorators.add(element.name.text);
+          else unresolved++;
         }
       }
     } else if (ts.isImportEqualsDeclaration(statement) && ts.isExternalModuleReference(statement.moduleReference)) {
@@ -66,35 +75,55 @@ function globalModulesOf(text: string): { modules: string[]; unresolved: number 
     }
   }
   const modules: string[] = [];
-  let unresolved = 0;
   const visit = (node: ts.Node): void => {
     if (ts.isClassLike(node) && ts.canHaveDecorators(node)) {
       for (const decorator of ts.getDecorators(node) ?? []) {
-        let callee: ts.Expression = ts.isCallExpression(decorator.expression)
-          ? decorator.expression.expression
-          : decorator.expression;
-        while (ts.isParenthesizedExpression(callee)) callee = callee.expression;
-        const named = ts.isIdentifier(callee)
-          ? callee
+        const expression = bare(decorator.expression);
+        const callee = bare(ts.isCallExpression(expression) ? expression.expression : expression);
+        // The name it is called by and, for a member (`nest.Global`, `nest['Global']`), what it is read from.
+        const [name, owner] = ts.isIdentifier(callee)
+          ? [callee.text, undefined]
           : ts.isPropertyAccessExpression(callee)
-            ? callee.name
-            : undefined;
-        if (!named) continue;
-        const viaNamespace =
-          ts.isPropertyAccessExpression(callee) &&
-          ts.isIdentifier(callee.expression) &&
-          namespaces.has(callee.expression.text);
-        const resolved = ts.isIdentifier(callee)
-          ? decorators.has(callee.text)
-          : viaNamespace && named.text === 'Global';
+            ? [callee.name.text, callee.expression]
+            : ts.isElementAccessExpression(callee) && ts.isStringLiteralLike(callee.argumentExpression)
+              ? [callee.argumentExpression.text, callee.expression]
+              : [undefined, undefined];
+        if (name === undefined) continue;
+        const resolved = owner
+          ? ts.isIdentifier(owner) && namespaces.has(owner.text) && name === 'Global'
+          : decorators.has(name);
         if (resolved) modules.push(node.name?.text ?? '(anonymous)');
-        else if (/Global$/.test(named.text)) unresolved++;
+        else if (/Global$/.test(name)) unresolved++;
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
   return { modules, unresolved };
+}
+
+/**
+ * The global modules of a set of sources by class name and path, with what the comparison with docs/08 cannot rest
+ * on: the paths holding a decorator the reader could not classify, and the class names declared global more than once
+ * (the table is keyed by name, so a second declaration would disappear into the first).
+ */
+function declaredGlobals(files: Array<[path: string, text: string]>): {
+  declared: Map<string, string>;
+  unresolved: string[];
+  ambiguous: string[];
+} {
+  const declared = new Map<string, string>();
+  const unresolved: string[] = [];
+  const ambiguous: string[] = [];
+  for (const [path, text] of files) {
+    const found = globalModulesOf(text);
+    for (const name of found.modules) {
+      if (declared.has(name)) ambiguous.push(`${name} in ${declared.get(name)} and ${path}`);
+      declared.set(name, path);
+    }
+    if (found.unresolved > 0) unresolved.push(path);
+  }
+  return { declared, unresolved, ambiguous };
 }
 
 type Trigger = { branches?: string[] };
@@ -409,15 +438,13 @@ describe('governance docs match the repository', () => {
   // docs/08 8.3 freezes the set of @Global() modules and says why each one is global. The table is what a contributor
   // reads before adding one, so it has to name exactly the modules the source declares, with their paths.
   it('lists in docs/08 exactly the modules the source declares global', () => {
-    const declared = new Map<string, string>();
-    const unresolved: string[] = [];
-    for (const file of readdirSync(join(root, 'src'), { recursive: true }) as string[]) {
-      if (!file.endsWith('.ts') || file.endsWith('.spec.ts')) continue;
-      const path = `src/${file.split('\\').join('/')}`;
-      const found = globalModulesOf(read(path));
-      for (const name of found.modules) declared.set(name, path);
-      if (found.unresolved > 0) unresolved.push(path);
-    }
+    const sources = (readdirSync(join(root, 'src'), { recursive: true }) as string[])
+      .filter(file => file.endsWith('.ts') && !file.endsWith('.spec.ts'))
+      .map((file): [string, string] => {
+        const path = `src/${file.split('\\').join('/')}`;
+        return [path, read(path)];
+      });
+    const { declared, unresolved, ambiguous } = declaredGlobals(sources);
     const documented = new Map<string, string>();
     for (const line of between(read('docs/08-development-guidelines.md'), '### Global modules', '\n## ').split('\n')) {
       const cells = line.split('|').map(cell => cell.trim());
@@ -428,9 +455,10 @@ describe('governance docs match the repository', () => {
     // Both readers must find a long-standing member, or the comparison below proves nothing.
     expect(declared.get('AuthModule')).toBe('src/modules/auth/auth.module.ts');
     expect(documented.get('AuthModule')).toBe('src/modules/auth/auth.module.ts');
-    // A decorator called Global that does not come from @nestjs/common is one the reader cannot classify; naming the
-    // files makes the gap visible instead of letting a global module go unlisted.
-    expect(unresolved).toEqual([]);
+    // A Global that does not come from @nestjs/common is one the reader cannot classify, and a class name declared
+    // global twice cannot be told apart in the table; naming the files makes the gap visible instead of letting a
+    // global module go unlisted.
+    expect({ unresolved, ambiguous }).toEqual({ unresolved: [], ambiguous: [] });
     expect(Object.fromEntries([...documented].sort())).toEqual(Object.fromEntries([...declared].sort()));
   });
 
@@ -454,6 +482,10 @@ describe('governance docs match the repository', () => {
       ['imported as a namespace', "import * as nest from '@nestjs/common';\n@nest.Global()\nexport class A {}"],
       ['imported with require', "import nest = require('@nestjs/common');\n@nest.Global()\nexport class A {}"],
       ['wrapped in parentheses', `${nest}@(Global)()\n@Module({})\nexport class A {}`],
+      [
+        'called through a quoted member inside parentheses',
+        "import * as nest from '@nestjs/common';\n@(nest['Global']())\nexport class A {}",
+      ],
     ])('reads a global module %s', (_shape, text) => {
       expect(globalModulesOf(text)).toEqual({ modules: ['A'], unresolved: 0 });
     });
@@ -463,11 +495,53 @@ describe('governance docs match the repository', () => {
       expect(globalModulesOf(text)).toEqual({ modules: ['A', 'B'], unresolved: 0 });
     });
 
-    it('reports a Global that does not come from @nestjs/common instead of passing it unseen', () => {
-      expect(globalModulesOf("import { Global } from './nest-reexports';\n@Global()\nexport class A {}")).toEqual({
+    it('reads each of two global classes that share a name', () => {
+      const text = `${nest}@Global()\nexport class A {}\nexport function other() {\n  @Global()\n  class A {}\n  return A;\n}`;
+      expect(globalModulesOf(text)).toEqual({ modules: ['A', 'A'], unresolved: 0 });
+    });
+
+    it('reports a Global imported from another module under any local name', () => {
+      expect(globalModulesOf("import { Global as Shared } from './barrel';\n@Shared()\nexport class A {}")).toEqual({
         modules: [],
         unresolved: 1,
       });
+    });
+
+    // The import and the decorator are each reported.
+    it('reports a Global that does not come from @nestjs/common instead of passing it unseen', () => {
+      expect(globalModulesOf("import { Global } from './nest-reexports';\n@Global()\nexport class A {}")).toEqual({
+        modules: [],
+        unresolved: 2,
+      });
+    });
+  });
+
+  describe('declaredGlobals', () => {
+    const nest = "import { Global } from '@nestjs/common';\n";
+
+    it('names each file that holds a Global it cannot classify', () => {
+      const result = declaredGlobals([
+        ['src/a.module.ts', `${nest}@Global()\nexport class A {}`],
+        ['src/b.module.ts', "import { Global as Shared } from './barrel';\n@Shared()\nexport class B {}"],
+      ]);
+
+      expect([...result.declared]).toEqual([['A', 'src/a.module.ts']]);
+      expect(result.unresolved).toEqual(['src/b.module.ts']);
+      expect(result.ambiguous).toEqual([]);
+    });
+
+    it('names a class declared global twice, in two files or in one', () => {
+      const nested = `${nest}@Global()\nexport class C {}\nexport function other() {\n  @Global()\n  class C {}\n  return C;\n}`;
+      const result = declaredGlobals([
+        ['src/a.module.ts', `${nest}@Global()\nexport class A {}`],
+        ['src/b.module.ts', `${nest}@Global()\nexport class A {}`],
+        ['src/c.module.ts', nested],
+      ]);
+
+      expect(result.ambiguous).toEqual([
+        'A in src/a.module.ts and src/b.module.ts',
+        'C in src/c.module.ts and src/c.module.ts',
+      ]);
     });
   });
 
